@@ -8846,6 +8846,16 @@ function ShowsApp({onHome}){
   // Show stock management
   const markShowItemSold=(sid,iid,soldPrice,soldCurrency,soldBuyer)=>save(shows.map(s=>s.id!==sid?s:{...s,showStock:(s.showStock||[]).map(i=>i.id!==iid?i:{...i,sold:true,soldAt:today(),soldPrice,soldCurrency,soldBuyer})}));
   const removeShowItem=(sid,iid)=>save(shows.map(s=>s.id!==sid?s:{...s,showStock:(s.showStock||[]).filter(i=>i.id!==iid)}));
+  // Show stats handlers
+  const addDailySale=(sid,sale)=>save(shows.map(s=>s.id!==sid?s:{...s,dailySales:[...(s.dailySales||[]),sale]}));
+  const delDailySale=(sid,saleId)=>save(shows.map(s=>s.id!==sid?s:{...s,dailySales:(s.dailySales||[]).filter(x=>x.id!==saleId)}));
+  const addShowExpense=(sid,expense)=>save(shows.map(s=>s.id!==sid?s:{...s,showExpenses:[...(s.showExpenses||[]),expense]}));
+  const delShowExpense=(sid,expId)=>save(shows.map(s=>s.id!==sid?s:{...s,showExpenses:(s.showExpenses||[]).filter(x=>x.id!==expId)}));
+  const addShowPhoto=(sid,file)=>{const pid=uid();const r=new FileReader();r.onload=async e=>{const dataUrl=e.target.result;let photo={id:pid,data:dataUrl,caption:"",addedAt:today()};try{photo={id:pid,url:await supabaseUpload(`shows/${sid}/${pid}.${(file.name||"").split(".").pop().toLowerCase()||"jpg"}`,file),caption:"",addedAt:today()};}catch{}save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:[...(s.showPhotos||[]),photo]}));};r.readAsDataURL(file);};
+  const delShowPhoto=(sid,pid)=>save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:(s.showPhotos||[]).filter(p=>p.id!==pid)}));
+  const updateShowPhotoCaption=(sid,pid,caption)=>save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:(s.showPhotos||[]).map(p=>p.id!==pid?p:{...p,caption})}));
+  const addJournalEntry=(sid,entry)=>save(shows.map(s=>s.id!==sid?s:{...s,journalEntries:[...(s.journalEntries||[]),entry]}));
+  const delJournalEntry=(sid,entryId)=>save(shows.map(s=>s.id!==sid?s:{...s,journalEntries:(s.journalEntries||[]).filter(x=>x.id!==entryId)}));
   const syncToCalendar=async(show)=>{
     let evts=[...calEvents].filter(e=>e.showId!==show.id);
     evts.push({id:`${show.id}-show`,showId:show.id,title:show.name,type:"show",date:show.startDate,endDate:show.endDate,notes:show.city,createdAt:new Date().toISOString()});
@@ -8873,7 +8883,11 @@ function ShowsApp({onHome}){
               onUpdateShipment={updateShipment} onAddShipment={addShipment} onDelShipment={delShipment}
               onUpdateShow={updateShow} onAddFile={addFile} onDelFile={delFile} onRenameFile={renameFile}
               onSyncToCalendar={syncToCalendar} onDelete={()=>save(shows.filter(s=>s.id!==show.id))}
-              stock={stock} onAddBagItem={addBagItem} onUpdateBagItem={updateBagItem} onRemoveBagItem={removeBagItem} onMarkShowItemSold={markShowItemSold} onRemoveShowItem={removeShowItem}/>)}
+              stock={stock} onAddBagItem={addBagItem} onUpdateBagItem={updateBagItem} onRemoveBagItem={removeBagItem} onMarkShowItemSold={markShowItemSold} onRemoveShowItem={removeShowItem}
+              onAddDailySale={addDailySale} onDelDailySale={delDailySale}
+              onAddShowExpense={addShowExpense} onDelShowExpense={delShowExpense}
+              onAddShowPhoto={addShowPhoto} onDelShowPhoto={delShowPhoto} onUpdateShowPhotoCaption={updateShowPhotoCaption}
+              onAddJournalEntry={addJournalEntry} onDelJournalEntry={delJournalEntry}/>)}
           </div>
         </div>
       )}
@@ -8897,120 +8911,218 @@ function ShowsApp({onHome}){
 
 // ShowCard defined OUTSIDE ShowsApp so React sees a stable component type across re-renders
 // (prevents focus-loss on every keystroke in checklist inputs)
-function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem}){
-    const todayStr=today();
-    const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
-    const daysLeft=Math.round((new Date(show.endDate)-new Date(todayStr))/(1000*60*60*24));
-    const isNow=daysTo<=0&&daysLeft>=0;
-    const done=(show.checklist||[]).filter(t=>t.done).length;
-    const total=(show.checklist||[]).length;
-    const isOpen=expanded===show.id;
-    const [pendingFile,setPendingFile]=useState(null);
-    const [pendingName,setPendingName]=useState("");
-    const [bagSearch,setBagSearch]=useState("");
-    const [bagSellId,setBagSellId]=useState(null);
-    const [bagSellPrice,setBagSellPrice]=useState("");
-    const [showStockTab,setShowStockTab]=useState("unsold");
-    const [sellId,setSellId]=useState(null);
-    const [sellPrice,setSellPrice]=useState("");
-    const [sellCurrency,setSellCurrency]=useState("USD");
-    const [sellBuyer,setSellBuyer]=useState("");
-    const showStock=show.showStock||[];
-    const ssUnsold=showStock.filter(i=>!i.sold);
-    const ssSold=showStock.filter(i=>i.sold);
-    const ssTotalCost=showStock.reduce((s,i)=>s+(+i.costPrice||0)*(+i.qty||1),0);
-    const ssRevenue=ssSold.reduce((s,i)=>s+(+i.soldPrice||0),0);
-    const bagItems=show.bagItems||[];
-    const bagOut=bagItems.filter(b=>b.status==="out").length;
-    const bagReturned=bagItems.filter(b=>b.status==="returned").length;
-    const bagSold=bagItems.filter(b=>b.status==="sold").length;
-    const bagFiltered=bagSearch.trim()
-      ?stock.filter(s=>{const q=bagSearch.toLowerCase();return(s.material||"").toLowerCase().includes(q)||(s.shape||"").toLowerCase().includes(q)||(s.location||"").toLowerCase().includes(q)||(s.notes||"").toLowerCase().includes(q);}).slice(0,8)
-      :[];
-    const alreadyAdded=new Set(bagItems.map(b=>b.stockId));
+function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry}){
+  const todayStr=today();
+  const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
+  const daysLeft=Math.round((new Date(show.endDate)-new Date(todayStr))/(1000*60*60*24));
+  const isNow=daysTo<=0&&daysLeft>=0;
+  const done=(show.checklist||[]).filter(t=>t.done).length;
+  const total=(show.checklist||[]).length;
+  const isOpen=expanded===show.id;
+  const [pendingFile,setPendingFile]=useState(null);
+  const [pendingName,setPendingName]=useState("");
+  const [bagSearch,setBagSearch]=useState("");
+  const [bagSellId,setBagSellId]=useState(null);
+  const [bagSellPrice,setBagSellPrice]=useState("");
+  const [showStockTab,setShowStockTab]=useState("unsold");
+  const [sellId,setSellId]=useState(null);
+  const [sellPrice,setSellPrice]=useState("");
+  const [sellCurrency,setSellCurrency]=useState("USD");
+  const [sellBuyer,setSellBuyer]=useState("");
+  const [showTab,setShowTab]=useState(isNow?"sales":"prep");
+  const [saleDate,setSaleDate]=useState(todayStr);
+  const [saleAmt,setSaleAmt]=useState("");
+  const [saleCur,setSaleCur]=useState("USD");
+  const [saleNotes,setSaleNotes]=useState("");
+  const [expCat,setExpCat]=useState("Booth");
+  const [expAmt,setExpAmt]=useState("");
+  const [expCur,setExpCur]=useState("USD");
+  const [expDate,setExpDate]=useState(todayStr);
+  const [expNotes,setExpNotes]=useState("");
+  const [journalText,setJournalText]=useState("");
 
-    return(
-      <div style={{background:C.surface,border:`1.5px solid ${isOpen?show.color:C.border}`,borderRadius:9,overflow:"hidden",borderLeft:`4px solid ${show.color}`}}>
-        {/* Card header */}
-        <div onClick={()=>setExpanded(isOpen?null:show.id)} style={{padding:"13px 16px",cursor:"pointer",display:"flex",gap:12,alignItems:"center",justifyContent:"space-between"}}>
-          <div style={{minWidth:0,flex:1}}>
-            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{show.name}</div>
-            <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>📍 {show.city}</div>
-            <div style={{fontSize:11,color:C.inkFaint,marginTop:1}}>{fmtDate(show.startDate)} – {fmtDate(show.endDate)}</div>
-          </div>
-          <div style={{textAlign:"center",flexShrink:0}}>
-            {isNow
-              ?<div style={{background:show.color,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:11,fontWeight:700}}>Live</div>
-              :daysTo>0
-                ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:26,fontWeight:600,color:daysTo<=14?C.red:C.ink,lineHeight:1}}>{daysTo}</div><div style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase"}}>days</div></>
-                :<span style={{fontSize:10,color:C.inkFaint}}>Past</span>
-            }
-          </div>
-          <div style={{fontSize:16,color:C.inkFaint,transform:isOpen?"rotate(90deg)":"none",transition:"transform .2s",flexShrink:0}}>›</div>
+  const showStock=show.showStock||[];
+  const ssUnsold=showStock.filter(i=>!i.sold);
+  const ssSold=showStock.filter(i=>i.sold);
+  const ssTotalCost=showStock.reduce((s,i)=>s+(+i.costPrice||0)*(+i.qty||1),0);
+  const bagItems=show.bagItems||[];
+  const bagOut=bagItems.filter(b=>b.status==="out").length;
+  const bagReturned=bagItems.filter(b=>b.status==="returned").length;
+  const bagSold=bagItems.filter(b=>b.status==="sold").length;
+  const bagFiltered=bagSearch.trim()
+    ?stock.filter(s=>{const q=bagSearch.toLowerCase();return(s.material||"").toLowerCase().includes(q)||(s.shape||"").toLowerCase().includes(q)||(s.location||"").toLowerCase().includes(q)||(s.notes||"").toLowerCase().includes(q);}).slice(0,8)
+    :[];
+  const alreadyAdded=new Set(bagItems.map(b=>b.stockId));
+  const dailySales=show.dailySales||[];
+  const showExpenses=show.showExpenses||[];
+  const showPhotos=show.showPhotos||[];
+  const journalEntries=show.journalEntries||[];
+
+  const sumByCur=(arr,amtKey,curKey)=>{const m={};arr.forEach(x=>{const c=x[curKey]||"USD";m[c]=(m[c]||0)+(+x[amtKey]||0);});return m;};
+  const bagSoldRevByCur=bagItems.filter(b=>b.status==="sold").reduce((m,b)=>{const c=b.currency||"USD";m[c]=(m[c]||0)+(+b.sellPrice||0);return m;},{});
+  const ssSoldRevByCur=ssSold.reduce((m,i)=>{const c=i.soldCurrency||"USD";m[c]=(m[c]||0)+(+i.soldPrice||0);return m;},{});
+  const dailySalesRevByCur=sumByCur(dailySales,"amount","currency");
+  const allRevByCur={...dailySalesRevByCur};
+  [bagSoldRevByCur,ssSoldRevByCur].forEach(src2=>Object.entries(src2).forEach(([c,v])=>{allRevByCur[c]=(allRevByCur[c]||0)+v;}));
+  const expByCur=sumByCur(showExpenses,"amount","currency");
+  const totalItemsSold=bagSold+ssSold.length;
+  const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${v.toLocaleString()}`).join(" · ")||"—";
+  const TABS=[{id:"prep",label:"📋 Prep"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}];
+  const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
+  const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
+
+  return(
+    <div style={{background:C.surface,border:`1.5px solid ${isOpen?show.color:C.border}`,borderRadius:9,overflow:"hidden",borderLeft:`4px solid ${show.color}`}}>
+      {/* Card header */}
+      <div onClick={()=>setExpanded(isOpen?null:show.id)} style={{padding:"13px 16px",cursor:"pointer",display:"flex",gap:12,alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{show.name}</div>
+          <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>📍 {show.city}</div>
+          <div style={{fontSize:11,color:C.inkFaint,marginTop:1}}>{fmtDate(show.startDate)} – {fmtDate(show.endDate)}</div>
         </div>
+        <div style={{textAlign:"center",flexShrink:0}}>
+          {isNow
+            ?<div style={{background:show.color,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:11,fontWeight:700}}>Live</div>
+            :daysTo>0
+              ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:26,fontWeight:600,color:daysTo<=14?C.red:C.ink,lineHeight:1}}>{daysTo}</div><div style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase"}}>days</div></>
+              :<span style={{fontSize:10,color:C.inkFaint}}>Past</span>
+          }
+        </div>
+        <div style={{fontSize:16,color:C.inkFaint,transform:isOpen?"rotate(90deg)":"none",transition:"transform .2s",flexShrink:0}}>›</div>
+      </div>
 
-        {/* Checklist ticks preview when collapsed */}
-        {!isOpen&&total>0&&(
-          <div style={{padding:"0 16px 10px",display:"flex",gap:4,flexWrap:"wrap"}}>
-            {(show.checklist||[]).map((item,i)=>(
-              <span key={i} title={item.task} style={{width:12,height:12,borderRadius:2,background:item.done?C.green:C.card,border:`1px solid ${item.done?C.green:C.border}`,display:"inline-block"}}/>
-            ))}
-            <span style={{fontSize:10,color:C.inkFaint,marginLeft:4}}>{done}/{total}</span>
+      {/* Collapsed checklist preview */}
+      {!isOpen&&total>0&&(
+        <div style={{padding:"0 16px 10px",display:"flex",gap:4,flexWrap:"wrap"}}>
+          {(show.checklist||[]).map((item,i)=>(
+            <span key={i} title={item.task} style={{width:12,height:12,borderRadius:2,background:item.done?C.green:C.card,border:`1px solid ${item.done?C.green:C.border}`,display:"inline-block"}}/>
+          ))}
+          <span style={{fontSize:10,color:C.inkFaint,marginLeft:4}}>{done}/{total}</span>
+        </div>
+      )}
+
+      {isOpen&&(
+        <div style={{borderTop:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+
+          {/* P&L Strip */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",borderBottom:`1px solid ${C.border}`,background:C.card}}>
+            <div style={{padding:"8px 12px",borderRight:`1px solid ${C.border}`}}>
+              <div style={{fontSize:8,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3}}>Revenue</div>
+              <div style={{fontSize:11,fontWeight:700,color:C.green}}>{fmtCurObj(allRevByCur)}</div>
+            </div>
+            <div style={{padding:"8px 12px",borderRight:`1px solid ${C.border}`}}>
+              <div style={{fontSize:8,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3}}>Show Costs</div>
+              <div style={{fontSize:11,fontWeight:700,color:C.red}}>{fmtCurObj(expByCur)}</div>
+            </div>
+            <div style={{padding:"8px 12px"}}>
+              <div style={{fontSize:8,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3}}>Items Sold</div>
+              <div style={{fontSize:11,fontWeight:700,color:C.ink}}>{totalItemsSold}</div>
+            </div>
           </div>
-        )}
 
-        {/* Expanded detail */}
-        {isOpen&&(
-          <div style={{borderTop:`1px solid ${C.border}`,padding:"14px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          {/* Tab nav */}
+          <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,overflowX:"auto",background:C.surface}}>
+            {TABS.map(t=>(
+              <button key={t.id} onClick={e=>{e.stopPropagation();setShowTab(t.id);}}
+                style={{flex:"0 0 auto",padding:"8px 11px",fontSize:10,fontWeight:showTab===t.id?700:400,background:"none",border:"none",cursor:"pointer",color:showTab===t.id?C.ink:C.inkFaint,borderBottom:`2px solid ${showTab===t.id?show.color:"transparent"}`,transition:"border-color .15s",whiteSpace:"nowrap"}}>
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-            {/* LEFT COL: Checklist + Shipments + Bags */}
-            <div style={{display:"grid",gap:14}}>
-
-              {/* Checklist */}
-              <div>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>Checklist</span>
-                  <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddCheckItem(show.id);}}>+ Item</button>
-                </div>
-                {(show.checklist||[]).map((item,i)=>(
-                  <div key={item.id||i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-                    <input type="checkbox" checked={!!item.done} onChange={()=>onToggleCheck(show.id,i)} style={{flexShrink:0}}/>
-                    <input value={item.task} onChange={e=>onEditCheckTask(show.id,i,e.target.value)} onClick={e=>e.stopPropagation()} style={{flex:1,background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:"2px 0",fontSize:12,color:item.done?C.inkFaint:C.ink,textDecoration:item.done?"line-through":"none",outline:"none"}} placeholder="Add task..."/>
-                    <button onClick={e=>{e.stopPropagation();onDelCheckItem(show.id,i);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0,flexShrink:0}}>&times;</button>
+          {/* ── PREP ── */}
+          {showTab==="prep"&&(
+            <div style={{padding:"14px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+              <div style={{display:"grid",gap:14}}>
+                <div>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span>Checklist</span>
+                    <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddCheckItem(show.id);}}>+ Item</button>
                   </div>
-                ))}
-              </div>
-
-              {/* Shipments */}
-              <div>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>Shipments</span>
-                  <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddShipment(show.id);}}>+ Add</button>
-                </div>
-                {(!show.shipments||show.shipments.length===0)&&<div style={{fontSize:11,color:C.inkFaint}}>No shipments yet</div>}
-                {(show.shipments||[]).map((sh,i)=>(
-                  <div key={sh.id||i} style={{background:C.card,borderRadius:6,padding:"8px 10px",marginBottom:8}}>
-                    <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
-                      <select value={sh.type||"Sea Freight"} onChange={e=>onUpdateShipment(show.id,i,"type",e.target.value)} style={{...FI,fontSize:11,padding:"3px 5px",flex:1,cursor:"pointer"}} onClick={e=>e.stopPropagation()}>
-                        {["Sea Freight","Air Freight","Courier"].map(t=><option key={t}>{t}</option>)}
-                      </select>
-                      <button onClick={e=>{e.stopPropagation();onDelShipment(show.id,i);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13}}>&times;</button>
+                  {(show.checklist||[]).map((item,i)=>(
+                    <div key={item.id||i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                      <input type="checkbox" checked={!!item.done} onChange={()=>onToggleCheck(show.id,i)} style={{flexShrink:0}}/>
+                      <input value={item.task} onChange={e=>onEditCheckTask(show.id,i,e.target.value)} onClick={e=>e.stopPropagation()} style={{flex:1,background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:"2px 0",fontSize:12,color:item.done?C.inkFaint:C.ink,textDecoration:item.done?"line-through":"none",outline:"none"}} placeholder="Add task..."/>
+                      <button onClick={e=>{e.stopPropagation();onDelCheckItem(show.id,i);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0,flexShrink:0}}>&times;</button>
                     </div>
-                    <div style={{fontSize:9,color:C.inkFaint,marginBottom:2}}>SEND BY</div>
-                    <input type="date" value={sh.date||""} onChange={e=>onUpdateShipment(show.id,i,"date",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"3px 5px",width:"100%"}}/>
-                    {sh.date&&(()=>{const d=Math.round((new Date(sh.date)-new Date(todayStr))/(1000*60*60*24));return<div style={{fontSize:10,marginTop:2,color:d<0?"#C00":d<7?C.red:d<14?C.amber:C.green}}>{d<0?"⚠ Overdue":d===0?"Today":`${d} days`}</div>;})()}
+                  ))}
+                </div>
+                <div>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span>Shipments</span>
+                    <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddShipment(show.id);}}>+ Add</button>
                   </div>
-                ))}
+                  {(!show.shipments||show.shipments.length===0)&&<div style={{fontSize:11,color:C.inkFaint}}>No shipments yet</div>}
+                  {(show.shipments||[]).map((sh,i)=>(
+                    <div key={sh.id||i} style={{background:C.card,borderRadius:6,padding:"8px 10px",marginBottom:8}}>
+                      <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
+                        <select value={sh.type||"Sea Freight"} onChange={e=>onUpdateShipment(show.id,i,"type",e.target.value)} style={{...FI,fontSize:11,padding:"3px 5px",flex:1,cursor:"pointer"}} onClick={e=>e.stopPropagation()}>
+                          {["Sea Freight","Air Freight","Courier"].map(t=><option key={t}>{t}</option>)}
+                        </select>
+                        <button onClick={e=>{e.stopPropagation();onDelShipment(show.id,i);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13}}>&times;</button>
+                      </div>
+                      <div style={{fontSize:9,color:C.inkFaint,marginBottom:2}}>SEND BY</div>
+                      <input type="date" value={sh.date||""} onChange={e=>onUpdateShipment(show.id,i,"date",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"3px 5px",width:"100%"}}/>
+                      {sh.date&&(()=>{const d=Math.round((new Date(sh.date)-new Date(todayStr))/(1000*60*60*24));return<div style={{fontSize:10,marginTop:2,color:d<0?"#C00":d<7?C.red:d<14?C.amber:C.green}}>{d<0?"⚠ Overdue":d===0?"Today":`${d} days`}</div>;})()}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{display:"grid",gap:14}}>
+                <div>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Show Details</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:7}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
+                      <Field label="Start"><input type="date" value={show.startDate} onChange={e=>onUpdateShow(show.id,"startDate",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"4px 5px",width:"100%",boxSizing:"border-box"}}/></Field>
+                      <Field label="End"><input type="date" value={show.endDate} onChange={e=>onUpdateShow(show.id,"endDate",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"4px 5px",width:"100%",boxSizing:"border-box"}}/></Field>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:7}}>
+                      <Field label="City"><input value={show.city} onChange={e=>onUpdateShow(show.id,"city",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"4px 5px"}}/></Field>
+                      <Field label="Color"><input type="color" value={show.color||"#5A5040"} onChange={e=>onUpdateShow(show.id,"color",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,padding:"1px",cursor:"pointer",height:29,width:40}}/></Field>
+                    </div>
+                  </div>
+                  <Field label="Notes"><textarea value={show.notes||""} onChange={e=>onUpdateShow(show.id,"notes",e.target.value)} onClick={e=>e.stopPropagation()} rows={2} style={{...FI,fontSize:11,resize:"none"}}/></Field>
+                </div>
+                <div>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Files</div>
+                  {(show.files||[]).map(f=>(
+                    <div key={f.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5,background:C.card,borderRadius:4,padding:"4px 8px"}}>
+                      <span style={{fontSize:11}}>📎</span>
+                      <input value={f.name} onChange={e=>onRenameFile(show.id,f.id,e.target.value)} onClick={e=>e.stopPropagation()} style={{flex:1,background:"none",border:"none",fontSize:11,outline:"none",minWidth:0,color:C.ink}}/>
+                      <a href={f.data||f.url} download={f.name} style={{fontSize:11,color:C.blue,textDecoration:"none",flexShrink:0}} onClick={e=>e.stopPropagation()}>↓</a>
+                      <button onClick={e=>{e.stopPropagation();onDelFile(show.id,f.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:12,padding:0}}>&times;</button>
+                    </div>
+                  ))}
+                  {pendingFile
+                    ?<div style={{background:C.amberBg,border:`1px solid #F0C890`,borderRadius:5,padding:"7px 9px"}} onClick={e=>e.stopPropagation()}>
+                      <input autoFocus value={pendingName} onChange={e=>setPendingName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){onAddFile(show.id,pendingFile,pendingName||pendingFile.name);setPendingFile(null);setPendingName("");}if(e.key==="Escape"){setPendingFile(null);setPendingName("");}}} style={{...FI,fontSize:11,marginBottom:6}} placeholder="File name..."/>
+                      <div style={{display:"flex",gap:5}}>
+                        <button className="bp" style={{fontSize:10,padding:"3px 9px"}} onClick={()=>{onAddFile(show.id,pendingFile,pendingName||pendingFile.name);setPendingFile(null);setPendingName("");}}>Save</button>
+                        <button className="bs" style={{fontSize:10}} onClick={()=>{setPendingFile(null);setPendingName("");}}>✕</button>
+                      </div>
+                    </div>
+                    :<label style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",border:`1px dashed ${C.border}`,borderRadius:5,cursor:"pointer",fontSize:11,color:C.inkMid}} onClick={e=>e.stopPropagation()}>
+                      📎 Upload file
+                      <input type="file" style={{display:"none"}} onChange={e=>{if(e.target.files[0]){setPendingFile(e.target.files[0]);setPendingName(e.target.files[0].name);}}}/>
+                    </label>
+                  }
+                </div>
+                <div style={{display:"flex",gap:7}}>
+                  <button className="bs" style={{fontSize:11,flex:1}} onClick={e=>{e.stopPropagation();onSyncToCalendar(show);}}>📅 Sync to Calendar</button>
+                  <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${show.name}"? This cannot be undone.`)){onDelete();}}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,cursor:"pointer",color:C.red,fontSize:11,padding:"5px 10px"}}>🗑 Delete</button>
+                </div>
               </div>
             </div>
+          )}
 
-              {/* Bags / Carry-On Stock */}
-              <div>
+          {/* ── STOCK ── */}
+          {showTab==="stock"&&(
+            <div style={{padding:"14px 16px"}}>
+              <div style={{marginBottom:16}}>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span>🎒 Bags {bagItems.length>0&&`(${bagItems.length})`}</span>
                   {bagItems.length>0&&<span style={{fontSize:9,color:C.inkFaint}}>{bagOut>0&&`${bagOut} out`}{bagReturned>0&&` · ${bagReturned} back`}{bagSold>0&&` · ${bagSold} sold`}</span>}
                 </div>
-                {/* Search to add stock */}
                 <div style={{position:"relative",marginBottom:8}} onClick={e=>e.stopPropagation()}>
                   <input value={bagSearch} onChange={e=>setBagSearch(e.target.value)} placeholder="Search stock to add…" style={{...FI,width:"100%",boxSizing:"border-box",fontSize:11,padding:"5px 8px"}}/>
                   {bagFiltered.length>0&&(
@@ -9028,7 +9140,6 @@ function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAdd
                     </div>
                   )}
                 </div>
-                {/* Bag items list */}
                 {bagItems.length===0&&<div style={{fontSize:11,color:C.inkFaint}}>No items added yet</div>}
                 {bagItems.map(b=>(
                   <div key={b.id} style={{background:b.status==="returned"?C.greenBg:b.status==="sold"?C.amberBg:C.card,border:`1px solid ${b.status==="returned"?"#B8E8C8":b.status==="sold"?"#F0D890":C.border}`,borderRadius:6,padding:"7px 9px",marginBottom:6}} onClick={e=>e.stopPropagation()}>
@@ -9048,11 +9159,10 @@ function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAdd
                         <button onClick={()=>onRemoveBagItem(show.id,b.id)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0}}>&times;</button>
                       </div>
                     </div>
-                    {/* Sell price input */}
                     {bagSellId===b.id&&b.status==="out"&&(
                       <div style={{display:"flex",gap:5,marginTop:6,alignItems:"center"}}>
                         <select value={b.currency||"USD"} onChange={e=>onUpdateBagItem(show.id,b.id,{currency:e.target.value})} style={{...FI,fontSize:10,padding:"3px 5px",width:60}}>
-                          {["USD","JPY","EUR","GBP","INR"].map(c=><option key={c}>{c}</option>)}
+                          {SHOW_CURS.map(c=><option key={c}>{c}</option>)}
                         </select>
                         <input value={bagSellPrice} onChange={e=>setBagSellPrice(e.target.value)} placeholder="Sell price" style={{...FI,fontSize:10,flex:1}} autoFocus/>
                         <button onClick={()=>{onUpdateBagItem(show.id,b.id,{status:"sold",sellPrice:bagSellPrice});setBagSellId(null);setBagSellPrice("");}} style={{background:C.gold,color:"#fff",border:"none",borderRadius:4,padding:"3px 9px",fontSize:10,cursor:"pointer",fontWeight:600}}>✓</button>
@@ -9062,63 +9172,180 @@ function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAdd
                   </div>
                 ))}
               </div>
-
-            {/* RIGHT COL: Dates, Files, Actions */}
-            <div style={{display:"grid",gap:14}}>
-
-              {/* Dates */}
               <div>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Show Details</div>
-                <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:7}}>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
-                    <Field label="Start"><input type="date" value={show.startDate} onChange={e=>onUpdateShow(show.id,"startDate",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"4px 5px",width:"100%",boxSizing:"border-box"}}/></Field>
-                    <Field label="End"><input type="date" value={show.endDate} onChange={e=>onUpdateShow(show.id,"endDate",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"4px 5px",width:"100%",boxSizing:"border-box"}}/></Field>
-                  </div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:7}}>
-                    <Field label="City"><input value={show.city} onChange={e=>onUpdateShow(show.id,"city",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"4px 5px"}}/></Field>
-                    <Field label="Color"><input type="color" value={show.color||"#5A5040"} onChange={e=>onUpdateShow(show.id,"color",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,padding:"1px",cursor:"pointer",height:29,width:40}}/></Field>
-                  </div>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>📦 Show Stock ({showStock.length})</span>
+                  <span style={{fontSize:9,color:C.inkFaint}}>Cost: ₹{ssTotalCost.toLocaleString()} · Sold: {ssSold.length}</span>
                 </div>
-                <Field label="Notes"><textarea value={show.notes||""} onChange={e=>onUpdateShow(show.id,"notes",e.target.value)} onClick={e=>e.stopPropagation()} rows={2} style={{...FI,fontSize:11,resize:"none"}}/></Field>
-              </div>
-
-              {/* Files */}
-              <div>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Files</div>
-                {(show.files||[]).map(f=>(
-                  <div key={f.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5,background:C.card,borderRadius:4,padding:"4px 8px"}}>
-                    <span style={{fontSize:11}}>📎</span>
-                    <input value={f.name} onChange={e=>onRenameFile(show.id,f.id,e.target.value)} onClick={e=>e.stopPropagation()} style={{flex:1,background:"none",border:"none",fontSize:11,outline:"none",minWidth:0,color:C.ink}}/>
-                    <a href={f.data} download={f.name} style={{fontSize:11,color:C.blue,textDecoration:"none",flexShrink:0}} onClick={e=>e.stopPropagation()}>↓</a>
-                    <button onClick={e=>{e.stopPropagation();onDelFile(show.id,f.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:12,padding:0}}>&times;</button>
-                  </div>
-                ))}
-                {pendingFile
-                  ?<div style={{background:C.amberBg,border:`1px solid #F0C890`,borderRadius:5,padding:"7px 9px"}} onClick={e=>e.stopPropagation()}>
-                    <input autoFocus value={pendingName} onChange={e=>setPendingName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){onAddFile(show.id,pendingFile,pendingName||pendingFile.name);setPendingFile(null);setPendingName("");}if(e.key==="Escape"){setPendingFile(null);setPendingName("");}}} style={{...FI,fontSize:11,marginBottom:6}} placeholder="File name..."/>
-                    <div style={{display:"flex",gap:5}}>
-                      <button className="bp" style={{fontSize:10,padding:"3px 9px"}} onClick={()=>{onAddFile(show.id,pendingFile,pendingName||pendingFile.name);setPendingFile(null);setPendingName("");}}>Save</button>
-                      <button className="bs" style={{fontSize:10}} onClick={()=>{setPendingFile(null);setPendingName("");}}>✕</button>
+                <div style={{display:"flex",gap:6,marginBottom:8}}>
+                  {["unsold","sold"].map(tab=>(
+                    <button key={tab} onClick={e=>{e.stopPropagation();setShowStockTab(tab);}} style={{fontSize:10,padding:"3px 10px",borderRadius:4,border:`1px solid ${showStockTab===tab?show.color:C.border}`,background:showStockTab===tab?show.color:"none",color:showStockTab===tab?"#fff":C.inkMid,cursor:"pointer",fontWeight:showStockTab===tab?700:400}}>
+                      {tab==="unsold"?`Unsold (${ssUnsold.length})`:`Sold (${ssSold.length})`}
+                    </button>
+                  ))}
+                </div>
+                {(showStockTab==="unsold"?ssUnsold:ssSold).length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 0"}}>None</div>}
+                {(showStockTab==="unsold"?ssUnsold:ssSold).map(item=>(
+                  <div key={item.id} style={{background:item.sold?C.amberBg:C.card,border:`1px solid ${item.sold?"#F0D890":C.border}`,borderRadius:6,padding:"7px 9px",marginBottom:6}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:11,fontWeight:600,color:C.ink}}>{item.material||item.desc||"Item"}{item.shape?` · ${item.shape}`:""}</div>
+                        <div style={{fontSize:9,color:C.inkFaint}}>Cost: {item.costPrice||"—"}{item.qty&&item.qty>1?` × ${item.qty}`:""}</div>
+                        {item.sold&&<div style={{fontSize:9,color:C.amber,fontWeight:600}}>Sold {item.soldAt}: {item.soldCurrency||"USD"} {item.soldPrice}{item.soldBuyer?` · ${item.soldBuyer}`:""}</div>}
+                      </div>
+                      <div style={{display:"flex",gap:4,flexShrink:0,alignItems:"center"}}>
+                        {!item.sold&&(
+                          <>
+                            {sellId===item.id
+                              ?<div style={{display:"flex",gap:4,alignItems:"center"}}>
+                                <select value={sellCurrency} onChange={e=>setSellCurrency(e.target.value)} style={{...FI,fontSize:10,padding:"2px 4px",width:58}}>
+                                  {SHOW_CURS.map(c=><option key={c}>{c}</option>)}
+                                </select>
+                                <input value={sellPrice} onChange={e=>setSellPrice(e.target.value)} placeholder="Price" style={{...FI,fontSize:10,width:70}} autoFocus/>
+                                <input value={sellBuyer} onChange={e=>setSellBuyer(e.target.value)} placeholder="Buyer" style={{...FI,fontSize:10,width:70}}/>
+                                <button onClick={e=>{e.stopPropagation();onMarkShowItemSold(show.id,item.id,sellPrice,sellCurrency,sellBuyer);setSellId(null);setSellPrice("");setSellCurrency("USD");setSellBuyer("");}} style={{background:C.gold,color:"#fff",border:"none",borderRadius:4,padding:"2px 8px",fontSize:10,cursor:"pointer",fontWeight:600}}>✓</button>
+                                <button onClick={e=>{e.stopPropagation();setSellId(null);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 6px",fontSize:10,cursor:"pointer"}}>✕</button>
+                              </div>
+                              :<button onClick={e=>{e.stopPropagation();setSellId(item.id);setSellPrice("");setSellCurrency("USD");setSellBuyer("");}} style={{background:C.gold,color:"#fff",border:"none",borderRadius:4,padding:"2px 7px",fontSize:9,cursor:"pointer",fontWeight:600}}>💰 Sold</button>
+                            }
+                          </>
+                        )}
+                        <button onClick={e=>{e.stopPropagation();onRemoveShowItem(show.id,item.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0}}>&times;</button>
+                      </div>
                     </div>
                   </div>
-                  :<label style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",border:`1px dashed ${C.border}`,borderRadius:5,cursor:"pointer",fontSize:11,color:C.inkMid}} onClick={e=>e.stopPropagation()}>
-                    📎 Upload file
-                    <input type="file" style={{display:"none"}} onChange={e=>{if(e.target.files[0]){setPendingFile(e.target.files[0]);setPendingName(e.target.files[0].name);}}}/>
-                  </label>
-                }
-              </div>
-
-              {/* Actions */}
-              <div style={{display:"flex",gap:7}}>
-                <button className="bs" style={{fontSize:11,flex:1}} onClick={e=>{e.stopPropagation();onSyncToCalendar(show);}}>📅 Sync to Calendar</button>
-                <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${show.name}"? This cannot be undone.`)){onDelete();}}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,cursor:"pointer",color:C.red,fontSize:11,padding:"5px 10px"}}>🗑 Delete</button>
+                ))}
               </div>
             </div>
+          )}
 
-          </div>
-        )}
-      </div>
-    );
+          {/* ── SALES ── */}
+          {showTab==="sales"&&(
+            <div style={{padding:"14px 16px"}}>
+              <div style={{background:C.card,borderRadius:7,padding:"11px 12px",marginBottom:14,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Log Sale</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:7}}>
+                  <Field label="Date"><input type="date" value={saleDate} onChange={e=>setSaleDate(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
+                  <Field label="Amount"><input type="number" value={saleAmt} onChange={e=>setSaleAmt(e.target.value)} placeholder="0" style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
+                  <Field label="Currency"><select value={saleCur} onChange={e=>setSaleCur(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px",cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select></Field>
+                </div>
+                <Field label="Notes"><textarea value={saleNotes} onChange={e=>setSaleNotes(e.target.value)} rows={2} placeholder="Buyer, item, details…" style={{...FI,fontSize:11,resize:"none",marginBottom:8}}/></Field>
+                <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();if(!saleAmt)return;onAddDailySale(show.id,{id:uid(),date:saleDate,amount:saleAmt,currency:saleCur,notes:saleNotes,createdAt:new Date().toISOString()});setSaleAmt("");setSaleNotes("");}}>+ Log Sale</button>
+              </div>
+              {dailySales.length===0&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"12px 0"}}>No sales logged yet</div>}
+              {[...dailySales].sort((a,b)=>b.date.localeCompare(a.date)).map(sale=>(
+                <div key={sale.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"8px 10px",background:C.card,borderRadius:6,marginBottom:6,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"baseline",gap:6}}>
+                      <span style={{fontSize:13,fontWeight:700,color:C.green}}>{sale.currency} {(+sale.amount).toLocaleString()}</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{fmtDate(sale.date)}</span>
+                    </div>
+                    {sale.notes&&<div style={{fontSize:11,color:C.inkMid,marginTop:2,whiteSpace:"pre-wrap"}}>{sale.notes}</div>}
+                  </div>
+                  <button onClick={e=>{e.stopPropagation();onDelDailySale(show.id,sale.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0,flexShrink:0}}>&times;</button>
+                </div>
+              ))}
+              {dailySales.length>0&&(
+                <div style={{borderTop:`1px solid ${C.border}`,marginTop:8,paddingTop:8}}>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Daily Sales Total</div>
+                  {Object.entries(sumByCur(dailySales,"amount","currency")).map(([c,v])=>(
+                    <div key={c} style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,color:C.green,padding:"2px 0"}}>
+                      <span>{c}</span><span>{v.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── COSTS ── */}
+          {showTab==="costs"&&(
+            <div style={{padding:"14px 16px"}}>
+              <div style={{background:C.card,borderRadius:7,padding:"11px 12px",marginBottom:14,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Add Expense</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:7}}>
+                  <Field label="Category"><select value={expCat} onChange={e=>setExpCat(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px",cursor:"pointer"}}>{EXP_CATS.map(c=><option key={c}>{c}</option>)}</select></Field>
+                  <Field label="Date"><input type="date" value={expDate} onChange={e=>setExpDate(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
+                  <Field label="Amount"><input type="number" value={expAmt} onChange={e=>setExpAmt(e.target.value)} placeholder="0" style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
+                  <Field label="Currency"><select value={expCur} onChange={e=>setExpCur(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px",cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select></Field>
+                </div>
+                <Field label="Notes"><textarea value={expNotes} onChange={e=>setExpNotes(e.target.value)} rows={2} placeholder="Details…" style={{...FI,fontSize:11,resize:"none",marginBottom:8}}/></Field>
+                <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();if(!expAmt)return;onAddShowExpense(show.id,{id:uid(),category:expCat,date:expDate,amount:expAmt,currency:expCur,notes:expNotes,createdAt:new Date().toISOString()});setExpAmt("");setExpNotes("");}}>+ Add Expense</button>
+              </div>
+              {showExpenses.length===0&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"12px 0"}}>No expenses logged yet</div>}
+              {[...showExpenses].sort((a,b)=>b.date.localeCompare(a.date)).map(exp=>(
+                <div key={exp.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"8px 10px",background:C.card,borderRadius:6,marginBottom:6,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"baseline",gap:6,flexWrap:"wrap"}}>
+                      <span style={{fontSize:13,fontWeight:700,color:C.red}}>{exp.currency} {(+exp.amount).toLocaleString()}</span>
+                      <span style={{fontSize:10,fontWeight:600,color:C.inkMid,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,padding:"1px 5px"}}>{exp.category}</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{fmtDate(exp.date)}</span>
+                    </div>
+                    {exp.notes&&<div style={{fontSize:11,color:C.inkMid,marginTop:2,whiteSpace:"pre-wrap"}}>{exp.notes}</div>}
+                  </div>
+                  <button onClick={e=>{e.stopPropagation();onDelShowExpense(show.id,exp.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0,flexShrink:0}}>&times;</button>
+                </div>
+              ))}
+              {showExpenses.length>0&&(
+                <div style={{borderTop:`1px solid ${C.border}`,marginTop:8,paddingTop:8}}>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Total by Currency</div>
+                  {Object.entries(expByCur).map(([c,v])=>(
+                    <div key={c} style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,color:C.red,padding:"2px 0"}}>
+                      <span>{c}</span><span>{v.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── PHOTOS ── */}
+          {showTab==="photos"&&(
+            <div style={{padding:"14px 16px"}} onClick={e=>e.stopPropagation()}>
+              <label style={{display:"inline-flex",alignItems:"center",gap:7,padding:"7px 14px",background:C.card,border:`1px dashed ${C.border}`,borderRadius:6,cursor:"pointer",fontSize:11,color:C.inkMid,marginBottom:12}}>
+                📸 Upload Photos
+                <input type="file" multiple accept="image/*" style={{display:"none"}} onChange={e=>{Array.from(e.target.files||[]).forEach(f=>onAddShowPhoto(show.id,f));e.target.value="";}}/>
+              </label>
+              {showPhotos.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 0"}}>No photos yet — upload your booth setup, products, anything from the show</div>}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                {showPhotos.map(p=>(
+                  <div key={p.id} style={{borderRadius:6,overflow:"hidden",background:C.card,border:`1px solid ${C.border}`}}>
+                    <div style={{position:"relative",paddingBottom:"75%"}}>
+                      <img src={p.data||p.url} alt={p.caption||""} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+                      <button onClick={e=>{e.stopPropagation();onDelShowPhoto(show.id,p.id);}} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.55)",border:"none",borderRadius:"50%",color:"#fff",fontSize:13,width:22,height:22,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,lineHeight:1}}>&times;</button>
+                    </div>
+                    <input value={p.caption||""} onChange={e=>onUpdateShowPhotoCaption(show.id,p.id,e.target.value)} placeholder="Caption…" style={{...FI,fontSize:10,padding:"4px 7px",borderRadius:0,border:"none",borderTop:`1px solid ${C.border}`,width:"100%",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}/>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── NOTES ── */}
+          {showTab==="notes"&&(
+            <div style={{padding:"14px 16px"}} onClick={e=>e.stopPropagation()}>
+              <div style={{background:C.card,borderRadius:7,padding:"11px 12px",marginBottom:14,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>New Journal Entry</div>
+                <textarea value={journalText} onChange={e=>setJournalText(e.target.value)} rows={3} placeholder="Write a note, observation, or recap of the day…" style={{...FI,fontSize:12,resize:"none",marginBottom:8}}/>
+                <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();if(!journalText.trim())return;onAddJournalEntry(show.id,{id:uid(),date:todayStr,text:journalText.trim(),createdAt:new Date().toISOString()});setJournalText("");}}>Add Note</button>
+              </div>
+              {journalEntries.length===0&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"12px 0"}}>No notes yet</div>}
+              {[...journalEntries].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(entry=>(
+                <div key={entry.id} style={{background:C.card,borderRadius:6,padding:"9px 11px",marginBottom:8,border:`1px solid ${C.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                    <div style={{fontSize:10,fontWeight:700,color:show.color}}>{fmtDate(entry.date)}</div>
+                    <button onClick={e=>{e.stopPropagation();onDelJournalEntry(show.id,entry.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0}}>&times;</button>
+                  </div>
+                  <div style={{fontSize:12,color:C.ink,whiteSpace:"pre-wrap",lineHeight:1.5}}>{entry.text}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>
+      )}
+    </div>
+  );
 }
 
 
