@@ -4962,23 +4962,30 @@ async function uploadStockPhoto(itemId,file){
   const pathname=`stock/${itemId}-${uid()}.${ext}`;
   return await supabaseUpload(pathname,file);
 }
-// Vercel Blob upload — supports up to 500 MB, built-in progress, cancel via AbortController
+// Supabase Storage upload with simulated progress (blob-upload endpoint retired)
 function startStockVideoUpload(itemId,file,_unused,onProgress){
   const ext=(file.name||"").split(".").pop().toLowerCase()||"mp4";
   const pathname=`stock/${itemId}-video.${ext}`;
-  const controller=new AbortController();
+  let cancelled=false;
+  let fakeProgress=0;
+  const ticker=setInterval(()=>{
+    if(cancelled){clearInterval(ticker);return;}
+    fakeProgress=Math.min(fakeProgress+Math.random()*7,90);
+    if(onProgress)onProgress(Math.round(fakeProgress));
+  },400);
   const promise=(async()=>{
-    const blob=await blobUpload(pathname,file,{
-      access:"public",
-      handleUploadUrl:"/api/blob-upload",
-      abortSignal:controller.signal,
-      onUploadProgress:({percentage})=>{
-        if(onProgress) onProgress(Math.round(percentage));
-      },
-    });
-    return blob.url;
+    try{
+      const url=await supabaseUpload(pathname,file);
+      clearInterval(ticker);
+      if(cancelled)throw new Error("Cancelled");
+      if(onProgress)onProgress(100);
+      return url;
+    }catch(err){
+      clearInterval(ticker);
+      throw err;
+    }
   })();
-  return{xhr:{abort:()=>controller.abort()},promise};
+  return{xhr:{abort:()=>{cancelled=true;clearInterval(ticker);}},promise};
 }
 
 async function uploadVendorFile(vendorId,fileId,dataUrl,fileName){

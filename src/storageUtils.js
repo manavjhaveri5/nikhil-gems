@@ -1,12 +1,13 @@
 import { supabase } from "./supabase.js";
 
 const BUCKET = "ng-media";
-let bucketReady = false;
+let bucketReadyPromise = null;
 
 async function ensureBucket() {
-  if (bucketReady) return;
-  await supabase.storage.createBucket(BUCKET, { public: true }).catch(() => {});
-  bucketReady = true;
+  if (!bucketReadyPromise) {
+    bucketReadyPromise = supabase.storage.createBucket(BUCKET, { public: true }).catch(() => {});
+  }
+  return bucketReadyPromise;
 }
 
 export async function uploadToStorage(path, file) {
