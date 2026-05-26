@@ -654,7 +654,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
         )}
 
         {/* ── Main content ── */}
-        <div style={{flex:1,minWidth:0,padding:mob?"12px":"20px 24px"}}>
+        <div style={{flex:1,minWidth:0,padding:mob?"12px":"20px 24px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":undefined}}>
 
           {/* ── Tab switcher ── */}
           <div style={{display:"flex",gap:6,marginBottom:18,borderBottom:`1px solid ${C.border}`,paddingBottom:0}}>
@@ -716,14 +716,14 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           })()}
 
           {dashTab==="overview"&&<>
-          {/* Mobile: horizontal module strip */}
+          {/* Mobile: icon grid for all modules */}
           {mob&&(
-            <div style={{display:"flex",gap:7,overflowX:"auto",paddingBottom:4,marginBottom:14,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none"}}>
               {visibleMods.filter(m=>m.ready).map(m=>(
                 <button key={m.id} onClick={()=>onEnter(m.id)}
-                  style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"8px 10px",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,cursor:"pointer",flexShrink:0,fontFamily:"inherit",minWidth:58}}>
-                  <span style={{fontSize:19}}>{m.icon}</span>
-                  <span style={{fontSize:9,fontWeight:500,color:C.inkMid,whiteSpace:"nowrap"}}>{m.title.split(" ")[0]}</span>
+                  style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"12px 8px",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",WebkitTapHighlightColor:"transparent",transition:"transform .1s"}}>
+                  <span style={{fontSize:24,lineHeight:1}}>{m.icon}</span>
+                  <span style={{fontSize:10,fontWeight:500,color:C.ink,textAlign:"center",lineHeight:1.2}}>{m.title}</span>
                 </button>
               ))}
             </div>
@@ -1128,7 +1128,7 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
   const [dark,toggleDark]=useDark();
   return(
     <div style={{fontFamily:"'Figtree',system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}input,select,textarea{font-family:inherit;}input:focus,select:focus,textarea:focus{outline:none;border-color:${C.goldBright}!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:3px;}.bp{background:${C.ink};color:#FAF0DC;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;letter-spacing:.01em;transition:all .18s;font-family:inherit;}.bp:hover{background:#2C1E0A;box-shadow:0 4px 14px rgba(26,19,8,.18);}.bs{background:${C.surface};color:${C.ink};border:1.5px solid ${C.border};padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:400;white-space:nowrap;transition:all .18s;font-family:inherit;}.bs:hover{border-color:${C.inkMid};background:${C.card};}.bp:disabled,.bs:disabled{opacity:.38;cursor:not-allowed;}.rh{transition:background .12s;cursor:pointer;}.rh:hover{background:${C.card}!important;}input[type=checkbox]{accent-color:${C.gold};width:14px;height:14px;cursor:pointer;}@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}@media(max-width:699px){.bp,.bs{font-size:15px!important;padding:9px 16px!important;min-height:44px!important;}select{font-size:16px!important;}}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}input,select,textarea{font-family:inherit;}input:focus,select:focus,textarea:focus{outline:none;border-color:${C.goldBright}!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:3px;}.bp{background:${C.ink};color:#FAF0DC;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;letter-spacing:.01em;transition:all .18s;font-family:inherit;}.bp:hover{background:#2C1E0A;box-shadow:0 4px 14px rgba(26,19,8,.18);}.bs{background:${C.surface};color:${C.ink};border:1.5px solid ${C.border};padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:400;white-space:nowrap;transition:all .18s;font-family:inherit;}.bs:hover{border-color:${C.inkMid};background:${C.card};}.bp:disabled,.bs:disabled{opacity:.38;cursor:not-allowed;}.rh{transition:background .12s;cursor:pointer;}.rh:hover{background:${C.card}!important;}input[type=checkbox]{accent-color:${C.gold};width:14px;height:14px;cursor:pointer;}@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}@media(max-width:699px){.bp,.bs{font-size:15px!important;padding:9px 16px!important;min-height:44px!important;}select{font-size:16px!important;}.bp:active,.bs:active{opacity:.72!important;transform:scale(.98);}button:active{opacity:.72;}}`}</style>
       <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:mob?"0 10px":"0 28px",display:"flex",alignItems:"center",height:54,position:"sticky",top:0,zIndex:100,gap:mob?6:12,boxShadow:"0 1px 0 rgba(26,19,8,.04)"}}>
         <button onClick={onHome} style={{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:mob?0:10,padding:`0 ${mob?8:16}px 0 0`,borderRight:`1px solid ${C.border}`,flexShrink:0,opacity:.92,transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.92}>
           <img src={LOGO_SRC} style={{width:28,height:28,objectFit:"contain"}} alt=""/>
@@ -1142,7 +1142,7 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
         </div>
         <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}><button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
       </div>
-      <div style={{padding:mob?"14px 12px":"22px 28px",maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
+      <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":undefined,maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
     </div>
   );
 }
@@ -11415,8 +11415,8 @@ export default function Root({onSignOut}){
   };
   if(userProfile===undefined)return<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--c-bg)",color:"#8C7E66",fontSize:13,fontFamily:"system-ui,sans-serif"}}>Loading…</div>;
   let content;
+  const goHome=()=>{setScreen("welcome");localStorage.removeItem("ng-last-mod");};
   if(screen==="app"){
-    const goHome=()=>{setScreen("welcome");localStorage.removeItem("ng-last-mod");};
     if(mod==="purchases")content=<PurchasesApp onHome={()=>{goHome();setStartView(null);setStartBillId(null);}} startView={startView} startBillId={startBillId} onBillIdConsumed={()=>setStartBillId(null)} onGoToVendor={name=>{setStartVendor(name);setMod("vendors");setScreen("app");}}/>;
     else if(mod==="vendors")content=<VendorsApp onHome={()=>{goHome();setStartVendor(null);}} startVendor={startVendor}/>;
     else if(mod==="stock")content=<StockApp onHome={goHome} startStockId={startStockId} onStockIdConsumed={()=>{setStartStockId(null);window.history.replaceState(null,"",window.location.pathname);}} startLocationFilter={startLocationFilter} onLocationConsumed={()=>{setStartLocationFilter(null);window.history.replaceState(null,"",window.location.pathname);}} onCreateInvoiceFromStock={draft=>{setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
@@ -11459,7 +11459,22 @@ export default function Root({onSignOut}){
         </div>
       )}
       {content}
-      <div style={{position:"fixed",bottom:mob?84:76,right:mob?16:24,zIndex:800,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10}}>
+      {mob&&(
+        <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:600,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"stretch",paddingBottom:"env(safe-area-inset-bottom)",boxShadow:"0 -2px 12px rgba(26,19,8,.07)"}}>
+          {[{id:null,icon:"🏠",label:"Home"},{id:"stock",icon:"💎",label:"Stock"},{id:"purchases",icon:"📦",label:"Purchases"},{id:"shows",icon:"🌐",label:"Shows"},{id:"finance",icon:"💰",label:"Finance"}].filter(item=>!item.id||allowedMods.find(m=>m.id===item.id)).map(item=>{
+            const isActive=item.id?mod===item.id&&screen==="app":screen==="welcome";
+            return(
+              <button key={item.id||"home"} onClick={()=>item.id?go(item.id):goHome()}
+                style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"7px 0 5px",background:"none",border:"none",cursor:"pointer",gap:2,fontFamily:"inherit",WebkitTapHighlightColor:"transparent",transition:"opacity .1s",outline:"none"}}>
+                <span style={{fontSize:20,lineHeight:1}}>{item.icon}</span>
+                <span style={{fontSize:9,fontWeight:isActive?700:400,color:isActive?C.gold:C.inkFaint,letterSpacing:.2}}>{item.label}</span>
+                {isActive&&<div style={{width:18,height:2,borderRadius:1,background:C.gold,marginTop:1}}/>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div style={{position:"fixed",bottom:mob?"calc(64px + env(safe-area-inset-bottom))":76,right:mob?16:24,zIndex:800,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10}}>
         {fab&&FAB_ITEMS.map(o=>(
           <button key={o.label} onClick={()=>{o.action();}} style={{display:"flex",alignItems:"center",gap:8,background:C.surface,border:`1.5px solid ${C.borderHi}`,borderRadius:24,padding:"9px 18px",fontSize:mob?14:13,fontWeight:600,color:C.ink,boxShadow:"0 4px 16px rgba(0,0,0,.14)",cursor:"pointer",whiteSpace:"nowrap",transition:"transform .1s"}}>
             <span style={{fontSize:16}}>{o.icon}</span>{o.label}
