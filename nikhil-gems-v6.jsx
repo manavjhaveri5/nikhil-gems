@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "./src/supabase.js";
 import { upload as blobUpload } from "@vercel/blob/client";
+import { uploadToStorage as supabaseUpload } from "./src/storageUtils.js";
 import confetti from "canvas-confetti";
 // CSV data loaded lazily — only when the Import button is clicked (saves ~570KB from initial bundle)
 const loadCSVStock    = () => import("./src/csvStockData.js").then(m => m.CSV_STOCK);
@@ -4956,14 +4957,10 @@ async function uploadToStorage(path,dataUrl){
 }
 
 async function uploadStockPhoto(itemId,file){
-  // Upload original file directly to Vercel Blob — no compression, no quality loss
+  // Upload directly to Supabase Storage (blob-upload endpoint was retired)
   const ext=(file.name||"").split(".").pop().toLowerCase()||"jpg";
-  const pathname=`ng-stock/stock/${itemId}-${uid()}.${ext}`;
-  const blob=await blobUpload(pathname,file,{
-    access:"public",
-    handleUploadUrl:"/api/blob-upload",
-  });
-  return blob.url;
+  const pathname=`stock/${itemId}-${uid()}.${ext}`;
+  return await supabaseUpload(pathname,file);
 }
 // Vercel Blob upload — supports up to 500 MB, built-in progress, cancel via AbortController
 function startStockVideoUpload(itemId,file,_unused,onProgress){
