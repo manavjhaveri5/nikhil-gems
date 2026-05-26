@@ -11379,6 +11379,26 @@ export default function Root({onSignOut}){
     localStorage.setItem(seenKey,JSON.stringify([...existing]));
     setNewAssignedTasks([]);
   };
+  // ── PWA install prompt ──────────────────────────────────────────────────
+  const [installPrompt,setInstallPrompt]=useState(null);
+  const [showInstall,setShowInstall]=useState(false);
+  const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.navigator.standalone;
+  const isInStandaloneMode=()=>window.navigator.standalone||window.matchMedia('(display-mode: standalone)').matches;
+  useEffect(()=>{
+    if(isInStandaloneMode())return; // already installed
+    const seen=localStorage.getItem("ng-install-dismissed-v1");
+    if(seen)return;
+    const handler=e=>{e.preventDefault();setInstallPrompt(e);setShowInstall(true);};
+    window.addEventListener("beforeinstallprompt",handler);
+    // iOS: show manual tip after 3s if not installed
+    if(mob&&isIOS()){setTimeout(()=>setShowInstall(true),3000);}
+    return()=>window.removeEventListener("beforeinstallprompt",handler);
+  },[]);
+  const handleInstall=async()=>{
+    if(installPrompt){installPrompt.prompt();const{outcome}=await installPrompt.userChoice;if(outcome==="accepted"){setShowInstall(false);localStorage.setItem("ng-install-dismissed-v1","1");}setInstallPrompt(null);}
+    else{setShowInstall(false);localStorage.setItem("ng-install-dismissed-v1","1");}
+  };
+  const dismissInstall=()=>{setShowInstall(false);localStorage.setItem("ng-install-dismissed-v1","1");};
   const isAdmin=userProfile===false||userProfile===undefined;
   const todoKey=isAdmin?"ng-todos-v1":TODO_KEY_FOR(currentEmail);
   const currentUser=isAdmin?{name:"Admin",email:currentEmail,role:"admin"}:userProfile||null;
@@ -11456,6 +11476,23 @@ export default function Root({onSignOut}){
               :`${newAssignedTasks.length} new tasks assigned to you`}
           </span>
           <button onClick={dismissNewTasks} style={{background:"rgba(255,255,255,.25)",border:"none",color:"#fff",borderRadius:5,padding:"5px 13px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>Dismiss ×</button>
+        </div>
+      )}
+      {mob&&showInstall&&(
+        <div style={{position:"fixed",bottom:mob?"calc(62px + env(safe-area-inset-bottom))":"24px",left:mob?8:"auto",right:mob?8:24,zIndex:700,background:C.surface,border:`1.5px solid ${C.borderHi}`,borderRadius:12,padding:"13px 15px",boxShadow:"0 8px 32px rgba(26,19,8,.2)",display:"flex",gap:10,alignItems:"flex-start",maxWidth:340,animation:"fadeUp .25s ease both"}}>
+          <span style={{fontSize:22,flexShrink:0,lineHeight:1,marginTop:1}}>💎</span>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:3}}>Add to Home Screen</div>
+            {installPrompt
+              ?<div style={{fontSize:11,color:C.inkMid,marginBottom:9,lineHeight:1.4}}>Install Nikhil Gems as an app for quick access and a full-screen experience.</div>
+              :<div style={{fontSize:11,color:C.inkMid,marginBottom:9,lineHeight:1.4}}>Tap <b>Share</b> → <b>Add to Home Screen</b> to install this app for quick offline access.</div>
+            }
+            <div style={{display:"flex",gap:7}}>
+              {installPrompt&&<button onClick={handleInstall} style={{background:C.gold,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Install</button>}
+              <button onClick={dismissInstall} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"7px 12px",fontSize:12,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Not now</button>
+            </div>
+          </div>
+          <button onClick={dismissInstall} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:18,padding:0,lineHeight:1,flexShrink:0}}>×</button>
         </div>
       )}
       {content}
