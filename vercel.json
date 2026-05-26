@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/claude.js":   { "maxDuration": 30 },
+    "api/etsy.js":     { "maxDuration": 15 },
+    "api/raj.js":      { "maxDuration": 60 },
+    "api/shopify.js":  { "maxDuration": 90 },
+    "api/telegram.js":    { "maxDuration": 60 },
+    "api/openai.js":      { "maxDuration": 30 }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "nikhil-gems",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.1",
+    "@vercel/blob": "^2.3.3",
+    "@vercel/functions": "^3.4.4",
+    "canvas-confetti": "^1.9.4",
+    "jsbarcode": "^3.12.3",
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^5.7.284",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "unpdf": "^1.6.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "supabase": "^2.83.0",
+    "vite": "^5.4.2",
+    "vite-plugin-pwa": "^1.2.0"
+  }
+}

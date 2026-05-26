@@ -1,0 +1,25 @@
+:root {
+  --c-bg:#FAF7F2; --c-surface:#FFFFFF; --c-card:#F5F1EA;
+  --c-border:#E3DDD4; --c-borderHi:#C4B898;
+  --c-ink:#1A1308; --c-inkMid:#4E4433; --c-inkFaint:#8C7E66;
+  --c-gold:#9A6200; --c-goldLight:#FEF6E0; --c-goldBright:#C48208;
+  --c-green:#1A5C38; --c-greenBg:#E6F5ED; --c-greenBright:#1A8050;
+  --c-red:#892020; --c-redBg:#FEEEED;
+  --c-amber:#9A5000; --c-amberBg:#FFF1DC;
+  --c-blue:#1A3E7A; --c-blueBg:#EDF2FF;
+  --c-purple:#4E2E7A; --c-purpleBg:#F2EDFF;
+  --c-teal:#14605A; --c-tealBg:#E4F3F2;
+}
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+html.dark {
+  --c-bg:#141210; --c-surface:#1E1B17; --c-card:#252118;
+  --c-border:#3A342A; --c-borderHi:#5A4E3A;
+  --c-ink:#F0E8D0; --c-inkMid:#C0A878; --c-inkFaint:#6A5A48;
+  --c-gold:#C89020; --c-goldLight:#2A2010; --c-goldBright:#E0A830;
+  --c-green:#2A8050; --c-greenBg:#0A2018; --c-greenBright:#30A060;
+  --c-red:#C04040; --c-redBg:#280E0E;
+  --c-amber:#C06820; --c-amberBg:#281408;
+  --c-blue:#4060C0; --c-blueBg:#0A1428;
+  --c-purple:#7050C0; --c-purpleBg:#180E28;
+  --c-teal:#20907A; --c-tealBg:#081E1A;
+}

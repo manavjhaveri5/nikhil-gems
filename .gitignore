@@ -1,0 +1,11 @@
+node_modules
+.env
+.env.*
+dist
+dist-demo
+.vercel
+.DS_Store
+~
+blob-url-map.json
+.claude/
+bot/
