@@ -11382,16 +11382,19 @@ export default function Root({onSignOut}){
   // ── PWA install prompt ──────────────────────────────────────────────────
   const [installPrompt,setInstallPrompt]=useState(null);
   const [showInstall,setShowInstall]=useState(false);
-  const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.navigator.standalone;
-  const isInStandaloneMode=()=>window.navigator.standalone||window.matchMedia('(display-mode: standalone)').matches;
+  // iPad on iOS 13+ reports as desktop Safari (Mac + maxTouchPoints > 1)
+  const isAppleTouch=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)||(/Mac/i.test(navigator.userAgent)&&navigator.maxTouchPoints>1);
+  const isInStandaloneMode=()=>!!window.navigator.standalone||window.matchMedia('(display-mode: standalone)').matches;
+  // show banner on phones, tablets, and desktop (Chrome/Edge support beforeinstallprompt)
+  const isTablet=window.innerWidth>=700&&window.innerWidth<1200;
   useEffect(()=>{
-    if(isInStandaloneMode())return; // already installed
+    if(isInStandaloneMode())return; // already installed as PWA
     const seen=localStorage.getItem("ng-install-dismissed-v1");
     if(seen)return;
     const handler=e=>{e.preventDefault();setInstallPrompt(e);setShowInstall(true);};
     window.addEventListener("beforeinstallprompt",handler);
-    // iOS: show manual tip after 3s if not installed
-    if(mob&&isIOS()){setTimeout(()=>setShowInstall(true),3000);}
+    // Apple (iPhone + iPad) don't fire beforeinstallprompt — show manual tip after 3s
+    if(isAppleTouch()){setTimeout(()=>setShowInstall(true),3000);}
     return()=>window.removeEventListener("beforeinstallprompt",handler);
   },[]);
   const handleInstall=async()=>{
@@ -11478,21 +11481,50 @@ export default function Root({onSignOut}){
           <button onClick={dismissNewTasks} style={{background:"rgba(255,255,255,.25)",border:"none",color:"#fff",borderRadius:5,padding:"5px 13px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>Dismiss ×</button>
         </div>
       )}
-      {mob&&showInstall&&(
-        <div style={{position:"fixed",bottom:mob?"calc(62px + env(safe-area-inset-bottom))":"24px",left:mob?8:"auto",right:mob?8:24,zIndex:700,background:C.surface,border:`1.5px solid ${C.borderHi}`,borderRadius:12,padding:"13px 15px",boxShadow:"0 8px 32px rgba(26,19,8,.2)",display:"flex",gap:10,alignItems:"flex-start",maxWidth:340,animation:"fadeUp .25s ease both"}}>
-          <span style={{fontSize:22,flexShrink:0,lineHeight:1,marginTop:1}}>💎</span>
+      {showInstall&&(
+        <div style={{
+          position:"fixed",
+          // Phone: sit above bottom nav; tablet/desktop: corner card bottom-right
+          bottom:mob?"calc(66px + env(safe-area-inset-bottom))":"24px",
+          left:mob?8:"auto",
+          right:mob?8:24,
+          zIndex:700,
+          background:C.surface,
+          border:`1.5px solid ${C.borderHi}`,
+          borderRadius:14,
+          padding:"14px 15px",
+          boxShadow:"0 8px 32px rgba(26,19,8,.22)",
+          display:"flex",gap:10,alignItems:"flex-start",
+          // Tablet: wider card with more breathing room; phone: full-width minus margins
+          maxWidth:mob?undefined:360,
+          width:mob?"auto":undefined,
+          animation:"fadeUp .25s ease both"
+        }}>
+          <span style={{fontSize:24,flexShrink:0,lineHeight:1,marginTop:1}}>💎</span>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:3}}>Add to Home Screen</div>
             {installPrompt
-              ?<div style={{fontSize:11,color:C.inkMid,marginBottom:9,lineHeight:1.4}}>Install Nikhil Gems as an app for quick access and a full-screen experience.</div>
-              :<div style={{fontSize:11,color:C.inkMid,marginBottom:9,lineHeight:1.4}}>Tap <b>Share</b> → <b>Add to Home Screen</b> to install this app for quick offline access.</div>
+              ?<div style={{fontSize:11,color:C.inkMid,marginBottom:9,lineHeight:1.45}}>
+                  Install <b>Nikhil Gems</b> as an app for quick access and a full-screen experience.
+                </div>
+              :<div style={{fontSize:11,color:C.inkMid,marginBottom:9,lineHeight:1.45}}>
+                  {isTablet
+                    ?"Tap the <b>Share</b> button in Safari's toolbar, then <b>Add to Home Screen</b>."
+                    :"Tap <b>Share ⎙</b> → <b>Add to Home Screen</b> to install this app."}
+                </div>
             }
-            <div style={{display:"flex",gap:7}}>
-              {installPrompt&&<button onClick={handleInstall} style={{background:C.gold,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>Install</button>}
-              <button onClick={dismissInstall} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"7px 12px",fontSize:12,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>Not now</button>
+            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+              {installPrompt&&(
+                <button onClick={handleInstall} style={{background:C.gold,color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                  Install
+                </button>
+              )}
+              <button onClick={dismissInstall} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 12px",fontSize:12,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                Not now
+              </button>
             </div>
           </div>
-          <button onClick={dismissInstall} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:18,padding:0,lineHeight:1,flexShrink:0}}>×</button>
+          <button onClick={dismissInstall} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:19,padding:0,lineHeight:1,flexShrink:0,marginTop:-1}}>×</button>
         </div>
       )}
       {content}
