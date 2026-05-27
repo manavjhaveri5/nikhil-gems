@@ -8815,7 +8815,7 @@ function ShowsApp({onHome}){
   const [stock,setStock]=useState([]);
   const [calEvents,setCalEvents]=useState([]);
   const [loaded,setLoaded]=useState(false);
-  const [expanded,setExpanded]=useState(null);
+  const [detailId,setDetailId]=useState(null);
   const [toast,setToast]=useState("");
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const todayStr=today();
@@ -8867,58 +8867,85 @@ function ShowsApp({onHome}){
   const upcoming=sorted.filter(s=>(s.endDate||s.startDate)>=todayStr);
   const past=sorted.filter(s=>(s.endDate||s.startDate)<todayStr);
 
+  // Helper: all handler props for ShowCard (avoids repeating twice)
+  const mkCardProps=(show)=>({
+    onToggleCheck:toggleCheck,onEditCheckTask:editCheckTask,
+    onAddCheckItem:addCheckItem,onDelCheckItem:delCheckItem,
+    onUpdateShipment:updateShipment,onAddShipment:addShipment,onDelShipment:delShipment,
+    onUpdateShow:updateShow,onAddFile:addFile,onDelFile:delFile,onRenameFile:renameFile,
+    onSyncToCalendar:syncToCalendar,onDelete:()=>save(shows.filter(s=>s.id!==show.id)),
+    stock,
+    onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
+    onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
+    onAddDailySale:addDailySale,onDelDailySale:delDailySale,
+    onAddShowExpense:addShowExpense,onDelShowExpense:delShowExpense,
+    onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
+    onUpdateShowPhotoCaption:updateShowPhotoCaption,
+    onAddJournalEntry:addJournalEntry,onDelJournalEntry:delJournalEntry,
+  });
+
   if(!loaded)return(<Shell title="Shows" onHome={onHome}><p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p></Shell>);
 
+  // ── Detail view: full-screen for selected show ───────────────────────────
+  const detailShow=detailId?shows.find(s=>s.id===detailId):null;
+  if(detailShow){
+    return(
+      <Shell title={detailShow.name} onHome={onHome} onBack={()=>setDetailId(null)}>
+        <Toast msg={toast}/>
+        <ShowCard key={detailShow.id} show={detailShow} isDetail={true} onOpen={()=>{}} {...mkCardProps(detailShow)}/>
+      </Shell>
+    );
+  }
+
+  // ── List view ────────────────────────────────────────────────────────────
   return(
     <Shell title="Shows" onHome={onHome} onBack={onHome} actions={
-      <button className="bp" style={{fontSize:12}} onClick={()=>{const n={id:uid(),name:"New Show",city:"",startDate:today(),endDate:today(),year:new Date().getFullYear(),color:C.teal,checklist:DEFAULT_CHECKLIST.map(t=>({id:uid(),task:t,done:false})),shipments:[],files:[],notes:""};save([...shows,n]);}}>+ Add Show</button>
+      <button className="bp" style={{fontSize:12}} onClick={()=>{
+        const n={id:uid(),name:"New Show",city:"",startDate:today(),endDate:today(),
+          year:new Date().getFullYear(),color:C.teal,
+          checklist:DEFAULT_CHECKLIST.map(t=>({id:uid(),task:t,done:false})),
+          shipments:[],files:[],notes:""};
+        save([...shows,n]);
+        setDetailId(n.id);
+      }}>+ Add Show</button>
     }>
       <Toast msg={toast}/>
       {upcoming.length>0&&(
-        <div style={{marginBottom:24}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>{upcoming.length} Upcoming</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:10}}>
-            {upcoming.map(show=><ShowCard key={show.id} show={show} expanded={expanded} setExpanded={setExpanded}
-              onToggleCheck={toggleCheck} onEditCheckTask={editCheckTask} onAddCheckItem={addCheckItem} onDelCheckItem={delCheckItem}
-              onUpdateShipment={updateShipment} onAddShipment={addShipment} onDelShipment={delShipment}
-              onUpdateShow={updateShow} onAddFile={addFile} onDelFile={delFile} onRenameFile={renameFile}
-              onSyncToCalendar={syncToCalendar} onDelete={()=>save(shows.filter(s=>s.id!==show.id))}
-              stock={stock} onAddBagItem={addBagItem} onUpdateBagItem={updateBagItem} onRemoveBagItem={removeBagItem} onMarkShowItemSold={markShowItemSold} onRemoveShowItem={removeShowItem}
-              onAddDailySale={addDailySale} onDelDailySale={delDailySale}
-              onAddShowExpense={addShowExpense} onDelShowExpense={delShowExpense}
-              onAddShowPhoto={addShowPhoto} onDelShowPhoto={delShowPhoto} onUpdateShowPhotoCaption={updateShowPhotoCaption}
-              onAddJournalEntry={addJournalEntry} onDelJournalEntry={delJournalEntry}/>)}
+        <div style={{marginBottom:28}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:14}}>{upcoming.length} Upcoming</div>
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
+            {upcoming.map(show=><ShowCard key={show.id} show={show} isDetail={false} onOpen={setDetailId} {...mkCardProps(show)}/>)}
           </div>
         </div>
       )}
       {past.length>0&&(
         <div>
           <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:10}}>Past</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:7}}>
-            {past.map(show=>(
-              <div key={show.id} onClick={()=>setExpanded(expanded===show.id?null:show.id)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",borderLeft:`3px solid ${show.color}`,opacity:.6,cursor:"pointer"}}>
-                <div style={{fontSize:13,fontWeight:500}}>{show.name}</div>
-                <div style={{fontSize:11,color:C.inkFaint}}>{fmtDate(show.startDate)} – {fmtDate(show.endDate)} · {show.city}</div>
-              </div>
-            ))}
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(340px,1fr))",gap:8}}>
+            {past.map(show=><ShowCard key={show.id} show={show} isDetail={false} onOpen={setDetailId} {...mkCardProps(show)}/>)}
           </div>
         </div>
       )}
-      {upcoming.length===0&&past.length===0&&<div style={{textAlign:"center",paddingTop:60,color:C.inkFaint}}>No shows yet</div>}
+      {upcoming.length===0&&past.length===0&&(
+        <div style={{textAlign:"center",paddingTop:80,color:C.inkFaint}}>
+          <div style={{fontSize:32,marginBottom:10}}>🌐</div>
+          <p style={{fontSize:14}}>No shows yet</p>
+        </div>
+      )}
     </Shell>
   );
 }
 
 // ShowCard defined OUTSIDE ShowsApp so React sees a stable component type across re-renders
 // (prevents focus-loss on every keystroke in checklist inputs)
-function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry}){
+function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry}){
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
   const daysLeft=Math.round((new Date(show.endDate)-new Date(todayStr))/(1000*60*60*24));
   const isNow=daysTo<=0&&daysLeft>=0;
   const done=(show.checklist||[]).filter(t=>t.done).length;
   const total=(show.checklist||[]).length;
-  const isOpen=expanded===show.id;
+  const isOpen=isDetail;
   const [pendingFile,setPendingFile]=useState(null);
   const [pendingName,setPendingName]=useState("");
   const [bagSearch,setBagSearch]=useState("");
@@ -8971,38 +8998,59 @@ function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAdd
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
   const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
 
-  return(
-    <div style={{background:C.surface,border:`1.5px solid ${isOpen?show.color:C.border}`,borderRadius:9,overflow:"hidden",borderLeft:`4px solid ${show.color}`}}>
-      {/* Card header */}
-      <div onClick={()=>setExpanded(isOpen?null:show.id)} style={{padding:"13px 16px",cursor:"pointer",display:"flex",gap:12,alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{minWidth:0,flex:1}}>
-          <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{show.name}</div>
-          <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>📍 {show.city}</div>
-          <div style={{fontSize:11,color:C.inkFaint,marginTop:1}}>{fmtDate(show.startDate)} – {fmtDate(show.endDate)}</div>
+  // ── Compact card (list mode) ─────────────────────────────────────────────
+  if(!isDetail){
+    const hasRev=Object.values(allRevByCur).some(v=>v>0);
+    const isPast=daysTo<=0&&!isNow;
+    return(
+      <div
+        onClick={()=>onOpen(show.id)}
+        style={{
+          background:C.surface,
+          border:`1.5px solid ${C.border}`,
+          borderRadius:12,
+          overflow:"hidden",
+          borderLeft:`4px solid ${show.color}`,
+          cursor:"pointer",
+          userSelect:"none",
+          opacity:isPast?.72:1,
+          transition:"box-shadow .15s",
+        }}
+      >
+        <div style={{padding:"15px 16px",display:"flex",gap:14,alignItems:"flex-start"}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:17,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{show.name}</div>
+            <div style={{fontSize:11.5,color:C.inkMid,marginTop:3}}>📍 {show.city}</div>
+            <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>{fmtDate(show.startDate)} – {fmtDate(show.endDate)}</div>
+            {hasRev&&<div style={{fontSize:11,color:C.green,fontWeight:600,marginTop:6}}>💰 {fmtCurObj(allRevByCur)}</div>}
+            {total>0&&(
+              <div style={{marginTop:11}}>
+                <div style={{background:C.card,borderRadius:3,height:4,overflow:"hidden"}}>
+                  <div style={{background:done===total?C.green:show.color,height:"100%",width:`${total?done/total*100:0}%`,transition:"width .4s ease",borderRadius:3}}/>
+                </div>
+                <div style={{fontSize:10,color:C.inkFaint,marginTop:4}}>{done}/{total} prep items</div>
+              </div>
+            )}
+          </div>
+          <div style={{textAlign:"right",flexShrink:0,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,minWidth:54}}>
+            {isNow
+              ?<div style={{background:show.color,color:"#fff",borderRadius:6,padding:"5px 11px",fontSize:11,fontWeight:700}}>● Live</div>
+              :daysTo>0
+                ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:28,fontWeight:600,color:daysTo<=14?C.red:C.ink,lineHeight:1}}>{daysTo}</div><div style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>days</div></>
+                :<span style={{fontSize:10,color:C.inkFaint}}>Past</span>
+            }
+            <span style={{fontSize:18,color:C.inkFaint,lineHeight:1,marginTop:4}}>›</span>
+          </div>
         </div>
-        <div style={{textAlign:"center",flexShrink:0}}>
-          {isNow
-            ?<div style={{background:show.color,color:"#fff",borderRadius:5,padding:"5px 10px",fontSize:11,fontWeight:700}}>Live</div>
-            :daysTo>0
-              ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:26,fontWeight:600,color:daysTo<=14?C.red:C.ink,lineHeight:1}}>{daysTo}</div><div style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase"}}>days</div></>
-              :<span style={{fontSize:10,color:C.inkFaint}}>Past</span>
-          }
-        </div>
-        <div style={{fontSize:16,color:C.inkFaint,transform:isOpen?"rotate(90deg)":"none",transition:"transform .2s",flexShrink:0}}>›</div>
       </div>
+    );
+  }
 
-      {/* Collapsed checklist preview */}
-      {!isOpen&&total>0&&(
-        <div style={{padding:"0 16px 10px",display:"flex",gap:4,flexWrap:"wrap"}}>
-          {(show.checklist||[]).map((item,i)=>(
-            <span key={i} title={item.task} style={{width:12,height:12,borderRadius:2,background:item.done?C.green:C.card,border:`1px solid ${item.done?C.green:C.border}`,display:"inline-block"}}/>
-          ))}
-          <span style={{fontSize:10,color:C.inkFaint,marginLeft:4}}>{done}/{total}</span>
-        </div>
-      )}
-
-      {isOpen&&(
-        <div style={{borderTop:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+  // ── Full detail view (inside Shell with back button from ShowsApp) ────────
+  return(
+    <div>
+      <div style={{height:4,background:show.color}}/>
+      <div onClick={e=>e.stopPropagation()}>
 
           {/* P&L Strip */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",borderBottom:`1px solid ${C.border}`,background:C.card}}>
@@ -9343,7 +9391,6 @@ function ShowCard({show,expanded,setExpanded,onToggleCheck,onEditCheckTask,onAdd
           )}
 
         </div>
-      )}
     </div>
   );
 }
