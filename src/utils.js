@@ -173,12 +173,55 @@ export const loadKFresh=async k=>{
   return _cache.has(k)?_cache.get(k):[];
 };
 
+// ── Offline write queue ───────────────────────────────────────────────────────
+const OQ_KEY="ng-offline-queue-v1";
+const _getOQ=()=>{try{return JSON.parse(localStorage.getItem(OQ_KEY)||"[]");}catch{return[];}};
+const _setOQ=q=>{try{localStorage.setItem(OQ_KEY,JSON.stringify(q));}catch{}};
+
+// Enqueue a key-value pair (dedup: latest value wins)
+const _enqueueWrite=(k,v)=>{
+  const q=_getOQ();
+  const idx=q.findIndex(x=>x.k===k);
+  if(idx>=0)q[idx]={k,v,ts:Date.now()};
+  else q.push({k,v,ts:Date.now()});
+  _setOQ(q);
+};
+
+// Flush queue → Supabase (called on 'online' event)
+export const syncOfflineQueue=async()=>{
+  const q=_getOQ();
+  if(!q.length)return 0;
+  const failed=[];
+  for(const item of q){
+    try{
+      const{error}=await supabase.from("app_data").upsert({key:item.k,value:item.v});
+      if(error)failed.push(item);
+      else{
+        const ts=Date.now();
+        _lastLocalSave.set(item.k,ts);
+        globalThis.__ngDataChannel?.send({type:"broadcast",event:"invalidate",payload:{key:item.k,ts}}).catch(()=>{});
+      }
+    }catch{failed.push(item);}
+  }
+  _setOQ(failed);
+  return q.length-failed.length; // number successfully synced
+};
+
+export const getOfflineQueueCount=()=>_getOQ().length;
+
 export const saveK=async(k,d)=>{
   if(DEMO_MODE)return; // no-op — demo data is read-only
   const persisted=_safeForLocalCache(d);
   _cache.set(k,persisted);            // update cache immediately so UI stays snappy
   _keyFetchedAt.set(k,Date.now());
   _persistLS();               // keep localStorage in sync so next load is fresh
+
+  // If offline: queue the write and return — UI already has the latest data
+  if(!navigator.onLine){
+    _enqueueWrite(k,persisted);
+    return;
+  }
+
   const{error}=await supabase.from("app_data").upsert({key:k,value:persisted});
   if(error)throw new Error(error.message);
   const ts=Date.now();

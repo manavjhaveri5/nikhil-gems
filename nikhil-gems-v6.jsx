@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS } from "./src/constants.js";
-import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity } from "./src/utils.js";
+import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
@@ -11396,6 +11396,25 @@ export default function Root({onSignOut}){
   const [userProfile,setUserProfile]=useState(undefined); // undefined=loading, false=admin, {...}=staff
   const [allUsers,setAllUsers]=useState([]);
   const [newAssignedTasks,setNewAssignedTasks]=useState([]);
+  // ── Offline / sync state ──────────────────────────────────────────────────
+  const [isOnline,setIsOnline]=useState(navigator.onLine);
+  const [syncingCount,setSyncingCount]=useState(0); // >0 while flushing queue
+  useEffect(()=>{
+    const goOnline=async()=>{
+      setIsOnline(true);
+      const pending=getOfflineQueueCount();
+      if(pending>0){
+        setSyncingCount(pending);
+        await syncOfflineQueue().catch(()=>{});
+        setSyncingCount(0);
+      }
+    };
+    const goOffline=()=>setIsOnline(false);
+    window.addEventListener("online",goOnline);
+    window.addEventListener("offline",goOffline);
+    return()=>{window.removeEventListener("online",goOnline);window.removeEventListener("offline",goOffline);};
+  },[]);
+
   // ── New-version detector ──────────────────────────────────────────────────
   const [updateReady,setUpdateReady]=useState(false);
   useEffect(()=>{
@@ -11549,8 +11568,29 @@ export default function Root({onSignOut}){
           <button onClick={()=>setUpdateReady(false)} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.6)",fontSize:18,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
         </div>
       )}
+      {(!isOnline||syncingCount>0)&&(
+        <div style={{
+          position:"fixed",
+          top:updateReady?44:0,
+          left:0,right:0,
+          zIndex:9998,
+          background:syncingCount>0?"#1A4A8A":"#4A3800",
+          padding:"9px 16px",
+          display:"flex",alignItems:"center",gap:10,
+          boxShadow:"0 2px 12px rgba(0,0,0,.22)",
+          animation:"fadeDown .25s ease both",
+          transition:"top .2s ease",
+        }}>
+          <span style={{fontSize:14,flexShrink:0}}>{syncingCount>0?"🔄":"📴"}</span>
+          <span style={{flex:1,fontSize:12,fontWeight:600,color:"#fff",lineHeight:1.3}}>
+            {syncingCount>0
+              ?`Syncing ${syncingCount} change${syncingCount!==1?"s":""}…`
+              :"You're offline — changes are saved locally and will sync when reconnected"}
+          </span>
+        </div>
+      )}
       {newAssignedTasks.length>0&&(
-        <div style={{position:"fixed",top:updateReady?44:0,left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)",transition:"top .2s ease"}}>
+        <div style={{position:"fixed",top:(updateReady?44:0)+(!isOnline||syncingCount>0?38:0),left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)",transition:"top .2s ease"}}>
           <span style={{fontSize:14,marginRight:4}}>📋</span>
           <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff"}}>
             {newAssignedTasks.length===1
