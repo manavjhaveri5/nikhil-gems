@@ -20,6 +20,9 @@
     },
     "api/notify-cron.js": {
       "maxDuration": 20
+    },
+    "api/version.js": {
+      "maxDuration": 5
     }
   },
   "crons": [

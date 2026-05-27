@@ -614,7 +614,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
   return(
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Figtree',system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:2px;}.jai-halo{position:relative;z-index:0;transition:transform .38s cubic-bezier(.34,1.56,.64,1),letter-spacing .35s ease;cursor:default;isolation:isolate;}.jai-halo::before{content:'';position:absolute;inset:-3px;border-radius:24px;background:conic-gradient(from 0deg,#9A6200 0%,#FFD700 18%,#FFFDE0 34%,#C48208 50%,#E0A830 66%,#FFD700 82%,#9A6200 100%);opacity:0;z-index:-1;animation:jaiSpin 2.4s linear infinite paused;transition:opacity .4s ease;}.jai-halo::after{content:'';position:absolute;inset:1px;border-radius:20px;background:var(--c-goldLight,#FEF6E0);z-index:-1;opacity:0;transition:opacity .4s ease;}.jai-halo:hover{transform:translateY(-2px) scale(1.07);letter-spacing:1.3px;animation:jaiGlow 1.8s ease-in-out infinite;}.jai-halo:hover::before{opacity:1;animation-play-state:running;}.jai-halo:hover::after{opacity:1;}@keyframes jaiSpin{to{transform:rotate(360deg)}}@keyframes jaiGlow{0%,100%{box-shadow:0 0 10px 3px rgba(196,130,8,.38),0 0 26px 9px rgba(196,130,8,.2),0 0 56px 20px rgba(255,215,0,.1)}50%{box-shadow:0 0 18px 7px rgba(255,215,0,.65),0 0 44px 16px rgba(196,130,8,.35),0 0 88px 34px rgba(255,215,0,.17)}}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeDown{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:2px;}.jai-halo{position:relative;z-index:0;transition:transform .38s cubic-bezier(.34,1.56,.64,1),letter-spacing .35s ease;cursor:default;isolation:isolate;}.jai-halo::before{content:'';position:absolute;inset:-3px;border-radius:24px;background:conic-gradient(from 0deg,#9A6200 0%,#FFD700 18%,#FFFDE0 34%,#C48208 50%,#E0A830 66%,#FFD700 82%,#9A6200 100%);opacity:0;z-index:-1;animation:jaiSpin 2.4s linear infinite paused;transition:opacity .4s ease;}.jai-halo::after{content:'';position:absolute;inset:1px;border-radius:20px;background:var(--c-goldLight,#FEF6E0);z-index:-1;opacity:0;transition:opacity .4s ease;}.jai-halo:hover{transform:translateY(-2px) scale(1.07);letter-spacing:1.3px;animation:jaiGlow 1.8s ease-in-out infinite;}.jai-halo:hover::before{opacity:1;animation-play-state:running;}.jai-halo:hover::after{opacity:1;}@keyframes jaiSpin{to{transform:rotate(360deg)}}@keyframes jaiGlow{0%,100%{box-shadow:0 0 10px 3px rgba(196,130,8,.38),0 0 26px 9px rgba(196,130,8,.2),0 0 56px 20px rgba(255,215,0,.1)}50%{box-shadow:0 0 18px 7px rgba(255,215,0,.65),0 0 44px 16px rgba(196,130,8,.35),0 0 88px 34px rgba(255,215,0,.17)}}`}</style>
       {assignOpen&&<AssignLocationsModal onClose={()=>setAssignOpen(false)} onSaved={count=>{showToast(`✓ ${count} location${count!==1?"s":""} saved`);loadK(KEYS.stock).then(s=>setUnassignedStock((s||[]).filter(x=>!x.location)));setTimeout(()=>setAssignOpen(false),800);}}/>}
       <Toast msg={dashToast}/>
 
@@ -11349,6 +11349,26 @@ export default function Root({onSignOut}){
   const [userProfile,setUserProfile]=useState(undefined); // undefined=loading, false=admin, {...}=staff
   const [allUsers,setAllUsers]=useState([]);
   const [newAssignedTasks,setNewAssignedTasks]=useState([]);
+  // ── New-version detector ──────────────────────────────────────────────────
+  const [updateReady,setUpdateReady]=useState(false);
+  useEffect(()=>{
+    let baseline=null;
+    const check=async()=>{
+      try{
+        const r=await fetch("/api/version",{cache:"no-store"});
+        if(!r.ok)return;
+        const{version}=await r.json();
+        if(!version||version==="dev")return;       // local / no SHA — stay quiet
+        if(baseline===null){baseline=version;return;} // first load — record baseline
+        if(version!==baseline)setUpdateReady(true);
+      }catch{}
+    };
+    check();
+    const id=setInterval(check,5*60*1000);          // poll every 5 min
+    const onVisible=()=>{if(!document.hidden)check();};
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>{clearInterval(id);document.removeEventListener("visibilitychange",onVisible);};
+  },[]);
   useEffect(()=>{
     supabase.auth.getUser().then(({data:{user}})=>{
       const email=user?.email||null;
@@ -11470,8 +11490,20 @@ export default function Root({onSignOut}){
   const FAB_ITEMS=[{icon:"⬆",label:"Upload Bill",action:()=>go("purchases","upload")},{icon:"🧾",label:"New Expense",action:()=>go("expenses")},{icon:"📋",label:"New Invoice",action:()=>go("invoices")},...(isAdmin?[{icon:"💰",label:"Finance",action:()=>go("finance")}]:[])];
   return(
     <>
+      {updateReady&&(
+        <div style={{position:"fixed",top:0,left:0,right:0,zIndex:10000,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
+          <span style={{fontSize:15,flexShrink:0}}>🚀</span>
+          <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff",lineHeight:1.3}}>A new version is available</span>
+          <button
+            onClick={()=>window.location.reload()}
+            style={{background:"#fff",border:"none",color:"#1C4A2E",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0,fontFamily:"inherit"}}>
+            Update now
+          </button>
+          <button onClick={()=>setUpdateReady(false)} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.6)",fontSize:18,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
+        </div>
+      )}
       {newAssignedTasks.length>0&&(
-        <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)"}}>
+        <div style={{position:"fixed",top:updateReady?44:0,left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)",transition:"top .2s ease"}}>
           <span style={{fontSize:14,marginRight:4}}>📋</span>
           <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff"}}>
             {newAssignedTasks.length===1
