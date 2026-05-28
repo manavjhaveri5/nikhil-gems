@@ -12023,7 +12023,9 @@ export default function Root({onSignOut}){
     localStorage.setItem("ng-user-lang",next);
     if(userProfile&&userProfile!==false){
       const users=await loadK("ng-users-v1");
-      const updated=(Array.isArray(users)?users:[]).map(u=>u.email?.toLowerCase()===currentEmail?.toLowerCase()?{...u,language:next}:u);
+      // Safety guard: never save if we didn't get a valid array back — avoids wiping all users on a load failure
+      if(!Array.isArray(users)||users.length===0)return;
+      const updated=users.map(u=>u.email?.toLowerCase()===currentEmail?.toLowerCase()?{...u,language:next}:u);
       saveK("ng-users-v1",updated).catch(()=>{});
       setUserProfile(prev=>prev?{...prev,language:next}:prev);
     }
