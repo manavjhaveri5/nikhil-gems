@@ -10,6 +10,7 @@ const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS } from "./src/constants.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
+import translations from "./src/translations.js";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
@@ -335,6 +336,14 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
 // ══════════════════════════════════════════════════════════════════
 // WELCOME
 // ══════════════════════════════════════════════════════════════════
+// ── LANGUAGE CONTEXT ─────────────────────────────────────────────
+const LanguageCtx=React.createContext({t:k=>k});
+function LanguageProvider({language,children}){
+  const t=React.useCallback(k=>(translations[language]?.[k]??translations.en[k]??k),[language]);
+  return<LanguageCtx.Provider value={{t}}>{children}</LanguageCtx.Provider>;
+}
+const useT=()=>React.useContext(LanguageCtx).t;
+// ─────────────────────────────────────────────────────────────────
 const MODS=[
   {id:"purchases",icon:"📦",title:"Purchases",desc:"Orders, bills, expand to stock",ready:true},
   {id:"vendors",icon:"🏢",title:"Vendors",desc:"Suppliers, GST, history",ready:true},
@@ -414,6 +423,7 @@ function FinancialChart({chartData,months6,nextM,openPOtotal,pendingReceivables,
 }
 
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
+  const t=useT();
   const visibleMods=allowedMods||MODS;
   const [vis,setVis]=useState(false);
   const [dashTab,setDashTab]=useState("overview"); // "overview" | "activity"
@@ -723,7 +733,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                 <button key={m.id} onClick={()=>onEnter(m.id)}
                   style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"12px 8px",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",WebkitTapHighlightColor:"transparent",transition:"transform .1s"}}>
                   <span style={{fontSize:24,lineHeight:1}}>{m.icon}</span>
-                  <span style={{fontSize:10,fontWeight:500,color:C.ink,textAlign:"center",lineHeight:1.2}}>{m.title}</span>
+                  <span style={{fontSize:10,fontWeight:500,color:C.ink,textAlign:"center",lineHeight:1.2}}>{t(m.id)}</span>
                 </button>
               ))}
             </div>
@@ -11209,7 +11219,7 @@ function UsersApp({onHome}){
         if(!r.ok)throw new Error(d.error||"Failed to update password");
       }catch(e){setSaving(false);return alert("Error changing password: "+e.message);}
     }
-    const entry={id:form.id||uid(),name:form.name.trim(),email:form.email.trim().toLowerCase(),role:"staff",allowedModules:form.allowedModules,supabaseId,createdAt:form.createdAt||new Date().toISOString()};
+    const entry={id:form.id||uid(),name:form.name.trim(),email:form.email.trim().toLowerCase(),role:"staff",allowedModules:form.allowedModules,language:form.language||"",supabaseId,createdAt:form.createdAt||new Date().toISOString()};
     const next=form.id?users.map(u=>u.id===form.id?entry:u):[...users,entry];
     await saveUsers(next);
     setSaving(false);setForm(null);showToast(form.id?"User updated":"User created");
@@ -11328,6 +11338,7 @@ function UsersApp({onHome}){
               <Field label="Email"><input type="email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} style={FI} placeholder="ravi@example.com" disabled={!!form.id}/></Field>
               {!form.id&&<Field label="Password"><input type="password" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))} style={FI} placeholder="Min 8 characters"/></Field>}
               {form.id&&<Field label="New Password (leave blank to keep current)"><input type="password" value={form.password||""} onChange={e=>setForm(f=>({...f,password:e.target.value}))} style={FI} placeholder="Enter new password to change it"/></Field>}
+              <Field label="Language"><select value={form.language||""} onChange={e=>setForm(f=>({...f,language:e.target.value}))} style={FI}><option value="">English (default)</option><option value="mr">मराठी (Marathi)</option></select></Field>
               <div>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:8}}>Module Access</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
@@ -11554,7 +11565,9 @@ export default function Root({onSignOut}){
   };
   if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
   const FAB_ITEMS=[{icon:"⬆",label:"Upload Bill",action:()=>go("purchases","upload")},{icon:"🧾",label:"New Expense",action:()=>go("expenses")},{icon:"📋",label:"New Invoice",action:()=>go("invoices")},...(isAdmin?[{icon:"💰",label:"Finance",action:()=>go("finance")}]:[])];
+  const userLang=userProfile?.language||"en";
   return(
+    <LanguageProvider language={userLang}>
     <>
       {updateReady&&(
         <div style={{position:"fixed",top:0,left:0,right:0,zIndex:10000,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
@@ -11673,5 +11686,6 @@ export default function Root({onSignOut}){
         </button>
       </div>
     </>
+    </LanguageProvider>
   );
 }
