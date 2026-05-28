@@ -10,7 +10,7 @@ const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS } from "./src/constants.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
-import translations from "./src/translations.js";
+import { LanguageCtx, LanguageProvider, useT } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
@@ -336,14 +336,6 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
 // ══════════════════════════════════════════════════════════════════
 // WELCOME
 // ══════════════════════════════════════════════════════════════════
-// ── LANGUAGE CONTEXT ─────────────────────────────────────────────
-const LanguageCtx=React.createContext({t:k=>k});
-function LanguageProvider({language,children}){
-  const t=React.useCallback(k=>(translations[language]?.[k]??translations.en[k]??k),[language]);
-  return<LanguageCtx.Provider value={{t}}>{children}</LanguageCtx.Provider>;
-}
-const useT=()=>React.useContext(LanguageCtx).t;
-// ─────────────────────────────────────────────────────────────────
 const MODS=[
   {id:"purchases",icon:"📦",title:"Purchases",desc:"Orders, bills, expand to stock",ready:true},
   {id:"vendors",icon:"🏢",title:"Vendors",desc:"Suppliers, GST, history",ready:true},
@@ -1413,6 +1405,7 @@ productType one of: ${PRODUCT_TYPES.join(",")}. shape one of: ${SHAPES.join(",")
 // VENDORS MODULE
 // ══════════════════════════════════════════════════════════════════
 function VendorsApp({onHome,startVendor}){
+  const t=useT();
   const [vendors,setVendors]=useState([]);const [purchases,setPurchases]=useState([]);const [expenses,setExpenses]=useState([]);const [finTxns,setFinTxns]=useState([]);const [accStock,setAccStock]=useState([]);const [form,setForm]=useState(null);const [selected,setSelected]=useState(null);const [selTab,setSelTab]=useState("ledger");const [toast,setToast]=useState("");const [loaded,setLoaded]=useState(false);const [vendorSort,setVendorSort]=useState("az");const [vendorSearch,setVendorSearch]=useState("");const [merging,setMerging]=useState(false);const [mergeTargetId,setMergeTargetId]=useState("");
   const [ledgerSelectMode,setLedgerSelectMode]=useState(false);const [selectedLedgerIds,setSelectedLedgerIds]=useState(new Set());const [editingRow,setEditingRow]=useState(null);const [expandedBillId,setExpandedBillId]=useState(null);
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
@@ -2677,6 +2670,7 @@ const JW_KEY="ng-jobwork-v1";
 const JW_TYPES=["Polishing","Resetting","Cutting","Drilling","Engraving","Plating","Other"];
 
 function JobWorkApp({onHome}){
+  const t=useT();
   const [jobs,setJobs]=useState([]);
   const [tab,setTab]=useState("out"); // out | returned | all
   const [form,setForm]=useState(null);
@@ -3280,6 +3274,7 @@ function VendorPickerField({value,onChange,vendors,onVendorCreated,allowFreeText
 }
 
 function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onStockIdConsumed,startLocationFilter,onLocationConsumed}){
+  const t=useT();
   // Capture on mount so clearing the parent prop doesn't lose the value before StockBinsView mounts
   const initBinRef=useRef(startLocationFilter||null);
   const allShapes=useShapes();
@@ -4689,7 +4684,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         return(
         <div style={{maxWidth:680}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}>
-            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600}}>{form.id&&stock.find(s=>s.id===form.id)?"Edit Stock Item":"New Stock Item"}</div>
+            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600}}>{form.id&&stock.find(s=>s.id===form.id)?t("Edit Stock Item"):t("New Stock Item")}</div>
             {formQueue.length>0&&<div style={{fontSize:11,color:C.green,background:C.greenBg,border:`1px solid ${C.green}`,borderRadius:6,padding:"4px 10px",fontWeight:600}}>✓ {formQueue.length} queued</div>}
           </div>
           {formQueue.length>0&&(
@@ -4711,7 +4706,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div style={{display:"grid",gap:11}}>
               {/* ── CLASSIFICATION ── */}
               <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px"}}>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.amber,borderRadius:2}}/>Classification</div>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.amber,borderRadius:2}}/>{t("Classification")}</div>
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10}}>
                   <Field label="Material / Stone">
                     <div style={{display:"flex",gap:5,alignItems:"center"}}>
@@ -4735,7 +4730,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               </div>
               {/* ── QUANTITIES ── */}
               <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px"}}>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.blue,borderRadius:2}}/>Quantities & Cost</div>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.blue,borderRadius:2}}/>{t("Quantities & Cost")}</div>
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto 1fr",gap:10,alignItems:"end"}}>
                   <Field label="Qty — Primary">
                     <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6}}>
@@ -4760,7 +4755,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               </div>
               {/* ── ACQUISITION ── */}
               <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px"}}>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.green,borderRadius:2}}/>Acquisition</div>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.green,borderRadius:2}}/>{t("Acquisition")}</div>
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10}}>
                   <Field label="Purchased From / Vendor">
                     <VendorPickerField
@@ -4779,7 +4774,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 </div>
               </div>
               <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"16px 18px"}}>
-                <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:11}}>Tags & Platforms</div>
+                <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:11}}>{t("Tags & Platforms")}</div>
                 <div>
                   <Tag>Markets</Tag><div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>{DEFAULT_MARKETS.filter(m=>m!=="Unassigned").map(m=>{const cur=Array.isArray(form.market)?form.market:[];const on=cur.includes(m);return <button type="button" key={m} onClick={()=>setForm(f=>{const c=Array.isArray(f.market)?f.market:[];return{...f,market:on?c.filter(x=>x!==m):[...c,m]};})  } style={{fontSize:11,padding:"3px 9px",borderRadius:4,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:"transparent",color:on?C.ink:C.inkMid,cursor:"pointer",transition:"all .1s"}}>{m}</button>;})} </div>
                 </div>
@@ -4809,10 +4804,10 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         </div>
                       ))}
                     </div>
-                  ):<div style={{textAlign:"center",color:C.inkFaint}}><div style={{fontSize:20,marginBottom:3}}>📷</div><div style={{fontSize:10}}>Add photos</div></div>}
+                  ):<div style={{textAlign:"center",color:C.inkFaint}}><div style={{fontSize:20,marginBottom:3}}>📷</div><div style={{fontSize:10}}>{t("Add photos")}</div></div>}
                   {form._photoUploading&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,.3)",borderRadius:7,fontSize:11,color:"#fff"}}>Uploading…</div>}
                 </label>
-                <button className="bs" style={{width:"100%",fontSize:11,padding:"6px"}} onClick={()=>photoRef.current?.click()}>+ Add More Photos</button>
+                <button className="bs" style={{width:"100%",fontSize:11,padding:"6px"}} onClick={()=>photoRef.current?.click()}>{t("+ Add More Photos")}</button>
                 {/* Video */}
                 <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:12}}>
                   <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>🎬 Video</div>
@@ -4869,7 +4864,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         }}>Remove video</button>
                       </div>
                     :<button className="bs" style={{width:"100%",fontSize:11,padding:"8px"}} onClick={()=>videoRef.current.click()}>
-                        {form._videoUploading?"Uploading…":"+ Upload Video"}
+                        {form._videoUploading?t("Saving…"):t("+ Upload Video")}
                       </button>
                   }
                 </div>
@@ -4888,7 +4883,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     </div>
                   )}
                   <label style={{display:"flex",alignItems:"center",gap:5,background:C.surface,border:`1.5px dashed ${C.border}`,borderRadius:6,padding:"7px 10px",cursor:"pointer",fontSize:11,color:C.inkMid,width:"100%",boxSizing:"border-box"}}>
-                    <span style={{fontSize:14}}>📎</span> Attach file / bill
+                    <span style={{fontSize:14}}>📎</span> {t("Attach file / bill")}
                     <input type="file" accept="image/*,.pdf" multiple style={{display:"none"}} onChange={e=>{
                       const files=Array.from(e.target.files||[]);
                       files.forEach(file=>{
@@ -4905,7 +4900,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           </div>
           <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:13,flexWrap:"wrap"}}>
             <button className="bs" onClick={()=>{setForm(null);setFormQueue([]);}}>Cancel</button>
-            <button className="bs" style={{color:C.amber,borderColor:C.amber,opacity:form._photoUploading?.55:1}} disabled={!!form._photoUploading} onClick={()=>{if(!form.material?.trim()&&!form.name?.trim())return alert("Material required");queueAndNext(form);}}>+ Add Another</button>
+            <button className="bs" style={{color:C.amber,borderColor:C.amber,opacity:form._photoUploading?.55:1}} disabled={!!form._photoUploading} onClick={()=>{if(!form.material?.trim()&&!form.name?.trim())return alert("Material required");queueAndNext(form);}}>{t("+ Add Another")}</button>
             <button className="bp" disabled={!!form._photoUploading} style={{opacity:form._photoUploading?.55:1}} onClick={()=>{
               if(!form.material?.trim()&&!form.name?.trim())return alert("Material required");
               if(form._videoUploading){
@@ -4916,7 +4911,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               }else{
                 saveItem(form);
               }
-            }}>{form._photoUploading?"Uploading photos…":formQueue.length>0?`Save All (${formQueue.length+1})`:"Save to Stock"}</button>
+            }}>{form._photoUploading?t("Saving…"):formQueue.length>0?`Save All (${formQueue.length+1})`:t("Save to Stock")}</button>
           </div>
         </div>
         );
@@ -5077,6 +5072,7 @@ async function loadStockWithPhotos(){
 }
 
 function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor}){
+  const t=useT();
   const [purchases,setPurchases]=useState([]);const [vendors,setVendors]=useState([]);const [stock,setStock]=useState([]);const [glossary,setGlossary]=useState([]);const [accStock,setAccStock]=useState([]);
   const [view,setView]=useState(startView==="upload"?"upload":"list");const [tab,setTab]=useState("all");const [sortBy,setSortBy]=useState("date");
   const [draft,setDraft]=useState(null);const [expandBill,setExpandBill]=useState(null);const [detail,setDetail]=useState(null);
@@ -6408,6 +6404,7 @@ function ExpenseCharts({expenses,topCat,totalSpend}){
 }
 
 function ExpensesApp({onHome}){
+  const t=useT();
   const [expenses,setExpenses]=useState([]);
   const [vendors,setVendors]=useState([]);
   const [recurring,setRecurring]=useState([]);

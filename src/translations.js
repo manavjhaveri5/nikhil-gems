@@ -1,6 +1,6 @@
 const translations = {
   en: {
-    // Module names (navigation)
+    // ── Module IDs ──────────────────────────────────────────────────
     purchases: "Purchases",
     vendors: "Vendors",
     stock: "Stock",
@@ -17,7 +17,7 @@ const translations = {
     users: "Users",
     datasets: "Datasets",
 
-    // Common actions
+    // ── Common actions ───────────────────────────────────────────────
     save: "Save",
     cancel: "Cancel",
     add: "Add",
@@ -44,8 +44,6 @@ const translations = {
     yes: "Yes",
     no: "No",
     ok: "OK",
-
-    // Loading / status
     loading: "Loading…",
     saving: "Saving…",
     saved: "Saved",
@@ -54,39 +52,7 @@ const translations = {
     noData: "No data",
     noResults: "No results",
 
-    // Common form labels
-    name: "Name",
-    email: "Email",
-    phone: "Phone",
-    date: "Date",
-    amount: "Amount",
-    quantity: "Quantity",
-    status: "Status",
-    notes: "Notes",
-    description: "Description",
-    total: "Total",
-    price: "Price",
-    category: "Category",
-    type: "Type",
-    weight: "Weight",
-    vendor: "Vendor",
-    item: "Item",
-    invoice: "Invoice",
-    payment: "Payment",
-    balance: "Balance",
-    rate: "Rate",
-    currency: "Currency",
-    address: "Address",
-    city: "City",
-    country: "Country",
-    gst: "GST",
-    remarks: "Remarks",
-    reference: "Reference",
-    orderNo: "Order No.",
-    billNo: "Bill No.",
-    invoiceNo: "Invoice No.",
-
-    // Status values
+    // ── Status ───────────────────────────────────────────────────────
     pending: "Pending",
     completed: "Completed",
     paid: "Paid",
@@ -101,115 +67,193 @@ const translations = {
     dispatched: "Dispatched",
     received: "Received",
     returned: "Returned",
-
-    // Purchases module
-    purchaseOrder: "Purchase Order",
-    purchaseOrders: "Purchase Orders",
-    bill: "Bill",
-    bills: "Bills",
-    addPurchase: "Add Purchase",
-    addBill: "Add Bill",
-    expandToStock: "Expand to Stock",
-    orderDate: "Order Date",
-    billDate: "Bill Date",
-    dueDate: "Due Date",
-    deliveryDate: "Delivery Date",
-    totalAmount: "Total Amount",
-    paidAmount: "Paid Amount",
-    balanceDue: "Balance Due",
-    payNow: "Pay Now",
-    markPaid: "Mark as Paid",
-
-    // Stock module
-    stockItem: "Stock Item",
-    stockItems: "Stock Items",
-    addStock: "Add to Stock",
-    carats: "Carats",
-    pieces: "Pieces",
-    shape: "Shape",
-    cut: "Cut",
-    color: "Color",
-    clarity: "Clarity",
-    origin: "Origin",
-    treatment: "Treatment",
-    certificate: "Certificate",
-    costPerCarat: "Cost/Ct",
-    salePrice: "Sale Price",
+    sold: "Sold",
+    available: "Available",
     assigned: "Assigned",
     unassigned: "Unassigned",
-    available: "Available",
-    sold: "Sold",
 
-    // Vendors module
-    vendorName: "Vendor Name",
-    addVendor: "Add Vendor",
-    contactPerson: "Contact Person",
-    panNo: "PAN No.",
-    accountNo: "Account No.",
-    ifsc: "IFSC",
-    bank: "Bank",
-    outstandingBalance: "Outstanding Balance",
-    purchaseHistory: "Purchase History",
-
-    // Expenses module
-    expense: "Expense",
-    expenses2: "Expenses",
-    addExpense: "Add Expense",
-    expenseType: "Expense Type",
-    freight: "Freight",
-    rent: "Rent",
-    utilities: "Utilities",
-    showCosts: "Show Costs",
-    payee: "Payee",
-    paidBy: "Paid By",
-    paidVia: "Paid Via",
-    cash: "Cash",
-    bank2: "Bank",
-    cheque: "Cheque",
-
-    // Job Work module
-    jobOrder: "Job Order",
-    jobOrders: "Job Orders",
-    addJobOrder: "Add Job Order",
-    sentDate: "Sent Date",
-    returnDate: "Return Date",
-    worker: "Worker",
-    workType: "Work Type",
-    polishing: "Polishing",
-    cutting: "Cutting",
-    resetting: "Resetting",
-    jobCharges: "Job Charges",
-    sentPieces: "Sent Pieces",
-    returnedPieces: "Returned Pieces",
-
-    // Dashboard / welcome
-    welcome: "Welcome",
-    dashboard: "Dashboard",
-    quickSell: "Quick Sell",
-    todoList: "To-Do List",
-    addTask: "Add Task",
-    recentActivity: "Recent Activity",
-    openOrders: "Open Orders",
-    pendingBills: "Pending Bills",
-    lowStock: "Low Stock",
-
-    // Users panel (admin)
+    // ── Users panel ──────────────────────────────────────────────────
     language: "Language",
     moduleAccess: "Module Access",
-    fullName: "Full Name",
-    password: "Password",
-    newPassword: "New Password",
-    addUser: "Add User",
-    editUser: "Edit User",
-    deleteUser: "Delete User",
-    saveUser: "Save User",
-    userCreated: "User created",
-    userUpdated: "User updated",
-    userDeleted: "User deleted",
+
+    // ════════════════════════════════════════════════════════════════
+    // FIELD LABELS  (exact English string as key — used by Field auto-translate)
+    // ════════════════════════════════════════════════════════════════
+
+    // Stock form
+    "Material / Stone": "Material / Stone",
+    "Shape": "Shape",
+    "Product Type": "Product Type",
+    "Size": "Size",
+    "Grade": "Grade",
+    "HSN": "HSN",
+    "Qty — Primary": "Qty — Primary",
+    "Qty — Secondary": "Qty — Secondary",
+    "Cost Price (₹)": "Cost Price (₹)",
+    "List Price / USD": "List Price / USD",
+    "Storage Location": "Storage Location",
+    "Purchased From / Vendor": "Purchased From / Vendor",
+    "SKU": "SKU",
+    "Origin": "Origin",
+    "Treatment": "Treatment",
+    "Certificate": "Certificate",
+    "Weight (gm)": "Weight (gm)",
+
+    // Purchases form
+    "Vendor": "Vendor",
+    "Order Date": "Order Date",
+    "Bill Date": "Bill Date",
+    "Due Date": "Due Date",
+    "Delivery Date": "Delivery Date",
+    "Invoice No.": "Invoice No.",
+    "Order No.": "Order No.",
+    "Bill No.": "Bill No.",
+    "Total Amount": "Total Amount",
+    "Amount Paid": "Amount Paid",
+    "Balance Due": "Balance Due",
+    "Notes": "Notes",
+    "Description": "Description",
+    "Quantity": "Quantity",
+    "Unit Price": "Unit Price",
+    "GST %": "GST %",
+    "Discount": "Discount",
+    "Tax": "Tax",
+    "Subtotal": "Subtotal",
+    "Total": "Total",
+    "Payment Date": "Payment Date",
+    "Payment Mode": "Payment Mode",
+    "Reference": "Reference",
+    "Remarks": "Remarks",
+    "Currency": "Currency",
+    "Exchange Rate": "Exchange Rate",
+
+    // Vendors form
+    "Name": "Name",
+    "Email": "Email",
+    "Phone": "Phone",
+    "Address": "Address",
+    "City": "City",
+    "Country": "Country",
+    "PAN No.": "PAN No.",
+    "GST No.": "GST No.",
+    "Account No.": "Account No.",
+    "IFSC": "IFSC",
+    "Bank": "Bank",
+    "Contact Person": "Contact Person",
+
+    // Expenses form
+    "Date": "Date",
+    "Amount": "Amount",
+    "Category": "Category",
+    "Paid By": "Paid By",
+    "Paid Via": "Paid Via",
+    "Payee": "Payee",
+    "Type": "Type",
+
+    // Job Work form
+    "Sent Date": "Sent Date",
+    "Return Date": "Return Date",
+    "Worker / Party": "Worker / Party",
+    "Work Type": "Work Type",
+    "Pieces Sent": "Pieces Sent",
+    "Pieces Returned": "Pieces Returned",
+    "Charges": "Charges",
+    "Item / Stone": "Item / Stone",
+
+    // Invoices form
+    "Buyer": "Buyer",
+    "Invoice Date": "Invoice Date",
+    "Currency Rate": "Currency Rate",
+    "Shipping": "Shipping",
+    "Insurance": "Insurance",
+
+    // Common field labels
+    "Full Name": "Full Name",
+    "Password": "Password",
+    "New Password (leave blank to keep current)": "New Password (leave blank to keep current)",
+    "Language": "Language",
+
+    // ════════════════════════════════════════════════════════════════
+    // SECTION HEADERS
+    // ════════════════════════════════════════════════════════════════
+    "Classification": "Classification",
+    "Quantities & Cost": "Quantities & Cost",
+    "Acquisition": "Acquisition",
+    "Tags & Platforms": "Tags & Platforms",
+    "Photos": "Photos",
+    "Party Details": "Party Details",
+    "Line Items": "Line Items",
+    "Payment": "Payment",
+    "Summary": "Summary",
+    "Details": "Details",
+    "Markets": "Markets",
+
+    // ════════════════════════════════════════════════════════════════
+    // PAGE TITLES & HEADINGS
+    // ════════════════════════════════════════════════════════════════
+    "New Stock Item": "New Stock Item",
+    "Edit Stock Item": "Edit Stock Item",
+    "New Purchase Order": "New Purchase Order",
+    "New Bill": "New Bill",
+    "Edit Purchase": "Edit Purchase",
+    "New Expense": "New Expense",
+    "Edit Expense": "Edit Expense",
+    "New Job Order": "New Job Order",
+    "Edit Job Order": "Edit Job Order",
+    "New Vendor": "New Vendor",
+    "Edit Vendor": "Edit Vendor",
+    "Add User": "Add User",
+    "Edit User": "Edit User",
+    "Staff Users": "Staff Users",
+
+    // ════════════════════════════════════════════════════════════════
+    // BUTTONS
+    // ════════════════════════════════════════════════════════════════
+    "Save to Stock": "Save to Stock",
+    "Save Changes": "Save Changes",
+    "+ Add Another": "+ Add Another",
+    "Add Purchase Order": "Add Purchase Order",
+    "Add Bill": "Add Bill",
+    "Add Expense": "Add Expense",
+    "+ Add Job Order": "+ Add Job Order",
+    "Add Vendor": "Add Vendor",
+    "Mark as Paid": "Mark as Paid",
+    "Pay Now": "Pay Now",
+    "Expand to Stock": "Expand to Stock",
+    "+ Add Photo": "+ Add Photo",
+    "+ Add More Photos": "+ Add More Photos",
+    "+ Upload Video": "+ Upload Video",
+    "Attach file / bill": "Attach file / bill",
+    "↺ Auto": "↺ Auto",
+    "Save User": "Save User",
+
+    // ════════════════════════════════════════════════════════════════
+    // TABLE COLUMN HEADERS
+    // ════════════════════════════════════════════════════════════════
+    "Item": "Item",
+    "Vendor": "Vendor",
+    "Date": "Date",
+    "Amount": "Amount",
+    "Status": "Status",
+    "Actions": "Actions",
+    "Qty": "Qty",
+    "Price": "Price",
+    "Balance": "Balance",
+    "Location": "Location",
+    "Market": "Market",
+
+    // ════════════════════════════════════════════════════════════════
+    // EMPTY STATES & MESSAGES
+    // ════════════════════════════════════════════════════════════════
+    "No items yet": "No items yet",
+    "No results found": "No results found",
+    "Loading…": "Loading…",
+    "Saving…": "Saving…",
+    "Add photos": "Add photos",
   },
 
   mr: {
-    // Module names (navigation)
+    // ── Module IDs ──────────────────────────────────────────────────
     purchases: "खरेदी",
     vendors: "विक्रेते",
     stock: "स्टॉक",
@@ -226,7 +270,7 @@ const translations = {
     users: "वापरकर्ते",
     datasets: "डेटासेट",
 
-    // Common actions
+    // ── Common actions ───────────────────────────────────────────────
     save: "जतन करा",
     cancel: "रद्द करा",
     add: "जोडा",
@@ -253,8 +297,6 @@ const translations = {
     yes: "होय",
     no: "नाही",
     ok: "ठीक आहे",
-
-    // Loading / status
     loading: "लोड होत आहे…",
     saving: "जतन होत आहे…",
     saved: "जतन झाले",
@@ -263,39 +305,7 @@ const translations = {
     noData: "माहिती नाही",
     noResults: "परिणाम नाही",
 
-    // Common form labels
-    name: "नाव",
-    email: "ईमेल",
-    phone: "फोन",
-    date: "तारीख",
-    amount: "रक्कम",
-    quantity: "प्रमाण",
-    status: "स्थिती",
-    notes: "नोंदी",
-    description: "वर्णन",
-    total: "एकूण",
-    price: "किंमत",
-    category: "श्रेणी",
-    type: "प्रकार",
-    weight: "वजन",
-    vendor: "विक्रेता",
-    item: "वस्तू",
-    invoice: "चालान",
-    payment: "पेमेंट",
-    balance: "शिल्लक",
-    rate: "दर",
-    currency: "चलन",
-    address: "पत्ता",
-    city: "शहर",
-    country: "देश",
-    gst: "जीएसटी",
-    remarks: "टिप्पणी",
-    reference: "संदर्भ",
-    orderNo: "ऑर्डर क्र.",
-    billNo: "बिल क्र.",
-    invoiceNo: "चालान क्र.",
-
-    // Status values
+    // ── Status ───────────────────────────────────────────────────────
     pending: "प्रलंबित",
     completed: "पूर्ण",
     paid: "भरले",
@@ -310,111 +320,188 @@ const translations = {
     dispatched: "पाठवले",
     received: "मिळाले",
     returned: "परत केले",
-
-    // Purchases module
-    purchaseOrder: "खरेदी ऑर्डर",
-    purchaseOrders: "खरेदी ऑर्डर्स",
-    bill: "बिल",
-    bills: "बिले",
-    addPurchase: "खरेदी जोडा",
-    addBill: "बिल जोडा",
-    expandToStock: "स्टॉकमध्ये जोडा",
-    orderDate: "ऑर्डर तारीख",
-    billDate: "बिल तारीख",
-    dueDate: "देय तारीख",
-    deliveryDate: "डिलिव्हरी तारीख",
-    totalAmount: "एकूण रक्कम",
-    paidAmount: "भरलेली रक्कम",
-    balanceDue: "शिल्लक रक्कम",
-    payNow: "आत्ता भरा",
-    markPaid: "भरले म्हणून चिन्हांकित करा",
-
-    // Stock module
-    stockItem: "स्टॉक वस्तू",
-    stockItems: "स्टॉक वस्तू",
-    addStock: "स्टॉक जोडा",
-    carats: "कॅरेट",
-    pieces: "तुकडे",
-    shape: "आकार",
-    cut: "कट",
-    color: "रंग",
-    clarity: "स्पष्टता",
-    origin: "मूळ",
-    treatment: "उपचार",
-    certificate: "प्रमाणपत्र",
-    costPerCarat: "किंमत/कॅ.",
-    salePrice: "विक्री किंमत",
+    sold: "विकले",
+    available: "उपलब्ध",
     assigned: "नियुक्त",
     unassigned: "अनियुक्त",
-    available: "उपलब्ध",
-    sold: "विकले",
 
-    // Vendors module
-    vendorName: "विक्रेत्याचे नाव",
-    addVendor: "विक्रेता जोडा",
-    contactPerson: "संपर्क व्यक्ती",
-    panNo: "पॅन क्र.",
-    accountNo: "खाते क्र.",
-    ifsc: "IFSC",
-    bank: "बँक",
-    outstandingBalance: "थकबाकी शिल्लक",
-    purchaseHistory: "खरेदी इतिहास",
-
-    // Expenses module
-    expense: "खर्च",
-    expenses2: "खर्च",
-    addExpense: "खर्च जोडा",
-    expenseType: "खर्चाचा प्रकार",
-    freight: "मालवाहतूक",
-    rent: "भाडे",
-    utilities: "उपयुक्तता",
-    showCosts: "प्रदर्शन खर्च",
-    payee: "प्राप्तकर्ता",
-    paidBy: "द्वारे भरले",
-    paidVia: "मार्गाने भरले",
-    cash: "रोख",
-    bank2: "बँक",
-    cheque: "चेक",
-
-    // Job Work module
-    jobOrder: "काम ऑर्डर",
-    jobOrders: "काम ऑर्डर्स",
-    addJobOrder: "काम ऑर्डर जोडा",
-    sentDate: "पाठवण्याची तारीख",
-    returnDate: "परत तारीख",
-    worker: "कामगार",
-    workType: "कामाचा प्रकार",
-    polishing: "पॉलिशिंग",
-    cutting: "कटिंग",
-    resetting: "रिसेटिंग",
-    jobCharges: "काम शुल्क",
-    sentPieces: "पाठवलेले तुकडे",
-    returnedPieces: "परत केलेले तुकडे",
-
-    // Dashboard / welcome
-    welcome: "स्वागत आहे",
-    dashboard: "डॅशबोर्ड",
-    quickSell: "त्वरित विक्री",
-    todoList: "करायच्या गोष्टी",
-    addTask: "काम जोडा",
-    recentActivity: "अलीकडील क्रियाकलाप",
-    openOrders: "उघडे ऑर्डर",
-    pendingBills: "प्रलंबित बिले",
-    lowStock: "कमी स्टॉक",
-
-    // Users panel (admin)
+    // ── Users panel ──────────────────────────────────────────────────
     language: "भाषा",
     moduleAccess: "मॉड्यूल प्रवेश",
-    fullName: "पूर्ण नाव",
-    password: "पासवर्ड",
-    newPassword: "नवीन पासवर्ड",
-    addUser: "वापरकर्ता जोडा",
-    editUser: "वापरकर्ता संपादित करा",
-    deleteUser: "वापरकर्ता हटवा",
-    saveUser: "वापरकर्ता जतन करा",
-    userCreated: "वापरकर्ता तयार झाला",
-    userUpdated: "वापरकर्ता अपडेट झाला",
-    userDeleted: "वापरकर्ता हटवला",
+
+    // ════════════════════════════════════════════════════════════════
+    // FIELD LABELS
+    // ════════════════════════════════════════════════════════════════
+
+    // Stock form
+    "Material / Stone": "साहित्य / दगड",
+    "Shape": "आकार",
+    "Product Type": "उत्पादनाचा प्रकार",
+    "Size": "आकारमान",
+    "Grade": "दर्जा",
+    "HSN": "HSN",
+    "Qty — Primary": "प्राथमिक प्रमाण",
+    "Qty — Secondary": "दुय्यम प्रमाण",
+    "Cost Price (₹)": "खरेदी किंमत (₹)",
+    "List Price / USD": "यादी किंमत / USD",
+    "Storage Location": "साठवण जागा",
+    "Purchased From / Vendor": "विक्रेत्याकडून खरेदी",
+    "SKU": "SKU",
+    "Origin": "मूळ",
+    "Treatment": "प्रक्रिया",
+    "Certificate": "प्रमाणपत्र",
+    "Weight (gm)": "वजन (ग्रॅम)",
+
+    // Purchases form
+    "Vendor": "विक्रेता",
+    "Order Date": "ऑर्डर तारीख",
+    "Bill Date": "बिल तारीख",
+    "Due Date": "देय तारीख",
+    "Delivery Date": "डिलिव्हरी तारीख",
+    "Invoice No.": "चालान क्र.",
+    "Order No.": "ऑर्डर क्र.",
+    "Bill No.": "बिल क्र.",
+    "Total Amount": "एकूण रक्कम",
+    "Amount Paid": "भरलेली रक्कम",
+    "Balance Due": "शिल्लक रक्कम",
+    "Notes": "नोंदी",
+    "Description": "वर्णन",
+    "Quantity": "प्रमाण",
+    "Unit Price": "एकक किंमत",
+    "GST %": "GST %",
+    "Discount": "सूट",
+    "Tax": "कर",
+    "Subtotal": "उपएकूण",
+    "Total": "एकूण",
+    "Payment Date": "पेमेंट तारीख",
+    "Payment Mode": "पेमेंट पद्धत",
+    "Reference": "संदर्भ",
+    "Remarks": "टिप्पणी",
+    "Currency": "चलन",
+    "Exchange Rate": "विनिमय दर",
+
+    // Vendors form
+    "Name": "नाव",
+    "Email": "ईमेल",
+    "Phone": "फोन",
+    "Address": "पत्ता",
+    "City": "शहर",
+    "Country": "देश",
+    "PAN No.": "PAN क्र.",
+    "GST No.": "GST क्र.",
+    "Account No.": "खाते क्र.",
+    "IFSC": "IFSC",
+    "Bank": "बँक",
+    "Contact Person": "संपर्क व्यक्ती",
+
+    // Expenses form
+    "Date": "तारीख",
+    "Amount": "रक्कम",
+    "Category": "श्रेणी",
+    "Paid By": "द्वारे भरले",
+    "Paid Via": "मार्गाने भरले",
+    "Payee": "प्राप्तकर्ता",
+    "Type": "प्रकार",
+
+    // Job Work form
+    "Sent Date": "पाठवण्याची तारीख",
+    "Return Date": "परत तारीख",
+    "Worker / Party": "कामगार / पार्टी",
+    "Work Type": "कामाचा प्रकार",
+    "Pieces Sent": "पाठवलेले तुकडे",
+    "Pieces Returned": "परत केलेले तुकडे",
+    "Charges": "शुल्क",
+    "Item / Stone": "वस्तू / दगड",
+
+    // Invoices form
+    "Buyer": "खरेदीदार",
+    "Invoice Date": "चालान तारीख",
+    "Currency Rate": "चलन दर",
+    "Shipping": "शिपिंग",
+    "Insurance": "विमा",
+
+    // Common field labels
+    "Full Name": "पूर्ण नाव",
+    "Password": "पासवर्ड",
+    "New Password (leave blank to keep current)": "नवीन पासवर्ड (बदलायचा नसल्यास रिकामे सोडा)",
+    "Language": "भाषा",
+
+    // ════════════════════════════════════════════════════════════════
+    // SECTION HEADERS
+    // ════════════════════════════════════════════════════════════════
+    "Classification": "वर्गीकरण",
+    "Quantities & Cost": "प्रमाण आणि किंमत",
+    "Acquisition": "संपादन",
+    "Tags & Platforms": "टॅग आणि प्लॅटफॉर्म",
+    "Photos": "फोटो",
+    "Party Details": "पार्टी तपशील",
+    "Line Items": "वस्तू यादी",
+    "Payment": "पेमेंट",
+    "Summary": "सारांश",
+    "Details": "तपशील",
+    "Markets": "बाजार",
+
+    // ════════════════════════════════════════════════════════════════
+    // PAGE TITLES & HEADINGS
+    // ════════════════════════════════════════════════════════════════
+    "New Stock Item": "नवीन स्टॉक वस्तू",
+    "Edit Stock Item": "स्टॉक वस्तू संपादित करा",
+    "New Purchase Order": "नवीन खरेदी ऑर्डर",
+    "New Bill": "नवीन बिल",
+    "Edit Purchase": "खरेदी संपादित करा",
+    "New Expense": "नवीन खर्च",
+    "Edit Expense": "खर्च संपादित करा",
+    "New Job Order": "नवीन काम ऑर्डर",
+    "Edit Job Order": "काम ऑर्डर संपादित करा",
+    "New Vendor": "नवीन विक्रेता",
+    "Edit Vendor": "विक्रेता संपादित करा",
+    "Add User": "वापरकर्ता जोडा",
+    "Edit User": "वापरकर्ता संपादित करा",
+    "Staff Users": "कर्मचारी वापरकर्ते",
+
+    // ════════════════════════════════════════════════════════════════
+    // BUTTONS
+    // ════════════════════════════════════════════════════════════════
+    "Save to Stock": "स्टॉकमध्ये जतन करा",
+    "Save Changes": "बदल जतन करा",
+    "+ Add Another": "+ आणखी जोडा",
+    "Add Purchase Order": "खरेदी ऑर्डर जोडा",
+    "Add Bill": "बिल जोडा",
+    "Add Expense": "खर्च जोडा",
+    "+ Add Job Order": "+ काम ऑर्डर जोडा",
+    "Add Vendor": "विक्रेता जोडा",
+    "Mark as Paid": "भरले म्हणून चिन्हांकित करा",
+    "Pay Now": "आत्ता भरा",
+    "Expand to Stock": "स्टॉकमध्ये जोडा",
+    "+ Add Photo": "+ फोटो जोडा",
+    "+ Add More Photos": "+ अधिक फोटो जोडा",
+    "+ Upload Video": "+ व्हिडिओ अपलोड करा",
+    "Attach file / bill": "फाइल / बिल जोडा",
+    "↺ Auto": "↺ ऑटो",
+    "Save User": "वापरकर्ता जतन करा",
+
+    // ════════════════════════════════════════════════════════════════
+    // TABLE COLUMN HEADERS
+    // ════════════════════════════════════════════════════════════════
+    "Item": "वस्तू",
+    "Date": "तारीख",
+    "Amount": "रक्कम",
+    "Status": "स्थिती",
+    "Actions": "क्रिया",
+    "Qty": "प्रमाण",
+    "Price": "किंमत",
+    "Balance": "शिल्लक",
+    "Location": "जागा",
+    "Market": "बाजार",
+
+    // ════════════════════════════════════════════════════════════════
+    // EMPTY STATES & MESSAGES
+    // ════════════════════════════════════════════════════════════════
+    "No items yet": "अद्याप वस्तू नाही",
+    "No results found": "परिणाम आढळला नाही",
+    "Loading…": "लोड होत आहे…",
+    "Saving…": "जतन होत आहे…",
+    "Add photos": "फोटो जोडा",
   },
 };
 

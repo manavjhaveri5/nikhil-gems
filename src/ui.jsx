@@ -1,5 +1,6 @@
 import React from "react";
 import { mob } from "./utils.js";
+import { useT } from "./languageContext.jsx";
 
 export const C={
   bg:"var(--c-bg)",surface:"var(--c-surface)",card:"var(--c-card)",border:"var(--c-border)",borderHi:"var(--c-borderHi)",
@@ -17,7 +18,11 @@ export const FI={background:C.surface,border:`1.5px solid ${C.border}`,color:C.i
 export const CI={...FI,padding:"6px 9px",fontSize:mob?16:12};
 
 export function Tag({c,children}){return <div style={{fontSize:9,fontWeight:600,letterSpacing:.9,color:c||C.inkFaint,textTransform:"uppercase",marginBottom:4}}>{children}</div>;}
-export function Field({label,c,children}){return <div><Tag c={c}>{label}</Tag>{children}</div>;}
+export function Field({label,c,children}){
+  const t=useT();
+  const displayLabel=typeof label==="string"?t(label):label;
+  return <div><Tag c={c}>{displayLabel}</Tag>{children}</div>;
+}
 export function Toast({msg}){if(!msg)return null;return <div style={{position:"fixed",bottom:22,right:22,zIndex:9999,background:C.ink,color:"#fff",padding:"10px 18px",borderRadius:6,fontSize:12,boxShadow:"0 8px 28px rgba(0,0,0,.18)",display:"flex",alignItems:"center",gap:8}}><span style={{color:C.goldBright}}>✓</span>{msg}</div>;}
 export function TypeBadge({type}){return <span style={{background:type==="po"?C.amberBg:C.blueBg,color:type==="po"?C.amber:C.blue,border:`1px solid ${type==="po"?"#F0C890":"#B8D0F8"}`,borderRadius:4,padding:"2px 7px",fontSize:10,fontWeight:700,letterSpacing:.4}}>{type==="po"?"ORDER":"BILL"}</span>;}
 export function StatusBadge({s}){const m={open:[C.amber,C.amberBg],pending:[C.gold,C.goldLight],confirmed:[C.green,C.greenBg],paid:[C.greenBright,C.greenBg],partial:[C.blue,C.blueBg],"in stock":[C.teal,C.tealBg],expanded:[C.teal,C.tealBg],unpaid:[C.red,C.redBg],closed:[C.inkFaint,C.card]};const [col,bg]=m[s]||[C.inkFaint,C.card];const label=s==="expanded"?"in stock":s;return <span style={{color:col,background:bg,borderRadius:4,padding:"2px 8px",fontSize:10,fontWeight:700}}>{label||"—"}</span>;}
