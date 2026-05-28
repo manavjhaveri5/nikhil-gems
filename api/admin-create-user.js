@@ -39,7 +39,24 @@ export default async function handler(req, res) {
       password,
       email_confirm: true,
     });
-    if (error) return res.status(400).json({ error: error.message });
+
+    // If auth account already exists (e.g. after a KV wipe), find the existing
+    // user, update their password, and return their ID so the profile can be saved.
+    if (error) {
+      const msg = error.message || "";
+      if (msg.toLowerCase().includes("already been registered") || msg.toLowerCase().includes("already registered")) {
+        const { data: list, error: listErr } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+        if (!listErr && list?.users) {
+          const existing = list.users.find(u => u.email?.toLowerCase() === email.toLowerCase());
+          if (existing) {
+            await supabaseAdmin.auth.admin.updateUserById(existing.id, { password });
+            return res.json({ success: true, userId: existing.id, alreadyExisted: true });
+          }
+        }
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
     res.json({ success: true, userId: data.user.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
