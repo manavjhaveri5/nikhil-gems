@@ -227,6 +227,59 @@ const translations = {
     "↺ Auto": "↺ Auto",
     "Save User": "Save User",
 
+    // ── Job Work ─────────────────────────────────────────────────────
+    "Job Work": "Job Work",
+    "Edit Job": "Edit Job",
+    "New Job": "New Job",
+    "Job Details": "Job Details",
+    "Items Sent Out": "Items Sent Out",
+    "+ Add Item": "+ Add Item",
+    "Save Job →": "Save Job →",
+    "+ Send Out Goods": "+ Send Out Goods",
+    "Currently Out": "Currently Out",
+    "Overdue": "Overdue",
+    "Returned": "Returned",
+    "Out": "Out",
+    "Nothing currently out for processing": "Nothing currently out for processing",
+    "No records yet": "No records yet",
+
+    // ── Invoicing ────────────────────────────────────────────────────
+    "Invoicing": "Invoicing",
+    "Invoices": "Invoices",
+    "Buyers": "Buyers",
+    "Total USD": "Total USD",
+    "Unpaid/Draft": "Unpaid/Draft",
+    "Paid": "Paid",
+    "All Types": "All Types",
+    "Commercial": "Commercial",
+    "Proforma": "Proforma",
+    "All Buyers": "All Buyers",
+    "All Currency": "All Currency",
+    "All": "All",
+    "Draft": "Draft",
+    "Sent": "Sent",
+    "Partial": "Partial",
+    "No invoices found": "No invoices found",
+    "+ Invoice": "+ Invoice",
+    "+ Proforma": "+ Proforma",
+    "Cancel": "Cancel",
+
+    // ── Shows ────────────────────────────────────────────────────────
+    "Shows": "Shows",
+    "+ Add Show": "+ Add Show",
+    "Upcoming": "Upcoming",
+    "Past": "Past",
+    "No shows yet": "No shows yet",
+    "Checklist": "Checklist",
+    "+ Item": "+ Item",
+    "Shipments": "Shipments",
+    "+ Add": "+ Add",
+    "Show Details": "Show Details",
+    "Files": "Files",
+    "Bags": "Bags",
+    "Show Stock": "Show Stock",
+    "Daily Sales Total": "Daily Sales Total",
+
     // ════════════════════════════════════════════════════════════════
     // TABLE COLUMN HEADERS
     // ════════════════════════════════════════════════════════════════
@@ -250,6 +303,18 @@ const translations = {
     "Loading…": "Loading…",
     "Saving…": "Saving…",
     "Add photos": "Add photos",
+
+    // ── System banners ──────────────────────────────────────────────
+    "A new version is available": "A new version is available",
+    "Update now": "Update now",
+    "You're offline — changes are saved locally and will sync when reconnected": "You're offline — changes are saved locally and will sync when reconnected",
+    "Dismiss": "Dismiss",
+
+    // ── Interpolated strings (tFmt keys) ────────────────────────────
+    "notif_tasks_one": "New task assigned to you: \"{text}\"",
+    "notif_tasks_other": "{count} new tasks assigned to you",
+    "syncing_other": "Syncing {count} changes…",
+    "syncing_one": "Syncing 1 change…",
   },
 
   mr: {
@@ -480,6 +545,59 @@ const translations = {
     "↺ Auto": "↺ ऑटो",
     "Save User": "वापरकर्ता जतन करा",
 
+    // ── Job Work ─────────────────────────────────────────────────────
+    "Job Work": "जॉब वर्क",
+    "Edit Job": "काम संपादित करा",
+    "New Job": "नवीन काम",
+    "Job Details": "कामाचा तपशील",
+    "Items Sent Out": "पाठवलेल्या वस्तू",
+    "+ Add Item": "+ वस्तू जोडा",
+    "Save Job →": "काम जतन करा →",
+    "+ Send Out Goods": "+ माल पाठवा",
+    "Currently Out": "सध्या बाहेर",
+    "Overdue": "उशीर",
+    "Returned": "परत आले",
+    "Out": "बाहेर",
+    "Nothing currently out for processing": "सध्या कोणताही माल प्रक्रियेसाठी बाहेर नाही",
+    "No records yet": "अद्याप नोंदी नाही",
+
+    // ── Invoicing ────────────────────────────────────────────────────
+    "Invoicing": "चालान व्यवस्थापन",
+    "Invoices": "चालान",
+    "Buyers": "खरेदीदार",
+    "Total USD": "एकूण USD",
+    "Unpaid/Draft": "अदा नाही/मसुदा",
+    "Paid": "अदा केले",
+    "All Types": "सर्व प्रकार",
+    "Commercial": "व्यापारी",
+    "Proforma": "प्रोफॉर्मा",
+    "All Buyers": "सर्व खरेदीदार",
+    "All Currency": "सर्व चलन",
+    "All": "सर्व",
+    "Draft": "मसुदा",
+    "Sent": "पाठवले",
+    "Partial": "अंशतः",
+    "No invoices found": "चालान आढळले नाही",
+    "+ Invoice": "+ चालान",
+    "+ Proforma": "+ प्रोफॉर्मा",
+    "Cancel": "रद्द करा",
+
+    // ── Shows ────────────────────────────────────────────────────────
+    "Shows": "प्रदर्शने",
+    "+ Add Show": "+ प्रदर्शन जोडा",
+    "Upcoming": "येणारे",
+    "Past": "मागील",
+    "No shows yet": "अद्याप प्रदर्शने नाही",
+    "Checklist": "यादी",
+    "+ Item": "+ वस्तू",
+    "Shipments": "माल वाहतूक",
+    "+ Add": "+ जोडा",
+    "Show Details": "प्रदर्शन तपशील",
+    "Files": "फायली",
+    "Bags": "पिशव्या",
+    "Show Stock": "प्रदर्शन स्टॉक",
+    "Daily Sales Total": "दैनंदिन विक्री एकूण",
+
     // ════════════════════════════════════════════════════════════════
     // TABLE COLUMN HEADERS
     // ════════════════════════════════════════════════════════════════
@@ -502,6 +620,18 @@ const translations = {
     "Loading…": "लोड होत आहे…",
     "Saving…": "जतन होत आहे…",
     "Add photos": "फोटो जोडा",
+
+    // ── System banners ──────────────────────────────────────────────
+    "A new version is available": "नवीन आवृत्ती उपलब्ध आहे",
+    "Update now": "आत्ता अपडेट करा",
+    "You're offline — changes are saved locally and will sync when reconnected": "तुम्ही ऑफलाइन आहात — बदल स्थानिक पातळीवर जतन आहेत, कनेक्ट झाल्यावर सिंक होतील",
+    "Dismiss": "बंद करा",
+
+    // ── Interpolated strings (tFmt keys) ────────────────────────────
+    "notif_tasks_one": "तुम्हाला नवीन काम दिले: \"{text}\"",
+    "notif_tasks_other": "तुम्हाला {count} नवीन कामे दिली आहेत",
+    "syncing_other": "{count} बदल सिंक होत आहेत…",
+    "syncing_one": "1 बदल सिंक होत आहे…",
   },
 };
 

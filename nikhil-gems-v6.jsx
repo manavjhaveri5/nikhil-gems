@@ -10,7 +10,7 @@ const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS } from "./src/constants.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
-import { LanguageCtx, LanguageProvider, useT } from "./src/languageContext.jsx";
+import { LanguageProvider, useT, useTFmt } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
@@ -110,6 +110,7 @@ function WatchListWidget(){
 // TODO WIDGET
 // ══════════════════════════════════════════════════════════════════
 function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null}){
+  const t=useT();
   const [todos,setTodos]=useState([]);
   const [input,setInput]=useState("");
   const [loaded,setLoaded]=useState(false);
@@ -167,9 +168,9 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
     }
   };
 
-  const deleteTodo=(id)=>persist(todos.filter(t=>t.id!==id));
-  const setTodoDueDate=(id,date)=>persist(todos.map(t=>t.id===id?{...t,dueDate:date}:t));
-  const setTodoRecurring=(id,freq)=>persist(todos.map(t=>t.id===id?{...t,recurring:freq}:t));
+  const deleteTodo=(id)=>persist(todos.filter(todo=>todo.id!==id));
+  const setTodoDueDate=(id,date)=>persist(todos.map(todo=>todo.id===id?{...todo,dueDate:date}:todo));
+  const setTodoRecurring=(id,freq)=>persist(todos.map(todo=>todo.id===id?{...todo,recurring:freq}:todo));
 
   // Build assignee list: admin slot + all staff users, minus self
   const adminEntry={id:"__admin__",name:"Admin (Nikhil)",key:"ng-todos-v1"};
@@ -190,8 +191,8 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
     setAssignText("");setAssignDue("");setAssignOpen(false);
   };
 
-  const pending=todos.filter(t=>!t.done).length;
-  const doneCount=todos.filter(t=>t.done).length;
+  const pending=todos.filter(todo=>!todo.done).length;
+  const doneCount=todos.filter(todo=>todo.done).length;
 
   const sortFn=(a,b)=>{
     if(!a.dueDate&&!b.dueDate)return 0;
@@ -199,8 +200,8 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
     if(!b.dueDate)return -1;
     return a.dueDate.localeCompare(b.dueDate);
   };
-  const activeTodos=[...todos].filter(t=>!t.done).sort(sortFn);
-  const doneTodos=[...todos].filter(t=>t.done).sort(sortFn);
+  const activeTodos=[...todos].filter(todo=>!todo.done).sort(sortFn);
+  const doneTodos=[...todos].filter(todo=>todo.done).sort(sortFn);
 
   const todayStr=today();
   const fmtDue=d=>{if(!d)return null;const diff=Math.round((new Date(d)-new Date(todayStr))/(86400000));if(diff<0)return{label:`${Math.abs(diff)}d overdue`,color:C.red};if(diff===0)return{label:"Today",color:C.amber};if(diff===1)return{label:"Tomorrow",color:C.amber};return{label:fmtDate(d),color:C.inkFaint};};
@@ -315,14 +316,14 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
       {loaded&&(
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           <div style={{maxHeight:280,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-            {activeTodos.map(t=><TodoRow key={t.id} t={t}/>)}
+            {activeTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
             {activeTodos.length===0&&!showDone&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"6px 0"}}>No pending tasks 🎉</div>}
           </div>
           {showDone&&doneTodos.length>0&&(
             <>
               <div style={{fontSize:9,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,margin:"6px 0 2px"}}>Completed</div>
               <div style={{maxHeight:180,overflowY:"auto",display:"flex",flexDirection:"column",gap:4,opacity:.7}}>
-                {doneTodos.map(t=><TodoRow key={t.id} t={t}/>)}
+                {doneTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
               </div>
             </>
           )}
@@ -1312,7 +1313,7 @@ productType one of: ${PRODUCT_TYPES.join(",")}. shape one of: ${SHAPES.join(",")
                           <Field label="Product Type">
                             <select value={entry.productType||""} onChange={e=>setEntry(lineIdx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}>
                               <option value="">Select...</option>
-                              {PRODUCT_TYPES.map(t=><option key={t}>{t}</option>)}
+                              {PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}
                             </select>
                           </Field>
                           <Field label="Grade">
@@ -2735,12 +2736,12 @@ function JobWorkApp({onHome}){
     const setItem=(idx,k,v)=>setForm(f=>({...f,items:f.items.map((it,i)=>i===idx?{...it,[k]:v}:it)}));
     const removeItem=idx=>setForm(f=>({...f,items:f.items.filter((_,i)=>i!==idx)}));
     return(
-      <Shell title="Job Work" crumb={form.id&&jobs.find(j=>j.id===form.id)?"Edit Job":"New Job"} onHome={onHome} onBack={()=>setForm(null)}>
+      <Shell title={t("Job Work")} crumb={form.id&&jobs.find(j=>j.id===form.id)?t("Edit Job"):t("New Job")} onHome={onHome} onBack={()=>setForm(null)}>
         <Toast msg={toast}/>
         <div style={{maxWidth:600,margin:"0 auto",display:"flex",flexDirection:"column",gap:16}}>
           {/* Person */}
           <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Job Details</div>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>{t("Job Details")}</div>
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
               <Field label="Sent To">
                 <input value={form.sentTo} onChange={e=>setF("sentTo")(e.target.value)} style={FI} placeholder="e.g. Ramesh, Mehta Polish Co." list="jw-people"/>
@@ -2748,7 +2749,7 @@ function JobWorkApp({onHome}){
               </Field>
               <Field label="Work Type">
                 <select value={form.workType} onChange={e=>setF("workType")(e.target.value)} style={FI}>
-                  {JW_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+                  {JW_TYPES.map(typ=><option key={typ} value={typ}>{typ}</option>)}
                 </select>
               </Field>
               <Field label="Date Sent">
@@ -2761,7 +2762,7 @@ function JobWorkApp({onHome}){
           </div>
           {/* Items */}
           <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Items Sent Out</div>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>{t("Items Sent Out")}</div>
             {form.items.map((it,idx)=>(
               <div key={it.id} style={{marginBottom:10,paddingBottom:10,borderBottom:idx<form.items.length-1?`1px solid ${C.border}`:"none"}}>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 32px",gap:8,alignItems:"end",marginBottom:6}}>
@@ -2795,15 +2796,15 @@ function JobWorkApp({onHome}){
                 </div>
               </div>
             ))}
-            <button onClick={addItem} className="bs" style={{fontSize:12,marginTop:4}}>+ Add Item</button>
+            <button onClick={addItem} className="bs" style={{fontSize:12,marginTop:4}}>{t("+ Add Item")}</button>
           </div>
           {/* Notes */}
           <Field label="Notes (optional)">
             <textarea value={form.notes} onChange={e=>setF("notes")(e.target.value)} rows={2} style={{...FI,resize:"vertical"}} placeholder="Any special instructions, agreed price, etc."/>
           </Field>
           <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-            <button onClick={()=>setForm(null)} className="bs">Cancel</button>
-            <button onClick={()=>{if(!form.sentTo)return alert("Enter who the goods were sent to.");if(!form.items.some(it=>it.desc))return alert("Add at least one item.");saveJob(form);}} className="bp">Save Job →</button>
+            <button onClick={()=>setForm(null)} className="bs">{t("Cancel")}</button>
+            <button onClick={()=>{if(!form.sentTo)return alert("Enter who the goods were sent to.");if(!form.items.some(it=>it.desc))return alert("Add at least one item.");saveJob(form);}} className="bp">{t("Save Job →")}</button>
           </div>
         </div>
       </Shell>
@@ -2812,13 +2813,13 @@ function JobWorkApp({onHome}){
 
   // ── List view ────────────────────────────────────────────────────
   return(
-    <Shell title="Job Work" onHome={onHome} onBack={onHome}
-      actions={<button className="bp" style={{fontSize:mob?12:13}} onClick={()=>setForm(blankForm())}>+ Send Out Goods</button>}>
+    <Shell title={t("Job Work")} onHome={onHome} onBack={onHome}
+      actions={<button className="bp" style={{fontSize:mob?12:13}} onClick={()=>setForm(blankForm())}>{t("+ Send Out Goods")}</button>}>
       <Toast msg={toast}/>
       {returning&&<ReturnModal job={returning} onConfirm={notes=>markReturned(returning,notes)} onClose={()=>setReturning(null)}/>}
       {/* Stats */}
       <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(3,1fr)",gap:10,marginBottom:16}}>
-        {[[outCount,"Currently Out",C.amber,C.amberBg],[overdueCount,"Overdue",C.red,C.redBg],[jobs.filter(j=>j.status==="returned").length,"Returned",C.green,C.greenBg]].map(([v,l,col,bg])=>(
+        {[[outCount,t("Currently Out"),C.amber,C.amberBg],[overdueCount,t("Overdue"),C.red,C.redBg],[jobs.filter(j=>j.status==="returned").length,t("Returned"),C.green,C.greenBg]].map(([v,l,col,bg])=>(
           <div key={l} style={{background:bg||C.surface,border:`1.5px solid ${col||C.border}`,borderRadius:9,padding:"13px 16px"}}>
             <div style={{fontSize:9,fontWeight:700,color:col,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>{l}</div>
             <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:24,fontWeight:600,color:col}}>{v}</div>
@@ -2827,7 +2828,7 @@ function JobWorkApp({onHome}){
       </div>
       {/* Tabs */}
       <div style={{display:"flex",gap:2,background:C.card,borderRadius:5,padding:3,border:`1px solid ${C.border}`,marginBottom:14,width:"fit-content"}}>
-        {[["out",`Out${outCount>0?` (${outCount})`:""}`,overdueCount>0?C.red:C.amber],["returned","Returned",C.green],["all","All",C.inkMid]].map(([id,label,col])=>(
+        {[["out",`${t("Out")}${outCount>0?` (${outCount})`:""}`,overdueCount>0?C.red:C.amber],["returned",t("Returned"),C.green],["all",t("All"),C.inkMid]].map(([id,label,col])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?C.surface:"transparent",color:tab===id?col:C.inkFaint,border:tab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:4,padding:"6px 16px",cursor:"pointer",fontSize:12,fontWeight:tab===id?600:400,transition:"all .15s"}}>{label}</button>
         ))}
       </div>
@@ -2835,8 +2836,8 @@ function JobWorkApp({onHome}){
       {!loaded?<p style={{color:C.inkFaint,textAlign:"center",padding:"48px 0",fontSize:13}}>Loading…</p>
         :displayed.length===0?<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"56px 0",textAlign:"center"}}>
             <div style={{fontSize:32,marginBottom:10,opacity:.2}}>🔧</div>
-            <p style={{fontSize:13,color:C.inkMid}}>{tab==="out"?"Nothing currently out for processing":"No records yet"}</p>
-            {tab==="out"&&<button onClick={()=>setForm(blankForm())} className="bp" style={{marginTop:14,fontSize:12}}>+ Send Out Goods</button>}
+            <p style={{fontSize:13,color:C.inkMid}}>{tab==="out"?t("Nothing currently out for processing"):t("No records yet")}</p>
+            {tab==="out"&&<button onClick={()=>setForm(blankForm())} className="bp" style={{marginTop:14,fontSize:12}}>{t("+ Send Out Goods")}</button>}
           </div>
         :(
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
@@ -4722,7 +4723,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     </div>
                   </Field>
                   <Field label="Shape"><input value={form.shape||""} onChange={e=>{const sh=e.target.value;const pt=SHAPE_TO_PRODUCT_TYPE[sh]||form.productType||"";setForm(f=>({...f,shape:sh,productType:pt||f.productType,sku:f.sku||generateSKU(f.material,sh)}));}} style={FI} placeholder="e.g. Round, Palmstone…" list="shape-list-main"/><datalist id="shape-list-main">{allShapes.map(s=><option key={s} value={s}/>)}</datalist></Field>
-                  <Field label="Product Type"><select value={form.productType||""} onChange={e=>setForm(f=>({...f,productType:e.target.value}))} style={{...FI,cursor:"pointer"}}><option value="">Select...</option>{PRODUCT_TYPES.map(t=><option key={t}>{t}</option>)}</select></Field>
+                  <Field label="Product Type"><select value={form.productType||""} onChange={e=>setForm(f=>({...f,productType:e.target.value}))} style={{...FI,cursor:"pointer"}}><option value="">Select...</option>{PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}</select></Field>
                   <Field label="Size"><input value={form.size||""} onChange={e=>setForm(f=>({...f,size:e.target.value}))} style={FI} placeholder="60–80mm"/></Field>
                   <Field label="Grade"><input value={form.grade||""} onChange={e=>setForm(f=>({...f,grade:e.target.value}))} style={FI} placeholder="AAA"/></Field>
                   <Field label="HSN"><input value={form.hsn||"7103"} onChange={e=>setForm(f=>({...f,hsn:e.target.value}))} style={FI}/></Field>
@@ -6262,7 +6263,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],on
                             <Field label="Product Type">
                               <select value={entry.productType||""} onChange={e=>setPhys(iIdx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}>
                                 <option value="">Select…</option>
-                                {PRODUCT_TYPES.map(t=><option key={t}>{t}</option>)}
+                                {PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}
                               </select>
                             </Field>
                           </div>
@@ -7123,6 +7124,7 @@ function InvBulkView({queue,idx,setIdx,buyers,extractInvoice,onSave,onBack}){
 }
 
 function InvoicesApp({onHome,startDraft}){
+  const t=useT();
   const [invoices,setInvoices]=useState([]);
   const [buyers,setBuyers]=useState([]);
   const [stock,setStock]=useState([]);
@@ -7387,10 +7389,10 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
               <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,boxShadow:"0 6px 24px rgba(26,19,8,.12)",zIndex:500,minWidth:180,padding:"6px 0"}} onClick={()=>setInvMenuOpen(false)}>
                 <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.multiple=true;i.onchange=e=>handleBulkUpload(e.target.files);i.click();}}>📂 Bulk Upload</button>
                 <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.onchange=e=>e.target.files[0]&&handleUpload(e.target.files[0]);i.click();}}>✨ Upload & Extract</button>
-                <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} onClick={()=>{setDraft(newDraft("proforma"));setView("form");}}>+ Proforma</button>
+                <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} onClick={()=>{setDraft(newDraft("proforma"));setView("form");}}>{t("+ Proforma")}</button>
               </div>
             )}
-            <button className="bp" style={{fontSize:13,padding:"7px 14px"}} onClick={()=>{setDraft(newDraft("commercial"));setView("form");}}>+ Invoice</button>
+            <button className="bp" style={{fontSize:13,padding:"7px 14px"}} onClick={()=>{setDraft(newDraft("commercial"));setView("form");}}>{t("+ Invoice")}</button>
           </>
         ):(
           <>
@@ -7398,8 +7400,8 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
             <button className="bs" style={{fontSize:12}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.multiple=true;i.onchange=e=>handleBulkUpload(e.target.files);i.click();}}>📂 Bulk Upload</button>
             <button className="bs" style={{fontSize:12}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.onchange=e=>e.target.files[0]&&handleUpload(e.target.files[0]);i.click();}}>✨ Upload & Extract</button>
             {!csvInvAlreadyImported&&<button className="bs" style={{fontSize:12,color:C.amber,borderColor:C.amber}} onClick={()=>{if(window.confirm(`Import invoices & buyers from Zoho Books?\n\nIncludes all FY2025-26 invoices across Atyahara, AhhhMuse, Celestique, Original Way Crystals and more.`))handleCSVInvImport();}}>📥 Import History</button>}
-            <button className="bs" style={{fontSize:12}} onClick={()=>{setDraft(newDraft("proforma"));setView("form");}}>+ Proforma</button>
-            <button className="bp" onClick={()=>{setDraft(newDraft("commercial"));setView("form");}}>+ Invoice</button>
+            <button className="bs" style={{fontSize:12}} onClick={()=>{setDraft(newDraft("proforma"));setView("form");}}>{t("+ Proforma")}</button>
+            <button className="bp" onClick={()=>{setDraft(newDraft("commercial"));setView("form");}}>{t("+ Invoice")}</button>
           </>
         )}
       </>}
@@ -7408,13 +7410,13 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   const invBack=view!=="list"?()=>{setView("list");setDraft(null);}:onHome;
 
   return(
-    <Shell title="Invoicing" onHome={onHome} onBack={invBack} actions={Actions}>
+    <Shell title={t("Invoicing")} onHome={onHome} onBack={invBack} actions={Actions}>
       <Toast msg={toast}/>
       {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
       {loaded&&view==="list"&&(
         <div>
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:mob?8:11,marginBottom:16}}>
-            {[[invoices.length,"Invoices",C.blue,C.blueBg],[`${invoices.filter(i=>i.currency==="USD").reduce((a,i)=>a+(+i.totalAmt||0),0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}`,"Total USD",C.green,C.greenBg],[unpaid,"Unpaid/Draft",C.red,C.redBg],[invoices.filter(i=>i.status==="paid").length,"Paid",C.teal,C.tealBg]].map(([v,l,col,bg])=>(
+            {[[invoices.length,t("Invoices"),C.blue,C.blueBg],[`${invoices.filter(i=>i.currency==="USD").reduce((a,i)=>a+(+i.totalAmt||0),0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}`,t("Total USD"),C.green,C.greenBg],[unpaid,t("Unpaid/Draft"),C.red,C.redBg],[invoices.filter(i=>i.status==="paid").length,t("Paid"),C.teal,C.tealBg]].map(([v,l,col,bg])=>(
               <div key={l} style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:mob?"10px 12px":"13px 16px"}}>
                 <div style={{fontSize:mob?10:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>{l}</div>
                 <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?22:20,fontWeight:600,color:col,wordBreak:"break-all"}}>{v}</div>
@@ -7425,26 +7427,26 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
             <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder={mob?"Search…":"Search invoice / buyer…"} style={{...FI,width:mob?120:190,fontSize:mob?16:12,flexShrink:0,minHeight:mob?40:undefined}}/>
             <div style={{display:"flex",gap:4,flexShrink:0}}>
               {["all","draft","sent","partial","paid"].map(s=>(
-                <button key={s} onClick={()=>setFilterStatus(s)} style={{fontSize:mob?12:11,padding:mob?"6px 12px":"4px 10px",borderRadius:4,cursor:"pointer",border:`1px solid ${filterStatus===s?C.gold:C.border}`,background:filterStatus===s?C.goldLight:C.surface,color:filterStatus===s?C.gold:C.inkMid,fontWeight:filterStatus===s?700:400,whiteSpace:"nowrap",minHeight:mob?40:undefined}}>{s==="all"?"All":s.charAt(0).toUpperCase()+s.slice(1)}</button>
+                <button key={s} onClick={()=>setFilterStatus(s)} style={{fontSize:mob?12:11,padding:mob?"6px 12px":"4px 10px",borderRadius:4,cursor:"pointer",border:`1px solid ${filterStatus===s?C.gold:C.border}`,background:filterStatus===s?C.goldLight:C.surface,color:filterStatus===s?C.gold:C.inkMid,fontWeight:filterStatus===s?700:400,whiteSpace:"nowrap",minHeight:mob?40:undefined}}>{s==="all"?t("All"):t(s.charAt(0).toUpperCase()+s.slice(1))}</button>
               ))}
             </div>
           </div>
           <div style={{display:"flex",gap:mob?5:8,marginBottom:11,alignItems:"center",flexWrap:mob?"nowrap":"wrap",overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}}>
             {/* Type filter */}
             <div style={{display:"flex",gap:3,flexShrink:0}}>
-              {[["all","All Types"],["commercial","Commercial"],["proforma","Proforma"]].map(([v,l])=>(
+              {[["all",t("All Types")],["commercial",t("Commercial")],["proforma",t("Proforma")]].map(([v,l])=>(
                 <button key={v} onClick={()=>setInvTypeF(v)} style={{fontSize:mob?12:11,padding:mob?"5px 10px":"3px 9px",borderRadius:4,cursor:"pointer",border:`1px solid ${invTypeF===v?C.blue:C.border}`,background:invTypeF===v?C.blueBg:C.surface,color:invTypeF===v?C.blue:C.inkMid,fontWeight:invTypeF===v?600:400,whiteSpace:"nowrap",minHeight:mob?36:undefined}}>{l}</button>
               ))}
             </div>
             {/* Buyer filter */}
             <select value={invBuyerF} onChange={e=>setInvBuyerF(e.target.value)} style={{...FI,fontSize:mob?16:11,padding:mob?"6px 8px":"4px 8px",cursor:"pointer",maxWidth:mob?160:180,flexShrink:0,minHeight:mob?36:undefined}}>
-              <option value="all">All Buyers</option>
+              <option value="all">{t("All Buyers")}</option>
               {invBuyerOptions.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
             {/* Currency filter */}
             {invCurrencies.length>1&&<div style={{display:"flex",gap:3}}>
               {["all",...invCurrencies].map(c=>(
-                <button key={c} onClick={()=>setInvCurrF(c)} style={{fontSize:11,padding:"3px 9px",borderRadius:4,cursor:"pointer",border:`1px solid ${invCurrF===c?C.green:C.border}`,background:invCurrF===c?C.greenBg:C.surface,color:invCurrF===c?C.green:C.inkMid,fontWeight:invCurrF===c?600:400}}>{c==="all"?"All Currency":c}</button>
+                <button key={c} onClick={()=>setInvCurrF(c)} style={{fontSize:11,padding:"3px 9px",borderRadius:4,cursor:"pointer",border:`1px solid ${invCurrF===c?C.green:C.border}`,background:invCurrF===c?C.greenBg:C.surface,color:invCurrF===c?C.green:C.inkMid,fontWeight:invCurrF===c?600:400}}>{c==="all"?t("All Currency"):c}</button>
               ))}
             </div>}
             {/* Clear filters */}
@@ -7461,13 +7463,13 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
             <button onClick={clearSel} style={{fontSize:12,padding:"5px 10px",borderRadius:5,cursor:"pointer",border:"1px solid #475569",background:"transparent",color:"#94a3b8"}}>✕ Clear</button>
           </div>}
           <div style={{display:"flex",gap:2,background:C.card,borderRadius:5,padding:3,border:`1px solid ${C.border}`,marginBottom:13,width:"fit-content"}}>
-            {[["invoices","Invoices"],["buyers","Buyers"]].map(([id,label])=>(
+            {[["invoices",t("Invoices")],["buyers",t("Buyers")]].map(([id,label])=>(
               <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?C.surface:"transparent",color:tab===id?C.ink:C.inkMid,border:tab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:4,padding:"4px 14px",cursor:"pointer",fontSize:12,fontWeight:tab===id?500:400,transition:"all .15s"}}>{label}</button>
             ))}
           </div>
           {tab==="invoices"&&(
             filteredInvoices.length===0
-              ?<div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"52px 0",textAlign:"center"}}><div style={{fontSize:28,opacity:.2,marginBottom:8}}>📋</div><p style={{fontSize:13,color:C.inkMid}}>No invoices found</p></div>
+              ?<div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"52px 0",textAlign:"center"}}><div style={{fontSize:28,opacity:.2,marginBottom:8}}>📋</div><p style={{fontSize:13,color:C.inkMid}}>{t("No invoices found")}</p></div>
               :mob
               ?<div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {filteredInvoices.map(inv=>{
@@ -8818,6 +8820,7 @@ const DEFAULT_SHOWS=[
 const DEFAULT_CHECKLIST=["Booth confirmed","Flights booked","Hotel booked","Shipping arranged","Stock packed","Invoices ready","Business cards","Display materials"];
 
 function ShowsApp({onHome}){
+  const t=useT();
   const [shows,setShows]=useState([]);
   const [stock,setStock]=useState([]);
   const [calEvents,setCalEvents]=useState([]);
@@ -8829,7 +8832,7 @@ function ShowsApp({onHome}){
 
   useEffect(()=>{
     Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock)]).then(([s,e,st])=>{
-      setShows(s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(t=>({id:uid(),task:t,done:false})),shipments:[],bagItems:[],files:[],notes:""})));
+      setShows(s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""})));
       setCalEvents(e||[]);setStock(st||[]);setLoaded(true);
     });
   },[]);
@@ -8906,20 +8909,20 @@ function ShowsApp({onHome}){
 
   // ── List view ────────────────────────────────────────────────────────────
   return(
-    <Shell title="Shows" onHome={onHome} onBack={onHome} actions={
+    <Shell title={t("Shows")} onHome={onHome} onBack={onHome} actions={
       <button className="bp" style={{fontSize:12}} onClick={()=>{
         const n={id:uid(),name:"New Show",city:"",startDate:today(),endDate:today(),
           year:new Date().getFullYear(),color:C.teal,
-          checklist:DEFAULT_CHECKLIST.map(t=>({id:uid(),task:t,done:false})),
+          checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),
           shipments:[],files:[],notes:""};
         save([...shows,n]);
         setDetailId(n.id);
-      }}>+ Add Show</button>
+      }}>{t("+ Add Show")}</button>
     }>
       <Toast msg={toast}/>
       {upcoming.length>0&&(
         <div style={{marginBottom:28}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:14}}>{upcoming.length} Upcoming</div>
+          <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:14}}>{upcoming.length} {t("Upcoming")}</div>
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
             {upcoming.map(show=><ShowCard key={show.id} show={show} isDetail={false} onOpen={setDetailId} {...mkCardProps(show)}/>)}
           </div>
@@ -8927,7 +8930,7 @@ function ShowsApp({onHome}){
       )}
       {past.length>0&&(
         <div>
-          <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:10}}>Past</div>
+          <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:10}}>{t("Past")}</div>
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(340px,1fr))",gap:8}}>
             {past.map(show=><ShowCard key={show.id} show={show} isDetail={false} onOpen={setDetailId} {...mkCardProps(show)}/>)}
           </div>
@@ -8936,7 +8939,7 @@ function ShowsApp({onHome}){
       {upcoming.length===0&&past.length===0&&(
         <div style={{textAlign:"center",paddingTop:80,color:C.inkFaint}}>
           <div style={{fontSize:32,marginBottom:10}}>🌐</div>
-          <p style={{fontSize:14}}>No shows yet</p>
+          <p style={{fontSize:14}}>{t("No shows yet")}</p>
         </div>
       )}
     </Shell>
@@ -8946,11 +8949,12 @@ function ShowsApp({onHome}){
 // ShowCard defined OUTSIDE ShowsApp so React sees a stable component type across re-renders
 // (prevents focus-loss on every keystroke in checklist inputs)
 function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry}){
+  const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
   const daysLeft=Math.round((new Date(show.endDate)-new Date(todayStr))/(1000*60*60*24));
   const isNow=daysTo<=0&&daysLeft>=0;
-  const done=(show.checklist||[]).filter(t=>t.done).length;
+  const done=(show.checklist||[]).filter(item=>item.done).length;
   const total=(show.checklist||[]).length;
   const isOpen=isDetail;
   const [pendingFile,setPendingFile]=useState(null);
@@ -9077,10 +9081,10 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
 
           {/* Tab nav */}
           <div style={{display:"flex",borderBottom:`1px solid ${C.border}`,overflowX:"auto",background:C.surface}}>
-            {TABS.map(t=>(
-              <button key={t.id} onClick={e=>{e.stopPropagation();setShowTab(t.id);}}
-                style={{flex:"0 0 auto",padding:"8px 11px",fontSize:10,fontWeight:showTab===t.id?700:400,background:"none",border:"none",cursor:"pointer",color:showTab===t.id?C.ink:C.inkFaint,borderBottom:`2px solid ${showTab===t.id?show.color:"transparent"}`,transition:"border-color .15s",whiteSpace:"nowrap"}}>
-                {t.label}
+            {TABS.map(tab=>(
+              <button key={tab.id} onClick={e=>{e.stopPropagation();setShowTab(tab.id);}}
+                style={{flex:"0 0 auto",padding:"8px 11px",fontSize:10,fontWeight:showTab===tab.id?700:400,background:"none",border:"none",cursor:"pointer",color:showTab===tab.id?C.ink:C.inkFaint,borderBottom:`2px solid ${showTab===tab.id?show.color:"transparent"}`,transition:"border-color .15s",whiteSpace:"nowrap"}}>
+                {tab.label}
               </button>
             ))}
           </div>
@@ -9091,8 +9095,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{display:"grid",gap:14}}>
                 <div>
                   <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <span>Checklist</span>
-                    <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddCheckItem(show.id);}}>+ Item</button>
+                    <span>{t("Checklist")}</span>
+                    <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddCheckItem(show.id);}}>{t("+ Item")}</button>
                   </div>
                   {(show.checklist||[]).map((item,i)=>(
                     <div key={item.id||i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
@@ -9104,15 +9108,15 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 </div>
                 <div>
                   <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <span>Shipments</span>
-                    <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddShipment(show.id);}}>+ Add</button>
+                    <span>{t("Shipments")}</span>
+                    <button className="bs" style={{fontSize:9,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();onAddShipment(show.id);}}>{t("+ Add")}</button>
                   </div>
                   {(!show.shipments||show.shipments.length===0)&&<div style={{fontSize:11,color:C.inkFaint}}>No shipments yet</div>}
                   {(show.shipments||[]).map((sh,i)=>(
                     <div key={sh.id||i} style={{background:C.card,borderRadius:6,padding:"8px 10px",marginBottom:8}}>
                       <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
                         <select value={sh.type||"Sea Freight"} onChange={e=>onUpdateShipment(show.id,i,"type",e.target.value)} style={{...FI,fontSize:11,padding:"3px 5px",flex:1,cursor:"pointer"}} onClick={e=>e.stopPropagation()}>
-                          {["Sea Freight","Air Freight","Courier"].map(t=><option key={t}>{t}</option>)}
+                          {["Sea Freight","Air Freight","Courier"].map(opt=><option key={opt}>{opt}</option>)}
                         </select>
                         <button onClick={e=>{e.stopPropagation();onDelShipment(show.id,i);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13}}>&times;</button>
                       </div>
@@ -9125,7 +9129,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               </div>
               <div style={{display:"grid",gap:14}}>
                 <div>
-                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Show Details</div>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>{t("Show Details")}</div>
                   <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:7}}>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
                       <Field label="Start"><input type="date" value={show.startDate} onChange={e=>onUpdateShow(show.id,"startDate",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"4px 5px",width:"100%",boxSizing:"border-box"}}/></Field>
@@ -9139,7 +9143,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <Field label="Notes"><textarea value={show.notes||""} onChange={e=>onUpdateShow(show.id,"notes",e.target.value)} onClick={e=>e.stopPropagation()} rows={2} style={{...FI,fontSize:11,resize:"none"}}/></Field>
                 </div>
                 <div>
-                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Files</div>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>{t("Files")}</div>
                   {(show.files||[]).map(f=>(
                     <div key={f.id} style={{display:"flex",alignItems:"center",gap:6,marginBottom:5,background:C.card,borderRadius:4,padding:"4px 8px"}}>
                       <span style={{fontSize:11}}>📎</span>
@@ -9175,7 +9179,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
             <div style={{padding:"14px 16px"}}>
               <div style={{marginBottom:16}}>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>🎒 Bags {bagItems.length>0&&`(${bagItems.length})`}</span>
+                  <span>🎒 {t("Bags")} {bagItems.length>0&&`(${bagItems.length})`}</span>
                   {bagItems.length>0&&<span style={{fontSize:9,color:C.inkFaint}}>{bagOut>0&&`${bagOut} out`}{bagReturned>0&&` · ${bagReturned} back`}{bagSold>0&&` · ${bagSold} sold`}</span>}
                 </div>
                 <div style={{position:"relative",marginBottom:8}} onClick={e=>e.stopPropagation()}>
@@ -9229,7 +9233,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               </div>
               <div>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>📦 Show Stock ({showStock.length})</span>
+                  <span>📦 {t("Show Stock")} ({showStock.length})</span>
                   <span style={{fontSize:9,color:C.inkFaint}}>Cost: ₹{ssTotalCost.toLocaleString()} · Sold: {ssSold.length}</span>
                 </div>
                 <div style={{display:"flex",gap:6,marginBottom:8}}>
@@ -9302,7 +9306,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               ))}
               {dailySales.length>0&&(
                 <div style={{borderTop:`1px solid ${C.border}`,marginTop:8,paddingTop:8}}>
-                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Daily Sales Total</div>
+                  <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>{t("Daily Sales Total")}</div>
                   {Object.entries(sumByCur(dailySales,"amount","currency")).map(([c,v])=>(
                     <div key={c} style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,color:C.green,padding:"2px 0"}}>
                       <span>{c}</span><span>{v.toLocaleString()}</span>
@@ -9648,6 +9652,7 @@ const RECON_KEY="ng-recon-v1";
 const RECON2_KEY="ng-recon-v2";
 
 function ReconApp({onHome}){
+  const t=useT();
   const [invoices,setInvoices]=useState([]);
   const [buyers,setBuyers]=useState([]);
   const [recon,setRecon]=useState({});   // {[invId]: {sbGenerated,fircReceived,submittedToBank,sbNumber,sbDate,hawb,fobValue,fircNo,fircDate,foreignAmount,inrAmount,docs,notes}}
@@ -10182,6 +10187,7 @@ function inlineMd(text){
 }
 
 function AIAssistantApp({onHome}){
+  const t=useT();
   const [activeAgent,setActiveAgent]=useState("raj");
   const agent=AGENTS[activeAgent];
   // Separate conversation per agent
@@ -10523,6 +10529,7 @@ ${attachSection}
 }
 
 function MiscApp({onHome}){
+  const t=useT();
   const [tab,setTab]=useState("dashboard");
   const [editBill,setEditBill]=useState(null);
   const [company,setCompany]=useState("nikhil");
@@ -11182,7 +11189,7 @@ function UsersApp({onHome}){
     if(!users.length)return;
     Promise.all(users.map(u=>loadK(TODO_KEY_FOR(u.email)).then(todos=>{
       const arr=Array.isArray(todos)?todos:[];
-      return[u.id,{pending:arr.filter(t=>!t.done).length,done:arr.filter(t=>t.done).length}];
+      return[u.id,{pending:arr.filter(todo=>!todo.done).length,done:arr.filter(todo=>todo.done).length}];
     }))).then(entries=>setTaskCounts(Object.fromEntries(entries)));
   },[users]);
 
@@ -11238,7 +11245,7 @@ function UsersApp({onHome}){
     const todos=await loadK(TODO_KEY_FOR(u.email))||[];
     const arr=Array.isArray(todos)?todos:[];
     setUserTodos(arr);
-    setTaskCounts(prev=>({...prev,[u.id]:{pending:arr.filter(t=>!t.done).length,done:arr.filter(t=>t.done).length}}));
+    setTaskCounts(prev=>({...prev,[u.id]:{pending:arr.filter(todo=>!todo.done).length,done:arr.filter(todo=>todo.done).length}}));
   };
 
   const assignTask=async()=>{
@@ -11250,9 +11257,9 @@ function UsersApp({onHome}){
   };
 
   const removeUserTodo=async(id)=>{
-    const next=userTodos.filter(t=>t.id!==id);
+    const next=userTodos.filter(todo=>todo.id!==id);
     setUserTodos(next);await saveK(TODO_KEY_FOR(selectedUser.email),next);
-    setTaskCounts(prev=>({...prev,[selectedUser.id]:{pending:next.filter(t=>!t.done).length,done:next.filter(t=>t.done).length}}));
+    setTaskCounts(prev=>({...prev,[selectedUser.id]:{pending:next.filter(todo=>!todo.done).length,done:next.filter(todo=>todo.done).length}}));
   };
 
   return(
@@ -11282,8 +11289,8 @@ function UsersApp({onHome}){
             </div>
             <div style={{flex:1,padding:"10px 18px",overflowY:"auto"}}>
               {(()=>{
-                const pending=userTodos.filter(t=>!t.done);
-                const done=userTodos.filter(t=>t.done).sort((a,b)=>(b.doneAt||b.createdAt||"").localeCompare(a.doneAt||a.createdAt||""));
+                const pending=userTodos.filter(todo=>!todo.done);
+                const done=userTodos.filter(todo=>todo.done).sort((a,b)=>(b.doneAt||b.createdAt||"").localeCompare(a.doneAt||a.createdAt||""));
                 const fmtDoneAt=iso=>{if(!iso)return"";const d=new Date(iso);const diff=Math.round((Date.now()-d.getTime())/60000);if(diff<1)return"just now";if(diff<60)return`${diff}m ago`;if(diff<1440)return`${Math.round(diff/60)}h ago`;return fmtDate(iso.slice(0,10));};
                 return(<>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -11291,27 +11298,27 @@ function UsersApp({onHome}){
                     <button onClick={()=>refreshUserTodos()} style={{background:"none",border:"none",color:C.gold,cursor:"pointer",fontSize:11,fontWeight:600,padding:"2px 0"}}>↻ Refresh</button>
                   </div>
                   {pending.length===0&&<div style={{textAlign:"center",padding:"16px 0 8px",color:C.inkFaint,fontSize:13}}>No pending tasks</div>}
-                  {pending.map(t=>(
-                    <div key={t.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
-                      <input type="checkbox" checked={false} onChange={async()=>{const next=userTodos.map(x=>x.id===t.id?{...x,done:true,doneAt:new Date().toISOString()}:x);setUserTodos(next);await saveK(TODO_KEY_FOR(selectedUser.email),next);setTaskCounts(prev=>({...prev,[selectedUser.id]:{pending:next.filter(x=>!x.done).length,done:next.filter(x=>x.done).length}}));}} style={{marginTop:2,flexShrink:0,accentColor:C.gold,width:15,height:15}}/>
+                  {pending.map(todo=>(
+                    <div key={todo.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
+                      <input type="checkbox" checked={false} onChange={async()=>{const next=userTodos.map(x=>x.id===todo.id?{...x,done:true,doneAt:new Date().toISOString()}:x);setUserTodos(next);await saveK(TODO_KEY_FOR(selectedUser.email),next);setTaskCounts(prev=>({...prev,[selectedUser.id]:{pending:next.filter(x=>!x.done).length,done:next.filter(x=>x.done).length}}));}} style={{marginTop:2,flexShrink:0,accentColor:C.gold,width:15,height:15}}/>
                       <div style={{flex:1,fontSize:13,color:C.ink,lineHeight:1.4}}>
-                        {t.text}
-                        {(t.assignedByAdmin||t.assignedBy)&&<span style={{fontSize:9,background:C.amberBg,color:C.amber,borderRadius:3,padding:"1px 5px",marginLeft:6,fontWeight:600}}>{t.assignedByAdmin?"ASSIGNED":`From ${t.assignedBy}`}</span>}
-                        {t.dueDate&&<span style={{fontSize:10,color:C.inkFaint,marginLeft:6}}>{fmtDate(t.dueDate)}</span>}
+                        {todo.text}
+                        {(todo.assignedByAdmin||todo.assignedBy)&&<span style={{fontSize:9,background:C.amberBg,color:C.amber,borderRadius:3,padding:"1px 5px",marginLeft:6,fontWeight:600}}>{todo.assignedByAdmin?"ASSIGNED":`From ${todo.assignedBy}`}</span>}
+                        {todo.dueDate&&<span style={{fontSize:10,color:C.inkFaint,marginLeft:6}}>{fmtDate(todo.dueDate)}</span>}
                       </div>
-                      <button onClick={()=>removeUserTodo(t.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0,padding:"0 2px"}}>✕</button>
+                      <button onClick={()=>removeUserTodo(todo.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0,padding:"0 2px"}}>✕</button>
                     </div>
                   ))}
                   {done.length>0&&(<>
                     <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginTop:14,marginBottom:4}}>Completed ({done.length})</div>
-                    {done.map(t=>(
-                      <div key={t.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 0",borderBottom:`1px solid ${C.border}`,opacity:.7}}>
-                        <input type="checkbox" checked={true} onChange={async()=>{const next=userTodos.map(x=>x.id===t.id?{...x,done:false,doneAt:undefined}:x);setUserTodos(next);await saveK(TODO_KEY_FOR(selectedUser.email),next);setTaskCounts(prev=>({...prev,[selectedUser.id]:{pending:next.filter(x=>!x.done).length,done:next.filter(x=>x.done).length}}));}} style={{marginTop:2,flexShrink:0,accentColor:C.gold,width:15,height:15}}/>
+                    {done.map(todo=>(
+                      <div key={todo.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 0",borderBottom:`1px solid ${C.border}`,opacity:.7}}>
+                        <input type="checkbox" checked={true} onChange={async()=>{const next=userTodos.map(x=>x.id===todo.id?{...x,done:false,doneAt:undefined}:x);setUserTodos(next);await saveK(TODO_KEY_FOR(selectedUser.email),next);setTaskCounts(prev=>({...prev,[selectedUser.id]:{pending:next.filter(x=>!x.done).length,done:next.filter(x=>x.done).length}}));}} style={{marginTop:2,flexShrink:0,accentColor:C.gold,width:15,height:15}}/>
                         <div style={{flex:1,fontSize:13,color:C.inkFaint,textDecoration:"line-through",lineHeight:1.4}}>
-                          {t.text}
-                          {t.doneAt&&<span style={{fontSize:10,color:C.green,textDecoration:"none",display:"inline-block",marginLeft:6,fontWeight:600,textDecorationLine:"none"}}>✓ {fmtDoneAt(t.doneAt)}</span>}
+                          {todo.text}
+                          {todo.doneAt&&<span style={{fontSize:10,color:C.green,textDecoration:"none",display:"inline-block",marginLeft:6,fontWeight:600,textDecorationLine:"none"}}>✓ {fmtDoneAt(todo.doneAt)}</span>}
                         </div>
-                        <button onClick={()=>removeUserTodo(t.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0,padding:"0 2px"}}>✕</button>
+                        <button onClick={()=>removeUserTodo(todo.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0,padding:"0 2px"}}>✕</button>
                       </div>
                     ))}
                   </>)}
@@ -11399,6 +11406,42 @@ function UsersApp({onHome}){
   );
 }
 
+function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssignedTasks,dismissNewTasks}){
+  const tFmt=useTFmt();
+  const t=useT();
+  return<>
+    {updateReady&&(
+      <div style={{position:"fixed",top:0,left:0,right:0,zIndex:10000,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
+        <span style={{fontSize:15,flexShrink:0}}>🚀</span>
+        <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff",lineHeight:1.3}}>{t("A new version is available")}</span>
+        <button onClick={()=>window.location.reload()} style={{background:"#fff",border:"none",color:"#1C4A2E",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0,fontFamily:"inherit"}}>{t("Update now")}</button>
+        <button onClick={()=>setUpdateReady(false)} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.6)",fontSize:18,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
+      </div>
+    )}
+    {(!isOnline||syncingCount>0)&&(
+      <div style={{position:"fixed",top:updateReady?44:0,left:0,right:0,zIndex:9998,background:syncingCount>0?"#1A4A8A":"#4A3800",padding:"9px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.22)",animation:"fadeDown .25s ease both",transition:"top .2s ease"}}>
+        <span style={{fontSize:14,flexShrink:0}}>{syncingCount>0?"🔄":"📴"}</span>
+        <span style={{flex:1,fontSize:12,fontWeight:600,color:"#fff",lineHeight:1.3}}>
+          {syncingCount>0
+            ?tFmt("syncing",{count:syncingCount})
+            :t("You're offline — changes are saved locally and will sync when reconnected")}
+        </span>
+      </div>
+    )}
+    {newAssignedTasks.length>0&&(
+      <div style={{position:"fixed",top:(updateReady?44:0)+(!isOnline||syncingCount>0?38:0),left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)",transition:"top .2s ease"}}>
+        <span style={{fontSize:14,marginRight:4}}>📋</span>
+        <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff"}}>
+          {newAssignedTasks.length===1
+            ?tFmt("notif_tasks",{count:1,text:newAssignedTasks[0].text})
+            :tFmt("notif_tasks",{count:newAssignedTasks.length})}
+        </span>
+        <button onClick={dismissNewTasks} style={{background:"rgba(255,255,255,.25)",border:"none",color:"#fff",borderRadius:5,padding:"5px 13px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>{t("Dismiss")} ×</button>
+      </div>
+    )}
+  </>;
+}
+
 export default function Root({onSignOut}){
   const [currentEmail,setCurrentEmail]=useState(null);
   const [userProfile,setUserProfile]=useState(undefined); // undefined=loading, false=admin, {...}=staff
@@ -11451,6 +11494,7 @@ export default function Root({onSignOut}){
         const arr=Array.isArray(users)?users:[];
         setAllUsers(arr);
         const profile=arr.find(u=>u.email?.toLowerCase()===email?.toLowerCase());
+        if(profile?.language)localStorage.setItem("ng-user-lang",profile.language);
         setUserProfile(profile||false);
       });
     });
@@ -11462,14 +11506,14 @@ export default function Root({onSignOut}){
     loadK(key).then(todos=>{
       const arr=Array.isArray(todos)?todos:[];
       const seenIds=new Set(JSON.parse(localStorage.getItem(seenKey)||'[]'));
-      const fresh=arr.filter(t=>(t.assignedBy||t.assignedByAdmin)&&!t.done&&!seenIds.has(t.id));
+      const fresh=arr.filter(todo=>(todo.assignedBy||todo.assignedByAdmin)&&!todo.done&&!seenIds.has(todo.id));
       setNewAssignedTasks(fresh);
     });
   },[currentEmail,userProfile]);
   const dismissNewTasks=()=>{
     const seenKey=`ng-notif-seen-${currentEmail}`;
     const existing=new Set(JSON.parse(localStorage.getItem(seenKey)||'[]'));
-    newAssignedTasks.forEach(t=>existing.add(t.id));
+    newAssignedTasks.forEach(todo=>existing.add(todo.id));
     localStorage.setItem(seenKey,JSON.stringify([...existing]));
     setNewAssignedTasks([]);
   };
@@ -11530,7 +11574,7 @@ export default function Root({onSignOut}){
     if(userProfile&&userProfile!==false&&!allowedMods.find(m=>m.id===id))return;
     setMod(id);setStartView(sv);setScreen("app");setFab(false);localStorage.setItem("ng-last-mod",id);
   };
-  if(userProfile===undefined)return<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--c-bg)",color:"#8C7E66",fontSize:13,fontFamily:"system-ui,sans-serif"}}>Loading…</div>;
+  if(userProfile===undefined){const _ll=localStorage.getItem("ng-user-lang")||"en";return<LanguageProvider language={_ll}><div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--c-bg)",color:"#8C7E66",fontSize:13,fontFamily:"system-ui,sans-serif"}}>{_ll==="mr"?"लोड होत आहे…":"Loading…"}</div></LanguageProvider>;}
   let content;
   const goHome=()=>{setScreen("welcome");localStorage.removeItem("ng-last-mod");};
   if(screen==="app"){
@@ -11566,50 +11610,7 @@ export default function Root({onSignOut}){
   return(
     <LanguageProvider language={userLang}>
     <>
-      {updateReady&&(
-        <div style={{position:"fixed",top:0,left:0,right:0,zIndex:10000,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
-          <span style={{fontSize:15,flexShrink:0}}>🚀</span>
-          <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff",lineHeight:1.3}}>A new version is available</span>
-          <button
-            onClick={()=>window.location.reload()}
-            style={{background:"#fff",border:"none",color:"#1C4A2E",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0,fontFamily:"inherit"}}>
-            Update now
-          </button>
-          <button onClick={()=>setUpdateReady(false)} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.6)",fontSize:18,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
-        </div>
-      )}
-      {(!isOnline||syncingCount>0)&&(
-        <div style={{
-          position:"fixed",
-          top:updateReady?44:0,
-          left:0,right:0,
-          zIndex:9998,
-          background:syncingCount>0?"#1A4A8A":"#4A3800",
-          padding:"9px 16px",
-          display:"flex",alignItems:"center",gap:10,
-          boxShadow:"0 2px 12px rgba(0,0,0,.22)",
-          animation:"fadeDown .25s ease both",
-          transition:"top .2s ease",
-        }}>
-          <span style={{fontSize:14,flexShrink:0}}>{syncingCount>0?"🔄":"📴"}</span>
-          <span style={{flex:1,fontSize:12,fontWeight:600,color:"#fff",lineHeight:1.3}}>
-            {syncingCount>0
-              ?`Syncing ${syncingCount} change${syncingCount!==1?"s":""}…`
-              :"You're offline — changes are saved locally and will sync when reconnected"}
-          </span>
-        </div>
-      )}
-      {newAssignedTasks.length>0&&(
-        <div style={{position:"fixed",top:(updateReady?44:0)+(!isOnline||syncingCount>0?38:0),left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)",transition:"top .2s ease"}}>
-          <span style={{fontSize:14,marginRight:4}}>📋</span>
-          <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff"}}>
-            {newAssignedTasks.length===1
-              ?`New task assigned to you: "${newAssignedTasks[0].text}"`
-              :`${newAssignedTasks.length} new tasks assigned to you`}
-          </span>
-          <button onClick={dismissNewTasks} style={{background:"rgba(255,255,255,.25)",border:"none",color:"#fff",borderRadius:5,padding:"5px 13px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>Dismiss ×</button>
-        </div>
-      )}
+      <RootBanners updateReady={updateReady} setUpdateReady={setUpdateReady} isOnline={isOnline} syncingCount={syncingCount} newAssignedTasks={newAssignedTasks} dismissNewTasks={dismissNewTasks}/>
       {showInstall&&(
         <div style={{
           position:"fixed",
