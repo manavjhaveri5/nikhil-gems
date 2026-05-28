@@ -652,7 +652,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                   onMouseEnter={()=>m.ready&&setHov(m.id)} onMouseLeave={()=>setHov(null)}>
                   <span style={{fontSize:17,flexShrink:0,lineHeight:1,width:22,textAlign:"center"}}>{m.icon}</span>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,fontWeight:500,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{m.title}</div>
+                    <div style={{fontSize:12,fontWeight:500,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t(m.id)}</div>
                     {!m.ready&&<div style={{fontSize:8,color:C.inkFaint,letterSpacing:.6,fontWeight:600}}>SOON</div>}
                   </div>
                   {m.ready&&<div style={{width:5,height:5,borderRadius:"50%",background:C.greenBright,flexShrink:0,animation:"pulse 2.2s ease infinite"}}/>}
