@@ -8,9 +8,9 @@ const loadCSVStock    = () => import("./src/csvStockData.js").then(m => m.CSV_ST
 const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BILLS);
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
-import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS } from "./src/constants.js";
+import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
-import { LanguageProvider, useT, useTFmt } from "./src/languageContext.jsx";
+import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
@@ -351,6 +351,7 @@ const MODS=[
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
   {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",ready:true},
   {id:"misc",icon:"🗂️",title:"Miscellaneous",desc:"Purchase bill maker, utilities",ready:true},
+  {id:"journal",icon:"📒",title:"Stock Journal",desc:"Gate register — parcel entries & exits",ready:true},
 ];
 // ── FINANCIAL CHART (standalone — Y-axis + hover tooltips) ────────
 function FinancialChart({chartData,months6,nextM,openPOtotal,pendingReceivables,todayStr}){
@@ -1129,6 +1130,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 // ══════════════════════════════════════════════════════════════════
 function Shell({title,crumb,onHome,onBack,actions,children}){
   const [dark,toggleDark]=useDark();
+  const [lang,setLang]=useLang();
   return(
     <div style={{fontFamily:"'Figtree',system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}input,select,textarea{font-family:inherit;}input:focus,select:focus,textarea:focus{outline:none;border-color:${C.goldBright}!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:3px;}.bp{background:${C.ink};color:#FAF0DC;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;letter-spacing:.01em;transition:all .18s;font-family:inherit;}.bp:hover{background:#2C1E0A;box-shadow:0 4px 14px rgba(26,19,8,.18);}.bs{background:${C.surface};color:${C.ink};border:1.5px solid ${C.border};padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:400;white-space:nowrap;transition:all .18s;font-family:inherit;}.bs:hover{border-color:${C.inkMid};background:${C.card};}.bp:disabled,.bs:disabled{opacity:.38;cursor:not-allowed;}.rh{transition:background .12s;cursor:pointer;}.rh:hover{background:${C.card}!important;}input[type=checkbox]{accent-color:${C.gold};width:14px;height:14px;cursor:pointer;}@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}@media(max-width:699px){.bp,.bs{font-size:15px!important;padding:9px 16px!important;min-height:44px!important;}select{font-size:16px!important;}.bp:active,.bs:active{opacity:.72!important;transform:scale(.98);}button:active{opacity:.72;}}`}</style>
@@ -1143,7 +1145,7 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
           {crumb&&!mob&&<><span style={{color:C.border,fontSize:16,lineHeight:.8,flexShrink:0}}>›</span><span style={{color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{crumb}</span></>}
           {crumb&&mob&&<><span style={{color:C.border,fontSize:14,lineHeight:.8,flexShrink:0}}>›</span><span style={{color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:12,maxWidth:mob?120:undefined}}>{crumb}</span></>}
         </div>
-        <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}><button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
+        <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}><button onClick={()=>setLang(lang==="en"?"mr":"en")} title={lang==="en"?"Switch to Marathi":"English वर जा"} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:12,cursor:"pointer",lineHeight:1,minHeight:mob?36:32,fontFamily:"inherit",color:C.inkMid,fontWeight:600}}>{lang==="en"?"मराठी":"EN"}</button><button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
       </div>
       <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":undefined,maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
     </div>
@@ -2891,6 +2893,406 @@ function JobWorkApp({onHome}){
           </div>
         )
       }
+    </Shell>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════
+// STOCK JOURNAL — Gate Register (parcel entries & exits)
+// ══════════════════════════════════════════════════════════════════
+const JOURNAL_KEY="ng-journal-v1";
+const JOURNAL_ENTRY_STATUSES=[["received","Received"],["in-selection","In Selection"],["returned","Returned"],["purchased","Purchased"]];
+const JOURNAL_EXIT_STATUSES=[["selection","Sent for Selection"],["return-to-vendor","Returned to Vendor"],["other","Other"]];
+const JOURNAL_STATUS_COLORS={received:[C.green,C.greenBg],["in-selection"]:[C.amber,C.amberBg],returned:[C.blue,C.blueBg],purchased:[C.teal,C.tealBg],selection:[C.purple,C.purpleBg],["return-to-vendor"]:[C.red,C.redBg],other:[C.inkMid,C.card]};
+function journalStatusColor(status){return JOURNAL_STATUS_COLORS[status]||[C.inkMid,C.card];}
+
+function StockJournalApp({onHome}){
+  const t=useT();
+  const [entries,setEntries]=useState([]);
+  const [vendors,setVendors]=useState([]);
+  const [loaded,setLoaded]=useState(false);
+  const [view,setView]=useState("list"); // "list"|"form"
+  const [form,setForm]=useState(null);
+  const [filterVendorId,setFilterVendorId]=useState("all");
+  const [filterType,setFilterType]=useState("all");
+  const [filterStatus,setFilterStatus]=useState("all");
+  const [filterDate,setFilterDate]=useState("");
+  const [toast,setToast]=useState("");
+  const [aiLoading,setAiLoading]=useState(false);
+  const [photoUploading,setPhotoUploading]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [printOpen,setPrintOpen]=useState(false);
+  const [printVendorId,setPrintVendorId]=useState("all");
+  const [printDateFrom,setPrintDateFrom]=useState("");
+  const [printDateTo,setPrintDateTo]=useState(today());
+
+  useEffect(()=>{
+    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors)]).then(([j,v])=>{
+      setEntries(Array.isArray(j)?j:[]);
+      setVendors(Array.isArray(v)?v:[]);
+      setLoaded(true);
+    });
+  },[]);
+
+  const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
+  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",material:"",shape:"",qty:"",unit:"pcs",qty2:"",unit2:"kg",grade:"",notes:"",photos:[],status:"received",exitReason:"",linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
+  const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
+
+  const handleSave=async()=>{
+    if(!form)return;
+    if(!form.vendorId&&!form.vendorName.trim()){showToast("Please select a vendor");return;}
+    setSaving(true);
+    const entry={...form,updatedAt:new Date().toISOString(),createdAt:form.createdAt||new Date().toISOString()};
+    const isEdit=entries.some(e=>e.id===entry.id);
+    const next=isEdit?entries.map(e=>e.id===entry.id?entry:e):[entry,...entries];
+    await saveEntries(next);
+    setSaving(false);
+    setView("list");
+    showToast(t("Entry saved"));
+  };
+
+  const handleDelete=async(id)=>{
+    if(!window.confirm("Delete this entry?"))return;
+    await saveEntries(entries.filter(e=>e.id!==id));
+    setView("list");
+    showToast(t("Entry deleted"));
+  };
+
+  const handlePhotoUpload=async(e)=>{
+    const files=[...e.target.files];
+    if(!files.length)return;
+    setPhotoUploading(true);
+    try{
+      const entryId=form.id||uid();
+      const urls=await Promise.all(files.map(file=>uploadJournalPhoto(entryId,file)));
+      setForm(f=>({...f,id:entryId,photos:[...f.photos,...urls]}));
+    }catch(err){showToast("Photo upload failed: "+err.message);}
+    setPhotoUploading(false);
+  };
+
+  const handleAIParse=async()=>{
+    if(!form||!form.notes.trim())return;
+    setAiLoading(true);
+    try{
+      const stoneList=DEFAULT_STONES.slice(0,40).join(", ");
+      const prompt=`You are an assistant for a gemstone trading business in India.
+The user typed a note (possibly in Marathi, Hindi, or a mix with English) describing a stock parcel.
+Extract the fields below. If a field is not present, return empty string "".
+
+Note: "${form.notes}"
+
+Return ONLY valid JSON (no markdown):
+{
+  "material": "stone name in English (e.g. Amethyst, Rose Quartz)",
+  "shape": "shape in English (e.g. Sphere, Palmstone, Tower)",
+  "qty": "numeric quantity only",
+  "unit": "one of: pcs ct gm kg lot str",
+  "qty2": "secondary quantity if mentioned",
+  "unit2": "unit for secondary quantity",
+  "grade": "grade if mentioned (A B AAA Extra etc.)",
+  "notes_en": "short English translation of the note (2-3 sentences max)"
+}
+
+Known stones: ${stoneList}
+Known shapes: Sphere, Palmstone, Tower, Heart, Tumbled, Freeform, Rough, Pendant, Bracelet, Cabochon`;
+
+      const raw=await callClaude([{role:"user",content:prompt}],400);
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      setForm(f=>({
+        ...f,
+        material:parsed.material||f.material,
+        shape:parsed.shape||f.shape,
+        qty:parsed.qty||f.qty,
+        unit:parsed.unit||f.unit,
+        qty2:parsed.qty2||f.qty2,
+        unit2:parsed.unit2||f.unit2,
+        grade:parsed.grade||f.grade,
+        notes:parsed.notes_en?`${f.notes}\n[🤖 ${parsed.notes_en}]`:f.notes,
+      }));
+      showToast("✓ "+t("AI filled fields from notes"));
+    }catch(err){showToast(t("AI parse failed"));}
+    setAiLoading(false);
+  };
+
+  const handlePrint=()=>{
+    const toprint=entries
+      .filter(e=>printVendorId==="all"||e.vendorId===printVendorId)
+      .filter(e=>!printDateFrom||e.date>=printDateFrom)
+      .filter(e=>!printDateTo||e.date<=printDateTo)
+      .sort((a,b)=>b.date.localeCompare(a.date));
+    const byVendor={};
+    toprint.forEach(e=>{
+      const key=e.vendorId||e.vendorName||"Unknown";
+      if(!byVendor[key])byVendor[key]={name:e.vendorName||"Unknown",items:[]};
+      byVendor[key].items.push(e);
+    });
+    const statusLabel=s=>{const found=[...JOURNAL_ENTRY_STATUSES,...JOURNAL_EXIT_STATUSES].find(([v])=>v===s);return found?found[1]:s||"—";};
+    const vendorBlocks=Object.values(byVendor).map(({name,items})=>{
+      const rows=items.map(e=>`<tr>
+        <td>${fmtDate(e.date)}</td>
+        <td class="${e.type==="entry"?"entry-t":"exit-t"}">${e.type==="entry"?"↓ Entry":"↑ Exit"}</td>
+        <td>${e.material||"—"}</td><td>${e.shape||"—"}</td>
+        <td>${e.qty||"—"} ${e.unit}${e.qty2?` / ${e.qty2} ${e.unit2}`:""}</td>
+        <td>${e.grade||"—"}</td><td>${statusLabel(e.status)}</td>
+        <td style="max-width:180px;word-break:break-word">${e.notes||"—"}</td>
+      </tr>`).join("");
+      return `<div class="vblock"><h2>${name}</h2>
+        <table><thead><tr><th>Date</th><th>Type</th><th>Material</th><th>Shape</th><th>Qty</th><th>Grade</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`;
+    }).join("");
+    const dateRange=(printDateFrom||printDateTo)?`${printDateFrom?fmtDate(printDateFrom):"Start"} – ${printDateTo?fmtDate(printDateTo):"Today"}`:"All Dates";
+    const vendorName=printVendorId==="all"?"All Vendors":(vendors.find(v=>v.id===printVendorId)?.name||"");
+    const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Journal</title>
+<style>*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;padding:24px;color:#1a1308;background:#fff}.no-print{margin-bottom:16px}.btn{background:#b8922a;color:#fff;border:none;padding:9px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-family:inherit}.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #e5dcc8;padding-bottom:12px;margin-bottom:8px}.co{font-family:Georgia,serif;font-size:22px;font-weight:700}.cosub{font-size:11px;color:#888;letter-spacing:1px;text-transform:uppercase}.rtitle{font-family:Georgia,serif;font-size:18px;font-weight:600;margin:16px 0 4px}.rsub{font-size:12px;color:#888;margin-bottom:20px}.vblock{margin-bottom:28px}.vblock h2{font-family:Georgia,serif;font-size:16px;font-weight:700;border-bottom:1px solid #e5dcc8;padding-bottom:6px;margin-bottom:8px;color:#4a3200}table{width:100%;border-collapse:collapse;font-size:12px}th{background:#f8f6f1;padding:7px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#888;border-bottom:2px solid #e5dcc8}td{padding:7px 10px;border-bottom:1px solid #efe8d8;vertical-align:top}tr:last-child td{border-bottom:none}.entry-t{color:#1a6a2a;font-weight:600}.exit-t{color:#8a1a1a;font-weight:600}@media print{.no-print{display:none}body{padding:10px}@page{margin:1.2cm;size:A4}}
+</style></head><body>
+<div class="no-print"><button class="btn" onclick="window.print()">🖨 Print / Save PDF</button></div>
+<div class="hdr"><div><div class="co">Nikhil Gems</div><div class="cosub">Stock Entry Journal</div></div>
+<div style="text-align:right;font-size:12px;color:#888"><div>Generated: ${fmtDate(today())}</div><div>${dateRange}</div><div>${toprint.length} entries</div></div></div>
+<div class="rtitle">Stock Entry Journal</div>
+<div class="rsub">${vendorName} · ${dateRange}</div>
+${vendorBlocks}
+</body></html>`;
+    const w=window.open("","_blank");w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),600);
+    setPrintOpen(false);
+  };
+
+  // ── Filtering ───────────────────────────────────────────────────
+  const filtered=entries
+    .filter(e=>filterVendorId==="all"||e.vendorId===filterVendorId)
+    .filter(e=>filterType==="all"||e.type===filterType)
+    .filter(e=>filterStatus==="all"||e.status===filterStatus)
+    .filter(e=>!filterDate||e.date===filterDate)
+    .sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt));
+
+  // Group by date for timeline display
+  const byDate=[];
+  filtered.forEach(e=>{
+    if(!byDate.length||byDate[byDate.length-1].date!==e.date)byDate.push({date:e.date,items:[]});
+    byDate[byDate.length-1].items.push(e);
+  });
+
+  const anyFilter=filterVendorId!=="all"||filterType!=="all"||filterStatus!=="all"||filterDate;
+
+  // ── Form view ───────────────────────────────────────────────────
+  if(view==="form"&&form){
+    const isEdit=entries.some(e=>e.id===form.id);
+    const setF=k=>v=>setForm(f=>({...f,[k]:v}));
+    return(
+      <Shell title={t("Stock Journal")} crumb={isEdit?t("Edit Entry"):t("New Entry")} onHome={onHome} onBack={()=>setView("list")}>
+        <Toast msg={toast}/>
+        <div style={{maxWidth:620,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+          {/* Section 1: Type + Date + Vendor */}
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>{t("Entry Type")}</div>
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              <button onClick={()=>{setF("type")("entry");setF("status")("received");}} className={form.type==="entry"?"bp":"bs"} style={{flex:1,fontSize:mob?14:13}}>📥 {t("Stock Entry")}</button>
+              <button onClick={()=>{setF("type")("exit");setF("status")("selection");}} className={form.type==="exit"?"bp":"bs"} style={{flex:1,fontSize:mob?14:13}}>📤 {t("Stock Exit")}</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+              <Field label="Date"><input type="date" value={form.date} onChange={e=>setF("date")(e.target.value)} style={FI}/></Field>
+              <Field label="Vendor">
+                <select value={form.vendorId} onChange={e=>{const v=vendors.find(x=>x.id===e.target.value);setForm(f=>({...f,vendorId:e.target.value,vendorName:v?.name||""}));}} style={FI}>
+                  <option value="">— Select Vendor —</option>
+                  {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              </Field>
+            </div>
+          </div>
+
+          {/* Section 2: Material Details */}
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Material</div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12,marginBottom:12}}>
+              <Field label="Material / Stone">
+                <input value={form.material} onChange={e=>setF("material")(e.target.value)} list="jnl-stones" style={FI} placeholder="e.g. Amethyst"/>
+                <datalist id="jnl-stones">{DEFAULT_STONES.map(s=><option key={s} value={s}/>)}</datalist>
+              </Field>
+              <Field label="Shape">
+                <input value={form.shape} onChange={e=>setF("shape")(e.target.value)} list="jnl-shapes" style={FI} placeholder="e.g. Sphere"/>
+                <datalist id="jnl-shapes">{SHAPES.map(s=><option key={s} value={s}/>)}</datalist>
+              </Field>
+              <Field label="Grade">
+                <input value={form.grade} onChange={e=>setF("grade")(e.target.value)} style={FI} placeholder="A / B / AAA / Extra"/>
+              </Field>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <Field label="Qty — Primary">
+                <div style={{display:"grid",gridTemplateColumns:"1fr 72px",gap:4}}>
+                  <input type="number" value={form.qty} onChange={e=>setF("qty")(e.target.value)} style={FI} placeholder="50"/>
+                  <select value={form.unit} onChange={e=>setF("unit")(e.target.value)} style={{...FI,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                </div>
+              </Field>
+              <Field label="Qty — Secondary (optional)">
+                <div style={{display:"grid",gridTemplateColumns:"1fr 72px",gap:4}}>
+                  <input type="number" value={form.qty2} onChange={e=>setF("qty2")(e.target.value)} style={FI} placeholder="2.5"/>
+                  <select value={form.unit2} onChange={e=>setF("unit2")(e.target.value)} style={{...FI,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                </div>
+              </Field>
+            </div>
+          </div>
+
+          {/* Section 3: Status + Linking */}
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Status</div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+              <Field label="Status">
+                <select value={form.status} onChange={e=>setF("status")(e.target.value)} style={FI}>
+                  {(form.type==="entry"?JOURNAL_ENTRY_STATUSES:JOURNAL_EXIT_STATUSES).map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                </select>
+              </Field>
+              {form.vendorId&&(
+                <Field label={t("Linked Entry (optional)")}>
+                  <select value={form.linkedEntryId} onChange={e=>setF("linkedEntryId")(e.target.value)} style={FI}>
+                    <option value="">— Not linked —</option>
+                    {entries.filter(e=>e.type==="entry"&&e.vendorId===form.vendorId&&e.id!==form.id).map(e=><option key={e.id} value={e.id}>{fmtDate(e.date)} · {e.material||"?"} · {e.qty} {e.unit}</option>)}
+                  </select>
+                </Field>
+              )}
+            </div>
+          </div>
+
+          {/* Section 4: Notes + AI */}
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Notes</div>
+            <div style={{position:"relative"}}>
+              <textarea value={form.notes} onChange={e=>setF("notes")(e.target.value)} rows={3} style={{...FI,resize:"vertical",paddingRight:48}} placeholder="मराठीत लिहा किंवा type in English…"/>
+              <button onClick={handleAIParse} disabled={aiLoading||!form.notes.trim()} title="Parse with AI — extract material, shape, qty" style={{position:"absolute",right:8,bottom:8,background:aiLoading?C.card:C.goldLight,border:`1px solid ${C.goldBright}`,borderRadius:6,padding:"5px 9px",cursor:"pointer",fontSize:16,lineHeight:1,opacity:aiLoading||!form.notes.trim()?.35:1}}>{aiLoading?"⏳":"🤖"}</button>
+            </div>
+          </div>
+
+          {/* Section 5: Photos */}
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
+            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Photos</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {form.photos.map((url,i)=>(
+                <div key={url} style={{position:"relative",width:80,height:80,borderRadius:8,overflow:"hidden",border:`1px solid ${C.border}`}}>
+                  <img src={url} style={{width:80,height:80,objectFit:"cover"}} alt=""/>
+                  <button onClick={()=>setForm(f=>({...f,photos:f.photos.filter((_,j)=>j!==i)}))} style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,.65)",color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,cursor:"pointer",fontSize:13,lineHeight:"20px",padding:0,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+                </div>
+              ))}
+              <label style={{width:80,height:80,border:`2px dashed ${C.border}`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:24,color:C.inkFaint,flexShrink:0,transition:"border-color .15s",background:C.card}}>
+                {photoUploading?"⏳":"+"}
+                <input type="file" accept="image/*" multiple hidden onChange={handlePhotoUpload}/>
+              </label>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:4,paddingBottom:mob?"16px":0}}>
+            <div>
+              {isEdit&&<button onClick={()=>handleDelete(form.id)} style={{background:"none",border:`1px solid ${C.red}`,borderRadius:6,color:C.red,cursor:"pointer",fontSize:12,padding:"7px 14px",fontFamily:"inherit"}}>{t("Delete Entry")}</button>}
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setView("list")} className="bs">{t("Cancel")}</button>
+              <button onClick={handleSave} className="bp" disabled={saving}>{saving?t("Saving…"):isEdit?t("Save Changes"):t("Entry saved").replace("saved","& Save")}</button>
+            </div>
+          </div>
+        </div>
+      </Shell>
+    );
+  }
+
+  // ── List view ───────────────────────────────────────────────────
+  return(
+    <Shell title={t("Stock Journal")} onHome={onHome} onBack={onHome} actions={
+      <div style={{display:"flex",gap:8}}>
+        <button className="bs" style={{fontSize:mob?12:12}} onClick={()=>setPrintOpen(true)}>🖨{!mob&&" "+t("Print Report")}</button>
+        <button className="bp" style={{fontSize:mob?12:13}} onClick={()=>{setForm(blankEntry());setView("form");}}>+ {mob?"Add":t("New Entry")}</button>
+      </div>
+    }>
+      <Toast msg={toast}/>
+      {/* Filter bar */}
+      <div style={{display:"flex",gap:mob?4:8,marginBottom:12,flexWrap:mob?"nowrap":"wrap",overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",alignItems:"center"}}>
+        <select value={filterVendorId} onChange={e=>setFilterVendorId(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"7px 8px":"4px 8px",minWidth:mob?130:150,flexShrink:0,cursor:"pointer"}}>
+          <option value="all">{t("All Vendors")}</option>
+          {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+        </select>
+        <div style={{display:"flex",gap:3,flexShrink:0}}>
+          {[["all",t("All")],["entry","📥 Entry"],["exit","📤 Exit"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setFilterType(v)} style={{fontSize:mob?12:11,padding:mob?"6px 10px":"4px 10px",borderRadius:4,cursor:"pointer",border:`1px solid ${filterType===v?C.gold:C.border}`,background:filterType===v?C.goldLight:C.surface,color:filterType===v?C.gold:C.inkMid,fontWeight:filterType===v?700:400,whiteSpace:"nowrap",minHeight:mob?38:undefined}}>{l}</button>
+          ))}
+        </div>
+        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"7px 8px":"4px 8px",flexShrink:0,cursor:"pointer",minWidth:mob?120:140}}>
+          <option value="all">{t("All Statuses")}</option>
+          {[...JOURNAL_ENTRY_STATUSES,...JOURNAL_EXIT_STATUSES].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+        </select>
+        <input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"7px 8px":"4px 8px",flexShrink:0,width:mob?undefined:130}}/>
+        {anyFilter&&<button onClick={()=>{setFilterVendorId("all");setFilterType("all");setFilterStatus("all");setFilterDate("");}} style={{fontSize:11,padding:"4px 10px",borderRadius:4,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint,flexShrink:0,whiteSpace:"nowrap"}}>Clear ×</button>}
+      </div>
+
+      {/* Timeline */}
+      {!loaded&&<div style={{textAlign:"center",padding:"52px 0",color:C.inkFaint,fontSize:13}}>{t("Loading…")}</div>}
+      {loaded&&filtered.length===0&&(
+        <div style={{textAlign:"center",padding:"72px 0",color:C.inkFaint}}>
+          <div style={{fontSize:40,marginBottom:12,opacity:.18}}>📒</div>
+          <p style={{fontSize:14,fontWeight:500,color:C.inkMid}}>{anyFilter?"No entries match the filter":t("No journal entries yet")}</p>
+          {!anyFilter&&<p style={{fontSize:12,marginTop:6,color:C.inkFaint}}>Tap + to record your first parcel</p>}
+        </div>
+      )}
+      {loaded&&byDate.map(group=>(
+        <div key={group.date} style={{marginBottom:20}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+            <span style={{flex:1,height:1,background:C.border}}/>
+            <span>{fmtDate(group.date)}</span>
+            <span style={{flex:1,height:1,background:C.border}}/>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {group.items.map(entry=>{
+              const [scol,sbg]=journalStatusColor(entry.status);
+              const borderCol=entry.type==="entry"?C.green:C.red;
+              return(
+                <div key={entry.id} onClick={()=>{setForm({...entry});setView("form");}} style={{background:C.surface,border:`1px solid ${C.border}`,borderLeft:`4px solid ${borderCol}`,borderRadius:9,padding:"13px 14px",cursor:"pointer",transition:"box-shadow .15s"}} onMouseEnter={e=>e.currentTarget.style.boxShadow="0 2px 12px rgba(26,19,8,.09)"} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:5,gap:8}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:16}}>{entry.type==="entry"?"📥":"📤"}</span>
+                      <span style={{fontSize:9,fontWeight:700,letterSpacing:.8,textTransform:"uppercase",color:entry.type==="entry"?C.green:C.red}}>{entry.type==="entry"?"Entry":"Exit"}</span>
+                      <span style={{background:sbg,color:scol,borderRadius:4,padding:"2px 7px",fontSize:9,fontWeight:700}}>{[...JOURNAL_ENTRY_STATUSES,...JOURNAL_EXIT_STATUSES].find(([v])=>v===entry.status)?.[1]||entry.status}</span>
+                    </div>
+                    <span style={{fontSize:11,color:C.inkFaint,flexShrink:0}}>{entry.vendorName||"—"}</span>
+                  </div>
+                  <div style={{fontSize:14,fontWeight:600,color:C.ink,marginBottom:3}}>
+                    {[entry.material,entry.shape].filter(Boolean).join(" · ")||"—"}
+                    {entry.qty&&<span style={{fontWeight:400,color:C.inkMid}}> · {entry.qty} {entry.unit}{entry.qty2?` / ${entry.qty2} ${entry.unit2}`:""}</span>}
+                    {entry.grade&&<span style={{fontWeight:400,color:C.inkMid,fontSize:12}}> · Grade {entry.grade}</span>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
+                    {entry.photos.length>0&&(
+                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                        {entry.photos.slice(0,3).map((url,i)=><img key={i} src={url} style={{width:32,height:32,objectFit:"cover",borderRadius:4,border:`1px solid ${C.border}`}} alt=""/>)}
+                        {entry.photos.length>3&&<span style={{fontSize:10,color:C.inkFaint}}>+{entry.photos.length-3}</span>}
+                      </div>
+                    )}
+                    {entry.notes&&<p style={{fontSize:11,color:C.inkMid,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",margin:0}}>{entry.notes.split("\n")[0]}</p>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {/* Print Modal */}
+      {printOpen&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:800,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={e=>{if(e.target===e.currentTarget)setPrintOpen(false);}}>
+          <div style={{background:C.surface,borderRadius:12,maxWidth:400,width:"100%",padding:24,boxShadow:"0 8px 40px rgba(0,0,0,.25)"}}>
+            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:600,marginBottom:16}}>{t("Print Vendor Report")}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+              <Field label="Vendor">
+                <select value={printVendorId} onChange={e=>setPrintVendorId(e.target.value)} style={FI}>
+                  <option value="all">{t("All Vendors")}</option>
+                  {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Date From"><input type="date" value={printDateFrom} onChange={e=>setPrintDateFrom(e.target.value)} style={FI}/></Field>
+              <Field label="Date To"><input type="date" value={printDateTo} onChange={e=>setPrintDateTo(e.target.value)} style={FI}/></Field>
+            </div>
+            <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
+              <button className="bs" onClick={()=>setPrintOpen(false)}>{t("Cancel")}</button>
+              <button className="bp" onClick={handlePrint}>🖨 {t("Generate PDF")}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }
@@ -4966,6 +5368,11 @@ async function uploadStockPhoto(itemId,file){
   // Upload directly to Supabase Storage (blob-upload endpoint was retired)
   const ext=(file.name||"").split(".").pop().toLowerCase()||"jpg";
   const pathname=`stock/${itemId}-${uid()}.${ext}`;
+  return await supabaseUpload(pathname,file);
+}
+async function uploadJournalPhoto(entryId,file){
+  const ext=(file.name||"").split(".").pop().toLowerCase()||"jpg";
+  const pathname=`journal/${entryId}-${uid()}.${ext}`;
   return await supabaseUpload(pathname,file);
 }
 // Supabase Storage upload with simulated progress (blob-upload endpoint retired)
@@ -11169,6 +11576,7 @@ const ALL_STAFF_MODS=[
   {id:"ai",label:"Ask AI"},
   {id:"images",label:"Image Library"},
   {id:"misc",label:"Miscellaneous"},
+  {id:"journal",label:"Stock Journal"},
 ];
 const TODO_KEY_FOR=(email)=>email?`ng-todos-${email.replace(/[^a-z0-9]/gi,"-")}-v1`:"ng-todos-v1";
 
@@ -11447,6 +11855,7 @@ export default function Root({onSignOut}){
   const [userProfile,setUserProfile]=useState(undefined); // undefined=loading, false=admin, {...}=staff
   const [allUsers,setAllUsers]=useState([]);
   const [newAssignedTasks,setNewAssignedTasks]=useState([]);
+  const [activeLang,setActiveLang]=useState(()=>localStorage.getItem("ng-user-lang")||"en");
   // ── Offline / sync state ──────────────────────────────────────────────────
   const [isOnline,setIsOnline]=useState(navigator.onLine);
   const [syncingCount,setSyncingCount]=useState(0); // >0 while flushing queue
@@ -11494,7 +11903,7 @@ export default function Root({onSignOut}){
         const arr=Array.isArray(users)?users:[];
         setAllUsers(arr);
         const profile=arr.find(u=>u.email?.toLowerCase()===email?.toLowerCase());
-        if(profile?.language)localStorage.setItem("ng-user-lang",profile.language);
+        if(profile?.language){localStorage.setItem("ng-user-lang",profile.language);setActiveLang(profile.language);}
         setUserProfile(profile||false);
       });
     });
@@ -11594,6 +12003,7 @@ export default function Root({onSignOut}){
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;
     else if(mod==="images")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ImageLibraryApp onHome={goHome}/></React.Suspense>;
     else if(mod==="misc")content=<MiscApp onHome={goHome}/>;
+    else if(mod==="journal")content=<StockJournalApp onHome={goHome}/>;
   }
   const handleGoToActivity=act=>{
     if(!act?.targetMod)return;
@@ -11606,9 +12016,20 @@ export default function Root({onSignOut}){
   };
   if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
   const FAB_ITEMS=[{icon:"⬆",label:"Upload Bill",action:()=>go("purchases","upload")},{icon:"🧾",label:"New Expense",action:()=>go("expenses")},{icon:"📋",label:"New Invoice",action:()=>go("invoices")},...(isAdmin?[{icon:"💰",label:"Finance",action:()=>go("finance")}]:[])];
-  const userLang=userProfile?.language||"en";
+  const userLang=activeLang;
+  const toggleLang=async()=>{
+    const next=activeLang==="en"?"mr":"en";
+    setActiveLang(next);
+    localStorage.setItem("ng-user-lang",next);
+    if(userProfile&&userProfile!==false){
+      const users=await loadK("ng-users-v1");
+      const updated=(Array.isArray(users)?users:[]).map(u=>u.email?.toLowerCase()===currentEmail?.toLowerCase()?{...u,language:next}:u);
+      saveK("ng-users-v1",updated).catch(()=>{});
+      setUserProfile(prev=>prev?{...prev,language:next}:prev);
+    }
+  };
   return(
-    <LanguageProvider language={userLang}>
+    <LanguageProvider language={userLang} setLang={toggleLang}>
     <>
       <RootBanners updateReady={updateReady} setUpdateReady={setUpdateReady} isOnline={isOnline} syncingCount={syncingCount} newAssignedTasks={newAssignedTasks} dismissNewTasks={dismissNewTasks}/>
       {showInstall&&(
