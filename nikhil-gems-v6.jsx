@@ -3764,6 +3764,8 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [bulkEditOpen,setBulkEditOpen]=useState(false);
   const [boxAssignOpen,setBoxAssignOpen]=useState(false);
   const [boxAssignVal,setBoxAssignVal]=useState("");
+  const [mergeOpen,setMergeOpen]=useState(false);
+  const [mergeKeepId,setMergeKeepId]=useState("");
   const [sendToShowOpen,setSendToShowOpen]=useState(false);
   const [shows,setShows]=useState([]);
   const [sendToShowId,setSendToShowId]=useState("");
@@ -4080,6 +4082,21 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
       setSelectMode(false);
       logActivity({user:"Admin",action:"returned",module:"stock",label:`Returned ${returnedItems.length} item${returnedItems.length>1?"s":""} to India from ${stockRegion}`,targetId:returnedItems[0]?.id,targetMod:"stock"});
     }catch(e){showToast("⚠ Save failed: "+e.message);}
+  };
+  const mergePhysicalStock=async(ids,keepId)=>{
+    if(ids.size!==2)return;
+    const [id1,id2]=[...ids];
+    const dropId=keepId===id1?id2:id1;
+    const keepItem=stock.find(s=>s.id===keepId);
+    const dropItem=stock.find(s=>s.id===dropId);
+    if(!keepItem||!dropItem)return;
+    const newQty=+parseFloat(Math.max(0,(parseFloat(keepItem.qty)||0)+(parseFloat(dropItem.qty)||0))).toFixed(4);
+    const newQty2=+parseFloat(Math.max(0,(parseFloat(keepItem.qty2)||0)+(parseFloat(dropItem.qty2)||0))).toFixed(4);
+    const merged={...keepItem,qty:String(newQty),...(newQty2>0?{qty2:String(newQty2)}:{}),updatedAt:new Date().toISOString()};
+    const newStock=stock.filter(s=>s.id!==dropId).map(s=>s.id===keepId?merged:s);
+    setStock(newStock);
+    try{await saveStockK(newStock);showToast("✓ Items merged");setSelectedIds(new Set());setSelectMode(false);setMergeOpen(false);}
+    catch(e){showToast("⚠ Save failed: "+e.message);}
   };
   const swapQtyBulk=async ids=>{if(!ids.size)return;const list=stock.map(s=>ids.has(s.id)?{...s,qty:s.qty2||"",unit:s.unit2||"pcs",qty2:s.qty||"",unit2:s.unit||"pcs",updatedAt:new Date().toISOString()}:s);setStock(list);try{await saveStockK(list);showToast(ids.size+" items swapped");}catch(e){showToast("Swap failed: "+e.message);};};
   const applyBulkEdit=async(ids,fields)=>{
@@ -4927,6 +4944,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined}} onClick={()=>setSelectedIds(new Set())}>None</button>
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#6B48CC",borderColor:"#6B48CC",background:"#F0EBFF"}} disabled={selectedIds.size===0} onClick={()=>{setSendToShowOpen(v=>!v);setSendToShowId("");}}>✈ Send to Show</button>
                   {stockRegion!=="India"&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#1A6A1A",borderColor:"#1A6A1A",background:"#EDF7ED"}} disabled={selectedIds.size===0} onClick={()=>openReturnQtyDialog(selectedIds)}>🇮🇳 Return to India</button>}
+                  {selectedIds.size===2&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#0369A1",borderColor:"#0369A1",background:"#E0F2FE"}} onClick={()=>{setMergeOpen(v=>!v);const [id1]=([...selectedIds]);setMergeKeepId(id1);}}>⇌ Merge</button>}
                   {!mob&&<><button className="bs" style={{fontSize:12}} disabled={selectedIds.size===0} onClick={()=>swapQtyBulk(selectedIds)}>⇄ Swap Qty</button>
                   <button className="bs" style={{fontSize:12,color:C.green,borderColor:C.green,background:C.greenBg}} disabled={selectedIds.size===0} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button>
                   <button className="bs" style={{fontSize:12,color:C.blue,borderColor:C.blue,background:C.blueBg}} disabled={selectedIds.size===0} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedWix:null,postedEbay:null});}}>✏ Edit</button></>}
@@ -4947,6 +4965,44 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <button onClick={()=>setBoxAssignOpen(false)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:18,lineHeight:1,padding:0,flexShrink:0}}>×</button>
                 </div>
               )}
+              {selectMode&&mergeOpen&&selectedIds.size===2&&(()=>{
+                const [id1,id2]=[...selectedIds];
+                const item1=stock.find(s=>s.id===id1),item2=stock.find(s=>s.id===id2);
+                if(!item1||!item2)return null;
+                const dropId=mergeKeepId===id1?id2:id1;
+                const keepItem=stock.find(s=>s.id===mergeKeepId)||item1;
+                const dropItem=stock.find(s=>s.id===dropId);
+                const combinedQty=+parseFloat((parseFloat(keepItem.qty)||0)+(parseFloat(dropItem?.qty)||0)).toFixed(4);
+                const combinedQty2=+parseFloat((parseFloat(keepItem.qty2)||0)+(parseFloat(dropItem?.qty2)||0)).toFixed(4);
+                const itemRow=(item,isKeep)=>(
+                  <label key={item.id} style={{flex:1,minWidth:160,cursor:"pointer",background:isKeep?"#fff":"transparent",border:`1.5px solid ${isKeep?"#0369A1":C.border}`,borderRadius:7,padding:"9px 12px",display:"flex",gap:8,alignItems:"flex-start"}}>
+                    <input type="radio" name="mergeKeep" checked={isKeep} onChange={()=>setMergeKeepId(item.id)} style={{accentColor:"#0369A1",marginTop:2,flexShrink:0}}/>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{item.material||"—"}{item.shape?` · ${item.shape}`:""}</div>
+                      <div style={{fontSize:12,color:C.inkMid}}>{item.qty||"0"} {item.unit||"pcs"}{item.qty2&&+item.qty2>0?` + ${item.qty2} ${item.unit2||""}`:""}</div>
+                      {item.location&&<div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>{item.location}</div>}
+                      {isKeep&&<div style={{fontSize:10,fontWeight:700,color:"#0369A1",marginTop:3,textTransform:"uppercase",letterSpacing:.4}}>Keep this card</div>}
+                      {!isKeep&&<div style={{fontSize:10,color:C.inkFaint,marginTop:3,textTransform:"uppercase",letterSpacing:.4}}>Merge into →</div>}
+                    </div>
+                  </label>
+                );
+                return(
+                  <div style={{background:"#E0F2FE",border:"1px solid #0369A1",borderRadius:7,padding:"12px 14px",marginBottom:8}}>
+                    <div style={{fontSize:12,fontWeight:700,color:"#0369A1",marginBottom:10}}>⇌ Merge — pick the card to keep (qty will be combined)</div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+                      {itemRow(item1,mergeKeepId===id1)}
+                      {itemRow(item2,mergeKeepId===id2)}
+                    </div>
+                    <div style={{fontSize:12,color:"#0369A1",marginBottom:10}}>
+                      Result: <strong>{combinedQty} {keepItem.unit||"pcs"}{combinedQty2>0?` + ${combinedQty2} ${keepItem.unit2||""}`:""}</strong> · other card deleted
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>mergePhysicalStock(selectedIds,mergeKeepId)} style={{background:"#0369A1",color:"#fff",border:"none",borderRadius:6,padding:"7px 18px",fontSize:12,fontWeight:600,cursor:"pointer"}}>✓ Confirm Merge</button>
+                      <button onClick={()=>setMergeOpen(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"7px 14px",fontSize:12,cursor:"pointer",color:C.inkFaint}}>Cancel</button>
+                    </div>
+                  </div>
+                );
+              })()}
               {selectMode&&sendToShowOpen&&(
                 <div style={{display:"flex",gap:8,alignItems:"center",background:"#F0EBFF",border:"1px solid #6B48CC",borderRadius:7,padding:"9px 14px",marginBottom:8,flexWrap:"wrap"}}>
                   <span style={{fontSize:12,fontWeight:600,color:"#6B48CC",flexShrink:0}}>✈ Send {selectedIds.size} item{selectedIds.size!==1?"s":""} to show:</span>
