@@ -3389,7 +3389,7 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
           <button onClick={onImportFromLib}
             style={{ padding: "8px 16px", background: platform.color + "15", border: `1.5px solid ${platform.color}40`,
               borderRadius: 8, fontSize: 12, fontWeight: 600, color: platform.color, cursor: "pointer" }}>
-            ↓ Import from Image Library
+            ⟳ Sync from Shopify
           </button>
         </div>
       )}
@@ -3400,7 +3400,7 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
           <div style={{ fontSize: 14, fontWeight: 600 }}>No active listings on {platform.label}</div>
           <div style={{ fontSize: 12, marginTop: 4 }}>
             {onImportFromLib
-              ? "Click \"Import from Image Library\" above to pull in products you've already pushed to this store."
+              ? "Click \"Sync from Shopify\" above to pull active products from your store."
               : "Publish listings from the All Listings tab."}
           </div>
         </div>
@@ -3745,47 +3745,20 @@ export default function ListingManagerApp({ onHome }) {
     setTab("orders");
   };
 
-  /* import Earth Editions from Image Library */
+  /* import active products from Shopify Earth Editions */
   const handleImportEarth = async () => {
+    showToast("Fetching from Shopify…");
     try {
-      const imgs = await loadK(IMG_KEY) || [];
-      const groups = new Map();
-      for (const img of imgs) {
-        if (!(img.usedOn || []).includes("eartheditions")) continue;
-        const k = `${img.name}|||${img.category || ""}`;
-        if (!groups.has(k)) groups.set(k, { name: img.name, category: img.category || "", imgs: [] });
-        groups.get(k).imgs.push(img);
-      }
-      const existingProductIds = new Set(
-        listings.map(l => l.platforms?.shopify_earth?.product_id).filter(Boolean)
-      );
-      const toAdd = [];
-      for (const { name, category, imgs } of groups.values()) {
-        const productId = imgs[0]?.shopifyProductId || "";
-        if (productId && existingProductIds.has(productId)) continue;
-        const alreadyByName = listings.some(l =>
-          l.material?.toLowerCase() === name?.toLowerCase() &&
-          l.shape?.toLowerCase() === category?.toLowerCase() &&
-          l.platforms?.shopify_earth?.status === "active"
-        );
-        if (alreadyByName) continue;
-        toAdd.push({
-          id: uid(),
-          title: [name, category].filter(Boolean).join(" "),
-          material: name,
-          shape: category,
-          type: "unique",
-          qty: 1,
-          images: imgs.map(i => i.imageUrl).filter(Boolean),
-          platforms: {
-            shopify_earth: { product_id: productId, status: "active" },
-          },
-          createdAt: new Date().toISOString(),
-        });
-      }
-      if (!toAdd.length) { showToast("No new Earth Editions items found in Image Library"); return; }
-      await persistListings([...toAdd, ...listings]);
-      showToast(`✓ Imported ${toAdd.length} listing${toAdd.length > 1 ? "s" : ""} from Image Library`);
+      const r = await fetch("/api/listing-manager?action=import_shopify_listings&store_key=earth");
+      const d = await r.json();
+      if (!d.ok) { showToast("⚠ " + (d.error || "Shopify fetch failed")); return; }
+      const imported = d.listings || [];
+      if (!imported.length) { showToast("No active listings found on Earth Editions"); return; }
+      const existingIds = new Set(listings.map(l => l.platforms?.shopify_earth?.product_id).filter(Boolean));
+      const toAdd = imported.filter(l => !existingIds.has(l.platforms?.shopify_earth?.product_id));
+      const kept  = listings.filter(l => !imported.find(i => i.platforms?.shopify_earth?.product_id === l.platforms?.shopify_earth?.product_id));
+      await persistListings([...imported, ...kept]);
+      showToast(`✓ Synced ${imported.length} listing${imported.length !== 1 ? "s" : ""} from Earth Editions (${toAdd.length} new)`);
     } catch (e) { showToast("⚠ " + e.message); }
   };
 
