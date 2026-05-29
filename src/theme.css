@@ -9,6 +9,13 @@
   --c-blue:#1A3E7A; --c-blueBg:#EDF2FF;
   --c-purple:#4E2E7A; --c-purpleBg:#F2EDFF;
   --c-teal:#14605A; --c-tealBg:#E4F3F2;
+  --c-fill:rgba(118,118,128,.10);
+  --c-topbar:rgba(255,255,255,.72);
+  --e-1:0 1px 3px rgba(26,19,8,.05),0 4px 16px rgba(26,19,8,.04);
+  --e-2:0 6px 24px rgba(26,19,8,.12);
+  --e-modal:0 20px 60px rgba(26,19,8,.30);
+  --r-sm:8px; --r-md:12px; --r-lg:16px;
+  --ease-spring:cubic-bezier(.34,1.2,.64,1); --ease:cubic-bezier(.4,0,.2,1);
 }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 html.dark {
@@ -22,4 +29,9 @@ html.dark {
   --c-blue:#4060C0; --c-blueBg:#0A1428;
   --c-purple:#7050C0; --c-purpleBg:#180E28;
   --c-teal:#20907A; --c-tealBg:#081E1A;
+  --c-fill:rgba(200,190,170,.10);
+  --c-topbar:rgba(30,27,23,.72);
+  --e-1:0 0 0 1px rgba(255,255,255,.06),0 4px 16px rgba(0,0,0,.40);
+  --e-2:0 0 0 1px rgba(255,255,255,.10),0 8px 28px rgba(0,0,0,.55);
+  --e-modal:0 0 0 1px rgba(255,255,255,.08),0 24px 64px rgba(0,0,0,.70);
 }

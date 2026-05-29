@@ -14,7 +14,7 @@ export const C={
   teal:"var(--c-teal)",tealBg:"var(--c-tealBg)",
 };
 
-export const FI={background:C.surface,border:`1.5px solid ${C.border}`,color:C.ink,borderRadius:6,padding:"8px 11px",fontSize:mob?16:13,width:"100%",fontFamily:"inherit",transition:"border-color .15s, box-shadow .15s"};
+export const FI={background:C.surface,border:`1px solid ${C.border}`,color:C.ink,borderRadius:8,padding:"8px 11px",fontSize:mob?16:13,width:"100%",fontFamily:"inherit",transition:"border-color .15s, box-shadow .15s"};
 export const CI={...FI,padding:"6px 9px",fontSize:mob?16:12};
 
 export function Tag({c,children}){return <div style={{fontSize:9,fontWeight:600,letterSpacing:.9,color:c||C.inkFaint,textTransform:"uppercase",marginBottom:4}}>{children}</div>;}

@@ -254,7 +254,7 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
       {/* Assign modal */}
       {assignOpen&&(
         <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={e=>{if(e.target===e.currentTarget)setAssignOpen(false);}}>
-          <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:400,boxShadow:"0 20px 60px rgba(26,19,8,.3)",overflow:"hidden"}}>
+          <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:400,boxShadow:"var(--e-modal)",overflow:"hidden"}}>
             <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:17,fontWeight:600}}>Assign a Task</div>
               <button onClick={()=>setAssignOpen(false)} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:C.inkFaint}}>&times;</button>
@@ -696,9 +696,9 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                   </div>
                 )}
                 {activities.map(act=>(
-                  <div key={act.id} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"12px 14px",background:C.surface,borderRadius:14,marginBottom:8,transition:"box-shadow .15s",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}
-                    onMouseEnter={e=>e.currentTarget.style.boxShadow="0 2px 10px rgba(0,0,0,.08)"}
-                    onMouseLeave={e=>e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}>
+                  <div key={act.id} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"12px 14px",background:C.surface,borderRadius:14,marginBottom:8,transition:"box-shadow .15s",boxShadow:"var(--e-1)"}}
+                    onMouseEnter={e=>e.currentTarget.style.boxShadow="var(--e-2)"}
+                    onMouseLeave={e=>e.currentTarget.style.boxShadow="var(--e-1)"}>
                     {/* icon */}
                     <div style={{width:34,height:34,borderRadius:8,background:`${ACT_COLORS[act.module]||C.gold}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>
                       {ACT_ICONS[act.module]||"📝"}
@@ -734,7 +734,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                 const mc=MOD_COLORS[m.id]||"#8E8E93";
                 return(
                   <button key={m.id} onClick={()=>onEnter(m.id)}
-                    style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"10px 6px",background:C.surface,borderRadius:14,cursor:"pointer",fontFamily:"inherit",WebkitTapHighlightColor:"transparent",transition:"transform .1s",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+                    style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"10px 6px",background:C.surface,borderRadius:14,cursor:"pointer",fontFamily:"inherit",WebkitTapHighlightColor:"transparent",transition:"transform .1s",boxShadow:"var(--e-1)"}}>
                     <div style={{width:38,height:38,borderRadius:10,background:mc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,lineHeight:1}}>
                       {m.icon}
                     </div>
@@ -748,10 +748,10 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* Row 1: Show countdown + stat cards */}
           {isAdmin&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:11,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .1s both":"none"}}>
             {/* Next show */}
-            <div style={{background:nextShow?`linear-gradient(135deg,${nextShow.color}14,${C.surface} 70%)`:C.surface,borderRadius:16,padding:"16px 18px",display:"flex",flexDirection:"column",justifyContent:"space-between",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+            <div style={{background:nextShow?`linear-gradient(135deg,${nextShow.color}14,${C.surface} 70%)`:C.surface,borderRadius:16,padding:"16px 18px",display:"flex",flexDirection:"column",justifyContent:"space-between",boxShadow:"var(--e-1)"}}>
               <div style={{fontSize:10,fontWeight:700,color:nextShow?.color||C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:6}}>Next Gem Show</div>
               {nextShow
-                ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:600,color:C.ink,marginBottom:2,lineHeight:1.3}}>{nextShow.name}</div><div style={{fontSize:10,color:C.inkMid,marginBottom:8}}>📍 {nextShow.city} · {fmtDate(nextShow.startDate)}</div><div style={{display:"flex",alignItems:"baseline",gap:5}}>{isNow?<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:nextShow.color}}>Now!</span>:<><span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?30:34,fontWeight:600,color:nextShow.color,lineHeight:1}}>{nextShowDays}</span><span style={{fontSize:10,color:C.inkFaint}}>days</span></>}</div></>
+                ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:600,color:C.ink,marginBottom:2,lineHeight:1.3}}>{nextShow.name}</div><div style={{fontSize:10,color:C.inkMid,marginBottom:8}}>📍 {nextShow.city} · {fmtDate(nextShow.startDate)}</div><div style={{display:"flex",alignItems:"baseline",gap:5}}>{isNow?<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:nextShow.color}}>Now!</span>:<><span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?30:34,fontWeight:600,color:nextShow.color,lineHeight:1,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>{nextShowDays}</span><span style={{fontSize:10,color:C.inkFaint}}>days</span></>}</div></>
                 :<div style={{fontSize:11,color:C.inkFaint}}>No upcoming shows</div>
               }
             </div>
@@ -766,9 +766,9 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               ].map(([v,l,col,modId,hint])=>{
                 return(
                   <div key={l} onClick={()=>{if(modId)onEnter(modId);}}
-                    style={{background:C.surface,borderRadius:14,padding:mob?"10px 12px":"12px 15px",cursor:"pointer",transition:"all .18s",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}
+                    style={{background:C.surface,borderRadius:14,padding:mob?"10px 12px":"12px 15px",cursor:"pointer",transition:"all .18s",boxShadow:"var(--e-1)"}}
                     onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 20px rgba(0,0,0,0.08),0 0 0 2px ${col}22`;}}
-                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)";}}>
+                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="var(--e-1)";}}>
                     <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:5}}>
                       <div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0}}/>
                       <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>{l}</div>
@@ -776,7 +776,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                     {l==="Receivables"?(
                       <>
                         {Object.entries(receivablesByCur).filter(([,a])=>a>0).map(([cur,amt])=>(
-                          <div key={cur} style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col}}>
+                          <div key={cur} style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>
                             {cur==="INR"?inr(amt):`${{USD:"$",EUR:"€",JPY:"¥",GBP:"£"}[cur]||cur} ${amt.toLocaleString("en-US",{maximumFractionDigits:0})}`}
                           </div>
                         ))}
@@ -784,12 +784,12 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                       </>
                     ):l==="Payables"?(
                       <>
-                        {payablesINR>0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col}}>{inr(payablesINR)}</div>}
-                        {payablesUSD>0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col}}>$ {payablesUSD.toLocaleString("en-US",{maximumFractionDigits:0})}</div>}
+                        {payablesINR>0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>{inr(payablesINR)}</div>}
+                        {payablesUSD>0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>$ {payablesUSD.toLocaleString("en-US",{maximumFractionDigits:0})}</div>}
                         {payablesINR===0&&payablesUSD===0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:C.inkFaint}}>—</div>}
                       </>
                     ):(
-                      <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col}}>
+                      <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>
                         {v}
                       </div>
                     )}
@@ -802,7 +802,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
           {/* Unassigned stock reminder */}
           {unassignedStock.length>0&&(
-            <div style={{background:`linear-gradient(135deg,${C.amberBg},${C.surface})`,borderRadius:14,padding:mob?"12px 14px":"13px 18px",marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .14s both":"none",display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+            <div style={{background:`linear-gradient(135deg,${C.amberBg},${C.surface})`,borderRadius:14,padding:mob?"12px 14px":"13px 18px",marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .14s both":"none",display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,boxShadow:"var(--e-1)"}}>
               <div style={{fontSize:17,flexShrink:0}}>⚠️</div>
               <div style={{flex:1,minWidth:180}}>
                 <div style={{fontWeight:600,fontSize:12,color:C.ink,marginBottom:3}}>{unassignedStock.length} stock item{unassignedStock.length>1?"s":""} not yet packed / no bin location</div>
@@ -818,13 +818,13 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* ── To-Do + Watch List + Open POs row ── */}
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1fr 1fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .16s both":"none"}}>
             {/* To-Do Widget */}
-            <div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+            <div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"var(--e-1)"}}>
               <TodoWidget todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser}/>
             </div>
-            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"var(--e-1)"}}>
               <WatchListWidget/>
             </div>}
-            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"var(--e-1)"}}>
               <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:9}}>Open Purchase Orders</div>
               {openPOs.length===0
                 ?<div style={{fontSize:11,color:C.inkFaint,padding:"6px 0"}}>No open POs</div>
@@ -852,7 +852,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* ── Action Items row ── */}
           {isAdmin&&(notShipped.length>0||overdueInvs.length>0||billsDue.length>0)&&(
           <div style={{marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .16s both":"none"}}>
-            <div style={{background:C.surface,borderRadius:16,padding:"13px 16px",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+            <div style={{background:C.surface,borderRadius:16,padding:"13px 16px",boxShadow:"var(--e-1)"}}>
               <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:9}}>Action Items</div>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
                 {notShipped.length>0&&(
@@ -902,7 +902,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* ── Quick Sell + Chart row ── */}
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1.6fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .19s both":"none",alignItems:"stretch"}}>
           {/* ── Quick Sell Widget ── */}
-          <div style={{background:C.surface,borderRadius:16,padding:mob?"12px 14px":"15px 20px",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+          <div style={{background:C.surface,borderRadius:16,padding:mob?"12px 14px":"15px 20px",boxShadow:"var(--e-1)"}}>
             {/* Header row — click to expand/collapse */}
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:qsOpen?12:0}} onClick={()=>setQsOpen(o=>!o)}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -1104,7 +1104,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           </div>
 
           {/* Financial position chart */}
-          {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:mob?"12px 13px":"15px 20px",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+          {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:mob?"12px 13px":"15px 20px",boxShadow:"var(--e-1)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
               <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>Financial Position — Last 6 Months</div>
               <div style={{display:"flex",gap:10,fontSize:9,color:C.inkFaint}}>
@@ -1119,7 +1119,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           </div>{/* end Quick Sell + Chart grid */}
 
           {/* Upcoming calendar events */}
-          <div style={{background:C.surface,borderRadius:16,padding:"14px 18px",marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .24s both":"none",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+          <div style={{background:C.surface,borderRadius:16,padding:"14px 18px",marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .24s both":"none",boxShadow:"var(--e-1)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>Upcoming Events</div>
               <button onClick={()=>onEnter("calendar")} style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:C.gold,fontWeight:600,padding:0}}>View all →</button>
@@ -1162,9 +1162,9 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
   const [dark,toggleDark]=useDark();
   const [lang,setLang,canSwitchLang]=useLang();
   return(
-    <div style={{fontFamily:"'Figtree',system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}input,select,textarea{font-family:inherit;}input:focus,select:focus,textarea:focus{outline:none;border-color:${C.goldBright}!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:3px;}.bp{background:${C.ink};color:#FAF0DC;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;letter-spacing:.01em;transition:all .18s;font-family:inherit;}.bp:hover{background:#2C1E0A;box-shadow:0 4px 14px rgba(26,19,8,.18);}.bs{background:${C.surface};color:${C.ink};border:1.5px solid ${C.border};padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:400;white-space:nowrap;transition:all .18s;font-family:inherit;}.bs:hover{border-color:${C.inkMid};background:${C.card};}.bp:disabled,.bs:disabled{opacity:.38;cursor:not-allowed;}.rh{transition:background .12s;cursor:pointer;}.rh:hover{background:${C.card}!important;}input[type=checkbox]{accent-color:${C.gold};width:14px;height:14px;cursor:pointer;}@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}@media(max-width:699px){.bp,.bs{font-size:15px!important;padding:9px 16px!important;min-height:44px!important;}select{font-size:16px!important;}.bp:active,.bs:active{opacity:.72!important;transform:scale(.98);}button:active{opacity:.72;}}`}</style>
-      <div style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:mob?"0 10px":"0 28px",display:"flex",alignItems:"center",height:54,position:"sticky",top:0,zIndex:100,gap:mob?6:12,boxShadow:"0 1px 0 rgba(26,19,8,.04)"}}>
+    <div style={{fontFamily:"-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}input,select,textarea{font-family:inherit;}input:focus,select:focus,textarea:focus{outline:none;border-color:${C.goldBright}!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:3px;}.tnum{font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1}.bp{background:${C.ink};color:#FAF0DC;border:none;padding:8px 18px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;letter-spacing:.01em;transition:all .18s var(--ease);font-family:inherit;}.bp:hover{background:#2C1E0A;box-shadow:var(--e-1);}.bs{background:var(--c-fill);color:${C.ink};border:none;padding:8px 15px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;transition:all .18s var(--ease);font-family:inherit;}.bs:hover{background:rgba(118,118,128,.18);}.bp:disabled,.bs:disabled{opacity:.38;cursor:not-allowed;}.rh{transition:background .12s;cursor:pointer;}.rh:hover{background:${C.card}!important;}input[type=checkbox]{accent-color:${C.gold};width:14px;height:14px;cursor:pointer;}@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}@keyframes shimmer{0%{background-position:-460px 0}100%{background-position:460px 0}}@media(max-width:699px){.bp,.bs{font-size:15px!important;padding:9px 16px!important;min-height:44px!important;}select{font-size:16px!important;}.bp:active,.bs:active{opacity:.72!important;transform:scale(.98);}button:active{opacity:.72;}}`}</style>
+      <div style={{background:"var(--c-topbar,rgba(255,255,255,0.72))",borderBottom:"0.5px solid rgba(0,0,0,0.08)",backdropFilter:"blur(20px) saturate(180%)",WebkitBackdropFilter:"blur(20px) saturate(180%)",padding:mob?"0 10px":"0 28px",display:"flex",alignItems:"center",height:54,position:"sticky",top:0,zIndex:100,gap:mob?6:12}}>
         <button onClick={onHome} style={{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:mob?0:10,padding:`0 ${mob?8:16}px 0 0`,borderRight:`1px solid ${C.border}`,flexShrink:0,opacity:.92,transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.92}>
           <img src={LOGO_SRC} style={{width:28,height:28,objectFit:"contain"}} alt=""/>
           {!mob&&<div style={{textAlign:"left"}}><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:15,fontWeight:600,color:C.ink,lineHeight:1.1,letterSpacing:.01}}>Nikhil Gems</div><div style={{fontSize:8,color:C.inkFaint,letterSpacing:1.2,fontWeight:500}}>BUSINESS SUITE</div></div>}
@@ -4382,8 +4382,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         </div>
       )}
       {sendQtyDialog&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:C.surface,borderRadius:14,width:"min(520px,100%)",boxShadow:"0 12px 50px rgba(0,0,0,.35)",overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:14,width:"min(520px,100%)",boxShadow:"var(--e-modal)",overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
             <div style={{padding:"18px 20px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
               <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:4}}>✈ How many to send?</div>
               <div style={{fontSize:13,color:C.inkFaint}}>Set quantity for each item — leave at full to send all, or reduce to split.</div>
@@ -4433,8 +4433,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         </div>
       )}
       {returnQtyDialog&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:C.surface,borderRadius:14,width:"min(860px,100%)",boxShadow:"0 12px 50px rgba(0,0,0,.35)",overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:14,width:"min(860px,100%)",boxShadow:"var(--e-modal)",overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
             <div style={{padding:"18px 20px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
               <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:4}}>🇮🇳 Return quantity to India</div>
               <div style={{fontSize:13,color:C.inkFaint}}>Split what came back into new India stock rows. The balance can stay in {stockRegion}, or be marked sold from the show.</div>
@@ -4520,8 +4520,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         </div>
       )}
       {shopifyDeleteConfirm&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:C.surface,borderRadius:14,width:"min(480px,100%)",boxShadow:"0 12px 50px rgba(0,0,0,.35)",overflow:"hidden"}}>
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:14,width:"min(480px,100%)",boxShadow:"var(--e-modal)",overflow:"hidden"}}>
             <div style={{padding:"18px 20px",borderBottom:`1px solid ${C.border}`}}>
               <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:4}}>🛍 Remove Shopify Listings?</div>
               <div style={{fontSize:13,color:C.inkFaint}}>{shopifyDeleteConfirm.items.length} of your selected item{shopifyDeleteConfirm.items.length!==1?"s are":"  is"} currently listed on Shopify from this ERP.</div>
@@ -4682,8 +4682,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
 
         const copy=()=>{navigator.clipboard.writeText(summary).then(()=>showToast("Copied!")).catch(()=>showToast("Copy failed"));};
         return(
-          <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.5)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:520,boxShadow:"0 20px 60px rgba(26,19,8,.3)",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
+          <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.45)",backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:520,boxShadow:"var(--e-modal)",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
               <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
                 <div>
                   <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:19,fontWeight:600}}>📋 Daily Summary</div>
@@ -4719,8 +4719,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         const triLabel=(v)=>v===null?"—":v?"✅":"❌";
         const triStyle=(v)=>({display:"flex",alignItems:"center",justifyContent:"center",gap:4,padding:"6px 14px",borderRadius:6,border:`1.5px solid ${v===null?C.border:v?C.green:C.red}`,background:v===null?"transparent":v?C.greenBg:C.redBg,color:v===null?C.inkFaint:v?C.green:C.red,cursor:"pointer",fontSize:12,fontWeight:600,minWidth:60,whiteSpace:"nowrap"});
         return(
-          <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.5)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:460,boxShadow:"0 20px 60px rgba(26,19,8,.3)",overflow:"hidden",maxHeight:"90vh",display:"flex",flexDirection:"column"}}>
+          <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.45)",backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)",zIndex:700,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:460,boxShadow:"var(--e-modal)",overflow:"hidden",maxHeight:"90vh",display:"flex",flexDirection:"column"}}>
               <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
                 <div>
                   <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:19,fontWeight:600}}>Bulk Edit</div>
@@ -4796,7 +4796,19 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           </div>
         );
       })()}
-      {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
+      {!loaded&&(()=>{
+        const sk={background:"linear-gradient(90deg,var(--c-card) 25%,var(--c-fill) 37%,var(--c-card) 63%)",backgroundSize:"920px 100%",animation:"shimmer 1.4s ease infinite"};
+        return(
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:18}}>
+              {[0,1,2,3].map(i=><div key={i} style={{background:C.surface,borderRadius:14,boxShadow:"var(--e-1)",padding:"14px 16px"}}><div style={{...sk,height:10,width:"45%",borderRadius:5,marginBottom:10}}/><div style={{...sk,height:22,width:"70%",borderRadius:6}}/></div>)}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+              {Array.from({length:mob?6:12}).map((_,i)=><div key={i} style={{background:C.surface,borderRadius:16,boxShadow:"var(--e-1)",overflow:"hidden"}}><div style={{...sk,height:mob?130:155}}/><div style={{padding:mob?"9px 10px":"11px 13px"}}><div style={{...sk,height:13,width:"75%",borderRadius:5,marginBottom:7}}/><div style={{...sk,height:9,width:"50%",borderRadius:5,marginBottom:10}}/><div style={{...sk,height:13,width:"35%",borderRadius:5}}/></div></div>)}
+            </div>
+          </div>
+        );
+      })()}
       {loaded&&!form&&(
         <div>
           {(()=>{
@@ -4804,14 +4816,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             const totalKgFromUnit=stock.filter(s=>s.unit==="kg").reduce((a,s)=>a+(+s.qty||0),0);
             const totalKgFromWeight=stock.reduce((a,s)=>a+((+s.weightGm||0)/1000),0);
             const totalKg=totalKgFromUnit+totalKgFromWeight;
-            const qtyDisplay=<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,color:C.green}}>{totalPcs>0&&<div style={{fontSize:20}}>{totalPcs.toLocaleString("en-IN")} pcs</div>}{totalKg>0&&<div style={{fontSize:totalPcs>0?14:20}}>{totalKg.toLocaleString("en-IN",{maximumFractionDigits:2})} kg</div>}</div>;
+            const qtyDisplay=<div className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,color:C.green,letterSpacing:"-.02em"}}>{totalPcs>0&&<div style={{fontSize:22}}>{totalPcs.toLocaleString("en-IN")} pcs</div>}{totalKg>0&&<div style={{fontSize:totalPcs>0?14:22}}>{totalKg.toLocaleString("en-IN",{maximumFractionDigits:2})} kg</div>}</div>;
             return(
               <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:18}}>
-                {(()=>{const SC={background:C.surface,borderRadius:14,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)",padding:"14px 16px"};const lab=(col,txt)=>(<div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6}}><div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0}}/><div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>{txt}</div></div>);return(<>
-                <div style={SC}>{lab(C.blue,"Items")}<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,color:C.blue}}>{stock.length}</div></div>
+                {(()=>{const SC={background:C.surface,borderRadius:14,boxShadow:"var(--e-1)",padding:"14px 16px"};const NUM={fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,letterSpacing:"-.02em"};const lab=(col,txt)=>(<div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6}}><div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0}}/><div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>{txt}</div></div>);return(<>
+                <div style={SC}>{lab(C.blue,"Items")}<div className="tnum" style={{...NUM,color:C.blue}}>{stock.length}</div></div>
                 <div style={SC}>{lab(C.green,"Total Qty")}{qtyDisplay}</div>
-                <div style={SC}>{lab(C.gold,"Stock Value")}<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,color:C.gold}}>{inr(stock.reduce((a,s)=>a+(+s.qty||0)*(+s.costPrice||0),0))}</div></div>
-                <div style={SC}>{lab(C.purple,"Distinct Stones")}<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,color:C.purple}}>{[...new Set(stock.map(s=>s.material).filter(Boolean))].length} materials</div></div>
+                <div style={SC}>{lab(C.gold,"Stock Value")}<div className="tnum" style={{...NUM,color:C.gold}}>{inr(stock.reduce((a,s)=>a+(+s.qty||0)*(+s.costPrice||0),0))}</div></div>
+                <div style={SC}>{lab(C.purple,"Distinct Stones")}<div className="tnum" style={{...NUM,color:C.purple}}>{[...new Set(stock.map(s=>s.material).filter(Boolean))].length} materials</div></div>
                 </>);})()}
               </div>
             );
@@ -4955,17 +4967,25 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 );
               })()}
               {/* ── Active chips ── */}
-              {activeFilterCount>0&&(
-                <div style={{display:"flex",gap:5,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
-                  {[...fsStones].map(v=><span key={"stone-"+v} style={{background:C.purpleBg,color:C.purple,borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>💎 {v}<button onClick={()=>setFsStones(s=>{const n=new Set(s);n.delete(v);return n;})} style={{background:"none",border:"none",cursor:"pointer",color:C.purple,fontWeight:700,fontSize:13,lineHeight:1,padding:0}}>×</button></span>)}
-                  {[...fsShapes].map(v=><span key={"shp-"+v} style={{background:C.blueBg,color:C.blue,borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>◇ {v}<button onClick={()=>setFsShapes(s=>{const n=new Set(s);n.delete(v);return n;})} style={{background:"none",border:"none",cursor:"pointer",color:C.blue,fontWeight:700,fontSize:13,lineHeight:1,padding:0}}>×</button></span>)}
-                  {[...fsMarkets].map(v=><span key={"mkt-"+v} style={{background:C.greenBg,color:C.green,borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>🌐 {v}<button onClick={()=>setFsMarkets(s=>{const n=new Set(s);n.delete(v);return n;})} style={{background:"none",border:"none",cursor:"pointer",color:C.green,fontWeight:700,fontSize:13,lineHeight:1,padding:0}}>×</button></span>)}
-                  {[...fsTypes].map(v=><span key={"typ-"+v} style={{background:C.tealBg,color:C.teal,borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>{v}<button onClick={()=>setFsTypes(s=>{const n=new Set(s);n.delete(v);return n;})} style={{background:"none",border:"none",cursor:"pointer",color:C.teal,fontWeight:700,fontSize:13,lineHeight:1,padding:0}}>×</button></span>)}
-                  {fPhoto!=="Any"&&<span style={{background:"#E8F5E9",color:"#2E7D32",borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>📸 {fPhoto==="Yes"?"Photographed":"Not Photographed"}<button onClick={()=>setFPhoto("Any")} style={{background:"none",border:"none",cursor:"pointer",color:"#2E7D32",fontWeight:700,fontSize:13,lineHeight:1,padding:0}}>×</button></span>}
-                  {[...fsPlats].map(v=><span key={"plt-"+v} style={{background:"#FFF3E0",color:"#BF360C",borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>🛒 {v}<button onClick={()=>setFsPlats(s=>{const n=new Set(s);n.delete(v);return n;})} style={{background:"none",border:"none",cursor:"pointer",color:"#BF360C",fontWeight:700,fontSize:13,lineHeight:1,padding:0}}>×</button></span>)}
-                  {[...fsVendors].map(v=><span key={"vnd-"+v} style={{background:C.amberBg,color:C.amber,borderRadius:12,padding:"2px 10px",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>🏢 {v}<button onClick={()=>setFsVendors(s=>{const n=new Set(s);n.delete(v);return n;})} style={{background:"none",border:"none",cursor:"pointer",color:C.amber,fontWeight:700,fontSize:13,lineHeight:1,padding:0}}>×</button></span>)}
+              {activeFilterCount>0&&(()=>{
+                const chip=(key,dot,label,onRemove)=>(
+                  <span key={key} style={{background:"var(--c-fill)",color:C.inkMid,borderRadius:12,padding:"3px 9px",fontSize:11,fontWeight:600,display:"inline-flex",alignItems:"center",gap:5}}>
+                    <span style={{width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0}}/>{label}
+                    <button onClick={onRemove} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontWeight:700,fontSize:13,lineHeight:1,padding:0,marginLeft:1}}>×</button>
+                  </span>
+                );
+                return(
+                <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
+                  {[...fsStones].map(v=>chip("stone-"+v,C.purple,v,()=>setFsStones(s=>{const n=new Set(s);n.delete(v);return n;})))}
+                  {[...fsShapes].map(v=>chip("shp-"+v,C.blue,v,()=>setFsShapes(s=>{const n=new Set(s);n.delete(v);return n;})))}
+                  {[...fsMarkets].map(v=>chip("mkt-"+v,C.green,v,()=>setFsMarkets(s=>{const n=new Set(s);n.delete(v);return n;})))}
+                  {[...fsTypes].map(v=>chip("typ-"+v,C.teal,v,()=>setFsTypes(s=>{const n=new Set(s);n.delete(v);return n;})))}
+                  {fPhoto!=="Any"&&chip("photo",C.green,fPhoto==="Yes"?"Photographed":"Not Photographed",()=>setFPhoto("Any"))}
+                  {[...fsPlats].map(v=>chip("plt-"+v,C.amber,v,()=>setFsPlats(s=>{const n=new Set(s);n.delete(v);return n;})))}
+                  {[...fsVendors].map(v=>chip("vnd-"+v,C.amber,v,()=>setFsVendors(s=>{const n=new Set(s);n.delete(v);return n;})))}
                 </div>
-              )}
+                );
+              })()}
               <div style={{marginBottom:13,display:"flex",alignItems:"center",justifyContent:"flex-end"}}>
                 <span style={{fontSize:11,color:C.inkFaint}}>{filtered.length} item{filtered.length!==1?"s":""}{activeFilterCount>0?` (${activeFilterCount} filter${activeFilterCount>1?"s":""} active)`:""}</span>
               </div>
@@ -5047,7 +5067,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 </div>
               )}
               {(()=>{const futureCount=stock.filter(s=>{if(!s.addedDate)return false;const t=new Date(s.addedDate).getTime();return!isNaN(t)&&s.addedDate>today();}).length;return futureCount>0&&(<div style={{background:C.amberBg,border:`1px solid ${C.amber}`,borderRadius:7,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}><span style={{fontSize:12,color:C.amber}}>⚠ {futureCount} item{futureCount>1?"s have":" has"} a future date (showing ⚠ on card)</span><button className="bs" style={{fontSize:11,color:C.amber,borderColor:C.amber,whiteSpace:"nowrap",flexShrink:0}} onClick={fixFutureDates}>Fix — move back 1 year</button></div>);})()}
-              {filtered.length===0?(<div style={{background:C.surface,borderRadius:16,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)",padding:"48px 0",textAlign:"center"}}><div style={{fontSize:28,opacity:.2,marginBottom:8}}>💎</div><p style={{fontSize:13,color:C.inkMid}}>No stock items</p></div>):(
+              {filtered.length===0?(<div style={{background:C.surface,borderRadius:16,boxShadow:"var(--e-1)",padding:"56px 24px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}><div style={{width:72,height:72,borderRadius:"50%",background:"var(--c-fill)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>💎</div><div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.ink,marginBottom:3}}>{activeFilterCount>0?"No matching stock":"No stock yet"}</div><p style={{fontSize:13,color:C.inkFaint,maxWidth:300}}>{activeFilterCount>0?"Try clearing a filter to see more items.":"Add your first physical stock item to get started."}</p></div>{activeFilterCount>0?<button className="bs" onClick={()=>{clearAllFilters();setOpenFilter(null);}}>Clear filters</button>:<button className="bp" onClick={()=>{setFormType("physical");setForm({...blank});setTab("physical");}}>+ Add Physical Stock</button>}</div>):(
                 <div>
                   <style>{`@keyframes fadeSlideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}`}</style>
                   <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
@@ -5062,11 +5082,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     return(
                     <div key={s.id}
                       onClick={()=>{if(selectMode){setSelectedIds(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;});}else setSelected(s);}}
-                      style={{background:isSel?C.amberBg:C.surface,boxShadow:isSel?`0 0 0 2px ${C.amber}, 0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)`:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)",borderRadius:16,overflow:"hidden",cursor:"pointer",
+                      style={{background:isSel?C.amberBg:C.surface,boxShadow:isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:"var(--e-1)",borderRadius:16,overflow:"hidden",cursor:"pointer",
                         animation:`fadeSlideUp .3s ease both`,animationDelay:`${Math.min(idx*.025,.5)}s`,
                         transition:"box-shadow .18s,transform .18s"}}
-                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow="0 6px 24px rgba(0,0,0,0.12)";e.currentTarget.style.transform="translateY(-2px)";}}}
-                      onMouseLeave={e=>{e.currentTarget.style.boxShadow=isSel?`0 0 0 2px ${C.amber}, 0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)`:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)";e.currentTarget.style.transform="none";}}>
+                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow="var(--e-2)";e.currentTarget.style.transform="translateY(-2px)";}}}
+                      onMouseLeave={e=>{e.currentTarget.style.boxShadow=isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:"var(--e-1)";e.currentTarget.style.transform="none";}}>
                       {/* Photo */}
                       <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
                         {cover
@@ -5101,7 +5121,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         {s.shape&&<div style={{fontSize:10,color:C.inkMid,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.shape}{s.size?` · ${s.size}`:""}</div>}
                         {/* Primary stat row: qty + weight */}
                         <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
-                          {qty>0&&<span style={{fontSize:mob?13:14,fontWeight:700,color:qty<5?C.red:C.ink}}>{qty}<span style={{fontWeight:400,fontSize:10,color:C.inkMid,marginLeft:2}}>{s.unit}</span></span>}
+                          {qty>0&&<span className="tnum" style={{fontSize:mob?13:14,fontWeight:700,color:qty<5?C.red:C.ink}}>{qty}<span style={{fontWeight:400,fontSize:10,color:C.inkMid,marginLeft:2}}>{s.unit}</span></span>}
                           {s.qty2&&+s.qty2>0&&<span style={{display:"inline-flex",alignItems:"center",gap:3}}>
                             <span style={{fontSize:mob?12:13,fontWeight:600,color:C.amber}}>{(()=>{const v=+parseFloat((+s.qty2).toFixed(4));return v<1?(v*1000).toFixed(0)+"g":`${v}${s.unit2||"kg"}`;})()}</span>
                             <button onClick={e=>{e.stopPropagation();quickUpdateItem(s.id,{qty2:"",unit2:""});}} title="Clear secondary quantity"
@@ -5109,7 +5129,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                               onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.6}>×</button>
                           </span>}
                           {!qty&&!s.qty2&&<span style={{fontSize:12,color:C.inkFaint}}>—</span>}
-                          {s.costPrice&&+s.costPrice>0&&<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{inr(+s.costPrice*(+s.qty||1))}</span>}
+                          {s.costPrice&&+s.costPrice>0&&<span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{inr(+s.costPrice*(+s.qty||1))}</span>}
                         </div>
                         {/* Status icon strip */}
                         {(()=>{
@@ -5124,12 +5144,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           if(s.billLineId)    chips.push({icon:"↗",label:"From bill",key:"bill",color:C.teal});
                           if(isFutureDate)    chips.push({icon:"⚠",label:"Future date",key:"future",color:C.amber});
                           return(
-                            <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:chips.length?5:0}}>
+                            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:4,marginTop:chips.length||s.showTag||s.productType?6:0}}>
                               {chips.map(c=>(
-                                <span key={c.key} title={c.label} style={{fontSize:13,lineHeight:1,opacity:c.color?1:.75,color:c.color||"inherit"}}>{c.icon}</span>
+                                <span key={c.key} title={c.label} style={c.color?{fontSize:12,lineHeight:1,color:c.color}:{fontSize:12,lineHeight:1,filter:"grayscale(1)",opacity:.5}}>{c.icon}</span>
                               ))}
-                              {s.showTag&&<span style={{background:REGION_CFG[s.region]?.bg||C.card,color:REGION_CFG[s.region]?.color||C.inkFaint,borderRadius:10,padding:"1px 6px",fontSize:8,fontWeight:600,border:`1px solid ${REGION_CFG[s.region]?.border||C.border}`,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={s.showTag}>{s.showTag}</span>}
-                              {s.productType&&<span style={{background:C.purpleBg,color:C.purple,borderRadius:10,padding:"1px 6px",fontSize:9,fontWeight:600,marginLeft:"auto"}}>{s.productType}</span>}
+                              {s.showTag&&<span style={{background:"var(--c-fill)",color:C.inkMid,borderRadius:10,padding:"1px 7px",fontSize:8,fontWeight:600,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={s.showTag}>{s.showTag}</span>}
+                              {s.productType&&<span style={{background:"var(--c-fill)",color:C.inkMid,borderRadius:10,padding:"1px 7px",fontSize:9,fontWeight:600,marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:5,height:5,borderRadius:"50%",background:C.purple}}/>{s.productType}</span>}
                             </div>
                           );
                         })()}
@@ -9075,7 +9095,7 @@ function InvoiceForm({draft,setDraft,buyers,accStock=[],stock,purchases=[],finTx
         const fmt=n=>parseFloat((+n||0).toFixed(3)).toString();
         return(
           <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.5)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:700,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px rgba(26,19,8,.3)"}}>
+            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:700,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"var(--e-modal)"}}>
               {/* Header */}
               <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
                 <div>
@@ -9205,7 +9225,7 @@ function InvoiceForm({draft,setDraft,buyers,accStock=[],stock,purchases=[],finTx
         });
         return(
           <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.5)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:660,maxHeight:"82vh",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px rgba(26,19,8,.3)"}}>
+            <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:660,maxHeight:"82vh",display:"flex",flexDirection:"column",boxShadow:"var(--e-modal)"}}>
               <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
                 <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:19,fontWeight:600}}>Link Accounting Stock</div>
                 <button onClick={()=>setAcctPicker(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:22,color:C.inkFaint,lineHeight:1}}>×</button>
