@@ -3325,7 +3325,7 @@ function EbayLiveView() {
   );
 }
 
-function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, onUnpublish, onMarkSold }) {
+function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, onUnpublish, onMarkSold, onImportFromLib }) {
   const pkey         = platform.key;
   const liveListings = listings.filter(l => l.platforms?.[pkey]?.status === "active");
   const pOrders      = orders.filter(o => o.platform === pkey);
@@ -3384,11 +3384,25 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
         placeholder={`Search ${platform.label} listings…`}
         style={{ ...FI(), maxWidth: 320, fontSize: 12, padding: "7px 12px", borderRadius: 20, marginBottom: 16 }} />
 
+      {onImportFromLib && (
+        <div style={{ marginBottom: 14, display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={onImportFromLib}
+            style={{ padding: "8px 16px", background: platform.color + "15", border: `1.5px solid ${platform.color}40`,
+              borderRadius: 8, fontSize: 12, fontWeight: 600, color: platform.color, cursor: "pointer" }}>
+            ↓ Import from Image Library
+          </button>
+        </div>
+      )}
+
       {visible.length === 0 ? (
         <div style={{ textAlign: "center", padding: "50px 0", color: C.inkFaint }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>{platform.icon}</div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>No active listings on {platform.label}</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>Publish listings from the All Listings tab.</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            {onImportFromLib
+              ? "Click \"Import from Image Library\" above to pull in products you've already pushed to this store."
+              : "Publish listings from the All Listings tab."}
+          </div>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(auto-fill,minmax(270px,1fr))", gap: 12 }}>
@@ -3731,6 +3745,50 @@ export default function ListingManagerApp({ onHome }) {
     setTab("orders");
   };
 
+  /* import Earth Editions from Image Library */
+  const handleImportEarth = async () => {
+    try {
+      const imgs = await loadK(IMG_KEY) || [];
+      const groups = new Map();
+      for (const img of imgs) {
+        if (!(img.usedOn || []).includes("eartheditions")) continue;
+        const k = `${img.name}|||${img.category || ""}`;
+        if (!groups.has(k)) groups.set(k, { name: img.name, category: img.category || "", imgs: [] });
+        groups.get(k).imgs.push(img);
+      }
+      const existingProductIds = new Set(
+        listings.map(l => l.platforms?.shopify_earth?.product_id).filter(Boolean)
+      );
+      const toAdd = [];
+      for (const { name, category, imgs } of groups.values()) {
+        const productId = imgs[0]?.shopifyProductId || "";
+        if (productId && existingProductIds.has(productId)) continue;
+        const alreadyByName = listings.some(l =>
+          l.material?.toLowerCase() === name?.toLowerCase() &&
+          l.shape?.toLowerCase() === category?.toLowerCase() &&
+          l.platforms?.shopify_earth?.status === "active"
+        );
+        if (alreadyByName) continue;
+        toAdd.push({
+          id: uid(),
+          title: [name, category].filter(Boolean).join(" "),
+          material: name,
+          shape: category,
+          type: "unique",
+          qty: 1,
+          images: imgs.map(i => i.imageUrl).filter(Boolean),
+          platforms: {
+            shopify_earth: { product_id: productId, status: "active" },
+          },
+          createdAt: new Date().toISOString(),
+        });
+      }
+      if (!toAdd.length) { showToast("No new Earth Editions items found in Image Library"); return; }
+      await persistListings([...toAdd, ...listings]);
+      showToast(`✓ Imported ${toAdd.length} listing${toAdd.length > 1 ? "s" : ""} from Image Library`);
+    } catch (e) { showToast("⚠ " + e.message); }
+  };
+
   /* filtered listings */
   const visibleListings = listings
     .filter(l => {
@@ -3944,6 +4002,7 @@ export default function ListingManagerApp({ onHome }) {
             onPublish={handlePublish}
             onUnpublish={handleUnpublish}
             onMarkSold={setSoldModal}
+            onImportFromLib={activePlatform.key === "shopify_earth" ? handleImportEarth : null}
           />
         )}
       </div>

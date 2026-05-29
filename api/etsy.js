@@ -175,7 +175,7 @@ export default async function handler(req, res) {
     if (action === "listing_images") {
       const { listing_id } = req.query;
       if (!listing_id) return res.status(400).json({ error: "listing_id required" });
-      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listing_id}/images`, { headers: pubHeaders });
+      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listing_id}/images`, { headers: authHeaders });
       const data = await r.json();
       if (!r.ok) return res.status(r.status).json({ error: data.error || "Etsy API error", details: data });
       return res.json(data);
