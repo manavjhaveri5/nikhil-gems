@@ -616,55 +616,62 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
     setQsSaving(false);
   };
 
+  // Apple-style icon colors per module (iOS Settings palette)
+  const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",users:"#007AFF",datasets:"#5AC8FA"};
+
   return(
-    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Figtree',system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"-apple-system,'SF Pro Display',Figtree,system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeDown{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:2px;}.jai-halo{position:relative;z-index:0;transition:transform .38s cubic-bezier(.34,1.56,.64,1),letter-spacing .35s ease;cursor:default;isolation:isolate;}.jai-halo::before{content:'';position:absolute;inset:-3px;border-radius:24px;background:conic-gradient(from 0deg,#9A6200 0%,#FFD700 18%,#FFFDE0 34%,#C48208 50%,#E0A830 66%,#FFD700 82%,#9A6200 100%);opacity:0;z-index:-1;animation:jaiSpin 2.4s linear infinite paused;transition:opacity .4s ease;}.jai-halo::after{content:'';position:absolute;inset:1px;border-radius:20px;background:var(--c-goldLight,#FEF6E0);z-index:-1;opacity:0;transition:opacity .4s ease;}.jai-halo:hover{transform:translateY(-2px) scale(1.07);letter-spacing:1.3px;animation:jaiGlow 1.8s ease-in-out infinite;}.jai-halo:hover::before{opacity:1;animation-play-state:running;}.jai-halo:hover::after{opacity:1;}@keyframes jaiSpin{to{transform:rotate(360deg)}}@keyframes jaiGlow{0%,100%{box-shadow:0 0 10px 3px rgba(196,130,8,.38),0 0 26px 9px rgba(196,130,8,.2),0 0 56px 20px rgba(255,215,0,.1)}50%{box-shadow:0 0 18px 7px rgba(255,215,0,.65),0 0 44px 16px rgba(196,130,8,.35),0 0 88px 34px rgba(255,215,0,.17)}}`}</style>
       {assignOpen&&<AssignLocationsModal onClose={()=>setAssignOpen(false)} onSaved={count=>{showToast(`✓ ${count} location${count!==1?"s":""} saved`);loadK(KEYS.stock).then(s=>setUnassignedStock((s||[]).filter(x=>!x.location)));setTimeout(()=>setAssignOpen(false),800);}}/>}
       <Toast msg={dashToast}/>
 
-      {/* Topbar */}
-      <div style={{padding:mob?"0 14px":"0 24px",height:54,display:"flex",alignItems:"center",gap:12,borderBottom:`1px solid ${C.border}`,background:C.surface,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none",boxShadow:"0 1px 0 rgba(26,19,8,.04)",flexShrink:0,position:"sticky",top:0,zIndex:200}}>
+      {/* Topbar — frosted glass */}
+      <div style={{padding:mob?"0 14px":"0 24px",height:56,display:"flex",alignItems:"center",gap:12,borderBottom:"0.5px solid rgba(0,0,0,0.08)",background:"rgba(255,255,255,0.72)",backdropFilter:"blur(20px) saturate(180%)",WebkitBackdropFilter:"blur(20px) saturate(180%)",opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none",flexShrink:0,position:"sticky",top:0,zIndex:200}}>
         <img src={LOGO_SRC} style={{width:30,height:30,objectFit:"contain"}} alt=""/>
         <div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:600,color:C.ink,letterSpacing:.01}}>Nikhil Gems</div><div style={{fontSize:8,color:C.inkFaint,letterSpacing:1.2,fontWeight:500}}>BUSINESS SUITE</div></div>
         <div style={{flex:1}}/>
-        <button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:14,cursor:"pointer",lineHeight:1}}>{dark?"☀️":"🌙"}</button>
+        <button onClick={toggleDark} style={{background:"none",border:"1px solid rgba(0,0,0,0.10)",borderRadius:8,padding:"5px 9px",fontSize:14,cursor:"pointer",lineHeight:1}}>{dark?"☀️":"🌙"}</button>
         {!mob&&<div className="jai-halo" style={{background:C.goldLight,color:C.gold,borderRadius:20,padding:"4px 14px",fontSize:10,fontWeight:600,letterSpacing:.8,border:`1px solid ${C.borderHi}`}}>🕉 JAI SWAMINARAYAN</div>}
-        {onSignOut&&<button onClick={onSignOut} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:12,cursor:"pointer",color:C.inkFaint,lineHeight:1}} title="Sign out">⎋</button>}
+        {onSignOut&&<button onClick={onSignOut} style={{background:"none",border:"1px solid rgba(0,0,0,0.10)",borderRadius:8,padding:"5px 9px",fontSize:12,cursor:"pointer",color:C.inkFaint,lineHeight:1}} title="Sign out">⎋</button>}
       </div>
 
       {/* Body: sidebar + main */}
       <div style={{display:"flex",flex:1}}>
 
-        {/* ── Sidebar (desktop only) ── */}
+        {/* ── Sidebar (desktop only) — iOS Settings style ── */}
         {!mob&&(
-          <div style={{width:194,borderRight:`1px solid ${C.border}`,background:C.surface,position:"sticky",top:54,height:"calc(100vh - 54px)",overflowY:"auto",flexShrink:0,display:"flex",flexDirection:"column",boxShadow:"1px 0 0 rgba(26,19,8,.03)"}}>
+          <div style={{width:200,borderRight:"0.5px solid rgba(0,0,0,0.07)",background:C.surface,position:"sticky",top:56,height:"calc(100vh - 56px)",overflowY:"auto",flexShrink:0,display:"flex",flexDirection:"column"}}>
             <div style={{padding:"14px 10px",flex:1}}>
-              <div style={{fontSize:8,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.2,marginBottom:8,paddingLeft:8}}>Modules</div>
-              {visibleMods.map(m=>(
-                <button key={m.id} onClick={()=>m.ready&&onEnter(m.id)}
-                  style={{display:"flex",alignItems:"center",gap:9,width:"100%",padding:"8px 8px",marginBottom:2,border:"none",borderRadius:7,cursor:m.ready?"pointer":"default",background:hov===m.id?C.card:"transparent",opacity:m.ready?1:.4,transition:"background .12s",textAlign:"left",color:C.ink,fontFamily:"inherit"}}
-                  onMouseEnter={()=>m.ready&&setHov(m.id)} onMouseLeave={()=>setHov(null)}>
-                  <span style={{fontSize:17,flexShrink:0,lineHeight:1,width:22,textAlign:"center"}}>{m.icon}</span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:12,fontWeight:500,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t(m.id)}</div>
-                    {!m.ready&&<div style={{fontSize:8,color:C.inkFaint,letterSpacing:.6,fontWeight:600}}>SOON</div>}
-                  </div>
-                  {m.ready&&<div style={{width:5,height:5,borderRadius:"50%",background:C.greenBright,flexShrink:0,animation:"pulse 2.2s ease infinite"}}/>}
-                </button>
-              ))}
+              <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:8,paddingLeft:8}}>Modules</div>
+              {visibleMods.map(m=>{
+                const mc=MOD_COLORS[m.id]||"#8E8E93";
+                return(
+                  <button key={m.id} onClick={()=>m.ready&&onEnter(m.id)}
+                    style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"7px 8px",marginBottom:1,border:"none",borderRadius:9,cursor:m.ready?"pointer":"default",background:hov===m.id?"rgba(0,0,0,0.04)":"transparent",opacity:m.ready?1:.4,transition:"background .12s",textAlign:"left",color:C.ink,fontFamily:"inherit"}}
+                    onMouseEnter={()=>m.ready&&setHov(m.id)} onMouseLeave={()=>setHov(null)}>
+                    <div style={{width:30,height:30,borderRadius:8,background:mc,boxShadow:`0 1px 4px ${mc}55`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0,lineHeight:1}}>
+                      {m.icon}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,fontWeight:500,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t(m.id)}</div>
+                      {!m.ready&&<div style={{fontSize:8,color:C.inkFaint,letterSpacing:.6,fontWeight:600}}>SOON</div>}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
-            <div style={{padding:"10px 14px",borderTop:`1px solid ${C.border}`,fontSize:9,color:C.inkFaint,textAlign:"center"}}>v0.7</div>
+            <div style={{padding:"10px 14px",borderTop:"0.5px solid rgba(0,0,0,0.07)",fontSize:9,color:C.inkFaint,textAlign:"center"}}>v0.7</div>
           </div>
         )}
 
         {/* ── Main content ── */}
         <div style={{flex:1,minWidth:0,padding:mob?"12px":"20px 24px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":undefined}}>
 
-          {/* ── Tab switcher ── */}
-          <div style={{display:"flex",gap:6,marginBottom:18,borderBottom:`1px solid ${C.border}`,paddingBottom:0}}>
-            {[["overview","📊 Overview"],["activity","⚡ Activity"]].map(([id,label])=>(
+          {/* ── Tab switcher — iOS Segmented Control ── */}
+          <div style={{display:"inline-flex",background:"rgba(118,118,128,0.12)",borderRadius:10,padding:3,marginBottom:18}}>
+            {[["overview","Overview"],["activity","Activity"]].map(([id,label])=>(
               <button key={id} onClick={()=>setDashTab(id)}
-                style={{background:"none",border:"none",borderBottom:`2px solid ${dashTab===id?C.gold:"transparent"}`,padding:"8px 14px",fontSize:13,fontWeight:dashTab===id?600:400,color:dashTab===id?C.gold:C.inkMid,cursor:"pointer",transition:"all .15s",fontFamily:"inherit"}}>
+                style={{background:dashTab===id?C.surface:"transparent",boxShadow:dashTab===id?"0 1px 3px rgba(0,0,0,0.10)":"none",border:"none",borderRadius:8,padding:"6px 18px",fontSize:13,fontWeight:dashTab===id?600:400,color:dashTab===id?C.ink:C.inkMid,cursor:"pointer",transition:"all .15s",fontFamily:"inherit"}}>
                 {label}
               </button>
             ))}
@@ -689,11 +696,11 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                   </div>
                 )}
                 {activities.map(act=>(
-                  <div key={act.id} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,marginBottom:8,transition:"box-shadow .15s"}}
+                  <div key={act.id} style={{display:"flex",gap:12,alignItems:"flex-start",padding:"12px 14px",background:C.surface,borderRadius:14,marginBottom:8,transition:"box-shadow .15s",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}
                     onMouseEnter={e=>e.currentTarget.style.boxShadow="0 2px 10px rgba(0,0,0,.08)"}
-                    onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
+                    onMouseLeave={e=>e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}>
                     {/* icon */}
-                    <div style={{width:34,height:34,borderRadius:8,background:`${ACT_COLORS[act.module]||C.gold}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0,border:`1px solid ${ACT_COLORS[act.module]||C.gold}30`}}>
+                    <div style={{width:34,height:34,borderRadius:8,background:`${ACT_COLORS[act.module]||C.gold}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>
                       {ACT_ICONS[act.module]||"📝"}
                     </div>
                     {/* text */}
@@ -720,31 +727,36 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           })()}
 
           {dashTab==="overview"&&<>
-          {/* Mobile: icon grid for all modules */}
+          {/* Mobile: icon grid for all modules — 4-col with colored tiles */}
           {mob&&(
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none"}}>
-              {visibleMods.filter(m=>m.ready).map(m=>(
-                <button key={m.id} onClick={()=>onEnter(m.id)}
-                  style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"12px 8px",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,cursor:"pointer",fontFamily:"inherit",WebkitTapHighlightColor:"transparent",transition:"transform .1s"}}>
-                  <span style={{fontSize:24,lineHeight:1}}>{m.icon}</span>
-                  <span style={{fontSize:10,fontWeight:500,color:C.ink,textAlign:"center",lineHeight:1.2}}>{t(m.id)}</span>
-                </button>
-              ))}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none"}}>
+              {visibleMods.filter(m=>m.ready).map(m=>{
+                const mc=MOD_COLORS[m.id]||"#8E8E93";
+                return(
+                  <button key={m.id} onClick={()=>onEnter(m.id)}
+                    style={{display:"flex",flexDirection:"column",alignItems:"center",gap:5,padding:"10px 6px",background:C.surface,borderRadius:14,cursor:"pointer",fontFamily:"inherit",WebkitTapHighlightColor:"transparent",transition:"transform .1s",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+                    <div style={{width:38,height:38,borderRadius:10,background:mc,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,lineHeight:1}}>
+                      {m.icon}
+                    </div>
+                    <span style={{fontSize:9,fontWeight:500,color:C.ink,textAlign:"center",lineHeight:1.2}}>{t(m.id)}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
 
-          {/* Row 1: Show countdown + 5 stat cards */}
+          {/* Row 1: Show countdown + stat cards */}
           {isAdmin&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:11,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .1s both":"none"}}>
             {/* Next show */}
-            <div style={{background:nextShow?`linear-gradient(135deg,${nextShow.color}14,${C.surface} 70%)`:C.surface,border:`1.5px solid ${nextShow?.color||C.border}`,borderRadius:10,padding:"16px 18px",display:"flex",flexDirection:"column",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(26,19,8,.05)"}}>
-              <div style={{fontSize:9,fontWeight:600,color:nextShow?.color||C.inkFaint,textTransform:"uppercase",letterSpacing:.9,marginBottom:6}}>Next Gem Show</div>
+            <div style={{background:nextShow?`linear-gradient(135deg,${nextShow.color}14,${C.surface} 70%)`:C.surface,borderRadius:16,padding:"16px 18px",display:"flex",flexDirection:"column",justifyContent:"space-between",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+              <div style={{fontSize:10,fontWeight:700,color:nextShow?.color||C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:6}}>Next Gem Show</div>
               {nextShow
                 ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:600,color:C.ink,marginBottom:2,lineHeight:1.3}}>{nextShow.name}</div><div style={{fontSize:10,color:C.inkMid,marginBottom:8}}>📍 {nextShow.city} · {fmtDate(nextShow.startDate)}</div><div style={{display:"flex",alignItems:"baseline",gap:5}}>{isNow?<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:nextShow.color}}>Now!</span>:<><span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?30:34,fontWeight:600,color:nextShow.color,lineHeight:1}}>{nextShowDays}</span><span style={{fontSize:10,color:C.inkFaint}}>days</span></>}</div></>
                 :<div style={{fontSize:11,color:C.inkFaint}}>No upcoming shows</div>
               }
             </div>
 
-            {/* 5 stat cards */}
+            {/* Stat cards */}
             <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(3,1fr)",gap:9}}>
               {[
                 [null,"Receivables",C.green,"invoices","Invoices + proformas"],
@@ -754,10 +766,13 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               ].map(([v,l,col,modId,hint])=>{
                 return(
                   <div key={l} onClick={()=>{if(modId)onEnter(modId);}}
-                    style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:mob?"10px 12px":"12px 15px",cursor:"pointer",transition:"all .18s",boxShadow:"0 1px 4px rgba(26,19,8,.04)"}}
-                    onMouseEnter={e=>{e.currentTarget.style.borderColor=col;e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 14px rgba(26,19,8,.08)`;}}
-                    onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="0 1px 4px rgba(26,19,8,.04)";}}>
-                    <div style={{fontSize:9,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:5}}>{l}</div>
+                    style={{background:C.surface,borderRadius:14,padding:mob?"10px 12px":"12px 15px",cursor:"pointer",transition:"all .18s",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}
+                    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 20px rgba(0,0,0,0.08),0 0 0 2px ${col}22`;}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)";}}>
+                    <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:5}}>
+                      <div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0}}/>
+                      <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>{l}</div>
+                    </div>
                     {l==="Receivables"?(
                       <>
                         {Object.entries(receivablesByCur).filter(([,a])=>a>0).map(([cur,amt])=>(
@@ -787,35 +802,38 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
           {/* Unassigned stock reminder */}
           {unassignedStock.length>0&&(
-            <div style={{background:`linear-gradient(135deg,${C.amberBg},${C.surface})`,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:mob?"12px 14px":"13px 18px",marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .14s both":"none",display:"flex",flexWrap:"wrap",alignItems:"center",gap:10}}>
+            <div style={{background:`linear-gradient(135deg,${C.amberBg},${C.surface})`,borderRadius:14,padding:mob?"12px 14px":"13px 18px",marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .14s both":"none",display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
               <div style={{fontSize:17,flexShrink:0}}>⚠️</div>
               <div style={{flex:1,minWidth:180}}>
                 <div style={{fontWeight:600,fontSize:12,color:C.ink,marginBottom:3}}>{unassignedStock.length} stock item{unassignedStock.length>1?"s":""} not yet packed / no bin location</div>
                 <div style={{fontSize:11,color:C.inkMid,display:"flex",flexWrap:"wrap",gap:6}}>
-                  {unassignedStock.slice(0,3).map(s=>{const d=daysSince(s.addedDate);return(<span key={s.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 7px"}}>{s.material||"Unknown"}{s.shape?` ${s.shape}`:""} <span style={{color:d>30?C.red:C.amber,fontWeight:600}}>{d}d</span></span>);})}
+                  {unassignedStock.slice(0,3).map(s=>{const d=daysSince(s.addedDate);return(<span key={s.id} style={{background:C.surface,borderRadius:4,padding:"2px 7px"}}>{s.material||"Unknown"}{s.shape?` ${s.shape}`:""} <span style={{color:d>30?C.red:C.amber,fontWeight:600}}>{d}d</span></span>);})}
                   {unassignedStock.length>3&&<span style={{color:C.inkFaint}}>+{unassignedStock.length-3} more</span>}
                 </div>
               </div>
-              <button onClick={()=>setAssignOpen(true)} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:6,padding:"6px 14px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Assign Locations →</button>
+              <button onClick={()=>setAssignOpen(true)} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:10,padding:"6px 14px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Assign Locations →</button>
             </div>
           )}
 
           {/* ── To-Do + Watch List + Open POs row ── */}
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1fr 1fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .16s both":"none"}}>
             {/* To-Do Widget */}
-            <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"13px 16px",minHeight:160}}>
+            <div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
               <TodoWidget todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser}/>
             </div>
-            {isAdmin&&<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"13px 16px",minHeight:160}}>
+            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
               <WatchListWidget/>
             </div>}
-            {isAdmin&&<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"13px 16px",minHeight:160}}>
-              <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.9,marginBottom:9}}>📋 Open Purchase Orders</div>
+            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:9}}>Open Purchase Orders</div>
               {openPOs.length===0
                 ?<div style={{fontSize:11,color:C.inkFaint,padding:"6px 0"}}>No open POs</div>
-                :<div style={{display:"flex",flexDirection:"column",gap:6}}>
+                :<div style={{display:"flex",flexDirection:"column",gap:5}}>
                   {openPOs.slice(0,6).map(po=>(
-                    <div key={po.id} onClick={()=>onEnter("purchases")} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.purpleBg||"#F3EEFF",border:`1px solid #C9B8F0`,borderRadius:7,padding:"7px 10px",cursor:"pointer"}}>
+                    <div key={po.id} onClick={()=>onEnter("purchases")}
+                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"rgba(88,86,214,0.07)",borderRadius:9,padding:"7px 10px",cursor:"pointer",transition:"background .12s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="rgba(88,86,214,0.12)"}
+                      onMouseLeave={e=>e.currentTarget.style.background="rgba(88,86,214,0.07)"}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontWeight:600,fontSize:11,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{po.poNumber||"PO"}{po.supplier?` · ${po.supplier}`:""}</div>
                         <div style={{fontSize:10,color:C.inkMid}}>{fmtDate(po.date)} · {po.status||"open"}</div>
@@ -834,37 +852,46 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* ── Action Items row ── */}
           {isAdmin&&(notShipped.length>0||overdueInvs.length>0||billsDue.length>0)&&(
           <div style={{marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .16s both":"none"}}>
-            <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"13px 16px"}}>
-              <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.9,marginBottom:9}}>Action Items</div>
+            <div style={{background:C.surface,borderRadius:16,padding:"13px 16px",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:9}}>Action Items</div>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
                 {notShipped.length>0&&(
-                  <div style={{display:"flex",alignItems:"center",gap:8,background:C.amberBg,border:`1px solid #F0C890`,borderRadius:7,padding:"8px 10px",cursor:"pointer"}} onClick={()=>onEnter("invoices")}>
-                    <span style={{fontSize:13,flexShrink:0}}>📦</span>
+                  <div style={{display:"flex",alignItems:"center",gap:10,borderRadius:10,padding:"8px 10px",cursor:"pointer",transition:"background .12s",background:"transparent"}}
+                    onClick={()=>onEnter("invoices")}
+                    onMouseEnter={e=>e.currentTarget.style.background="rgba(255,149,0,0.07)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <div style={{width:32,height:32,borderRadius:8,background:"rgba(255,149,0,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>📦</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontWeight:600,fontSize:11,color:C.ink}}>{notShipped.length} not shipped</div>
                       <div style={{fontSize:10,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{notShipped.slice(0,2).map(i=>i.invNo||"Draft").join(", ")}{notShipped.length>2?` +${notShipped.length-2}`:""}</div>
                     </div>
-                    <span style={{fontSize:10,color:C.amber,fontWeight:600,flexShrink:0}}>→</span>
+                    <span style={{fontSize:10,color:"#FF9500",fontWeight:600,flexShrink:0}}>→</span>
                   </div>
                 )}
                 {overdueInvs.length>0&&(
-                  <div style={{display:"flex",alignItems:"center",gap:8,background:C.redBg,border:`1px solid #F0B8B8`,borderRadius:7,padding:"8px 10px",cursor:"pointer"}} onClick={()=>onEnter("invoices")}>
-                    <span style={{fontSize:13,flexShrink:0}}>⏰</span>
+                  <div style={{display:"flex",alignItems:"center",gap:10,borderRadius:10,padding:"8px 10px",cursor:"pointer",transition:"background .12s",background:"transparent"}}
+                    onClick={()=>onEnter("invoices")}
+                    onMouseEnter={e=>e.currentTarget.style.background="rgba(255,69,58,0.07)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <div style={{width:32,height:32,borderRadius:8,background:"rgba(255,69,58,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>⏰</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontWeight:600,fontSize:11,color:C.ink}}>{overdueInvs.length} overdue</div>
                       <div style={{fontSize:10,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{overdueInvs.slice(0,2).map(i=>i.invNo||"Draft").join(", ")}{overdueInvs.length>2?` +${overdueInvs.length-2}`:""}</div>
                     </div>
-                    <span style={{fontSize:10,color:C.red,fontWeight:600,flexShrink:0}}>→</span>
+                    <span style={{fontSize:10,color:"#FF453A",fontWeight:600,flexShrink:0}}>→</span>
                   </div>
                 )}
                 {billsDue.length>0&&(
-                  <div style={{display:"flex",alignItems:"center",gap:8,background:C.blueBg,border:`1px solid #B8C8F0`,borderRadius:7,padding:"8px 10px",cursor:"pointer"}} onClick={()=>onEnter("purchases")}>
-                    <span style={{fontSize:13,flexShrink:0}}>🧾</span>
+                  <div style={{display:"flex",alignItems:"center",gap:10,borderRadius:10,padding:"8px 10px",cursor:"pointer",transition:"background .12s",background:"transparent"}}
+                    onClick={()=>onEnter("purchases")}
+                    onMouseEnter={e=>e.currentTarget.style.background="rgba(0,122,255,0.07)"}
+                    onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <div style={{width:32,height:32,borderRadius:8,background:"rgba(0,122,255,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🧾</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontWeight:600,fontSize:11,color:C.ink}}>{billsDue.length} bills due</div>
                       <div style={{fontSize:10,color:C.inkMid}}>{inr(billsDue.reduce((a,p)=>a+((+p.totalAmount||0)-(+p.paidAmount||0)),0))}</div>
                     </div>
-                    <span style={{fontSize:10,color:C.blue,fontWeight:600,flexShrink:0}}>→</span>
+                    <span style={{fontSize:10,color:"#007AFF",fontWeight:600,flexShrink:0}}>→</span>
                   </div>
                 )}
               </div>
@@ -875,13 +902,16 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* ── Quick Sell + Chart row ── */}
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1.6fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .19s both":"none",alignItems:"stretch"}}>
           {/* ── Quick Sell Widget ── */}
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:mob?"12px 14px":"15px 20px"}}>
+          <div style={{background:C.surface,borderRadius:16,padding:mob?"12px 14px":"15px 20px",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
             {/* Header row — click to expand/collapse */}
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:qsOpen?12:0}} onClick={()=>setQsOpen(o=>!o)}>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:15}}>⚡</span>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.9}}>Quick Sell</div>
-                {qsLines.length>0&&<span style={{background:C.ink,color:"#FAF0DC",borderRadius:10,padding:"1px 8px",fontSize:9,fontWeight:700}}>{qsLines.length} item{qsLines.length>1?"s":""}</span>}
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:28,height:28,borderRadius:7,background:"rgba(48,209,88,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0,lineHeight:1}}>⚡</div>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:C.ink}}>Quick Sell</div>
+                  {qsLines.length>0?<div style={{fontSize:10,color:C.inkFaint}}>{qsLines.length} item{qsLines.length>1?"s":""} in cart</div>:<div style={{fontSize:10,color:C.inkFaint}}>{qsFullStock.length} items in stock</div>}
+                </div>
+                {qsLines.length>0&&<span style={{background:C.ink,color:"#FAF0DC",borderRadius:10,padding:"1px 8px",fontSize:9,fontWeight:700}}>{qsLines.length}</span>}
               </div>
               <span style={{color:C.inkFaint,fontSize:11,lineHeight:1}}>{qsOpen?"▲":"▼"}</span>
             </div>
@@ -1059,7 +1089,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
                 {/* Success / error toast inline */}
                 {qsToast&&(
-                  <div style={{marginTop:10,background:C.greenBg,border:`1px solid ${C.green}`,borderRadius:7,padding:"8px 14px",fontSize:11,color:C.green,fontWeight:500,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                  <div style={{marginTop:10,background:C.greenBg,border:`1px solid ${C.green}`,borderRadius:10,padding:"8px 14px",fontSize:11,color:C.green,fontWeight:500,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                     <span>✓ {qsToast}</span>
                     <button onClick={()=>onEnter("invoices")} style={{background:"none",border:"none",cursor:"pointer",color:C.green,fontSize:11,fontWeight:700,flexShrink:0}}>View Invoices →</button>
                   </div>
@@ -1074,9 +1104,9 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           </div>
 
           {/* Financial position chart */}
-          {isAdmin&&<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:mob?"12px 13px":"15px 20px"}}>
+          {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:mob?"12px 13px":"15px 20px",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
-              <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.9}}>Financial Position — Last 6 Months</div>
+              <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>Financial Position — Last 6 Months</div>
               <div style={{display:"flex",gap:10,fontSize:9,color:C.inkFaint}}>
                 <span style={{display:"flex",alignItems:"center",gap:3}}><span style={{width:14,height:2,background:C.green,display:"inline-block",borderRadius:1}}/>Invoiced</span>
                 <span style={{display:"flex",alignItems:"center",gap:3}}><span style={{width:14,height:2,background:C.blue,display:"inline-block",borderRadius:1}}/>Purchases</span>
@@ -1089,9 +1119,9 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           </div>{/* end Quick Sell + Chart grid */}
 
           {/* Upcoming calendar events */}
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"14px 18px",marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .24s both":"none"}}>
+          <div style={{background:C.surface,borderRadius:16,padding:"14px 18px",marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .24s both":"none",boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <div style={{fontSize:9,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.9}}>Upcoming Events</div>
+              <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>Upcoming Events</div>
               <button onClick={()=>onEnter("calendar")} style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:C.gold,fontWeight:600,padding:0}}>View all →</button>
             </div>
             {upcomingEvents.length===0
@@ -1101,7 +1131,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                   const d=Math.round((new Date(ev.date)-new Date(todayStr))/(1000*60*60*24));
                   const col=EVT_COLORS[ev.type]||EVT_COLORS.other;
                   return(
-                    <div key={ev.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 11px",background:C.card,borderRadius:7,border:`1px solid ${C.border}`}}>
+                    <div key={ev.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 11px",background:C.card,borderRadius:10,border:"1px solid rgba(0,0,0,0.05)"}}>
                       <div style={{width:34,textAlign:"center",flexShrink:0}}>
                         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:17,fontWeight:600,color:d<=3?C.red:C.ink,lineHeight:1}}>{d===0?"Today":d===1?"Tmrw":d}</div>
                         {d>1&&<div style={{fontSize:8,color:C.inkFaint,textTransform:"uppercase"}}>days</div>}
