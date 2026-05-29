@@ -3325,7 +3325,7 @@ function EbayLiveView() {
   );
 }
 
-function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, onUnpublish, onMarkSold }) {
+function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, onUnpublish, onMarkSold, onImportFromLib }) {
   const pkey         = platform.key;
   const liveListings = listings.filter(l => l.platforms?.[pkey]?.status === "active");
   const pOrders      = orders.filter(o => o.platform === pkey);
@@ -3384,11 +3384,25 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
         placeholder={`Search ${platform.label} listings…`}
         style={{ ...FI(), maxWidth: 320, fontSize: 12, padding: "7px 12px", borderRadius: 20, marginBottom: 16 }} />
 
+      {onImportFromLib && (
+        <div style={{ marginBottom: 14, display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={onImportFromLib}
+            style={{ padding: "8px 16px", background: platform.color + "15", border: `1.5px solid ${platform.color}40`,
+              borderRadius: 8, fontSize: 12, fontWeight: 600, color: platform.color, cursor: "pointer" }}>
+            ⟳ Sync from Shopify
+          </button>
+        </div>
+      )}
+
       {visible.length === 0 ? (
         <div style={{ textAlign: "center", padding: "50px 0", color: C.inkFaint }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>{platform.icon}</div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>No active listings on {platform.label}</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>Publish listings from the All Listings tab.</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            {onImportFromLib
+              ? "Click \"Sync from Shopify\" above to pull active products from your store."
+              : "Publish listings from the All Listings tab."}
+          </div>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(auto-fill,minmax(270px,1fr))", gap: 12 }}>
@@ -3731,6 +3745,23 @@ export default function ListingManagerApp({ onHome }) {
     setTab("orders");
   };
 
+  /* import active products from Shopify Earth Editions */
+  const handleImportEarth = async () => {
+    showToast("Fetching from Shopify…");
+    try {
+      const r = await fetch("/api/listing-manager?action=import_shopify_listings&store_key=earth");
+      const d = await r.json();
+      if (!d.ok) { showToast("⚠ " + (d.error || "Shopify fetch failed")); return; }
+      const imported = d.listings || [];
+      if (!imported.length) { showToast("No active listings found on Earth Editions"); return; }
+      const existingIds = new Set(listings.map(l => l.platforms?.shopify_earth?.product_id).filter(Boolean));
+      const toAdd = imported.filter(l => !existingIds.has(l.platforms?.shopify_earth?.product_id));
+      const kept  = listings.filter(l => !imported.find(i => i.platforms?.shopify_earth?.product_id === l.platforms?.shopify_earth?.product_id));
+      await persistListings([...imported, ...kept]);
+      showToast(`✓ Synced ${imported.length} listing${imported.length !== 1 ? "s" : ""} from Earth Editions (${toAdd.length} new)`);
+    } catch (e) { showToast("⚠ " + e.message); }
+  };
+
   /* filtered listings */
   const visibleListings = listings
     .filter(l => {
@@ -3944,6 +3975,7 @@ export default function ListingManagerApp({ onHome }) {
             onPublish={handlePublish}
             onUnpublish={handleUnpublish}
             onMarkSold={setSoldModal}
+            onImportFromLib={activePlatform.key === "shopify_earth" ? handleImportEarth : null}
           />
         )}
       </div>

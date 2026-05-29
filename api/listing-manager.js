@@ -478,6 +478,59 @@ export default async function handler(req, res) {
       }
     }
 
+    /* Import active products from a Shopify store → reconstruct listing objects */
+    if (action === "import_shopify_listings") {
+      const store_key = url.searchParams.get("store_key") || "earth";
+      const storeEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_STORE"  : "SHOPIFY_EARTH_STORE";
+      const tokenEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_TOKEN"  : "SHOPIFY_EARTH_TOKEN";
+      const store = process.env[storeEnvKey] || process.env.SHOPIFY_STORE;
+      const token = process.env[tokenEnvKey] || process.env.SHOPIFY_ACCESS_TOKEN;
+      if (!store || !token) return res.status(400).json({
+        error: `Shopify credentials not set. Add ${storeEnvKey} and ${tokenEnvKey} to Vercel env vars.`,
+      });
+      const platformKey = store_key === "atyahara" ? "shopify_aty" : "shopify_earth";
+      const priceField  = store_key === "atyahara" ? "price_shopify_aty"  : "price_shopify_earth";
+      try {
+        const allListings = [];
+        let nextUrl = `https://${store}/admin/api/2024-04/products.json?status=active&limit=250&fields=id,title,handle,body_html,product_type,tags,images,variants,status`;
+        while (nextUrl) {
+          const r = await fetch(nextUrl, { headers: { "X-Shopify-Access-Token": token } });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.errors ? JSON.stringify(d.errors) : "Shopify fetch failed");
+          allListings.push(...(d.products || []).map(p => {
+            const variant = p.variants?.[0] || {};
+            const tags = (p.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+            return {
+              id: `shopify-${store_key}-${p.id}`,
+              title: p.title || "",
+              description: p.body_html ? p.body_html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "",
+              material: p.product_type || tags[0] || "",
+              tags,
+              images: (p.images || []).map(img => img.src).filter(Boolean),
+              [priceField]: parseFloat(variant.price || 0),
+              qty: parseInt(variant.inventory_quantity || 1, 10) || 1,
+              type: parseInt(variant.inventory_quantity, 10) === 1 ? "unique" : "repeatable",
+              sku: variant.sku || "",
+              platforms: {
+                [platformKey]: {
+                  product_id: String(p.id),
+                  url: `https://${store}/products/${p.handle}`,
+                  status: "active",
+                },
+              },
+            };
+          }));
+          // Follow cursor-based pagination via Link header
+          const link = r.headers.get("link") || "";
+          const nextMatch = link.match(/<([^>]+)>;\s*rel="next"/);
+          nextUrl = nextMatch ? nextMatch[1] : null;
+        }
+        return res.json({ ok: true, listings: allListings });
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+      }
+    }
+
     if (action !== "get_etsy_settings")
       return res.status(400).json({ error: "Unknown GET action" });
     try {
