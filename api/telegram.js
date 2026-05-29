@@ -51,6 +51,16 @@ async function tg(method, body, token) {
   return r.json();
 }
 
+// Resolve a Telegram file_id to a temporary public URL (valid ~1h — long enough
+// for OpenAI to fetch it during a single vision call). Returns null on failure.
+async function tgFileUrl(fileId) {
+  try {
+    const r = await tg("getFile", { file_id: fileId }, _ctx.token);
+    const path = r?.result?.file_path;
+    return path ? `https://api.telegram.org/file/bot${_ctx.token}/${path}` : null;
+  } catch { return null; }
+}
+
 // Request-scoped bot context (set once per handler invocation — safe in serverless)
 let _ctx = null;
 
@@ -1033,7 +1043,7 @@ Sharp, dry, meticulous. Finance guy who also runs ops. Never lets a sloppy recor
 // if history is sliced mid-sequence OpenAI rejects the orphaned role:tool messages.
 function sanitizeHistory(history) {
   return (history || []).filter(m =>
-    (m.role === "user" && typeof m.content === "string") ||
+    (m.role === "user" && (typeof m.content === "string" || Array.isArray(m.content))) ||
     (m.role === "assistant" && typeof m.content === "string" && !m.tool_calls)
   );
 }
@@ -1101,7 +1111,18 @@ export default async function handler(req, res) {
       const chatId = message.chat?.id;
       const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
       const caption  = (message.caption || "").trim();
-      const text = (message.text || caption || (hasPhoto ? "[image sent — describe what you need]" : "")).trim();
+      // Vision is enabled for the Atyahara bot only — it can read payment
+      // screenshots / receipts and act on them. Other bots keep the text-only flow.
+      const wantsVision = hasPhoto && _ctx.isAT;
+      let imageUrl = null;
+      if (wantsVision) {
+        // Largest rendition is last in the photo size array
+        imageUrl = await tgFileUrl(message.photo[message.photo.length - 1].file_id);
+      }
+      const text = (message.text || caption || (
+        wantsVision ? (imageUrl ? "[image attached]" : "[image attached but could not be loaded — ask the user to resend or describe it]")
+        : hasPhoto ? "[image sent — describe what you need]" : ""
+      )).trim();
       if (!chatId || !text) return;
 
       // Auth
@@ -1160,13 +1181,22 @@ export default async function handler(req, res) {
 
       // Build history with new message
       const history = session.history || [];
-      const updatedHistory = [...history, { role: "user", content: text }];
+      // For the model this turn: attach the image as a vision part (Atyahara only).
+      const userContent = (wantsVision && imageUrl)
+        ? [
+            { type: "text", text: caption || "Read this payment screenshot and log the transaction(s) — money received and/or paid." },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ]
+        : text;
+      const modelHistory = [...history, { role: "user", content: userContent }];
 
       // Run GPT-4o
-      const { reply, newMessages } = await chatWithOpenAI(updatedHistory);
+      const { reply, newMessages } = await chatWithOpenAI(modelHistory);
 
-      // Save session — strip tool call plumbing so history never has orphaned role:tool messages
-      const finalHistory = sanitizeHistory([...updatedHistory, ...newMessages]).slice(-MAX_HISTORY);
+      // Persist a text-only version of the user turn — the Telegram file URL is
+      // temporary and image content would bloat the stored session.
+      const persistedTurn = { role: "user", content: (wantsVision && imageUrl) ? (caption || "[sent a payment screenshot]") : text };
+      const finalHistory = sanitizeHistory([...history, persistedTurn, ...newMessages]).slice(-MAX_HISTORY);
       await saveSession(chatId, { lastUpdateId: updateId, history: finalHistory });
 
       await send(chatId, reply);
