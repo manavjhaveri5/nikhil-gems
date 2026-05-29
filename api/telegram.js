@@ -51,6 +51,15 @@ async function tg(method, body, token) {
   return r.json();
 }
 
+// Resolve a Telegram file_id to a publicly-accessible download URL
+async function getTelegramFileUrl(fileId, token) {
+  const r = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`);
+  const data = await r.json();
+  const filePath = data?.result?.file_path;
+  if (!filePath) throw new Error("Telegram getFile failed");
+  return `https://api.telegram.org/file/bot${token}/${filePath}`;
+}
+
 // Request-scoped bot context (set once per handler invocation — safe in serverless)
 let _ctx = null;
 
@@ -1040,7 +1049,10 @@ function sanitizeHistory(history) {
 
 async function chatWithOpenAI(history) {
   const systemContent = await buildSystemPrompt();
-  const messages = [{ role: "system", content: systemContent }, ...sanitizeHistory(history)];
+  // Sanitize past messages but leave the last message untouched — it may carry vision content
+  const past = history.length > 1 ? sanitizeHistory(history.slice(0, -1)) : [];
+  const current = history.length > 0 ? [history[history.length - 1]] : [];
+  const messages = [{ role: "system", content: systemContent }, ...past, ...current];
 
   const callOpenAI = async (msgs) => {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -1160,13 +1172,29 @@ export default async function handler(req, res) {
 
       // Build history with new message
       const history = session.history || [];
-      const updatedHistory = [...history, { role: "user", content: text }];
 
-      // Run GPT-4o
-      const { reply, newMessages } = await chatWithOpenAI(updatedHistory);
+      // For images: build a vision message for the AI, keep plain text for stored history
+      let userMsgForAI;
+      if (hasPhoto) {
+        const fileId = message.photo[message.photo.length - 1].file_id;
+        const imageUrl = await getTelegramFileUrl(fileId, _ctx.token);
+        userMsgForAI = {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: imageUrl } },
+            { type: "text", text: caption || "What is in this image?" },
+          ],
+        };
+      } else {
+        userMsgForAI = { role: "user", content: text };
+      }
 
-      // Save session — strip tool call plumbing so history never has orphaned role:tool messages
-      const finalHistory = sanitizeHistory([...updatedHistory, ...newMessages]).slice(-MAX_HISTORY);
+      // Run GPT-4o (vision-capable for the current message)
+      const { reply, newMessages } = await chatWithOpenAI([...history, userMsgForAI]);
+
+      // Save session — store text-only user message; strip tool call plumbing
+      const userMsgForStorage = { role: "user", content: text };
+      const finalHistory = sanitizeHistory([...history, userMsgForStorage, ...newMessages]).slice(-MAX_HISTORY);
       await saveSession(chatId, { lastUpdateId: updateId, history: finalHistory });
 
       await send(chatId, reply);
