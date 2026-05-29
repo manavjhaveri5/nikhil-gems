@@ -149,6 +149,31 @@ async function uploadEtsyImage(listingId, imgUrl, rank, altText, authHdrs) {
   } catch (e) { console.error("Etsy image upload failed:", e.message); }
 }
 
+/* ── Etsy: upload listing video (download from URL → multipart to Etsy) ────────
+   Etsy allows ONE video per listing: MP4, ≤100MB, ~5–15s. Returns true on success. */
+async function uploadEtsyVideo(listingId, videoUrl, authHdrs, name = "video") {
+  try {
+    const vResp = await fetch(videoUrl);
+    if (!vResp.ok) { console.error("Etsy video fetch failed:", vResp.status); return false; }
+    const buf  = await vResp.arrayBuffer();
+    const mime = vResp.headers.get("content-type") || "video/mp4";
+    const form = new FormData();
+    form.append("video", new Blob([buf], { type: mime }), "video.mp4");
+    form.append("name", String(name || "video").slice(0, 70));
+    const { "Content-Type": _ct, ...bare } = authHdrs;
+    const r = await fetch(
+      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/videos`,
+      { method: "POST", headers: bare, body: form }
+    );
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      console.error("Etsy video upload error:", r.status, JSON.stringify(d));
+      return false;
+    }
+    return true;
+  } catch (e) { console.error("Etsy video upload failed:", e.message); return false; }
+}
+
 /* ── Etsy: publish listing ─────────────────────────────────────────────────── */
 async function publishEtsy(listing, ai, { activate = true } = {}) {
   const {
@@ -213,6 +238,11 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
   for (let i = 0; i < imgUrls.length; i++) {
     await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
     if (i < imgUrls.length - 1) await new Promise(r => setTimeout(r, 400));
+  }
+
+  // Optional listing video (one per listing)
+  if (listing.video && typeof listing.video === "string" && listing.video.startsWith("http")) {
+    await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle);
   }
 
   let finalStatus = "draft";
@@ -300,6 +330,11 @@ async function updateEtsyListing(listingId, listing, ai) {
   for (let i = 0; i < imgUrls.length; i++) {
     await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
     if (i < imgUrls.length - 1) await new Promise(r => setTimeout(r, 400));
+  }
+
+  // Optional listing video — best-effort (Etsy ignores/replaces if one already exists)
+  if (listing.video && typeof listing.video === "string" && listing.video.startsWith("http")) {
+    await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle);
   }
 
   return { listing_id: listingId, status: existingStatus };

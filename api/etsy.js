@@ -215,6 +215,30 @@ export default async function handler(req, res) {
       return res.json(data);
     }
 
+    // ── upload_listing_video: fetch video from URL and POST to Etsy listing ─────
+    // Etsy allows ONE video per listing: MP4, ≤100MB, ~5–15s.
+    if (action === "upload_listing_video") {
+      if (req.method !== "POST") return res.status(405).json({ error: "POST required" });
+      if (!token) return res.status(401).json({ error: "OAuth token required" });
+      const { listing_id } = req.query;
+      const { video_url, name = "video" } = req.body || {};
+      if (!listing_id || !video_url) return res.status(400).json({ error: "listing_id and video_url required" });
+      const vR = await fetch(video_url);
+      if (!vR.ok) return res.status(400).json({ error: `Could not fetch video (${vR.status})` });
+      const vBuf = await vR.arrayBuffer();
+      const ct = vR.headers.get("content-type") || "video/mp4";
+      const form = new FormData();
+      form.append("video", new Blob([vBuf], { type: ct }), "video.mp4");
+      form.append("name", String(name).slice(0, 70));
+      const r = await fetch(
+        `https://openapi.etsy.com/v3/application/shops/${sid}/listings/${listing_id}/videos`,
+        { method: "POST", headers: { "x-api-key": key, Authorization: `Bearer ${token}` }, body: form }
+      );
+      const data = await r.json();
+      if (!r.ok) return res.status(r.status).json({ error: data.error || "Video upload failed", details: data });
+      return res.json(data);
+    }
+
     // ── delete_listing_image: remove an image from a listing ──────────────────
     if (action === "delete_listing_image") {
       if (req.method !== "POST") return res.status(405).json({ error: "POST required" });
@@ -399,7 +423,7 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, listings, listings_all, listing_images, listing, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }

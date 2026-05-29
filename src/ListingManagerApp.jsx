@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { loadK, saveK, uid } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 
+/* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
+const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(u);
+
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 const C = {
   bg:"var(--c-bg)", surface:"var(--c-surface)", card:"var(--c-card)",
@@ -216,15 +219,17 @@ function AiField({ label, value, mono, rows }) {
 /* ══════════════════════════════════════════════════════════════════════════
    IMAGE PICKER  — library matches + new uploads → auto-save to library
 ══════════════════════════════════════════════════════════════════════════ */
-function ImagePicker({ material, shape, selectedUrls, onChange }) {
+function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoChange }) {
   const [allLibImages, setAllLibImages] = useState([]);
   const [uploading,    setUploading]    = useState(false);
+  const [vidUploading, setVidUploading] = useState(false);
   const [libLoaded,    setLibLoaded]    = useState(false);
   // Library filter state — default to incoming material/shape props
   const [libStone,     setLibStone]     = useState(material || "");
   const [libShape,     setLibShape]     = useState(shape || "");
   const [libText,      setLibText]      = useState("");
   const fileRef = useRef(null);
+  const videoRef = useRef(null);
   const dragSrc = useRef(null);
 
   // Load ALL library images once
@@ -265,6 +270,18 @@ function ImagePicker({ material, shape, selectedUrls, onChange }) {
     const newUrls = results.filter(r => r.status === "fulfilled").map(r => r.value);
     setUploading(false);
     if (newUrls.length) onChange([...selectedUrls, ...newUrls]);
+  };
+
+  // Single listing video — Etsy/eBay each allow one. Uploaded to its own prefix.
+  const handleVideoFile = async file => {
+    if (!file || !onVideoChange) return;
+    setVidUploading(true);
+    try {
+      const ext = (file.name.split(".").pop() || "mp4").toLowerCase();
+      const url = await uploadToStorage(`listing-videos/${uid()}.${ext}`, file);
+      onVideoChange(url);
+    } catch (e) { /* surfaced by caller toast if needed */ }
+    setVidUploading(false);
   };
 
   // Drag-to-reorder selected thumbnails
@@ -334,6 +351,37 @@ function ImagePicker({ material, shape, selectedUrls, onChange }) {
         </div>
       )}
 
+      {/* ── 2b. Listing video (optional) — one per listing (Etsy/eBay) ── */}
+      {onVideoChange && (
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .6,
+            color: C.inkFaint, marginBottom: 6 }}>
+            Video (optional) · MP4 · one per listing
+          </div>
+          {video ? (
+            <div style={{ position: "relative", width: 120, height: 120, borderRadius: 8, overflow: "hidden",
+              border: `2px solid ${C.gold}`, background: "#000" }}>
+              <video src={video} muted playsInline preload="metadata" controls
+                style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <button onClick={() => onVideoChange("")}
+                style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,.65)", color: "#fff",
+                  border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, lineHeight: 1 }}>×</button>
+            </div>
+          ) : (
+            <div onClick={() => !vidUploading && videoRef.current?.click()}
+              style={{ border: `2px dashed ${C.border}`, borderRadius: 8, padding: "12px",
+                textAlign: "center", cursor: vidUploading ? "default" : "pointer", background: C.card }}>
+              <input ref={videoRef} type="file" accept="video/*" style={{ display: "none" }}
+                onChange={e => { handleVideoFile(e.target.files?.[0]); e.target.value = ""; }} />
+              {vidUploading
+                ? <div style={{ fontSize: 12, color: C.inkMid, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Spinner /> Uploading video…</div>
+                : <div style={{ fontSize: 12, fontWeight: 600, color: C.inkMid }}>🎬 Add a video</div>}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── 3. From Image Library (bottom) — filter by stone + shape, same as save ── */}
       {libLoaded && (
         <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
@@ -378,15 +426,19 @@ function ImagePicker({ material, shape, selectedUrls, onChange }) {
             <>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {libImages.map(img => {
-                  const sel = selectedUrls.includes(img.imageUrl);
+                  const isVid = img.mediaType === "video" || img.isVideo || isVideoUrl(img.imageUrl);
+                  const sel = isVid ? video === img.imageUrl : selectedUrls.includes(img.imageUrl);
+                  const pickVideo = isVid && onVideoChange;
                   return (
-                    <div key={img.id} onClick={() => toggle(img.imageUrl)}
-                      style={{ width: 62, height: 62, borderRadius: 7, overflow: "hidden", cursor: "pointer", flexShrink: 0,
-                        border: `2.5px solid ${sel ? C.green : C.border}`, position: "relative", transition: "border-color .15s" }}>
-                      <img src={img.imageUrl} alt="" loading="lazy"
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <div key={img.id} onClick={() => pickVideo ? onVideoChange(sel ? "" : img.imageUrl) : (!isVid && toggle(img.imageUrl))}
+                      style={{ width: 62, height: 62, borderRadius: 7, overflow: "hidden", cursor: (pickVideo || !isVid) ? "pointer" : "default", flexShrink: 0,
+                        border: `2.5px solid ${sel ? (isVid ? C.gold : C.green) : C.border}`, position: "relative", transition: "border-color .15s", background: isVid ? "#000" : undefined }}>
+                      {isVid
+                        ? <video src={img.imageUrl} muted playsInline preload="metadata" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        : <img src={img.imageUrl} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}
+                      {isVid && <div style={{ position: "absolute", top: 2, left: 2, fontSize: 10 }}>🎬</div>}
                       {sel && (
-                        <div style={{ position: "absolute", bottom: 2, right: 2, background: C.green,
+                        <div style={{ position: "absolute", bottom: 2, right: 2, background: isVid ? C.gold : C.green,
                           color: "#fff", borderRadius: "50%", width: 15, height: 15,
                           display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700 }}>✓</div>
                       )}
@@ -542,7 +594,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
       id: uid(), title: "", description: "", material: "", shape: "Mineral",
       origin: "", size: "", weight: "", sku: "", productType: "Lapidary",
       type: "unique", qty: 1, linked_stock_id: "", officeLocation: "",
-      tags: [], images: [],
+      tags: [], images: [], video: "",
       price_etsy: "", price_shopify_earth: "", price_shopify_aty: "", price_ebay: "",
       platforms: { etsy: {}, shopify_earth: {}, shopify_aty: {}, ebay: {} },
       variations: [], etsy_section_id: null, created_at: now(),
@@ -696,6 +748,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
             <ImagePicker
               material={form.material} shape={form.shape}
               selectedUrls={form.images || []} onChange={urls => set("images", urls)}
+              video={form.video || ""} onVideoChange={url => set("video", url)}
             />
           </Section>
 
