@@ -3911,7 +3911,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
         idsToSend.add(item.id);
       }else{
         // split: the sent portion gets sendQty (and sendQty2 if applicable)
-        const splitItem={...item,id:uid(),qty:String(sendQty),qty2:fullQty2>0?String(sendQty2):"",sentAt:null,showTag:null,updatedAt:new Date().toISOString()};
+        const splitItem={...item,id:uid(),qty:String(sendQty),qty2:fullQty2>0?String(sendQty2):"",sentAt:null,showTag:null,sourceIndiaId:item.id,updatedAt:new Date().toISOString()};
         const remainQty2=fullQty2>0?String(+(fullQty2-sendQty2).toFixed(4)):"";
         const remainItem={...item,qty:String(+(fullQty-sendQty).toFixed(4)),qty2:remainQty2,updatedAt:new Date().toISOString()};
         workingStock=workingStock.map(s=>s.id===item.id?remainItem:s);
@@ -3985,28 +3985,49 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
       if(retQty<=0&&retQty2<=0)continue;
       const isFullReturn=(!hasPrimary||retQty>=fullQty-0.0001)&&(!hasSecondary||retQty2>=fullQty2-0.0001);
       if(isFullReturn&&cleanSplits.length===1){
-        // Full qty returning as single destination — update the existing card in place
         const sp=cleanSplits[0];
-        const returnedItem={
-          ...item,
-          region:"India",
-          showTag:null,showId:null,sentAt:null,
-          material:String(sp.material||item.material||"").trim(),
-          shape:String(sp.shape||item.shape||"").trim(),
-          qty:hasPrimary?fmtQtyVal(sp.qty):item.qty,
-          unit:sp.unit||item.unit||"pcs",
-          qty2:(sp.secondaryOn||sp.qty2)?fmtQtyVal(sp.qty2):"",
-          unit2:sp.unit2||"pcs",
-          location:String(sp.location||item.location||"").trim(),
-          notes:[sp.notes,item.notes].filter(Boolean).join(" · ")||item.notes,
-          returnedFromRegion:item.region||stockRegion,
-          returnedFromShow:item.showTag||"",
-          returnedFromShowId:item.showId||"",
-          returnedAt:today(),
-          updatedAt:now,
-        };
-        workingStock=workingStock.map(s=>s.id===item.id?returnedItem:s);
-        returnedItems.push(returnedItem);
+        // Find the India card to merge back into:
+        // 1. prefer the exact source card (sourceIndiaId set during partial send)
+        // 2. fall back to unique material+shape+vendor match
+        const sourceId=item.sourceIndiaId;
+        let indiaCard=sourceId?workingStock.find(s=>s.id===sourceId&&(s.region||"India")==="India"&&!s.soldDate):null;
+        if(!indiaCard){
+          const matches=workingStock.filter(s=>s.id!==item.id&&(s.region||"India")==="India"&&!s.soldDate&&(s.material||"").toLowerCase()===(item.material||"").toLowerCase()&&(s.shape||"").toLowerCase()===(item.shape||"").toLowerCase()&&(s.vendor||"")===(item.vendor||""));
+          if(matches.length===1)indiaCard=matches[0];
+        }
+        if(indiaCard){
+          // Merge qty back into the existing India card and remove the abroad card
+          const mergedCard={
+            ...indiaCard,
+            qty:hasPrimary?fmtQtyVal((parseFloat(indiaCard.qty)||0)+retQty):indiaCard.qty,
+            qty2:hasSecondary?fmtQtyVal((parseFloat(indiaCard.qty2)||0)+retQty2):indiaCard.qty2,
+            location:String(sp.location||indiaCard.location||"").trim(),
+            returnedAt:today(),updatedAt:now,
+          };
+          workingStock=workingStock.map(s=>s.id===indiaCard.id?mergedCard:s);
+          workingStock=workingStock.filter(s=>s.id!==item.id);
+          returnedItems.push(mergedCard);
+        }else{
+          // No India card to merge into — update the abroad card in place
+          const returnedItem={
+            ...item,
+            region:"India",showTag:null,showId:null,sentAt:null,
+            material:String(sp.material||item.material||"").trim(),
+            shape:String(sp.shape||item.shape||"").trim(),
+            qty:hasPrimary?fmtQtyVal(sp.qty):item.qty,
+            unit:sp.unit||item.unit||"pcs",
+            qty2:(sp.secondaryOn||sp.qty2)?fmtQtyVal(sp.qty2):"",
+            unit2:sp.unit2||"pcs",
+            location:String(sp.location||item.location||"").trim(),
+            notes:[sp.notes,item.notes].filter(Boolean).join(" · ")||item.notes,
+            returnedFromRegion:item.region||stockRegion,
+            returnedFromShow:item.showTag||"",
+            returnedFromShowId:item.showId||"",
+            returnedAt:today(),updatedAt:now,
+          };
+          workingStock=workingStock.map(s=>s.id===item.id?returnedItem:s);
+          returnedItems.push(returnedItem);
+        }
       }else{
         // Partial return or multi-destination split — create new India card(s)
         const splitItems=cleanSplits.map(sp=>({
