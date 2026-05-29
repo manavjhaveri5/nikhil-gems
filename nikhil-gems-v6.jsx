@@ -4806,25 +4806,27 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             const totalKg=totalKgFromUnit+totalKgFromWeight;
             const qtyDisplay=<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,color:C.green}}>{totalPcs>0&&<div style={{fontSize:20}}>{totalPcs.toLocaleString("en-IN")} pcs</div>}{totalKg>0&&<div style={{fontSize:totalPcs>0?14:20}}>{totalKg.toLocaleString("en-IN",{maximumFractionDigits:2})} kg</div>}</div>;
             return(
-              <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:11,marginBottom:16}}>
-                <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"13px 16px"}}><div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>Items</div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.blue}}>{stock.length}</div></div>
-                <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"13px 16px"}}><div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>Total Qty</div>{qtyDisplay}</div>
-                <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"13px 16px"}}><div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>Stock Value</div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.gold}}>{inr(stock.reduce((a,s)=>a+(+s.qty||0)*(+s.costPrice||0),0))}</div></div>
-                <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"13px 16px"}}><div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>Distinct Stones</div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.purple}}>{[...new Set(stock.map(s=>s.material).filter(Boolean))].length} materials</div></div>
+              <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:12,marginBottom:18}}>
+                {(()=>{const SC={background:C.surface,borderRadius:14,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)",padding:"14px 16px"};const lab=(col,txt)=>(<div style={{display:"flex",alignItems:"center",gap:5,marginBottom:6}}><div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0}}/><div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>{txt}</div></div>);return(<>
+                <div style={SC}>{lab(C.blue,"Items")}<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,color:C.blue}}>{stock.length}</div></div>
+                <div style={SC}>{lab(C.green,"Total Qty")}{qtyDisplay}</div>
+                <div style={SC}>{lab(C.gold,"Stock Value")}<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,color:C.gold}}>{inr(stock.reduce((a,s)=>a+(+s.qty||0)*(+s.costPrice||0),0))}</div></div>
+                <div style={SC}>{lab(C.purple,"Distinct Stones")}<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,color:C.purple}}>{[...new Set(stock.map(s=>s.material).filter(Boolean))].length} materials</div></div>
+                </>);})()}
               </div>
             );
           })()}
-          <div style={{display:"flex",gap:2,background:C.card,borderRadius:5,padding:3,border:`1px solid ${C.border}`,marginBottom:14,overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",flexShrink:0,width:mob?"100%":undefined,maxWidth:mob?"100%":"fit-content"}}>
+          <div style={{display:"inline-flex",gap:2,background:"rgba(118,118,128,0.12)",borderRadius:10,padding:3,marginBottom:16,overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",flexShrink:0,width:mob?"100%":undefined,maxWidth:mob?"100%":"fit-content"}}>
             {(()=>{const unlocatedCount=stock.filter(s=>!s.location||s.location==="").length;return[["physical","Physical Stock"],["by-stone","By Stone"],["by-shape","By Shape"],["bins","By Location"],["unlocated",`No Location${unlocatedCount>0?` (${unlocatedCount})`:""}`],["accounting","Accounting Stock"],["insights","Insights"]].map(([id,label])=>(
-              <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?C.surface:"transparent",color:tab===id?C.ink:(id==="unlocated"&&unlocatedCount>0?C.amber:C.inkMid),border:tab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:4,padding:mob?"6px 12px":"4px 14px",cursor:"pointer",fontSize:mob?13:12,fontWeight:tab===id?500:400,transition:"all .15s",whiteSpace:"nowrap",flexShrink:0,minHeight:mob?40:undefined}}>{label}</button>
+              <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?C.surface:"transparent",boxShadow:tab===id?"0 1px 3px rgba(0,0,0,0.10)":"none",color:tab===id?C.ink:(id==="unlocated"&&unlocatedCount>0?C.amber:C.inkMid),border:"none",borderRadius:8,padding:mob?"7px 13px":"6px 15px",cursor:"pointer",fontSize:mob?13:12,fontWeight:tab===id?600:400,transition:"all .15s",whiteSpace:"nowrap",flexShrink:0,minHeight:mob?40:undefined}}>{label}</button>
             ));})()}
           </div>
           {tab==="physical"&&(
             <div>
               {/* ── Region Switcher ── */}
-              <div style={{display:"flex",gap:6,marginBottom:14,padding:"3px",background:C.card,borderRadius:10,border:`1px solid ${C.border}`,width:"fit-content"}}>
-                {Object.entries(REGION_CFG).map(([r,cfg])=>{const isActive=stockRegion===r;const cnt=stock.filter(s=>(s.region||"India")===r&&isActiveRegionStock(s)).length;return(<button key={r} onClick={()=>setStockRegion(r)} style={{display:"flex",alignItems:"center",gap:5,padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:isActive?600:400,fontSize:12,background:isActive?cfg.bg:"transparent",color:isActive?cfg.color:C.inkFaint,boxShadow:isActive?`0 0 0 1.5px ${cfg.border}`:"none",transition:"all .18s",position:"relative",whiteSpace:"nowrap"}}>
-                  <span style={{fontSize:15}}>{cfg.flag}</span>{cfg.label}{cnt>0&&<span style={{fontSize:10,background:isActive?cfg.color:"#ccc",color:"#fff",borderRadius:10,padding:"0px 5px",fontWeight:700,minWidth:16,textAlign:"center"}}>{cnt}</span>}
+              <div style={{display:"inline-flex",gap:3,marginBottom:16,padding:3,background:"rgba(118,118,128,0.12)",borderRadius:10,width:"fit-content"}}>
+                {Object.entries(REGION_CFG).map(([r,cfg])=>{const isActive=stockRegion===r;const cnt=stock.filter(s=>(s.region||"India")===r&&isActiveRegionStock(s)).length;return(<button key={r} onClick={()=>setStockRegion(r)} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:8,border:"none",cursor:"pointer",fontWeight:isActive?600:400,fontSize:12,background:isActive?C.surface:"transparent",color:isActive?cfg.color:C.inkFaint,boxShadow:isActive?"0 1px 3px rgba(0,0,0,0.10)":"none",transition:"all .18s",position:"relative",whiteSpace:"nowrap"}}>
+                  <span style={{fontSize:15}}>{cfg.flag}</span>{cfg.label}{cnt>0&&<span style={{fontSize:10,background:isActive?cfg.color:"rgba(118,118,128,0.4)",color:"#fff",borderRadius:10,padding:"0px 5px",fontWeight:700,minWidth:16,textAlign:"center"}}>{cnt}</span>}
                 </button>);})}
               </div>
               {/* ── Search & Sort ── */}
@@ -5045,7 +5047,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 </div>
               )}
               {(()=>{const futureCount=stock.filter(s=>{if(!s.addedDate)return false;const t=new Date(s.addedDate).getTime();return!isNaN(t)&&s.addedDate>today();}).length;return futureCount>0&&(<div style={{background:C.amberBg,border:`1px solid ${C.amber}`,borderRadius:7,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}><span style={{fontSize:12,color:C.amber}}>⚠ {futureCount} item{futureCount>1?"s have":" has"} a future date (showing ⚠ on card)</span><button className="bs" style={{fontSize:11,color:C.amber,borderColor:C.amber,whiteSpace:"nowrap",flexShrink:0}} onClick={fixFutureDates}>Fix — move back 1 year</button></div>);})()}
-              {filtered.length===0?(<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"48px 0",textAlign:"center"}}><div style={{fontSize:28,opacity:.2,marginBottom:8}}>💎</div><p style={{fontSize:13,color:C.inkMid}}>No stock items</p></div>):(
+              {filtered.length===0?(<div style={{background:C.surface,borderRadius:16,boxShadow:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)",padding:"48px 0",textAlign:"center"}}><div style={{fontSize:28,opacity:.2,marginBottom:8}}>💎</div><p style={{fontSize:13,color:C.inkMid}}>No stock items</p></div>):(
                 <div>
                   <style>{`@keyframes fadeSlideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}`}</style>
                   <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
@@ -5060,11 +5062,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     return(
                     <div key={s.id}
                       onClick={()=>{if(selectMode){setSelectedIds(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;});}else setSelected(s);}}
-                      style={{background:isSel?C.amberBg:C.surface,border:`1.5px solid ${isSel?C.amber:C.border}`,borderRadius:14,overflow:"hidden",cursor:"pointer",
+                      style={{background:isSel?C.amberBg:C.surface,boxShadow:isSel?`0 0 0 2px ${C.amber}, 0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)`:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)",borderRadius:16,overflow:"hidden",cursor:"pointer",
                         animation:`fadeSlideUp .3s ease both`,animationDelay:`${Math.min(idx*.025,.5)}s`,
-                        transition:"border-color .18s,box-shadow .18s,transform .18s",boxShadow:"0 2px 8px rgba(26,19,8,.06)"}}
-                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.borderColor=C.goldBright;e.currentTarget.style.boxShadow="0 8px 24px rgba(26,19,8,.12)";e.currentTarget.style.transform="translateY(-3px)";}}}
-                      onMouseLeave={e=>{e.currentTarget.style.borderColor=isSel?C.amber:C.border;e.currentTarget.style.boxShadow="0 2px 8px rgba(26,19,8,.06)";e.currentTarget.style.transform="none";}}>
+                        transition:"box-shadow .18s,transform .18s"}}
+                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow="0 6px 24px rgba(0,0,0,0.12)";e.currentTarget.style.transform="translateY(-2px)";}}}
+                      onMouseLeave={e=>{e.currentTarget.style.boxShadow=isSel?`0 0 0 2px ${C.amber}, 0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)`:"0 1px 3px rgba(0,0,0,0.05),0 4px 16px rgba(0,0,0,0.04)";e.currentTarget.style.transform="none";}}>
                       {/* Photo */}
                       <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
                         {cover
