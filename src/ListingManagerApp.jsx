@@ -3584,6 +3584,7 @@ export default function ListingManagerApp({ onHome }) {
           price:        listing.price_ebay,
           quantity:     listing.qty || 1,
           images:       listing.images || [],
+          video:        listing.video || "",
           conditionId:  listing.conditionId || "3000",
           shippingCost: listing.shippingCost || 0,
           ...(existingItemId ? { itemId: existingItemId } : {}),
@@ -3591,6 +3592,7 @@ export default function ListingManagerApp({ onHome }) {
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "eBay publish failed");
+      if (d.videoWarning) showToast(`⚠ eBay video: ${d.videoWarning}`);
       result = { item_id: d.itemId, url: d.url || `https://www.ebay.com/itm/${d.itemId}` };
     } else {
       let action, storeKey;

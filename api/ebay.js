@@ -14,7 +14,9 @@
  *   POST ?action=update_item&item_id=xxx — ReviseItem (price, qty, title)
  */
 
-export const maxDuration = 30;
+import { getEbayAccessToken } from "./ebay-auth.js";
+
+export const maxDuration = 60; // video upload + processing poll can exceed 30s
 
 const APP_ID     = process.env.EBAY_APP_ID     || process.env.EBAY_CLIENT_ID   || "";
 const DEV_ID     = process.env.EBAY_DEV_ID     || "";
@@ -106,6 +108,58 @@ async function trading(callName, bodyXml) {
   const xml = await r.text();
   const ack = xmlTag("Ack", xml);
   return { ok: ack === "Success" || ack === "Warning", ack, xml };
+}
+
+// ── eBay Media API: upload a video, return its videoId once processed ──────────
+// 3-step dance: create resource → upload binary → poll until processed.
+// Requires an OAuth access token (Trading Auth'n'Auth token cannot do this).
+const MEDIA_BASE = "https://apim.ebay.com/commerce/media/v1_beta/video";
+
+async function uploadEbayVideo(videoUrl) {
+  const accessToken = await getEbayAccessToken();
+  if (!accessToken) return { ok: false, error: "No eBay OAuth token — connect via /api/ebay-auth?action=start" };
+
+  // Fetch the source video so we know its byte size (createVideo requires it).
+  const vResp = await fetch(videoUrl);
+  if (!vResp.ok) return { ok: false, error: `Could not fetch video (${vResp.status})` };
+  const buf = Buffer.from(await vResp.arrayBuffer());
+
+  // 1. Create the video resource
+  const createR = await fetch(MEDIA_BASE, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US" },
+    body: JSON.stringify({ title: "Listing video", classification: ["LISTING"], size: buf.length }),
+  });
+  if (createR.status !== 201) {
+    const d = await createR.json().catch(() => ({}));
+    return { ok: false, error: `createVideo failed (${createR.status}): ${d.errors?.[0]?.message || JSON.stringify(d)}` };
+  }
+  const location = createR.headers.get("location") || "";
+  const videoId = location.split("/").filter(Boolean).pop();
+  if (!videoId) return { ok: false, error: "createVideo did not return a video id" };
+
+  // 2. Upload the binary
+  const upR = await fetch(`${MEDIA_BASE}/${videoId}/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/octet-stream" },
+    body: buf,
+  });
+  if (!upR.ok) {
+    const d = await upR.text().catch(() => "");
+    return { ok: false, error: `video upload failed (${upR.status}): ${d.slice(0, 200)}` };
+  }
+
+  // 3. Poll until eBay finishes processing (bounded by function maxDuration)
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const sR = await fetch(`${MEDIA_BASE}/${videoId}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!sR.ok) continue;
+    const sd = await sR.json().catch(() => ({}));
+    const status = sd.status || "";
+    if (/SUCCESS|LIVE|AVAILABLE/i.test(status)) return { ok: true, videoId };
+    if (/FAIL|BLOCK/i.test(status)) return { ok: false, error: `eBay video processing ${status}`, videoId };
+  }
+  return { ok: false, error: "video still processing after timeout", videoId };
 }
 
 // ── Parse a single <Item> block into a plain object ───────────────────────────
@@ -293,6 +347,7 @@ export default async function handler(req, res) {
       title, description, price, quantity = 1, images = [],
       conditionId = "3000", shippingCost = 0, itemId: existingId,
       categoryId = "4218", // Crystals & Mineral Specimens
+      video,
     } = body;
 
     if (!title) return res.status(400).json({ error: "title required" });
@@ -300,6 +355,16 @@ export default async function handler(req, res) {
     console.log("[ebay publish_listing] description preview:", JSON.stringify((description || "").slice(0, 200)));
 
     const picXml = images.slice(0, 12).map(u => `<PictureURL>${esc(u)}</PictureURL>`).join("");
+
+    // Optional listing video via the Media API (OAuth). Non-fatal: if it fails we
+    // still publish the listing and surface a warning to the caller.
+    let videoXml = "";
+    let videoWarning = null;
+    if (video && typeof video === "string" && video.startsWith("http")) {
+      const v = await uploadEbayVideo(video);
+      if (v.ok && v.videoId) videoXml = `<VideoDetails><VideoID>${esc(v.videoId)}</VideoID></VideoDetails>`;
+      else videoWarning = v.error || "video upload failed";
+    }
 
     if (existingId) {
       // ReviseItem — update existing listing
@@ -310,6 +375,7 @@ export default async function handler(req, res) {
         `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
         `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
         ...(picXml ? [`<PictureDetails>${picXml}</PictureDetails>`] : []),
+        ...(videoXml ? [videoXml] : []),
         `<ShippingDetails><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>USPSMedia</ShippingService><ShippingServiceCost>${Number(shippingCost).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails>`,
       ];
       const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
@@ -320,7 +386,7 @@ export default async function handler(req, res) {
           return res.status(500).json({ error: xmlTag("LongMessage", xml) || "ReviseItem failed" });
         }
       } else {
-        return res.json({ ok: true, itemId: xmlTag("ItemID", xml), isNew: false });
+        return res.json({ ok: true, itemId: xmlTag("ItemID", xml), isNew: false, ...(videoWarning ? { videoWarning } : {}) });
       }
     }
 
@@ -349,6 +415,7 @@ export default async function handler(req, res) {
       <ListingType>FixedPriceItem</ListingType>
       <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
       ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
+      ${videoXml}
       <ShippingDetails>
         <ShippingServiceOptions>
           <ShippingServicePriority>1</ShippingServicePriority>
@@ -364,7 +431,7 @@ export default async function handler(req, res) {
     }
     const newItemId = xmlTag("ItemID", xml);
     return res.json({ ok: true, itemId: newItemId, isNew: true,
-      url: `https://www.ebay.com/itm/${newItemId}` });
+      url: `https://www.ebay.com/itm/${newItemId}`, ...(videoWarning ? { videoWarning } : {}) });
   }
 
   // ── end_item — EndItem (delete/end listing) ──────────────────────────────
