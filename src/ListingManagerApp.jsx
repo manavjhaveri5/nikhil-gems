@@ -22,10 +22,13 @@ const mob   = () => window.innerWidth < 700;
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
-const LIST_KEY   = "ng-listings-v1";
-const ORDERS_KEY = "ng-orders-v1";
-const STK_KEY    = "ng-stock-v5";
-const IMG_KEY    = "ng-image-library-v1";
+const LIST_KEY      = "ng-listings-v1";
+const ORDERS_KEY    = "ng-orders-v1";
+const STK_KEY       = "ng-stock-v5";
+const IMG_KEY       = "ng-image-library-v1";
+const SG_CREDS_KEY  = "ng-shipglobal-creds-v1";
+const SG_TOKEN_KEY  = "ng-shipglobal-token-v1";
+const SG_SERVICES   = ["DPD-CLASSIC","DPD-EXPRESS","FEDEX","ARAMEX","DELHIVERY"];
 
 /* ─── platform config ────────────────────────────────────────────────────── */
 const PLATFORMS = [
@@ -1566,7 +1569,241 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 /* ══════════════════════════════════════════════════════════════════════════
    ORDERS VIEW
 ══════════════════════════════════════════════════════════════════════════ */
-function OrdersView({ orders }) {
+/* ══════════════════════════════════════════════════════════════════════════
+   SHIPGLOBAL
+══════════════════════════════════════════════════════════════════════════ */
+function ShipGlobalConnectModal({ onClose, onSave }) {
+  const [username,    setUsername]    = useState("");
+  const [password,    setPassword]    = useState("");
+  const [sellerName,  setSellerName]  = useState("");
+  const [sellerMobile,setSellerMobile]= useState("");
+  const [sellerEmail, setSellerEmail] = useState("");
+  const [sellerAddr,  setSellerAddr]  = useState("");
+  const [sellerCity,  setSellerCity]  = useState("");
+  const [sellerPin,   setSellerPin]   = useState("");
+  const [sellerState, setSellerState] = useState("");
+  const [sellerCo,    setSellerCo]    = useState("Nikhil Gems");
+  const [testing,     setTesting]     = useState(false);
+  const [err,         setErr]         = useState("");
+
+  const FI_ = { background:C.surface, border:`1.5px solid ${C.border}`, color:C.ink,
+    borderRadius:6, padding:"7px 10px", fontSize:13, fontFamily:"inherit", width:"100%" };
+
+  const save = async () => {
+    if (!username || !password) { setErr("Username and password required"); return; }
+    setTesting(true); setErr("");
+    try {
+      const r = await fetch("/api/shipglobal", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ action:"authenticate", username, password }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || "Authentication failed"); return; }
+      const token     = d.token || d.access_token || d.data?.token;
+      const expiresAt = d.expires_at || d.data?.expires_at || (Date.now()/1000 + 86400);
+      await saveK(SG_TOKEN_KEY, { token, expiresAt });
+      const creds = { username, password, sellerName, sellerMobile, sellerEmail, sellerAddr, sellerCity, sellerPin, sellerState, sellerCo };
+      await saveK(SG_CREDS_KEY, creds);
+      onSave(creds, token);
+    } catch(e) { setErr(e.message); }
+    finally { setTesting(false); }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:2000,
+      display:"flex",alignItems:mob()?"flex-end":"center",justifyContent:"center"}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:C.bg,borderRadius:mob()?"14px 14px 0 0":12,padding:"22px 24px",
+        width:mob()?"100%":520,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}}>
+        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,marginBottom:4}}>Connect ShipGlobal</div>
+        <div style={{fontSize:11,color:C.inkFaint,marginBottom:16}}>Enter your ShipGlobal credentials to generate shipping labels directly from orders.</div>
+
+        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>ShipGlobal Login</div>
+        <div style={{display:"grid",gap:8,marginBottom:16}}>
+          <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Username / Email" style={FI_}/>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" style={FI_}/>
+        </div>
+
+        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Shipper (Your) Details</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
+          <input value={sellerName}   onChange={e=>setSellerName(e.target.value)}   placeholder="Full Name"  style={FI_}/>
+          <input value={sellerCo}     onChange={e=>setSellerCo(e.target.value)}     placeholder="Company"    style={FI_}/>
+          <input value={sellerMobile} onChange={e=>setSellerMobile(e.target.value)} placeholder="Mobile"     style={FI_}/>
+          <input value={sellerEmail}  onChange={e=>setSellerEmail(e.target.value)}  placeholder="Email"      style={FI_}/>
+          <input value={sellerAddr}   onChange={e=>setSellerAddr(e.target.value)}   placeholder="Address"    style={{...FI_,gridColumn:"1/-1"}}/>
+          <input value={sellerCity}   onChange={e=>setSellerCity(e.target.value)}   placeholder="City"       style={FI_}/>
+          <input value={sellerState}  onChange={e=>setSellerState(e.target.value)}  placeholder="State"      style={FI_}/>
+          <input value={sellerPin}    onChange={e=>setSellerPin(e.target.value)}     placeholder="Pincode"   style={FI_}/>
+        </div>
+
+        {err && <div style={{color:C.red,fontSize:12,marginBottom:12}}>⚠ {err}</div>}
+
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={save} disabled={testing}
+            style={{flex:1,background:C.ink,color:"#FAF0DC",border:"none",borderRadius:7,
+              padding:"11px 0",fontSize:14,fontWeight:600,cursor:testing?"wait":"pointer",opacity:testing?0.7:1}}>
+            {testing ? "Connecting…" : "Connect"}
+          </button>
+          <button onClick={onClose} style={{padding:"11px 18px",background:C.surface,
+            border:`1.5px solid ${C.border}`,borderRadius:7,fontSize:13,cursor:"pointer",color:C.ink}}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShipGlobalLabelModal({ order, creds, token, onClose, onSuccess }) {
+  const nameParts  = (order.buyer_name||"").trim().split(/\s+/);
+  const firstName  = nameParts[0] || "";
+  const lastName   = nameParts.slice(1).join(" ") || "-";
+
+  const [weightG,   setWeightG]   = useState("");
+  const [lengthCm,  setLengthCm]  = useState("");
+  const [breadthCm, setBreadthCm] = useState("");
+  const [heightCm,  setHeightCm]  = useState("");
+  const [service,   setService]   = useState(SG_SERVICES[0]);
+  const [custAddr,  setCustAddr]  = useState("");
+  const [custCity,  setCustCity]  = useState("");
+  const [custState, setCustState] = useState("");
+  const [custPin,   setCustPin]   = useState("");
+  const [creating,  setCreating]  = useState(false);
+  const [err,       setErr]       = useState("");
+
+  const FI_ = { background:C.surface, border:`1.5px solid ${C.border}`, color:C.ink,
+    borderRadius:6, padding:"7px 10px", fontSize:13, fontFamily:"inherit" };
+
+  const sellerParts = (creds.sellerName||"").trim().split(/\s+/);
+  const refId = order.platform_order_id || order.order_number || order.id;
+
+  const create = async () => {
+    if (!weightG || !lengthCm || !breadthCm || !heightCm) { setErr("All dimensions required"); return; }
+    if (!custAddr || !custCity || !custPin) { setErr("Address, city and postcode required"); return; }
+    setCreating(true); setErr("");
+    try {
+      const sgOrder = {
+        invoice_no:      `NG-${refId}`,
+        invoice_date:    new Date().toISOString().slice(0,10),
+        order_reference: String(refId),
+        service,
+        package_weight:  Number(weightG),
+        package_length:  Number(lengthCm),
+        package_breadth: Number(breadthCm),
+        package_height:  Number(heightCm),
+        currency_code:   "INR",
+        csb5_status:     false,
+        seller_firstname: sellerParts[0] || creds.sellerName || "",
+        seller_lastname:  sellerParts.slice(1).join(" ") || "",
+        seller_company:   creds.sellerCo || "Nikhil Gems",
+        seller_mobile:    creds.sellerMobile || "",
+        seller_email:     creds.sellerEmail  || "",
+        seller_address:   creds.sellerAddr   || "",
+        seller_city:      creds.sellerCity   || "",
+        seller_postcode:  creds.sellerPin    || "",
+        seller_country_code: "IN",
+        seller_state:     creds.sellerState  || "",
+        customer_shipping_firstname:    firstName,
+        customer_shipping_lastname:     lastName,
+        customer_shipping_address:      custAddr,
+        customer_shipping_city:         custCity,
+        customer_shipping_state:        custState,
+        customer_shipping_postcode:     custPin,
+        customer_shipping_country_code: order.buyer_country || "",
+        vendor_order_items: [{
+          vendor_order_item_name:      order.listing_title || "",
+          vendor_order_item_sku:       order.listing_sku   || "",
+          vendor_order_item_quantity:  1,
+          vendor_order_item_unit_price: Number(order.sale_price) || 0,
+        }],
+      };
+
+      const r = await fetch("/api/shipglobal?action=create_label", {
+        method:"POST", headers:{"Content-Type":"application/json","x-shipglobal-token":token},
+        body: JSON.stringify({ action:"create_label", order:sgOrder }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setErr(data.error || "Label creation failed"); return; }
+
+      const pdf64 = data?.dpd?.raw_response?.pdf_base64 || data?.pdf_base64 || data?.label_pdf;
+      if (pdf64) {
+        const byteStr = atob(pdf64);
+        const bytes = new Uint8Array(byteStr.length);
+        for (let i=0; i<byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
+        const blob = new Blob([bytes], {type:"application/pdf"});
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement("a");
+        a.href = url; a.download = `label-${refId}.pdf`; a.click();
+        URL.revokeObjectURL(url);
+      }
+      onSuccess(data);
+    } catch(e) { setErr(e.message); }
+    finally { setCreating(false); }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:2000,
+      display:"flex",alignItems:mob()?"flex-end":"center",justifyContent:"center"}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      <div style={{background:C.bg,borderRadius:mob()?"14px 14px 0 0":12,padding:"22px 24px",
+        width:mob()?"100%":540,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}}>
+        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,marginBottom:4}}>Create ShipGlobal Label</div>
+        <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>
+          {order.order_number} · {order.buyer_name} · {order.buyer_country}
+        </div>
+
+        <div style={{background:C.amberBg,border:`1px solid ${C.borderHi}`,borderRadius:8,padding:"10px 12px",marginBottom:14,fontSize:12}}>
+          {order.listing_title}
+        </div>
+
+        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Package</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:8}}>
+          {[["Weight (g)",weightG,setWeightG],["Length (cm)",lengthCm,setLengthCm],
+            ["Width (cm)",breadthCm,setBreadthCm],["Height (cm)",heightCm,setHeightCm]].map(([lbl,val,set])=>(
+            <div key={lbl}>
+              <div style={{fontSize:10,color:C.inkFaint,marginBottom:3}}>{lbl}</div>
+              <input type="number" value={val} onChange={e=>set(e.target.value)} style={{...FI_,width:"100%"}}/>
+            </div>
+          ))}
+        </div>
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:10,color:C.inkFaint,marginBottom:3}}>Service</div>
+          <select value={service} onChange={e=>setService(e.target.value)} style={{...FI_,width:"100%"}}>
+            {SG_SERVICES.map(s=><option key={s}>{s}</option>)}
+          </select>
+        </div>
+
+        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>
+          Recipient Address — {order.buyer_country}
+        </div>
+        <div style={{display:"grid",gap:8,marginBottom:14}}>
+          <input value={custAddr}  onChange={e=>setCustAddr(e.target.value)}  placeholder="Street address" style={{...FI_,width:"100%"}}/>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            <input value={custCity}  onChange={e=>setCustCity(e.target.value)}  placeholder="City"     style={{...FI_,width:"100%"}}/>
+            <input value={custState} onChange={e=>setCustState(e.target.value)} placeholder="State"    style={{...FI_,width:"100%"}}/>
+            <input value={custPin}   onChange={e=>setCustPin(e.target.value)}   placeholder="Postcode" style={{...FI_,width:"100%"}}/>
+          </div>
+        </div>
+
+        {err && <div style={{color:C.red,fontSize:12,marginBottom:12}}>⚠ {err}</div>}
+
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={create} disabled={creating}
+            style={{flex:1,background:C.ink,color:"#FAF0DC",border:"none",borderRadius:7,
+              padding:"11px 0",fontSize:14,fontWeight:600,cursor:creating?"wait":"pointer",opacity:creating?0.7:1}}>
+            {creating ? "Creating…" : "Generate & Download Label"}
+          </button>
+          <button onClick={onClose} style={{padding:"11px 18px",background:C.surface,
+            border:`1.5px solid ${C.border}`,borderRadius:7,fontSize:13,cursor:"pointer",color:C.ink}}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel }) {
   const [pFilter,  setPFilter]  = useState("all");
   const [search,   setSearch]   = useState("");
   const [expanded, setExpanded] = useState(null);
@@ -1666,27 +1903,44 @@ function OrdersView({ orders }) {
 
                 {/* expanded detail */}
                 {isExp && (
-                  <div style={{ borderTop: `1px solid ${C.border}`, padding: "12px 16px", background: C.bg,
-                    display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
-                    {[
-                      ["Order #",       order.order_number],
-                      ["Platform",      `${p.icon} ${p.label}`],
-                      ["Platform ID",   order.platform_order_id || "—"],
-                      ["Date",          new Date(order.date).toLocaleDateString("en-GB")],
-                      ["Buyer",         order.buyer_name || "—"],
-                      ["Country",       order.buyer_country || "—"],
-                      ["Sale Price",    `₹${fmt(order.sale_price)}`],
-                      ["SKU",           order.listing_sku || "—"],
-                      ["Notes",         order.notes || "—"],
-                      ["Material",      order.listing_material || "—"],
-                      ["Shape",         order.listing_shape || "—"],
-                      ["Created",       new Date(order.created_at).toLocaleDateString("en-GB")],
-                    ].map(([k, v]) => (
-                      <div key={k}>
-                        <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 2 }}>{k}</div>
-                        <div style={{ fontSize: 12, color: C.ink, fontWeight: 500 }}>{v}</div>
-                      </div>
-                    ))}
+                  <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
+                    <div style={{ padding: "12px 16px", display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
+                      {[
+                        ["Order #",       order.order_number],
+                        ["Platform",      `${p.icon} ${p.label}`],
+                        ["Platform ID",   order.platform_order_id || "—"],
+                        ["Date",          new Date(order.date).toLocaleDateString("en-GB")],
+                        ["Buyer",         order.buyer_name || "—"],
+                        ["Country",       order.buyer_country || "—"],
+                        ["Sale Price",    `₹${fmt(order.sale_price)}`],
+                        ["SKU",           order.listing_sku || "—"],
+                        ["Notes",         order.notes || "—"],
+                        ["Material",      order.listing_material || "—"],
+                        ["Shape",         order.listing_shape || "—"],
+                        ["Created",       new Date(order.created_at).toLocaleDateString("en-GB")],
+                      ].map(([k, v]) => (
+                        <div key={k}>
+                          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 2 }}>{k}</div>
+                          <div style={{ fontSize: 12, color: C.ink, fontWeight: 500 }}>{v}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* ShipGlobal */}
+                    <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 11, color: C.inkFaint, flex: 1 }}>📦 ShipGlobal</span>
+                      {sgCreds && sgToken
+                        ? <button onClick={() => onCreateLabel(order)}
+                            style={{ padding: "7px 14px", background: "#0057a8", color: "#fff", border: "none",
+                              borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                            Create Label
+                          </button>
+                        : <button onClick={onSgConnect}
+                            style={{ padding: "7px 14px", background: C.surface, border: `1.5px solid ${C.border}`,
+                              borderRadius: 6, fontSize: 12, cursor: "pointer", color: C.inkMid, fontWeight: 600 }}>
+                            Connect ShipGlobal
+                          </button>
+                      }
+                    </div>
                   </div>
                 )}
               </div>
@@ -3496,12 +3750,22 @@ export default function ListingManagerApp({ onHome }) {
   const [search,     setSearch]     = useState("");
   const [filter,     setFilter]     = useState("all");
 
+  const [sgCreds,      setSgCreds]      = useState(null);
+  const [sgToken,      setSgToken]      = useState(null);
+  const [sgConnect,    setSgConnect]    = useState(false);
+  const [sgLabelOrder, setSgLabelOrder] = useState(null);
+
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
 
   useEffect(() => {
     Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(([l, o, s]) => {
       setListings(l || []); setOrders(o || []); setStock(s || []); setLoaded(true);
     });
+    // Load ShipGlobal creds in isolation so a missing key can't block anything
+    Promise.all([loadK(SG_CREDS_KEY), loadK(SG_TOKEN_KEY)]).then(([sgC, sgT]) => {
+      if (sgC && !Array.isArray(sgC)) setSgCreds(sgC);
+      if (sgT?.token && sgT.expiresAt > Date.now()/1000) setSgToken(sgT.token);
+    }).catch(() => {});
   }, []);
 
   const BACKUP_KEY = "ng-listings-backup-v1";
@@ -3960,7 +4224,12 @@ export default function ListingManagerApp({ onHome }) {
         )}
 
         {/* ══ ORDERS ══ */}
-        {tab === "orders" && <OrdersView orders={orders} />}
+        {tab === "orders" && (
+          <OrdersView orders={orders}
+            sgCreds={sgCreds} sgToken={sgToken}
+            onSgConnect={() => setSgConnect(true)}
+            onCreateLabel={order => setSgLabelOrder(order)}/>
+        )}
 
         {/* ══ PLATFORM TABS ══ */}
         {tab === "etsy" && <EtsyLiveView />}
@@ -3996,6 +4265,23 @@ export default function ListingManagerApp({ onHome }) {
           onSave={handleMarkSold}
           onClose={() => setSoldModal(null)}
         />
+      )}
+
+      {sgConnect && (
+        <ShipGlobalConnectModal
+          onClose={() => setSgConnect(false)}
+          onSave={(creds, token) => {
+            setSgCreds(creds); setSgToken(token); setSgConnect(false);
+            showToast("✓ ShipGlobal connected");
+          }}/>
+      )}
+      {sgLabelOrder && sgCreds && sgToken && (
+        <ShipGlobalLabelModal
+          order={sgLabelOrder}
+          creds={sgCreds}
+          token={sgToken}
+          onClose={() => setSgLabelOrder(null)}
+          onSuccess={() => { setSgLabelOrder(null); showToast("✓ Label downloaded"); }}/>
       )}
     </div>
   );
