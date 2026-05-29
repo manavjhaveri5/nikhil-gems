@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Deploy prebuilt dist/ + api/ functions to Vercel (bypasses Node.js TLS issue)."""
-import json, os, hashlib, subprocess, sys, mimetypes
+import json, os, hashlib, subprocess, sys, mimetypes, time
 
 AUTH_PATH = os.path.expanduser("~/Library/Application Support/com.vercel.cli/auth.json")
 with open(AUTH_PATH) as f:
@@ -79,7 +79,13 @@ print(f"Found {len(files)} static files + {len(api_files)-1} api functions")
 
 # Upload all files
 for fi in all_files:
-    ok, out = curl_upload(fi["path"], fi["sha"], fi["size"])
+    ok, out = False, ""
+    for attempt in range(3):
+        ok, out = curl_upload(fi["path"], fi["sha"], fi["size"])
+        if ok:
+            break
+        if attempt < 2:
+            time.sleep(2 + attempt * 2)
     kb = fi["size"] // 1024
     tag = "fn" if fi["kind"] == "function" else fi["kind"]
     if ok:

@@ -1130,7 +1130,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 // ══════════════════════════════════════════════════════════════════
 function Shell({title,crumb,onHome,onBack,actions,children}){
   const [dark,toggleDark]=useDark();
-  const [lang,setLang]=useLang();
+  const [lang,setLang,canSwitchLang]=useLang();
   return(
     <div style={{fontFamily:"'Figtree',system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}input,select,textarea{font-family:inherit;}input:focus,select:focus,textarea:focus{outline:none;border-color:${C.goldBright}!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:3px;}.bp{background:${C.ink};color:#FAF0DC;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;letter-spacing:.01em;transition:all .18s;font-family:inherit;}.bp:hover{background:#2C1E0A;box-shadow:0 4px 14px rgba(26,19,8,.18);}.bs{background:${C.surface};color:${C.ink};border:1.5px solid ${C.border};padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:400;white-space:nowrap;transition:all .18s;font-family:inherit;}.bs:hover{border-color:${C.inkMid};background:${C.card};}.bp:disabled,.bs:disabled{opacity:.38;cursor:not-allowed;}.rh{transition:background .12s;cursor:pointer;}.rh:hover{background:${C.card}!important;}input[type=checkbox]{accent-color:${C.gold};width:14px;height:14px;cursor:pointer;}@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}@media(max-width:699px){.bp,.bs{font-size:15px!important;padding:9px 16px!important;min-height:44px!important;}select{font-size:16px!important;}.bp:active,.bs:active{opacity:.72!important;transform:scale(.98);}button:active{opacity:.72;}}`}</style>
@@ -1145,7 +1145,7 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
           {crumb&&!mob&&<><span style={{color:C.border,fontSize:16,lineHeight:.8,flexShrink:0}}>›</span><span style={{color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{crumb}</span></>}
           {crumb&&mob&&<><span style={{color:C.border,fontSize:14,lineHeight:.8,flexShrink:0}}>›</span><span style={{color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:12,maxWidth:mob?120:undefined}}>{crumb}</span></>}
         </div>
-        <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}><button onClick={()=>setLang(lang==="en"?"mr":"en")} title={lang==="en"?"Switch to Marathi":"English वर जा"} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:12,cursor:"pointer",lineHeight:1,minHeight:mob?36:32,fontFamily:"inherit",color:C.inkMid,fontWeight:600}}>{lang==="en"?"मराठी":"EN"}</button><button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
+        <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>{canSwitchLang&&<button onClick={()=>setLang(lang==="en"?"mr":"en")} title={lang==="en"?"Switch to Marathi":"English वर जा"} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:12,cursor:"pointer",lineHeight:1,minHeight:mob?36:32,fontFamily:"inherit",color:C.inkMid,fontWeight:600}}>{lang==="en"?"मराठी":"EN"}</button>}<button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
       </div>
       <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":undefined,maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
     </div>
@@ -2901,22 +2901,31 @@ function JobWorkApp({onHome}){
 // STOCK JOURNAL — Gate Register (parcel entries & exits)
 // ══════════════════════════════════════════════════════════════════
 const JOURNAL_KEY="ng-journal-v1";
-const JOURNAL_ENTRY_STATUSES=[["received","Received"],["in-selection","In Selection"],["returned","Returned"],["purchased","Purchased"]];
-const JOURNAL_EXIT_STATUSES=[["selection","Sent for Selection"],["return-to-vendor","Returned to Vendor"],["other","Other"]];
-const JOURNAL_STATUS_COLORS={received:[C.green,C.greenBg],["in-selection"]:[C.amber,C.amberBg],returned:[C.blue,C.blueBg],purchased:[C.teal,C.tealBg],selection:[C.purple,C.purpleBg],["return-to-vendor"]:[C.red,C.redBg],other:[C.inkMid,C.card]};
-function journalStatusColor(status){return JOURNAL_STATUS_COLORS[status]||[C.inkMid,C.card];}
+const JOURNAL_EXIT_REASONS=["Job work","Sale of goods","Consignment"];
+const JOURNAL_ENTRY_REASONS=["Purchase received","Selection received","Return received","Consignment received"];
+const journalLine=(seed={})=>({id:uid(),vendorId:seed.vendorId||"",vendorName:seed.vendorName||"",material:"",shape:"",qty:"",unit:"pcs",qty2:"",unit2:"kg",notes:""});
+const journalLines=e=>Array.isArray(e?.items)&&e.items.length
+  ?e.items.map(it=>({...it,vendorId:it.vendorId||e?.vendorId||"",vendorName:it.vendorName||e?.vendorName||""}))
+  :[{id:"legacy",vendorId:e?.vendorId||"",vendorName:e?.vendorName||"",material:e?.material||"",shape:e?.shape||"",qty:e?.qty||"",unit:e?.unit||"pcs",qty2:e?.qty2||"",unit2:e?.unit2||"kg",notes:e?.itemNotes||e?.lineNotes||e?.grade||""}];
+const journalParty=e=>e?.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):[...new Set(journalLines(e).map(it=>it.vendorName).filter(Boolean))].join(", ")||e?.vendorName||"";
+const journalQtyText=it=>[it.qty?`${it.qty} ${it.unit||"pcs"}`:"",it.qty2?`${it.qty2} ${it.unit2||"kg"}`:""].filter(Boolean).join(" / ");
+const journalItemText=it=>`${[it.material,it.shape].filter(Boolean).join(" · ")||"Item"}${journalQtyText(it)?` · ${journalQtyText(it)}`:""}`;
+const journalSummary=e=>journalLines(e).map(journalItemText).join(" | ");
+const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||"")});
 
 function StockJournalApp({onHome}){
   const t=useT();
+  const allShapes=useShapes();
   const [entries,setEntries]=useState([]);
   const [vendors,setVendors]=useState([]);
+  const [buyers,setBuyers]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const [view,setView]=useState("list"); // "list"|"form"
   const [form,setForm]=useState(null);
-  const [filterVendorId,setFilterVendorId]=useState("all");
+  const [filterVendor,setFilterVendor]=useState("all");
   const [filterType,setFilterType]=useState("all");
-  const [filterStatus,setFilterStatus]=useState("all");
-  const [filterDate,setFilterDate]=useState("");
+  const [filterDateFrom,setFilterDateFrom]=useState("");
+  const [filterDateTo,setFilterDateTo]=useState("");
   const [toast,setToast]=useState("");
   const [aiLoading,setAiLoading]=useState(false);
   const [photoUploading,setPhotoUploading]=useState(false);
@@ -2927,22 +2936,40 @@ function StockJournalApp({onHome}){
   const [printDateTo,setPrintDateTo]=useState(today());
 
   useEffect(()=>{
-    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors)]).then(([j,v])=>{
+    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors),loadK(INV_KEYS.buyers)]).then(([j,v,b])=>{
       setEntries(Array.isArray(j)?j:[]);
       setVendors(Array.isArray(v)?v:[]);
+      setBuyers(Array.isArray(b)?b:[]);
       setLoaded(true);
     });
   },[]);
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
-  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",material:"",shape:"",qty:"",unit:"pcs",qty2:"",unit2:"kg",grade:"",notes:"",photos:[],status:"received",exitReason:"",linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
+  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
   const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
 
   const handleSave=async()=>{
     if(!form)return;
-    if(!form.vendorId&&!form.vendorName.trim()){showToast("Please select a vendor");return;}
+    if(form.type==="exit"&&!String(form.customerName||"").trim()){showToast("Please enter a customer");return;}
+    const validItems=journalLines(form).filter(it=>String(it.material||"").trim()||String(it.shape||"").trim()||String(it.qty||"").trim()||String(it.notes||"").trim());
+    if(!validItems.length){showToast("Add at least one item");return;}
+    if(form.type==="entry"&&validItems.some(it=>!String(it.vendorName||"").trim())){showToast("Please enter vendor for each item");return;}
     setSaving(true);
-    const entry={...form,updatedAt:new Date().toISOString(),createdAt:form.createdAt||new Date().toISOString()};
+    const buyer=buyers.find(b=>(b.name||"").toLowerCase()===String(form.customerName||"").toLowerCase());
+    const normalizedItems=validItems.map(it=>{
+      const vendor=vendors.find(v=>(v.name||"").toLowerCase()===String(it.vendorName||"").toLowerCase());
+      return {...it,vendorId:form.type==="entry"?(vendor?.id||it.vendorId||""):"",vendorName:form.type==="entry"?String(it.vendorName||"").trim():"",material:String(it.material||"").trim(),shape:String(it.shape||"").trim(),notes:String(it.notes||"").trim()};
+    });
+    const firstVendor=normalizedItems.find(it=>it.vendorName);
+    const entry={
+      ...form,
+      vendorId:form.type==="entry"?(firstVendor?.vendorId||""):"",
+      vendorName:form.type==="entry"?(firstVendor?.vendorName||""):"",
+      customerId:form.type==="exit"?(buyer?.id||form.customerId||""):"",
+      items:normalizedItems,
+      updatedAt:new Date().toISOString(),
+      createdAt:form.createdAt||new Date().toISOString()
+    };
     const isEdit=entries.some(e=>e.id===entry.id);
     const next=isEdit?entries.map(e=>e.id===entry.id?entry:e):[entry,...entries];
     await saveEntries(next);
@@ -2965,13 +2992,13 @@ function StockJournalApp({onHome}){
     try{
       const entryId=form.id||uid();
       const urls=await Promise.all(files.map(file=>uploadJournalPhoto(entryId,file)));
-      setForm(f=>({...f,id:entryId,photos:[...f.photos,...urls]}));
+      setForm(f=>({...f,id:entryId,photos:[...(f.photos||[]),...urls]}));
     }catch(err){showToast("Photo upload failed: "+err.message);}
     setPhotoUploading(false);
   };
 
   const handleAIParse=async()=>{
-    if(!form||!form.notes.trim())return;
+    if(!form||!String(form.reason||"").trim())return;
     setAiLoading(true);
     try{
       const stoneList=DEFAULT_STONES.slice(0,40).join(", ");
@@ -2979,7 +3006,7 @@ function StockJournalApp({onHome}){
 The user typed a note (possibly in Marathi, Hindi, or a mix with English) describing a stock parcel.
 Extract the fields below. If a field is not present, return empty string "".
 
-Note: "${form.notes}"
+Note: "${form.reason}"
 
 Return ONLY valid JSON (no markdown):
 {
@@ -2989,7 +3016,7 @@ Return ONLY valid JSON (no markdown):
   "unit": "one of: pcs ct gm kg lot str",
   "qty2": "secondary quantity if mentioned",
   "unit2": "unit for secondary quantity",
-  "grade": "grade if mentioned (A B AAA Extra etc.)",
+  "notes": "quality, grade, condition, lot detail, or other item notes if mentioned",
   "notes_en": "short English translation of the note (2-3 sentences max)"
 }
 
@@ -2998,17 +3025,11 @@ Known shapes: Sphere, Palmstone, Tower, Heart, Tumbled, Freeform, Rough, Pendant
 
       const raw=await callClaude([{role:"user",content:prompt}],400);
       const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
-      setForm(f=>({
-        ...f,
-        material:parsed.material||f.material,
-        shape:parsed.shape||f.shape,
-        qty:parsed.qty||f.qty,
-        unit:parsed.unit||f.unit,
-        qty2:parsed.qty2||f.qty2,
-        unit2:parsed.unit2||f.unit2,
-        grade:parsed.grade||f.grade,
-        notes:parsed.notes_en?`${f.notes}\n[🤖 ${parsed.notes_en}]`:f.notes,
-      }));
+      setForm(f=>{
+        const items=journalLines(f);
+        const first={...items[0],material:parsed.material||items[0].material,shape:parsed.shape||items[0].shape,qty:parsed.qty||items[0].qty,unit:parsed.unit||items[0].unit,qty2:parsed.qty2||items[0].qty2,unit2:parsed.unit2||items[0].unit2,notes:parsed.notes||items[0].notes};
+        return {...f,items:[first,...items.slice(1)],notes:parsed.notes_en?parsed.notes_en:f.notes};
+      });
       showToast("✓ "+t("AI filled fields from notes"));
     }catch(err){showToast(t("AI parse failed"));}
     setAiLoading(false);
@@ -3016,39 +3037,44 @@ Known shapes: Sphere, Palmstone, Tower, Heart, Tumbled, Freeform, Rough, Pendant
 
   const handlePrint=()=>{
     const toprint=entries
-      .filter(e=>printVendorId==="all"||e.vendorId===printVendorId)
+      .filter(e=>{
+        const linked=entries.find(x=>x.id===e.linkedEntryId);
+        return printVendorId==="all"||e.vendorId===printVendorId||e.vendorName===printVendorId||journalLines(e).some(it=>it.vendorId===printVendorId||it.vendorName===printVendorId)||linked?.vendorId===printVendorId||linked?.vendorName===printVendorId;
+      })
       .filter(e=>!printDateFrom||e.date>=printDateFrom)
       .filter(e=>!printDateTo||e.date<=printDateTo)
       .sort((a,b)=>b.date.localeCompare(a.date));
     const byVendor={};
     toprint.forEach(e=>{
-      const key=e.vendorId||e.vendorName||"Unknown";
-      if(!byVendor[key])byVendor[key]={name:e.vendorName||"Unknown",items:[]};
+      const linked=entries.find(x=>x.id===e.linkedEntryId);
+      const name=journalParty(e)||linked?.vendorName||"Unknown";
+      const key=e.vendorId||linked?.vendorId||name;
+      if(!byVendor[key])byVendor[key]={name,items:[]};
       byVendor[key].items.push(e);
     });
-    const statusLabel=s=>{const found=[...JOURNAL_ENTRY_STATUSES,...JOURNAL_EXIT_STATUSES].find(([v])=>v===s);return found?found[1]:s||"—";};
     const vendorBlocks=Object.values(byVendor).map(({name,items})=>{
       const rows=items.map(e=>`<tr>
         <td>${fmtDate(e.date)}</td>
-        <td class="${e.type==="entry"?"entry-t":"exit-t"}">${e.type==="entry"?"↓ Entry":"↑ Exit"}</td>
-        <td>${e.material||"—"}</td><td>${e.shape||"—"}</td>
-        <td>${e.qty||"—"} ${e.unit}${e.qty2?` / ${e.qty2} ${e.unit2}`:""}</td>
-        <td>${e.grade||"—"}</td><td>${statusLabel(e.status)}</td>
+        <td class="${e.type==="entry"?"entry-t":"exit-t"}">${e.type==="entry"?"In":"Out"}</td>
+        <td>${journalLines(e).map(it=>`${e.type==="entry"&&it.vendorName?`${it.vendorName} · `:""}${it.material||"—"}${it.shape?` · ${it.shape}`:""}`).join("<br/>")}</td>
+        <td>${journalLines(e).map(it=>`${journalQtyText(it)||"—"}${it.notes?` · ${it.notes}`:""}`).join("<br/>")}</td>
+        <td>${journalParty(e)||"—"}</td>
+        <td>${e.reason||e.exitReason||"—"}</td>
         <td style="max-width:180px;word-break:break-word">${e.notes||"—"}</td>
       </tr>`).join("");
       return `<div class="vblock"><h2>${name}</h2>
-        <table><thead><tr><th>Date</th><th>Type</th><th>Material</th><th>Shape</th><th>Qty</th><th>Grade</th><th>Status</th><th>Notes</th></tr></thead>
+        <table><thead><tr><th>Date</th><th>Flow</th><th>Items</th><th>Qty / Notes</th><th>Party</th><th>Reason</th><th>Record Notes</th></tr></thead>
         <tbody>${rows}</tbody></table></div>`;
     }).join("");
     const dateRange=(printDateFrom||printDateTo)?`${printDateFrom?fmtDate(printDateFrom):"Start"} – ${printDateTo?fmtDate(printDateTo):"Today"}`:"All Dates";
-    const vendorName=printVendorId==="all"?"All Vendors":(vendors.find(v=>v.id===printVendorId)?.name||"");
+    const vendorName=printVendorId==="all"?"All Vendors":(vendors.find(v=>v.id===printVendorId)?.name||printVendorId||"");
     const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Journal</title>
 <style>*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;padding:24px;color:#1a1308;background:#fff}.no-print{margin-bottom:16px}.btn{background:#b8922a;color:#fff;border:none;padding:9px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-family:inherit}.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #e5dcc8;padding-bottom:12px;margin-bottom:8px}.co{font-family:Georgia,serif;font-size:22px;font-weight:700}.cosub{font-size:11px;color:#888;letter-spacing:1px;text-transform:uppercase}.rtitle{font-family:Georgia,serif;font-size:18px;font-weight:600;margin:16px 0 4px}.rsub{font-size:12px;color:#888;margin-bottom:20px}.vblock{margin-bottom:28px}.vblock h2{font-family:Georgia,serif;font-size:16px;font-weight:700;border-bottom:1px solid #e5dcc8;padding-bottom:6px;margin-bottom:8px;color:#4a3200}table{width:100%;border-collapse:collapse;font-size:12px}th{background:#f8f6f1;padding:7px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#888;border-bottom:2px solid #e5dcc8}td{padding:7px 10px;border-bottom:1px solid #efe8d8;vertical-align:top}tr:last-child td{border-bottom:none}.entry-t{color:#1a6a2a;font-weight:600}.exit-t{color:#8a1a1a;font-weight:600}@media print{.no-print{display:none}body{padding:10px}@page{margin:1.2cm;size:A4}}
 </style></head><body>
 <div class="no-print"><button class="btn" onclick="window.print()">🖨 Print / Save PDF</button></div>
 <div class="hdr"><div><div class="co">Nikhil Gems</div><div class="cosub">Stock Entry Journal</div></div>
 <div style="text-align:right;font-size:12px;color:#888"><div>Generated: ${fmtDate(today())}</div><div>${dateRange}</div><div>${toprint.length} entries</div></div></div>
-<div class="rtitle">Stock Entry Journal</div>
+<div class="rtitle">Stock Movement Journal</div>
 <div class="rsub">${vendorName} · ${dateRange}</div>
 ${vendorBlocks}
 </body></html>`;
@@ -3057,11 +3083,15 @@ ${vendorBlocks}
   };
 
   // ── Filtering ───────────────────────────────────────────────────
+  const vendorFilterOptions=[
+    ...vendors.filter(v=>v.name).map(v=>({value:v.id,label:v.name})),
+    ...[...new Set(entries.flatMap(e=>[e.vendorName,...journalLines(e).map(it=>it.vendorName)]).filter(Boolean))].filter(name=>!vendors.some(v=>v.name===name)).map(name=>({value:name,label:name}))
+  ].sort((a,b)=>a.label.localeCompare(b.label));
   const filtered=entries
-    .filter(e=>filterVendorId==="all"||e.vendorId===filterVendorId)
+    .filter(e=>filterVendor==="all"||e.vendorId===filterVendor||e.vendorName===filterVendor||journalLines(e).some(it=>it.vendorId===filterVendor||it.vendorName===filterVendor)||entries.find(x=>x.id===e.linkedEntryId)?.vendorId===filterVendor||entries.find(x=>x.id===e.linkedEntryId)?.vendorName===filterVendor)
     .filter(e=>filterType==="all"||e.type===filterType)
-    .filter(e=>filterStatus==="all"||e.status===filterStatus)
-    .filter(e=>!filterDate||e.date===filterDate)
+    .filter(e=>!filterDateFrom||e.date>=filterDateFrom)
+    .filter(e=>!filterDateTo||e.date<=filterDateTo)
     .sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt));
 
   // Group by date for timeline display
@@ -3071,103 +3101,129 @@ ${vendorBlocks}
     byDate[byDate.length-1].items.push(e);
   });
 
-  const anyFilter=filterVendorId!=="all"||filterType!=="all"||filterStatus!=="all"||filterDate;
+  const anyFilter=filterVendor!=="all"||filterType!=="all"||filterDateFrom||filterDateTo;
 
   // ── Form view ───────────────────────────────────────────────────
   if(view==="form"&&form){
     const isEdit=entries.some(e=>e.id===form.id);
     const setF=k=>v=>setForm(f=>({...f,[k]:v}));
+    const setType=type=>setForm(f=>({...f,type,vendorId:type==="entry"?f.vendorId:"",vendorName:type==="entry"?f.vendorName:"",customerId:type==="exit"?f.customerId:"",customerName:type==="exit"?f.customerName:"",reason:f.reason||""}));
+    const items=journalLines(form);
+    const setItem=(idx,k,v)=>setForm(f=>({...f,items:journalLines(f).map((it,i)=>{
+      if(i!==idx)return it;
+      const next={...it,[k]:v};
+      if(k==="vendorName"){const vendor=vendors.find(x=>(x.name||"").toLowerCase()===String(v||"").toLowerCase());next.vendorId=vendor?.id||"";}
+      return next;
+    })}));
+    const addItem=()=>setForm(f=>{const lines=journalLines(f);const prev=lines[lines.length-1]||{};return{...f,items:[...lines,journalLine({vendorId:prev.vendorId||f.vendorId||"",vendorName:prev.vendorName||f.vendorName||""})]};});
+    const removeItem=idx=>setForm(f=>({...f,items:journalLines(f).filter((_,i)=>i!==idx)}));
+    const linkedEntry=entries.find(e=>e.id===form.linkedEntryId);
+    const glass={background:"rgba(255,255,255,.86)",border:"1px solid rgba(0,0,0,.08)",borderRadius:8,boxShadow:"0 18px 50px rgba(15,23,42,.08)"};
+    const inputS={...FI,borderRadius:8,border:"1px solid rgba(0,0,0,.12)",background:"#fff",boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",boxSizing:"border-box"};
+    const sectionTitle={fontSize:11,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:.8,marginBottom:12};
     return(
       <Shell title={t("Stock Journal")} crumb={isEdit?t("Edit Entry"):t("New Entry")} onHome={onHome} onBack={()=>setView("list")}>
         <Toast msg={toast}/>
-        <div style={{maxWidth:620,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{maxWidth:880,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
           {/* Section 1: Type + Date + Vendor */}
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>{t("Entry Type")}</div>
-            <div style={{display:"flex",gap:8,marginBottom:12}}>
-              <button onClick={()=>{setF("type")("entry");setF("status")("received");}} className={form.type==="entry"?"bp":"bs"} style={{flex:1,fontSize:mob?14:13}}>📥 {t("Stock Entry")}</button>
-              <button onClick={()=>{setF("type")("exit");setF("status")("selection");}} className={form.type==="exit"?"bp":"bs"} style={{flex:1,fontSize:mob?14:13}}>📤 {t("Stock Exit")}</button>
+          <div style={{...glass,padding:"18px 20px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+              <div>
+                <div style={{fontSize:20,fontWeight:700,color:"#111827",letterSpacing:0}}>Stock {form.type==="entry"?"Entry":"Exit"}</div>
+                <div style={{fontSize:12,color:"#6B7280",marginTop:2}}>Record goods coming in or going out, with as many item lines as needed.</div>
+              </div>
+              <div style={{display:"flex",background:"#F3F4F6",borderRadius:8,padding:3,border:"1px solid #E5E7EB"}}>
+                {[["entry","Stock In"],["exit","Stock Out"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>setType(v)} style={{border:"none",borderRadius:6,padding:"8px 16px",background:form.type===v?"#fff":"transparent",boxShadow:form.type===v?"0 1px 4px rgba(0,0,0,.12)":"none",fontWeight:700,color:form.type===v?"#111827":"#6B7280",cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+                ))}
+              </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
-              <Field label="Date"><input type="date" value={form.date} onChange={e=>setF("date")(e.target.value)} style={FI}/></Field>
-              <Field label="Vendor">
-                <select value={form.vendorId} onChange={e=>{const v=vendors.find(x=>x.id===e.target.value);setForm(f=>({...f,vendorId:e.target.value,vendorName:v?.name||""}));}} style={FI}>
-                  <option value="">— Select Vendor —</option>
-                  {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
-                </select>
-              </Field>
-            </div>
-          </div>
-
-          {/* Section 2: Material Details */}
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Material</div>
-            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12,marginBottom:12}}>
-              <Field label="Material / Stone">
-                <input value={form.material} onChange={e=>setF("material")(e.target.value)} list="jnl-stones" style={FI} placeholder="e.g. Amethyst"/>
-                <datalist id="jnl-stones">{DEFAULT_STONES.map(s=><option key={s} value={s}/>)}</datalist>
-              </Field>
-              <Field label="Shape">
-                <input value={form.shape} onChange={e=>setF("shape")(e.target.value)} list="jnl-shapes" style={FI} placeholder="e.g. Sphere"/>
-                <datalist id="jnl-shapes">{SHAPES.map(s=><option key={s} value={s}/>)}</datalist>
-              </Field>
-              <Field label="Grade">
-                <input value={form.grade} onChange={e=>setF("grade")(e.target.value)} style={FI} placeholder="A / B / AAA / Extra"/>
-              </Field>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <Field label="Qty — Primary">
-                <div style={{display:"grid",gridTemplateColumns:"1fr 72px",gap:4}}>
-                  <input type="number" value={form.qty} onChange={e=>setF("qty")(e.target.value)} style={FI} placeholder="50"/>
-                  <select value={form.unit} onChange={e=>setF("unit")(e.target.value)} style={{...FI,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
-                </div>
-              </Field>
-              <Field label="Qty — Secondary (optional)">
-                <div style={{display:"grid",gridTemplateColumns:"1fr 72px",gap:4}}>
-                  <input type="number" value={form.qty2} onChange={e=>setF("qty2")(e.target.value)} style={FI} placeholder="2.5"/>
-                  <select value={form.unit2} onChange={e=>setF("unit2")(e.target.value)} style={{...FI,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
-                </div>
-              </Field>
-            </div>
-          </div>
-
-          {/* Section 3: Status + Linking */}
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Status</div>
-            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
-              <Field label="Status">
-                <select value={form.status} onChange={e=>setF("status")(e.target.value)} style={FI}>
-                  {(form.type==="entry"?JOURNAL_ENTRY_STATUSES:JOURNAL_EXIT_STATUSES).map(([v,l])=><option key={v} value={v}>{l}</option>)}
-                </select>
-              </Field>
-              {form.vendorId&&(
-                <Field label={t("Linked Entry (optional)")}>
-                  <select value={form.linkedEntryId} onChange={e=>setF("linkedEntryId")(e.target.value)} style={FI}>
-                    <option value="">— Not linked —</option>
-                    {entries.filter(e=>e.type==="entry"&&e.vendorId===form.vendorId&&e.id!==form.id).map(e=><option key={e.id} value={e.id}>{fmtDate(e.date)} · {e.material||"?"} · {e.qty} {e.unit}</option>)}
-                  </select>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"1fr":"1fr 1fr",gap:12}}>
+              <Field label="Date"><input type="date" value={form.date} onChange={e=>setF("date")(e.target.value)} style={inputS}/></Field>
+              {form.type==="exit"&&(
+                <Field label="Customer">
+                  <input value={form.customerName||""} onChange={e=>{const val=e.target.value;const b=buyers.find(x=>(x.name||"").toLowerCase()===val.toLowerCase());setForm(f=>({...f,customerName:val,customerId:b?.id||""}));}} style={inputS} placeholder="Select or type customer" list="jnl-buyers"/>
+                  <datalist id="jnl-buyers">{buyers.map(b=><option key={b.id} value={b.name}/>)}</datalist>
                 </Field>
               )}
             </div>
           </div>
 
-          {/* Section 4: Notes + AI */}
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Notes</div>
-            <div style={{position:"relative"}}>
-              <textarea value={form.notes} onChange={e=>setF("notes")(e.target.value)} rows={3} style={{...FI,resize:"vertical",paddingRight:48}} placeholder="मराठीत लिहा किंवा type in English…"/>
-              <button onClick={handleAIParse} disabled={aiLoading||!form.notes.trim()} title="Parse with AI — extract material, shape, qty" style={{position:"absolute",right:8,bottom:8,background:aiLoading?C.card:C.goldLight,border:`1px solid ${C.goldBright}`,borderRadius:6,padding:"5px 9px",cursor:"pointer",fontSize:16,lineHeight:1,opacity:aiLoading||!form.notes.trim()?.35:1}}>{aiLoading?"⏳":"🤖"}</button>
-            </div>
+          {/* Section 2: Material Details */}
+          <div style={{...glass,padding:"18px 20px"}}>
+            <div style={sectionTitle}>Items</div>
+            {items.map((it,idx)=>(
+              <div key={it.id||idx} style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"1.1fr 1.2fr 1fr .85fr .85fr 1.1fr 30px":"1.3fr 1fr .9fr .9fr 1.3fr 30px",gap:8,alignItems:"end",padding:"10px 0",borderTop:idx?`1px solid ${C.border}`:"none"}}>
+                {form.type==="entry"&&(
+                  <Field label={idx===0?"Vendor":""}>
+                    <input value={it.vendorName||""} onChange={e=>setItem(idx,"vendorName",e.target.value)} list="jnl-vendors" style={inputS} placeholder="Select or type vendor"/>
+                  </Field>
+                )}
+                <Field label={idx===0?"Stone name":""}>
+                  <input value={it.material||""} onChange={e=>setItem(idx,"material",e.target.value)} list="jnl-stones" style={inputS} placeholder="Select or type stone"/>
+                </Field>
+                <Field label={idx===0?"Shape":""}>
+                  <input value={it.shape||""} onChange={e=>setItem(idx,"shape",e.target.value)} list="jnl-shapes" style={inputS} placeholder="Select or type shape"/>
+                </Field>
+                <Field label={idx===0?"Primary qty":""}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 64px",gap:4}}>
+                    <input type="number" value={it.qty||""} onChange={e=>setItem(idx,"qty",e.target.value)} style={inputS} placeholder="50"/>
+                    <select value={it.unit||"pcs"} onChange={e=>setItem(idx,"unit",e.target.value)} style={{...inputS,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                  </div>
+                </Field>
+                <Field label={idx===0?"Secondary":""}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 64px",gap:4}}>
+                    <input type="number" value={it.qty2||""} onChange={e=>setItem(idx,"qty2",e.target.value)} style={inputS} placeholder="kg"/>
+                    <select value={it.unit2||"kg"} onChange={e=>setItem(idx,"unit2",e.target.value)} style={{...inputS,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                  </div>
+                </Field>
+                <Field label={idx===0?"Notes":""}>
+                  <input value={it.notes||""} onChange={e=>setItem(idx,"notes",e.target.value)} style={inputS} placeholder="Quality, grade, lot, condition"/>
+                </Field>
+                <div style={{paddingBottom:3}}>{items.length>1&&<button onClick={()=>removeItem(idx)} style={{width:28,height:28,border:"1px solid #E5E7EB",borderRadius:8,background:"#fff",color:C.red,cursor:"pointer",fontSize:17,lineHeight:1}}>×</button>}</div>
+              </div>
+            ))}
+            <datalist id="jnl-vendors">{vendors.map(v=><option key={v.id} value={v.name}/>)}</datalist>
+            <datalist id="jnl-stones">{[...new Set([...DEFAULT_STONES,...entries.flatMap(e=>journalLines(e).map(it=>it.material)).filter(Boolean)])].sort().map(s=><option key={s} value={s}/>)}</datalist>
+            <datalist id="jnl-shapes">{allShapes.map(s=><option key={s} value={s}/>)}</datalist>
+            <button onClick={addItem} style={{marginTop:8,width:"100%",border:"1px dashed #CBD5E1",borderRadius:8,background:"#F8FAFC",color:"#374151",padding:"10px 12px",fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ Add another item</button>
           </div>
 
-          {/* Section 5: Photos */}
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"16px 18px"}}>
-            <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:12}}>Photos</div>
+          {/* Section 3: Reason + Linking */}
+          <div style={{...glass,padding:"18px 20px"}}>
+            <div style={sectionTitle}>{form.type==="entry"?"Entry details":"Exit details"}</div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+              <Field label="Reason">
+                <div style={{position:"relative"}}>
+                  <input value={form.reason||form.exitReason||""} onChange={e=>setF("reason")(e.target.value)} list={form.type==="entry"?"jnl-entry-reasons":"jnl-exit-reasons"} style={{...inputS,paddingRight:48}} placeholder={form.type==="entry"?"Type reason":"Job work, sale of goods, consignment..."} />
+                  <button onClick={handleAIParse} disabled={aiLoading||!String(form.reason||"").trim()} title="Parse reason into first item" style={{position:"absolute",right:8,top:7,background:aiLoading?"#F3F4F6":"#F5F5F7",border:"1px solid #D1D5DB",borderRadius:6,padding:"3px 8px",cursor:"pointer",fontSize:12,lineHeight:1,opacity:aiLoading||!String(form.reason||"").trim()?.35:1}}>{aiLoading?"...":"AI"}</button>
+                </div>
+                <datalist id="jnl-entry-reasons">{JOURNAL_ENTRY_REASONS.map(r=><option key={r} value={r}/>)}</datalist>
+                <datalist id="jnl-exit-reasons">{JOURNAL_EXIT_REASONS.map(r=><option key={r} value={r}/>)}</datalist>
+              </Field>
+              {form.type==="exit"&&(
+                <Field label={t("Linked stock entry")}>
+                  <select value={form.linkedEntryId||""} onChange={e=>setF("linkedEntryId")(e.target.value)} style={{...inputS,cursor:"pointer"}}>
+                    <option value="">Not linked</option>
+                    {entries.filter(e=>e.type==="entry"&&e.id!==form.id).map(e=><option key={e.id} value={e.id}>{fmtDate(e.date)} · {journalParty(e)||"Vendor"} · {journalSummary(e)}</option>)}
+                  </select>
+                </Field>
+              )}
+              <Field label="Record notes">
+                <input value={form.notes||""} onChange={e=>setF("notes")(e.target.value)} style={inputS} placeholder="Optional internal note"/>
+              </Field>
+            </div>
+            {linkedEntry&&<div style={{marginTop:12,padding:"10px 12px",borderRadius:8,background:"#F8FAFC",border:"1px solid #E5E7EB",fontSize:12,color:"#4B5563"}}>Linked to {fmtDate(linkedEntry.date)} from <strong>{journalParty(linkedEntry)||"vendor"}</strong>: {journalSummary(linkedEntry)}</div>}
+          </div>
+
+          {/* Section 4: Photos */}
+          <div style={{...glass,padding:"18px 20px"}}>
+            <div style={sectionTitle}>Photos</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-              {form.photos.map((url,i)=>(
+              {(form.photos||[]).map((url,i)=>(
                 <div key={url} style={{position:"relative",width:80,height:80,borderRadius:8,overflow:"hidden",border:`1px solid ${C.border}`}}>
                   <img src={url} style={{width:80,height:80,objectFit:"cover"}} alt=""/>
-                  <button onClick={()=>setForm(f=>({...f,photos:f.photos.filter((_,j)=>j!==i)}))} style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,.65)",color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,cursor:"pointer",fontSize:13,lineHeight:"20px",padding:0,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+                  <button onClick={()=>setForm(f=>({...f,photos:(f.photos||[]).filter((_,j)=>j!==i)}))} style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,.65)",color:"#fff",border:"none",borderRadius:"50%",width:20,height:20,cursor:"pointer",fontSize:13,lineHeight:"20px",padding:0,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
                 </div>
               ))}
               <label style={{width:80,height:80,border:`2px dashed ${C.border}`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:24,color:C.inkFaint,flexShrink:0,transition:"border-color .15s",background:C.card}}>
@@ -3197,27 +3253,24 @@ ${vendorBlocks}
     <Shell title={t("Stock Journal")} onHome={onHome} onBack={onHome} actions={
       <div style={{display:"flex",gap:8}}>
         <button className="bs" style={{fontSize:mob?12:12}} onClick={()=>setPrintOpen(true)}>🖨{!mob&&" "+t("Print Report")}</button>
-        <button className="bp" style={{fontSize:mob?12:13}} onClick={()=>{setForm(blankEntry());setView("form");}}>+ {mob?"Add":t("New Entry")}</button>
+        <button className="bp" style={{fontSize:mob?12:13}} onClick={()=>{setForm(blankEntry());setView("form");}}>+ {mob?"Add":"New Movement"}</button>
       </div>
     }>
       <Toast msg={toast}/>
       {/* Filter bar */}
-      <div style={{display:"flex",gap:mob?4:8,marginBottom:12,flexWrap:mob?"nowrap":"wrap",overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",alignItems:"center"}}>
-        <select value={filterVendorId} onChange={e=>setFilterVendorId(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"7px 8px":"4px 8px",minWidth:mob?130:150,flexShrink:0,cursor:"pointer"}}>
+      <div style={{display:"flex",gap:mob?6:8,marginBottom:14,flexWrap:mob?"nowrap":"wrap",overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",alignItems:"center",padding:mob?"2px 0":"0"}}>
+        <select value={filterVendor} onChange={e=>setFilterVendor(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",minWidth:mob?150:180,flexShrink:0,cursor:"pointer",borderRadius:8}}>
           <option value="all">{t("All Vendors")}</option>
-          {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+          {vendorFilterOptions.map(v=><option key={v.value} value={v.value}>{v.label}</option>)}
         </select>
-        <div style={{display:"flex",gap:3,flexShrink:0}}>
-          {[["all",t("All")],["entry","📥 Entry"],["exit","📤 Exit"]].map(([v,l])=>(
-            <button key={v} onClick={()=>setFilterType(v)} style={{fontSize:mob?12:11,padding:mob?"6px 10px":"4px 10px",borderRadius:4,cursor:"pointer",border:`1px solid ${filterType===v?C.gold:C.border}`,background:filterType===v?C.goldLight:C.surface,color:filterType===v?C.gold:C.inkMid,fontWeight:filterType===v?700:400,whiteSpace:"nowrap",minHeight:mob?38:undefined}}>{l}</button>
+        <div style={{display:"flex",gap:3,flexShrink:0,background:"#F3F4F6",border:"1px solid #E5E7EB",borderRadius:8,padding:3}}>
+          {[["all",t("All")],["entry","In"],["exit","Out"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setFilterType(v)} style={{fontSize:mob?12:11,padding:mob?"7px 12px":"5px 13px",borderRadius:6,cursor:"pointer",border:"none",background:filterType===v?"#fff":"transparent",boxShadow:filterType===v?"0 1px 4px rgba(0,0,0,.12)":"none",color:filterType===v?"#111827":"#6B7280",fontWeight:filterType===v?700:600,whiteSpace:"nowrap",minHeight:mob?38:undefined}}>{l}</button>
           ))}
         </div>
-        <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"7px 8px":"4px 8px",flexShrink:0,cursor:"pointer",minWidth:mob?120:140}}>
-          <option value="all">{t("All Statuses")}</option>
-          {[...JOURNAL_ENTRY_STATUSES,...JOURNAL_EXIT_STATUSES].map(([v,l])=><option key={v} value={v}>{l}</option>)}
-        </select>
-        <input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"7px 8px":"4px 8px",flexShrink:0,width:mob?undefined:130}}/>
-        {anyFilter&&<button onClick={()=>{setFilterVendorId("all");setFilterType("all");setFilterStatus("all");setFilterDate("");}} style={{fontSize:11,padding:"4px 10px",borderRadius:4,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint,flexShrink:0,whiteSpace:"nowrap"}}>Clear ×</button>}
+        <input type="date" value={filterDateFrom} onChange={e=>setFilterDateFrom(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",flexShrink:0,width:mob?undefined:138,borderRadius:8}}/>
+        <input type="date" value={filterDateTo} onChange={e=>setFilterDateTo(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",flexShrink:0,width:mob?undefined:138,borderRadius:8}}/>
+        {anyFilter&&<button onClick={()=>{setFilterVendor("all");setFilterType("all");setFilterDateFrom("");setFilterDateTo("");}} style={{fontSize:11,padding:"6px 12px",borderRadius:8,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint,flexShrink:0,whiteSpace:"nowrap"}}>Clear</button>}
       </div>
 
       {/* Timeline */}
@@ -3238,30 +3291,35 @@ ${vendorBlocks}
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             {group.items.map(entry=>{
-              const [scol,sbg]=journalStatusColor(entry.status);
-              const borderCol=entry.type==="entry"?C.green:C.red;
+              const isIn=entry.type==="entry";
+              const borderCol=isIn?"#34C759":"#FF3B30";
+              const linked=entries.find(e=>e.id===entry.linkedEntryId);
+              const lines=journalLines(entry);
               return(
-                <div key={entry.id} onClick={()=>{setForm({...entry});setView("form");}} style={{background:C.surface,border:`1px solid ${C.border}`,borderLeft:`4px solid ${borderCol}`,borderRadius:9,padding:"13px 14px",cursor:"pointer",transition:"box-shadow .15s"}} onMouseEnter={e=>e.currentTarget.style.boxShadow="0 2px 12px rgba(26,19,8,.09)"} onMouseLeave={e=>e.currentTarget.style.boxShadow="none"}>
+                <div key={entry.id} onClick={()=>{setForm(normalizeJournalForm(entry));setView("form");}} style={{background:"rgba(255,255,255,.88)",border:`1px solid ${C.border}`,borderLeft:`4px solid ${borderCol}`,borderRadius:8,padding:"13px 14px",cursor:"pointer",transition:"box-shadow .15s, transform .15s",boxShadow:"0 1px 2px rgba(15,23,42,.04)"}} onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 10px 28px rgba(15,23,42,.10)";e.currentTarget.style.transform="translateY(-1px)";}} onMouseLeave={e=>{e.currentTarget.style.boxShadow="0 1px 2px rgba(15,23,42,.04)";e.currentTarget.style.transform="none";}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:5,gap:8}}>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:16}}>{entry.type==="entry"?"📥":"📤"}</span>
-                      <span style={{fontSize:9,fontWeight:700,letterSpacing:.8,textTransform:"uppercase",color:entry.type==="entry"?C.green:C.red}}>{entry.type==="entry"?"Entry":"Exit"}</span>
-                      <span style={{background:sbg,color:scol,borderRadius:4,padding:"2px 7px",fontSize:9,fontWeight:700}}>{[...JOURNAL_ENTRY_STATUSES,...JOURNAL_EXIT_STATUSES].find(([v])=>v===entry.status)?.[1]||entry.status}</span>
+                      <span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:borderCol,background:isIn?"#F0FFF4":"#FFF5F5",borderRadius:8,padding:"3px 8px"}}>{isIn?"Stock In":"Stock Out"}</span>
+                      {entry.reason&&<span style={{fontSize:11,color:"#6B7280"}}>{entry.reason}</span>}
                     </div>
-                    <span style={{fontSize:11,color:C.inkFaint,flexShrink:0}}>{entry.vendorName||"—"}</span>
+                    <span style={{fontSize:11,color:C.inkFaint,flexShrink:0}}>{journalParty(entry)||"—"}</span>
                   </div>
-                  <div style={{fontSize:14,fontWeight:600,color:C.ink,marginBottom:3}}>
-                    {[entry.material,entry.shape].filter(Boolean).join(" · ")||"—"}
-                    {entry.qty&&<span style={{fontWeight:400,color:C.inkMid}}> · {entry.qty} {entry.unit}{entry.qty2?` / ${entry.qty2} ${entry.unit2}`:""}</span>}
-                    {entry.grade&&<span style={{fontWeight:400,color:C.inkMid,fontSize:12}}> · Grade {entry.grade}</span>}
+                  <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:8}}>
+                    {lines.map((it,i)=>(
+                      <div key={it.id||i} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"baseline"}}>
+                        <div style={{fontSize:14,fontWeight:650,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[it.material,it.shape].filter(Boolean).join(" · ")||"—"}</div>
+                        <div style={{fontSize:12,color:C.inkMid,whiteSpace:"nowrap"}}>{journalQtyText(it)}{it.notes?` · ${it.notes}`:""}</div>
+                      </div>
+                    ))}
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
-                    {entry.photos.length>0&&(
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
+                    {(entry.photos||[]).length>0&&(
                       <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                        {entry.photos.slice(0,3).map((url,i)=><img key={i} src={url} style={{width:32,height:32,objectFit:"cover",borderRadius:4,border:`1px solid ${C.border}`}} alt=""/>)}
-                        {entry.photos.length>3&&<span style={{fontSize:10,color:C.inkFaint}}>+{entry.photos.length-3}</span>}
+                        {(entry.photos||[]).slice(0,3).map((url,i)=><img key={i} src={url} style={{width:32,height:32,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`}} alt=""/>)}
+                        {(entry.photos||[]).length>3&&<span style={{fontSize:10,color:C.inkFaint}}>+{(entry.photos||[]).length-3}</span>}
                       </div>
                     )}
+                    {linked&&<span style={{fontSize:11,color:C.blue,background:C.blueBg,borderRadius:8,padding:"3px 8px"}}>Linked to {fmtDate(linked.date)}</span>}
                     {entry.notes&&<p style={{fontSize:11,color:C.inkMid,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",margin:0}}>{entry.notes.split("\n")[0]}</p>}
                   </div>
                 </div>
@@ -3280,7 +3338,7 @@ ${vendorBlocks}
               <Field label="Vendor">
                 <select value={printVendorId} onChange={e=>setPrintVendorId(e.target.value)} style={FI}>
                   <option value="all">{t("All Vendors")}</option>
-                  {vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}
+                  {vendorFilterOptions.map(v=><option key={v.value} value={v.value}>{v.label}</option>)}
                 </select>
               </Field>
               <Field label="Date From"><input type="date" value={printDateFrom} onChange={e=>setPrintDateFrom(e.target.value)} style={FI}/></Field>
@@ -3711,6 +3769,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [sendToShowId,setSendToShowId]=useState("");
   const [shopifyDeleteConfirm,setShopifyDeleteConfirm]=useState(null); // {items,showId,ids,stockOverride}
   const [sendQtyDialog,setSendQtyDialog]=useState(null); // {entries:[{item,qtyToSend}],showId}
+  const [returnQtyDialog,setReturnQtyDialog]=useState(null); // {entries:[{item,qtyToReturn,qty2ToReturn}]}
   const [undoSend,setUndoSend]=useState(null); // {prevStock,label}
   const [stockRegion,setStockRegion]=useState("India");
   const [markSoldItem,setMarkSoldItem]=useState(null);
@@ -3822,7 +3881,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const del=async id=>{const item=stock.find(x=>x.id===id);const list=stock.filter(x=>x.id!==id);setStock(list);try{await saveStockK(list,{deletedIds:[id]});logActivity({user:"Admin",action:"deleted",module:"stock",label:`Deleted: ${item?.material||"item"}${item?.shape?" "+item.shape:""}`,targetMod:"stock"});}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
   const getShowRegion=show=>{const t=((show.city||"")+" "+(show.name||"")).toLowerCase();if(/japan|tokyo|osaka|kyoto|ikebukuro|nagoya/.test(t))return"Japan";if(/usa|america|denver|tucson|arizona/.test(t))return"USA";if(/europe|germany|munich|france|paris|italy|spain/.test(t))return"Europe";return"India";};
   const REGION_CFG={India:{label:"India",flag:"🇮🇳",color:"#9A6200",bg:"#FDF8ED",border:"#E8C878",currency:"INR"},Japan:{label:"Japan",flag:"🇯🇵",color:"#C0392B",bg:"#FFF5F5",border:"#F5C6C6",currency:"JPY"},USA:{label:"USA",flag:"🇺🇸",color:"#1D4ED8",bg:"#EFF6FF",border:"#BFDBFE",currency:"USD"},Europe:{label:"Europe",flag:"🇪🇺",color:"#059669",bg:"#F0FDF4",border:"#A7F3D0",currency:"EUR"}};
-  const sendToShow=async(showId,ids,stockOverride)=>{if(!ids.size||!showId)return;const show=shows.find(s=>s.id===showId);if(!show)return;const region=getShowRegion(show);const showTag=show.name;const base=stockOverride||stock;const prevStock=[...base];const ts=new Date().toISOString();const newStock=base.map(s=>ids.has(s.id)?{...s,region,showTag,sentAt:today(),updatedAt:ts}:s);setStock(newStock);try{await saveStockK(newStock);setUndoSend({prevStock,label:`${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`});showToast(`✓ ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`);setSelectedIds(new Set());setSelectMode(false);setSendToShowOpen(false);setSendToShowId("");logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`,targetMod:"stock"});}catch(e){showToast("⚠ Save failed: "+e.message);}};
+  const sendToShow=async(showId,ids,stockOverride)=>{if(!ids.size||!showId)return;const show=shows.find(s=>s.id===showId);if(!show)return;const region=getShowRegion(show);const showTag=show.name;const base=stockOverride||stock;const prevStock=[...base];const ts=new Date().toISOString();const newStock=base.map(s=>ids.has(s.id)?{...s,region,showTag,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts}:s);setStock(newStock);try{await saveStockK(newStock);setUndoSend({prevStock,label:`${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`});showToast(`✓ ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`);setSelectedIds(new Set());setSelectMode(false);setSendToShowOpen(false);setSendToShowId("");logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`,targetMod:"stock"});}catch(e){showToast("⚠ Save failed: "+e.message);}};
   const doUndoSend=async()=>{if(!undoSend)return;const{prevStock}=undoSend;setUndoSend(null);setStock(prevStock);try{await saveStockK(prevStock);showToast("↩ Send undone");}catch(e){showToast("⚠ Undo failed: "+e.message);}};;
   const trySendToShow=async(showId,ids,stockOverride)=>{
     if(!ids.size||!showId)return;
@@ -3892,7 +3951,115 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const doMarkSold=async()=>{if(!markSoldItem)return;const cfg=REGION_CFG[stockRegion]||REGION_CFG.India;const soldQty=Math.min(+markSoldQty||+markSoldItem.qty||1,+markSoldItem.qty||1);const remaining=(+markSoldItem.qty||0)-soldQty;const patch={qty:String(Math.max(0,remaining)),soldDate:today(),soldPrice:markSoldRate,soldCurrency:cfg.currency,updatedAt:new Date().toISOString()};const newStock=stock.map(s=>s.id!==markSoldItem.id?s:{...s,...patch});setStock(newStock);try{await saveStockK(newStock);showToast("✓ Marked sold");logActivity({user:"Admin",action:"sold",module:"stock",label:`Sold: ${markSoldItem.material||"item"}${markSoldItem.shape?" "+markSoldItem.shape:""} · ${soldQty} ${markSoldItem.unit||"pcs"}${markSoldRate?" @ "+inr(markSoldRate):""}`,targetId:markSoldItem.id,targetMod:"stock"});setMarkSoldItem(null);setMarkSoldQty("");setMarkSoldRate("");}catch(e){showToast("⚠ Save failed: "+e.message);}};
   const quickUpdateItem=async(id,patch)=>{const newStock=stock.map(s=>s.id!==id?s:{...s,...patch,updatedAt:new Date().toISOString()});setStock(newStock);try{await saveStockK(newStock);}catch(e){showToast("⚠ Save failed");}}
   const delBulk=async ids=>{if(!ids.size)return;const list=stock.filter(s=>!ids.has(s.id));setStock(list);try{try{await saveStockK(list,{deletedIds:[...ids]});showToast(ids.size+" items deleted");logActivity({user:"Admin",action:"deleted",module:"stock",label:`Deleted ${ids.size} stock item${ids.size>1?"s":""}`,targetMod:"stock"});}catch(e){showToast("Delete failed: "+e.message);}setSelectedIds(new Set());setSelectMode(false);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
-  const returnToIndia=async ids=>{if(!ids.size)return;const list=stock.map(s=>ids.has(s.id)?{...s,region:"India",showTag:null,sentAt:null,updatedAt:new Date().toISOString()}:s);setStock(list);try{await saveStockK(list);showToast(`✓ ${ids.size} item${ids.size>1?"s":""} returned to India`);setSelectedIds(new Set());setSelectMode(false);}catch(e){showToast("⚠ Save failed: "+e.message);}}
+  const fmtQtyVal=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)).replace(/\.?0+$/,""):"";};
+  const sumReturnSplits=(entry,key)=>entry.splits.reduce((sum,sp)=>sum+(parseFloat(sp[key])||0),0);
+  const remainingReturnQty=(entry,key)=>Math.max(0,(parseFloat(entry.item[key])||0)-sumReturnSplits(entry,key));
+  const makeReturnSplit=item=>({id:uid(),material:item.material||"",shape:item.shape||"",qty:item.qty||"",unit:item.unit||"pcs",qty2:item.qty2||"",unit2:item.qty2?(item.unit2||"kg"):"pcs",secondaryOn:!!item.qty2,location:item.location||"",notes:""});
+  const openReturnQtyDialog=ids=>{
+    if(!ids.size)return;
+    const cfg=REGION_CFG[stockRegion]||REGION_CFG.India;
+    const entries=stock.filter(s=>ids.has(s.id)).map(s=>({item:s,splits:[makeReturnSplit(s)],markBalanceSold:false,soldRate:"",soldPrice:"",soldCurrency:cfg.currency}));
+    if(!entries.length)return;
+    setReturnQtyDialog({entries});
+  };
+  const addReturnSplit=i=>setReturnQtyDialog(d=>({...d,entries:d.entries.map((en,j)=>j===i?{...en,splits:[...en.splits,{...makeReturnSplit(en.item),shape:"",qty:"",qty2:""}]}:en)}));
+  const removeReturnSplit=(i,id)=>setReturnQtyDialog(d=>({...d,entries:d.entries.map((en,j)=>j===i?{...en,splits:en.splits.length>1?en.splits.filter(sp=>sp.id!==id):en.splits}:en)}));
+  const setReturnSplit=(i,id,key,value)=>setReturnQtyDialog(d=>({...d,entries:d.entries.map((en,j)=>j===i?{...en,splits:en.splits.map(sp=>sp.id===id?{...sp,[key]:value}:sp)}:en)}));
+  const setReturnEntry=(i,key,value)=>setReturnQtyDialog(d=>({...d,entries:d.entries.map((en,j)=>j===i?{...en,[key]:value}:en)}));
+  const confirmReturnQty=async()=>{
+    if(!returnQtyDialog)return;
+    const entries=returnQtyDialog.entries;
+    let workingStock=[...stock];
+    const returnedItems=[];
+    const now=new Date().toISOString();
+    for(const entry of entries){
+      const{item}=entry;
+      const cleanSplits=entry.splits.filter(sp=>(parseFloat(sp.qty)||0)>0||(parseFloat(sp.qty2)||0)>0);
+      const retQty=sumReturnSplits(entry,"qty");
+      const fullQty=parseFloat(item.qty)||0;
+      const retQty2=sumReturnSplits(entry,"qty2");
+      const fullQty2=parseFloat(item.qty2)||0;
+      const hasPrimary=fullQty>0;
+      const hasSecondary=fullQty2>0;
+      if((hasPrimary&&retQty-fullQty>0.0001)||(hasSecondary&&retQty2-fullQty2>0.0001)){showToast("Returned quantity is more than available");return;}
+      if(retQty<=0&&retQty2<=0)continue;
+      const isFullReturn=(!hasPrimary||retQty>=fullQty-0.0001)&&(!hasSecondary||retQty2>=fullQty2-0.0001);
+      if(isFullReturn&&cleanSplits.length===1){
+        // Full qty returning as single destination — update the existing card in place
+        const sp=cleanSplits[0];
+        const returnedItem={
+          ...item,
+          region:"India",
+          showTag:null,showId:null,sentAt:null,
+          material:String(sp.material||item.material||"").trim(),
+          shape:String(sp.shape||item.shape||"").trim(),
+          qty:hasPrimary?fmtQtyVal(sp.qty):item.qty,
+          unit:sp.unit||item.unit||"pcs",
+          qty2:(sp.secondaryOn||sp.qty2)?fmtQtyVal(sp.qty2):"",
+          unit2:sp.unit2||"pcs",
+          location:String(sp.location||item.location||"").trim(),
+          notes:[sp.notes,item.notes].filter(Boolean).join(" · ")||item.notes,
+          returnedFromRegion:item.region||stockRegion,
+          returnedFromShow:item.showTag||"",
+          returnedFromShowId:item.showId||"",
+          returnedAt:today(),
+          updatedAt:now,
+        };
+        workingStock=workingStock.map(s=>s.id===item.id?returnedItem:s);
+        returnedItems.push(returnedItem);
+      }else{
+        // Partial return or multi-destination split — create new India card(s)
+        const splitItems=cleanSplits.map(sp=>({
+          ...item,
+          id:uid(),
+          material:String(sp.material||item.material||"").trim(),
+          shape:String(sp.shape||item.shape||"").trim(),
+          qty:hasPrimary?fmtQtyVal(sp.qty):"",
+          unit:sp.unit||item.unit||"pcs",
+          qty2:(sp.secondaryOn||sp.qty2)?fmtQtyVal(sp.qty2):"",
+          unit2:sp.unit2||"pcs",
+          location:String(sp.location||"").trim(),
+          notes:[sp.notes,item.notes].filter(Boolean).join(" · "),
+          region:"India",
+          showTag:null,showId:null,sentAt:null,
+          returnedFromRegion:item.region||stockRegion,
+          returnedFromShow:item.showTag||"",
+          returnedFromShowId:item.showId||"",
+          returnedFromStockId:item.id,
+          returnedAt:today(),
+          addedDate:today(),
+          createdAt:now,
+          updatedAt:now,
+        }));
+        const remainQty=hasPrimary?remainingReturnQty(entry,"qty"):0;
+        const remainQty2=hasSecondary?remainingReturnQty(entry,"qty2"):0;
+        let remainItem={
+          ...item,
+          qty:hasPrimary?(fmtQtyVal(remainQty)||"0"):item.qty,
+          qty2:hasSecondary?(fmtQtyVal(remainQty2)||"0"):item.qty2,
+          updatedAt:now,
+        };
+        if(entry.markBalanceSold&&(remainQty>0||remainQty2>0)){
+          const soldRate=parseFloat(entry.soldRate||entry.soldPrice)||0;
+          const soldAmount=soldRate*(hasPrimary?remainQty:1);
+          remainItem={...remainItem,qty:hasPrimary?"0":remainItem.qty,qty2:hasSecondary?"0":remainItem.qty2,soldDate:today(),soldRate:soldRate?fmtQtyVal(soldRate):"",soldPrice:soldAmount?fmtQtyVal(soldAmount):"",soldCurrency:entry.soldCurrency||((REGION_CFG[item.region]||REGION_CFG[stockRegion]||REGION_CFG.India).currency),soldFromShow:item.showTag||"",soldFromShowId:item.showId||"",soldQty:hasPrimary?fmtQtyVal(remainQty):"",soldQty2:hasSecondary?fmtQtyVal(remainQty2):"",updatedAt:now};
+        }
+        workingStock=workingStock.map(s=>s.id===item.id?remainItem:s);
+        workingStock=[...splitItems,...workingStock];
+        returnedItems.push(...splitItems);
+      }
+    }
+    if(!returnedItems.length){showToast("No quantity selected");return;}
+    setReturnQtyDialog(null);
+    setStock(workingStock);
+    try{
+      await saveStockK(workingStock);
+      showToast(`✓ ${returnedItems.length} item${returnedItems.length!==1?"s":""} returned to India`);
+      setSelectedIds(new Set());
+      setSelectMode(false);
+      logActivity({user:"Admin",action:"returned",module:"stock",label:`Returned ${returnedItems.length} item${returnedItems.length>1?"s":""} to India from ${stockRegion}`,targetId:returnedItems[0]?.id,targetMod:"stock"});
+    }catch(e){showToast("⚠ Save failed: "+e.message);}
+  };
   const swapQtyBulk=async ids=>{if(!ids.size)return;const list=stock.map(s=>ids.has(s.id)?{...s,qty:s.qty2||"",unit:s.unit2||"pcs",qty2:s.qty||"",unit2:s.unit||"pcs",updatedAt:new Date().toISOString()}:s);setStock(list);try{await saveStockK(list);showToast(ids.size+" items swapped");}catch(e){showToast("Swap failed: "+e.message);};};
   const applyBulkEdit=async(ids,fields)=>{
     if(!ids.size)return;
@@ -4008,8 +4175,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const pfP=fPhoto==="Any"||(fPhoto==="Yes"&&s.photographed)||(fPhoto==="No"&&!s.photographed);
     const platP=fsPlats.size===0||[["Shopify",s.postedShopify],["Wix",s.postedWix],["Etsy",s.postedEtsy],["Ebay",s.postedEbay]].some(([p,v])=>fsPlats.has(p)&&v);
     const vendorP=fsVendors.size===0||fsVendors.has(s.vendor||"");
-    const isSold=(s.qty!=null&&s.qty!==""&&+s.qty===0)&&(!s.qty2||s.qty2===""||+s.qty2===0);
-    const hasQty=(s.qty==null||s.qty===""||+s.qty>0)||(s.qty2!=null&&s.qty2!==""&&+s.qty2>0);
+    const primaryQty=parseFloat(s.qty);
+    const secondaryQty=parseFloat(s.qty2);
+    const hasActualQty=(Number.isFinite(primaryQty)&&primaryQty>0)||(Number.isFinite(secondaryQty)&&secondaryQty>0);
+    const hasBlankQty=(!s.qty||s.qty==="")&&(!s.qty2||s.qty2==="");
+    const isMovementRow=!!(s.showId||s.showTag||s.returnedFromStockId||s.returnedAt||s.soldDate||s.soldFromShowId);
+    const isSold=((s.qty!=null&&s.qty!==""&&+s.qty===0)&&(!s.qty2||s.qty2===""||+s.qty2===0))||(isMovementRow&&!hasActualQty);
+    const hasQty=hasActualQty||(!isMovementRow&&hasBlankQty);
     const qtyP=qtyFilter==="all"||(qtyFilter==="sold"?isSold:hasQty);
     return q&&stone&&shape&&mkt&&typ&&unit&&pfP&&platP&&vendorP&&qtyP;
   }).sort((a,b)=>{
@@ -4063,6 +4235,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
   const activeFilterCount=fsStones.size+fsShapes.size+fsMarkets.size+fsTypes.size+fsUnits.size+(fPhoto!=="Any"?1:0)+fsPlats.size+fsVendors.size;
   const clearAllFilters=()=>{setFsStones(new Set());setFsShapes(new Set());setFsMarkets(new Set());setFsTypes(new Set());setFsUnits(new Set());setFPhoto("Any");setFsPlats(new Set());setFsVendors(new Set());};
   const togSet=(setter,val)=>setter(prev=>{const n=new Set(prev);n.has(val)?n.delete(val):n.add(val);return n;});
+  const isActiveRegionStock=s=>{
+    const primaryQty=parseFloat(s.qty);
+    const secondaryQty=parseFloat(s.qty2);
+    const hasActualQty=(Number.isFinite(primaryQty)&&primaryQty>0)||(Number.isFinite(secondaryQty)&&secondaryQty>0);
+    const hasBlankQty=(!s.qty||s.qty==="")&&(!s.qty2||s.qty2==="");
+    const isMovementRow=!!(s.showId||s.showTag||s.returnedFromStockId||s.returnedAt||s.soldDate||s.soldFromShowId);
+    return hasActualQty||(!isMovementRow&&hasBlankQty);
+  };
 
   const doPush=async(creds,customName,customPrice,itemOverride)=>{
     setShopifyPushing(true);
@@ -4178,6 +4358,93 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 ✈ Confirm Send
               </button>
               <button onClick={()=>setSendQtyDialog(null)} style={{background:"none",border:"none",fontSize:12,color:C.inkFaint,cursor:"pointer",padding:"4px 0"}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {returnQtyDialog&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:14,width:"min(860px,100%)",boxShadow:"0 12px 50px rgba(0,0,0,.35)",overflow:"hidden",display:"flex",flexDirection:"column",maxHeight:"90vh"}}>
+            <div style={{padding:"18px 20px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <div style={{fontWeight:700,fontSize:16,color:C.ink,marginBottom:4}}>🇮🇳 Return quantity to India</div>
+              <div style={{fontSize:13,color:C.inkFaint}}>Split what came back into new India stock rows. The balance can stay in {stockRegion}, or be marked sold from the show.</div>
+            </div>
+            <div style={{padding:"14px 20px",overflowY:"auto",flex:1}}>
+              <datalist id="return-stones">{[...new Set([...stones,...DEFAULT_STONES])].filter(Boolean).sort().map(x=><option key={x} value={x}/>)}</datalist>
+              <datalist id="return-shapes">{[...new Set([...allShapes,...shapes])].filter(Boolean).sort().map(x=><option key={x} value={x}/>)}</datalist>
+              {returnQtyDialog.entries.map((entry,i)=>{
+                const hasQty2=entry.item.qty2!=null&&entry.item.qty2!==""&&+entry.item.qty2>0;
+                const showName=[entry.item.material,entry.item.shape].filter(Boolean).join(" — ")||"Stock item";
+                const retQty=sumReturnSplits(entry,"qty");
+                const retQty2=sumReturnSplits(entry,"qty2");
+                const remQty=remainingReturnQty(entry,"qty");
+                const remQty2=remainingReturnQty(entry,"qty2");
+                return(
+                <div key={entry.item.id} style={{padding:"12px 0",borderBottom:i<returnQtyDialog.entries.length-1?`1px solid ${C.border}`:"none"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                    {stockCover(entry.item)?<img src={stockCover(entry.item)} alt="" style={{width:48,height:48,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>💎</div>}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{showName}{entry.item.location?` · #${entry.item.location}`:""}</div>
+                      <div style={{fontSize:11,color:C.inkFaint}}>
+                        In {entry.item.showTag||entry.item.region||stockRegion}: {entry.item.qty||0} {entry.item.unit||"pcs"}{hasQty2?` / ${entry.item.qty2} ${entry.item.unit2||"kg"}`:""}
+                      </div>
+                    </div>
+                    <div style={{textAlign:"right",fontSize:11,color:C.inkFaint,flexShrink:0}}>
+                      <div><b style={{color:C.green}}>Returning:</b> {fmtQtyVal(retQty)||0} {entry.item.unit||"pcs"}{hasQty2?` / ${fmtQtyVal(retQty2)||0} ${entry.item.unit2||"kg"}`:""}</div>
+                      <div><b style={{color:C.amber}}>Balance:</b> {fmtQtyVal(remQty)||0} {entry.item.unit||"pcs"}{hasQty2?` / ${fmtQtyVal(remQty2)||0} ${entry.item.unit2||"kg"}`:""}</div>
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gap:8}}>
+                    {entry.splits.map(sp=>(
+                      <div key={sp.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr .75fr .75fr .9fr 1fr auto",gap:7,alignItems:"end",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px"}} onClick={e=>e.stopPropagation()}>
+                        <Field label="Stone"><input list="return-stones" value={sp.material} onChange={e=>setReturnSplit(i,sp.id,"material",e.target.value)} style={{...FI,fontSize:11,padding:"5px 7px"}}/></Field>
+                        <Field label="Shape"><input list="return-shapes" value={sp.shape} onChange={e=>setReturnSplit(i,sp.id,"shape",e.target.value)} placeholder="Palm / Heart / Shiva" style={{...FI,fontSize:11,padding:"5px 7px"}}/></Field>
+                        <Field label="Qty"><input type="number" min="0" step="0.01" value={sp.qty} onChange={e=>setReturnSplit(i,sp.id,"qty",e.target.value)} style={{...FI,fontSize:11,padding:"5px 7px"}}/></Field>
+                        <Field label="Unit"><select value={sp.unit} onChange={e=>setReturnSplit(i,sp.id,"unit",e.target.value)} style={{...FI,fontSize:11,padding:"5px 7px"}}>{["pcs","kg","gm","ct","lot"].map(u=><option key={u}>{u}</option>)}</select></Field>
+                        <Field label="Box"><input value={sp.location} onChange={e=>setReturnSplit(i,sp.id,"location",e.target.value)} placeholder="Box" style={{...FI,fontSize:11,padding:"5px 7px"}}/></Field>
+                        <Field label="Notes"><input value={sp.notes} onChange={e=>setReturnSplit(i,sp.id,"notes",e.target.value)} placeholder="Optional" style={{...FI,fontSize:11,padding:"5px 7px"}}/></Field>
+                        <button onClick={()=>removeReturnSplit(i,sp.id)} style={{height:28,width:28,border:`1px solid ${C.border}`,background:C.surface,borderRadius:6,cursor:"pointer",color:C.red,fontWeight:700}}>×</button>
+                        {sp.secondaryOn?(
+                          <>
+                            <div style={{fontSize:10,color:C.inkFaint,alignSelf:"center"}}>Secondary</div>
+                            <div/>
+                            <Field label="Qty"><input type="number" min="0" step="1" value={sp.qty2} onChange={e=>setReturnSplit(i,sp.id,"qty2",e.target.value)} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="pcs"/></Field>
+                            <Field label="Unit"><select value={sp.unit2||"pcs"} onChange={e=>setReturnSplit(i,sp.id,"unit2",e.target.value)} style={{...FI,fontSize:11,padding:"5px 7px"}}>{["pcs","kg","gm","ct","lot"].map(u=><option key={u}>{u}</option>)}</select></Field>
+                            <button onClick={()=>setReturnQtyDialog(d=>({...d,entries:d.entries.map((en,j)=>j===i?{...en,splits:en.splits.map(x=>x.id===sp.id?{...x,secondaryOn:false,qty2:"",unit2:"pcs"}:x)}:en)}))} style={{height:28,border:`1px solid ${C.border}`,background:C.surface,borderRadius:6,cursor:"pointer",color:C.red,fontSize:11,fontWeight:700}}>Remove secondary</button>
+                          </>
+                        ):(
+                          <button onClick={()=>setReturnQtyDialog(d=>({...d,entries:d.entries.map((en,j)=>j===i?{...en,splits:en.splits.map(x=>x.id===sp.id?{...x,secondaryOn:true,unit2:x.unit2||"pcs"}:x)}:en)}))} style={{gridColumn:mob?undefined:"1 / 3",border:`1px dashed ${C.border}`,background:"rgba(255,255,255,.65)",borderRadius:7,padding:"6px 9px",fontSize:11,color:C.inkMid,fontWeight:700,cursor:"pointer"}}>+ Add secondary qty</button>
+                        )}
+                      </div>
+                    ))}
+                    <button onClick={()=>addReturnSplit(i)} style={{border:`1px dashed ${C.border}`,background:"rgba(255,255,255,.55)",borderRadius:8,padding:"8px 10px",fontSize:12,color:C.green,fontWeight:700,cursor:"pointer"}}>+ Add returned shape</button>
+                    <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.inkMid,cursor:"pointer",background:entry.markBalanceSold?C.amberBg:"transparent",border:`1px solid ${entry.markBalanceSold?"#F0D890":C.border}`,borderRadius:8,padding:"9px 10px"}}>
+                      <input type="checkbox" checked={!!entry.markBalanceSold} onChange={e=>setReturnEntry(i,"markBalanceSold",e.target.checked)}/>
+                      Mark remaining balance as sold from {entry.item.showTag||stockRegion}
+                    </label>
+                    {entry.markBalanceSold&&(
+                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"110px 1fr 1fr",gap:8}}>
+                        <Field label="Currency"><select value={entry.soldCurrency} onChange={e=>setReturnEntry(i,"soldCurrency",e.target.value)} style={{...FI,fontSize:11,padding:"5px 7px"}}>{["JPY","INR","USD","EUR","GBP"].map(c=><option key={c}>{c}</option>)}</select></Field>
+                        <Field label={`Rate / ${entry.item.unit||"unit"}`}><input type="number" value={entry.soldRate||entry.soldPrice||""} onChange={e=>setReturnEntry(i,"soldRate",e.target.value)} placeholder="Rate" style={{...FI,fontSize:11,padding:"5px 7px"}}/></Field>
+                        <Field label="Amount sold">
+                          <div style={{...FI,fontSize:11,padding:"6px 8px",background:C.card,color:C.green,fontWeight:700}}>
+                            {entry.soldCurrency||""} {((+entry.soldRate||+entry.soldPrice||0)*(+remQty||1)).toLocaleString("en-IN",{maximumFractionDigits:2})}
+                          </div>
+                        </Field>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                );
+              })}
+            </div>
+            <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:8,flexShrink:0}}>
+              <button onClick={confirmReturnQty} style={{background:"#1A6A1A",border:"none",borderRadius:8,padding:"11px 0",fontSize:13,fontWeight:700,color:"#fff",cursor:"pointer"}}>
+                🇮🇳 Confirm Return to India
+              </button>
+              <button onClick={()=>setReturnQtyDialog(null)} style={{background:"none",border:"none",fontSize:12,color:C.inkFaint,cursor:"pointer",padding:"4px 0"}}>
                 Cancel
               </button>
             </div>
@@ -4488,7 +4755,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div>
               {/* ── Region Switcher ── */}
               <div style={{display:"flex",gap:6,marginBottom:14,padding:"3px",background:C.card,borderRadius:10,border:`1px solid ${C.border}`,width:"fit-content"}}>
-                {Object.entries(REGION_CFG).map(([r,cfg])=>{const isActive=stockRegion===r;const cnt=stock.filter(s=>(s.region||"India")===r).length;return(<button key={r} onClick={()=>setStockRegion(r)} style={{display:"flex",alignItems:"center",gap:5,padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:isActive?600:400,fontSize:12,background:isActive?cfg.bg:"transparent",color:isActive?cfg.color:C.inkFaint,boxShadow:isActive?`0 0 0 1.5px ${cfg.border}`:"none",transition:"all .18s",position:"relative",whiteSpace:"nowrap"}}>
+                {Object.entries(REGION_CFG).map(([r,cfg])=>{const isActive=stockRegion===r;const cnt=stock.filter(s=>(s.region||"India")===r&&isActiveRegionStock(s)).length;return(<button key={r} onClick={()=>setStockRegion(r)} style={{display:"flex",alignItems:"center",gap:5,padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontWeight:isActive?600:400,fontSize:12,background:isActive?cfg.bg:"transparent",color:isActive?cfg.color:C.inkFaint,boxShadow:isActive?`0 0 0 1.5px ${cfg.border}`:"none",transition:"all .18s",position:"relative",whiteSpace:"nowrap"}}>
                   <span style={{fontSize:15}}>{cfg.flag}</span>{cfg.label}{cnt>0&&<span style={{fontSize:10,background:isActive?cfg.color:"#ccc",color:"#fff",borderRadius:10,padding:"0px 5px",fontWeight:700,minWidth:16,textAlign:"center"}}>{cnt}</span>}
                 </button>);})}
               </div>
@@ -4638,7 +4905,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined}} onClick={()=>setSelectedIds(new Set(filtered.map(s=>s.id)))}>All ({filtered.length})</button>
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined}} onClick={()=>setSelectedIds(new Set())}>None</button>
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#6B48CC",borderColor:"#6B48CC",background:"#F0EBFF"}} disabled={selectedIds.size===0} onClick={()=>{setSendToShowOpen(v=>!v);setSendToShowId("");}}>✈ Send to Show</button>
-                  <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#1A6A1A",borderColor:"#1A6A1A",background:"#EDF7ED"}} disabled={selectedIds.size===0} onClick={()=>{if(window.confirm(`Return ${selectedIds.size} item${selectedIds.size>1?"s":""} to India stock?`))returnToIndia(selectedIds);}}>🇮🇳 Return to India</button>
+                  {stockRegion!=="India"&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#1A6A1A",borderColor:"#1A6A1A",background:"#EDF7ED"}} disabled={selectedIds.size===0} onClick={()=>openReturnQtyDialog(selectedIds)}>🇮🇳 Return to India</button>}
                   {!mob&&<><button className="bs" style={{fontSize:12}} disabled={selectedIds.size===0} onClick={()=>swapQtyBulk(selectedIds)}>⇄ Swap Qty</button>
                   <button className="bs" style={{fontSize:12,color:C.green,borderColor:C.green,background:C.greenBg}} disabled={selectedIds.size===0} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button>
                   <button className="bs" style={{fontSize:12,color:C.blue,borderColor:C.blue,background:C.blueBg}} disabled={selectedIds.size===0} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedWix:null,postedEbay:null});}}>✏ Edit</button></>}
@@ -4682,6 +4949,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     const ageCol=isFutureDate?C.amber:age>180?C.red:age>60?C.amber:C.green;
                     const qty=+s.qty||0;
                     const listed=s.postedShopify||s.postedWix||s.postedEtsy||s.postedEbay;
+                    const cover=stockCover(s);
                     return(
                     <div key={s.id}
                       onClick={()=>{if(selectMode){setSelectedIds(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;});}else setSelected(s);}}
@@ -4691,9 +4959,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       onMouseEnter={e=>{if(!isSel){e.currentTarget.style.borderColor=C.goldBright;e.currentTarget.style.boxShadow="0 8px 24px rgba(26,19,8,.12)";e.currentTarget.style.transform="translateY(-3px)";}}}
                       onMouseLeave={e=>{e.currentTarget.style.borderColor=isSel?C.amber:C.border;e.currentTarget.style.boxShadow="0 2px 8px rgba(26,19,8,.06)";e.currentTarget.style.transform="none";}}>
                       {/* Photo */}
-                      <div style={{position:"relative",height:stockCover(s)?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
-                        {stockCover(s)
-                          ?<img src={stockCover(s)} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>
+                      <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
+                        {cover
+                          ?<img src={cover} loading="eager" decoding="async" fetchPriority={idx<24?"high":"auto"} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>
                           :<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:4}}>
                             <div style={{fontSize:mob?22:28,opacity:.12}}>💎</div>
                             {s.grade&&<div style={{fontSize:9,color:C.inkFaint,fontWeight:700,letterSpacing:.5}}>{s.grade}</div>}
@@ -7595,7 +7863,7 @@ function InvoicesApp({onHome,startDraft}){
     const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());
     return hit?hit.hsn||"71031029":"71031029";
   },[customsDescs]);
-  useEffect(()=>{Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),loadK(KEYS.stock),loadK(KEYS.purchases),loadK("ng-fin-txns-v1"),loadK("ng-customs-descs-v1")]).then(([i,b,a,s,p,ft,cd])=>{setInvoices(i||[]);setBuyers(b||[]);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const fyTag=String(y1).slice(-2);const extractNum=n=>{const m=(n||"").match(/^NG-0*(\d+)[-\/]/);return m?+m[1]:0;};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&(x.invNo||"").includes(fyTag)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`NG-${String(maxNum+1).padStart(2,"0")}/${fy}`;setDraft({...startDraft,invNo:nextNo});setView("form");}});},[]);
+  useEffect(()=>{Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),loadK(KEYS.stock),loadK(KEYS.purchases),loadK("ng-fin-txns-v1"),loadK("ng-customs-descs-v1")]).then(([i,b,a,s,p,ft,cd])=>{setInvoices(i||[]);setBuyers(b||[]);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(/^NG-0*(\d+)[-\/]/);return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`NG-${String(maxNum+1).padStart(2,"0")}/${fy}`;setDraft({...startDraft,invNo:nextNo});setView("form");}});},[]);
 
   const nextInvNo=useCallback(()=>{
     const y1=new Date().getFullYear(), y2=y1+1;
@@ -7605,9 +7873,9 @@ function InvoicesApp({onHome,startDraft}){
       const m=(invNo||"").match(/^NG-0*(\d+)[-\/]/);
       return m?+m[1]:0;
     };
-    // Only count invoices from current FY (contains current 2-digit year)
-    const fyTag=String(y1).slice(-2);
-    const maxNo=invoices.filter(i=>i.type!=="proforma"&&(i.invNo||"").includes(fyTag)).reduce((mx,inv)=>Math.max(mx,extractNum(inv.invNo)),0);
+    // Only count invoices from current FY — match /26-27, -2026/xx, or /2026-xx formats
+    const isCurrFY=n=>{const s=n||"";return s.includes(`/${yr}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};
+    const maxNo=invoices.filter(i=>i.type!=="proforma"&&isCurrFY(i.invNo)).reduce((mx,inv)=>Math.max(mx,extractNum(inv.invNo)),0);
     return `NG-${String(maxNo+1).padStart(2,"0")}/${yr}`;
   },[invoices]);
 
@@ -9265,10 +9533,11 @@ function ShowsApp({onHome}){
   const removeShowItem=(sid,iid)=>save(shows.map(s=>s.id!==sid?s:{...s,showStock:(s.showStock||[]).filter(i=>i.id!==iid)}));
   // Show stats handlers
   const addDailySale=(sid,sale)=>save(shows.map(s=>s.id!==sid?s:{...s,dailySales:[...(s.dailySales||[]),sale]}));
+  const updateDailySale=(sid,saleId,patch)=>save(shows.map(s=>s.id!==sid?s:{...s,dailySales:(s.dailySales||[]).map(x=>x.id!==saleId?x:{...x,...patch,updatedAt:new Date().toISOString()})}));
   const delDailySale=(sid,saleId)=>save(shows.map(s=>s.id!==sid?s:{...s,dailySales:(s.dailySales||[]).filter(x=>x.id!==saleId)}));
   const addShowExpense=(sid,expense)=>save(shows.map(s=>s.id!==sid?s:{...s,showExpenses:[...(s.showExpenses||[]),expense]}));
   const delShowExpense=(sid,expId)=>save(shows.map(s=>s.id!==sid?s:{...s,showExpenses:(s.showExpenses||[]).filter(x=>x.id!==expId)}));
-  const addShowPhoto=(sid,file)=>{const pid=uid();const r=new FileReader();r.onload=async e=>{const dataUrl=e.target.result;let photo={id:pid,data:dataUrl,caption:"",addedAt:today()};try{photo={id:pid,url:await supabaseUpload(`shows/${sid}/${pid}.${(file.name||"").split(".").pop().toLowerCase()||"jpg"}`,file),caption:"",addedAt:today()};}catch{}save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:[...(s.showPhotos||[]),photo]}));};r.readAsDataURL(file);};
+  const addShowPhoto=(sid,file)=>{const pid=uid();const mediaType=(file.type||"").startsWith("video/")?"video":"image";const r=new FileReader();r.onload=async e=>{const dataUrl=e.target.result;let photo={id:pid,data:dataUrl,mediaType,name:file.name||"",caption:"",addedAt:today()};try{photo={id:pid,url:await supabaseUpload(`shows/${sid}/${pid}.${(file.name||"").split(".").pop().toLowerCase()||(mediaType==="video"?"mp4":"jpg")}`,file),mediaType,name:file.name||"",caption:"",addedAt:today()};}catch{}save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:[...(s.showPhotos||[]),photo]}));};r.readAsDataURL(file);};
   const delShowPhoto=(sid,pid)=>save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:(s.showPhotos||[]).filter(p=>p.id!==pid)}));
   const updateShowPhotoCaption=(sid,pid,caption)=>save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:(s.showPhotos||[]).map(p=>p.id!==pid?p:{...p,caption})}));
   const addJournalEntry=(sid,entry)=>save(shows.map(s=>s.id!==sid?s:{...s,journalEntries:[...(s.journalEntries||[]),entry]}));
@@ -9294,7 +9563,7 @@ function ShowsApp({onHome}){
     stock,
     onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
     onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
-    onAddDailySale:addDailySale,onDelDailySale:delDailySale,
+    onAddDailySale:addDailySale,onUpdateDailySale:updateDailySale,onDelDailySale:delDailySale,
     onAddShowExpense:addShowExpense,onDelShowExpense:delShowExpense,
     onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
     onUpdateShowPhotoCaption:updateShowPhotoCaption,
@@ -9355,7 +9624,7 @@ function ShowsApp({onHome}){
 
 // ShowCard defined OUTSIDE ShowsApp so React sees a stable component type across re-renders
 // (prevents focus-loss on every keystroke in checklist inputs)
-function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry}){
+function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -9385,33 +9654,42 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [expDate,setExpDate]=useState(todayStr);
   const [expNotes,setExpNotes]=useState("");
   const [journalText,setJournalText]=useState("");
+  const fmtAmtIN=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return Number.isFinite(n)?n.toLocaleString("en-IN",{maximumFractionDigits:2}):"";};
+  const rawAmt=v=>String(v||"").replace(/,/g,"").replace(/[^\d.]/g,"");
 
   const showStock=show.showStock||[];
   const ssUnsold=showStock.filter(i=>!i.sold);
   const ssSold=showStock.filter(i=>i.sold);
   const ssTotalCost=showStock.reduce((s,i)=>s+(+i.costPrice||0)*(+i.qty||1),0);
-  const bagItems=show.bagItems||[];
-  const bagOut=bagItems.filter(b=>b.status==="out").length;
-  const bagReturned=bagItems.filter(b=>b.status==="returned").length;
-  const bagSold=bagItems.filter(b=>b.status==="sold").length;
-  const bagFiltered=bagSearch.trim()
-    ?stock.filter(s=>{const q=bagSearch.toLowerCase();return(s.material||"").toLowerCase().includes(q)||(s.shape||"").toLowerCase().includes(q)||(s.location||"").toLowerCase().includes(q)||(s.notes||"").toLowerCase().includes(q);}).slice(0,8)
-    :[];
-  const alreadyAdded=new Set(bagItems.map(b=>b.stockId));
+  const hasStockQty=s=>(parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0;
+  const showName=(show.name||"").toLowerCase();
+  const showFlowItems=stock.filter(s=>s.showId===show.id||s.returnedFromShowId===show.id||(s.showTag||"").toLowerCase()===showName||(s.returnedFromShow||"").toLowerCase()===showName);
+  const showLiveItems=showFlowItems.filter(s=>s.showId===show.id||(s.showTag||"").toLowerCase()===showName);
+  const showReturnedItems=showFlowItems.filter(s=>s.returnedFromShowId===show.id||(s.returnedFromShow||"").toLowerCase()===showName);
+  const showStillThere=showLiveItems.filter(s=>(s.region||"India")!=="India"&&hasStockQty(s)&&!s.soldDate);
+  const showSoldItems=showLiveItems.filter(s=>s.soldDate||s.soldPrice||s.soldFromShowId===show.id||(s.soldFromShow||"").toLowerCase()===showName);
+  const showSentItems=showLiveItems.length?showLiveItems:showFlowItems.filter(s=>s.sentAt||s.returnedFromShow||s.returnedFromShowId);
+  const fmtFlowNum=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)).replace(/\.?0+$/,""):"";};
+  const flowQtyText=s=>[s.qty&&s.qty!=="0"?`${s.qty} ${s.unit||"pcs"}`:s.soldQty?`${s.soldQty} ${s.unit||"pcs"}`:"",s.qty2&&s.qty2!=="0"?`${s.qty2} ${s.unit2||"kg"}`:s.soldQty2?`${s.soldQty2} ${s.unit2||"kg"}`:""].filter(Boolean).join(" / ")||"—";
+  const flowKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+s.qty||0):0)+((s.unit2||"")==="kg"?(+s.qty2||0):0),0);
+  const flowSentKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+(s.showSentQty||s.qty)||0):0)+((s.unit2||"")==="kg"?(+(s.showSentQty2||s.qty2)||0):0),0);
+  const flowReturnedKg=flowKgTotal(showReturnedItems);
+  const flowStillKg=flowKgTotal(showStillThere);
+  const flowSentKg=flowSentKgTotal(showSentItems);
   const dailySales=show.dailySales||[];
   const showExpenses=show.showExpenses||[];
   const showPhotos=show.showPhotos||[];
   const journalEntries=show.journalEntries||[];
 
   const sumByCur=(arr,amtKey,curKey)=>{const m={};arr.forEach(x=>{const c=x[curKey]||"USD";m[c]=(m[c]||0)+(+x[amtKey]||0);});return m;};
-  const bagSoldRevByCur=bagItems.filter(b=>b.status==="sold").reduce((m,b)=>{const c=b.currency||"USD";m[c]=(m[c]||0)+(+b.sellPrice||0);return m;},{});
   const ssSoldRevByCur=ssSold.reduce((m,i)=>{const c=i.soldCurrency||"USD";m[c]=(m[c]||0)+(+i.soldPrice||0);return m;},{});
+  const flowSoldRevByCur=showSoldItems.reduce((m,i)=>{const c=i.soldCurrency||"USD";m[c]=(m[c]||0)+(+i.soldPrice||0);return m;},{});
   const dailySalesRevByCur=sumByCur(dailySales,"amount","currency");
   const allRevByCur={...dailySalesRevByCur};
-  [bagSoldRevByCur,ssSoldRevByCur].forEach(src2=>Object.entries(src2).forEach(([c,v])=>{allRevByCur[c]=(allRevByCur[c]||0)+v;}));
+  [ssSoldRevByCur,flowSoldRevByCur].forEach(src2=>Object.entries(src2).forEach(([c,v])=>{allRevByCur[c]=(allRevByCur[c]||0)+v;}));
   const expByCur=sumByCur(showExpenses,"amount","currency");
-  const totalItemsSold=bagSold+ssSold.length;
-  const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${v.toLocaleString()}`).join(" · ")||"—";
+  const totalItemsSold=ssSold.length+showSoldItems.length;
+  const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`).join(" · ")||"—";
   const TABS=[{id:"prep",label:"📋 Prep"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}];
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
   const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
@@ -9584,59 +9862,54 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
           {/* ── STOCK ── */}
           {showTab==="stock"&&(
             <div style={{padding:"14px 16px"}}>
-              <div style={{marginBottom:16}}>
-                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>🎒 {t("Bags")} {bagItems.length>0&&`(${bagItems.length})`}</span>
-                  {bagItems.length>0&&<span style={{fontSize:9,color:C.inkFaint}}>{bagOut>0&&`${bagOut} out`}{bagReturned>0&&` · ${bagReturned} back`}{bagSold>0&&` · ${bagSold} sold`}</span>}
+              <div style={{marginBottom:18}}>
+                <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:8}}>Show Summary</div>
+                <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8,marginBottom:12}}>
+                  {[
+                    ["Sent",showSentItems.length,flowSentKg?`${fmtFlowNum(flowSentKg)} kg`:"",C.blue,C.blueBg],
+                    ["Sold",showSoldItems.length,"",C.amber,C.amberBg],
+                    ["Returned",showReturnedItems.length,flowReturnedKg?`${fmtFlowNum(flowReturnedKg)} kg`:"",C.green,C.greenBg],
+                    ["Still there",showStillThere.length,flowStillKg?`${fmtFlowNum(flowStillKg)} kg`:"",C.red,C.redBg],
+                  ].map(([label,count,sub,color,bg])=>(
+                    <div key={label} style={{background:bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
+                      <div style={{fontSize:9,fontWeight:800,color,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
+                      <div style={{fontSize:20,fontWeight:750,color:C.ink,lineHeight:1}}>{count}</div>
+                      <div style={{fontSize:10,color:C.inkFaint,marginTop:3,minHeight:12}}>{sub}</div>
+                    </div>
+                  ))}
                 </div>
-                <div style={{position:"relative",marginBottom:8}} onClick={e=>e.stopPropagation()}>
-                  <input value={bagSearch} onChange={e=>setBagSearch(e.target.value)} placeholder="Search stock to add…" style={{...FI,width:"100%",boxSizing:"border-box",fontSize:11,padding:"5px 8px"}}/>
-                  {bagFiltered.length>0&&(
-                    <div style={{position:"absolute",top:"100%",left:0,right:0,background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,zIndex:50,boxShadow:"0 4px 12px rgba(0,0,0,.12)",maxHeight:180,overflowY:"auto"}}>
-                      {bagFiltered.map(s=>(
-                        <div key={s.id} onClick={()=>{if(!alreadyAdded.has(s.id)){const lbl=(s.material||"")+(s.shape?" · "+s.shape:"")+(s.qty?" · "+s.qty+(s.unit||""):"");onAddBagItem(show.id,{id:uid(),stockId:s.id,label:lbl,costPrice:s.costPrice||"",location:s.location||"",status:"out",addedAt:todayStr,sellPrice:"",currency:"USD",notes:""});setBagSearch("");}}}
-                          style={{padding:"7px 10px",borderBottom:`1px solid ${C.border}`,cursor:alreadyAdded.has(s.id)?"default":"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",opacity:alreadyAdded.has(s.id)?.5:1,background:alreadyAdded.has(s.id)?C.card:""}}>
-                          <div>
-                            <div style={{fontSize:11,fontWeight:600,color:C.ink}}>{s.material||"?"}{s.shape?` · ${s.shape}`:""}</div>
-                            <div style={{fontSize:9,color:C.inkFaint}}>{s.location||"—"}{s.qty?` · ${s.qty}${s.unit||""}`:""}</div>
-                          </div>
-                          {alreadyAdded.has(s.id)?<span style={{fontSize:9,color:C.inkFaint}}>added</span>:<span style={{fontSize:10,color:C.green}}>+</span>}
+                {showFlowItems.length===0?(
+                  <div style={{fontSize:11,color:C.inkFaint,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>No linked stock movements yet. Send stock to this show from the Stock module and it will appear here automatically.</div>
+                ):(
+                  <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr 1fr",gap:10}}>
+                    {[
+                      ["Still at show",showStillThere,C.red,"Still"],
+                      ["Returned to India",showReturnedItems,C.green,"Returned"],
+                      ["Sold from show",showSoldItems,C.amber,"Sold"],
+                    ].map(([title,items,color,badge])=>(
+                      <div key={title} style={{border:`1px solid ${C.border}`,borderRadius:8,background:"rgba(255,255,255,.76)",overflow:"hidden"}}>
+                        <div style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>{title}</span>
+                          <span style={{fontSize:10,fontWeight:800,color}}>{items.length}</span>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {bagItems.length===0&&<div style={{fontSize:11,color:C.inkFaint}}>No items added yet</div>}
-                {bagItems.map(b=>(
-                  <div key={b.id} style={{background:b.status==="returned"?C.greenBg:b.status==="sold"?C.amberBg:C.card,border:`1px solid ${b.status==="returned"?"#B8E8C8":b.status==="sold"?"#F0D890":C.border}`,borderRadius:6,padding:"7px 9px",marginBottom:6}} onClick={e=>e.stopPropagation()}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:11,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.label}</div>
-                        <div style={{fontSize:9,color:C.inkFaint}}>{b.location||""}{b.costPrice?` · Cost: ${b.costPrice}`:""}</div>
-                        {b.status==="sold"&&b.sellPrice&&<div style={{fontSize:9,color:C.amber,fontWeight:600}}>Sold: {b.currency||"USD"} {b.sellPrice}</div>}
+                        <div style={{padding:8,display:"grid",gap:6,maxHeight:240,overflowY:"auto"}}>
+                          {items.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 2px"}}>None</div>}
+                          {items.map(item=>(
+                            <div key={item.id} style={{display:"flex",gap:8,alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 8px"}}>
+                              {stockCover(item)?<img src={stockCover(item)} alt="" style={{width:36,height:36,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:36,height:36,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}</div>
+                                <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}</div>
+                                {(item.returnedAt||item.soldDate||item.sentAt)&&<div style={{fontSize:9,color:C.inkFaint,marginTop:1}}>{item.returnedAt?`Returned ${fmtDate(item.returnedAt)}`:item.soldDate?`Sold ${fmtDate(item.soldDate)}`:`Sent ${fmtDate(item.sentAt)}`}</div>}
+                              </div>
+                              <span style={{fontSize:9,fontWeight:800,color,background:"#fff",border:`1px solid ${C.border}`,borderRadius:6,padding:"2px 6px",flexShrink:0}}>{badge}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div style={{display:"flex",gap:4,flexShrink:0,alignItems:"center"}}>
-                        {b.status==="out"&&<>
-                          <button onClick={()=>onUpdateBagItem(show.id,b.id,{status:"returned"})} style={{background:C.green,color:"#fff",border:"none",borderRadius:4,padding:"2px 7px",fontSize:9,cursor:"pointer",fontWeight:600}}>↩ Back</button>
-                          <button onClick={()=>{setBagSellId(b.id===bagSellId?null:b.id);setBagSellPrice(b.sellPrice||"");}} style={{background:C.gold,color:"#fff",border:"none",borderRadius:4,padding:"2px 7px",fontSize:9,cursor:"pointer",fontWeight:600}}>💰 Sold</button>
-                        </>}
-                        {b.status==="returned"&&<span style={{fontSize:9,color:C.green,fontWeight:700}}>✓ Back</span>}
-                        {b.status==="sold"&&<span style={{fontSize:9,color:C.amber,fontWeight:700}}>💰 Sold</span>}
-                        <button onClick={()=>onRemoveBagItem(show.id,b.id)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0}}>&times;</button>
-                      </div>
-                    </div>
-                    {bagSellId===b.id&&b.status==="out"&&(
-                      <div style={{display:"flex",gap:5,marginTop:6,alignItems:"center"}}>
-                        <select value={b.currency||"USD"} onChange={e=>onUpdateBagItem(show.id,b.id,{currency:e.target.value})} style={{...FI,fontSize:10,padding:"3px 5px",width:60}}>
-                          {SHOW_CURS.map(c=><option key={c}>{c}</option>)}
-                        </select>
-                        <input value={bagSellPrice} onChange={e=>setBagSellPrice(e.target.value)} placeholder="Sell price" style={{...FI,fontSize:10,flex:1}} autoFocus/>
-                        <button onClick={()=>{onUpdateBagItem(show.id,b.id,{status:"sold",sellPrice:bagSellPrice});setBagSellId(null);setBagSellPrice("");}} style={{background:C.gold,color:"#fff",border:"none",borderRadius:4,padding:"3px 9px",fontSize:10,cursor:"pointer",fontWeight:600}}>✓</button>
-                        <button onClick={()=>{setBagSellId(null);setBagSellPrice("");}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:"pointer"}}>✕</button>
-                      </div>
-                    )}
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
               <div>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -9692,22 +9965,19 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Log Sale</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:7}}>
                   <Field label="Date"><input type="date" value={saleDate} onChange={e=>setSaleDate(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
-                  <Field label="Amount"><input type="number" value={saleAmt} onChange={e=>setSaleAmt(e.target.value)} placeholder="0" style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
+                  <Field label="Amount"><input value={saleAmt} onChange={e=>setSaleAmt(fmtAmtIN(e.target.value)||rawAmt(e.target.value))} placeholder="0" inputMode="decimal" style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
                   <Field label="Currency"><select value={saleCur} onChange={e=>setSaleCur(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px",cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select></Field>
                 </div>
                 <Field label="Notes"><textarea value={saleNotes} onChange={e=>setSaleNotes(e.target.value)} rows={2} placeholder="Buyer, item, details…" style={{...FI,fontSize:11,resize:"none",marginBottom:8}}/></Field>
-                <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();if(!saleAmt)return;onAddDailySale(show.id,{id:uid(),date:saleDate,amount:saleAmt,currency:saleCur,notes:saleNotes,createdAt:new Date().toISOString()});setSaleAmt("");setSaleNotes("");}}>+ Log Sale</button>
+                <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();const amt=rawAmt(saleAmt);if(!amt)return;onAddDailySale(show.id,{id:uid(),date:saleDate,amount:amt,currency:saleCur,notes:saleNotes,createdAt:new Date().toISOString()});setSaleAmt("");setSaleNotes("");}}>+ Log Sale</button>
               </div>
               {dailySales.length===0&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"12px 0"}}>No sales logged yet</div>}
               {[...dailySales].sort((a,b)=>b.date.localeCompare(a.date)).map(sale=>(
-                <div key={sale.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"8px 10px",background:C.card,borderRadius:6,marginBottom:6,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{display:"flex",alignItems:"baseline",gap:6}}>
-                      <span style={{fontSize:13,fontWeight:700,color:C.green}}>{sale.currency} {(+sale.amount).toLocaleString()}</span>
-                      <span style={{fontSize:10,color:C.inkFaint}}>{fmtDate(sale.date)}</span>
-                    </div>
-                    {sale.notes&&<div style={{fontSize:11,color:C.inkMid,marginTop:2,whiteSpace:"pre-wrap"}}>{sale.notes}</div>}
-                  </div>
+                <div key={sale.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"120px 1fr 90px 2fr 20px",gap:7,alignItems:"start",padding:"8px 10px",background:C.card,borderRadius:6,marginBottom:6,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+                  <input type="date" value={sale.date||todayStr} onChange={e=>onUpdateDailySale(show.id,sale.id,{date:e.target.value})} style={{...FI,fontSize:11,padding:"4px 6px"}}/>
+                  <input value={fmtAmtIN(sale.amount)} onChange={e=>onUpdateDailySale(show.id,sale.id,{amount:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,fontWeight:700,color:C.green,padding:"4px 6px"}}/>
+                  <select value={sale.currency||"USD"} onChange={e=>onUpdateDailySale(show.id,sale.id,{currency:e.target.value})} style={{...FI,fontSize:11,padding:"4px 6px",cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select>
+                  <textarea value={sale.notes||""} onChange={e=>onUpdateDailySale(show.id,sale.id,{notes:e.target.value})} rows={2} placeholder="Buyer, item, details..." style={{...FI,fontSize:11,resize:"vertical",padding:"4px 6px",minHeight:30}}/>
                   <button onClick={e=>{e.stopPropagation();onDelDailySale(show.id,sale.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0,flexShrink:0}}>&times;</button>
                 </div>
               ))}
@@ -9716,7 +9986,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>{t("Daily Sales Total")}</div>
                   {Object.entries(sumByCur(dailySales,"amount","currency")).map(([c,v])=>(
                     <div key={c} style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,color:C.green,padding:"2px 0"}}>
-                      <span>{c}</span><span>{v.toLocaleString()}</span>
+                      <span>{c}</span><span>{(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
                     </div>
                   ))}
                 </div>
@@ -9732,18 +10002,18 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:7}}>
                   <Field label="Category"><select value={expCat} onChange={e=>setExpCat(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px",cursor:"pointer"}}>{EXP_CATS.map(c=><option key={c}>{c}</option>)}</select></Field>
                   <Field label="Date"><input type="date" value={expDate} onChange={e=>setExpDate(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
-                  <Field label="Amount"><input type="number" value={expAmt} onChange={e=>setExpAmt(e.target.value)} placeholder="0" style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
+                  <Field label="Amount"><input value={expAmt} onChange={e=>setExpAmt(fmtAmtIN(e.target.value)||rawAmt(e.target.value))} placeholder="0" inputMode="decimal" style={{...FI,fontSize:11,padding:"4px 6px"}}/></Field>
                   <Field label="Currency"><select value={expCur} onChange={e=>setExpCur(e.target.value)} style={{...FI,fontSize:11,padding:"4px 6px",cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select></Field>
                 </div>
                 <Field label="Notes"><textarea value={expNotes} onChange={e=>setExpNotes(e.target.value)} rows={2} placeholder="Details…" style={{...FI,fontSize:11,resize:"none",marginBottom:8}}/></Field>
-                <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();if(!expAmt)return;onAddShowExpense(show.id,{id:uid(),category:expCat,date:expDate,amount:expAmt,currency:expCur,notes:expNotes,createdAt:new Date().toISOString()});setExpAmt("");setExpNotes("");}}>+ Add Expense</button>
+                <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();const amt=rawAmt(expAmt);if(!amt)return;onAddShowExpense(show.id,{id:uid(),category:expCat,date:expDate,amount:amt,currency:expCur,notes:expNotes,createdAt:new Date().toISOString()});setExpAmt("");setExpNotes("");}}>+ Add Expense</button>
               </div>
               {showExpenses.length===0&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"12px 0"}}>No expenses logged yet</div>}
               {[...showExpenses].sort((a,b)=>b.date.localeCompare(a.date)).map(exp=>(
                 <div key={exp.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"8px 10px",background:C.card,borderRadius:6,marginBottom:6,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{display:"flex",alignItems:"baseline",gap:6,flexWrap:"wrap"}}>
-                      <span style={{fontSize:13,fontWeight:700,color:C.red}}>{exp.currency} {(+exp.amount).toLocaleString()}</span>
+                      <span style={{fontSize:13,fontWeight:700,color:C.red}}>{exp.currency} {(+exp.amount||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
                       <span style={{fontSize:10,fontWeight:600,color:C.inkMid,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,padding:"1px 5px"}}>{exp.category}</span>
                       <span style={{fontSize:10,color:C.inkFaint}}>{fmtDate(exp.date)}</span>
                     </div>
@@ -9757,7 +10027,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Total by Currency</div>
                   {Object.entries(expByCur).map(([c,v])=>(
                     <div key={c} style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,color:C.red,padding:"2px 0"}}>
-                      <span>{c}</span><span>{v.toLocaleString()}</span>
+                      <span>{c}</span><span>{(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
                     </div>
                   ))}
                 </div>
@@ -9769,15 +10039,18 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
           {showTab==="photos"&&(
             <div style={{padding:"14px 16px"}} onClick={e=>e.stopPropagation()}>
               <label style={{display:"inline-flex",alignItems:"center",gap:7,padding:"7px 14px",background:C.card,border:`1px dashed ${C.border}`,borderRadius:6,cursor:"pointer",fontSize:11,color:C.inkMid,marginBottom:12}}>
-                📸 Upload Photos
-                <input type="file" multiple accept="image/*" style={{display:"none"}} onChange={e=>{Array.from(e.target.files||[]).forEach(f=>onAddShowPhoto(show.id,f));e.target.value="";}}/>
+                📸 Upload Photos / Videos
+                <input type="file" multiple accept="image/*,video/*" style={{display:"none"}} onChange={e=>{Array.from(e.target.files||[]).forEach(f=>onAddShowPhoto(show.id,f));e.target.value="";}}/>
               </label>
-              {showPhotos.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 0"}}>No photos yet — upload your booth setup, products, anything from the show</div>}
+              {showPhotos.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 0"}}>No media yet — upload your booth setup, products, anything from the show</div>}
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
                 {showPhotos.map(p=>(
                   <div key={p.id} style={{borderRadius:6,overflow:"hidden",background:C.card,border:`1px solid ${C.border}`}}>
                     <div style={{position:"relative",paddingBottom:"75%"}}>
-                      <img src={p.data||p.url} alt={p.caption||""} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+                      {(p.mediaType==="video"||String(p.url||p.data||"").startsWith("data:video/"))
+                        ?<video src={p.data||p.url} controls playsInline style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover",background:"#000"}}/>
+                        :<img src={p.data||p.url} alt={p.caption||""} style={{position:"absolute",inset:0,width:"100%",height:"100%",objectFit:"cover"}}/>
+                      }
                       <button onClick={e=>{e.stopPropagation();onDelShowPhoto(show.id,p.id);}} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.55)",border:"none",borderRadius:"50%",color:"#fff",fontSize:13,width:22,height:22,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,lineHeight:1}}>&times;</button>
                     </div>
                     <input value={p.caption||""} onChange={e=>onUpdateShowPhotoCaption(show.id,p.id,e.target.value)} placeholder="Caption…" style={{...FI,fontSize:10,padding:"4px 7px",borderRadius:0,border:"none",borderTop:`1px solid ${C.border}`,width:"100%",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}/>
@@ -11903,7 +12176,9 @@ export default function Root({onSignOut}){
         const arr=Array.isArray(users)?users:[];
         setAllUsers(arr);
         const profile=arr.find(u=>u.email?.toLowerCase()===email?.toLowerCase());
-        if(profile?.language){localStorage.setItem("ng-user-lang",profile.language);setActiveLang(profile.language);}
+        const savedLang=localStorage.getItem("ng-user-lang");
+        if(profile?.language==="mr")setActiveLang(savedLang==="en"||savedLang==="mr"?savedLang:"mr");
+        else{localStorage.setItem("ng-user-lang","en");setActiveLang("en");}
         setUserProfile(profile||false);
       });
     });
@@ -12017,21 +12292,15 @@ export default function Root({onSignOut}){
   if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
   const FAB_ITEMS=[{icon:"⬆",label:"Upload Bill",action:()=>go("purchases","upload")},{icon:"🧾",label:"New Expense",action:()=>go("expenses")},{icon:"📋",label:"New Invoice",action:()=>go("invoices")},...(isAdmin?[{icon:"💰",label:"Finance",action:()=>go("finance")}]:[])];
   const userLang=activeLang;
+  const canSwitchLang=!!(userProfile&&userProfile!==false&&userProfile.language==="mr");
   const toggleLang=async()=>{
+    if(!canSwitchLang)return;
     const next=activeLang==="en"?"mr":"en";
     setActiveLang(next);
     localStorage.setItem("ng-user-lang",next);
-    if(userProfile&&userProfile!==false){
-      const users=await loadK("ng-users-v1");
-      // Safety guard: never save if we didn't get a valid array back — avoids wiping all users on a load failure
-      if(!Array.isArray(users)||users.length===0)return;
-      const updated=users.map(u=>u.email?.toLowerCase()===currentEmail?.toLowerCase()?{...u,language:next}:u);
-      saveK("ng-users-v1",updated).catch(()=>{});
-      setUserProfile(prev=>prev?{...prev,language:next}:prev);
-    }
   };
   return(
-    <LanguageProvider language={userLang} setLang={toggleLang}>
+    <LanguageProvider language={canSwitchLang?userLang:"en"} setLang={toggleLang} canSwitchLang={canSwitchLang}>
     <>
       <RootBanners updateReady={updateReady} setUpdateReady={setUpdateReady} isOnline={isOnline} syncingCount={syncingCount} newAssignedTasks={newAssignedTasks} dismissNewTasks={dismissNewTasks}/>
       {showInstall&&(
