@@ -775,7 +775,11 @@ export default function EtsyApp({ onHome }) {
         setSyncProg(`Fetching orders ${off+1}…${total?` of ${total}`:""}`);
         const r = await fetch(`/api/etsy?action=orders&shop_id=${sid}&limit=100&offset=${off}&min_created=${minCreated}`);
         const d = await r.json();
-        if (!r.ok) throw new Error(d.error||"API error");
+        if (!r.ok) {
+          const msg = d.error || "API error";
+          const hint = d.fix ? ` — ${d.fix}` : "";
+          throw new Error(msg + hint);
+        }
         if (total === null) total = d.count;
         const batch = (d.results||[]).filter(o=>!existingIds.has(o.receipt_id));
         allNew = [...allNew, ...batch];
@@ -928,8 +932,14 @@ export default function EtsyApp({ onHome }) {
 
       {/* error */}
       {platform==="etsy"&&syncErr&&(
-        <div style={{background:C.redBg,border:`1px solid ${C.red}`,padding:"10px 28px",fontSize:12,color:C.red}}>
-          ⚠ {syncErr}
+        <div style={{background:C.redBg,border:`1px solid ${C.red}`,padding:"10px 28px",fontSize:12,color:C.red,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <span>⚠ {syncErr}</span>
+          {/oauth|token|authoriz/i.test(syncErr)&&(
+            <a href="/api/etsy-auth?action=start" target="_blank" rel="noreferrer"
+              style={{color:C.red,fontWeight:700,textDecoration:"underline",whiteSpace:"nowrap"}}>
+              Reconnect Etsy →
+            </a>
+          )}
         </div>
       )}
 

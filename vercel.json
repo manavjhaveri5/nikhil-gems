@@ -4,7 +4,10 @@
       "maxDuration": 30
     },
     "api/etsy.js": {
-      "maxDuration": 15
+      "maxDuration": 45
+    },
+    "api/etsy-auth.js": {
+      "maxDuration": 30
     },
     "api/raj.js": {
       "maxDuration": 60

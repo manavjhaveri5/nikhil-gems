@@ -1,6 +1,6 @@
 import { getEtsyAccessToken } from "./etsy-auth.js";
 
-export const maxDuration = 45; // Vercel Pro: allow up to 45s for multi-page listing fetches
+export const config = { maxDuration: 45 }; // 45s for multi-page listing fetches
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
