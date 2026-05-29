@@ -1002,18 +1002,21 @@ export default function EtsyApp({ onHome }) {
 
   /* load */
   useEffect(()=>{
-    Promise.all([loadK(ETSY_KEY),loadK(BATCH_KEY),loadK(BUY_KEY),loadK(STK_KEY),loadK(SG_CREDS_KEY),loadK(SG_TOKEN_KEY)])
-      .then(([etsy,b,buys,stk,sgC,sgT])=>{
+    Promise.all([loadK(ETSY_KEY),loadK(BATCH_KEY),loadK(BUY_KEY),loadK(STK_KEY)])
+      .then(([etsy,b,buys,stk])=>{
         if(etsy){ setOrders(etsy.orders||[]); setProcessed(etsy.processed||{}); setSettings(s=>({...s,...(etsy.settings||{})})); }
         setBatch(b||[]);
         setBuyers(buys||[]);
         setStock(stk||[]);
         const aty=(buys||[]).find(b=>(b.name||"").toLowerCase().includes("atyahara"));
         if(aty) setAtyaharaId(aty.id);
-        if(sgC) setSgCreds(sgC);
-        if(sgT?.token && sgT.expiresAt > Date.now()/1000) setSgToken(sgT.token);
         setLoaded(true);
       });
+    // Load ShipGlobal creds separately — must not block main order data
+    Promise.all([loadK(SG_CREDS_KEY),loadK(SG_TOKEN_KEY)]).then(([sgC,sgT])=>{
+      if(sgC && !Array.isArray(sgC)) setSgCreds(sgC);
+      if(sgT?.token && sgT.expiresAt > Date.now()/1000) setSgToken(sgT.token);
+    }).catch(()=>{});
   },[]);
 
   const persistEtsy = async (o,p,s) => {
