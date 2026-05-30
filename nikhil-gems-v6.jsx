@@ -5118,7 +5118,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       {/* Photo */}
                       <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
                         {cover
-                          ?<a href={cover} target="_blank" rel="noopener noreferrer" onClick={e=>e.preventDefault()} style={{display:"block",width:"100%",height:"100%"}}><img src={thumbUrl(cover)} loading="lazy" decoding="async" fetchPriority={idx<4?"high":"auto"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} alt=""/></a>
+                          ?<a href={cover} target="_blank" rel="noopener noreferrer" onClick={e=>e.preventDefault()} style={{position:"absolute",inset:0}}><img src={cover} loading="eager" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} alt=""/></a>
                           :<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:4}}>
                             <div style={{fontSize:mob?22:28,opacity:.12}}>💎</div>
                             {s.grade&&<div style={{fontSize:9,color:C.inkFaint,fontWeight:700,letterSpacing:.5}}>{s.grade}</div>}
