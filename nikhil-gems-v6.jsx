@@ -9862,15 +9862,47 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     if(sh&&String(x.shape||"").trim().toLowerCase()!==sh)return false;
     return st||sh;
   })||null;
+  // Convert any per-unit rate into per-kg when possible (kg/g supported;
+  // pcs needs a per-piece weight, which is rarely present, so we return 0).
+  const toCostPerKg=(rate,unit,weightGm)=>{
+    const r=+rate||0;if(!r)return 0;
+    const u=String(unit||"").toLowerCase();
+    if(u==="kg")return r;
+    if(u==="g"||u==="gm")return r*1000;
+    const w=+weightGm||0;if((u==="pcs"||u==="pc")&&w>0)return r/(w/1000);
+    return 0;
+  };
+  // Best cost basis for a stone+shape: most recent purchase, falling back to
+  // existing India stock. Returns the per-kg figure in the source currency,
+  // plus enough context to display a "auto from …" hint to the user.
+  const findCostBasis=(stone,shape)=>{
+    const lp=findLastPurchase(stone,shape);
+    if(lp){
+      return{costPerKg:toCostPerKg(lp.rate,lp.unit,0),currency:lp.currency||"INR",rate:lp.rate,unit:lp.unit||"pcs",source:"purchase",vendor:lp.vendor||"",date:lp.date||""};
+    }
+    const st=String(stone||"").trim().toLowerCase();
+    const sh=String(shape||"").trim().toLowerCase();
+    if(!st&&!sh)return null;
+    const sm=stock.find(s=>{
+      if(st&&String(s.material||"").trim().toLowerCase()!==st)return false;
+      if(sh&&String(s.shape||"").trim().toLowerCase()!==sh)return false;
+      return (+s.costPrice||0)>0;
+    });
+    if(!sm)return null;
+    return{costPerKg:toCostPerKg(sm.costPrice,sm.unit,sm.weightGm),currency:"INR",rate:sm.costPrice,unit:sm.unit||"pcs",source:"stock",vendor:sm.vendor||"",date:sm.addedDate||""};
+  };
   const buyingPlan=show.buyingPlan||[];
   const saveBuyingPlan=plan=>onUpdateShow(show.id,"buyingPlan",plan);
   const addBuyingLine=(seed={})=>{
-    const last=findLastPurchase(seed.stone,seed.shape);
+    const basis=findCostBasis(seed.stone,seed.shape);
     saveBuyingPlan([...buyingPlan,{
-      id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||last?.vendor||"",
-      qty:seed.qty||"",unit:seed.unit||last?.unit||"pcs",targetRate:seed.targetRate||last?.rate||"",
-      currency:seed.currency||last?.currency||"USD",priority:seed.priority||"Medium",status:seed.status||"Idea",
-      notes:seed.notes||"",lastRate:last?.rate||"",lastVendor:last?.vendor||"",lastDate:last?.date||"",
+      id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||basis?.vendor||"",
+      qty:seed.qty||"",unit:seed.unit||basis?.unit||"pcs",targetRate:seed.targetRate||basis?.rate||"",
+      currency:seed.currency||basis?.currency||"USD",priority:seed.priority||"Medium",status:seed.status||"Idea",
+      notes:seed.notes||"",
+      costPerKg:seed.costPerKg||(basis?.costPerKg?String(+basis.costPerKg.toFixed(2)):""),
+      targetSellPrice:seed.targetSellPrice||"",
+      lastRate:basis?.rate||"",lastVendor:basis?.vendor||"",lastDate:basis?.date||"",lastSource:basis?.source||"",
       createdAt:new Date().toISOString()
     }]);
   };
@@ -9879,13 +9911,15 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     const next={...row,...patch,updatedAt:new Date().toISOString()};
     const shouldFill=patch.stone!==undefined||patch.shape!==undefined;
     if(shouldFill){
-      const last=findLastPurchase(next.stone,next.shape);
-      if(last){
-        next.lastRate=last.rate||"";next.lastVendor=last.vendor||"";next.lastDate=last.date||"";
-        if(!next.vendor)next.vendor=last.vendor||"";
-        if(!next.targetRate)next.targetRate=last.rate||"";
-        if(!next.unit)next.unit=last.unit||"pcs";
-        if(!next.currency)next.currency=last.currency||"USD";
+      const basis=findCostBasis(next.stone,next.shape);
+      if(basis){
+        next.lastRate=basis.rate||"";next.lastVendor=basis.vendor||"";next.lastDate=basis.date||"";next.lastSource=basis.source||"";
+        if(!next.vendor)next.vendor=basis.vendor||"";
+        if(!next.targetRate)next.targetRate=basis.rate||"";
+        if(!next.unit)next.unit=basis.unit||"pcs";
+        if(!next.currency)next.currency=basis.currency||"USD";
+        // Autofill CP/kg only if user hasn't entered one — keeps manual edits sticky
+        if(!next.costPerKg&&basis.costPerKg>0)next.costPerKg=String(+basis.costPerKg.toFixed(2));
       }
     }
     return next;
@@ -10174,6 +10208,32 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           </select>
                           <button onClick={e=>{e.stopPropagation();removeBuyingLine(row.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:15,padding:0}}>&times;</button>
                         </div>
+                        {/* Pricing sub-row: historical CP/kg + target SP + margin */}
+                        {(()=>{
+                          const tr=+row.targetRate||0;
+                          const sp=+row.targetSellPrice||0;
+                          const margin=sp>0&&tr>0?((sp-tr)/sp)*100:null;
+                          const marginColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
+                          const cpkAuto=row.costPerKg&&row.lastSource;
+                          return(
+                            <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:6,alignItems:"center",marginTop:7}}>
+                              <div>
+                                <div style={{fontSize:8.5,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45,marginBottom:2}}>CP / kg{cpkAuto?<span style={{color:C.green,fontWeight:700,marginLeft:4,letterSpacing:0,textTransform:"none"}}>· auto from {row.lastSource}</span>:""}</div>
+                                <input value={fmtAmtIN(row.costPerKg)} onChange={e=>updateBuyingLine(row.id,{costPerKg:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder={`${row.currency||"USD"} / kg`}/>
+                              </div>
+                              <div>
+                                <div style={{fontSize:8.5,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45,marginBottom:2}}>Target SP / {row.unit||"pcs"}</div>
+                                <input value={fmtAmtIN(row.targetSellPrice)} onChange={e=>updateBuyingLine(row.id,{targetSellPrice:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder="Sell rate"/>
+                              </div>
+                              <div style={{gridColumn:mob?"1 / -1":undefined}}>
+                                <div style={{fontSize:8.5,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45,marginBottom:2}}>Margin</div>
+                                <div style={{fontSize:13,fontWeight:800,color:marginColor,padding:"5px 7px",background:margin==null?"transparent":marginColor+"14",border:`1px solid ${margin==null?C.border:marginColor+"40"}`,borderRadius:5,textAlign:"center"}}>
+                                  {margin==null?"—":`${margin.toFixed(1)}%`}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
                         <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"center",marginTop:7}}>
                           <input value={row.notes||""} onChange={e=>updateBuyingLine(row.id,{notes:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Notes, exact quality, size range, quote details..."/>
                           <div style={{fontSize:10,color:C.inkFaint}}>
