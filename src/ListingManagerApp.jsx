@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { loadK, saveK, uid } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 
@@ -2071,6 +2071,19 @@ function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel, onAd
 ══════════════════════════════════════════════════════════════════════════ */
 const ETSY_CACHE = "ng-etsy-v3";
 
+/* Transaction image with lazy-fetch fallback for sold/inactive listings */
+function TxnImg({ listing_id, image_data, fetchImg, size = 52 }) {
+  const initial = image_data?.url_75x75 || image_data?.url_170x135 || null;
+  const [url, setUrl] = useState(initial);
+  useEffect(() => {
+    if (!url && listing_id) fetchImg(listing_id).then(u => { if (u) setUrl(u); });
+  }, [listing_id]);
+  const s = { width: size, height: size, borderRadius: 7, flexShrink: 0 };
+  return url
+    ? <img src={url} alt="" style={{ ...s, objectFit: "cover" }} />
+    : <div style={{ ...s, background: C.border, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>💎</div>;
+}
+
 function EtsyLiveView() {
   const loadCache = () => { try { return JSON.parse(localStorage.getItem(ETSY_CACHE)||"{}"); } catch { return {}; } };
   const c0 = loadCache();
@@ -2184,6 +2197,22 @@ function EtsyLiveView() {
     setTrackingOrder(null);
     showToast("✓ Tracking added — buyer notified");
   };
+
+  /* per-session image cache for transaction listing images (not React state — no re-render on writes) */
+  const imgCacheRef = useRef({});
+  const fetchTxnImg = useCallback(async (listing_id) => {
+    const k = String(listing_id);
+    if (k in imgCacheRef.current) return imgCacheRef.current[k] || null;
+    try {
+      const tok = await getToken();
+      const headers = tok ? { "X-Etsy-Token": tok } : {};
+      const r = await fetch(`/api/etsy?action=listing_images&listing_id=${listing_id}`, { headers });
+      const d = await r.json();
+      const url = d.results?.[0]?.url_75x75 || d.results?.[0]?.url_170x135 || null;
+      imgCacheRef.current[k] = url || "";
+      return url;
+    } catch { imgCacheRef.current[k] = ""; return null; }
+  }, []);
 
   const fetchAll = async (bg=false) => {
     bg ? setSyncing(true) : setLoading(true);
@@ -2809,14 +2838,10 @@ function EtsyLiveView() {
                         {/* line items */}
                         <div style={{display:"flex",flexDirection:"column",gap:8}}>
                           {(o.transactions||[]).map((t,i)=>{
-                            const tImg = t.image_data?.url_75x75||t.image_data?.url_170x135;
                             return (
                               <div key={i} style={{display:"flex",alignItems:"center",gap:12,
                                 padding:"10px 12px",background:C.card,borderRadius:8}}>
-                                {tImg
-                                  ? <img src={tImg} alt="" style={{width:52,height:52,borderRadius:7,objectFit:"cover",flexShrink:0}}/>
-                                  : <div style={{width:52,height:52,borderRadius:7,background:C.border,
-                                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>💎</div>}
+                                <TxnImg listing_id={t.listing_id} image_data={t.image_data} fetchImg={fetchTxnImg} />
                                 <div style={{flex:1}}>
                                   <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{t.title}</div>
                                   <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>
