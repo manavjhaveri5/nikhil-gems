@@ -9627,6 +9627,7 @@ function ShowsApp({onHome}){
   const t=useT();
   const [shows,setShows]=useState([]);
   const [stock,setStock]=useState([]);
+  const [purchases,setPurchases]=useState([]);
   const [calEvents,setCalEvents]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const [detailId,setDetailId]=useState(null);
@@ -9635,13 +9636,57 @@ function ShowsApp({onHome}){
   const todayStr=today();
 
   useEffect(()=>{
-    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock)]).then(([s,e,st])=>{
+    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases)]).then(([s,e,st,p])=>{
       setShows(s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""})));
-      setCalEvents(e||[]);setStock(st||[]);setLoaded(true);
+      setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);setLoaded(true);
     });
   },[]);
 
   const save=async(list)=>{setShows(list);await saveK(SHOWS_KEY,list);};
+  const createPOFromBuyingPlan=async sid=>{
+    const show=shows.find(s=>s.id===sid);
+    if(!show)return;
+    const plan=show.buyingPlan||[];
+    const rows=plan.filter(r=>!r.poId&&!["Bought","Skipped"].includes(r.status)&&String(r.stone||"").trim());
+    if(!rows.length){showToast("Add open buying plan lines first");return;}
+    const incomplete=rows.filter(r=>!String(r.vendor||"").trim()||!(+r.qty>0)||!(+r.targetRate>0));
+    if(incomplete.length){showToast("Add vendor, qty and target rate before creating PO");return;}
+    const groups={};
+    rows.forEach(r=>{
+      const key=`${String(r.vendor||"").trim()}__${r.currency||"INR"}`;
+      groups[key]=groups[key]||[];
+      groups[key].push(r);
+    });
+    let poCount=purchases.filter(p=>p.type==="po").length;
+    const created=Object.entries(groups).map(([key,lines])=>{
+      const [supplier,currency]=key.split("__");
+      poCount+=1;
+      const poNumber=`PO/${new Date().getFullYear()}/${String(poCount).padStart(3,"0")}`;
+      const items=lines.map(r=>{
+        const qty=String(r.qty||"");
+        const rate=String(r.targetRate||"");
+        const desc=[r.stone,r.shape].filter(Boolean).join(" · ");
+        const amt=(+qty||0)*(+rate||0);
+        return{...newItem(),id:uid(),desc,shape:r.shape||"",qty,unit:r.unit||"pcs",rate,amt};
+      });
+      return{
+        type:"po",id:uid(),poNumber,supplier,date:today(),currency,
+        advance:"",items,notes:`Created from ${show.name} buying plan.`,
+        followUpDate:show.startDate||"",status:"open",paidAmount:0,totalAmount:items.reduce((s,i)=>s+(+i.amt||0),0),
+        sourceShowId:show.id,sourceShowName:show.name,buyingPlanLineIds:lines.map(r=>r.id),
+        createdAt:new Date().toISOString()
+      };
+    });
+    const lineToPO={};
+    created.forEach(po=>(po.buyingPlanLineIds||[]).forEach(id=>{lineToPO[id]={poId:po.id,poNumber:po.poNumber};}));
+    const updatedShows=shows.map(s=>s.id!==sid?s:{...s,buyingPlan:plan.map(r=>lineToPO[r.id]?{...r,...lineToPO[r.id],status:"Ordered",orderedAt:today(),updatedAt:new Date().toISOString()}:r)});
+    const updatedPurchases=[...created,...purchases];
+    setPurchases(updatedPurchases);
+    setShows(updatedShows);
+    await savePurchasesK(updatedPurchases);
+    await saveK(SHOWS_KEY,updatedShows);
+    showToast(`Created ${created.length} PO${created.length!==1?"s":""} from buying plan`);
+  };
   // Bag item management
   const addBagItem=(sid,item)=>save(shows.map(s=>s.id!==sid?s:{...s,bagItems:[...(s.bagItems||[]),item]}));
   const updateBagItem=(sid,iid,patch)=>save(shows.map(s=>s.id!==sid?s:{...s,bagItems:(s.bagItems||[]).map(b=>b.id!==iid?b:{...b,...patch})}));
@@ -9689,7 +9734,7 @@ function ShowsApp({onHome}){
     onUpdateShipment:updateShipment,onAddShipment:addShipment,onDelShipment:delShipment,
     onUpdateShow:updateShow,onAddFile:addFile,onDelFile:delFile,onRenameFile:renameFile,
     onSyncToCalendar:syncToCalendar,onDelete:()=>save(shows.filter(s=>s.id!==show.id)),
-    stock,
+    stock,purchases,
     onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
     onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
     onAddDailySale:addDailySale,onUpdateDailySale:updateDailySale,onDelDailySale:delDailySale,
@@ -9697,6 +9742,7 @@ function ShowsApp({onHome}){
     onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
     onUpdateShowPhotoCaption:updateShowPhotoCaption,
     onAddJournalEntry:addJournalEntry,onDelJournalEntry:delJournalEntry,
+    onCreatePOFromBuyingPlan:createPOFromBuyingPlan,
   });
 
   if(!loaded)return(<Shell title="Shows" onHome={onHome}><p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p></Shell>);
@@ -9753,7 +9799,7 @@ function ShowsApp({onHome}){
 
 // ShowCard defined OUTSIDE ShowsApp so React sees a stable component type across re-renders
 // (prevents focus-loss on every keystroke in checklist inputs)
-function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry}){
+function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -9783,8 +9829,72 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [expDate,setExpDate]=useState(todayStr);
   const [expNotes,setExpNotes]=useState("");
   const [journalText,setJournalText]=useState("");
+  const allShapes=useShapes();
   const fmtAmtIN=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return Number.isFinite(n)?n.toLocaleString("en-IN",{maximumFractionDigits:2}):"";};
   const rawAmt=v=>String(v||"").replace(/,/g,"").replace(/[^\d.]/g,"");
+  const PLAN_STATUS=["Idea","Quoted","Ordered","Bought","Skipped"];
+  const PLAN_PRIORITY=["High","Medium","Low"];
+  const PLAN_CURS=["USD","JPY","EUR","GBP","INR"];
+  const purchaseHistory=useMemo(()=>purchases.flatMap(p=>(p.items||[]).map(it=>{
+    const qtyKg=+it.qtyKg||0,qtyPcs=+it.qty||0;
+    const qty=qtyKg||qtyPcs||1;
+    const unit=qtyKg?"kg":"pcs";
+    const rate=+it.rate||(+it.amt&&qty?+it.amt/qty:0);
+    return{
+      desc:it.desc||it.purchaseDesc||it.catDesc||"",
+      shape:it.shape||"",
+      vendor:p.supplier||p.vendorName||p.vendor||"",
+      currency:p.currency||"INR",
+      rate,
+      unit:it.unit||unit,
+      qty,
+      date:p.billDate||p.date||p.createdAt||"",
+      billNumber:p.billNumber||p.poNumber||"",
+    };
+  })).filter(x=>x.desc).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))),[purchases]);
+  const planStoneOptions=useMemo(()=>[...new Set([...purchaseHistory.map(x=>x.desc),...stock.map(s=>s.material).filter(Boolean)])].sort(),[purchaseHistory,stock]);
+  const planShapeOptions=useMemo(()=>[...new Set([...purchaseHistory.map(x=>x.shape),...allShapes].filter(Boolean))].sort(),[purchaseHistory,allShapes]);
+  const planVendorOptions=useMemo(()=>[...new Set(purchaseHistory.map(x=>x.vendor).filter(Boolean))].sort(),[purchaseHistory]);
+  const findLastPurchase=(stone,shape)=>purchaseHistory.find(x=>{
+    const st=String(stone||"").trim().toLowerCase();
+    const sh=String(shape||"").trim().toLowerCase();
+    if(st&&String(x.desc||"").trim().toLowerCase()!==st)return false;
+    if(sh&&String(x.shape||"").trim().toLowerCase()!==sh)return false;
+    return st||sh;
+  })||null;
+  const buyingPlan=show.buyingPlan||[];
+  const saveBuyingPlan=plan=>onUpdateShow(show.id,"buyingPlan",plan);
+  const addBuyingLine=(seed={})=>{
+    const last=findLastPurchase(seed.stone,seed.shape);
+    saveBuyingPlan([...buyingPlan,{
+      id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||last?.vendor||"",
+      qty:seed.qty||"",unit:seed.unit||last?.unit||"pcs",targetRate:seed.targetRate||last?.rate||"",
+      currency:seed.currency||last?.currency||"USD",priority:seed.priority||"Medium",status:seed.status||"Idea",
+      notes:seed.notes||"",lastRate:last?.rate||"",lastVendor:last?.vendor||"",lastDate:last?.date||"",
+      createdAt:new Date().toISOString()
+    }]);
+  };
+  const updateBuyingLine=(id,patch)=>saveBuyingPlan(buyingPlan.map(row=>{
+    if(row.id!==id)return row;
+    const next={...row,...patch,updatedAt:new Date().toISOString()};
+    const shouldFill=patch.stone!==undefined||patch.shape!==undefined;
+    if(shouldFill){
+      const last=findLastPurchase(next.stone,next.shape);
+      if(last){
+        next.lastRate=last.rate||"";next.lastVendor=last.vendor||"";next.lastDate=last.date||"";
+        if(!next.vendor)next.vendor=last.vendor||"";
+        if(!next.targetRate)next.targetRate=last.rate||"";
+        if(!next.unit)next.unit=last.unit||"pcs";
+        if(!next.currency)next.currency=last.currency||"USD";
+      }
+    }
+    return next;
+  }));
+  const removeBuyingLine=id=>saveBuyingPlan(buyingPlan.filter(row=>row.id!==id));
+  const planAmount=row=>(+row.qty||0)*(+row.targetRate||0);
+  const planTotals=buyingPlan.reduce((m,row)=>{const c=row.currency||"USD";m[c]=(m[c]||0)+planAmount(row);return m;},{});
+  const planOpen=buyingPlan.filter(row=>!["Bought","Skipped"].includes(row.status)).length;
+  const planDatalistId=`buy-plan-${show.id}`;
 
   const showStock=show.showStock||[];
   const ssUnsold=showStock.filter(i=>!i.sold);
@@ -9819,7 +9929,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const expByCur=sumByCur(showExpenses,"amount","currency");
   const totalItemsSold=ssSold.length+showSoldItems.length;
   const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`).join(" · ")||"—";
-  const TABS=[{id:"prep",label:"📋 Prep"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}];
+  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}];
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
   const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
 
@@ -9985,6 +10095,99 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${show.name}"? This cannot be undone.`)){onDelete();}}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,cursor:"pointer",color:C.red,fontSize:11,padding:"5px 10px"}}>🗑 Delete</button>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ── BUYING PLAN ── */}
+          {showTab==="buying"&&(
+            <div style={{padding:"14px 16px"}}>
+              <datalist id={`${planDatalistId}-stones`}>{planStoneOptions.map(x=><option key={x} value={x}/>)}</datalist>
+              <datalist id={`${planDatalistId}-shapes`}>{planShapeOptions.map(x=><option key={x} value={x}/>)}</datalist>
+              <datalist id={`${planDatalistId}-vendors`}>{planVendorOptions.map(x=><option key={x} value={x}/>)}</datalist>
+              <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8,marginBottom:12}}>
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
+                  <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Planned Lines</div>
+                  <div style={{fontSize:20,fontWeight:750,color:C.ink,lineHeight:1}}>{buyingPlan.length}</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>{planOpen} open</div>
+                </div>
+                <div style={{background:C.blueBg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
+                  <div style={{fontSize:9,fontWeight:800,color:C.blue,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Budget</div>
+                  <div style={{fontSize:15,fontWeight:800,color:C.ink,lineHeight:1.25}}>{fmtCurObj(planTotals)}</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>qty × target rate</div>
+                </div>
+                <div style={{background:C.greenBg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
+                  <div style={{fontSize:9,fontWeight:800,color:C.green,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Bought</div>
+                  <div style={{fontSize:20,fontWeight:750,color:C.ink,lineHeight:1}}>{buyingPlan.filter(x=>x.status==="Bought").length}</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>ready to convert later</div>
+                </div>
+                <div style={{background:C.amberBg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
+                  <div style={{fontSize:9,fontWeight:800,color:C.amber,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>History</div>
+                  <div style={{fontSize:20,fontWeight:750,color:C.ink,lineHeight:1}}>{purchaseHistory.length}</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>past purchase lines</div>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+                <div>
+                  <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>What to order for {show.name}</div>
+                  <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>Stone, shape, vendor and last rates fill from previous purchase bills where possible.</div>
+                </div>
+                <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
+                  <button className="bp" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLine();}}>+ Add Item</button>
+                </div>
+              </div>
+              {buyingPlan.length===0?(
+                <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:"18px 16px",textAlign:"center"}}>
+                  No buying plan yet. Add what you want to source at this show, then fill target rates and vendors.
+                </div>
+              ):(
+                <div style={{display:"grid",gap:8}}>
+                  {!mob&&(
+                    <div style={{display:"grid",gridTemplateColumns:"1.2fr .9fr .9fr .65fr .55fr .75fr .75fr .8fr .8fr 28px",gap:6,padding:"0 8px"}}>
+                      {["Stone","Shape","Vendor","Qty","Unit","Target rate","Budget","Priority","Status",""].map(h=><div key={h} style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45}}>{h}</div>)}
+                    </div>
+                  )}
+                  {buyingPlan.map(row=>{
+                    const last=row.lastRate||row.lastVendor?row:findLastPurchase(row.stone,row.shape);
+                    return(
+                      <div key={row.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:mob?"10px":"9px 8px"}}>
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.2fr .9fr .9fr .65fr .55fr .75fr .75fr .8fr .8fr 28px",gap:6,alignItems:"center"}}>
+                          <input value={row.stone||""} onChange={e=>updateBuyingLine(row.id,{stone:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Stone" list={`${planDatalistId}-stones`}/>
+                          <input value={row.shape||""} onChange={e=>updateBuyingLine(row.id,{shape:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Shape" list={`${planDatalistId}-shapes`}/>
+                          <input value={row.vendor||""} onChange={e=>updateBuyingLine(row.id,{vendor:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Vendor" list={`${planDatalistId}-vendors`}/>
+                          <input value={row.qty||""} onChange={e=>updateBuyingLine(row.id,{qty:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder="Qty"/>
+                          <select value={row.unit||"pcs"} onChange={e=>updateBuyingLine(row.id,{unit:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px",cursor:"pointer"}}>
+                            {["pcs","kg","g","lots","boxes"].map(u=><option key={u}>{u}</option>)}
+                          </select>
+                          <div style={{display:"grid",gridTemplateColumns:"55px 1fr",gap:4}}>
+                            <select value={row.currency||"USD"} onChange={e=>updateBuyingLine(row.id,{currency:e.target.value})} style={{...FI,fontSize:10,padding:"5px 4px",cursor:"pointer"}}>
+                              {PLAN_CURS.map(c=><option key={c}>{c}</option>)}
+                            </select>
+                            <input value={fmtAmtIN(row.targetRate)} onChange={e=>updateBuyingLine(row.id,{targetRate:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder="Rate"/>
+                          </div>
+                          <div style={{fontSize:12,fontWeight:800,color:C.ink,textAlign:mob?"left":"right",padding:"0 4px"}}>{row.currency||"USD"} {fmtAmtIN(planAmount(row))||"0"}</div>
+                          <select value={row.priority||"Medium"} onChange={e=>updateBuyingLine(row.id,{priority:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px",cursor:"pointer"}}>
+                            {PLAN_PRIORITY.map(p=><option key={p}>{p}</option>)}
+                          </select>
+                          <select value={row.status||"Idea"} onChange={e=>updateBuyingLine(row.id,{status:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px",cursor:"pointer"}}>
+                            {PLAN_STATUS.map(s=><option key={s}>{s}</option>)}
+                          </select>
+                          <button onClick={e=>{e.stopPropagation();removeBuyingLine(row.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:15,padding:0}}>&times;</button>
+                        </div>
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"center",marginTop:7}}>
+                          <input value={row.notes||""} onChange={e=>updateBuyingLine(row.id,{notes:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Notes, exact quality, size range, quote details..."/>
+                          <div style={{fontSize:10,color:C.inkFaint}}>
+                            {row.poNumber
+                              ?`Linked PO: ${row.poNumber}`
+                              :last?`Last: ${last.currency||row.currency||"INR"} ${fmtAmtIN(last.rate)} / ${last.unit||row.unit||"pcs"}${last.vendor?` · ${last.vendor}`:""}${last.date?` · ${fmtDate(last.date)}`:""}`
+                              :"No matching purchase history yet"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
