@@ -9676,13 +9676,14 @@ function ShowsApp({onHome}){
   const [loaded,setLoaded]=useState(false);
   const [detailId,setDetailId]=useState(null);
   const [toast,setToast]=useState("");
+  const [vendors,setVendors]=useState([]);
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const todayStr=today();
 
   useEffect(()=>{
-    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases)]).then(([s,e,st,p])=>{
+    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases),loadK(KEYS.vendors)]).then(([s,e,st,p,v])=>{
       setShows(s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""})));
-      setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);setLoaded(true);
+      setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);setVendors(v||[]);setLoaded(true);
     });
   },[]);
 
@@ -9760,6 +9761,22 @@ function ShowsApp({onHome}){
   const updateShowPhotoCaption=(sid,pid,caption)=>save(shows.map(s=>s.id!==sid?s:{...s,showPhotos:(s.showPhotos||[]).map(p=>p.id!==pid?p:{...p,caption})}));
   const addJournalEntry=(sid,entry)=>save(shows.map(s=>s.id!==sid?s:{...s,journalEntries:[...(s.journalEntries||[]),entry]}));
   const delJournalEntry=(sid,entryId)=>save(shows.map(s=>s.id!==sid?s:{...s,journalEntries:(s.journalEntries||[]).filter(x=>x.id!==entryId)}));
+  const createPOForShow=async(sid,vendorName,items)=>{
+    const existing=await loadK(KEYS.purchases)||[];
+    const n=existing.filter(p=>p.type==="po").length+1;
+    const poNumber=`PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;
+    const show=shows.find(s=>s.id===sid);
+    const po={
+      id:uid(),type:"po",poNumber,supplier:vendorName,
+      date:today(),currency:"INR",advance:"",followUpDate:"",
+      items:items.map(b=>({id:uid(),desc:b.material||b.desc||"",qty:String(b.qty||""),unit:b.unit||"pcs",rate:"",amt:0,hsn:"7103",gst:"3"})),
+      notes:`Show buying plan: ${show?.name||""}`,
+      status:"draft",paidAmount:0,totalAmount:0,createdAt:new Date().toISOString()
+    };
+    await saveK(KEYS.purchases,[po,...existing]);
+    save(shows.map(s=>s.id!==sid?s:{...s,bagItems:(s.bagItems||[]).map(b=>items.find(i=>i.id===b.id)?{...b,status:"ordered"}:b)}));
+    showToast(`✓ Draft PO for ${vendorName} saved — check Purchases`);
+  };
   const syncToCalendar=async(show)=>{
     let evts=[...calEvents].filter(e=>e.showId!==show.id);
     evts.push({id:`${show.id}-show`,showId:show.id,title:show.name,type:"show",date:show.startDate,endDate:show.endDate,notes:show.city,createdAt:new Date().toISOString()});
@@ -9787,6 +9804,7 @@ function ShowsApp({onHome}){
     onUpdateShowPhotoCaption:updateShowPhotoCaption,
     onAddJournalEntry:addJournalEntry,onDelJournalEntry:delJournalEntry,
     onCreatePOFromBuyingPlan:createPOFromBuyingPlan,
+    vendors,onCreatePO:createPOForShow,
   });
 
   if(!loaded)return(<Shell title="Shows" onHome={onHome}><p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p></Shell>);
@@ -9843,7 +9861,7 @@ function ShowsApp({onHome}){
 
 // ShowCard defined OUTSIDE ShowsApp so React sees a stable component type across re-renders
 // (prevents focus-loss on every keystroke in checklist inputs)
-function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,vendors=[],onCreatePO}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -9872,6 +9890,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [expCur,setExpCur]=useState("USD");
   const [expDate,setExpDate]=useState(todayStr);
   const [expNotes,setExpNotes]=useState("");
+  const [buyVendorFilter,setBuyVendorFilter]=useState(null);
+  const [newBag,setNewBag]=useState({material:"",qty:"",unit:"pcs",vendor:"",notes:""});
   const [journalText,setJournalText]=useState("");
   const [usdInr,setUsdInr]=useState(85);
   const [vendorHistoryRow,setVendorHistoryRow]=useState(null);
@@ -10149,7 +10169,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const expByCur=sumByCur(showExpenses,"amount","currency");
   const totalItemsSold=ssSold.length+showSoldItems.length;
   const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`).join(" · ")||"—";
-  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}];
+  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"},{id:"buy",label:"🛒 Buy"}];
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
   const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
 
@@ -10742,6 +10762,101 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               ))}
             </div>
           )}
+
+          {/* ── BUY PLAN ── */}
+          {showTab==="buy"&&(()=>{
+            const bagItems=show.bagItems||[];
+            const bagVendors=[...new Set(bagItems.map(b=>b.vendor).filter(Boolean))];
+            const filteredBagItems=buyVendorFilter?bagItems.filter(b=>b.vendor===buyVendorFilter):bagItems;
+            const addNewBag=()=>{
+              if(!newBag.material.trim())return;
+              onAddBagItem(show.id,{id:uid(),material:newBag.material.trim(),qty:newBag.qty,unit:newBag.unit||"pcs",vendor:newBag.vendor,notes:newBag.notes,status:"needed",createdAt:new Date().toISOString()});
+              setNewBag({material:"",qty:"",unit:"pcs",vendor:"",notes:""});
+            };
+            const statusColor=s=>s==="ordered"?C.amber:s==="received"?C.green:C.inkFaint;
+            const CI2={background:"transparent",border:"none",borderBottom:`1px solid transparent`,padding:"5px 6px",fontSize:12,color:C.ink,width:"100%",outline:"none",fontFamily:"inherit",transition:"border-color .1s",boxSizing:"border-box"};
+            return(
+              <div style={{padding:"14px 16px"}} onClick={e=>e.stopPropagation()}>
+                <style>{`.brow:hover td{background:${C.card};} .bci:focus{border-bottom-color:${C.gold}!important;}`}</style>
+
+                {/* Vendor filter pills + Create PO buttons */}
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:12}}>
+                  <span style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginRight:2}}>Filter:</span>
+                  {[null,...bagVendors].map(v=>(
+                    <button key={v||"all"} onClick={e=>{e.stopPropagation();setBuyVendorFilter(v===buyVendorFilter?null:v);}}
+                      style={{padding:"3px 10px",borderRadius:4,border:`1px solid ${buyVendorFilter===(v)?show.color:C.border}`,background:buyVendorFilter===(v)?show.color:"none",color:buyVendorFilter===(v)?"#fff":C.inkMid,fontSize:10,fontWeight:buyVendorFilter===(v)?700:400,cursor:"pointer",whiteSpace:"nowrap"}}>
+                      {v||"All"} ({v?bagItems.filter(b=>b.vendor===v).length:bagItems.length})
+                    </button>
+                  ))}
+                  <div style={{flex:1}}/>
+                  {bagVendors.filter(v=>bagItems.some(b=>b.vendor===v&&b.status!=="received")).map(v=>(
+                    <button key={v} onClick={e=>{e.stopPropagation();onCreatePO&&onCreatePO(show.id,v,bagItems.filter(b=>b.vendor===v&&b.status!=="received"));}}
+                      style={{background:C.amberBg,border:`1px solid ${C.amber}50`,borderRadius:5,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",color:C.amber,whiteSpace:"nowrap"}}>
+                      📋 PO → {v}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Spreadsheet table */}
+                <div style={{border:`1.5px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse"}}>
+                    <thead>
+                      <tr style={{background:C.card,borderBottom:`1px solid ${C.border}`}}>
+                        {[["Item / Description",""],["Qty","58px"],["Unit","60px"],["Vendor","120px"],["Notes",""],["Status","84px"],["","24px"]].map(([h,w])=>(
+                          <th key={h} style={{textAlign:"left",padding:"6px 8px",fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4,...(w?{width:w}:{}),whiteSpace:"nowrap"}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredBagItems.map(item=>(
+                        <tr key={item.id} className="brow" style={{borderBottom:`1px solid ${C.border}`}}>
+                          <td style={{padding:"1px 2px"}}><input className="bci" value={item.material||""} onChange={e=>onUpdateBagItem(show.id,item.id,{material:e.target.value})} placeholder="Description…" style={CI2}/></td>
+                          <td style={{padding:"1px 2px"}}><input className="bci" value={item.qty||""} type="number" onChange={e=>onUpdateBagItem(show.id,item.id,{qty:e.target.value})} style={{...CI2,textAlign:"right"}}/></td>
+                          <td style={{padding:"1px 2px"}}><select className="bci" value={item.unit||"pcs"} onChange={e=>onUpdateBagItem(show.id,item.id,{unit:e.target.value})} style={{...CI2,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                          <td style={{padding:"1px 2px"}}><input className="bci" value={item.vendor||""} onChange={e=>onUpdateBagItem(show.id,item.id,{vendor:e.target.value})} list={`bvl-${show.id}`} placeholder="Vendor…" style={CI2}/></td>
+                          <td style={{padding:"1px 2px"}}><input className="bci" value={item.notes||""} onChange={e=>onUpdateBagItem(show.id,item.id,{notes:e.target.value})} placeholder="Notes…" style={CI2}/></td>
+                          <td style={{padding:"1px 2px"}}><select className="bci" value={item.status||"needed"} onChange={e=>onUpdateBagItem(show.id,item.id,{status:e.target.value})} style={{...CI2,cursor:"pointer",fontWeight:600,color:statusColor(item.status||"needed")}}>{["needed","ordered","received"].map(s=><option key={s}>{s}</option>)}</select></td>
+                          <td style={{padding:"1px 4px",textAlign:"center"}}><button onClick={e=>{e.stopPropagation();onRemoveBagItem(show.id,item.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,lineHeight:1,padding:0}}>&times;</button></td>
+                        </tr>
+                      ))}
+                      {/* Add new item row */}
+                      <tr style={{background:"rgba(34,197,94,.06)"}}>
+                        <td style={{padding:"1px 2px"}}><input className="bci" value={newBag.material} onChange={e=>setNewBag(b=>({...b,material:e.target.value}))} placeholder="+ New item…" style={CI2}
+                          onKeyDown={e=>{if(e.key==="Enter"&&newBag.material.trim())addNewBag();}}/></td>
+                        <td style={{padding:"1px 2px"}}><input className="bci" value={newBag.qty} type="number" onChange={e=>setNewBag(b=>({...b,qty:e.target.value}))} style={{...CI2,textAlign:"right"}}/></td>
+                        <td style={{padding:"1px 2px"}}><select className="bci" value={newBag.unit} onChange={e=>setNewBag(b=>({...b,unit:e.target.value}))} style={{...CI2,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                        <td style={{padding:"1px 2px"}}><input className="bci" value={newBag.vendor} onChange={e=>setNewBag(b=>({...b,vendor:e.target.value}))} list={`bvl-${show.id}`} placeholder="Vendor…" style={CI2}
+                          onKeyDown={e=>{if(e.key==="Enter"&&newBag.material.trim())addNewBag();}}/></td>
+                        <td style={{padding:"1px 2px"}}><input className="bci" value={newBag.notes} onChange={e=>setNewBag(b=>({...b,notes:e.target.value}))} placeholder="Notes…" style={CI2}
+                          onKeyDown={e=>{if(e.key==="Enter"&&newBag.material.trim())addNewBag();}}/></td>
+                        <td style={{padding:"5px 8px",fontSize:10,color:C.inkFaint,fontStyle:"italic"}}>needed</td>
+                        <td style={{padding:"1px 4px",textAlign:"center"}}>
+                          {newBag.material.trim()&&<button onClick={e=>{e.stopPropagation();addNewBag();}} style={{background:C.green,border:"none",borderRadius:4,color:"#fff",fontSize:11,padding:"2px 7px",cursor:"pointer",fontWeight:700}}>+</button>}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <datalist id={`bvl-${show.id}`}>
+                  {vendors.map(v=><option key={v.id} value={v.name}/>)}
+                  {bagVendors.filter(v=>!vendors.find(vv=>vv.name===v)).map(v=><option key={v} value={v}/>)}
+                </datalist>
+
+                {/* Summary */}
+                {bagItems.length>0&&(
+                  <div style={{marginTop:10,display:"flex",gap:16,flexWrap:"wrap"}}>
+                    {[["needed",C.inkFaint],["ordered",C.amber],["received",C.green]].map(([st,col])=>{
+                      const cnt=bagItems.filter(b=>(b.status||"needed")===st).length;
+                      return cnt>0?<div key={st} style={{fontSize:12}}><span style={{fontWeight:700,color:col}}>{cnt}</span><span style={{color:C.inkFaint,marginLeft:4}}>{st}</span></div>:null;
+                    })}
+                    <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{bagItems.length} item{bagItems.length!==1?"s":""} total</span>
+                  </div>
+                )}
+                {bagItems.length===0&&<div style={{textAlign:"center",fontSize:11,color:C.inkFaint,paddingTop:8}}>Start typing in the row above to add items to your buying plan</div>}
+              </div>
+            );
+          })()}
 
         </div>
     </div>
