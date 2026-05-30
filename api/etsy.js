@@ -423,7 +423,26 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    // ── create_shipment: add tracking to an Etsy order ───────────────────────
+    if (action === "create_shipment") {
+      const { receipt_id, carrier_name, tracking_code, send_bcc } = req.body || {};
+      if (!receipt_id)    return res.status(400).json({ error: "receipt_id required" });
+      if (!carrier_name)  return res.status(400).json({ error: "carrier_name required" });
+      if (!tracking_code) return res.status(400).json({ error: "tracking_code required" });
+      const r = await fetch(
+        `https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${receipt_id}/shipments`,
+        {
+          method: "POST",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ carrier_name, tracking_code, send_bcc: !!send_bcc }),
+        }
+      );
+      const data = await r.json();
+      if (!r.ok) return res.status(r.status).json({ error: data?.message || data?.error || "Etsy shipment failed", details: data });
+      return res.json({ ok: true, shipment: data });
+    }
+
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory, create_shipment" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }

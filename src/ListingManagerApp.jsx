@@ -1572,6 +1572,95 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 /* ══════════════════════════════════════════════════════════════════════════
    SHIPGLOBAL
 ══════════════════════════════════════════════════════════════════════════ */
+/* ── carrier list (shared between EtsyLiveView and OrdersView tracking) ── */
+const ETSY_CARRIERS = [
+  "DHL","FedEx","UPS","USPS","EMS","Royal Mail",
+  "India Post","Australia Post","Canada Post","Other",
+];
+
+/* helper: pull Etsy OAuth token from localStorage (no API call) */
+const getEtsyToken = async () => {
+  try {
+    const s = JSON.parse(localStorage.getItem("etsy-session") || "{}");
+    if (s.access_token && s.expiry > Date.now() + 60000) return s.access_token;
+  } catch {}
+  return null;
+};
+
+function TrackingModal({ order, isEtsy, onClose, onSubmit }) {
+  const [carrier,  setCarrier]  = useState(ETSY_CARRIERS[0]);
+  const [code,     setCode]     = useState("");
+  const [sendBcc,  setSendBcc]  = useState(true);
+  const [busy,     setBusy]     = useState(false);
+  const [err,      setErr]      = useState("");
+
+  const submit = async () => {
+    if (!code.trim()) { setErr("Tracking code is required"); return; }
+    setBusy(true); setErr("");
+    try { await onSubmit(carrier, code.trim(), sendBcc); }
+    catch(e) { setErr(e.message || "Failed"); setBusy(false); }
+  };
+
+  const orderRef  = order?.receipt_id || order?.order_number || order?.platform_order_id;
+  const buyerName = order?.name || order?.buyer_name;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 1000,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: C.bg, borderRadius: 16, width: "100%", maxWidth: 440,
+        padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ flex: 1, fontSize: 16, fontWeight: 700, color: C.ink }}>Add Tracking</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22,
+            color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+        {orderRef && (
+          <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 16, padding: "8px 12px",
+            background: C.card, borderRadius: 8, border: `1px solid ${C.border}` }}>
+            Order: <strong style={{ color: C.ink }}>{orderRef}</strong>
+            {buyerName && <span> · {buyerName}</span>}
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint, display: "block", marginBottom: 5, letterSpacing: .5 }}>CARRIER</label>
+            <select value={carrier} onChange={e => setCarrier(e.target.value)}
+              style={{ ...FI(), width: "100%", fontSize: 13 }}>
+              {ETSY_CARRIERS.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint, display: "block", marginBottom: 5, letterSpacing: .5 }}>TRACKING CODE *</label>
+            <input value={code} onChange={e => setCode(e.target.value)}
+              placeholder="e.g. EE123456789IN"
+              style={{ ...FI(), width: "100%", fontSize: 13, boxSizing: "border-box" }} />
+          </div>
+          {isEtsy && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}>
+              <input type="checkbox" checked={sendBcc} onChange={e => setSendBcc(e.target.checked)} />
+              Notify buyer with shipping update
+            </label>
+          )}
+          {err && <div style={{ fontSize: 12, color: C.red }}>{err}</div>}
+          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+            <button onClick={onClose}
+              style={{ flex: 1, padding: "10px 0", background: C.surface,
+                border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: "pointer", color: C.inkMid }}>
+              Cancel
+            </button>
+            <button onClick={submit} disabled={busy}
+              style={{ flex: 2, padding: "10px 0", background: C.green, border: "none",
+                borderRadius: 8, fontSize: 13, fontWeight: 700, color: "#fff",
+                cursor: busy ? "not-allowed" : "pointer", opacity: busy ? .7 : 1 }}>
+              {busy ? "Saving…" : "Mark Shipped ✓"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ShipGlobalConnectModal({ onClose, onSave }) {
   const [username,    setUsername]    = useState("");
   const [password,    setPassword]    = useState("");
@@ -1803,7 +1892,7 @@ function ShipGlobalLabelModal({ order, creds, token, onClose, onSuccess }) {
   );
 }
 
-function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel }) {
+function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel, onAddTracking }) {
   const [pFilter,  setPFilter]  = useState("all");
   const [search,   setSearch]   = useState("");
   const [expanded, setExpanded] = useState(null);
@@ -1941,6 +2030,25 @@ function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel }) {
                           </button>
                       }
                     </div>
+                    {/* Tracking */}
+                    <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.border}` }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 6 }}>Tracking</div>
+                      {order.tracking_code ? (
+                        <div style={{ fontSize: 12, color: C.ink, marginBottom: 8 }}>
+                          📦 {order.carrier_name || "—"} — <span style={{ fontFamily: "monospace", fontWeight: 600 }}>{order.tracking_code}</span>
+                          {order.shipped_at && <span style={{ fontSize: 11, color: C.inkFaint, marginLeft: 8 }}>
+                            ({new Date(order.shipped_at).toLocaleDateString("en-GB")})
+                          </span>}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 8 }}>No tracking yet</div>
+                      )}
+                      <button onClick={() => onAddTracking(order)}
+                        style={{ padding: "6px 14px", background: C.green, border: "none",
+                          borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
+                        {order.tracking_code ? "Update Tracking" : "+ Add Tracking"}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1995,6 +2103,7 @@ function EtsyLiveView() {
   const [toast,        setToast]        = useState("");
   const [tagInput,     setTagInput]     = useState("");
   const [showCalc,     setShowCalc]     = useState(false);
+  const [trackingOrder, setTrackingOrder] = useState(null);
   // Price calculator state
   const [calcWeight,   setCalcWeight]   = useState("");
   const [calcUnit,     setCalcUnit]     = useState("g");   // "g" or "kg"
@@ -2054,6 +2163,26 @@ function EtsyLiveView() {
 
       return null;
     } catch { return null; }
+  };
+
+  const handleAddTracking = async (carrier, code, sendBcc) => {
+    const o = trackingOrder;
+    if (!o) return;
+    const token = await getToken();
+    if (!token) throw new Error("Etsy not connected — please reconnect.");
+    const r = await fetch("/api/etsy?action=create_shipment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-etsy-token": token },
+      body: JSON.stringify({ receipt_id: o.receipt_id, carrier_name: carrier, tracking_code: code, send_bcc: sendBcc }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Failed to add tracking");
+    setOrders(prev => prev.map(x => x.receipt_id === o.receipt_id
+      ? { ...x, is_shipped: true, shipments: [...(x.shipments || []), { carrier_name: carrier, tracking_code: code }] }
+      : x
+    ));
+    setTrackingOrder(null);
+    showToast("✓ Tracking added — buyer notified");
   };
 
   const fetchAll = async (bg=false) => {
@@ -2746,6 +2875,27 @@ function EtsyLiveView() {
                             <div style={{fontSize:16,fontWeight:700,color:C.green,marginTop:2}}>{total}</div>
                           </div>
                         </div>
+
+                        {/* tracking */}
+                        <div style={{background:C.card,borderRadius:8,padding:"12px 14px"}}>
+                          <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Tracking / Shipment</div>
+                          {o.shipments?.length > 0 ? (
+                            <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:10}}>
+                              {o.shipments.map((s,i) => (
+                                <div key={i} style={{fontSize:12,color:C.ink}}>
+                                  📦 {s.carrier_name} — <span style={{fontFamily:"monospace",fontWeight:600}}>{s.tracking_code}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{fontSize:12,color:C.inkFaint,marginBottom:10}}>No tracking added yet</div>
+                          )}
+                          <button onClick={() => setTrackingOrder(o)}
+                            style={{padding:"6px 16px",background:C.green,border:"none",
+                              borderRadius:6,fontSize:12,fontWeight:600,color:"#fff",cursor:"pointer"}}>
+                            + Add Tracking
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -3141,6 +3291,14 @@ function EtsyLiveView() {
         </div>
         );
       })()}
+      {trackingOrder && (
+        <TrackingModal
+          order={trackingOrder}
+          isEtsy={true}
+          onClose={() => setTrackingOrder(null)}
+          onSubmit={handleAddTracking}
+        />
+      )}
     </div>
   );
 }
@@ -3754,8 +3912,32 @@ export default function ListingManagerApp({ onHome }) {
   const [sgToken,      setSgToken]      = useState(null);
   const [sgConnect,    setSgConnect]    = useState(false);
   const [sgLabelOrder, setSgLabelOrder] = useState(null);
+  const [trackingOrder, setTrackingOrder] = useState(null);
 
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
+
+  const handleTrackOrder = async (carrier, code, sendBcc) => {
+    const order = trackingOrder;
+    if (!order) return;
+    const updated = { ...order, tracking_code: code, carrier_name: carrier, status: "shipped", shipped_at: now() };
+    const next = orders.map(o => o.id === order.id ? updated : o);
+    await persistOrders(next);
+    // Also call Etsy API if this is an Etsy platform order
+    if (order.platform === "etsy" && order.platform_order_id) {
+      try {
+        const token = await getEtsyToken();
+        if (token) {
+          await fetch("/api/etsy?action=create_shipment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-etsy-token": token },
+            body: JSON.stringify({ receipt_id: order.platform_order_id, carrier_name: carrier, tracking_code: code, send_bcc: sendBcc }),
+          });
+        }
+      } catch {}
+    }
+    setTrackingOrder(null);
+    showToast("✓ Shipment recorded");
+  };
 
   useEffect(() => {
     Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(([l, o, s]) => {
@@ -4228,7 +4410,8 @@ export default function ListingManagerApp({ onHome }) {
           <OrdersView orders={orders}
             sgCreds={sgCreds} sgToken={sgToken}
             onSgConnect={() => setSgConnect(true)}
-            onCreateLabel={order => setSgLabelOrder(order)}/>
+            onCreateLabel={order => setSgLabelOrder(order)}
+            onAddTracking={order => setTrackingOrder(order)}/>
         )}
 
         {/* ══ PLATFORM TABS ══ */}
@@ -4282,6 +4465,14 @@ export default function ListingManagerApp({ onHome }) {
           token={sgToken}
           onClose={() => setSgLabelOrder(null)}
           onSuccess={() => { setSgLabelOrder(null); showToast("✓ Label downloaded"); }}/>
+      )}
+      {trackingOrder && tab === "orders" && (
+        <TrackingModal
+          order={trackingOrder}
+          isEtsy={trackingOrder.platform === "etsy"}
+          onClose={() => setTrackingOrder(null)}
+          onSubmit={handleTrackOrder}
+        />
       )}
     </div>
   );
