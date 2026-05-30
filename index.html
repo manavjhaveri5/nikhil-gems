@@ -9,6 +9,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Nikhil Gems" />
     <meta name="theme-color" content="#9A6200" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap">
+    <style>
+      /* Splash shown while React bootstraps — #root is empty */
+      #root:empty { display:flex; align-items:center; justify-content:center; height:100dvh; background:#FAF7F2; }
+      #root:empty::after { content:'💎'; font-size:44px; animation:ng-pulse 1.2s ease-in-out infinite; }
+      @keyframes ng-pulse { 0%,100%{opacity:.35} 50%{opacity:1} }
+    </style>
     <script>if(localStorage.getItem('ng-theme')==='dark')document.documentElement.classList.add('dark');</script>
   </head>
   <body>

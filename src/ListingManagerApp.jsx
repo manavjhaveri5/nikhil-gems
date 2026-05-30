@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { loadK, saveK, uid } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 
@@ -22,18 +22,17 @@ const mob   = () => window.innerWidth < 700;
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
-const LIST_KEY      = "ng-listings-v1";
-const ORDERS_KEY    = "ng-orders-v1";
-const STK_KEY       = "ng-stock-v5";
-const IMG_KEY       = "ng-image-library-v1";
-const SG_CREDS_KEY  = "ng-shipglobal-creds-v1";
-const SG_TOKEN_KEY  = "ng-shipglobal-token-v1";
-const SG_SERVICES   = ["DPD-CLASSIC","DPD-EXPRESS","FEDEX","ARAMEX","DELHIVERY"];
+const LIST_KEY   = "ng-listings-v1";
+const ORDERS_KEY = "ng-orders-v1";
+const STK_KEY    = "ng-stock-v5";
+const IMG_KEY    = "ng-image-library-v1";
+const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
+const SHIPGLOBAL_PORTAL_URL = "https://v2.app.shipglobal.in/auth/login";
 
 /* ─── platform config ────────────────────────────────────────────────────── */
 const PLATFORMS = [
   { key:"etsy",          label:"Etsy",         icon:"🏷️", color:"#F56400", priceField:"price_etsy",         currency:"INR" },
-  { key:"shopify_earth", label:"Earth Ed.",    icon:"🌍", color:"#2A6845", priceField:"price_shopify_earth", currency:"INR" },
+  { key:"shopify_earth", label:"Earth Ed.",    icon:"🌍", color:"#2A6845", priceField:"price_shopify_earth", currency:"USD" },
   { key:"shopify_aty",   label:"Atyahara",     icon:"💫", color:"#6B3FA0", priceField:"price_shopify_aty",  currency:"INR" },
   { key:"ebay",          label:"eBay",         icon:"🔨", color:"#0064D2", priceField:"price_ebay",          currency:"USD" },
 ];
@@ -147,6 +146,8 @@ function StatusPill({ status }) {
     deleted:  { label: "Removed",  color: C.red,     bg: C.redBg   },
     inactive: { label: "Inactive", color: C.inkMid,  bg: C.card    },
     sold:     { label: "Sold",     color: C.blue,    bg: C.blueBg  },
+    shipped:  { label: "Shipped",  color: C.green,   bg: C.greenBg },
+    unshipped:{ label: "Unshipped",color: C.amber,   bg: C.amberBg },
   };
   const s = map[status] || { label: status || "—", color: C.inkFaint, bg: C.card };
   return (
@@ -746,8 +747,12 @@ function ListingForm({ initial, stock, onSave, onClose }) {
             </div>
           </Section>
 
-          {/* ── Photos ───────────────────────────────────────────────────── */}
-          <Section title="Photos" action={<span style={{ fontSize: 11, color: C.inkFaint }}>{form.images.length} photo{form.images.length !== 1 ? "s" : ""}</span>}>
+          {/* ── Photos & video ───────────────────────────────────────────── */}
+          <Section title="Photos & Video" action={
+            <span style={{ fontSize: 11, color: C.inkFaint }}>
+              {form.images.length} photo{form.images.length !== 1 ? "s" : ""}{form.video ? " · 1 video" : ""}
+            </span>
+          }>
             <ImagePicker
               material={form.material} shape={form.shape}
               selectedUrls={form.images || []} onChange={urls => set("images", urls)}
@@ -1364,6 +1369,9 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
               border: `1px solid ${listing.type === "unique" ? C.blue : C.green}30` }}>
               {listing.type === "unique" ? "Unique" : "Repeatable"}
             </span>
+            {listing.video && <span style={{ fontSize: 10, borderRadius: 20, padding: "1px 8px", fontWeight: 700,
+              textTransform: "uppercase", letterSpacing: .4, background: C.amberBg, color: C.gold,
+              border: `1px solid ${C.gold}40` }}>Video</span>}
             {salesCount > 0 && <span style={{ fontSize: 11, color: C.inkFaint }}>· {salesCount} sold</span>}
           </div>
 
@@ -1569,383 +1577,289 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 /* ══════════════════════════════════════════════════════════════════════════
    ORDERS VIEW
 ══════════════════════════════════════════════════════════════════════════ */
-/* ══════════════════════════════════════════════════════════════════════════
-   SHIPGLOBAL
-══════════════════════════════════════════════════════════════════════════ */
-/* ── carrier list (shared between EtsyLiveView and OrdersView tracking) ── */
-const ETSY_CARRIERS = [
-  "DHL","FedEx","UPS","USPS","EMS","Royal Mail",
-  "India Post","Australia Post","Canada Post","Other",
-];
-
-/* helper: pull Etsy OAuth token from localStorage (no API call) */
-const getEtsyToken = async () => {
-  try {
-    const s = JSON.parse(localStorage.getItem("etsy-session") || "{}");
-    if (s.access_token && s.expiry > Date.now() + 60000) return s.access_token;
-  } catch {}
-  return null;
-};
-
-function TrackingModal({ order, isEtsy, onClose, onSubmit }) {
-  const [carrier,  setCarrier]  = useState(ETSY_CARRIERS[0]);
-  const [code,     setCode]     = useState("");
-  const [sendBcc,  setSendBcc]  = useState(true);
-  const [busy,     setBusy]     = useState(false);
-  const [err,      setErr]      = useState("");
-
-  const submit = async () => {
-    if (!code.trim()) { setErr("Tracking code is required"); return; }
-    setBusy(true); setErr("");
-    try { await onSubmit(carrier, code.trim(), sendBcc); }
-    catch(e) { setErr(e.message || "Failed"); setBusy(false); }
-  };
-
-  const orderRef  = order?.receipt_id || order?.order_number || order?.platform_order_id;
-  const buyerName = order?.name || order?.buyer_name;
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 1000,
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-      <div style={{ background: C.bg, borderRadius: 16, width: "100%", maxWidth: 440,
-        padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 20 }}>
-          <div style={{ flex: 1, fontSize: 16, fontWeight: 700, color: C.ink }}>Add Tracking</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22,
-            color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
-        </div>
-        {orderRef && (
-          <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 16, padding: "8px 12px",
-            background: C.card, borderRadius: 8, border: `1px solid ${C.border}` }}>
-            Order: <strong style={{ color: C.ink }}>{orderRef}</strong>
-            {buyerName && <span> · {buyerName}</span>}
-          </div>
-        )}
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint, display: "block", marginBottom: 5, letterSpacing: .5 }}>CARRIER</label>
-            <select value={carrier} onChange={e => setCarrier(e.target.value)}
-              style={{ ...FI(), width: "100%", fontSize: 13 }}>
-              {ETSY_CARRIERS.map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint, display: "block", marginBottom: 5, letterSpacing: .5 }}>TRACKING CODE *</label>
-            <input value={code} onChange={e => setCode(e.target.value)}
-              placeholder="e.g. EE123456789IN"
-              style={{ ...FI(), width: "100%", fontSize: 13, boxSizing: "border-box" }} />
-          </div>
-          {isEtsy && (
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}>
-              <input type="checkbox" checked={sendBcc} onChange={e => setSendBcc(e.target.checked)} />
-              Notify buyer with shipping update
-            </label>
-          )}
-          {err && <div style={{ fontSize: 12, color: C.red }}>{err}</div>}
-          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-            <button onClick={onClose}
-              style={{ flex: 1, padding: "10px 0", background: C.surface,
-                border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 13, cursor: "pointer", color: C.inkMid }}>
-              Cancel
-            </button>
-            <button onClick={submit} disabled={busy}
-              style={{ flex: 2, padding: "10px 0", background: C.green, border: "none",
-                borderRadius: 8, fontSize: 13, fontWeight: 700, color: "#fff",
-                cursor: busy ? "not-allowed" : "pointer", opacity: busy ? .7 : 1 }}>
-              {busy ? "Saving…" : "Mark Shipped ✓"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ShipGlobalConnectModal({ onClose, onSave }) {
-  const [username,    setUsername]    = useState("");
-  const [password,    setPassword]    = useState("");
-  const [sellerName,  setSellerName]  = useState("");
-  const [sellerMobile,setSellerMobile]= useState("");
-  const [sellerEmail, setSellerEmail] = useState("");
-  const [sellerAddr,  setSellerAddr]  = useState("");
-  const [sellerCity,  setSellerCity]  = useState("");
-  const [sellerPin,   setSellerPin]   = useState("");
-  const [sellerState, setSellerState] = useState("");
-  const [sellerCo,    setSellerCo]    = useState("Nikhil Gems");
-  const [testing,     setTesting]     = useState(false);
-  const [err,         setErr]         = useState("");
-
-  const FI_ = { background:C.surface, border:`1.5px solid ${C.border}`, color:C.ink,
-    borderRadius:6, padding:"7px 10px", fontSize:13, fontFamily:"inherit", width:"100%" };
-
-  const save = async () => {
-    if (!username || !password) { setErr("Username and password required"); return; }
-    setTesting(true); setErr("");
-    try {
-      const r = await fetch("/api/shipglobal", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ action:"authenticate", username, password }),
-      });
-      const d = await r.json();
-      if (!r.ok) { setErr(d.error || "Authentication failed"); return; }
-      const token     = d.token || d.access_token || d.data?.token;
-      const expiresAt = d.expires_at || d.data?.expires_at || (Date.now()/1000 + 86400);
-      await saveK(SG_TOKEN_KEY, { token, expiresAt });
-      const creds = { username, password, sellerName, sellerMobile, sellerEmail, sellerAddr, sellerCity, sellerPin, sellerState, sellerCo };
-      await saveK(SG_CREDS_KEY, creds);
-      onSave(creds, token);
-    } catch(e) { setErr(e.message); }
-    finally { setTesting(false); }
-  };
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:2000,
-      display:"flex",alignItems:mob()?"flex-end":"center",justifyContent:"center"}}
-      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div style={{background:C.bg,borderRadius:mob()?"14px 14px 0 0":12,padding:"22px 24px",
-        width:mob()?"100%":520,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}}>
-        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,marginBottom:4}}>Connect ShipGlobal</div>
-        <div style={{fontSize:11,color:C.inkFaint,marginBottom:16}}>Enter your ShipGlobal credentials to generate shipping labels directly from orders.</div>
-
-        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>ShipGlobal Login</div>
-        <div style={{display:"grid",gap:8,marginBottom:16}}>
-          <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Username / Email" style={FI_}/>
-          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" style={FI_}/>
-        </div>
-
-        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Shipper (Your) Details</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
-          <input value={sellerName}   onChange={e=>setSellerName(e.target.value)}   placeholder="Full Name"  style={FI_}/>
-          <input value={sellerCo}     onChange={e=>setSellerCo(e.target.value)}     placeholder="Company"    style={FI_}/>
-          <input value={sellerMobile} onChange={e=>setSellerMobile(e.target.value)} placeholder="Mobile"     style={FI_}/>
-          <input value={sellerEmail}  onChange={e=>setSellerEmail(e.target.value)}  placeholder="Email"      style={FI_}/>
-          <input value={sellerAddr}   onChange={e=>setSellerAddr(e.target.value)}   placeholder="Address"    style={{...FI_,gridColumn:"1/-1"}}/>
-          <input value={sellerCity}   onChange={e=>setSellerCity(e.target.value)}   placeholder="City"       style={FI_}/>
-          <input value={sellerState}  onChange={e=>setSellerState(e.target.value)}  placeholder="State"      style={FI_}/>
-          <input value={sellerPin}    onChange={e=>setSellerPin(e.target.value)}     placeholder="Pincode"   style={FI_}/>
-        </div>
-
-        {err && <div style={{color:C.red,fontSize:12,marginBottom:12}}>⚠ {err}</div>}
-
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={save} disabled={testing}
-            style={{flex:1,background:C.ink,color:"#FAF0DC",border:"none",borderRadius:7,
-              padding:"11px 0",fontSize:14,fontWeight:600,cursor:testing?"wait":"pointer",opacity:testing?0.7:1}}>
-            {testing ? "Connecting…" : "Connect"}
-          </button>
-          <button onClick={onClose} style={{padding:"11px 18px",background:C.surface,
-            border:`1.5px solid ${C.border}`,borderRadius:7,fontSize:13,cursor:"pointer",color:C.ink}}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ShipGlobalLabelModal({ order, creds, token, onClose, onSuccess }) {
-  const nameParts  = (order.buyer_name||"").trim().split(/\s+/);
-  const firstName  = nameParts[0] || "";
-  const lastName   = nameParts.slice(1).join(" ") || "-";
-
-  const [weightG,   setWeightG]   = useState("");
-  const [lengthCm,  setLengthCm]  = useState("");
-  const [breadthCm, setBreadthCm] = useState("");
-  const [heightCm,  setHeightCm]  = useState("");
-  const [service,   setService]   = useState(SG_SERVICES[0]);
-  const [custAddr,  setCustAddr]  = useState("");
-  const [custCity,  setCustCity]  = useState("");
-  const [custState, setCustState] = useState("");
-  const [custPin,   setCustPin]   = useState("");
-  const [creating,  setCreating]  = useState(false);
-  const [err,       setErr]       = useState("");
-
-  const FI_ = { background:C.surface, border:`1.5px solid ${C.border}`, color:C.ink,
-    borderRadius:6, padding:"7px 10px", fontSize:13, fontFamily:"inherit" };
-
-  const sellerParts = (creds.sellerName||"").trim().split(/\s+/);
-  const refId = order.platform_order_id || order.order_number || order.id;
-
-  const create = async () => {
-    if (!weightG || !lengthCm || !breadthCm || !heightCm) { setErr("All dimensions required"); return; }
-    if (!custAddr || !custCity || !custPin) { setErr("Address, city and postcode required"); return; }
-    setCreating(true); setErr("");
-    try {
-      const sgOrder = {
-        invoice_no:      `NG-${refId}`,
-        invoice_date:    new Date().toISOString().slice(0,10),
-        order_reference: String(refId),
-        service,
-        package_weight:  Number(weightG),
-        package_length:  Number(lengthCm),
-        package_breadth: Number(breadthCm),
-        package_height:  Number(heightCm),
-        currency_code:   "INR",
-        csb5_status:     false,
-        seller_firstname: sellerParts[0] || creds.sellerName || "",
-        seller_lastname:  sellerParts.slice(1).join(" ") || "",
-        seller_company:   creds.sellerCo || "Nikhil Gems",
-        seller_mobile:    creds.sellerMobile || "",
-        seller_email:     creds.sellerEmail  || "",
-        seller_address:   creds.sellerAddr   || "",
-        seller_city:      creds.sellerCity   || "",
-        seller_postcode:  creds.sellerPin    || "",
-        seller_country_code: "IN",
-        seller_state:     creds.sellerState  || "",
-        customer_shipping_firstname:    firstName,
-        customer_shipping_lastname:     lastName,
-        customer_shipping_address:      custAddr,
-        customer_shipping_city:         custCity,
-        customer_shipping_state:        custState,
-        customer_shipping_postcode:     custPin,
-        customer_shipping_country_code: order.buyer_country || "",
-        vendor_order_items: [{
-          vendor_order_item_name:      order.listing_title || "",
-          vendor_order_item_sku:       order.listing_sku   || "",
-          vendor_order_item_quantity:  1,
-          vendor_order_item_unit_price: Number(order.sale_price) || 0,
-        }],
-      };
-
-      const r = await fetch("/api/shipglobal?action=create_label", {
-        method:"POST", headers:{"Content-Type":"application/json","x-shipglobal-token":token},
-        body: JSON.stringify({ action:"create_label", order:sgOrder }),
-      });
-      const data = await r.json();
-      if (!r.ok) { setErr(data.error || "Label creation failed"); return; }
-
-      const pdf64 = data?.dpd?.raw_response?.pdf_base64 || data?.pdf_base64 || data?.label_pdf;
-      if (pdf64) {
-        const byteStr = atob(pdf64);
-        const bytes = new Uint8Array(byteStr.length);
-        for (let i=0; i<byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
-        const blob = new Blob([bytes], {type:"application/pdf"});
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement("a");
-        a.href = url; a.download = `label-${refId}.pdf`; a.click();
-        URL.revokeObjectURL(url);
-      }
-      onSuccess(data);
-    } catch(e) { setErr(e.message); }
-    finally { setCreating(false); }
-  };
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:2000,
-      display:"flex",alignItems:mob()?"flex-end":"center",justifyContent:"center"}}
-      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
-      <div style={{background:C.bg,borderRadius:mob()?"14px 14px 0 0":12,padding:"22px 24px",
-        width:mob()?"100%":540,maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}}>
-        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,marginBottom:4}}>Create ShipGlobal Label</div>
-        <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>
-          {order.order_number} · {order.buyer_name} · {order.buyer_country}
-        </div>
-
-        <div style={{background:C.amberBg,border:`1px solid ${C.borderHi}`,borderRadius:8,padding:"10px 12px",marginBottom:14,fontSize:12}}>
-          {order.listing_title}
-        </div>
-
-        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Package</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:8}}>
-          {[["Weight (g)",weightG,setWeightG],["Length (cm)",lengthCm,setLengthCm],
-            ["Width (cm)",breadthCm,setBreadthCm],["Height (cm)",heightCm,setHeightCm]].map(([lbl,val,set])=>(
-            <div key={lbl}>
-              <div style={{fontSize:10,color:C.inkFaint,marginBottom:3}}>{lbl}</div>
-              <input type="number" value={val} onChange={e=>set(e.target.value)} style={{...FI_,width:"100%"}}/>
-            </div>
-          ))}
-        </div>
-        <div style={{marginBottom:14}}>
-          <div style={{fontSize:10,color:C.inkFaint,marginBottom:3}}>Service</div>
-          <select value={service} onChange={e=>setService(e.target.value)} style={{...FI_,width:"100%"}}>
-            {SG_SERVICES.map(s=><option key={s}>{s}</option>)}
-          </select>
-        </div>
-
-        <div style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>
-          Recipient Address — {order.buyer_country}
-        </div>
-        <div style={{display:"grid",gap:8,marginBottom:14}}>
-          <input value={custAddr}  onChange={e=>setCustAddr(e.target.value)}  placeholder="Street address" style={{...FI_,width:"100%"}}/>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-            <input value={custCity}  onChange={e=>setCustCity(e.target.value)}  placeholder="City"     style={{...FI_,width:"100%"}}/>
-            <input value={custState} onChange={e=>setCustState(e.target.value)} placeholder="State"    style={{...FI_,width:"100%"}}/>
-            <input value={custPin}   onChange={e=>setCustPin(e.target.value)}   placeholder="Postcode" style={{...FI_,width:"100%"}}/>
-          </div>
-        </div>
-
-        {err && <div style={{color:C.red,fontSize:12,marginBottom:12}}>⚠ {err}</div>}
-
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={create} disabled={creating}
-            style={{flex:1,background:C.ink,color:"#FAF0DC",border:"none",borderRadius:7,
-              padding:"11px 0",fontSize:14,fontWeight:600,cursor:creating?"wait":"pointer",opacity:creating?0.7:1}}>
-            {creating ? "Creating…" : "Generate & Download Label"}
-          </button>
-          <button onClick={onClose} style={{padding:"11px 18px",background:C.surface,
-            border:`1.5px solid ${C.border}`,borderRadius:7,fontSize:13,cursor:"pointer",color:C.ink}}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel, onAddTracking }) {
+function OrdersView({ orders, listings = [] }) {
   const [pFilter,  setPFilter]  = useState("all");
+  const [shipFilter, setShipFilter] = useState("all");
   const [search,   setSearch]   = useState("");
   const [expanded, setExpanded] = useState(null);
+  const [copied, setCopied] = useState("");
+  const [shipGlobalState, setShipGlobalState] = useState({});
+  const [shipGlobalConfig, setShipGlobalConfig] = useState(null);
+  const [etsyBackfilling, setEtsyBackfilling] = useState(false);
+  const etsyBackfillRef = useRef(false);
+  const money = (amount, currency = "INR") => {
+    const sym = currency === "INR" ? "₹" : currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency === "JPY" ? "¥" : currency;
+    return `${sym}${fmt(amount)}`;
+  };
+  const isShipped = o => ["shipped", "completed", "fulfilled"].includes(String(o.status || "").toLowerCase()) || !!o.shipped_at;
+  const orderDate = o => o.date || o.created_at || new Date().toISOString().slice(0, 10);
+  const addressLines = o => [
+    o.ship_name || o.buyer_name,
+    o.ship_address1,
+    o.ship_address2,
+    [o.ship_city, o.ship_state, o.ship_postcode].filter(Boolean).join(", "),
+    o.ship_country || o.buyer_country,
+    o.ship_phone ? `Phone: ${o.ship_phone}` : "",
+    o.buyer_email ? `Email: ${o.buyer_email}` : "",
+  ].filter(Boolean);
+  const copyText = async (label, text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(label);
+      setTimeout(() => setCopied(""), 1800);
+    } catch {
+      setCopied("");
+    }
+  };
+  const shipGlobalDraft = o => {
+    const parts = String(o.ship_name || o.buyer_name || "").trim().split(/\s+/).filter(Boolean);
+    const first = parts[0] || "";
+    const last = parts.slice(1).join(" ") || "-";
+    return {
+      invoice_no: o.order_number || o.platform_order_id || "",
+      invoice_date: orderDate(o),
+      order_reference: o.platform_order_id || o.order_number || "",
+      service: "DHLECS-CLASSIC",
+      package_weight: 0,
+      package_length: 0,
+      package_breadth: 0,
+      package_height: 0,
+      currency_code: o.currency || "USD",
+      csb5_status: 1,
+      seller_nickname: "",
+      seller_firstname: "",
+      seller_lastname: "",
+      seller_mobile: "",
+      seller_email: "",
+      seller_company: "",
+      seller_address: "",
+      seller_address_2: "",
+      seller_city: "",
+      seller_postcode: "",
+      seller_country_code: "IN",
+      seller_state: "",
+      customer_shipping_firstname: first,
+      customer_shipping_lastname: last,
+      customer_shipping_mobile: o.ship_phone || "",
+      customer_shipping_email: o.buyer_email || "",
+      customer_shipping_company: "",
+      customer_shipping_address: o.ship_address1 || "",
+      customer_shipping_address_2: o.ship_address2 || "",
+      customer_shipping_city: o.ship_city || "",
+      customer_shipping_postcode: o.ship_postcode || "",
+      customer_shipping_country_code: o.ship_country || o.buyer_country || "",
+      customer_shipping_state: o.ship_state || "",
+      vendor_order_items: [{
+        vendor_order_item_name: o.listing_title || "",
+        vendor_order_item_sku: o.listing_sku || o.etsy_transaction_id || o.order_number || "",
+        vendor_order_item_quantity: 1,
+        vendor_order_item_unit_price: +o.sale_price || 0,
+        vendor_order_item_hsn: "",
+        vendor_order_item_tax_rate: 0,
+      }],
+      tracking: "",
+      retry: false,
+    };
+  };
+  const createShipGlobalLabel = async o => {
+    setShipGlobalState(s => ({ ...s, [o.id]: { loading: true, error: "", label: null } }));
+    try {
+      const r = await fetch("/api/shipglobal?action=create_label", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order: shipGlobalDraft(o) }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) throw new Error(d.error || d.message || "ShipGlobal label failed");
+      const pdf = d.data?.pdf_base64 || d.pdf_base64;
+      if (pdf) {
+        const bytes = Uint8Array.from(atob(pdf), c => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      setShipGlobalState(s => ({ ...s, [o.id]: { loading: false, error: "", label: d.data || d } }));
+    } catch (e) {
+      setShipGlobalState(s => ({ ...s, [o.id]: { loading: false, error: e.message || "ShipGlobal label failed", label: null } }));
+    }
+  };
+  const findOrderImage = o => {
+    if (o.listing_image || o.image || o.images?.[0]) return o.listing_image || o.image || o.images?.[0];
+    const norm = v => String(v || "").trim().toLowerCase();
+    const direct = listings.find(l => o.listing_id && l.id === o.listing_id);
+    const byEtsy = listings.find(l => o.etsy_listing_id && String(l.platforms?.etsy?.listing_id || "") === String(o.etsy_listing_id));
+    const bySku = listings.find(l => o.listing_sku && norm(l.sku) === norm(o.listing_sku));
+    const byTitle = listings.find(l => o.listing_title && norm(l.title) === norm(o.listing_title));
+    return (direct || byEtsy || bySku || byTitle)?.images?.[0] || "";
+  };
+  const etsyImageFromTxn = txn => {
+    const img = txn?.image_data || {};
+    return img.url_570xN || img.url_fullxfull || img.url_170x135 || img.url_75x75 || "";
+  };
+  const etsyEmailFromReceipt = receipt => receipt?.buyer_email || receipt?.email || receipt?.customer_email || receipt?.customer?.email || receipt?.buyer?.email || "";
+  const etsyOrderPatchMap = rawOrders => {
+    const patches = {};
+    (rawOrders || []).forEach(receipt => {
+      const txns = receipt.transactions?.length ? receipt.transactions : [null];
+      txns.forEach((txn, idx) => {
+        const receiptId = receipt.receipt_id;
+        const listingId = txn?.listing_id || "";
+        const txnId = txn?.transaction_id || "";
+        const id = `etsy-${receiptId}-${txnId || listingId || idx}`;
+        patches[id] = {
+          listing_image: etsyImageFromTxn(txn),
+          buyer_email: etsyEmailFromReceipt(receipt),
+          buyer_name: receipt.name || etsyEmailFromReceipt(receipt),
+          buyer_country: receipt.country_iso || "",
+          etsy_listing_id: listingId,
+          ship_name: receipt.name || "",
+          ship_address1: receipt.first_line || "",
+          ship_address2: receipt.second_line || "",
+          ship_city: receipt.city || "",
+          ship_state: receipt.state || "",
+          ship_postcode: receipt.zip || "",
+          ship_country: receipt.country_iso || "",
+          ship_phone: receipt.phone || receipt.formatted_phone || "",
+        };
+      });
+    });
+    return patches;
+  };
+  const mergeEtsyBackfill = async rawOrders => {
+    const patches = etsyOrderPatchMap(rawOrders);
+    if (!Object.keys(patches).length) return false;
+    const current = await loadK(ORDERS_KEY);
+    let changed = false;
+    const next = (current || orders || []).map(order => {
+      if (order.platform !== "etsy") return order;
+      const receiptId = order.etsy_receipt_id || order.platform_order_id || String(order.order_number || "").replace(/^ETSY-/, "").split("-")[0];
+      const candidates = [
+        order.id,
+        order.etsy_transaction_id ? `etsy-${receiptId}-${order.etsy_transaction_id}` : "",
+        order.etsy_listing_id ? `etsy-${receiptId}-${order.etsy_listing_id}` : "",
+      ].filter(Boolean);
+      const patch = candidates.map(k => patches[k]).find(Boolean);
+      if (!patch) return order;
+      const merged = { ...order };
+      Object.entries(patch).forEach(([k, v]) => {
+        if (v && !merged[k]) merged[k] = v;
+      });
+      if (JSON.stringify(merged) !== JSON.stringify(order)) changed = true;
+      return merged;
+    });
+    if (changed) {
+      await saveK(ORDERS_KEY, next);
+      window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+    }
+    return changed;
+  };
+
+  useEffect(() => {
+    fetch("/api/shipglobal?action=status")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setShipGlobalConfig(d))
+      .catch(() => setShipGlobalConfig(null));
+  }, []);
+
+  useEffect(() => {
+    const needsBackfill = (orders || []).some(o => o.platform === "etsy" && (!findOrderImage(o) || !o.buyer_email || !o.ship_address1));
+    if (!needsBackfill || etsyBackfillRef.current) return;
+    etsyBackfillRef.current = true;
+    setEtsyBackfilling(true);
+    const authHeaders = (() => {
+      try {
+        const sess = JSON.parse(localStorage.getItem("etsy-session") || "{}");
+        return sess.access_token ? { "X-Etsy-Token": sess.access_token } : {};
+      } catch { return {}; }
+    })();
+    fetch("/api/etsy?action=orders&limit=100&enrich=true", { headers: authHeaders })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => mergeEtsyBackfill(d?.results || []))
+      .catch(() => {})
+      .finally(() => setEtsyBackfilling(false));
+  }, [orders, listings]);
 
   const filtered = (orders || [])
     .filter(o => pFilter === "all" || o.platform === pFilter)
-    .filter(o => !search || [o.listing_title, o.buyer_name, o.order_number, o.platform_order_id]
+    .filter(o => shipFilter === "all" || (shipFilter === "shipped" ? isShipped(o) : !isShipped(o)))
+    .filter(o => !search || [
+      o.listing_title, o.buyer_name, o.buyer_email, o.order_number, o.platform_order_id,
+      o.listing_sku, o.buyer_country, o.ship_address1, o.ship_city, o.ship_postcode,
+    ]
       .join(" ").toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => new Date(b.created_at || b.date) - new Date(a.created_at || a.date));
 
-  const revenue = filtered.reduce((s, o) => s + (+o.sale_price || 0), 0);
+  const revenueByCurrency = filtered.reduce((m, o) => {
+    const c = o.currency || "INR";
+    m[c] = (m[c] || 0) + (+o.sale_price || 0);
+    return m;
+  }, {});
+  const revenueLabel = Object.entries(revenueByCurrency).map(([c, v]) => money(v, c)).join(" · ") || money(0);
+  const shippedCount = (orders || []).filter(isShipped).length;
+  const unshippedCount = (orders || []).length - shippedCount;
 
   const FILTER_OPTS = [
     { key: "all",    label: "All",      icon: "📦" },
     ...PLATFORMS.filter(p => !p.coming),
     { key: "manual", label: "Manual",   icon: "✏️", color: C.inkMid },
   ];
+  const SHIP_OPTS = [
+    { key:"all", label:"All", n:orders.length, color:C.ink },
+    { key:"unshipped", label:"Unshipped", n:unshippedCount, color:C.amber },
+    { key:"shipped", label:"Shipped", n:shippedCount, color:C.green },
+  ];
 
   return (
     <div>
       {/* stats */}
-      <div style={{ display: "flex", gap: 20, paddingBottom: 16, borderBottom: `1px solid ${C.border}`, marginBottom: 16, overflowX: "auto" }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
         {[
-          { label: "Total Orders",  val: orders.length,     color: C.ink  },
-          { label: "Filtered",      val: filtered.length,   color: C.blue },
-          { label: "Revenue",       val: `₹${fmt(revenue)}`, color: C.green },
-          ...PLATFORMS.filter(p => !p.coming).map(p => ({
-            label: p.label, val: orders.filter(o => o.platform === p.key).length, color: p.color,
-          })),
+          { label: "Total Orders",  val: orders.length,     color: C.ink, bg: C.surface },
+          { label: "Unshipped",     val: unshippedCount,    color: C.amber, bg: C.amberBg },
+          { label: "Shipped",       val: shippedCount,      color: C.green, bg: C.greenBg },
+          { label: "Revenue",       val: revenueLabel,      color: C.blue, bg: C.blueBg },
         ].map(s => (
-          <div key={s.label} style={{ textAlign: "center", flexShrink: 0 }}>
-            <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.val}</div>
-            <div style={{ fontSize: 10, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5, marginTop: 1 }}>{s.label}</div>
+          <div key={s.label} style={{ background: s.bg, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "13px 15px", minHeight: 74 }}>
+            <div style={{ fontSize: 9, color: s.color, textTransform: "uppercase", letterSpacing: .7, fontWeight: 800, marginBottom: 6 }}>{s.label}</div>
+            <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 24, fontWeight: 700, color: C.ink, lineHeight: 1.05 }}>{s.val}</div>
           </div>
         ))}
       </div>
 
       {/* filter bar */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-        {FILTER_OPTS.map(p => (
-          <button key={p.key} onClick={() => setPFilter(p.key)}
-            style={{ padding: "6px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-              fontWeight: pFilter === p.key ? 700 : 400,
-              border: `1.5px solid ${pFilter === p.key ? (p.color || C.gold) : C.border}`,
-              background: pFilter === p.key ? (p.color || C.gold) + "20" : C.surface,
-              color: pFilter === p.key ? (p.color || C.ink) : C.inkMid }}>
-            {p.icon} {p.label}
-          </button>
-        ))}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 4, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
+          {SHIP_OPTS.map(opt => (
+            <button key={opt.key} onClick={() => setShipFilter(opt.key)}
+              style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", border: "none",
+                fontWeight: shipFilter === opt.key ? 800 : 500,
+                background: shipFilter === opt.key ? C.surface : "transparent",
+                color: shipFilter === opt.key ? opt.color : C.inkMid,
+                boxShadow: shipFilter === opt.key ? "0 1px 4px rgba(0,0,0,.08)" : "none" }}>
+              {opt.label} <span style={{ opacity: .65 }}>{opt.n}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {FILTER_OPTS.map(p => (
+            <button key={p.key} onClick={() => setPFilter(p.key)}
+              style={{ padding: "6px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                fontWeight: pFilter === p.key ? 700 : 400,
+                border: `1.5px solid ${pFilter === p.key ? (p.color || C.gold) : C.border}`,
+                background: pFilter === p.key ? (p.color || C.gold) + "20" : C.surface,
+                color: pFilter === p.key ? (p.color || C.ink) : C.inkMid }}>
+              {p.icon} {p.label}
+            </button>
+          ))}
+        </div>
         <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search orders…"
-          style={{ ...FI(), width: 200, fontSize: 12, padding: "6px 12px", borderRadius: 20, marginLeft: "auto" }} />
+          placeholder="Search buyer, email, SKU, order..."
+          style={{ ...FI(), width: mob() ? "100%" : 260, fontSize: 12, padding: "8px 13px", borderRadius: 10, marginLeft: "auto" }} />
       </div>
+      {etsyBackfilling && (
+        <div style={{ marginBottom: 10, background: C.blueBg, border: `1px solid ${C.blue}25`, color: C.blue, borderRadius: 9, padding: "8px 11px", fontSize: 12, fontWeight: 700 }}>
+          Refreshing Etsy order photos and contact details...
+        </div>
+      )}
 
       {/* order list */}
       {filtered.length === 0 ? (
@@ -1959,96 +1873,155 @@ function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel, onAd
           {filtered.map(order => {
             const p = PLATFORMS.find(x => x.key === order.platform) || { label: "Manual", icon: "✏️", color: C.inkMid };
             const isExp = expanded === order.id;
+            const shipped = isShipped(order);
+            const status = shipped ? "shipped" : "unshipped";
+            const addr = addressLines(order);
+            const copyAddress = addr.join("\n");
+            const image = findOrderImage(order);
             return (
               <div key={order.id}
-                style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                style={{ background: C.surface, border: `1.5px solid ${isExp ? p.color || C.gold : C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: isExp ? "0 8px 28px rgba(0,0,0,.08)" : "0 1px 5px rgba(0,0,0,.04)" }}>
                 {/* row */}
-                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer" }}
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: mob() ? "54px minmax(0,1fr)" : "58px minmax(280px,2fr) minmax(120px,.6fr) 120px",
+                  gap: mob() ? 10 : 14,
+                  alignItems: "center",
+                  padding: mob() ? 10 : "9px 12px",
+                  cursor: "pointer",
+                }}
                   onClick={() => setExpanded(isExp ? null : order.id)}>
-                  <div style={{ width: 44, height: 44, borderRadius: 6, overflow: "hidden",
+                  <div style={{ width: 54, height: 54, borderRadius: 9, overflow: "hidden",
                     background: C.card, flexShrink: 0, border: `1px solid ${C.border}` }}>
-                    {order.listing_image
-                      ? <img src={order.listing_image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>💎</div>}
+                    {image
+                      ? <img src={image} alt="" loading="eager" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>💎</div>}
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, fontFamily: "monospace", color: C.gold }}>{order.order_number}</span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, fontFamily: "monospace", color: p.color || C.gold }}>{order.order_number}</span>
+                      <span style={{ fontSize: 14, fontWeight: 750, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                         {order.listing_title}
                       </span>
                     </div>
-                    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      <span style={{ color: p.color, fontWeight: 600 }}>{p.icon} {p.label}</span>
-                      <span>{new Date(order.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span>
-                      {order.buyer_name && <span>{order.buyer_name}{order.buyer_country ? `, ${order.buyer_country}` : ""}</span>}
+                    <div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {[order.buyer_name, order.buyer_email || "No email", order.listing_sku || order.etsy_transaction_id || order.platform_order_id]
+                        .filter(Boolean).join(" · ")}
                     </div>
                   </div>
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: C.green }}>₹{fmt(order.sale_price)}</div>
-                    <StatusPill status={order.status || "sold"} />
+                  <div style={{ display: mob() ? "none" : "block" }}>
+                    <div style={{ fontSize: 11, color: p.color, fontWeight: 750 }}>{p.icon} {p.label}</div>
+                    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{new Date(orderDate(order)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>
+                  </div>
+                  <div style={{ textAlign: mob() ? "left" : "right", gridColumn: mob() ? "2 / 3" : "auto" }}>
+                    <div style={{ fontSize: 16, fontWeight: 850, color: C.green }}>{money(order.sale_price, order.currency)}</div>
+                    <div style={{ marginTop: 3 }}><StatusPill status={status} /></div>
                   </div>
                 </div>
 
                 {/* expanded detail */}
                 {isExp && (
-                  <div style={{ borderTop: `1px solid ${C.border}`, background: C.bg }}>
-                    <div style={{ padding: "12px 16px", display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
+                  <div style={{ borderTop: `1px solid ${C.border}`, padding: "13px 14px", background: C.bg }}>
+                    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint }}>Ship To</div>
+                          <button onClick={() => copyText(`address-${order.id}`, copyAddress)}
+                            disabled={!copyAddress}
+                            style={{ background: copied === `address-${order.id}` ? C.green : C.card, border: `1px solid ${copied === `address-${order.id}` ? C.green : C.border}`, borderRadius: 7, padding: "5px 9px", fontSize: 11, fontWeight: 750, color: copied === `address-${order.id}` ? "#fff" : C.ink, cursor: copyAddress ? "pointer" : "not-allowed" }}>
+                            {copied === `address-${order.id}` ? "Copied" : "Copy Address"}
+                          </button>
+                        </div>
+                        <div style={{ whiteSpace: "pre-line", fontSize: 13, color: C.ink, lineHeight: 1.55, minHeight: 44 }}>
+                          {copyAddress || "No shipping address stored yet"}
+                        </div>
+                      </div>
+                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint }}>Buyer Contact</div>
+                          <button onClick={() => copyText(`email-${order.id}`, order.buyer_email || "")}
+                            disabled={!order.buyer_email}
+                            style={{ background: copied === `email-${order.id}` ? C.green : C.card, border: `1px solid ${copied === `email-${order.id}` ? C.green : C.border}`, borderRadius: 7, padding: "5px 9px", fontSize: 11, fontWeight: 750, color: copied === `email-${order.id}` ? "#fff" : C.ink, cursor: order.buyer_email ? "pointer" : "not-allowed" }}>
+                            {copied === `email-${order.id}` ? "Copied" : "Copy Email"}
+                          </button>
+                        </div>
+                        <div style={{ fontSize: 13, color: C.ink, lineHeight: 1.55 }}>
+                          <div style={{ fontWeight: 750 }}>{order.buyer_name || "No buyer name"}</div>
+                          <div>{order.buyer_email || "No email stored"}</div>
+                          <div>{order.ship_phone || ""}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                        <div>
+                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint, marginBottom: 3 }}>ShipGlobal</div>
+                          <div style={{ fontSize: 12, color: C.inkMid }}>
+                            {shipGlobalConfig?.configured ? "Create a label from this order, or open your ShipGlobal dashboard." : "Open ShipGlobal to connect/login. One-click labels here need ShipGlobal API credentials saved in Vercel."}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <a href={SHIPGLOBAL_PORTAL_URL} target="_blank" rel="noreferrer"
+                            style={{ textDecoration: "none", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, color: C.ink }}>
+                            Open Portal
+                          </a>
+                          <button onClick={() => {
+                              if (!shipGlobalConfig?.configured) {
+                                window.open(SHIPGLOBAL_PORTAL_URL, "_blank", "noopener,noreferrer");
+                                return;
+                              }
+                              createShipGlobalLabel(order);
+                            }}
+                            disabled={!!shipGlobalState[order.id]?.loading}
+                            style={{ background: shipGlobalConfig?.configured ? C.ink : C.gold, border: "none", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, color: "#fff", cursor: shipGlobalState[order.id]?.loading ? "wait" : "pointer", opacity: shipGlobalState[order.id]?.loading ? .7 : 1 }}>
+                            {shipGlobalState[order.id]?.loading ? "Creating..." : shipGlobalConfig?.configured ? "Create Label" : "Connect / Login"}
+                          </button>
+                        </div>
+                      </div>
+                      {shipGlobalConfig?.configured && (!shipGlobalConfig?.hasPackageDefaults || !shipGlobalConfig?.hasSellerDefaults) && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: C.amber, background: C.amberBg, border: `1px solid ${C.amber}30`, borderRadius: 8, padding: "7px 9px" }}>
+                          Add ShipGlobal seller and package defaults in Vercel env before creating labels.
+                        </div>
+                      )}
+                      {shipGlobalState[order.id]?.error && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
+                          {shipGlobalState[order.id].error}
+                        </div>
+                      )}
+                      {shipGlobalState[order.id]?.label && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 8, padding: "7px 9px" }}>
+                          Label ready: {shipGlobalState[order.id].label.waybill_number || shipGlobalState[order.id].label.order_number || "created"}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
                       {[
-                        ["Order #",       order.order_number],
-                        ["Platform",      `${p.icon} ${p.label}`],
-                        ["Platform ID",   order.platform_order_id || "—"],
-                        ["Date",          new Date(order.date).toLocaleDateString("en-GB")],
+                        ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
+                        ["Transaction",   order.etsy_transaction_id || "—"],
+                        ["Date",          new Date(orderDate(order)).toLocaleDateString("en-GB")],
                         ["Buyer",         order.buyer_name || "—"],
+                        ["Email",         order.buyer_email || "—"],
                         ["Country",       order.buyer_country || "—"],
-                        ["Sale Price",    `₹${fmt(order.sale_price)}`],
+                        ["Sale Price",    money(order.sale_price, order.currency)],
                         ["SKU",           order.listing_sku || "—"],
-                        ["Notes",         order.notes || "—"],
+                        ["Status",        shipped ? "Shipped" : "Unshipped"],
+                        ["Reference",     order.order_number || "—"],
                         ["Material",      order.listing_material || "—"],
                         ["Shape",         order.listing_shape || "—"],
-                        ["Created",       new Date(order.created_at).toLocaleDateString("en-GB")],
+                        ["Created",       order.created_at ? new Date(order.created_at).toLocaleDateString("en-GB") : "—"],
                       ].map(([k, v]) => (
-                        <div key={k}>
-                          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 2 }}>{k}</div>
-                          <div style={{ fontSize: 12, color: C.ink, fontWeight: 500 }}>{v}</div>
+                        <div key={k} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
+                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>{k}</div>
+                          <div style={{ fontSize: 12, color: C.ink, fontWeight: 600, overflowWrap: "anywhere" }}>{v}</div>
                         </div>
                       ))}
                     </div>
-                    {/* ShipGlobal */}
-                    <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 11, color: C.inkFaint, flex: 1 }}>📦 ShipGlobal</span>
-                      {sgCreds && sgToken
-                        ? <button onClick={() => onCreateLabel(order)}
-                            style={{ padding: "7px 14px", background: "#0057a8", color: "#fff", border: "none",
-                              borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                            Create Label
-                          </button>
-                        : <button onClick={onSgConnect}
-                            style={{ padding: "7px 14px", background: C.surface, border: `1.5px solid ${C.border}`,
-                              borderRadius: 6, fontSize: 12, cursor: "pointer", color: C.inkMid, fontWeight: 600 }}>
-                            Connect ShipGlobal
-                          </button>
-                      }
-                    </div>
-                    {/* Tracking */}
-                    <div style={{ padding: "10px 16px", borderTop: `1px solid ${C.border}` }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 6 }}>Tracking</div>
-                      {order.tracking_code ? (
-                        <div style={{ fontSize: 12, color: C.ink, marginBottom: 8 }}>
-                          📦 {order.carrier_name || "—"} — <span style={{ fontFamily: "monospace", fontWeight: 600 }}>{order.tracking_code}</span>
-                          {order.shipped_at && <span style={{ fontSize: 11, color: C.inkFaint, marginLeft: 8 }}>
-                            ({new Date(order.shipped_at).toLocaleDateString("en-GB")})
-                          </span>}
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 8 }}>No tracking yet</div>
-                      )}
-                      <button onClick={() => onAddTracking(order)}
-                        style={{ padding: "6px 14px", background: C.green, border: "none",
-                          borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
-                        {order.tracking_code ? "Update Tracking" : "+ Add Tracking"}
-                      </button>
-                    </div>
+                    {order.notes && (
+                      <div style={{ marginTop: 10, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 11px" }}>
+                        <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>Notes</div>
+                        <div style={{ fontSize: 12, color: C.inkMid, lineHeight: 1.45 }}>{order.notes}</div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -2070,19 +2043,6 @@ function OrdersView({ orders, sgCreds, sgToken, onSgConnect, onCreateLabel, onAd
    ETSY SHOP MANAGER — fast load, edit listings, full orders + customers
 ══════════════════════════════════════════════════════════════════════════ */
 const ETSY_CACHE = "ng-etsy-v3";
-
-/* Transaction image with lazy-fetch fallback for sold/inactive listings */
-function TxnImg({ listing_id, image_data, fetchImg, size = 52 }) {
-  const initial = image_data?.url_75x75 || image_data?.url_170x135 || null;
-  const [url, setUrl] = useState(initial);
-  useEffect(() => {
-    if (!url && listing_id) fetchImg(listing_id).then(u => { if (u) setUrl(u); });
-  }, [listing_id]);
-  const s = { width: size, height: size, borderRadius: 7, flexShrink: 0 };
-  return url
-    ? <img src={url} alt="" style={{ ...s, objectFit: "cover" }} />
-    : <div style={{ ...s, background: C.border, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>💎</div>;
-}
 
 function EtsyLiveView() {
   const loadCache = () => { try { return JSON.parse(localStorage.getItem(ETSY_CACHE)||"{}"); } catch { return {}; } };
@@ -2116,7 +2076,6 @@ function EtsyLiveView() {
   const [toast,        setToast]        = useState("");
   const [tagInput,     setTagInput]     = useState("");
   const [showCalc,     setShowCalc]     = useState(false);
-  const [trackingOrder, setTrackingOrder] = useState(null);
   // Price calculator state
   const [calcWeight,   setCalcWeight]   = useState("");
   const [calcUnit,     setCalcUnit]     = useState("g");   // "g" or "kg"
@@ -2135,6 +2094,83 @@ function EtsyLiveView() {
 
   const saveCache = (ls, os) => {
     try { localStorage.setItem(ETSY_CACHE, JSON.stringify({listings:ls, orders:os, syncedAt:Date.now()})); } catch {}
+  };
+
+  const etsyMoney = m => (m?.amount || 0) / (m?.divisor || 100);
+  const etsyOrderDate = o => {
+    const ts = o.create_timestamp || o.creation_tsz || o.created_timestamp || o.update_timestamp;
+    return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+  };
+  const etsyBuyerEmail = o => o.buyer_email || o.email || o.customer_email || o.customer?.email || o.buyer?.email || "";
+
+  const etsyListingImage = listing => {
+    const imgs = listing?.images || listing?.Images || [];
+    const img = [...imgs].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0] || listing?.main_image;
+    return img?.url_570xN || img?.url_fullxfull || img?.url_170x135 || img?.url_75x75 || "";
+  };
+
+  const syncOrdersToERP = async (rawOrders, etsyListings = []) => {
+    const [erpListings, erpOrders] = await Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY)]);
+    const listingByEtsyId = {};
+    (erpListings || []).forEach(l => {
+      const id = l.platforms?.etsy?.listing_id;
+      if (id) listingByEtsyId[String(id)] = l;
+    });
+    const liveListingByEtsyId = {};
+    (etsyListings || []).forEach(l => {
+      const id = l.listing_id || l.listingId || l.id;
+      if (id) liveListingByEtsyId[String(id)] = l;
+    });
+    const normalized = [];
+    (rawOrders || []).forEach(o => {
+      const txns = o.transactions?.length ? o.transactions : [null];
+      txns.forEach((txn, idx) => {
+        const etsyListingId = txn?.listing_id;
+        const linked = etsyListingId ? listingByEtsyId[String(etsyListingId)] : null;
+        const liveListing = etsyListingId ? liveListingByEtsyId[String(etsyListingId)] : null;
+        const currency = txn?.price?.currency_code || o.grandtotal?.currency_code || "USD";
+        const lineTotal = txn?.price ? etsyMoney(txn.price) * (txn.quantity || 1) : etsyMoney(o.grandtotal);
+        const id = `etsy-${o.receipt_id}-${txn?.transaction_id || etsyListingId || idx}`;
+        normalized.push({
+          id,
+          order_number:      `ETSY-${o.receipt_id}${txns.length > 1 ? `-${idx + 1}` : ""}`,
+          listing_id:        linked?.id || "",
+          listing_title:     txn?.title || linked?.title || `Etsy order #${o.receipt_id}`,
+          listing_material:  linked?.material || "",
+          listing_shape:     linked?.shape || "",
+          listing_sku:       txn?.sku || linked?.sku || "",
+          listing_image:     txn?.image_data?.url_570xN || txn?.image_data?.url_fullxfull || txn?.image_data?.url_170x135 || txn?.image_data?.url_75x75 || etsyListingImage(liveListing) || linked?.images?.[0] || "",
+          platform:          "etsy",
+          platform_order_id: String(o.receipt_id),
+          etsy_listing_id:   etsyListingId || "",
+          etsy_receipt_id:   o.receipt_id,
+          etsy_transaction_id: txn?.transaction_id || "",
+          sale_price:        Number(lineTotal.toFixed(2)),
+          currency,
+          buyer_name:        o.name || etsyBuyerEmail(o) || "",
+          buyer_country:     o.country_iso || "",
+          buyer_email:       etsyBuyerEmail(o),
+          ship_name:         o.name || "",
+          ship_address1:     o.first_line || "",
+          ship_address2:     o.second_line || "",
+          ship_city:         o.city || "",
+          ship_state:        o.state || "",
+          ship_postcode:     o.zip || "",
+          ship_country:      o.country_iso || "",
+          ship_phone:        o.phone || o.formatted_phone || "",
+          status:            o.is_shipped ? "shipped" : "sold",
+          date:              etsyOrderDate(o),
+          notes:             o.message_from_buyer || "",
+          created_at:        new Date((o.create_timestamp || o.creation_tsz || Date.now() / 1000) * 1000).toISOString(),
+          source:            "etsy-sync",
+        });
+      });
+    });
+    if (!normalized.length) return;
+    const importedIds = new Set(normalized.map(o => o.id));
+    const next = [...normalized, ...(erpOrders || []).filter(o => !importedIds.has(o.id))];
+    await saveK(ORDERS_KEY, next);
+    window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
   };
 
   // ── Token management — localStorage first, fall back to shared Supabase session
@@ -2178,42 +2214,6 @@ function EtsyLiveView() {
     } catch { return null; }
   };
 
-  const handleAddTracking = async (carrier, code, sendBcc) => {
-    const o = trackingOrder;
-    if (!o) return;
-    const token = await getToken();
-    if (!token) throw new Error("Etsy not connected — please reconnect.");
-    const r = await fetch("/api/etsy?action=create_shipment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-etsy-token": token },
-      body: JSON.stringify({ receipt_id: o.receipt_id, carrier_name: carrier, tracking_code: code, send_bcc: sendBcc }),
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || "Failed to add tracking");
-    setOrders(prev => prev.map(x => x.receipt_id === o.receipt_id
-      ? { ...x, is_shipped: true, shipments: [...(x.shipments || []), { carrier_name: carrier, tracking_code: code }] }
-      : x
-    ));
-    setTrackingOrder(null);
-    showToast("✓ Tracking added — buyer notified");
-  };
-
-  /* per-session image cache for transaction listing images (not React state — no re-render on writes) */
-  const imgCacheRef = useRef({});
-  const fetchTxnImg = useCallback(async (listing_id) => {
-    const k = String(listing_id);
-    if (k in imgCacheRef.current) return imgCacheRef.current[k] || null;
-    try {
-      const tok = await getToken();
-      const headers = tok ? { "X-Etsy-Token": tok } : {};
-      const r = await fetch(`/api/etsy?action=listing_images&listing_id=${listing_id}`, { headers });
-      const d = await r.json();
-      const url = d.results?.[0]?.url_75x75 || d.results?.[0]?.url_170x135 || null;
-      imgCacheRef.current[k] = url || "";
-      return url;
-    } catch { imgCacheRef.current[k] = ""; return null; }
-  }, []);
-
   const fetchAll = async (bg=false) => {
     bg ? setSyncing(true) : setLoading(true);
     setError(null); setListingErr(null);
@@ -2224,7 +2224,7 @@ function EtsyLiveView() {
       const [pr, lr, or_, sr, dr] = await Promise.all([
         fetch("/api/etsy?action=ping", { headers: authHdr }),
         fetch("/api/etsy?action=listings_all", { headers: authHdr }),
-        fetch("/api/etsy?action=orders&limit=100", { headers: authHdr }),
+        fetch("/api/etsy?action=orders&limit=100&enrich=true", { headers: authHdr }),
         fetch("/api/etsy?action=sections", { headers: authHdr }),
         fetch("/api/etsy?action=discounts", { headers: authHdr }),
       ]);
@@ -2252,7 +2252,12 @@ function EtsyLiveView() {
       setListings(newListings);
 
       let newOrders = orders;
-      if (oauth && or_.ok) { const od = await or_.json(); newOrders = od.results||[]; setOrders(newOrders); }
+      if (oauth && or_.ok) {
+        const od = await or_.json();
+        newOrders = od.results || [];
+        setOrders(newOrders);
+        syncOrdersToERP(newOrders, newListings).catch(e => console.warn("Etsy order ERP sync failed:", e));
+      }
       if (sr.ok) { const sd = await sr.json(); setSections(sd.results||[]); }
       if (dr.ok) {
         const dd = await dr.json();
@@ -2811,26 +2816,43 @@ function EtsyLiveView() {
               {visOrders.map(o=>{
                 const isOpen = expanded===o.receipt_id;
                 const total  = fmtCur(o.grandtotal?.amount||0,o.grandtotal?.divisor||100,o.grandtotal?.currency_code||"USD");
-                const items  = (o.transactions||[]).reduce((s,t)=>s+(t.quantity||1),0);
+                const txns   = o.transactions||[];
+                const items  = txns.reduce((s,t)=>s+(t.quantity||1),0);
                 const isDone = o.is_shipped || DONE_STATUSES.includes(o.status);
                 const sc     = isDone ? C.green : C.amber;
+                // Hero image + title — match the global Orders row format so photos
+                // are visible on the collapsed row, not only after expanding.
+                const firstTxn   = txns[0];
+                const firstImg   = firstTxn?.image_data?.url_170x135 || firstTxn?.image_data?.url_75x75 || firstTxn?.image_data?.url_570xN || "";
+                const firstTitle = firstTxn?.title || `Order #${o.receipt_id}`;
+                const extraItems = items - (firstTxn?.quantity || 1);
                 return (
                   <div key={o.receipt_id} style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
                     <div onClick={()=>setExpanded(isOpen?null:o.receipt_id)}
-                      style={{padding:"13px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                      style={{padding:"10px 14px",cursor:"pointer",display:"flex",alignItems:"center",gap:12}}>
                       <div style={{width:9,height:9,borderRadius:"50%",background:sc,flexShrink:0}}/>
-                      <div style={{flex:1,minWidth:120}}>
-                        <div style={{fontSize:13,fontWeight:700,color:C.ink}}>Order #{o.receipt_id}</div>
-                        <div style={{fontSize:11,color:C.inkFaint,marginTop:1}}>
-                          {o.name||o.buyer_email||"Buyer"} · {fmtDate(o.create_timestamp||o.creation_tsz)} · {items} item{items!==1?"s":""}
+                      <div style={{width:54,height:54,borderRadius:9,overflow:"hidden",background:C.card,flexShrink:0,border:`1px solid ${C.border}`}}>
+                        {firstImg
+                          ? <img src={firstImg} alt="" loading="eager" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                          : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>💎</div>}
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",gap:8,alignItems:"baseline",flexWrap:"wrap",marginBottom:3}}>
+                          <span style={{fontSize:11,fontWeight:800,fontFamily:"monospace",color:C.amber}}>ETSY-{o.receipt_id}</span>
+                          <span style={{fontSize:14,fontWeight:750,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
+                            {firstTitle}
+                          </span>
+                        </div>
+                        <div style={{fontSize:11,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {o.name||o.buyer_email||"Buyer"} · {fmtDate(o.create_timestamp||o.creation_tsz)}{extraItems>0?` · +${extraItems} more item${extraItems>1?"s":""}`:""}
                         </div>
                       </div>
                       <span style={{fontSize:10,color:sc,background:sc+"20",border:`1px solid ${sc}50`,
-                        borderRadius:5,padding:"2px 8px",textTransform:"uppercase",letterSpacing:.5,fontWeight:700}}>
+                        borderRadius:5,padding:"2px 8px",textTransform:"uppercase",letterSpacing:.5,fontWeight:700,flexShrink:0}}>
                         {isDone ? "Shipped" : "New"}
                       </span>
                       <div style={{fontSize:15,fontWeight:700,color:C.green,flexShrink:0}}>{total}</div>
-                      <span style={{color:C.inkFaint,fontSize:12}}>{isOpen?"▲":"▼"}</span>
+                      <span style={{color:C.inkFaint,fontSize:12,flexShrink:0}}>{isOpen?"▲":"▼"}</span>
                     </div>
 
                     {isOpen && (
@@ -2838,10 +2860,14 @@ function EtsyLiveView() {
                         {/* line items */}
                         <div style={{display:"flex",flexDirection:"column",gap:8}}>
                           {(o.transactions||[]).map((t,i)=>{
+                            const tImg = t.image_data?.url_75x75||t.image_data?.url_170x135;
                             return (
                               <div key={i} style={{display:"flex",alignItems:"center",gap:12,
                                 padding:"10px 12px",background:C.card,borderRadius:8}}>
-                                <TxnImg listing_id={t.listing_id} image_data={t.image_data} fetchImg={fetchTxnImg} />
+                                {tImg
+                                  ? <img src={tImg} alt="" style={{width:52,height:52,borderRadius:7,objectFit:"cover",flexShrink:0}}/>
+                                  : <div style={{width:52,height:52,borderRadius:7,background:C.border,
+                                      display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>💎</div>}
                                 <div style={{flex:1}}>
                                   <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{t.title}</div>
                                   <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>
@@ -2899,27 +2925,6 @@ function EtsyLiveView() {
                             {o.total_shipping_cost && <div style={{fontSize:11,color:C.inkFaint}}>Shipping: {fmtCur(o.total_shipping_cost.amount,o.total_shipping_cost.divisor,o.total_shipping_cost.currency_code)}</div>}
                             <div style={{fontSize:16,fontWeight:700,color:C.green,marginTop:2}}>{total}</div>
                           </div>
-                        </div>
-
-                        {/* tracking */}
-                        <div style={{background:C.card,borderRadius:8,padding:"12px 14px"}}>
-                          <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Tracking / Shipment</div>
-                          {o.shipments?.length > 0 ? (
-                            <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:10}}>
-                              {o.shipments.map((s,i) => (
-                                <div key={i} style={{fontSize:12,color:C.ink}}>
-                                  📦 {s.carrier_name} — <span style={{fontFamily:"monospace",fontWeight:600}}>{s.tracking_code}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div style={{fontSize:12,color:C.inkFaint,marginBottom:10}}>No tracking added yet</div>
-                          )}
-                          <button onClick={() => setTrackingOrder(o)}
-                            style={{padding:"6px 16px",background:C.green,border:"none",
-                              borderRadius:6,fontSize:12,fontWeight:600,color:"#fff",cursor:"pointer"}}>
-                            + Add Tracking
-                          </button>
                         </div>
                       </div>
                     )}
@@ -3316,14 +3321,6 @@ function EtsyLiveView() {
         </div>
         );
       })()}
-      {trackingOrder && (
-        <TrackingModal
-          order={trackingOrder}
-          isEtsy={true}
-          onClose={() => setTrackingOrder(null)}
-          onSubmit={handleAddTracking}
-        />
-      )}
     </div>
   );
 }
@@ -3762,7 +3759,7 @@ function EbayLiveView() {
   );
 }
 
-function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, onUnpublish, onMarkSold, onImportFromLib }) {
+function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, onUnpublish, onMarkSold }) {
   const pkey         = platform.key;
   const liveListings = listings.filter(l => l.platforms?.[pkey]?.status === "active");
   const pOrders      = orders.filter(o => o.platform === pkey);
@@ -3821,25 +3818,11 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
         placeholder={`Search ${platform.label} listings…`}
         style={{ ...FI(), maxWidth: 320, fontSize: 12, padding: "7px 12px", borderRadius: 20, marginBottom: 16 }} />
 
-      {onImportFromLib && (
-        <div style={{ marginBottom: 14, display: "flex", justifyContent: "flex-end" }}>
-          <button onClick={onImportFromLib}
-            style={{ padding: "8px 16px", background: platform.color + "15", border: `1.5px solid ${platform.color}40`,
-              borderRadius: 8, fontSize: 12, fontWeight: 600, color: platform.color, cursor: "pointer" }}>
-            ⟳ Sync from Shopify
-          </button>
-        </div>
-      )}
-
       {visible.length === 0 ? (
         <div style={{ textAlign: "center", padding: "50px 0", color: C.inkFaint }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>{platform.icon}</div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>No active listings on {platform.label}</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>
-            {onImportFromLib
-              ? "Click \"Sync from Shopify\" above to pull active products from your store."
-              : "Publish listings from the All Listings tab."}
-          </div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Publish listings from the All Listings tab.</div>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(auto-fill,minmax(270px,1fr))", gap: 12 }}>
@@ -3915,6 +3898,413 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
   );
 }
 
+function ShopifyEarthView({ listings, onEditLocal }) {
+  const platform = PLATFORMS.find(p => p.key === "shopify_earth");
+  const [products, setProducts] = useState([]);
+  const [collections, setCollections] = useState([]);
+  const [creds, setCreds] = useState(null);
+  const [storeInput, setStoreInput] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
+  const [statusFilter, setStatusFilter] = useState("active");
+  const [tagFilter, setTagFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const [editP, setEditP] = useState(null);
+
+  const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3200); };
+  const firstImage = p => p.image?.src || p.images?.[0]?.src || "";
+  const firstVariant = p => p.variants?.[0] || {};
+  const adminUrl = p => p.admin_graphql_api_id
+    ? `https://${creds?.store || ""}/admin/products/${p.id}`
+    : `https://${creds?.store || ""}/admin/products/${p.id}`;
+  const storefrontUrl = p => {
+    const base = String(creds?.publicUrl || (creds?.store ? `https://${creds.store}` : "")).replace(/\/$/, "");
+    return p.handle && base ? `${base}/products/${p.handle}` : "";
+  };
+  const productTags = p => Array.isArray(p.tags) ? p.tags : String(p.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+  const readProductCache = () => {
+    try {
+      const cached = JSON.parse(localStorage.getItem(SHOPIFY_EARTH_CACHE_KEY) || "null");
+      if (cached && Array.isArray(cached.products)) return cached;
+    } catch {}
+    return null;
+  };
+  const saveProductCache = data => {
+    try {
+      localStorage.setItem(SHOPIFY_EARTH_CACHE_KEY, JSON.stringify({
+        products: data.products || [],
+        collections: data.collections || [],
+        shop: data.shop || "",
+        publicUrl: data.publicUrl || "",
+        savedAt: Date.now(),
+      }));
+    } catch {}
+  };
+
+  const loadCreds = async () => {
+    const saved = await loadK("ng-shopify-creds-v1");
+    if (saved?.store && saved?.token) {
+      const normalized = { store: saved.store, token: saved.token };
+      setCreds(normalized);
+      setStoreInput(saved.store);
+      return normalized;
+    }
+    setCreds({});
+    return {};
+  };
+
+  const fetchProducts = async (nextCreds = creds, bg = false, nextCollection = collectionFilter) => {
+    if (!bg) setLoading(true);
+    setError("");
+    try {
+      const r = await fetch("/api/shopify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "list_products",
+          status: "any",
+          limit: 250,
+          store_key: "earth",
+          ...(nextCollection ? { collection_id: nextCollection } : {}),
+          // Manual creds (if the user saved an override) win; otherwise the
+          // server uses the SHOPIFY_EARTH_* env creds — same as Image Library.
+          ...(nextCreds?.token ? { shopStore: nextCreds.store, shopToken: nextCreds.token } : {}),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.error || "Could not fetch Shopify products");
+      setProducts(d.products || []);
+      setCollections(d.collections || []);
+      if (d.shop) setCreds(c => ({ ...(c || {}), store: d.shop, publicUrl: d.publicUrl }));
+      if (!nextCollection) saveProductCache(d);
+    } catch (e) {
+      setError(e.message || "Could not fetch Shopify products");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const cached = readProductCache();
+    if (cached) {
+      setProducts(cached.products || []);
+      setCollections(cached.collections || []);
+      if (cached.shop) setCreds(c => ({ ...(c || {}), store: cached.shop, publicUrl: cached.publicUrl }));
+      setLoading(false);
+    }
+    loadCreds().then(c => fetchProducts(c, !!cached, ""));
+  }, []);
+
+  const saveCreds = async () => {
+    const store = storeInput.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const token = tokenInput.trim();
+    if (!store || !token) { setError("Enter store domain and Admin API token"); return; }
+    const next = { store, token };
+    await saveK("ng-shopify-creds-v1", next);
+    setCreds(next);
+    setTokenInput("");
+    fetchProducts(next);
+  };
+
+  const openEdit = p => {
+    const v = firstVariant(p);
+    setEditP({
+      id: p.id,
+      title: p.title || "",
+      body_html: p.body_html || "",
+      tags: Array.isArray(p.tags) ? p.tags.join(", ") : p.tags || "",
+      status: p.status || "active",
+      product_type: p.product_type || "",
+      variant_id: v.id || "",
+      sku: v.sku || "",
+      price: v.price || "",
+      inventory_quantity: v.inventory_quantity ?? "",
+      image: firstImage(p),
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editP) return;
+    setSaving(true);
+    setError("");
+    try {
+      const r = await fetch("/api/shopify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update_product",
+          store_key: "earth",
+          ...(creds?.token ? { shopStore: creds.store, shopToken: creds.token } : {}),
+          product: editP,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.error || "Shopify update failed");
+      setProducts(prev => prev.map(p => String(p.id) === String(d.product.id) ? d.product : p));
+      setEditP(null);
+      showToast("✓ Earth Editions product updated");
+    } catch (e) {
+      setError(e.message || "Shopify update failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const linkLocal = p => {
+    const v = firstVariant(p);
+    const norm = s => String(s || "").trim().toLowerCase();
+    const match = listings.find(l =>
+      (v.sku && norm(l.sku) === norm(v.sku)) ||
+      (l.platforms?.shopify_earth?.product_id && String(l.platforms.shopify_earth.product_id) === String(p.id)) ||
+      norm(l.title) === norm(p.title)
+    );
+    if (match) onEditLocal(match);
+    else showToast("No matching local Listing Manager row found");
+  };
+
+  const tagOptions = [...new Set(products.flatMap(productTags))].filter(Boolean).sort((a,b)=>a.localeCompare(b));
+  const typeOptions = [...new Set(products.map(p => p.product_type).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const selectedCollection = collections.find(c => String(c.id) === String(collectionFilter));
+  const collectionMatchesProduct = p => {
+    if (!collectionFilter) return true;
+    if ((p.collection_ids || []).map(String).includes(String(collectionFilter))) return true;
+    const raw = [selectedCollection?.handle, selectedCollection?.title].filter(Boolean).join(" ");
+    const terms = raw.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/[\s-]+/).filter(x => x.length > 2);
+    const expanded = [...new Set(terms.flatMap(t => [t, t.endsWith("s") ? t.slice(0, -1) : `${t}s`]))];
+    const haystack = [p.title, p.handle, p.product_type, productTags(p).join(" ")].join(" ").toLowerCase();
+    return expanded.some(t => haystack.includes(t));
+  };
+  const visible = products
+    .filter(p => statusFilter === "all" || p.status === statusFilter)
+    .filter(p => !tagFilter || productTags(p).includes(tagFilter))
+    .filter(p => !typeFilter || p.product_type === typeFilter)
+    .filter(collectionMatchesProduct)
+    .filter(p => !search || [p.title, p.handle, productTags(p).join(" "), p.product_type, firstVariant(p).sku].join(" ").toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
+
+  const counts = {
+    all: products.length,
+    active: products.filter(p => p.status === "active").length,
+    draft: products.filter(p => p.status === "draft").length,
+    archived: products.filter(p => p.status === "archived").length,
+  };
+
+  return (
+    <div>
+      <Toast msg={toast} />
+      <div style={{ background: platform.color + "12", border: `1.5px solid ${platform.color}35`, borderRadius: 12, padding: "16px 18px", marginBottom: 14, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontSize: 34 }}>{platform.icon}</div>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 21, fontWeight: 750, color: platform.color }}>Earth Editions Shopify</div>
+          <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3 }}>
+            {loading ? "Loading Shopify..." : `${products.length} Shopify products · ${counts.active} active · ${counts.draft} drafts`}
+            {creds?.store ? ` · ${creds.store}` : ""}
+          </div>
+        </div>
+        <button onClick={() => fetchProducts(creds, false, collectionFilter)}
+          style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", color: C.ink }}>
+          Refresh
+        </button>
+      </div>
+
+      {!!error && /credential|token|store|domain|unauthor|401|403|not set/i.test(String(error)) && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: platform.color, marginBottom: 10 }}>Connect Earth Editions <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: C.inkFaint }}>· override (defaults to server credentials)</span></div>
+          <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+            <div>
+              <Label>Store Domain</Label>
+              <input value={storeInput} onChange={e => setStoreInput(e.target.value)} placeholder="eartheditions.myshopify.com" style={FI()} />
+            </div>
+            <div>
+              <Label>Admin API Token</Label>
+              <input value={tokenInput} onChange={e => setTokenInput(e.target.value)} placeholder="shpat_..." type="password" style={FI()} />
+            </div>
+            <button onClick={saveCreds} style={{ background: platform.color, border: "none", color: "#fff", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>Save</button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ background: C.redBg, border: `1px solid ${C.red}35`, color: C.red, borderRadius: 9, padding: "9px 12px", fontSize: 12, marginBottom: 12 }}>{String(error)}</div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "190px 1fr", gap: 12, alignItems: "start" }}>
+        <aside style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 10, position: mob() ? "static" : "sticky", top: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 850, textTransform: "uppercase", letterSpacing: .8, color: platform.color, marginBottom: 10 }}>Filters</div>
+          <div style={{ display: "grid", gap: 10 }}>
+            <div>
+              <Label>Status</Label>
+              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={FI()}>
+                <option value="all">All ({counts.all})</option>
+                <option value="active">Active ({counts.active})</option>
+                <option value="draft">Draft ({counts.draft})</option>
+                <option value="archived">Archived ({counts.archived})</option>
+              </select>
+            </div>
+            <div>
+              <Label>Collection</Label>
+              <select value={collectionFilter} onChange={e => { const val = e.target.value; setCollectionFilter(val); setTagFilter(""); setTypeFilter(""); fetchProducts(creds, false, val); }} style={FI()}>
+                <option value="">All collections</option>
+                {collections.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label>Tags</Label>
+              <select value={tagFilter} onChange={e => setTagFilter(e.target.value)} style={FI()}>
+                <option value="">All tags</option>
+                {tagOptions.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label>Product Type</Label>
+              <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={FI()}>
+                <option value="">All types</option>
+                {typeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            {(statusFilter !== "active" || tagFilter || typeFilter || collectionFilter || search) && (
+              <button onClick={() => { setStatusFilter("active"); setTagFilter(""); setTypeFilter(""); setCollectionFilter(""); setSearch(""); fetchProducts(creds, false, ""); }}
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 12, fontWeight: 800, color: C.inkMid, cursor: "pointer" }}>
+                Clear filters
+              </button>
+            )}
+          </div>
+        </aside>
+
+        <div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: C.inkFaint, fontWeight: 700 }}>{visible.length} shown</div>
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search Shopify title, SKU, tags..."
+              style={{ ...FI(), width: mob() ? "100%" : 360, marginLeft: "auto", borderRadius: 10 }} />
+          </div>
+
+      {loading ? (
+        <div style={{ padding: "50px 0", textAlign: "center", color: C.inkFaint }}><Spinner /> Loading Earth Editions...</div>
+      ) : visible.length === 0 ? (
+        <div style={{ padding: "55px 0", textAlign: "center", color: C.inkFaint }}>
+          <div style={{ fontSize: 34, marginBottom: 8 }}>🌍</div>
+          <div style={{ fontWeight: 750, color: C.inkMid }}>No Shopify products found</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Check the Earth Editions credentials or change the status filter.</div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(4,minmax(0,1fr))", gap: 10 }}>
+          {visible.map(p => {
+            const v = firstVariant(p);
+            const img = firstImage(p);
+            const localMatch = listings.find(l => String(l.platforms?.shopify_earth?.product_id || "") === String(p.id) || (v.sku && l.sku === v.sku));
+            return (
+              <div key={p.id} style={{ background: C.surface, border: `1.5px solid ${platform.color}25`, borderRadius: 11, overflow: "hidden" }}>
+                <div style={{ height: 138, background: C.card, position: "relative", overflow: "hidden" }}>
+                  {img ? <img src={img} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
+                    <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>🌍</div>}
+                  <span style={{ position: "absolute", top: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, textTransform: "uppercase", background: p.status === "active" ? C.greenBg : C.card, color: p.status === "active" ? C.green : C.inkMid, border: `1px solid ${C.border}` }}>{p.status}</span>
+                </div>
+                <div style={{ padding: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, lineHeight: 1.25, minHeight: 32 }}>{p.title}</div>
+                  <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {[p.product_type, v.sku && `SKU ${v.sku}`].filter(Boolean).join(" · ") || p.handle}
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                    <div style={{ fontSize: 15, fontWeight: 850, color: platform.color }}>{v.price ? `$${fmt(v.price)}` : "No price"}</div>
+                    <div style={{ fontSize: 11, color: C.inkFaint }}>{v.inventory_quantity ?? 0} in stock</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 5, marginTop: 9 }}>
+                    <button onClick={() => openEdit(p)} style={{ flex: 1, background: platform.color, color: "#fff", border: "none", borderRadius: 7, padding: "7px 0", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Edit</button>
+                    <a href={storefrontUrl(p) || adminUrl(p)} target="_blank" rel="noreferrer"
+                      style={{ flex: 1, textAlign: "center", textDecoration: "none", background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 0", fontSize: 11, fontWeight: 800, color: C.ink }}>View</a>
+                    <button onClick={() => linkLocal(p)} style={{ background: localMatch ? C.greenBg : C.surface, color: localMatch ? C.green : C.inkMid, border: `1px solid ${localMatch ? C.green + "45" : C.border}`, borderRadius: 7, padding: "7px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                      {localMatch ? "Local" : "Link"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+        </div>
+      </div>
+
+      {editP && (
+        <div onClick={e => { if (e.target === e.currentTarget) setEditP(null); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(26,19,8,.58)", zIndex: 1300, display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}>
+          <div style={{ width: "min(760px,100%)", maxHeight: "88vh", overflow: "auto", background: C.surface, borderRadius: 14, boxShadow: "0 24px 80px rgba(0,0,0,.32)" }}>
+            <div style={{ padding: "15px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: .8, color: platform.color, fontWeight: 850 }}>Earth Editions</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>Edit Shopify Product</div>
+              </div>
+              <button onClick={() => setEditP(null)} style={{ background: "none", border: "none", fontSize: 24, color: C.inkFaint, cursor: "pointer" }}>×</button>
+            </div>
+            <div style={{ padding: 18, display: "grid", gridTemplateColumns: mob() ? "1fr" : "160px 1fr", gap: 16 }}>
+              <div>
+                <div style={{ width: "100%", aspectRatio: "1", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                  {editP.image ? <img src={editP.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: 11 }}>
+                <div>
+                  <Label>Title</Label>
+                  <input value={editP.title} onChange={e => setEditP(p => ({ ...p, title: e.target.value }))} style={FI()} />
+                </div>
+                <Grid cols={3}>
+                  <div>
+                    <Label>Status</Label>
+                    <select value={editP.status} onChange={e => setEditP(p => ({ ...p, status: e.target.value }))} style={FI()}>
+                      <option value="active">Active</option>
+                      <option value="draft">Draft</option>
+                      <option value="archived">Archived</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label>Price</Label>
+                    <input value={editP.price} onChange={e => setEditP(p => ({ ...p, price: e.target.value }))} type="number" style={FI()} />
+                  </div>
+                  <div>
+                    <Label>Inventory</Label>
+                    <input value={editP.inventory_quantity} onChange={e => setEditP(p => ({ ...p, inventory_quantity: e.target.value }))} type="number" style={FI()} />
+                  </div>
+                </Grid>
+                <Grid cols={2}>
+                  <div>
+                    <Label>SKU</Label>
+                    <input value={editP.sku} onChange={e => setEditP(p => ({ ...p, sku: e.target.value }))} style={FI()} />
+                  </div>
+                  <div>
+                    <Label>Product Type</Label>
+                    <input value={editP.product_type} onChange={e => setEditP(p => ({ ...p, product_type: e.target.value }))} style={FI()} />
+                  </div>
+                </Grid>
+                <div>
+                  <Label>Tags</Label>
+                  <input value={editP.tags} onChange={e => setEditP(p => ({ ...p, tags: e.target.value }))} style={FI()} />
+                </div>
+                <div>
+                  <Label>Description</Label>
+                  <textarea value={editP.body_html} onChange={e => setEditP(p => ({ ...p, body_html: e.target.value }))}
+                    rows={8} style={{ ...FI(), resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12 }} />
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: "13px 18px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "flex-end", gap: 9 }}>
+              <button onClick={() => setEditP(null)} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 14px", fontSize: 13, color: C.inkMid, cursor: "pointer" }}>Cancel</button>
+              <button onClick={saveEdit} disabled={saving} style={{ background: platform.color, border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 850, color: "#fff", cursor: saving ? "wait" : "pointer", opacity: saving ? .7 : 1 }}>
+                {saving ? "Saving..." : "Save Shopify"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    MAIN
 ══════════════════════════════════════════════════════════════════════════ */
@@ -3933,46 +4323,18 @@ export default function ListingManagerApp({ onHome }) {
   const [search,     setSearch]     = useState("");
   const [filter,     setFilter]     = useState("all");
 
-  const [sgCreds,      setSgCreds]      = useState(null);
-  const [sgToken,      setSgToken]      = useState(null);
-  const [sgConnect,    setSgConnect]    = useState(false);
-  const [sgLabelOrder, setSgLabelOrder] = useState(null);
-  const [trackingOrder, setTrackingOrder] = useState(null);
-
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
-
-  const handleTrackOrder = async (carrier, code, sendBcc) => {
-    const order = trackingOrder;
-    if (!order) return;
-    const updated = { ...order, tracking_code: code, carrier_name: carrier, status: "shipped", shipped_at: now() };
-    const next = orders.map(o => o.id === order.id ? updated : o);
-    await persistOrders(next);
-    // Also call Etsy API if this is an Etsy platform order
-    if (order.platform === "etsy" && order.platform_order_id) {
-      try {
-        const token = await getEtsyToken();
-        if (token) {
-          await fetch("/api/etsy?action=create_shipment", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-etsy-token": token },
-            body: JSON.stringify({ receipt_id: order.platform_order_id, carrier_name: carrier, tracking_code: code, send_bcc: sendBcc }),
-          });
-        }
-      } catch {}
-    }
-    setTrackingOrder(null);
-    showToast("✓ Shipment recorded");
-  };
 
   useEffect(() => {
     Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(([l, o, s]) => {
       setListings(l || []); setOrders(o || []); setStock(s || []); setLoaded(true);
     });
-    // Load ShipGlobal creds in isolation so a missing key can't block anything
-    Promise.all([loadK(SG_CREDS_KEY), loadK(SG_TOKEN_KEY)]).then(([sgC, sgT]) => {
-      if (sgC && !Array.isArray(sgC)) setSgCreds(sgC);
-      if (sgT?.token && sgT.expiresAt > Date.now()/1000) setSgToken(sgT.token);
-    }).catch(() => {});
+    const onOrdersUpdated = e => {
+      if (Array.isArray(e.detail)) setOrders(e.detail);
+      else loadK(ORDERS_KEY).then(o => setOrders(o || []));
+    };
+    window.addEventListener("ng-orders-updated", onOrdersUpdated);
+    return () => window.removeEventListener("ng-orders-updated", onOrdersUpdated);
   }, []);
 
   const BACKUP_KEY = "ng-listings-backup-v1";
@@ -4216,23 +4578,6 @@ export default function ListingManagerApp({ onHome }) {
     setTab("orders");
   };
 
-  /* import active products from Shopify Earth Editions */
-  const handleImportEarth = async () => {
-    showToast("Fetching from Shopify…");
-    try {
-      const r = await fetch("/api/listing-manager?action=import_shopify_listings&store_key=earth");
-      const d = await r.json();
-      if (!d.ok) { showToast("⚠ " + (d.error || "Shopify fetch failed")); return; }
-      const imported = d.listings || [];
-      if (!imported.length) { showToast("No active listings found on Earth Editions"); return; }
-      const existingIds = new Set(listings.map(l => l.platforms?.shopify_earth?.product_id).filter(Boolean));
-      const toAdd = imported.filter(l => !existingIds.has(l.platforms?.shopify_earth?.product_id));
-      const kept  = listings.filter(l => !imported.find(i => i.platforms?.shopify_earth?.product_id === l.platforms?.shopify_earth?.product_id));
-      await persistListings([...imported, ...kept]);
-      showToast(`✓ Synced ${imported.length} listing${imported.length !== 1 ? "s" : ""} from Earth Editions (${toAdd.length} new)`);
-    } catch (e) { showToast("⚠ " + e.message); }
-  };
-
   /* filtered listings */
   const visibleListings = listings
     .filter(l => {
@@ -4431,18 +4776,18 @@ export default function ListingManagerApp({ onHome }) {
         )}
 
         {/* ══ ORDERS ══ */}
-        {tab === "orders" && (
-          <OrdersView orders={orders}
-            sgCreds={sgCreds} sgToken={sgToken}
-            onSgConnect={() => setSgConnect(true)}
-            onCreateLabel={order => setSgLabelOrder(order)}
-            onAddTracking={order => setTrackingOrder(order)}/>
-        )}
+        {tab === "orders" && <OrdersView orders={orders} listings={listings} />}
 
         {/* ══ PLATFORM TABS ══ */}
         {tab === "etsy" && <EtsyLiveView />}
         {tab === "ebay" && <EbayLiveView />}
-        {activePlatform && tab !== "etsy" && tab !== "ebay" && (
+        {tab === "shopify_earth" && (
+          <ShopifyEarthView
+            listings={listings}
+            onEditLocal={l => { setEditing(l); setShowForm(true); }}
+          />
+        )}
+        {activePlatform && tab !== "etsy" && tab !== "ebay" && tab !== "shopify_earth" && (
           <PlatformView
             platform={activePlatform}
             listings={listings}
@@ -4452,7 +4797,6 @@ export default function ListingManagerApp({ onHome }) {
             onPublish={handlePublish}
             onUnpublish={handleUnpublish}
             onMarkSold={setSoldModal}
-            onImportFromLib={activePlatform.key === "shopify_earth" ? handleImportEarth : null}
           />
         )}
       </div>
@@ -4472,31 +4816,6 @@ export default function ListingManagerApp({ onHome }) {
           orders={orders}
           onSave={handleMarkSold}
           onClose={() => setSoldModal(null)}
-        />
-      )}
-
-      {sgConnect && (
-        <ShipGlobalConnectModal
-          onClose={() => setSgConnect(false)}
-          onSave={(creds, token) => {
-            setSgCreds(creds); setSgToken(token); setSgConnect(false);
-            showToast("✓ ShipGlobal connected");
-          }}/>
-      )}
-      {sgLabelOrder && sgCreds && sgToken && (
-        <ShipGlobalLabelModal
-          order={sgLabelOrder}
-          creds={sgCreds}
-          token={sgToken}
-          onClose={() => setSgLabelOrder(null)}
-          onSuccess={() => { setSgLabelOrder(null); showToast("✓ Label downloaded"); }}/>
-      )}
-      {trackingOrder && tab === "orders" && (
-        <TrackingModal
-          order={trackingOrder}
-          isEtsy={trackingOrder.platform === "etsy"}
-          onClose={() => setTrackingOrder(null)}
-          onSubmit={handleTrackOrder}
         />
       )}
     </div>

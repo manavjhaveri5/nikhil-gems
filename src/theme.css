@@ -18,6 +18,83 @@
   --ease-spring:cubic-bezier(.34,1.2,.64,1); --ease:cubic-bezier(.4,0,.2,1);
 }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ── Global resets ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { -webkit-text-size-adjust: 100%; }
+input, select, textarea { font-family: inherit; }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--c-goldBright) !important;
+  box-shadow: 0 0 0 3px rgba(154,98,0,.1);
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--c-borderHi); border-radius: 3px; }
+
+/* ── Utility classes ─────────────────────────────────────────────────────── */
+.tnum { font-variant-numeric: tabular-nums lining-nums; font-feature-settings: "tnum" 1; }
+.bp {
+  background: var(--c-ink); color: #FAF0DC; border: none;
+  padding: 8px 18px; border-radius: var(--r-sm); cursor: pointer;
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+  letter-spacing: .01em; transition: all .18s var(--ease); font-family: inherit;
+}
+.bp:hover { background: #2C1E0A; box-shadow: var(--e-1); }
+.bs {
+  background: var(--c-fill); color: var(--c-ink); border: none;
+  padding: 8px 15px; border-radius: var(--r-sm); cursor: pointer;
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+  transition: all .18s var(--ease); font-family: inherit;
+}
+.bs:hover { background: rgba(118,118,128,.18); }
+.bp:disabled, .bs:disabled { opacity: .38; cursor: not-allowed; }
+.rh { transition: background .12s; cursor: pointer; }
+.rh:hover { background: var(--c-card) !important; }
+input[type=checkbox] { accent-color: var(--c-gold); width: 14px; height: 14px; cursor: pointer; }
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes fadeUp    { from { opacity: 0; transform: translateY(14px); }  to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeDown  { from { opacity: 0; transform: translateY(-14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn    { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pulse     { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+@keyframes slideIn   { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes shimmer   { 0% { background-position: -460px 0; } 100% { background-position: 460px 0; } }
+@keyframes fadeSlideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes jaiSpin   { to { transform: rotate(360deg); } }
+@keyframes jaiGlow {
+  0%,100% { box-shadow: 0 0 10px 3px rgba(196,130,8,.38), 0 0 26px 9px rgba(196,130,8,.2), 0 0 56px 20px rgba(255,215,0,.1); }
+  50%      { box-shadow: 0 0 18px 7px rgba(255,215,0,.65), 0 0 44px 16px rgba(196,130,8,.35), 0 0 88px 34px rgba(255,215,0,.17); }
+}
+
+/* ── Jai Swaminarayan halo ───────────────────────────────────────────────── */
+.jai-halo {
+  position: relative; z-index: 0;
+  transition: transform .38s cubic-bezier(.34,1.56,.64,1), letter-spacing .35s ease;
+  cursor: default; isolation: isolate;
+}
+.jai-halo::before {
+  content: ''; position: absolute; inset: -3px; border-radius: 24px;
+  background: conic-gradient(from 0deg,#9A6200 0%,#FFD700 18%,#FFFDE0 34%,#C48208 50%,#E0A830 66%,#FFD700 82%,#9A6200 100%);
+  opacity: 0; z-index: -1; animation: jaiSpin 2.4s linear infinite paused; transition: opacity .4s ease;
+}
+.jai-halo::after {
+  content: ''; position: absolute; inset: 1px; border-radius: 20px;
+  background: var(--c-goldLight); z-index: -1; opacity: 0; transition: opacity .4s ease;
+}
+.jai-halo:hover { transform: translateY(-2px) scale(1.07); letter-spacing: 1.3px; animation: jaiGlow 1.8s ease-in-out infinite; }
+.jai-halo:hover::before { opacity: 1; animation-play-state: running; }
+.jai-halo:hover::after  { opacity: 1; }
+
+/* ── Mobile touch targets & font-size fixes ──────────────────────────────── */
+@media (max-width: 699px) {
+  .bp, .bs { font-size: 15px !important; padding: 9px 16px !important; min-height: 44px !important; }
+  select { font-size: 16px !important; }
+  .bp:active, .bs:active { opacity: .72 !important; transform: scale(.98); }
+  button:active { opacity: .72; }
+}
 html.dark {
   --c-bg:#141210; --c-surface:#1E1B17; --c-card:#252118;
   --c-border:#3A342A; --c-borderHi:#5A4E3A;

@@ -255,7 +255,31 @@ async function shopifyReq(shop, token, method, path, body) {
   let data;
   try { data = JSON.parse(text); } catch { return { ok: false, error: text.slice(0, 300) }; }
   if (!r.ok) return { ok: false, error: data?.errors || data?.error || text.slice(0, 300), status: r.status };
-  return { ok: true, data };
+  return { ok: true, data, headers: r.headers };
+}
+
+function nextPagePath(linkHeader) {
+  const link = String(linkHeader || "");
+  const match = link.split(",").find(part => part.includes('rel="next"'))?.match(/<([^>]+)>/);
+  if (!match) return "";
+  try {
+    const u = new URL(match[1]);
+    return `${u.pathname.replace(/^\/admin\/api\/[^/]+/, "")}${u.search}`;
+  } catch {
+    return "";
+  }
+}
+
+async function shopifyGetAll(sr, firstPath, listKey, maxPages = 12) {
+  const rows = [];
+  let path = firstPath;
+  for (let page = 0; path && page < maxPages; page++) {
+    const result = await sr("GET", path);
+    if (!result.ok) return { ok: false, error: result.error };
+    rows.push(...(result.data?.[listKey] || []));
+    path = nextPagePath(result.headers?.get?.("link"));
+  }
+  return { ok: true, rows };
 }
 
 export default async function handler(req, res) {
@@ -266,15 +290,81 @@ export default async function handler(req, res) {
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); } }
 
-  const { action, item, shopStore, shopToken, shopifyName, shopifyPrice } = body;
+  const { action, item, shopStore, shopToken, shopifyName, shopifyPrice, store_key, status = "active", limit = 250, product, collection_id } = body;
 
-  const SHOP  = shopStore || process.env.SHOPIFY_STORE;
-  const TOKEN = shopToken  || process.env.SHOPIFY_ACCESS_TOKEN;
+  const storeEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_STORE" : store_key === "earth" ? "SHOPIFY_EARTH_STORE" : "SHOPIFY_STORE";
+  const tokenEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_TOKEN" : store_key === "earth" ? "SHOPIFY_EARTH_TOKEN" : "SHOPIFY_ACCESS_TOKEN";
+  const SHOP  = shopStore || process.env[storeEnvKey] || process.env.SHOPIFY_STORE;
+  const TOKEN = shopToken  || process.env[tokenEnvKey] || process.env.SHOPIFY_ACCESS_TOKEN;
 
   if (!SHOP)  return res.status(400).json({ error: "Store domain required" });
   if (!TOKEN) return res.status(400).json({ error: "Shopify access token required" });
 
   const sr = (method, path, b) => shopifyReq(SHOP, TOKEN, method, path, b);
+
+  if (action === "list_products") {
+    const cleanLimit = Math.min(Math.max(parseInt(limit, 10) || 250, 1), 250);
+    const qs = new URLSearchParams({
+      limit: String(cleanLimit),
+      fields: "id,title,handle,body_html,product_type,tags,images,image,variants,status,created_at,updated_at,admin_graphql_api_id",
+    });
+    if (status && status !== "any" && status !== "all") qs.set("status", status);
+    let collections = [];
+    try {
+      const [custom, smart] = await Promise.all([
+        sr("GET", "/custom_collections.json?limit=250&fields=id,title,handle"),
+        sr("GET", "/smart_collections.json?limit=250&fields=id,title,handle"),
+      ]);
+      collections = [
+        ...(custom.ok ? custom.data.custom_collections || [] : []),
+        ...(smart.ok ? smart.data.smart_collections || [] : []),
+      ].map(c => ({ id: String(c.id), title: c.title || "", handle: c.handle || "" }));
+    } catch (_) {}
+
+    const productPath = collection_id
+      ? `/collections/${encodeURIComponent(collection_id)}/products.json?${qs.toString()}`
+      : `/products.json?${qs.toString()}`;
+    const result = await shopifyGetAll(sr, productPath, "products");
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    const products = result.rows || [];
+    const byProduct = {};
+    if (collection_id) {
+      products.forEach(p => { byProduct[String(p.id)] = [String(collection_id)]; });
+    }
+    const productList = products.map(p => ({ ...p, collection_ids: byProduct[String(p.id)] || [] }));
+    return res.json({
+      success: true,
+      shop: SHOP,
+      publicUrl: process.env.SHOPIFY_EARTH_PUBLIC_URL || process.env.SHOPIFY_PUBLIC_URL || `https://${SHOP}`,
+      products: productList,
+      collections,
+      collection_id: collection_id ? String(collection_id) : "",
+    });
+  }
+
+  if (action === "update_product") {
+    if (!product?.id) return res.status(400).json({ error: "product.id required" });
+    const updatePayload = {
+      product: {
+        id: product.id,
+        title: product.title || "",
+        body_html: product.body_html || "",
+        tags: product.tags || "",
+        status: product.status || "active",
+        product_type: product.product_type || "",
+        variants: product.variant_id ? [{
+          id: product.variant_id,
+          sku: product.sku || "",
+          price: String(product.price || ""),
+        }] : undefined,
+      },
+    };
+    if (!updatePayload.product.variants) delete updatePayload.product.variants;
+    const result = await sr("PUT", `/products/${product.id}.json`, updatePayload);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    return res.json({ success: true, shop: SHOP, product: result.data.product });
+  }
+
   if (!item) return res.status(400).json({ error: "item required" });
 
   // Title: use user-confirmed name from modal, or fallback

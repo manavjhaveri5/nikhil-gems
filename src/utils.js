@@ -153,6 +153,13 @@ if(!DEMO_MODE){
   globalThis.__ngDataChannel=_dataChannel;
 }
 
+// Synchronous cache read — returns cached value if available (even if stale), null if unknown.
+// Use for useState(() => readCache(k) ?? []) to avoid the "Loading..." flash when LS cache is warm.
+export const readCache=k=>{
+  if(DEMO_MODE)return null;
+  return _cache.has(k)?(_cache.get(k)??[]):null;
+};
+
 export const loadK=async k=>{
   if(DEMO_MODE){
     const{DEMO_DATA}=await import("./demoData.js");

@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
-import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
+import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
@@ -29,6 +29,7 @@ const stockPhotos=item=>{
   return item?.photo&&!photos.includes(item.photo)?[item.photo,...photos]:photos;
 };
 const stockCover=item=>stockPhotos(item)[0]||"";
+const thumbUrl=(url)=>url||"";
 
 
 async function callClaude(messages,maxTokens=1000){
@@ -621,12 +622,11 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
   return(
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"-apple-system,'SF Pro Display',Figtree,system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeDown{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:translateY(0)}}@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:2px;}.jai-halo{position:relative;z-index:0;transition:transform .38s cubic-bezier(.34,1.56,.64,1),letter-spacing .35s ease;cursor:default;isolation:isolate;}.jai-halo::before{content:'';position:absolute;inset:-3px;border-radius:24px;background:conic-gradient(from 0deg,#9A6200 0%,#FFD700 18%,#FFFDE0 34%,#C48208 50%,#E0A830 66%,#FFD700 82%,#9A6200 100%);opacity:0;z-index:-1;animation:jaiSpin 2.4s linear infinite paused;transition:opacity .4s ease;}.jai-halo::after{content:'';position:absolute;inset:1px;border-radius:20px;background:var(--c-goldLight,#FEF6E0);z-index:-1;opacity:0;transition:opacity .4s ease;}.jai-halo:hover{transform:translateY(-2px) scale(1.07);letter-spacing:1.3px;animation:jaiGlow 1.8s ease-in-out infinite;}.jai-halo:hover::before{opacity:1;animation-play-state:running;}.jai-halo:hover::after{opacity:1;}@keyframes jaiSpin{to{transform:rotate(360deg)}}@keyframes jaiGlow{0%,100%{box-shadow:0 0 10px 3px rgba(196,130,8,.38),0 0 26px 9px rgba(196,130,8,.2),0 0 56px 20px rgba(255,215,0,.1)}50%{box-shadow:0 0 18px 7px rgba(255,215,0,.65),0 0 44px 16px rgba(196,130,8,.35),0 0 88px 34px rgba(255,215,0,.17)}}`}</style>
       {assignOpen&&<AssignLocationsModal onClose={()=>setAssignOpen(false)} onSaved={count=>{showToast(`✓ ${count} location${count!==1?"s":""} saved`);loadK(KEYS.stock).then(s=>setUnassignedStock((s||[]).filter(x=>!x.location)));setTimeout(()=>setAssignOpen(false),800);}}/>}
       <Toast msg={dashToast}/>
 
       {/* Topbar — frosted glass */}
-      <div style={{padding:mob?"0 14px":"0 24px",height:56,display:"flex",alignItems:"center",gap:12,borderBottom:"0.5px solid rgba(0,0,0,0.08)",background:"rgba(255,255,255,0.72)",backdropFilter:"blur(20px) saturate(180%)",WebkitBackdropFilter:"blur(20px) saturate(180%)",opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none",flexShrink:0,position:"sticky",top:0,zIndex:200}}>
+      <div style={{padding:mob?"0 14px":"0 24px",height:56,display:"flex",alignItems:"center",gap:12,borderBottom:"0.5px solid rgba(0,0,0,0.08)",background:mob?"rgba(255,255,255,0.95)":"rgba(255,255,255,0.72)",backdropFilter:mob?"blur(8px)":"blur(20px) saturate(180%)",WebkitBackdropFilter:mob?"blur(8px)":"blur(20px) saturate(180%)",willChange:"transform",opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none",flexShrink:0,position:"sticky",top:0,zIndex:200}}>
         <img src={LOGO_SRC} style={{width:30,height:30,objectFit:"contain"}} alt=""/>
         <div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:600,color:C.ink,letterSpacing:.01}}>Nikhil Gems</div><div style={{fontSize:8,color:C.inkFaint,letterSpacing:1.2,fontWeight:500}}>BUSINESS SUITE</div></div>
         <div style={{flex:1}}/>
@@ -1163,8 +1163,7 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
   const [lang,setLang,canSwitchLang]=useLang();
   return(
     <div style={{fontFamily:"-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif",background:C.bg,minHeight:"100vh",color:C.ink}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Figtree:wght@300;400;500;600&display=swap');*{box-sizing:border-box;margin:0;padding:0;}input,select,textarea{font-family:inherit;}input:focus,select:focus,textarea:focus{outline:none;border-color:${C.goldBright}!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:${C.borderHi};border-radius:3px;}.tnum{font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1}.bp{background:${C.ink};color:#FAF0DC;border:none;padding:8px 18px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;letter-spacing:.01em;transition:all .18s var(--ease);font-family:inherit;}.bp:hover{background:#2C1E0A;box-shadow:var(--e-1);}.bs{background:var(--c-fill);color:${C.ink};border:none;padding:8px 15px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;transition:all .18s var(--ease);font-family:inherit;}.bs:hover{background:rgba(118,118,128,.18);}.bp:disabled,.bs:disabled{opacity:.38;cursor:not-allowed;}.rh{transition:background .12s;cursor:pointer;}.rh:hover{background:${C.card}!important;}input[type=checkbox]{accent-color:${C.gold};width:14px;height:14px;cursor:pointer;}@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}@keyframes shimmer{0%{background-position:-460px 0}100%{background-position:460px 0}}@media(max-width:699px){.bp,.bs{font-size:15px!important;padding:9px 16px!important;min-height:44px!important;}select{font-size:16px!important;}.bp:active,.bs:active{opacity:.72!important;transform:scale(.98);}button:active{opacity:.72;}}`}</style>
-      <div style={{background:"var(--c-topbar,rgba(255,255,255,0.72))",borderBottom:"0.5px solid rgba(0,0,0,0.08)",backdropFilter:"blur(20px) saturate(180%)",WebkitBackdropFilter:"blur(20px) saturate(180%)",padding:mob?"0 10px":"0 28px",display:"flex",alignItems:"center",height:54,position:"sticky",top:0,zIndex:100,gap:mob?6:12}}>
+      <div style={{background:"var(--c-topbar,rgba(255,255,255,0.72))",borderBottom:"0.5px solid rgba(0,0,0,0.08)",backdropFilter:mob?"blur(8px)":"blur(20px) saturate(180%)",WebkitBackdropFilter:mob?"blur(8px)":"blur(20px) saturate(180%)",willChange:"transform",padding:mob?"0 10px":"0 28px",display:"flex",alignItems:"center",height:54,position:"sticky",top:0,zIndex:100,gap:mob?6:12}}>
         <button onClick={onHome} style={{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:mob?0:10,padding:`0 ${mob?8:16}px 0 0`,borderRight:`1px solid ${C.border}`,flexShrink:0,opacity:.92,transition:"opacity .15s"}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.92}>
           <img src={LOGO_SRC} style={{width:28,height:28,objectFit:"contain"}} alt=""/>
           {!mob&&<div style={{textAlign:"left"}}><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:15,fontWeight:600,color:C.ink,lineHeight:1.1,letterSpacing:.01}}>Nikhil Gems</div><div style={{fontSize:8,color:C.inkFaint,letterSpacing:1.2,fontWeight:500}}>BUSINESS SUITE</div></div>}
@@ -1439,31 +1438,48 @@ productType one of: ${PRODUCT_TYPES.join(",")}. shape one of: ${SHAPES.join(",")
 // ══════════════════════════════════════════════════════════════════
 function VendorsApp({onHome,startVendor}){
   const t=useT();
-  const [vendors,setVendors]=useState([]);const [purchases,setPurchases]=useState([]);const [expenses,setExpenses]=useState([]);const [finTxns,setFinTxns]=useState([]);const [accStock,setAccStock]=useState([]);const [form,setForm]=useState(null);const [selected,setSelected]=useState(null);const [selTab,setSelTab]=useState("ledger");const [toast,setToast]=useState("");const [loaded,setLoaded]=useState(false);const [vendorSort,setVendorSort]=useState("az");const [vendorSearch,setVendorSearch]=useState("");const [merging,setMerging]=useState(false);const [mergeTargetId,setMergeTargetId]=useState("");
+  const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);
+  const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
+  const [expenses,setExpenses]=useState(()=>readCache(KEYS.expenses)||[]);
+  const [finTxns,setFinTxns]=useState([]);const [accStock,setAccStock]=useState([]);
+  const [form,setForm]=useState(null);const [selected,setSelected]=useState(null);const [selTab,setSelTab]=useState("ledger");const [toast,setToast]=useState("");
+  const [loaded,setLoaded]=useState(()=>readCache(KEYS.vendors)!==null);
+  const [vendorSort,setVendorSort]=useState("az");const [vendorSearch,setVendorSearch]=useState("");const [merging,setMerging]=useState(false);const [mergeTargetId,setMergeTargetId]=useState("");
   const [ledgerSelectMode,setLedgerSelectMode]=useState(false);const [selectedLedgerIds,setSelectedLedgerIds]=useState(new Set());const [editingRow,setEditingRow]=useState(null);const [expandedBillId,setExpandedBillId]=useState(null);
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const [vendorStock,setVendorStock]=useState([]);
   useEffect(()=>{loadK(KEYS.stock).then(s=>setVendorStock(Array.isArray(s)?s:[]));}, []);
-  useEffect(()=>{Promise.all([loadK(KEYS.vendors),loadK(KEYS.purchases),loadK(KEYS.expenses),loadK("ng-fin-txns-v1"),loadK(KEYS.accStock)]).then(async([v,p,e,ft,ac])=>{
-    // Migrate base64 vendor files → Supabase Storage (runs once, skips already-migrated files)
-    let vList=v||[];
-    const needsMigration=vList.some(vnd=>(vnd.files||[]).some(f=>f.data?.startsWith("data:")));
-    if(needsMigration){
-      vList=await Promise.all(vList.map(async vnd=>{
-        const files=await Promise.all((vnd.files||[]).map(async f=>{
-          if(!f.data?.startsWith("data:"))return f;
-          try{
-            const url=await uploadVendorFile(vnd.id,f.id,f.data,f.name);
-            return{id:f.id,name:f.name,url,uploadedAt:f.uploadedAt};
-          }catch{return f;}
-        }));
-        return{...vnd,files};
-      }));
-      await saveK(KEYS.vendors,vList);
-    }
-    setVendors(vList);setPurchases(p);setExpenses(e||[]);setFinTxns(ft||[]);setAccStock(ac||[]);setLoaded(true);
-    if(startVendor){const match=vList.find(x=>x.name.toLowerCase()===startVendor.toLowerCase());if(match)setSelected(match);}
-  });},[]);
+  useEffect(()=>{
+    Promise.all([loadK(KEYS.vendors),loadK(KEYS.purchases),loadK(KEYS.expenses),loadK("ng-fin-txns-v1"),loadK(KEYS.accStock)])
+      .then(([v,p,e,ft,ac])=>{
+        const vList=v||[];
+        setVendors(vList);setPurchases(p||[]);setExpenses(e||[]);setFinTxns(ft||[]);setAccStock(ac||[]);
+        setLoaded(true);
+        if(startVendor){const match=vList.find(x=>x.name.toLowerCase()===startVendor.toLowerCase());if(match)setSelected(match);}
+        // Migrate base64 vendor files → Supabase Storage SEQUENTIALLY to avoid mobile OOM crash.
+        // Saves after each vendor so a mid-run crash doesn't restart from scratch.
+        (async()=>{
+          let list=[...vList];
+          for(let i=0;i<list.length;i++){
+            const vnd=list[i];
+            const needsVnd=(vnd.files||[]).some(f=>f.data?.startsWith("data:"));
+            if(!needsVnd)continue;
+            const newFiles=[];
+            for(const f of(vnd.files||[])){
+              if(!f.data?.startsWith("data:")){newFiles.push(f);continue;}
+              try{
+                const url=await uploadVendorFile(vnd.id,f.id,f.data,f.name);
+                newFiles.push({id:f.id,name:f.name,url,uploadedAt:f.uploadedAt});
+              }catch{newFiles.push(f);}
+            }
+            list[i]={...vnd,files:newFiles};
+            // Save after each vendor so progress survives a crash
+            setVendors([...list]);
+            await saveK(KEYS.vendors,list).catch(()=>{});
+          }
+        })();
+      });
+  },[]);
   const blank={id:uid(),name:"",companyName:"",gstin:"",pan:"",location:"",country:"India",contact:"",email:"",notes:"",files:[]};
   const saveVendor=async v=>{const list=[v,...vendors.filter(x=>x.id!==v.id)];setVendors(list);await saveK(KEYS.vendors,list);showToast("Vendor saved");setForm(null);};
   const deleteVendor=async id=>{const list=vendors.filter(x=>x.id!==id);setVendors(list);await saveK(KEYS.vendors,list);setSelected(null);};
@@ -1955,7 +1971,7 @@ function VendorsApp({onHome,startVendor}){
             if(useAlpha&&groups){
               return(
                 <div>
-                  <style>{`@keyframes fadeSlideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}`}</style>
+
                   {groups.map(([letter,vList])=>(
                     <div key={letter} style={{marginBottom:28}}>
                       <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:12}}>
@@ -1991,7 +2007,7 @@ function VendorsApp({onHome,startVendor}){
               const noDebt=withStats.filter(x=>x.s.outstanding===0);
               return(
                 <div>
-                  <style>{`@keyframes fadeSlideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}`}</style>
+
                   {/* Summary header */}
                   {totalOut>0&&(
                     <div style={{background:`linear-gradient(135deg,${C.redBg} 0%,${C.surface} 100%)`,border:`1.5px solid ${C.red}`,borderRadius:10,padding:"14px 18px",marginBottom:18,display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
@@ -2080,7 +2096,6 @@ function VendorsApp({onHome,startVendor}){
             // Non-alpha sort: flat grid
             return(
               <div>
-                <style>{`@keyframes fadeSlideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}`}</style>
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
                   {sorted.map((v,i)=><VCard key={v.id} v={v} idx={i}/>)}
                 </div>
@@ -2392,10 +2407,10 @@ function BinCollage({items,height=160}){
   const photos=items.flatMap(s=>stockPhotos(s)).slice(0,4);
   const n=photos.length;
   if(n===0)return(<div style={{width:"100%",height,background:C.amberBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,color:C.amber}}>◆</div>);
-  if(n===1)return(<img src={photos[0]} style={{width:"100%",height,objectFit:"cover",display:"block"}} alt=""/>);
-  if(n===2)return(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",height,gap:1}}>{photos.map((p,i)=><img key={i} src={p} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>)}</div>);
-  if(n===3)return(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gridTemplateRows:`${height*.6}px ${height*.4}px`,height,gap:1}}><img src={photos[0]} style={{width:"100%",height:"100%",objectFit:"cover",gridColumn:"1/2",gridRow:"1/2"}} alt=""/><img src={photos[1]} style={{width:"100%",height:"100%",objectFit:"cover",gridColumn:"2/3",gridRow:"1/3"}} alt=""/><img src={photos[2]} style={{width:"100%",height:"100%",objectFit:"cover",gridColumn:"1/2",gridRow:"2/3"}} alt=""/></div>);
-  return(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",height,gap:1}}>{photos.map((p,i)=><img key={i} src={p} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>)}</div>);
+  if(n===1)return(<img src={thumbUrl(photos[0],600)} style={{width:"100%",height,objectFit:"cover",display:"block"}} alt=""/>);
+  if(n===2)return(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",height,gap:1}}>{photos.map((p,i)=><img key={i} src={thumbUrl(p,400)} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>)}</div>);
+  if(n===3)return(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gridTemplateRows:`${height*.6}px ${height*.4}px`,height,gap:1}}><img src={thumbUrl(photos[0],400)} style={{width:"100%",height:"100%",objectFit:"cover",gridColumn:"1/2",gridRow:"1/2"}} alt=""/><img src={thumbUrl(photos[1],400)} style={{width:"100%",height:"100%",objectFit:"cover",gridColumn:"2/3",gridRow:"1/3"}} alt=""/><img src={thumbUrl(photos[2],400)} style={{width:"100%",height:"100%",objectFit:"cover",gridColumn:"1/2",gridRow:"2/3"}} alt=""/></div>);
+  return(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",height,gap:1}}>{photos.map((p,i)=><img key={i} src={thumbUrl(p,400)} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>)}</div>);
 }
 function StockBinsView({stock,onEdit,onSelect,onDelete,onDeleteBulk,onRenameBin,initialActiveBin}){
   const [activeBin,setActiveBin]=useState(initialActiveBin||null);
@@ -2480,7 +2495,7 @@ function StockBinsView({stock,onEdit,onSelect,onDelete,onDeleteBulk,onRenameBin,
                   <div key={s.id} onClick={()=>{if(binSelectMode){setBinSelectedIds(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;});}else onSelect&&onSelect(s);}}
                     style={{background:isSel?C.amberBg:C.card,border:`1.5px solid ${isSel?C.amber:C.border}`,borderRadius:8,overflow:"hidden",cursor:"pointer",transition:"all .12s"}}>
                     {stockCover(s)
-                      ?<img src={stockCover(s)} style={{width:"100%",height:100,objectFit:"cover",display:"block"}} alt=""/>
+                      ?<img src={thumbUrl(stockCover(s),600)} style={{width:"100%",height:100,objectFit:"cover",display:"block"}} alt=""/>
                       :<div style={{width:"100%",height:100,background:C.amberBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,color:C.amber}}>◆</div>
                     }
                     <div style={{padding:"8px 10px"}}>
@@ -3424,7 +3439,6 @@ function AssignLocationsModal({onClose,onSaved}){
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.55)",zIndex:1000,display:"flex",alignItems:mob?"flex-end":"center",justifyContent:"center",padding:mob?0:20}} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div style={{background:C.bg,borderRadius:mob?"16px 16px 0 0":14,width:mob?"100%":580,maxHeight:mob?"92vh":"82vh",display:"flex",flexDirection:"column",boxShadow:"0 24px 80px rgba(0,0,0,.35)",animation:"fadeUp .28s ease"}}>
-        <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}`}</style>
         {/* Header */}
         <div style={{padding:"18px 22px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexShrink:0}}>
           <div>
@@ -3449,7 +3463,7 @@ function AssignLocationsModal({onClose,onSaved}){
               <div key={item.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 22px",borderBottom:i<items.length-1?`1px solid ${C.border}`:"none",background:isDone?"rgba(56,142,60,.04)":"transparent",transition:"background .3s,opacity .3s",opacity:isDone?.5:1}}>
                 {/* Item image / icon */}
                 {stockCover(item)
-                  ?<img src={stockCover(item)} style={{width:46,height:46,borderRadius:8,objectFit:"cover",flexShrink:0}} alt=""/>
+                  ?<img src={thumbUrl(stockCover(item),150)} style={{width:46,height:46,borderRadius:8,objectFit:"cover",flexShrink:0}} alt=""/>
                   :<div style={{width:46,height:46,borderRadius:8,background:C.card,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0,border:`1px solid ${C.border}`}}>💎</div>
                 }
                 {/* Info */}
@@ -3769,7 +3783,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   // Capture on mount so clearing the parent prop doesn't lose the value before StockBinsView mounts
   const initBinRef=useRef(startLocationFilter||null);
   const allShapes=useShapes();
-  const [stock,setStock]=useState([]);const [accStock,setAccStock]=useState([]);const [glossary,setGlossary]=useState([]);const [purchases,setPurchases]=useState([]);const [invoices,setInvoices]=useState([]);const [vendors,setVendors]=useState([]);const [buyers,setBuyers]=useState([]);const [form,setForm]=useState(null);const [formType,setFormType]=useState("physical");const [tab,setTab]=useState("physical");const [searchRaw,setSearchRaw]=useState("");
+  const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);const [accStock,setAccStock]=useState(()=>readCache(KEYS.accStock)||[]);const [glossary,setGlossary]=useState(()=>readCache(KEYS.glossary)||[]);const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);const [invoices,setInvoices]=useState(()=>readCache(INV_KEYS.invoices)||[]);const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);const [buyers,setBuyers]=useState([]);const [form,setForm]=useState(null);const [formType,setFormType]=useState("physical");const [tab,setTab]=useState("physical");const [searchRaw,setSearchRaw]=useState("");
   const search=useDebounce(searchRaw,300);
   // Multi-select filter sets (empty = show all)
   const [fsStones,setFsStones]=useState(new Set());
@@ -3786,7 +3800,17 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [fqMarket,setFqMarket]=useState("");
   const [fqVendor,setFqVendor]=useState("");
   const filterBarRef=useRef();
-  const [sortBy,setSortBy]=useState("date");const [aiTagging,setAiTagging]=useState(false);const [toast,setToast]=useState("");const [selected,setSelected]=useState(null);const [loaded,setLoaded]=useState(false);const [selectMode,setSelectMode]=useState(false);const [selectedIds,setSelectedIds]=useState(new Set());const [accSelectMode,setAccSelectMode]=useState(false);const [accSelectedIds,setAccSelectedIds]=useState(new Set());
+  const [sortBy,setSortBy]=useState("date");const [aiTagging,setAiTagging]=useState(false);const [toast,setToast]=useState("");const [selected,setSelected]=useState(null);const [loaded,setLoaded]=useState(()=>readCache(KEYS.stock)!==null);const [selectMode,setSelectMode]=useState(false);const [selectedIds,setSelectedIds]=useState(new Set());const [accSelectMode,setAccSelectMode]=useState(false);const [accSelectedIds,setAccSelectedIds]=useState(new Set());
+  const PAGE_SIZE=36;
+  const [visibleCount,setVisibleCount]=useState(PAGE_SIZE);
+  const sentinelRef=useRef(null);
+  useEffect(()=>{
+    const el=sentinelRef.current;
+    if(!el)return;
+    const obs=new IntersectionObserver(entries=>{if(entries[0].isIntersecting)setVisibleCount(c=>c+PAGE_SIZE);},{rootMargin:"200px"});
+    obs.observe(el);
+    return()=>obs.disconnect();
+  },[]);
   const [qtyFilter,setQtyFilter]=useState("in-stock"); // "in-stock" | "all" | "sold"
   const [summaryOpen,setSummaryOpen]=useState(false);
   const [summaryDate,setSummaryDate]=useState(today());
@@ -3873,8 +3897,9 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   loadK(SHOWS_KEY).then(s=>setShows(s||[]));
   loadK(INV_KEYS.buyers).then(b=>setBuyers(b||[]));
   },[]);
-  // Re-sync stock from Supabase when user returns to this tab (picks up additions by others)
-  useEffect(()=>onCacheRefresh(()=>{
+  // Re-sync stock only when the stock key itself is invalidated (not every module save)
+  useEffect(()=>onCacheRefresh(keys=>{
+    if(!keys.includes(KEYS.stock))return;
     loadStockWithPhotos().then(s=>{if(s&&s.length)setStock(s);});
   }),[]);
   useEffect(()=>{if(!openFilter)return;const close=e=>{if(filterBarRef.current&&!filterBarRef.current.contains(e.target))setOpenFilter(null);};document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close);},[openFilter]);
@@ -4295,6 +4320,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     if(act==null&&bct==null)return 0;if(act==null)return 1;if(bct==null)return -1;
     return bct-act;
   }),[stock,search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
+  // Reset page whenever the filtered set changes so we don't show a stale "Load more" offset
+  useEffect(()=>{setVisibleCount(PAGE_SIZE);},[filtered]);
+  const visibleStock=filtered.slice(0,visibleCount);
   const stones=useMemo(()=>[...new Set(stock.map(s=>s.material).filter(Boolean))].sort(),[stock]);
   const shapes=useMemo(()=>[...new Set(stock.map(s=>s.shape).filter(Boolean))].sort(),[stock]);
   const markets=useMemo(()=>[...new Set(stock.flatMap(s=>Array.isArray(s.market)?s.market:[s.market||""]).filter(m=>m&&m!=="Unassigned"))].sort(),[stock]);
@@ -4394,7 +4422,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 return(
                 <div key={entry.item.id} style={{padding:"12px 0",borderBottom:i<sendQtyDialog.entries.length-1?`1px solid ${C.border}`:"none"}}>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:hasQty2?8:0}}>
-                    {stockCover(entry.item)?<img src={stockCover(entry.item)} alt="" style={{width:48,height:48,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>💎</div>}
+                    {stockCover(entry.item)?<img src={thumbUrl(stockCover(entry.item),150)} alt="" style={{width:48,height:48,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>💎</div>}
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[entry.item.material,entry.item.shape].filter(Boolean).join(" — ")}{entry.item.location?` · #${entry.item.location}`:""}</div>
                       <div style={{fontSize:11,color:C.inkFaint}}>
@@ -4452,7 +4480,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 return(
                 <div key={entry.item.id} style={{padding:"12px 0",borderBottom:i<returnQtyDialog.entries.length-1?`1px solid ${C.border}`:"none"}}>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-                    {stockCover(entry.item)?<img src={stockCover(entry.item)} alt="" style={{width:48,height:48,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>💎</div>}
+                    {stockCover(entry.item)?<img src={thumbUrl(stockCover(entry.item),150)} alt="" style={{width:48,height:48,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:48,height:48,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>💎</div>}
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{showName}{entry.item.location?` · #${entry.item.location}`:""}</div>
                       <div style={{fontSize:11,color:C.inkFaint}}>
@@ -4530,7 +4558,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:8}}>Will be deleted from Shopify</div>
               {shopifyDeleteConfirm.items.map(item=>(
                 <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:C.redBg,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:6}}>
-                  {stockCover(item)&&<img src={stockCover(item)} alt="" style={{width:40,height:40,objectFit:"cover",borderRadius:5,flexShrink:0}}/>}
+                  {stockCover(item)&&<img src={thumbUrl(stockCover(item),150)} alt="" style={{width:40,height:40,objectFit:"cover",borderRadius:5,flexShrink:0}}/>}
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[item.material,item.shape].filter(Boolean).join(" — ")}{item.location?` · #${item.location}`:""}</div>
                     <div style={{fontSize:11,color:C.inkFaint}}>Shopify ID: {item.shopifyProductId} · {item.qty} {item.unit}</div>
@@ -5069,9 +5097,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               {(()=>{const futureCount=stock.filter(s=>{if(!s.addedDate)return false;const t=new Date(s.addedDate).getTime();return!isNaN(t)&&s.addedDate>today();}).length;return futureCount>0&&(<div style={{background:C.amberBg,border:`1px solid ${C.amber}`,borderRadius:7,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}><span style={{fontSize:12,color:C.amber}}>⚠ {futureCount} item{futureCount>1?"s have":" has"} a future date (showing ⚠ on card)</span><button className="bs" style={{fontSize:11,color:C.amber,borderColor:C.amber,whiteSpace:"nowrap",flexShrink:0}} onClick={fixFutureDates}>Fix — move back 1 year</button></div>);})()}
               {filtered.length===0?(<div style={{background:C.surface,borderRadius:16,boxShadow:"var(--e-1)",padding:"56px 24px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}><div style={{width:72,height:72,borderRadius:"50%",background:"var(--c-fill)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>💎</div><div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.ink,marginBottom:3}}>{activeFilterCount>0?"No matching stock":"No stock yet"}</div><p style={{fontSize:13,color:C.inkFaint,maxWidth:300}}>{activeFilterCount>0?"Try clearing a filter to see more items.":"Add your first physical stock item to get started."}</p></div>{activeFilterCount>0?<button className="bs" onClick={()=>{clearAllFilters();setOpenFilter(null);}}>Clear filters</button>:<button className="bp" onClick={()=>{setFormType("physical");setForm({...blank});setTab("physical");}}>+ Add Physical Stock</button>}</div>):(
                 <div>
-                  <style>{`@keyframes fadeSlideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}`}</style>
+
                   <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
-                  {filtered.map((s,idx)=>{
+                  {visibleStock.map((s,idx)=>{
                     const isSel=selectedIds.has(s.id);
                     const age=daysSince(s.addedDate);
                     const isFutureDate=age!=null&&age<0;
@@ -5090,7 +5118,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       {/* Photo */}
                       <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
                         {cover
-                          ?<img src={cover} loading="eager" decoding="async" fetchPriority={idx<24?"high":"auto"} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>
+                          ?<a href={cover} target="_blank" rel="noopener noreferrer" onClick={e=>e.preventDefault()} style={{display:"block",width:"100%",height:"100%"}}><img src={thumbUrl(cover)} loading="lazy" decoding="async" fetchPriority={idx<4?"high":"auto"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} alt=""/></a>
                           :<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:4}}>
                             <div style={{fontSize:mob?22:28,opacity:.12}}>💎</div>
                             {s.grade&&<div style={{fontSize:9,color:C.inkFaint,fontWeight:700,letterSpacing:.5}}>{s.grade}</div>}
@@ -5098,16 +5126,17 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         }
                         {selectMode&&<div style={{position:"absolute",top:8,left:8}}><input type="checkbox" readOnly checked={isSel} style={{accentColor:C.amber,width:16,height:16,cursor:"pointer"}}/></div>}
                         {/* Box / location pill — top left */}
-                        {s.location&&<div style={{position:"absolute",top:8,left:selectMode?32:8,background:"rgba(26,19,8,.65)",backdropFilter:"blur(6px)",borderRadius:20,padding:"3px 9px",fontSize:10,color:"#fff",fontWeight:600,letterSpacing:.3}}>
+                        {s.location&&<div style={{position:"absolute",top:8,left:selectMode?32:8,background:"rgba(26,19,8,.75)",borderRadius:20,padding:"3px 9px",fontSize:10,color:"#fff",fontWeight:600,letterSpacing:.3}}>
                           {s.location}
                         </div>}
-                        {!s.location&&!selectMode&&<div style={{position:"absolute",top:8,left:8,background:"rgba(220,100,0,.8)",backdropFilter:"blur(4px)",borderRadius:20,padding:"3px 8px",fontSize:9,color:"#fff",fontWeight:600}}>no box</div>}
+                        {!s.location&&!selectMode&&<div style={{position:"absolute",top:8,left:8,background:"rgba(220,100,0,.85)",borderRadius:20,padding:"3px 8px",fontSize:9,color:"#fff",fontWeight:600}}>no box</div>}
                         {/* Age dot — top right */}
                         <div style={{position:"absolute",top:10,right:10,width:7,height:7,borderRadius:"50%",background:age==null?C.border:ageCol,boxShadow:"0 0 0 2px rgba(255,255,255,.8)"}} title={age==null?"No date":`${age} days in stock`}/>
                         {/* Quick actions on hover — desktop only */}
                         {!selectMode&&!mob&&<div style={{position:"absolute",bottom:6,right:6,display:"flex",gap:3}} onClick={e=>e.stopPropagation()}>
                           {stockRegion!=="India"&&<button onClick={()=>{setMarkSoldItem(s);setMarkSoldQty(s.qty||"1");setMarkSoldRate("");}} style={{background:"rgba(255,255,255,.95)",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:4,lineHeight:1,color:REGION_CFG[stockRegion]?.color||C.ink}}>💰 Sold</button>}
                           <button className="bs" style={{padding:"2px 6px",fontSize:9,borderRadius:4,background:"rgba(255,255,255,.9)",border:"none"}} onClick={()=>openEditForm(s)}>✏</button>
+                          {cover&&<a href={cover} download target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"rgba(255,255,255,.9)",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,lineHeight:1,textDecoration:"none",color:C.ink,display:"flex",alignItems:"center"}} title="Download full image">⬇</a>}
                           <button onClick={()=>{const url=`${window.location.origin}${window.location.pathname}?stock=${s.id}`;navigator.clipboard.writeText(url).then(()=>showToast("Link copied!"));}} style={{background:"rgba(255,255,255,.9)",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,lineHeight:1}} title="Copy link">🔗</button>
                           <button onClick={()=>{if(window.confirm("Delete?"))del(s.id);}} style={{background:"rgba(255,255,255,.9)",border:"none",cursor:"pointer",color:C.red,fontSize:11,fontWeight:700,padding:"2px 5px",borderRadius:4,lineHeight:1}}>&times;</button>
                         </div>}
@@ -5184,6 +5213,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     </div>
                   );})}
                   </div>
+                  {visibleCount<filtered.length&&<div ref={sentinelRef} style={{height:1}}/>}
                 </div>
               )}
               {/* Stock item detail panel */}
@@ -5221,7 +5251,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     </div>
                     {stockPhotos(selected).length>0&&(
                       <div style={{display:"grid",gridTemplateColumns:stockPhotos(selected).length>1?"1fr 1fr":"1fr",gap:2,background:C.card}}>
-                        {stockPhotos(selected).slice(0,4).map((url,i)=><img key={`${url}-${i}`} src={url} style={{width:"100%",height:i===0?200:96,objectFit:"cover",gridColumn:i===0&&stockPhotos(selected).length>1?"1/-1":"auto"}} alt=""/>)}
+                        {stockPhotos(selected).slice(0,4).map((url,i)=><a key={`${url}-${i}`} href={url} target="_blank" rel="noopener noreferrer" style={{display:"block",gridColumn:i===0&&stockPhotos(selected).length>1?"1/-1":"auto"}}><img src={thumbUrl(url,800)} style={{width:"100%",height:i===0?200:96,objectFit:"cover",display:"block"}} alt=""/></a>)}
                       </div>
                     )}
                     {selected.video&&<video src={selected.video} controls muted playsInline style={{width:"100%",maxHeight:200,background:"#000",display:"block"}}/>}
@@ -5385,7 +5415,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       return(
                         <div key={s.id} style={{background:isDone?C.greenBg:C.surface,border:`1.5px solid ${isDone?C.green:C.border}`,borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",gap:12,transition:"all .3s",animation:`fadeSlideUp .25s ease both`,animationDelay:`${Math.min(i*.03,.4)}s`,opacity:isDone?.6:1}}>
                           {stockCover(s)
-                            ?<img src={stockCover(s)} style={{width:48,height:48,borderRadius:8,objectFit:"cover",flexShrink:0}} alt=""/>
+                            ?<img src={thumbUrl(stockCover(s),150)} style={{width:48,height:48,borderRadius:8,objectFit:"cover",flexShrink:0}} alt=""/>
                             :<div style={{width:48,height:48,borderRadius:8,background:C.card,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>💎</div>
                           }
                           <div style={{flex:1,minWidth:0}}>
@@ -5878,17 +5908,31 @@ async function loadStockWithPhotos(){
 
 function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor}){
   const t=useT();
-  const [purchases,setPurchases]=useState([]);const [vendors,setVendors]=useState([]);const [stock,setStock]=useState([]);const [glossary,setGlossary]=useState([]);const [accStock,setAccStock]=useState([]);
+  const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
+  const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);
+  const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);
+  const [glossary,setGlossary]=useState(()=>readCache(KEYS.glossary)||[]);
+  const [accStock,setAccStock]=useState(()=>readCache(KEYS.accStock)||[]);
   const [view,setView]=useState(startView==="upload"?"upload":"list");const [tab,setTab]=useState("all");const [sortBy,setSortBy]=useState("date");
   const [draft,setDraft]=useState(null);const [expandBill,setExpandBill]=useState(null);const [detail,setDetail]=useState(null);
   const [extracting,setExtracting]=useState(false);const [bulkQueue,setBulkQueue]=useState([]);const [bulkIdx,setBulkIdx]=useState(0);
-  const [fileData,setFileData]=useState(null);const [toast,setToast]=useState("");const [loaded,setLoaded]=useState(false);
-  const [advDialog,setAdvDialog]=useState(null); // {po, amount, vendor}
-  const [customMarkets,setCustomMarkets]=useState([]);
+  const [fileData,setFileData]=useState(null);const [toast,setToast]=useState("");
+  const [loaded,setLoaded]=useState(()=>readCache(KEYS.purchases)!==null);
+  const [advDialog,setAdvDialog]=useState(null);
+  const [customMarkets,setCustomMarkets]=useState(()=>readCache("ng-custom-markets-v1")||[]);
   const [finAccounts,setFinAccounts]=useState([]);
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
 
-  useEffect(()=>{Promise.all([loadK(KEYS.purchases),loadK(KEYS.vendors),loadK(KEYS.stock),loadK(KEYS.glossary),loadK("ng-fin-accounts-v1"),loadK(KEYS.accStock),loadK("ng-custom-markets-v1")]).then(([p,v,s,g,fa,ac,cm])=>{setPurchases(p||[]);setVendors(v||[]);setStock(s||[]);setGlossary(g||[]);setFinAccounts((fa||[]).filter(a=>a.active!==false));setAccStock(ac||[]);setCustomMarkets(cm||[]);setLoaded(true);if(startBillId){const bill=(p||[]).find(b=>b.id===startBillId);if(bill){setDetail(bill);}onBillIdConsumed?.();}}).catch(e=>{console.error("PurchasesApp load error:",e);setLoaded(true);});},[]);
+  useEffect(()=>{
+    Promise.all([loadK(KEYS.purchases),loadK(KEYS.vendors),loadK(KEYS.stock),loadK(KEYS.glossary),loadK("ng-fin-accounts-v1"),loadK(KEYS.accStock),loadK("ng-custom-markets-v1")])
+      .then(([p,v,s,g,fa,ac,cm])=>{
+        setPurchases(p||[]);setVendors(v||[]);setStock(s||[]);setGlossary(g||[]);
+        setFinAccounts((fa||[]).filter(a=>a.active!==false));setAccStock(ac||[]);setCustomMarkets(cm||[]);
+        setLoaded(true);
+        if(startBillId){const bill=(p||[]).find(b=>b.id===startBillId);if(bill){setDetail(bill);}onBillIdConsumed?.();}
+      })
+      .catch(e=>{console.error("PurchasesApp load error:",e);setLoaded(true);});
+  },[]);
 
   const nextPO=useCallback(()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;},[purchases]);
 
@@ -7210,14 +7254,14 @@ function ExpenseCharts({expenses,topCat,totalSpend}){
 
 function ExpensesApp({onHome}){
   const t=useT();
-  const [expenses,setExpenses]=useState([]);
-  const [vendors,setVendors]=useState([]);
-  const [recurring,setRecurring]=useState([]);
+  const [expenses,setExpenses]=useState(()=>readCache(KEYS.expenses)||[]);
+  const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);
+  const [recurring,setRecurring]=useState(()=>readCache("ng-recurring-v1")||[]);
   const [form,setForm]=useState(null);
   const [recForm,setRecForm]=useState(null);
   const [tab,setTab]=useState("list");
   const [filterCat,setFilterCat]=useState("All");
-  const [loaded,setLoaded]=useState(false);
+  const [loaded,setLoaded]=useState(()=>readCache(KEYS.expenses)!==null);
   const [toast,setToast]=useState("");
   const [confirmDel,setConfirmDel]=useState(null);
   const [extracting,setExtracting]=useState(false);
@@ -7929,15 +7973,15 @@ function InvBulkView({queue,idx,setIdx,buyers,extractInvoice,onSave,onBack}){
 
 function InvoicesApp({onHome,startDraft}){
   const t=useT();
-  const [invoices,setInvoices]=useState([]);
-  const [buyers,setBuyers]=useState([]);
-  const [stock,setStock]=useState([]);
-  const [purchases,setPurchases]=useState([]);
+  const [invoices,setInvoices]=useState(()=>readCache(INV_KEYS.invoices)||[]);
+  const [buyers,setBuyers]=useState(()=>readCache(INV_KEYS.buyers)||[]);
+  const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);
+  const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
   const [view,setView]=useState("list");
   const [draft,setDraft]=useState(null);
   const [tab,setTab]=useState("invoices");
   const [toast,setToast]=useState("");
-  const [loaded,setLoaded]=useState(false);
+  const [loaded,setLoaded]=useState(()=>readCache(INV_KEYS.invoices)!==null);
   const [filterStatus,setFilterStatus]=useState("all");
   const [searchQ,setSearchQ]=useState("");
   const [invSortBy,setInvSortBy]=useState("date");
@@ -9137,7 +9181,7 @@ function InvoiceForm({draft,setDraft,buyers,accStock=[],stock,purchases=[],finTx
                       <div style={{display:"flex",alignItems:"center",gap:0,cursor:"pointer"}} onClick={()=>toggleItem(s)}>
                         {/* Thumbnail */}
                         <div style={{width:64,height:64,flexShrink:0,overflow:"hidden",background:C.amberBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,color:C.amber}}>
-                          {stockCover(s)?<img src={stockCover(s)} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:"◆"}
+                          {stockCover(s)?<img src={thumbUrl(stockCover(s),150)} style={{width:"100%",height:"100%",objectFit:"cover"}} alt=""/>:"◆"}
                         </div>
                         {/* Checkbox */}
                         <div style={{padding:"0 10px",flexShrink:0}}>
@@ -9649,11 +9693,11 @@ function ShowsApp({onHome}){
     const plan=show.buyingPlan||[];
     const rows=plan.filter(r=>!r.poId&&!["Bought","Skipped"].includes(r.status)&&String(r.stone||"").trim());
     if(!rows.length){showToast("Add open buying plan lines first");return;}
-    const incomplete=rows.filter(r=>!String(r.vendor||"").trim()||!(+r.qty>0)||!(+r.targetRate>0));
-    if(incomplete.length){showToast("Add vendor, qty and target rate before creating PO");return;}
+    const incomplete=rows.filter(r=>!String(r.vendor||"").trim()||!(+r.qty>0)||!(+r.costPerKg>0));
+    if(incomplete.length){showToast("Add vendor, qty and CP before creating PO");return;}
     const groups={};
     rows.forEach(r=>{
-      const key=`${String(r.vendor||"").trim()}__${r.currency||"INR"}`;
+      const key=`${String(r.vendor||"").trim()}__INR`;
       groups[key]=groups[key]||[];
       groups[key].push(r);
     });
@@ -9664,10 +9708,10 @@ function ShowsApp({onHome}){
       const poNumber=`PO/${new Date().getFullYear()}/${String(poCount).padStart(3,"0")}`;
       const items=lines.map(r=>{
         const qty=String(r.qty||"");
-        const rate=String(r.targetRate||"");
+        const rate=String(r.costPerKg||"");
         const desc=[r.stone,r.shape].filter(Boolean).join(" · ");
         const amt=(+qty||0)*(+rate||0);
-        return{...newItem(),id:uid(),desc,shape:r.shape||"",qty,unit:r.unit||"pcs",rate,amt};
+        return{...newItem(),id:uid(),desc,shape:r.shape||"",qty,unit:r.unit||"kg",rate,amt};
       });
       return{
         type:"po",id:uid(),poNumber,supplier,date:today(),currency,
@@ -9829,27 +9873,64 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [expDate,setExpDate]=useState(todayStr);
   const [expNotes,setExpNotes]=useState("");
   const [journalText,setJournalText]=useState("");
+  const [usdInr,setUsdInr]=useState(85);
+  const [vendorHistoryRow,setVendorHistoryRow]=useState(null);
   const allShapes=useShapes();
   const fmtAmtIN=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return Number.isFinite(n)?n.toLocaleString("en-IN",{maximumFractionDigits:2}):"";};
   const rawAmt=v=>String(v||"").replace(/,/g,"").replace(/[^\d.]/g,"");
   const PLAN_STATUS=["Idea","Quoted","Ordered","Bought","Skipped"];
-  const PLAN_PRIORITY=["High","Medium","Low"];
-  const PLAN_CURS=["USD","JPY","EUR","GBP","INR"];
+  const INR_RATES={INR:1,USD:usdInr,EUR:92,JPY:.57,GBP:107,AUD:55};
+  const usdFromInr=v=>{const n=+v||0;return n>0?String(Math.round((n/usdInr)*100)/100):"";};
+  const inrFromUsd=v=>{const n=+v||0;return n>0?String(Math.round(n*usdInr)):"";};
+  const toInr=(amount,currency)=>(+amount||0)*(INR_RATES[currency||"INR"]||1);
+  const normPlanText=v=>String(v||"").trim().toLowerCase();
+  const expandPlanShape=v=>{
+    const raw=String(v||"");
+    const key=raw.trim().toLowerCase();
+    if(key.length!==1)return raw;
+    return key==="p"?"Palmstone":key==="h"?"Heart":key==="s"?"Sphere":raw;
+  };
+  useEffect(()=>{
+    let alive=true;
+    (async()=>{
+      const saved=await loadK("ng-fin-rates-v1").catch(()=>null);
+      if(alive&&saved?.USD>0)setUsdInr(+saved.USD);
+      const fetchedAt=saved?._fetchedAt?new Date(saved._fetchedAt).getTime():0;
+      const stale=!fetchedAt||(Date.now()-fetchedAt)>24*60*60*1000;
+      if(!stale)return;
+      try{
+        const res=await fetch("https://open.er-api.com/v6/latest/USD");
+        const data=await res.json();
+        const rate=data?.rates?.INR;
+        if(data?.result==="success"&&rate>0){
+          const next={...(saved&&typeof saved==="object"?saved:{}),USD:Math.round(rate*100)/100,_fetchedAt:new Date().toISOString()};
+          if(alive)setUsdInr(next.USD);
+          saveK("ng-fin-rates-v1",next).catch(()=>{});
+        }
+      }catch{}
+    })();
+    return()=>{alive=false;};
+  },[]);
   const purchaseHistory=useMemo(()=>purchases.flatMap(p=>(p.items||[]).map(it=>{
     const qtyKg=+it.qtyKg||0,qtyPcs=+it.qty||0;
     const qty=qtyKg||qtyPcs||1;
-    const unit=qtyKg?"kg":"pcs";
+    const explicitUnit=String(it.unit||"").trim();
+    const unit=explicitUnit||(qtyKg?"kg":"");
     const rate=+it.rate||(+it.amt&&qty?+it.amt/qty:0);
+    const amount=+it.amt||(+rate||0)*(+qty||0);
     return{
       desc:it.desc||it.purchaseDesc||it.catDesc||"",
       shape:it.shape||"",
       vendor:p.supplier||p.vendorName||p.vendor||"",
       currency:p.currency||"INR",
       rate,
-      unit:it.unit||unit,
+      amount,
+      unit,
       qty,
       date:p.billDate||p.date||p.createdAt||"",
       billNumber:p.billNumber||p.poNumber||"",
+      status:p.status||"",
+      type:p.type||p.kind||"",
     };
   })).filter(x=>x.desc).sort((a,b)=>String(b.date||"").localeCompare(String(a.date||""))),[purchases]);
   const planStoneOptions=useMemo(()=>[...new Set([...purchaseHistory.map(x=>x.desc),...stock.map(s=>s.material).filter(Boolean)])].sort(),[purchaseHistory,stock]);
@@ -9862,6 +9943,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     if(sh&&String(x.shape||"").trim().toLowerCase()!==sh)return false;
     return st||sh;
   })||null;
+  const vendorHistoryFor=vendor=>{
+    const v=normPlanText(vendor);
+    if(!v)return[];
+    return purchaseHistory.filter(x=>normPlanText(x.vendor)===v);
+  };
   // Convert any per-unit rate into per-kg when possible (kg/g supported;
   // pcs needs a per-piece weight, which is rarely present, so we return 0).
   const toCostPerKg=(rate,unit,weightGm)=>{
@@ -9878,7 +9964,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const findCostBasis=(stone,shape)=>{
     const lp=findLastPurchase(stone,shape);
     if(lp){
-      return{costPerKg:toCostPerKg(lp.rate,lp.unit,0),currency:lp.currency||"INR",rate:lp.rate,unit:lp.unit||"pcs",source:"purchase",vendor:lp.vendor||"",date:lp.date||""};
+      const basisUnit=lp.unit||"kg";
+      return{costPerKg:toInr(toCostPerKg(lp.rate,basisUnit,0),lp.currency||"INR"),currency:"INR",rate:lp.rate,unit:basisUnit,source:"purchase",vendor:lp.vendor||"",date:lp.date||""};
     }
     const st=String(stone||"").trim().toLowerCase();
     const sh=String(shape||"").trim().toLowerCase();
@@ -9889,19 +9976,24 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
       return (+s.costPrice||0)>0;
     });
     if(!sm)return null;
-    return{costPerKg:toCostPerKg(sm.costPrice,sm.unit,sm.weightGm),currency:"INR",rate:sm.costPrice,unit:sm.unit||"pcs",source:"stock",vendor:sm.vendor||"",date:sm.addedDate||""};
+    return{costPerKg:toCostPerKg(sm.costPrice,sm.unit,sm.weightGm),currency:"INR",rate:sm.costPrice,unit:sm.unit||"kg",source:"stock",vendor:sm.vendor||"",date:sm.addedDate||""};
   };
   const buyingPlan=show.buyingPlan||[];
+  const shapeNotePresets=show.buyingPlanShapeNotes||{};
+  const shapeNoteFor=shape=>shapeNotePresets[normPlanText(shape)]||"";
+  const saveShapeNotePresets=next=>onUpdateShow(show.id,"buyingPlanShapeNotes",next);
   const saveBuyingPlan=plan=>onUpdateShow(show.id,"buyingPlan",plan);
   const addBuyingLine=(seed={})=>{
     const basis=findCostBasis(seed.stone,seed.shape);
+    const shapeNote=seed.notes||shapeNoteFor(seed.shape);
     saveBuyingPlan([...buyingPlan,{
       id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||basis?.vendor||"",
-      qty:seed.qty||"",unit:seed.unit||basis?.unit||"pcs",targetRate:seed.targetRate||basis?.rate||"",
-      currency:seed.currency||basis?.currency||"USD",priority:seed.priority||"Medium",status:seed.status||"Idea",
-      notes:seed.notes||"",
-      costPerKg:seed.costPerKg||(basis?.costPerKg?String(+basis.costPerKg.toFixed(2)):""),
+      qty:seed.qty||"",unit:seed.unit||"kg",targetRate:seed.targetRate||"",
+      currency:"INR",priority:seed.priority||"Medium",status:seed.status||"Idea",
+      notes:shapeNote,notesAuto:!!shapeNote&&!seed.notes,
+      costPerKg:seed.costPerKg||seed.targetRate||(basis?.costPerKg?String(+basis.costPerKg.toFixed(2)):""),
       targetSellPrice:seed.targetSellPrice||"",
+      targetSellPriceUsd:seed.targetSellPriceUsd||usdFromInr(seed.targetSellPrice),
       lastRate:basis?.rate||"",lastVendor:basis?.vendor||"",lastDate:basis?.date||"",lastSource:basis?.source||"",
       createdAt:new Date().toISOString()
     }]);
@@ -9915,19 +10007,113 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
       if(basis){
         next.lastRate=basis.rate||"";next.lastVendor=basis.vendor||"";next.lastDate=basis.date||"";next.lastSource=basis.source||"";
         if(!next.vendor)next.vendor=basis.vendor||"";
-        if(!next.targetRate)next.targetRate=basis.rate||"";
-        if(!next.unit)next.unit=basis.unit||"pcs";
-        if(!next.currency)next.currency=basis.currency||"USD";
+        if(!next.unit||(!next.unitTouched&&next.unit==="pcs"))next.unit="kg";
+        next.currency="INR";
         // Autofill CP/kg only if user hasn't entered one — keeps manual edits sticky
         if(!next.costPerKg&&basis.costPerKg>0)next.costPerKg=String(+basis.costPerKg.toFixed(2));
       }
+      const shapeNote=shapeNoteFor(next.shape);
+      if(shapeNote&&(!next.notes||next.notesAuto)){
+        next.notes=shapeNote;
+        next.notesAuto=true;
+      }
+    }
+    if(patch.targetSellPrice!==undefined&&!next.targetSellPriceUsdEdited)next.targetSellPriceUsd=usdFromInr(next.targetSellPrice);
+    if(patch.targetSellPriceUsd!==undefined){
+      next.targetSellPriceUsdEdited=!!next.targetSellPriceUsd;
+      next.targetSellPrice=inrFromUsd(next.targetSellPriceUsd);
     }
     return next;
   }));
+  const updateBuyingLineNote=(row,note)=>{
+    const shapeKey=normPlanText(row.shape);
+    if(shapeKey){
+      const oldPreset=shapeNoteFor(row.shape);
+      const nextPresets={...shapeNotePresets,[shapeKey]:note};
+      saveShapeNotePresets(nextPresets);
+      saveBuyingPlan(buyingPlan.map(r=>{
+        if(r.id===row.id)return{...r,notes:note,notesAuto:false,updatedAt:new Date().toISOString()};
+        if(normPlanText(r.shape)!==shapeKey)return r;
+        if(r.notes&&r.notes!==oldPreset&&!r.notesAuto)return r;
+        return{...r,notes:note,notesAuto:true,updatedAt:new Date().toISOString()};
+      }));
+      return;
+    }
+    updateBuyingLine(row.id,{notes:note,notesAuto:false});
+  };
+  const duplicateBuyingLine=id=>saveBuyingPlan(buyingPlan.flatMap(row=>{
+    if(row.id!==id)return [row];
+    const {poId,poNumber,orderedAt,...copy}=row;
+    return [row,{
+      ...copy,
+      id:uid(),
+      status:row.status==="Ordered"?"Idea":row.status||"Idea",
+      createdAt:new Date().toISOString(),
+      updatedAt:new Date().toISOString()
+    }];
+  }));
   const removeBuyingLine=id=>saveBuyingPlan(buyingPlan.filter(row=>row.id!==id));
-  const planAmount=row=>(+row.qty||0)*(+row.targetRate||0);
-  const planTotals=buyingPlan.reduce((m,row)=>{const c=row.currency||"USD";m[c]=(m[c]||0)+planAmount(row);return m;},{});
   const planOpen=buyingPlan.filter(row=>!["Bought","Skipped"].includes(row.status)).length;
+  const buyingLineKg=row=>{
+    const qty=+row.qty||0;
+    const unit=String(row.unit||"kg").toLowerCase();
+    if(unit==="kg")return qty;
+    if(unit==="g"||unit==="gm")return qty/1000;
+    return 0;
+  };
+  const buyingLineCostQty=row=>{
+    const qty=+row.qty||0;
+    const unit=String(row.unit||"kg").toLowerCase();
+    if(unit==="kg"||unit==="pcs"||unit==="lots"||unit==="boxes")return qty;
+    if(unit==="g"||unit==="gm")return qty/1000;
+    return qty;
+  };
+  const stockQtyPartsFor=(stone,shape)=>{
+    const st=normPlanText(stone);
+    const sh=normPlanText(shape);
+    if(!st)return null;
+    const totals={kg:0,pcs:0,lots:0,boxes:0,items:0};
+    stock.forEach(s=>{
+      if(normPlanText(s.material)!==st)return;
+      if(sh&&normPlanText(s.shape)!==sh)return;
+      const q=+s.qty||0,q2=+s.qty2||0;
+      if(q<=0&&q2<=0)return;
+      totals.items+=1;
+      const add=(qty,unit)=>{
+        const u=String(unit||"pcs").toLowerCase();
+        if(u==="kg")totals.kg+=qty;
+        else if(u==="g"||u==="gm")totals.kg+=qty/1000;
+        else if(u==="boxes"||u==="box")totals.boxes+=qty;
+        else if(u==="lots"||u==="lot")totals.lots+=qty;
+        else totals.pcs+=qty;
+      };
+      if(q>0)add(q,s.unit);
+      if(q2>0)add(q2,s.unit2);
+    });
+    const parts=[];
+    if(totals.kg>0)parts.push(`${fmtAmtIN(totals.kg)} kg`);
+    if(totals.pcs>0)parts.push(`${fmtAmtIN(totals.pcs)} pcs`);
+    if(totals.lots>0)parts.push(`${fmtAmtIN(totals.lots)} lots`);
+    if(totals.boxes>0)parts.push(`${fmtAmtIN(totals.boxes)} boxes`);
+    return{...totals,text:parts.join(" / ")};
+  };
+  const stoneBuyingTotals=buyingPlan.reduce((m,row)=>{
+    const key=normPlanText(row.stone);
+    if(!key)return m;
+    const name=String(row.stone||"").trim();
+    const unit=String(row.unit||"kg").toLowerCase();
+    const bucket=m[key]||{name,kg:0,lines:0,shapes:new Set(),other:{},cp:0,sp:0,spUsd:0};
+    const costQty=buyingLineCostQty(row);
+    bucket.lines+=1;
+    bucket.kg+=buyingLineKg(row);
+    bucket.cp+=costQty*(+row.costPerKg||0);
+    bucket.sp+=costQty*(+row.targetSellPrice||0);
+    bucket.spUsd+=costQty*(+row.targetSellPriceUsd||+(usdFromInr(row.targetSellPrice))||0);
+    if(row.shape)bucket.shapes.add(String(row.shape).trim());
+    if(unit!=="kg"&&unit!=="g"&&unit!=="gm"&&(+row.qty||0)>0)bucket.other[unit]=(bucket.other[unit]||0)+(+row.qty||0);
+    m[key]=bucket;
+    return m;
+  },{});
   const planDatalistId=`buy-plan-${show.id}`;
 
   const showStock=show.showStock||[];
@@ -10134,118 +10320,202 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
 
           {/* ── BUYING PLAN ── */}
           {showTab==="buying"&&(
-            <div style={{padding:"14px 16px"}}>
+            <div style={{padding:"10px 12px 78px"}}>
               <datalist id={`${planDatalistId}-stones`}>{planStoneOptions.map(x=><option key={x} value={x}/>)}</datalist>
               <datalist id={`${planDatalistId}-shapes`}>{planShapeOptions.map(x=><option key={x} value={x}/>)}</datalist>
               <datalist id={`${planDatalistId}-vendors`}>{planVendorOptions.map(x=><option key={x} value={x}/>)}</datalist>
-              <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8,marginBottom:12}}>
-                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
-                  <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Planned Lines</div>
-                  <div style={{fontSize:20,fontWeight:750,color:C.ink,lineHeight:1}}>{buyingPlan.length}</div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>{planOpen} open</div>
-                </div>
-                <div style={{background:C.blueBg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
-                  <div style={{fontSize:9,fontWeight:800,color:C.blue,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Budget</div>
-                  <div style={{fontSize:15,fontWeight:800,color:C.ink,lineHeight:1.25}}>{fmtCurObj(planTotals)}</div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>qty × target rate</div>
-                </div>
-                <div style={{background:C.greenBg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
-                  <div style={{fontSize:9,fontWeight:800,color:C.green,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Bought</div>
-                  <div style={{fontSize:20,fontWeight:750,color:C.ink,lineHeight:1}}>{buyingPlan.filter(x=>x.status==="Bought").length}</div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>ready to convert later</div>
-                </div>
-                <div style={{background:C.amberBg,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 11px"}}>
-                  <div style={{fontSize:9,fontWeight:800,color:C.amber,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>History</div>
-                  <div style={{fontSize:20,fontWeight:750,color:C.ink,lineHeight:1}}>{purchaseHistory.length}</div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>past purchase lines</div>
-                </div>
-              </div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+              <div style={{position:"sticky",top:0,zIndex:8,background:C.bg,borderBottom:`1px solid ${C.border}`,padding:"4px 0 9px",marginBottom:9}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:7}}>
                 <div>
                   <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>What to order for {show.name}</div>
-                  <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>Stone, shape, vendor and last rates fill from previous purchase bills where possible.</div>
+                  <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>CP and SP are INR. USD SP is editable. USD live rate: ₹{fmtAmtIN(usdInr)}</div>
                 </div>
                 <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"flex-end"}}>
                   <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
                   <button className="bp" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLine();}}>+ Add Item</button>
                 </div>
               </div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                {[
+                  ["Planned",buyingPlan.length,`${planOpen} open`,C.inkMid,C.card],
+                  ["Bought",buyingPlan.filter(x=>x.status==="Bought").length,"ready",C.green,C.greenBg],
+                  ["History",purchaseHistory.length,"purchase lines",C.amber,C.amberBg],
+                ].map(([label,value,sub,color,bg])=>(
+                  <div key={label} style={{display:"flex",alignItems:"center",gap:7,background:bg,border:`1px solid ${C.border}`,borderRadius:999,padding:"5px 9px",fontSize:10,color:C.inkMid}}>
+                    <span style={{fontWeight:850,color,textTransform:"uppercase",letterSpacing:.45}}>{label}</span>
+                    <span style={{fontSize:14,fontWeight:850,color:C.ink,lineHeight:1}}>{value}</span>
+                    <span style={{color:C.inkFaint}}>{sub}</span>
+                  </div>
+                ))}
+              </div>
+              </div>
               {buyingPlan.length===0?(
                 <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:"18px 16px",textAlign:"center"}}>
-                  No buying plan yet. Add what you want to source at this show, then fill target rates and vendors.
+                  No buying plan yet. Add what you want to source at this show, then fill CP and SP.
                 </div>
               ):(
-                <div style={{display:"grid",gap:8}}>
+                <div style={{display:"grid",gap:6}}>
                   {!mob&&(
-                    <div style={{display:"grid",gridTemplateColumns:"1.2fr .9fr .9fr .65fr .55fr .75fr .75fr .8fr .8fr 28px",gap:6,padding:"0 8px"}}>
-                      {["Stone","Shape","Vendor","Qty","Unit","Target rate","Budget","Priority","Status",""].map(h=><div key={h} style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45}}>{h}</div>)}
+                    <div style={{display:"grid",gridTemplateColumns:"1.2fr .85fr 1fr .45fr .48fr .68fr 70px",gap:5,padding:"0 7px"}}>
+                      {["Stone","Shape","Vendor","Qty","Unit","Status",""].map(h=><div key={h} style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45}}>{h}</div>)}
                     </div>
                   )}
-                  {buyingPlan.map(row=>{
+                  {buyingPlan.map((row,idx)=>{
                     const last=row.lastRate||row.lastVendor?row:findLastPurchase(row.stone,row.shape);
+                    const vendorHistory=vendorHistoryFor(row.vendor);
+                    const cp=+row.costPerKg||0;
+                    const sp=+row.targetSellPrice||0;
+                    const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
+                    const marginColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
+                    const spUsd=row.targetSellPriceUsd||usdFromInr(row.targetSellPrice);
+                    const lineUnit=(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":row.unit||"kg";
+                    const stoneKey=normPlanText(row.stone);
+                    const stoneTotal=stoneKey?stoneBuyingTotals[stoneKey]:null;
+                    const showStoneBand=stoneTotal&&buyingPlan.findIndex(r=>normPlanText(r.stone)===stoneKey)===idx;
+                    const otherTotals=stoneTotal?Object.entries(stoneTotal.other).filter(([,v])=>v>0):[];
+                    const shapeNames=stoneTotal?[...stoneTotal.shapes].filter(Boolean):[];
+                    const currentStock=stockQtyPartsFor(row.stone,row.shape);
                     return(
-                      <div key={row.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:mob?"10px":"9px 8px"}}>
-                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.2fr .9fr .9fr .65fr .55fr .75fr .75fr .8fr .8fr 28px",gap:6,alignItems:"center"}}>
-                          <input value={row.stone||""} onChange={e=>updateBuyingLine(row.id,{stone:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Stone" list={`${planDatalistId}-stones`}/>
-                          <input value={row.shape||""} onChange={e=>updateBuyingLine(row.id,{shape:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Shape" list={`${planDatalistId}-shapes`}/>
-                          <input value={row.vendor||""} onChange={e=>updateBuyingLine(row.id,{vendor:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Vendor" list={`${planDatalistId}-vendors`}/>
-                          <input value={row.qty||""} onChange={e=>updateBuyingLine(row.id,{qty:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder="Qty"/>
-                          <select value={row.unit||"pcs"} onChange={e=>updateBuyingLine(row.id,{unit:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px",cursor:"pointer"}}>
+                      <React.Fragment key={row.id}>
+                      {showStoneBand&&(
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"center",background:C.greenBg,border:`1px solid ${C.green}30`,borderLeft:`4px solid ${C.green}`,borderRadius:8,padding:"7px 10px",marginTop:idx?5:0}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                            <span style={{fontSize:12,fontWeight:900,color:C.green}}>{stoneTotal.name}</span>
+                            <span style={{fontSize:12,fontWeight:850,color:C.ink}}>{fmtAmtIN(stoneTotal.kg)} kg planned</span>
+                            <span style={{fontSize:10,color:C.ink,fontWeight:850}}>CP ₹{fmtAmtIN(stoneTotal.cp)||"0"}</span>
+                            <span style={{fontSize:10,color:C.green,fontWeight:850}}>SP ₹{fmtAmtIN(stoneTotal.sp)||"0"}</span>
+                            <span style={{fontSize:10,color:C.blue,fontWeight:850}}>SP ${fmtAmtIN(stoneTotal.spUsd)||"0"}</span>
+                            <span style={{fontSize:10,color:C.inkFaint,fontWeight:750}}>{stoneTotal.lines} lines · {shapeNames.length||1} shape{(shapeNames.length||1)===1?"":"s"}</span>
+                            {otherTotals.map(([u,v])=><span key={u} style={{fontSize:10,color:C.amber,fontWeight:800}}>+ {fmtAmtIN(v)} {u}</span>)}
+                          </div>
+                          <div style={{fontSize:10,color:C.inkMid,whiteSpace:mob?"normal":"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{shapeNames.length?shapeNames.join(" / "):"Shape not set yet"}</div>
+                        </div>
+                      )}
+                      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"9px":"7px 7px",boxShadow:"0 1px 2px rgba(26,19,8,.025)"}}>
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.2fr .85fr 1fr .45fr .48fr .68fr 70px",gap:5,alignItems:"center"}}>
+                          <input value={row.stone||""} onChange={e=>updateBuyingLine(row.id,{stone:e.target.value})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6}} placeholder="Stone" list={`${planDatalistId}-stones`}/>
+                          <input value={row.shape||""} onChange={e=>updateBuyingLine(row.id,{shape:expandPlanShape(e.target.value)})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6}} placeholder="Shape" list={`${planDatalistId}-shapes`}/>
+                          <input value={row.vendor||""} onChange={e=>updateBuyingLine(row.id,{vendor:e.target.value})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6}} placeholder="Vendor" list={`${planDatalistId}-vendors`}/>
+                          <input value={row.qty||""} onChange={e=>updateBuyingLine(row.id,{qty:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,textAlign:"right"}} placeholder="Qty"/>
+                          <select value={lineUnit} onChange={e=>updateBuyingLine(row.id,{unit:e.target.value,unitTouched:true})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,cursor:"pointer"}}>
                             {["pcs","kg","g","lots","boxes"].map(u=><option key={u}>{u}</option>)}
                           </select>
-                          <div style={{display:"grid",gridTemplateColumns:"55px 1fr",gap:4}}>
-                            <select value={row.currency||"USD"} onChange={e=>updateBuyingLine(row.id,{currency:e.target.value})} style={{...FI,fontSize:10,padding:"5px 4px",cursor:"pointer"}}>
-                              {PLAN_CURS.map(c=><option key={c}>{c}</option>)}
-                            </select>
-                            <input value={fmtAmtIN(row.targetRate)} onChange={e=>updateBuyingLine(row.id,{targetRate:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder="Rate"/>
-                          </div>
-                          <div style={{fontSize:12,fontWeight:800,color:C.ink,textAlign:mob?"left":"right",padding:"0 4px"}}>{row.currency||"USD"} {fmtAmtIN(planAmount(row))||"0"}</div>
-                          <select value={row.priority||"Medium"} onChange={e=>updateBuyingLine(row.id,{priority:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px",cursor:"pointer"}}>
-                            {PLAN_PRIORITY.map(p=><option key={p}>{p}</option>)}
-                          </select>
-                          <select value={row.status||"Idea"} onChange={e=>updateBuyingLine(row.id,{status:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px",cursor:"pointer"}}>
+                          <select value={row.status||"Idea"} onChange={e=>updateBuyingLine(row.id,{status:e.target.value})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,cursor:"pointer"}}>
                             {PLAN_STATUS.map(s=><option key={s}>{s}</option>)}
                           </select>
-                          <button onClick={e=>{e.stopPropagation();removeBuyingLine(row.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:15,padding:0}}>&times;</button>
+                          <div style={{display:"flex",alignItems:"center",justifyContent:mob?"flex-start":"flex-end",gap:4}}>
+                            <button title={vendorHistory.length?`Previous buys from ${row.vendor}`:"No previous buys for this vendor"} aria-label="Show vendor purchase history" disabled={!vendorHistory.length} onClick={e=>{e.stopPropagation();setVendorHistoryRow(row);}} style={{width:20,height:20,background:vendorHistory.length?C.amberBg:C.card,border:`1px solid ${C.border}`,borderRadius:4,cursor:vendorHistory.length?"pointer":"not-allowed",color:vendorHistory.length?C.amber:C.inkFaint,fontSize:11,padding:0,lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center",opacity:vendorHistory.length?1:.45}}>▤</button>
+                            <button title="Duplicate line" aria-label="Duplicate buying plan line" onClick={e=>{e.stopPropagation();duplicateBuyingLine(row.id);}} style={{width:20,height:20,background:C.card,border:`1px solid ${C.border}`,borderRadius:4,cursor:"pointer",color:C.inkMid,fontSize:12,padding:0,lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}}>⎘</button>
+                            <button title="Delete line" aria-label="Delete buying plan line" onClick={e=>{e.stopPropagation();removeBuyingLine(row.id);}} style={{width:18,height:20,background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:15,padding:0,lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center"}}>&times;</button>
+                          </div>
                         </div>
-                        {/* Pricing sub-row: historical CP/kg + target SP + margin */}
-                        {(()=>{
-                          const tr=+row.targetRate||0;
-                          const sp=+row.targetSellPrice||0;
-                          const margin=sp>0&&tr>0?((sp-tr)/sp)*100:null;
-                          const marginColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
-                          const cpkAuto=row.costPerKg&&row.lastSource;
-                          return(
-                            <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:6,alignItems:"center",marginTop:7}}>
-                              <div>
-                                <div style={{fontSize:8.5,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45,marginBottom:2}}>CP / kg{cpkAuto?<span style={{color:C.green,fontWeight:700,marginLeft:4,letterSpacing:0,textTransform:"none"}}>· auto from {row.lastSource}</span>:""}</div>
-                                <input value={fmtAmtIN(row.costPerKg)} onChange={e=>updateBuyingLine(row.id,{costPerKg:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder={`${row.currency||"USD"} / kg`}/>
-                              </div>
-                              <div>
-                                <div style={{fontSize:8.5,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45,marginBottom:2}}>Target SP / {row.unit||"pcs"}</div>
-                                <input value={fmtAmtIN(row.targetSellPrice)} onChange={e=>updateBuyingLine(row.id,{targetSellPrice:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:11,padding:"5px 7px",textAlign:"right"}} placeholder="Sell rate"/>
-                              </div>
-                              <div style={{gridColumn:mob?"1 / -1":undefined}}>
-                                <div style={{fontSize:8.5,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45,marginBottom:2}}>Margin</div>
-                                <div style={{fontSize:13,fontWeight:800,color:marginColor,padding:"5px 7px",background:margin==null?"transparent":marginColor+"14",border:`1px solid ${margin==null?C.border:marginColor+"40"}`,borderRadius:5,textAlign:"center"}}>
-                                  {margin==null?"—":`${margin.toFixed(1)}%`}
-                                </div>
-                              </div>
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":" .72fr .72fr .58fr .42fr 1.2fr auto",gap:5,alignItems:"end",marginTop:5}}>
+                          <div>
+                            <div style={{fontSize:8,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.42,marginBottom:1}}>CP INR / {lineUnit}{row.costPerKg&&row.lastSource?<span style={{color:C.green,fontWeight:700,marginLeft:4,letterSpacing:0,textTransform:"none"}}>auto</span>:""}</div>
+                            <input value={fmtAmtIN(row.costPerKg)} onChange={e=>updateBuyingLine(row.id,{costPerKg:rawAmt(e.target.value),currency:"INR"})} inputMode="decimal" style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,textAlign:"right"}} placeholder="₹ cost"/>
+                          </div>
+                          <div>
+                            <div style={{fontSize:8,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.42,marginBottom:1}}>SP INR / {lineUnit}</div>
+                            <input value={fmtAmtIN(row.targetSellPrice)} onChange={e=>updateBuyingLine(row.id,{targetSellPrice:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,textAlign:"right"}} placeholder="₹ sell"/>
+                          </div>
+                          <div>
+                            <div style={{fontSize:8,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.42,marginBottom:1}}>SP USD</div>
+                            <input value={fmtAmtIN(spUsd)} onChange={e=>updateBuyingLine(row.id,{targetSellPriceUsd:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,textAlign:"right"}} placeholder="$"/>
+                          </div>
+                          <div style={{gridColumn:mob?"1 / -1":undefined}}>
+                            <div style={{fontSize:8,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.42,marginBottom:1}}>Margin</div>
+                            <div style={{fontSize:11.5,fontWeight:850,color:marginColor,padding:"4px 6px",background:margin==null?"transparent":marginColor+"14",border:`1px solid ${margin==null?C.border:marginColor+"40"}`,borderRadius:6,textAlign:"center",minHeight:26}}>
+                              {margin==null?"—":`${margin.toFixed(1)}%`}
                             </div>
-                          );
-                        })()}
-                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"center",marginTop:7}}>
-                          <input value={row.notes||""} onChange={e=>updateBuyingLine(row.id,{notes:e.target.value})} style={{...FI,fontSize:11,padding:"5px 7px"}} placeholder="Notes, exact quality, size range, quote details..."/>
-                          <div style={{fontSize:10,color:C.inkFaint}}>
+                          </div>
+                          <input value={row.notes||""} onChange={e=>updateBuyingLineNote(row,e.target.value)} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6}} placeholder={row.shape?`Notes for ${row.shape}...`:"Notes, quality, size, quote..."}/>
+                          <div style={{fontSize:10,color:C.inkFaint,display:"flex",alignItems:"center",gap:7,justifyContent:mob?"flex-start":"flex-end",whiteSpace:"nowrap",paddingBottom:5}}>
+                            {currentStock?.text?(
+                              <span title={`${currentStock.items} stock card${currentStock.items===1?"":"s"} matched`} style={{fontSize:10,fontWeight:850,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}30`,borderRadius:999,padding:"2px 7px"}}>
+                                Stock now: {currentStock.text}
+                              </span>
+                            ):row.stone?(
+                              <span style={{fontSize:10,fontWeight:750,color:C.inkFaint,background:C.card,border:`1px solid ${C.border}`,borderRadius:999,padding:"2px 7px"}}>No current stock</span>
+                            ):null}
+                            {vendorHistory.length?(
+                              <button onClick={e=>{e.stopPropagation();setVendorHistoryRow(row);}} style={{background:"none",border:"none",padding:0,cursor:"pointer",fontSize:10,fontWeight:800,color:C.green,textDecoration:"underline",textUnderlineOffset:2}}>
+                                {vendorHistory.length} from vendor
+                              </button>
+                            ):null}
+                            <span>
                             {row.poNumber
                               ?`Linked PO: ${row.poNumber}`
-                              :last?`Last: ${last.currency||row.currency||"INR"} ${fmtAmtIN(last.rate)} / ${last.unit||row.unit||"pcs"}${last.vendor?` · ${last.vendor}`:""}${last.date?` · ${fmtDate(last.date)}`:""}`
+                              :last?`Last: ${last.currency||row.currency||"INR"} ${fmtAmtIN(last.rate)} / ${last.unit||lineUnit}${last.vendor?` · ${last.vendor}`:""}${last.date?` · ${fmtDate(last.date)}`:""}`
                               :"No matching purchase history yet"}
+                            </span>
                           </div>
                         </div>
                       </div>
+                      </React.Fragment>
                     );
                   })}
+                </div>
+              )}
+              <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
+                <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
+                  <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{buyingPlan.length} lines · {planOpen} open</div>
+                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
+                  <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLine();}}>+ Add Line</button>
+                </div>
+              </div>
+              {vendorHistoryRow&&(
+                <div onClick={()=>setVendorHistoryRow(null)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.22)",zIndex:80,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+                  <div onClick={e=>e.stopPropagation()} style={{width:"min(760px,calc(100vw - 32px))",maxHeight:"min(640px,calc(100vh - 32px))",overflow:"hidden",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 18px 55px rgba(17,12,7,.18)"}}>
+                    {(()=>{
+                      const rows=vendorHistoryFor(vendorHistoryRow.vendor);
+                      const stone=normPlanText(vendorHistoryRow.stone);
+                      const shape=normPlanText(vendorHistoryRow.shape);
+                      const isMatch=r=>(stone&&normPlanText(r.desc).includes(stone))||(shape&&normPlanText(r.shape).includes(shape));
+                      const shown=[...rows].sort((a,b)=>Number(isMatch(b))-Number(isMatch(a))||String(b.date||"").localeCompare(String(a.date||""))).slice(0,24);
+                      return(
+                        <>
+                          <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",padding:"13px 14px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
+                            <div>
+                              <div style={{fontSize:10,color:C.inkFaint,fontWeight:850,textTransform:"uppercase",letterSpacing:.65}}>Previously bought from this vendor</div>
+                              <div style={{fontSize:17,fontWeight:850,color:C.ink,marginTop:3}}>{vendorHistoryRow.vendor||"Vendor"}</div>
+                              <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>{rows.length} purchase lines · comparing against {vendorHistoryRow.stone||"this stone"}{vendorHistoryRow.shape?` / ${vendorHistoryRow.shape}`:""}</div>
+                            </div>
+                            <button onClick={()=>setVendorHistoryRow(null)} aria-label="Close vendor purchase history" style={{width:28,height:28,border:`1px solid ${C.border}`,borderRadius:6,background:C.surface,cursor:"pointer",fontSize:18,lineHeight:1,color:C.inkMid}}>&times;</button>
+                          </div>
+                          <div style={{padding:12,overflow:"auto",maxHeight:"calc(min(640px,100vh - 32px) - 78px)"}}>
+                            {shown.length?(
+                              <div style={{display:"grid",gap:6}}>
+                                {!mob&&(
+                                  <div style={{display:"grid",gridTemplateColumns:".75fr .75fr 1.35fr .8fr .55fr .75fr .85fr",gap:8,padding:"0 8px 3px"}}>
+                                    {["Date","PO/Bill","Item","Shape","Qty","Rate","Amount"].map(h=><div key={h} style={{fontSize:9,fontWeight:850,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55}}>{h}</div>)}
+                                  </div>
+                                )}
+                                {shown.map((r,i)=>{
+                                  const match=isMatch(r);
+                                  return(
+                                    <div key={`${r.billNumber||"row"}-${r.desc}-${i}`} style={{display:"grid",gridTemplateColumns:mob?"1fr":" .75fr .75fr 1.35fr .8fr .55fr .75fr .85fr",gap:8,alignItems:"center",padding:"8px",border:`1px solid ${match?C.green+"55":C.border}`,borderRadius:7,background:match?C.greenBg:C.surface}}>
+                                      <div style={{fontSize:11,color:C.inkMid}}>{r.date?fmtDate(r.date):"—"}</div>
+                                      <div style={{fontSize:11,color:C.inkMid,fontWeight:750}}>{r.billNumber||r.type||"—"}</div>
+                                      <div style={{fontSize:12,color:C.ink,fontWeight:750}}>
+                                        {r.desc||"Untitled"}
+                                        {match?<span style={{fontSize:9,color:C.green,fontWeight:850,marginLeft:6,textTransform:"uppercase"}}>match</span>:null}
+                                      </div>
+                                      <div style={{fontSize:11,color:C.inkMid}}>{r.shape||"—"}</div>
+                                      <div style={{fontSize:11,color:C.inkMid}}>{fmtAmtIN(r.qty)} {r.unit||""}</div>
+                                      <div style={{fontSize:11,color:C.ink,fontWeight:800}}>{r.currency||"INR"} {fmtAmtIN(r.rate)}</div>
+                                      <div style={{fontSize:11,color:C.inkMid}}>{r.amount?`${r.currency||"INR"} ${fmtAmtIN(r.amount)}`:"—"}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ):(
+                              <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:8,padding:18,textAlign:"center"}}>No previous purchase lines found for this vendor yet.</div>
+                            )}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               )}
             </div>
@@ -10288,7 +10558,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           {items.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 2px"}}>None</div>}
                           {items.map(item=>(
                             <div key={item.id} style={{display:"flex",gap:8,alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 8px"}}>
-                              {stockCover(item)?<img src={stockCover(item)} alt="" style={{width:36,height:36,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:36,height:36,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                              {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:36,height:36,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:36,height:36,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
                               <div style={{flex:1,minWidth:0}}>
                                 <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}</div>
                                 <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}</div>
@@ -12757,7 +13027,7 @@ export default function Root({onSignOut}){
           })}
         </div>
       )}
-      <div style={{position:"fixed",bottom:mob?"calc(64px + env(safe-area-inset-bottom))":76,right:mob?16:24,zIndex:800,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10}}>
+      {mod!=="shows"&&<div style={{position:"fixed",bottom:mob?"calc(64px + env(safe-area-inset-bottom))":76,right:mob?16:24,zIndex:800,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10}}>
         {fab&&FAB_ITEMS.map(o=>(
           <button key={o.label} onClick={()=>{o.action();}} style={{display:"flex",alignItems:"center",gap:8,background:C.surface,border:`1.5px solid ${C.borderHi}`,borderRadius:24,padding:"9px 18px",fontSize:mob?14:13,fontWeight:600,color:C.ink,boxShadow:"0 4px 16px rgba(0,0,0,.14)",cursor:"pointer",whiteSpace:"nowrap",transition:"transform .1s"}}>
             <span style={{fontSize:16}}>{o.icon}</span>{o.label}
@@ -12766,7 +13036,7 @@ export default function Root({onSignOut}){
         <button onClick={()=>setFab(f=>!f)} style={{width:mob?52:48,height:mob?52:48,borderRadius:mob?26:24,background:fab?C.inkMid:C.gold,border:"none",color:"#fff",fontSize:28,lineHeight:1,cursor:"pointer",boxShadow:"0 4px 20px rgba(0,0,0,.24)",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .2s, transform .2s",transform:fab?"rotate(45deg)":"rotate(0deg)"}}>
           +
         </button>
-      </div>
+      </div>}
     </>
     </LanguageProvider>
   );

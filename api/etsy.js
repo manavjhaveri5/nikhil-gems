@@ -39,7 +39,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const { action, shop_id, limit = "50", offset = "0", min_created, receipt_id } = req.query;
+  const { action, shop_id, limit = "50", offset = "0", min_created, receipt_id, enrich = "true", enrich_limit = "150" } = req.query;
   const sid = shop_id || defaultShopId;
 
   // Public endpoints only need x-api-key. Authenticated endpoints also need Bearer.
@@ -81,12 +81,87 @@ export default async function handler(req, res) {
         error: "OAuth token required to read orders.",
         fix: "Visit /api/etsy-auth?action=start to authorize your shop."
       });
-      const p = new URLSearchParams({ was_paid: "true", limit, offset });
-      if (min_created) p.set("min_created", min_created);
-      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts?${p}`, { headers: authHeaders });
-      const data = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: data.error || "Etsy API error", details: data });
-      return res.json(data);
+      const pageLimit = String(Math.min(100, Math.max(1, parseInt(limit, 10) || 100)));
+      const fetchPage = async pageOffset => {
+        const p = new URLSearchParams({ was_paid: "true", limit: pageLimit, offset: String(pageOffset) });
+        p.append("includes[]", "Transactions");
+        if (min_created) p.set("min_created", min_created);
+        return fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts?${p}`, { headers: authHeaders });
+      };
+      const first = await fetchPage(parseInt(offset, 10) || 0);
+      const data = await first.json();
+      if (!first.ok) return res.status(first.status).json({ error: data.error || "Etsy API error", details: data });
+      const results = [...(data.results || [])];
+      const count = data.count || results.length;
+      const startOffset = parseInt(offset, 10) || 0;
+      const maxPages = Math.min(10, Math.ceil(Math.max(0, count - startOffset) / (+pageLimit || 100)));
+      for (let page = 1; page < maxPages; page++) {
+        const r = await fetchPage(startOffset + page * (+pageLimit || 100));
+        if (!r.ok) break;
+        const d = await r.json();
+        results.push(...(d.results || []));
+        if (!d.results?.length) break;
+      }
+      if (String(enrich) !== "false") {
+        const needsDetail = receipt => !receipt.buyer_email || !receipt.first_line || !receipt.transactions?.length;
+        const detailTargets = results.filter(needsDetail).slice(0, Math.max(0, parseInt(enrich_limit, 10) || 150));
+        const detailByReceiptId = {};
+        const fetchDetail = async receipt => {
+          try {
+            const p = new URLSearchParams();
+            p.append("includes[]", "Transactions");
+            const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${receipt.receipt_id}?${p}`, { headers: authHeaders });
+            if (!r.ok) return;
+            const d = await r.json();
+            detailByReceiptId[String(receipt.receipt_id)] = d;
+          } catch {}
+        };
+        for (let i = 0; i < detailTargets.length; i += 8) {
+          await Promise.all(detailTargets.slice(i, i + 8).map(fetchDetail));
+        }
+        results.forEach((receipt, idx) => {
+          const detail = detailByReceiptId[String(receipt.receipt_id)];
+          if (!detail) return;
+          results[idx] = {
+            ...receipt,
+            ...detail,
+            transactions: detail.transactions?.length ? detail.transactions : receipt.transactions,
+          };
+        });
+      }
+      const listingIds = [...new Set(results.flatMap(receipt =>
+        (receipt.transactions || [])
+          .map(txn => txn?.listing_id)
+          .filter(Boolean)
+          .map(String)
+      ))];
+      const imageByListingId = {};
+      const fetchImage = async listingId => {
+        try {
+          const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: authHeaders });
+          if (!r.ok) return;
+          const d = await r.json();
+          const img = (d.results || []).sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
+          if (img) {
+            imageByListingId[listingId] = {
+              url_570xN: img.url_570xN,
+              url_fullxfull: img.url_fullxfull,
+              url_170x135: img.url_170x135,
+              url_75x75: img.url_75x75,
+            };
+          }
+        } catch {}
+      };
+      for (let i = 0; i < listingIds.length; i += 8) {
+        await Promise.all(listingIds.slice(i, i + 8).map(fetchImage));
+      }
+      results.forEach(receipt => {
+        (receipt.transactions || []).forEach(txn => {
+          const img = imageByListingId[String(txn?.listing_id || "")];
+          if (img && !txn.image_data) txn.image_data = img;
+        });
+      });
+      return res.json({ ...data, count, results });
     }
 
     // ── receipt: single receipt by ID (requires OAuth) ─────────────────────────
@@ -175,7 +250,7 @@ export default async function handler(req, res) {
     if (action === "listing_images") {
       const { listing_id } = req.query;
       if (!listing_id) return res.status(400).json({ error: "listing_id required" });
-      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listing_id}/images`, { headers: authHeaders });
+      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listing_id}/images`, { headers: pubHeaders });
       const data = await r.json();
       if (!r.ok) return res.status(r.status).json({ error: data.error || "Etsy API error", details: data });
       return res.json(data);
@@ -423,26 +498,7 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    // ── create_shipment: add tracking to an Etsy order ───────────────────────
-    if (action === "create_shipment") {
-      const { receipt_id, carrier_name, tracking_code, send_bcc } = req.body || {};
-      if (!receipt_id)    return res.status(400).json({ error: "receipt_id required" });
-      if (!carrier_name)  return res.status(400).json({ error: "carrier_name required" });
-      if (!tracking_code) return res.status(400).json({ error: "tracking_code required" });
-      const r = await fetch(
-        `https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${receipt_id}/shipments`,
-        {
-          method: "POST",
-          headers: { ...authHeaders, "Content-Type": "application/json" },
-          body: JSON.stringify({ carrier_name, tracking_code, send_bcc: !!send_bcc }),
-        }
-      );
-      const data = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: data?.message || data?.error || "Etsy shipment failed", details: data });
-      return res.json({ ok: true, shipment: data });
-    }
-
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory, create_shipment" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
