@@ -352,7 +352,7 @@ const MODS=[
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
   {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",ready:true},
   {id:"misc",icon:"🗂️",title:"Miscellaneous",desc:"Purchase bill maker, utilities",ready:true},
-  {id:"journal",icon:"📒",title:"Stock Journal",desc:"Gate register — parcel entries & exits",ready:true},
+  {id:"journal",icon:"📒",title:"Accounting Journal",desc:"Stock movements, customer orders, purchase orders",ready:true},
 ];
 // ── FINANCIAL CHART (standalone — Y-axis + hover tooltips) ────────
 function FinancialChart({chartData,months6,nextM,openPOtotal,pendingReceivables,todayStr}){
@@ -2957,11 +2957,141 @@ const journalQtyText=it=>[it.qty?`${it.qty} ${it.unit||"pcs"}`:"",it.qty2?`${it.
 const journalItemText=it=>`${[it.material,it.shape].filter(Boolean).join(" · ")||"Item"}${journalQtyText(it)?` · ${journalQtyText(it)}`:""}`;
 const journalSummary=e=>journalLines(e).map(journalItemText).join(" | ");
 const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||"")});
+const CUSTOMER_ORDERS_KEY="ng-customer-orders-v1";
+const CUSTOMER_ORDER_STATUS=["Open","PO Created","Part Ready","Ready","Fulfilled","Cancelled"];
+const customerOrderLine=(seed={})=>({id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||"",qty:seed.qty||"",unit:seed.unit||"kg",rate:seed.rate||"",spUsd:seed.spUsd||"",readyBy:seed.readyBy||"",status:seed.status||"Open",notes:seed.notes||"",poId:seed.poId||"",poNumber:seed.poNumber||""});
+const coLineInr=it=>(+it.qty||0)*(+it.rate||0);
+const coLineUsd=it=>(+it.qty||0)*(+it.spUsd||0);
+const customerOrderTotals=o=>(o.items||[]).reduce((m,it)=>({inr:m.inr+coLineInr(it),usd:m.usd+coLineUsd(it),qty:m.qty+(+it.qty||0),lines:m.lines+1}),{inr:0,usd:0,qty:0,lines:0});
+const fmtNum=v=>(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2});
+
+function CustomerOrderForm({order,setOrder,buyers=[],vendors=[],shapes=[],onSave,onCancel,onDelete,onCreatePO}){
+  const set=(k,v)=>setOrder(o=>({...o,[k]:v,updatedAt:new Date().toISOString()}));
+  const setItem=(idx,k,v)=>setOrder(o=>({...o,items:(o.items||[]).map((it,i)=>i===idx?{...it,[k]:v}:it),updatedAt:new Date().toISOString()}));
+  const addLine=()=>setOrder(o=>({...o,items:[...(o.items||[]),customerOrderLine((o.items||[]).at(-1)||{})]}));
+  const duplicateLine=idx=>setOrder(o=>{const src=(o.items||[])[idx]||{};const copy={...src,id:uid(),poId:"",poNumber:"",status:"Open"};return{...o,items:[...(o.items||[]).slice(0,idx+1),copy,...(o.items||[]).slice(idx+1)]};});
+  const delLine=idx=>setOrder(o=>{const items=(o.items||[]).filter((_,i)=>i!==idx);return{...o,items:items.length?items:[customerOrderLine()]};});
+  const totals=customerOrderTotals(order);
+  const isExisting=!!order.createdAt;
+  const inputS={...FI,fontSize:12,padding:"7px 9px",borderRadius:7};
+  return(
+    <div style={{maxWidth:980}}>
+      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 160px 160px",gap:10,background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 14px",marginBottom:10}}>
+        <Field label="Customer">
+          <input value={order.customerName||""} onChange={e=>{const val=e.target.value;const b=buyers.find(x=>(x.name||"").toLowerCase()===val.toLowerCase());setOrder(o=>({...o,customerName:val,customerId:b?.id||o.customerId||""}));}} list="co-buyers" style={inputS} placeholder="Customer name"/>
+          <datalist id="co-buyers">{buyers.map(b=><option key={b.id} value={b.name}/>)}</datalist>
+        </Field>
+        <Field label="Order Date"><input type="date" value={order.date||today()} onChange={e=>set("date",e.target.value)} style={inputS}/></Field>
+        <Field label="Overall Status"><select value={order.status||"Open"} onChange={e=>set("status",e.target.value)} style={{...inputS,cursor:"pointer"}}>{CUSTOMER_ORDER_STATUS.map(s=><option key={s}>{s}</option>)}</select></Field>
+      </div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,overflow:"hidden",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 12px",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:10,fontWeight:850,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Customer Order Lines</div>
+          <button className="bs" style={{fontSize:11,padding:"4px 10px"}} onClick={addLine}>+ Add Line</button>
+        </div>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}>
+            <thead><tr style={{background:C.card}}>
+              {["Stone","Shape","Vendor","Qty","Unit","Rate INR","Total INR","SP USD","Ready By","Status",""].map(h=><th key={h} style={{textAlign:"left",padding:"6px 8px",fontSize:9,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.45}}>{h}</th>)}
+            </tr></thead>
+            <tbody>{(order.items||[]).map((it,idx)=>(
+              <tr key={it.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                <td style={{padding:"5px 7px"}}><input value={it.stone||""} onChange={e=>setItem(idx,"stone",e.target.value)} style={CI} list="co-stones" placeholder="Stone"/></td>
+                <td style={{padding:"5px 7px"}}><input value={it.shape||""} onChange={e=>setItem(idx,"shape",e.target.value)} style={CI} list="co-shapes" placeholder="Shape"/></td>
+                <td style={{padding:"5px 7px"}}><input value={it.vendor||""} onChange={e=>setItem(idx,"vendor",e.target.value)} style={CI} list="co-vendors" placeholder="Vendor"/></td>
+                <td style={{padding:"5px 7px",width:70}}><input type="number" value={it.qty||""} onChange={e=>setItem(idx,"qty",e.target.value)} style={{...CI,textAlign:"right"}}/></td>
+                <td style={{padding:"5px 7px",width:72}}><select value={it.unit||"kg"} onChange={e=>setItem(idx,"unit",e.target.value)} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                <td style={{padding:"5px 7px",width:90}}><input type="number" value={it.rate||""} onChange={e=>setItem(idx,"rate",e.target.value)} style={{...CI,textAlign:"right"}}/></td>
+                <td style={{padding:"5px 7px",fontSize:12,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>₹{fmtNum(coLineInr(it))}</td>
+                <td style={{padding:"5px 7px",width:86}}><input type="number" value={it.spUsd||""} onChange={e=>setItem(idx,"spUsd",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="$"/></td>
+                <td style={{padding:"5px 7px",width:120}}><input type="date" value={it.readyBy||""} onChange={e=>setItem(idx,"readyBy",e.target.value)} style={CI}/></td>
+                <td style={{padding:"5px 7px",width:118}}><select value={it.status||"Open"} onChange={e=>setItem(idx,"status",e.target.value)} style={{...CI,cursor:"pointer"}}>{CUSTOMER_ORDER_STATUS.map(s=><option key={s}>{s}</option>)}</select></td>
+                <td style={{padding:"5px 7px",whiteSpace:"nowrap"}}>
+                  <button title="Duplicate" onClick={()=>duplicateLine(idx)} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:5,cursor:"pointer",padding:"3px 6px",marginRight:4}}>⎘</button>
+                  <button title="Delete" onClick={()=>delLine(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:15}}>&times;</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+          <datalist id="co-stones">{DEFAULT_STONES.map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="co-shapes">{shapes.map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="co-vendors">{vendors.map(v=><option key={v.id} value={v.name}/>)}</datalist>
+        </div>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:12,alignItems:"center",padding:"9px 12px",background:C.card,borderTop:`1px solid ${C.border}`}}>
+          <span style={{fontSize:11,color:C.inkFaint,fontWeight:800}}>{totals.lines} lines · {fmtNum(totals.qty)} qty</span>
+          <span style={{fontSize:13,fontWeight:850,color:C.ink}}>Total CP ₹{fmtNum(totals.inr)}</span>
+          <span style={{fontSize:13,fontWeight:850,color:C.blue}}>SP ${fmtNum(totals.usd)}</span>
+        </div>
+      </div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 14px",marginBottom:12}}>
+        <Field label="Notes"><textarea value={order.notes||""} onChange={e=>set("notes",e.target.value)} rows={2} style={{...inputS,resize:"vertical"}} placeholder="Customer specs, quality, packing, delivery notes..."/></Field>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+        <div>{isExisting&&onDelete&&<button style={{background:"none",border:`1px solid ${C.red}`,color:C.red,borderRadius:7,padding:"8px 13px",cursor:"pointer"}} onClick={()=>onDelete(order.id)}>Delete</button>}</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button className="bs" onClick={onCancel}>Cancel</button>
+          <button className="bs" onClick={()=>onCreatePO(order)}>Create PO</button>
+          <button className="bp" onClick={()=>onSave(order)}>Save Customer Order</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CustomerOrdersList({orders,onEdit,onCreatePO,onDelete}){
+  if(!orders.length)return <div style={{textAlign:"center",padding:"60px 0",color:C.inkFaint}}><div style={{fontSize:34,opacity:.2,marginBottom:8}}>🧾</div><div style={{fontWeight:750,color:C.inkMid}}>No customer orders yet</div><div style={{fontSize:12,marginTop:4}}>Add an order, then create linked purchase orders from it.</div></div>;
+  return <div style={{display:"grid",gap:9}}>{orders.map(o=>{const totals=customerOrderTotals(o);const open=(o.items||[]).filter(it=>!["Fulfilled","Cancelled"].includes(it.status)).length;return(
+    <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 14px"}}>
+      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:10,alignItems:"start"}}>
+        <div onClick={()=>onEdit(o)} style={{cursor:"pointer"}}>
+          <div style={{fontSize:15,fontWeight:850,color:C.ink}}>{o.customerName||"Customer"}</div>
+          <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>{fmtDate(o.date)} · {o.status||"Open"} · {open} open line{open===1?"":"s"}</div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:7,display:"flex",gap:8,flexWrap:"wrap"}}>{(o.items||[]).slice(0,4).map(it=><span key={it.id}>{[it.stone,it.shape].filter(Boolean).join(" · ")||"Item"} · {it.qty||"—"} {it.unit||""}{it.poNumber?` · ${it.poNumber}`:""}</span>)}</div>
+        </div>
+        <div style={{display:"flex",gap:7,alignItems:"center",justifyContent:"flex-end",flexWrap:"wrap"}}>
+          <span style={{fontSize:12,fontWeight:850,color:C.ink}}>₹{fmtNum(totals.inr)}</span>
+          <span style={{fontSize:12,fontWeight:850,color:C.blue}}>${fmtNum(totals.usd)}</span>
+          <button className="bs" style={{fontSize:11}} onClick={()=>onEdit(o)}>Edit</button>
+          <button className="bp" style={{fontSize:11}} onClick={()=>onCreatePO(o)}>Create PO</button>
+          <button onClick={()=>onDelete(o.id)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16}}>&times;</button>
+        </div>
+      </div>
+    </div>
+  );})}</div>;
+}
+
+function AccountingPOList({purchaseOrders,onOpen,onNew,onQuickPaid,onQuickClose}){
+  if(!purchaseOrders.length)return <div style={{textAlign:"center",padding:"60px 0",color:C.inkFaint}}><div style={{fontSize:34,opacity:.2,marginBottom:8}}>📦</div><div style={{fontWeight:750,color:C.inkMid}}>No purchase orders yet</div><button className="bp" style={{marginTop:12}} onClick={onNew}>+ New Purchase Order</button></div>;
+  return <div style={{overflowX:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+    <table style={{width:"100%",borderCollapse:"collapse",minWidth:900}}>
+      <thead><tr style={{background:C.card}}>{["PO","Vendor","Date","Items","Total","Paid","Received","Status",""].map(h=><th key={h} style={{textAlign:"left",padding:"8px 10px",fontSize:9,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.45}}>{h}</th>)}</tr></thead>
+      <tbody>{purchaseOrders.map(po=>{const items=po.items||[];const totalQty=items.reduce((a,it)=>a+(+it.qty||0),0);const rcvd=items.reduce((a,it)=>a+(+it.rcvQty||0),0);const paid=+po.paidAmount||+po.advance||0;return(
+        <tr key={po.id} style={{borderTop:`1px solid ${C.border}`,cursor:"pointer"}} onClick={()=>onOpen(po)}>
+          <td style={{padding:"9px 10px",fontWeight:850,color:C.ink}}>{po.poNumber||po.id.slice(0,6)}</td>
+          <td style={{padding:"9px 10px",color:C.inkMid}}>{po.supplier||"—"}{po.customerName?<div style={{fontSize:10,color:C.blue}}>For {po.customerName}</div>:null}</td>
+          <td style={{padding:"9px 10px",fontSize:12,color:C.inkMid}}>{fmtDate(po.date||po.createdAt)}</td>
+          <td style={{padding:"9px 10px",fontSize:12,color:C.inkMid}}>{items.length} line{items.length===1?"":"s"}</td>
+          <td style={{padding:"9px 10px",fontWeight:850,color:C.ink}}>₹{fmtNum(po.totalAmount||0)}</td>
+          <td style={{padding:"9px 10px",color:paid?C.green:C.inkFaint,fontWeight:800}}>₹{fmtNum(paid)}</td>
+          <td style={{padding:"9px 10px",fontSize:12,color:rcvd>=totalQty&&totalQty?C.green:rcvd?C.amber:C.inkFaint}}>{fmtNum(rcvd)} / {fmtNum(totalQty)}</td>
+          <td style={{padding:"9px 10px"}}><span style={{fontSize:10,fontWeight:850,color:po.status==="closed"?C.green:C.amber,background:(po.status==="closed"?C.green:C.amber)+"18",borderRadius:999,padding:"3px 8px"}}>{po.status||"open"}</span></td>
+          <td style={{padding:"9px 10px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
+            <button className="bs" style={{fontSize:11,padding:"5px 9px",marginRight:5}} onClick={()=>onQuickPaid(po)}>Paid</button>
+            {po.status!=="closed"&&<button className="bs" style={{fontSize:11,padding:"5px 9px"}} onClick={()=>onQuickClose(po)}>Close</button>}
+          </td>
+        </tr>
+      );})}</tbody>
+    </table>
+  </div>;
+}
 
 function StockJournalApp({onHome}){
   const t=useT();
   const allShapes=useShapes();
+  const [moduleTab,setModuleTab]=useState("stock");
   const [entries,setEntries]=useState([]);
+  const [customerOrders,setCustomerOrders]=useState([]);
+  const [purchases,setPurchases]=useState([]);
   const [vendors,setVendors]=useState([]);
   const [buyers,setBuyers]=useState([]);
   const [loaded,setLoaded]=useState(false);
@@ -2979,19 +3109,28 @@ function StockJournalApp({onHome}){
   const [printVendorId,setPrintVendorId]=useState("all");
   const [printDateFrom,setPrintDateFrom]=useState("");
   const [printDateTo,setPrintDateTo]=useState(today());
+  const [customerForm,setCustomerForm]=useState(null);
+  const [poDraft,setPoDraft]=useState(null);
+  const [poDetail,setPoDetail]=useState(null);
 
   useEffect(()=>{
-    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors),loadK(INV_KEYS.buyers)]).then(([j,v,b])=>{
+    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors),loadK(INV_KEYS.buyers),loadK(CUSTOMER_ORDERS_KEY),loadK(KEYS.purchases)]).then(([j,v,b,co,p])=>{
       setEntries(Array.isArray(j)?j:[]);
       setVendors(Array.isArray(v)?v:[]);
       setBuyers(Array.isArray(b)?b:[]);
+      setCustomerOrders(Array.isArray(co)?co:[]);
+      setPurchases(Array.isArray(p)?p:[]);
       setLoaded(true);
     });
   },[]);
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
+  const blankCustomerOrder=()=>({id:uid(),date:today(),customerId:"",customerName:"",status:"Open",items:[customerOrderLine()],notes:"",createdAt:new Date().toISOString(),updatedAt:""});
+  const nextAccountingPO=()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;};
   const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
+  const saveCustomerOrders=async(next)=>{setCustomerOrders(next);await saveK(CUSTOMER_ORDERS_KEY,next);};
+  const savePurchases=async(next)=>{setPurchases(next);await savePurchasesK(next);};
 
   const handleSave=async()=>{
     if(!form)return;
@@ -3028,6 +3167,81 @@ function StockJournalApp({onHome}){
     await saveEntries(entries.filter(e=>e.id!==id));
     setView("list");
     showToast(t("Entry deleted"));
+  };
+
+  const saveCustomerOrder=async(order)=>{
+    if(!String(order.customerName||"").trim()){showToast("Enter customer name");return;}
+    const cleanItems=(order.items||[]).filter(it=>String(it.stone||"").trim()||String(it.shape||"").trim()||String(it.qty||"").trim());
+    if(!cleanItems.length){showToast("Add at least one customer order line");return;}
+    const buyer=buyers.find(b=>(b.name||"").toLowerCase()===String(order.customerName||"").toLowerCase());
+    const saved={...order,customerId:buyer?.id||order.customerId||"",items:cleanItems,updatedAt:new Date().toISOString(),createdAt:order.createdAt||new Date().toISOString()};
+    const next=[saved,...customerOrders.filter(o=>o.id!==saved.id)];
+    await saveCustomerOrders(next);
+    setCustomerForm(null);
+    showToast("Customer order saved");
+  };
+
+  const deleteCustomerOrder=async(id)=>{
+    if(!window.confirm("Delete this customer order?"))return;
+    await saveCustomerOrders(customerOrders.filter(o=>o.id!==id));
+    setCustomerForm(null);
+    showToast("Customer order deleted");
+  };
+
+  const createPOFromCustomerOrder=async(order)=>{
+    const eligible=(order.items||[]).filter(it=>String(it.vendor||"").trim()&&String(it.stone||"").trim()&&(+it.qty||0)>0&&(+it.rate||0)>0&&!it.poId);
+    if(!eligible.length){showToast("Add vendor, qty and rate on at least one unlinked line");return;}
+    let poCount=purchases.filter(p=>p.type==="po").length;
+    const groups={};
+    eligible.forEach(it=>{const key=String(it.vendor||"").trim();groups[key]=groups[key]||[];groups[key].push(it);});
+    const created=Object.entries(groups).map(([vendor,lines])=>{
+      poCount+=1;
+      const poNumber=`PO/${new Date().getFullYear()}/${String(poCount).padStart(3,"0")}`;
+      const items=lines.map(it=>{
+        const qty=String(it.qty||"");
+        const rate=String(it.rate||"");
+        const amt=(+qty||0)*(+rate||0);
+        return{...newItem(),id:uid(),desc:[it.stone,it.shape].filter(Boolean).join(" · "),shape:it.shape||"",qty,unit:it.unit||"kg",rate,amt,customerOrderLineId:it.id};
+      });
+      return{type:"po",id:uid(),poNumber,supplier:vendor,date:today(),currency:"INR",advance:"",paidAmount:0,items,totalAmount:items.reduce((s,i)=>s+(+i.amt||0),0),notes:`Customer order: ${order.customerName||""}${order.notes?`\n${order.notes}`:""}`,status:"open",customerOrderId:order.id,customerName:order.customerName||"",source:"customer_order",createdAt:new Date().toISOString()};
+    });
+    const lineLinks={};
+    created.forEach(po=>(po.items||[]).forEach(it=>{if(it.customerOrderLineId)lineLinks[it.customerOrderLineId]={poId:po.id,poNumber:po.poNumber};}));
+    const updatedOrder={...order,items:(order.items||[]).map(it=>lineLinks[it.id]?{...it,...lineLinks[it.id],status:"PO Created"}:it),status:"PO Created",updatedAt:new Date().toISOString()};
+    const nextOrders=[updatedOrder,...customerOrders.filter(o=>o.id!==order.id)];
+    const nextPurchases=[...created,...purchases];
+    await Promise.all([saveCustomerOrders(nextOrders),savePurchases(nextPurchases)]);
+    setCustomerForm(updatedOrder);
+    showToast(`Created ${created.length} PO${created.length===1?"":"s"} from customer order`);
+  };
+
+  const saveAccountingPO=async(item)=>{
+    if(!String(item.supplier||"").trim()){showToast("Enter supplier name");return;}
+    const items=(item.items||[]).filter(it=>String(it.desc||"").trim()||String(it.qty||"").trim());
+    const saved={...item,items,totalAmount:items.reduce((s,i)=>s+(+i.amt||((+i.qty||0)*(+i.rate||0))),0),updatedAt:new Date().toISOString(),createdAt:item.createdAt||new Date().toISOString()};
+    await savePurchases([saved,...purchases.filter(p=>p.id!==saved.id)]);
+    setPoDraft(null);
+    setPoDetail(saved);
+    showToast("Purchase order saved");
+  };
+
+  const updateAccountingPO=async(item)=>{
+    const totalQty=(item.items||[]).reduce((a,it)=>a+(+it.qty||0),0);
+    const rcvdQty=(item.items||[]).reduce((a,it)=>a+(+it.rcvQty||0),0);
+    const paid=+item.paidAmount||+item.advance||0;
+    const status=(totalQty>0&&rcvdQty>=totalQty)||(+item.totalAmount>0&&paid>=+item.totalAmount)?"closed":item.status||"open";
+    const saved={...item,status,updatedAt:new Date().toISOString()};
+    await savePurchases([saved,...purchases.filter(p=>p.id!==saved.id)]);
+    setPoDetail(saved);
+    showToast("PO updated");
+  };
+
+  const convertAccountingPOToBill=async(po)=>{
+    const billItems=(po.items||[]).map(i=>({...newItem(),desc:i.desc||"",shape:i.shape||"",hsn:"7103",gst:"3",qty:String(i.qty||""),unit:i.unit||"pcs",rate:String(i.rate||""),amt:i.amt||0}));
+    const bill={type:"bill",id:uid(),billNumber:"",supplier:po.supplier||"",supplierGstin:"",supplierLocation:"",supplierCountry:"India",supplierContact:"",billDate:today(),currency:po.currency||"INR",items:billItems,notes:po.notes||"",status:"pending",paidAmount:0,linkedPO:po.id,createdAt:new Date().toISOString()};
+    bill.totalAmount=billItems.reduce((s,i)=>s+(+i.amt||(+i.qty||0)*(+i.rate||0)),0);
+    await savePurchases([bill,...purchases]);
+    showToast("Bill draft created in Purchases");
   };
 
   const handlePhotoUpload=async(e)=>{
@@ -3127,6 +3341,33 @@ ${vendorBlocks}
     setPrintOpen(false);
   };
 
+  if(customerForm){
+    return(
+      <Shell title="Accounting Journal" crumb="Customer Order" onHome={onHome} onBack={()=>setCustomerForm(null)}>
+        <Toast msg={toast}/>
+        <CustomerOrderForm order={customerForm} setOrder={setCustomerForm} buyers={buyers} vendors={vendors} shapes={allShapes} onSave={saveCustomerOrder} onCancel={()=>setCustomerForm(null)} onDelete={deleteCustomerOrder} onCreatePO={createPOFromCustomerOrder}/>
+      </Shell>
+    );
+  }
+
+  if(poDraft){
+    return(
+      <Shell title="Accounting Journal" crumb="Purchase Order" onHome={onHome} onBack={()=>setPoDraft(null)}>
+        <Toast msg={toast}/>
+        <POForm draft={poDraft} setDraft={setPoDraft} vendors={vendors} onSave={saveAccountingPO}/>
+      </Shell>
+    );
+  }
+
+  if(poDetail){
+    return(
+      <Shell title="Accounting Journal" crumb={poDetail.poNumber||"Purchase Order"} onHome={onHome} onBack={()=>setPoDetail(null)}>
+        <Toast msg={toast}/>
+        <PODetail po={poDetail} onBack={()=>setPoDetail(null)} onEdit={()=>{setPoDraft({...poDetail});setPoDetail(null);}} onUpdate={updateAccountingPO} onConvertToBill={convertAccountingPOToBill} onDelete={async()=>{await savePurchases(purchases.filter(p=>p.id!==poDetail.id));setPoDetail(null);showToast("PO deleted");}}/>
+      </Shell>
+    );
+  }
+
   // ── Filtering ───────────────────────────────────────────────────
   const vendorFilterOptions=[
     ...vendors.filter(v=>v.name).map(v=>({value:v.id,label:v.name})),
@@ -3147,6 +3388,9 @@ ${vendorBlocks}
   });
 
   const anyFilter=filterVendor!=="all"||filterType!=="all"||filterDateFrom||filterDateTo;
+  const purchaseOrders=purchases.filter(p=>p.type==="po").sort((a,b)=>new Date(b.date||b.createdAt||0)-new Date(a.date||a.createdAt||0));
+  const openCustomerOrders=customerOrders.filter(o=>!["Fulfilled","Cancelled"].includes(o.status||"Open")).length;
+  const openPOs=purchaseOrders.filter(p=>!["closed","cancelled","paid"].includes(p.status||"open")).length;
 
   // ── Form view ───────────────────────────────────────────────────
   if(view==="form"&&form){
@@ -3167,7 +3411,7 @@ ${vendorBlocks}
     const inputS={...FI,borderRadius:8,border:"1px solid rgba(0,0,0,.12)",background:"#fff",boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",boxSizing:"border-box"};
     const sectionTitle={fontSize:11,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:.8,marginBottom:12};
     return(
-      <Shell title={t("Stock Journal")} crumb={isEdit?t("Edit Entry"):t("New Entry")} onHome={onHome} onBack={()=>setView("list")}>
+      <Shell title="Accounting Journal" crumb={isEdit?"Stock Journal · Edit Entry":"Stock Journal · New Entry"} onHome={onHome} onBack={()=>setView("list")}>
         <Toast msg={toast}/>
         <div style={{maxWidth:880,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
           {/* Section 1: Type + Date + Vendor */}
@@ -3295,13 +3539,27 @@ ${vendorBlocks}
 
   // ── List view ───────────────────────────────────────────────────
   return(
-    <Shell title={t("Stock Journal")} onHome={onHome} onBack={onHome} actions={
+    <Shell title="Accounting Journal" onHome={onHome} onBack={onHome} actions={
       <div style={{display:"flex",gap:8}}>
-        <button className="bs" style={{fontSize:mob?12:12}} onClick={()=>setPrintOpen(true)}>🖨{!mob&&" "+t("Print Report")}</button>
-        <button className="bp" style={{fontSize:mob?12:13}} onClick={()=>{setForm(blankEntry());setView("form");}}>+ {mob?"Add":"New Movement"}</button>
+        {moduleTab==="stock"&&<button className="bs" style={{fontSize:mob?12:12}} onClick={()=>setPrintOpen(true)}>🖨{!mob&&" "+t("Print Report")}</button>}
+        {moduleTab==="stock"&&<button className="bp" style={{fontSize:mob?12:13}} onClick={()=>{setForm(blankEntry());setView("form");}}>+ {mob?"Add":"New Movement"}</button>}
+        {moduleTab==="customer"&&<button className="bp" style={{fontSize:mob?12:13}} onClick={()=>setCustomerForm(blankCustomerOrder())}>+ Customer Order</button>}
+        {moduleTab==="po"&&<button className="bp" style={{fontSize:mob?12:13}} onClick={()=>setPoDraft({type:"po",id:uid(),poNumber:nextAccountingPO(),supplier:"",date:today(),currency:"INR",advance:"",paidAmount:0,items:[newItem()],notes:"",followUpDate:"",status:"open",createdAt:new Date().toISOString()})}>+ Purchase Order</button>}
       </div>
     }>
       <Toast msg={toast}/>
+      <div style={{display:"flex",gap:3,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:3,marginBottom:14,overflowX:"auto"}}>
+        {[
+          ["stock","Stock Journal",entries.length],
+          ["customer","Customer Orders",openCustomerOrders],
+          ["po","Purchase Orders",openPOs],
+        ].map(([id,label,count])=>(
+          <button key={id} onClick={()=>setModuleTab(id)} style={{background:moduleTab===id?C.surface:"transparent",border:moduleTab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:7,padding:"7px 13px",cursor:"pointer",fontSize:12,fontWeight:moduleTab===id?850:700,color:moduleTab===id?C.ink:C.inkMid,whiteSpace:"nowrap"}}>
+            {label} <span style={{marginLeft:5,color:moduleTab===id?C.green:C.inkFaint}}>{count}</span>
+          </button>
+        ))}
+      </div>
+      {moduleTab==="stock"&&<>
       {/* Filter bar */}
       <div style={{display:"flex",gap:mob?6:8,marginBottom:14,flexWrap:mob?"nowrap":"wrap",overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none",alignItems:"center",padding:mob?"2px 0":"0"}}>
         <select value={filterVendor} onChange={e=>setFilterVendor(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",minWidth:mob?150:180,flexShrink:0,cursor:"pointer",borderRadius:8}}>
@@ -3373,6 +3631,15 @@ ${vendorBlocks}
           </div>
         </div>
       ))}
+      </>}
+
+      {moduleTab==="customer"&&(
+        <CustomerOrdersList orders={[...customerOrders].sort((a,b)=>new Date(b.date||b.createdAt||0)-new Date(a.date||a.createdAt||0))} onEdit={o=>setCustomerForm({...o,items:(o.items||[]).length?o.items:[customerOrderLine()]})} onCreatePO={createPOFromCustomerOrder} onDelete={deleteCustomerOrder}/>
+      )}
+
+      {moduleTab==="po"&&(
+        <AccountingPOList purchaseOrders={purchaseOrders} onOpen={po=>setPoDetail(po)} onNew={()=>setPoDraft({type:"po",id:uid(),poNumber:nextAccountingPO(),supplier:"",date:today(),currency:"INR",advance:"",paidAmount:0,items:[newItem()],notes:"",followUpDate:"",status:"open",createdAt:new Date().toISOString()})} onQuickPaid={async po=>{const val=window.prompt("Paid amount",String(+po.paidAmount||+po.advance||0));if(val==null)return;await updateAccountingPO({...po,paidAmount:+val||0});}} onQuickClose={async po=>{if(window.confirm("Close this purchase order?"))await updateAccountingPO({...po,status:"closed"});}}/>
+      )}
 
       {/* Print Modal */}
       {printOpen&&(
@@ -5160,6 +5427,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           {!qty&&!s.qty2&&<span style={{fontSize:12,color:C.inkFaint}}>—</span>}
                           {s.costPrice&&+s.costPrice>0&&<span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{inr(+s.costPrice*(+s.qty||1))}</span>}
                         </div>
+                        {/* Cost price per kg */}
+                        {s.costPrice&&+s.costPrice>0&&(()=>{
+                          const wKg=s.unit==="kg"?+s.qty||0:s.unit==="gm"?(+s.qty||0)/1000:s.unit2==="kg"?+s.qty2||0:s.unit2==="gm"?(+s.qty2||0)/1000:s.weightGm?(+s.weightGm||0)/1000:0;
+                          if(!(wKg>0))return null;
+                          const perKg=(+s.costPrice||0)*(+s.qty||1)/wKg;
+                          return <div className="tnum" style={{fontSize:9,color:C.inkFaint,textAlign:"right",marginTop:-3,marginBottom:6}}>{inr(perKg)}/kg</div>;
+                        })()}
                         {/* Status icon strip */}
                         {(()=>{
                           const mkts=Array.isArray(s.market)?s.market:[s.market].filter(Boolean);
@@ -12511,7 +12785,7 @@ const ALL_STAFF_MODS=[
   {id:"ai",label:"Ask AI"},
   {id:"images",label:"Image Library"},
   {id:"misc",label:"Miscellaneous"},
-  {id:"journal",label:"Stock Journal"},
+  {id:"journal",label:"Accounting Journal"},
 ];
 const TODO_KEY_FOR=(email)=>email?`ng-todos-${email.replace(/[^a-z0-9]/gi,"-")}-v1`:"ng-todos-v1";
 
