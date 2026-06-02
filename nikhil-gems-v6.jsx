@@ -10414,7 +10414,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     const lineUnit=(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":row.unit||"kg";
                     const stoneKey=normPlanText(row.stone);
                     const stoneTotal=stoneKey?stoneBuyingTotals[stoneKey]:null;
-                    const showStoneBand=stoneTotal&&buyingPlan.findIndex(r=>normPlanText(r.stone)===stoneKey)===idx;
+                    const prevStoneKey=idx>0?normPlanText(buyingPlan[idx-1].stone):"";
+                    const showStoneBand=!!(stoneTotal&&stoneKey&&prevStoneKey!==stoneKey);
                     const otherTotals=stoneTotal?Object.entries(stoneTotal.other).filter(([,v])=>v>0):[];
                     const shapeNames=stoneTotal?[...stoneTotal.shapes].filter(Boolean):[];
                     const currentStock=stockQtyPartsFor(row.stone,row.shape);
