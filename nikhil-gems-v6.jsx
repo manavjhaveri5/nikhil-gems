@@ -10001,6 +10001,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     return{costPerKg:toCostPerKg(sm.costPrice,sm.unit,sm.weightGm),currency:"INR",rate:sm.costPrice,unit:sm.unit||"kg",source:"stock",vendor:sm.vendor||"",date:sm.addedDate||""};
   };
   const buyingPlan=show.buyingPlan||[];
+  const displayPlan=[...buyingPlan].sort((a,b)=>{const s=normPlanText(a.stone).localeCompare(normPlanText(b.stone));return s!==0?s:normPlanText(a.shape).localeCompare(normPlanText(b.shape));});
   const shapeNotePresets=show.buyingPlanShapeNotes||{};
   const shapeNoteFor=shape=>shapeNotePresets[normPlanText(shape)]||"";
   const saveShapeNotePresets=next=>onUpdateShow(show.id,"buyingPlanShapeNotes",next);
@@ -10403,7 +10404,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                       {["Stone","Shape","Vendor","Qty","Unit","Status",""].map(h=><div key={h} style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase",fontWeight:800,letterSpacing:.45}}>{h}</div>)}
                     </div>
                   )}
-                  {buyingPlan.map((row,idx)=>{
+                  {displayPlan.map((row,idx)=>{
                     const last=row.lastRate||row.lastVendor?row:findLastPurchase(row.stone,row.shape);
                     const vendorHistory=vendorHistoryFor(row.vendor);
                     const cp=+row.costPerKg||0;
@@ -10414,7 +10415,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     const lineUnit=(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":row.unit||"kg";
                     const stoneKey=normPlanText(row.stone);
                     const stoneTotal=stoneKey?stoneBuyingTotals[stoneKey]:null;
-                    const prevStoneKey=idx>0?normPlanText(buyingPlan[idx-1].stone):"";
+                    const prevStoneKey=idx>0?normPlanText(displayPlan[idx-1].stone):"";
                     const showStoneBand=!!(stoneTotal&&stoneKey&&prevStoneKey!==stoneKey);
                     const otherTotals=stoneTotal?Object.entries(stoneTotal.other).filter(([,v])=>v>0):[];
                     const shapeNames=stoneTotal?[...stoneTotal.shapes].filter(Boolean):[];
