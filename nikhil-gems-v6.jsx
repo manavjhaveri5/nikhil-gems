@@ -10136,6 +10136,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     m[key]=bucket;
     return m;
   },{});
+  const planGrandKg=buyingPlan.reduce((s,r)=>s+buyingLineKg(r),0);
+  const planGrandCp=buyingPlan.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.costPerKg||0),0);
+  const planGrandSp=buyingPlan.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPrice||0),0);
+  const planGrandSpUsd=buyingPlan.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0),0);
+  const planGrandMargin=planGrandSp>0&&planGrandCp>0?((planGrandSp-planGrandCp)/planGrandSp)*100:null;
   const planDatalistId=`buy-plan-${show.id}`;
 
   const showStock=show.showStock||[];
@@ -10370,6 +10375,22 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   </div>
                 ))}
               </div>
+              {buyingPlan.length>0&&(planGrandCp>0||planGrandSp>0)&&(
+                <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:8,padding:"7px 10px",background:C.card,border:`1px solid ${C.border}`,borderRadius:8}}>
+                  {[
+                    ["Total CP",`₹${fmtAmtIN(planGrandCp)}`,C.ink],
+                    ["Total SP (INR)",`₹${fmtAmtIN(planGrandSp)}`,C.green],
+                    ["Total SP (USD)",`$${fmtAmtIN(planGrandSpUsd)}`,C.blue],
+                    ["Margin",planGrandMargin!=null?`${planGrandMargin.toFixed(1)}%`:"—",planGrandMargin==null?C.inkFaint:planGrandMargin>=40?C.green:planGrandMargin>=20?C.amber:C.red],
+                    ["Qty",`${fmtAmtIN(planGrandKg)} kg`,C.inkMid],
+                  ].map(([label,val,col])=>(
+                    <div key={label} style={{display:"flex",flexDirection:"column",gap:2,minWidth:70}}>
+                      <div style={{fontSize:8,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55}}>{label}</div>
+                      <div style={{fontSize:13,fontWeight:850,color:col,lineHeight:1}}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               </div>
               {buyingPlan.length===0?(
                 <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:"18px 16px",textAlign:"center"}}>
