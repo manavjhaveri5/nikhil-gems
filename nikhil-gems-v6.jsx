@@ -9895,6 +9895,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [journalText,setJournalText]=useState("");
   const [usdInr,setUsdInr]=useState(85);
   const [vendorHistoryRow,setVendorHistoryRow]=useState(null);
+  const [stoneSummaryKey,setStoneSummaryKey]=useState(null);
+  const [stonePanelShapeFilter,setStonePanelShapeFilter]=useState("");
   const allShapes=useShapes();
   const fmtAmtIN=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return Number.isFinite(n)?n.toLocaleString("en-IN",{maximumFractionDigits:2}):"";};
   const rawAmt=v=>String(v||"").replace(/,/g,"").replace(/[^\d.]/g,"");
@@ -10398,7 +10400,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     return(
                       <React.Fragment key={row.id}>
                       {showStoneBand&&(
-                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"center",background:C.greenBg,border:`1px solid ${C.green}30`,borderLeft:`4px solid ${C.green}`,borderRadius:8,padding:"7px 10px",marginTop:idx?5:0}}>
+                        <div onClick={e=>{e.stopPropagation();setStonePanelShapeFilter("");setStoneSummaryKey(stoneKey);}} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"center",background:C.greenBg,border:`1px solid ${C.green}30`,borderLeft:`4px solid ${C.green}`,borderRadius:8,padding:"7px 10px",marginTop:idx?5:0,cursor:"pointer"}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                             <span style={{fontSize:12,fontWeight:900,color:C.green}}>{stoneTotal.name}</span>
                             <span style={{fontSize:12,fontWeight:850,color:C.ink}}>{fmtAmtIN(stoneTotal.kg)} kg planned</span>
@@ -10408,7 +10410,10 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             <span style={{fontSize:10,color:C.inkFaint,fontWeight:750}}>{stoneTotal.lines} lines · {shapeNames.length||1} shape{(shapeNames.length||1)===1?"":"s"}</span>
                             {otherTotals.map(([u,v])=><span key={u} style={{fontSize:10,color:C.amber,fontWeight:800}}>+ {fmtAmtIN(v)} {u}</span>)}
                           </div>
-                          <div style={{fontSize:10,color:C.inkMid,whiteSpace:mob?"normal":"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{shapeNames.length?shapeNames.join(" / "):"Shape not set yet"}</div>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{fontSize:10,color:C.inkMid,whiteSpace:mob?"normal":"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{shapeNames.length?shapeNames.join(" / "):"Shape not set yet"}</span>
+                            <span style={{fontSize:14,color:C.green,flexShrink:0,lineHeight:1}}>›</span>
+                          </div>
                         </div>
                       )}
                       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"9px":"7px 7px",boxShadow:"0 1px 2px rgba(26,19,8,.025)"}}>
@@ -10538,6 +10543,127 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   </div>
                 </div>
               )}
+              {/* ── STONE SUMMARY PANEL ── */}
+              {stoneSummaryKey&&(()=>{
+                const sData=stoneBuyingTotals[stoneSummaryKey];
+                if(!sData)return null;
+                const stoneLines=buyingPlan.filter(r=>normPlanText(r.stone)===stoneSummaryKey);
+                const panelShapes=[...new Set(stoneLines.map(r=>r.shape).filter(Boolean))].sort();
+                const visibleLines=stonePanelShapeFilter?stoneLines.filter(r=>r.shape===stonePanelShapeFilter):stoneLines;
+                // Group by vendor
+                const byVendor=visibleLines.reduce((m,r)=>{
+                  const v=r.vendor||"(No vendor)";
+                  if(!m[v])m[v]={lines:[],kg:0,cp:0,sp:0,spUsd:0,shapes:new Set()};
+                  const cq=buyingLineCostQty(r);
+                  m[v].lines.push(r);m[v].kg+=buyingLineKg(r);
+                  m[v].cp+=cq*(+r.costPerKg||0);m[v].sp+=cq*(+r.targetSellPrice||0);
+                  m[v].spUsd+=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);
+                  if(r.shape)m[v].shapes.add(r.shape);
+                  return m;
+                },{});
+                const totalKg=visibleLines.reduce((s,r)=>s+buyingLineKg(r),0);
+                const totalCp=visibleLines.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.costPerKg||0),0);
+                const totalSp=visibleLines.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPrice||0),0);
+                const totalSpUsd=visibleLines.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0),0);
+                const margin=totalSp>0&&totalCp>0?((totalSp-totalCp)/totalSp)*100:null;
+                const marginColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
+                return(
+                  <div onClick={()=>setStoneSummaryKey(null)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.28)",zIndex:90}}>
+                    <div
+                      onClick={e=>e.stopPropagation()}
+                      onTouchMove={e=>e.stopPropagation()}
+                      style={{position:"absolute",top:0,right:0,bottom:0,width:mob?"100%":"min(400px,100vw)",background:C.surface,display:"flex",flexDirection:"column",boxShadow:"-6px 0 32px rgba(17,12,7,.14)",overflowY:"hidden"}}
+                    >
+                      {/* Header */}
+                      <div style={{flexShrink:0,borderBottom:`1px solid ${C.border}`,padding:"12px 16px"}}>
+                        <div style={{fontSize:9,fontWeight:800,color:C.green,textTransform:"uppercase",letterSpacing:.8,marginBottom:2}}>Stone Summary</div>
+                        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
+                          <div>
+                            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:700,color:C.ink,lineHeight:1.1}}>{sData.name}</div>
+                            <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>{stoneLines.length} line{stoneLines.length!==1?"s":""} · {panelShapes.length||1} shape{(panelShapes.length||1)===1?"":"s"} · {stoneLines.length} total line{stoneLines.length!==1?"s":""} in stone</div>
+                          </div>
+                          <button onClick={()=>setStoneSummaryKey(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:C.inkFaint,lineHeight:1,padding:"2px 4px",flexShrink:0}}>&times;</button>
+                        </div>
+                        {panelShapes.length>1&&(
+                          <div style={{display:"flex",gap:5,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
+                            <select value={stonePanelShapeFilter} onChange={e=>setStonePanelShapeFilter(e.target.value)} style={{...FI,fontSize:11,padding:"4px 8px",borderRadius:6,flex:1}}>
+                              <option value="">All shapes</option>
+                              {panelShapes.map(s=><option key={s} value={s}>{s}</option>)}
+                            </select>
+                            {stonePanelShapeFilter&&<button onClick={()=>setStonePanelShapeFilter("")} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"4px 8px",cursor:"pointer",fontSize:12,color:C.inkMid,flexShrink:0}}>&times;</button>}
+                          </div>
+                        )}
+                      </div>
+                      {/* Scrollable body */}
+                      <div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:"14px 16px",display:"flex",flexDirection:"column",gap:12}}>
+                        {/* Stats grid */}
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                          {[
+                            ["PLANNED",`${fmtAmtIN(totalKg)} kg`,C.ink],
+                            ["TOTAL CP",`₹${fmtAmtIN(totalCp)}`,C.ink],
+                            ["TOTAL SP INR",`₹${fmtAmtIN(totalSp)}`,C.green],
+                            ["TOTAL SP USD",`$${fmtAmtIN(totalSpUsd)}`,C.blue],
+                          ].map(([label,val,col])=>(
+                            <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                              <div style={{fontSize:8,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>{label}</div>
+                              <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,color:col,lineHeight:1}}>{val||"—"}</div>
+                            </div>
+                          ))}
+                          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                            <div style={{fontSize:8,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>MARGIN</div>
+                            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,color:marginColor,lineHeight:1}}>{margin!=null?`${margin.toFixed(1)}%`:"—"}</div>
+                          </div>
+                        </div>
+                        {/* Vendors */}
+                        <div>
+                          <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:6}}>Vendors</div>
+                          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                            {Object.entries(byVendor).map(([vName,vData])=>(
+                              <div key={vName} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:4}}>
+                                  <div style={{fontWeight:750,fontSize:13,color:C.ink}}>{vName}</div>
+                                  <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:700,color:C.ink,flexShrink:0}}>₹{fmtAmtIN(vData.sp)}</div>
+                                </div>
+                                <div style={{fontSize:10,color:C.inkFaint}}>{vData.lines.length} line{vData.lines.length!==1?"s":""} · {fmtAmtIN(vData.kg)} kg · CP ₹{fmtAmtIN(vData.cp)} · ${fmtAmtIN(vData.spUsd)}</div>
+                                <div style={{fontSize:10,color:C.inkMid,marginTop:2}}>{[...vData.shapes].join(", ")||"Shape not set"}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Lines */}
+                        <div>
+                          <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:6}}>Lines</div>
+                          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                            {visibleLines.map(r=>{
+                              const cq=buyingLineCostQty(r);
+                              const lineSp=cq*(+r.targetSellPrice||0);
+                              const lineCp=cq*(+r.costPerKg||0);
+                              const lineSpUsd=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);
+                              const lm=lineSp>0&&lineCp>0?((lineSp-lineCp)/lineSp)*100:null;
+                              const lmColor=lm==null?C.inkFaint:lm>=40?C.green:lm>=20?C.amber:C.red;
+                              const cs=stockQtyPartsFor(r.stone,r.shape);
+                              return(
+                                <div key={r.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px"}}>
+                                  <div style={{fontWeight:700,fontSize:13,color:C.ink,marginBottom:2}}>{r.shape||"(shape not set)"}</div>
+                                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:6}}>{r.vendor||"No vendor"}{cs?.text?` · stock ${cs.text}`:""}</div>
+                                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,fontSize:11}}>
+                                    <div><span style={{color:C.inkFaint}}>Qty: </span>{fmtAmtIN(r.qty)} {r.unit||"kg"}</div>
+                                    <div><span style={{color:C.inkFaint}}>CP: </span>₹{fmtAmtIN(r.costPerKg)}/{r.unit||"kg"}</div>
+                                    <div style={{color:C.green}}>SP ₹{fmtAmtIN(r.targetSellPrice)}</div>
+                                    <div style={{color:C.blue}}>SP ${fmtAmtIN(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))}</div>
+                                    <div><span style={{color:C.inkFaint}}>Total: </span>₹{fmtAmtIN(lineSp)}</div>
+                                    <div style={{fontWeight:700,color:lmColor}}>{lm!=null?`${lm.toFixed(1)}%`:"—"}</div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
