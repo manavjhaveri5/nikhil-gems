@@ -9897,6 +9897,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [vendorHistoryRow,setVendorHistoryRow]=useState(null);
   const [stoneSummaryKey,setStoneSummaryKey]=useState(null);
   const [stonePanelShapeFilter,setStonePanelShapeFilter]=useState("");
+  const [planSummaryOpen,setPlanSummaryOpen]=useState(false);
   const allShapes=useShapes();
   const fmtAmtIN=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return Number.isFinite(n)?n.toLocaleString("en-IN",{maximumFractionDigits:2}):"";};
   const rawAmt=v=>String(v||"").replace(/,/g,"").replace(/[^\d.]/g,"");
@@ -10507,10 +10508,36 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
                 <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
                   <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{buyingPlan.length} lines · {planOpen} open</div>
+                  {(planGrandCp>0||planGrandSp>0)&&<button onClick={e=>{e.stopPropagation();setPlanSummaryOpen(true);}} style={{background:C.amberBg,border:`1px solid ${C.amber}50`,borderRadius:999,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer",color:C.amber,whiteSpace:"nowrap"}}>Σ Summary</button>}
                   <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
                   <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLine();}}>+ Add Line</button>
                 </div>
               </div>
+              {planSummaryOpen&&(
+                <div onClick={()=>setPlanSummaryOpen(false)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.28)",zIndex:90,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0 0 24px"}}>
+                  <div onClick={e=>e.stopPropagation()} style={{width:"min(480px,calc(100vw - 24px))",background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,boxShadow:"0 18px 55px rgba(17,12,7,.18)",overflow:"hidden"}}>
+                    <div style={{padding:"13px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Plan Summary · {show.name}</div>
+                      <button onClick={()=>setPlanSummaryOpen(false)} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:C.inkFaint,lineHeight:1,padding:"2px 4px"}}>&times;</button>
+                    </div>
+                    <div style={{padding:"14px 16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                      {[
+                        ["Total CP",`₹${fmtAmtIN(planGrandCp)}`,C.ink],
+                        ["Total SP (INR)",`₹${fmtAmtIN(planGrandSp)}`,C.green],
+                        ["Total SP (USD)",`$${fmtAmtIN(planGrandSpUsd)}`,C.blue],
+                        ["Est. Margin",planGrandMargin!=null?`${planGrandMargin.toFixed(1)}%`:"—",planGrandMargin==null?C.inkFaint:planGrandMargin>=40?C.green:planGrandMargin>=20?C.amber:C.red],
+                        ["Total Qty",`${fmtAmtIN(planGrandKg)} kg`,C.inkMid],
+                        ["Lines",`${buyingPlan.length} (${planOpen} open)`,C.inkMid],
+                      ].map(([label,val,col])=>(
+                        <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+                          <div style={{fontSize:8,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>{label}</div>
+                          <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:700,color:col,lineHeight:1}}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
               {vendorHistoryRow&&(
                 <div onClick={()=>setVendorHistoryRow(null)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.22)",zIndex:80,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
                   <div onClick={e=>e.stopPropagation()} style={{width:"min(760px,calc(100vw - 32px))",maxHeight:"min(640px,calc(100vh - 32px))",overflow:"hidden",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 18px 55px rgba(17,12,7,.18)"}}>
