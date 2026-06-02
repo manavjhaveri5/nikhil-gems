@@ -10511,93 +10511,100 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
                 <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
                   <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{buyingPlan.length} lines · {planOpen} open</div>
-                  <button onClick={e=>{e.stopPropagation();setPlanSummaryOpen(true);}} style={{background:C.amberBg,border:`1px solid ${C.amber}50`,borderRadius:999,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer",color:C.amber,whiteSpace:"nowrap"}}>Σ Summary</button>
                   <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
                   <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLine();}}>+ Add Line</button>
                 </div>
               </div>
+              {/* Fixed floating summary button — always on screen regardless of scroll */}
+              <div style={{position:"fixed",bottom:mob?80:24,right:16,zIndex:88,pointerEvents:"none"}}>
+                <button onClick={e=>{e.stopPropagation();setPlanSummaryOpen(true);}} style={{pointerEvents:"auto",display:"flex",alignItems:"center",gap:7,background:C.gold,border:"none",borderRadius:999,padding:"11px 18px",fontSize:13,fontWeight:800,cursor:"pointer",color:"#fff",boxShadow:"0 4px 20px rgba(139,94,10,.40)",letterSpacing:.2,whiteSpace:"nowrap"}}>
+                  <span style={{fontSize:16,lineHeight:1}}>Σ</span> Summary
+                </button>
+              </div>
               {planSummaryOpen&&(()=>{
                 const allPlanShapes=[...new Set(buyingPlan.map(r=>r.shape).filter(Boolean))].sort();
-                const sortKeys={stone:r=>normPlanText(r.stone),shape:r=>normPlanText(r.shape),vendor:r=>normPlanText(r.vendor),cp:r=>+r.costPerKg||0,sp:r=>+r.targetSellPrice||0,margin:r=>{const cq=buyingLineCostQty(r);const tc=cq*(+r.costPerKg||0);const ts=cq*(+r.targetSellPrice||0);return ts>0&&tc>0?(ts-tc)/ts*100:0;},qty:r=>+r.qty||0,status:r=>normPlanText(r.status)};
-                const filteredRows=(planSummaryShapeFilter?buyingPlan.filter(r=>normPlanText(r.shape)===normPlanText(planSummaryShapeFilter)):buyingPlan);
-                const sortedRows=[...filteredRows].sort((a,b)=>{const fn=sortKeys[planSummarySort]||sortKeys.stone;const av=fn(a),bv=fn(b);return typeof av==="string"?planSummaryDir*av.localeCompare(bv):planSummaryDir*(av-bv);});
-                const filtTotalCp=filteredRows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.costPerKg||0),0);
-                const filtTotalSp=filteredRows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPrice||0),0);
-                const filtTotalSpUsd=filteredRows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0),0);
-                const filtTotalKg=filteredRows.reduce((s,r)=>s+buyingLineKg(r),0);
-                const filtMargin=filtTotalSp>0&&filtTotalCp>0?((filtTotalSp-filtTotalCp)/filtTotalSp)*100:null;
-                const marginCol=m=>m==null?C.inkFaint:m>=40?C.green:m>=20?C.amber:C.red;
-                const toggleSort=key=>{if(planSummarySort===key)setPlanSummaryDir(d=>d*-1);else{setPlanSummarySort(key);setPlanSummaryDir(1);}};
-                const SortHdr=({k,label})=>{const active=planSummarySort===k;return(<th onClick={()=>toggleSort(k)} style={{padding:"7px 8px",fontSize:9,fontWeight:800,color:active?C.gold:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,whiteSpace:"nowrap",cursor:"pointer",userSelect:"none",background:C.card,textAlign:"left",borderBottom:`1px solid ${C.border}`}}>{label}{active?(planSummaryDir===1?" ↑":" ↓"):""}</th>);};
+                const sortKeys={stone:r=>normPlanText(r.stone),vendor:r=>normPlanText(r.vendor),margin:r=>{const cq=buyingLineCostQty(r);const tc=cq*(+r.costPerKg||0);const ts=cq*(+r.targetSellPrice||0);return ts>0&&tc>0?(ts-tc)/ts*100:0;},cp:r=>+r.costPerKg||0,sp:r=>+r.targetSellPrice||0,qty:r=>buyingLineKg(r)};
+                const filteredRows=planSummaryShapeFilter?buyingPlan.filter(r=>normPlanText(r.shape)===normPlanText(planSummaryShapeFilter)):buyingPlan;
+                const sortedRows=[...filteredRows].sort((a,b)=>{const fn=sortKeys[planSummarySort]||sortKeys.stone;const av=fn(a),bv=fn(b);return typeof av==="string"?planSummaryDir*av.localeCompare(bv):planSummaryDir*(bv-av);});
+                const fTotalCp=filteredRows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.costPerKg||0),0);
+                const fTotalSp=filteredRows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPrice||0),0);
+                const fTotalSpUsd=filteredRows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0),0);
+                const fTotalKg=filteredRows.reduce((s,r)=>s+buyingLineKg(r),0);
+                const fMargin=fTotalSp>0&&fTotalCp>0?((fTotalSp-fTotalCp)/fTotalSp)*100:null;
+                const mCol=m=>m==null?C.inkFaint:m>=40?C.green:m>=20?C.amber:C.red;
+                const toggleSort=key=>{if(planSummarySort===key)setPlanSummaryDir(d=>d*-1);else{setPlanSummarySort(key);setPlanSummaryDir(-1);}};
+                const colHdr=(k,label,right=false)=>{const on=planSummarySort===k;return <th onClick={()=>toggleSort(k)} style={{padding:"9px 10px",fontSize:9,fontWeight:800,color:on?C.gold:C.inkFaint,textTransform:"uppercase",letterSpacing:.55,whiteSpace:"nowrap",cursor:"pointer",userSelect:"none",background:C.card,textAlign:right?"right":"left",borderBottom:`2px solid ${on?C.gold:C.border}`,transition:"color .15s"}}>{label}{on?(planSummaryDir===-1?" ↓":" ↑"):""}</th>;};
                 const doPrint=()=>{
-                  const rows=sortedRows.map(r=>{
-                    const cq=buyingLineCostQty(r);const tc=cq*(+r.costPerKg||0);const ts=cq*(+r.targetSellPrice||0);
-                    const tsu=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);
-                    const mg=ts>0&&tc>0?((ts-tc)/ts*100).toFixed(1)+"%":"—";
-                    return`<tr><td>${r.stone||""}</td><td>${r.shape||""}</td><td>${r.vendor||""}</td><td style="text-align:right">${r.qty||""} ${r.unit||""}</td><td style="text-align:right">₹${r.costPerKg||""}</td><td style="text-align:right">₹${r.targetSellPrice||""}</td><td style="text-align:right">$${r.targetSellPriceUsd||usdFromInr(r.targetSellPrice)||""}</td><td style="text-align:right">₹${tc?tc.toLocaleString("en-IN",{maximumFractionDigits:0}):""}</td><td style="text-align:right">₹${ts?ts.toLocaleString("en-IN",{maximumFractionDigits:0}):""}</td><td style="text-align:right;color:${mg!=="—"&&parseFloat(mg)>=40?"green":parseFloat(mg)>=20?"orange":"red"}">${mg}</td><td>${r.status||""}</td></tr>`;
-                  }).join("");
-                  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Buying Plan — ${show.name}</title><style>body{font-family:Arial,sans-serif;font-size:11px;color:#000;margin:20px}h2{font-size:16px;margin-bottom:4px}p{margin:2px 0 12px;color:#555;font-size:10px}table{width:100%;border-collapse:collapse}th{background:#f5f0e8;font-size:9px;text-transform:uppercase;letter-spacing:.4px;padding:5px 7px;border:1px solid #ccc;text-align:left}td{padding:5px 7px;border:1px solid #ddd;vertical-align:middle}tr:nth-child(even){background:#fafafa}tfoot td{background:#f5f0e8;font-weight:bold}@media print{@page{margin:15mm}}</style></head><body><h2>Buying Plan — ${show.name}</h2><p>Generated ${new Date().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"})}${planSummaryShapeFilter?" · Shape: "+planSummaryShapeFilter:""}</p><table><thead><tr><th>Stone</th><th>Shape</th><th>Vendor</th><th>Qty</th><th>CP/kg (INR)</th><th>SP/kg (INR)</th><th>SP (USD)</th><th>Total CP</th><th>Total SP</th><th>Margin</th><th>Status</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="7">Total${planSummaryShapeFilter?" ("+planSummaryShapeFilter+")":""} — ${filteredRows.length} lines</td><td>₹${filtTotalCp.toLocaleString("en-IN",{maximumFractionDigits:0})}</td><td>₹${filtTotalSp.toLocaleString("en-IN",{maximumFractionDigits:0})}</td><td>${filtMargin!=null?filtMargin.toFixed(1)+"%":"—"}</td><td></td></tr></tfoot></table></body></html>`;
-                  const w=window.open("","_blank","width=900,height=700");w.document.write(html);w.document.close();setTimeout(()=>w.print(),300);
+                  const rows=sortedRows.map((r,i)=>{const cq=buyingLineCostQty(r);const tc=cq*(+r.costPerKg||0);const ts=cq*(+r.targetSellPrice||0);const tsu=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);const mg=ts>0&&tc>0?((ts-tc)/ts*100).toFixed(1)+"%":"—";const bg=i%2?"#fafaf8":"#fff";return`<tr style="background:${bg}"><td>${r.stone||""}</td><td>${r.shape||""}</td><td>${r.vendor||""}</td><td align="right">${r.qty||""} ${r.unit||""}</td><td align="right">₹${r.costPerKg?Number(r.costPerKg).toLocaleString("en-IN"):""}</td><td align="right">₹${r.targetSellPrice?Number(r.targetSellPrice).toLocaleString("en-IN"):""}</td><td align="right">$${tsu>0?(tsu/cq).toFixed(0):""}</td><td align="right">${tc?`₹${tc.toLocaleString("en-IN",{maximumFractionDigits:0})}`:"—"}</td><td align="right">${ts?`₹${ts.toLocaleString("en-IN",{maximumFractionDigits:0})}`:"—"}</td><td align="right" style="color:${parseFloat(mg)>=40?"#1a6a2a":parseFloat(mg)>=20?"#a06000":"#c0392b"}">${mg}</td><td>${r.status||"Idea"}</td></tr>`;}).join("");
+                  const w=window.open("","_blank");
+                  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Buying Plan — ${show.name}</title><style>*{box-sizing:border-box}body{font-family:-apple-system,Arial,sans-serif;font-size:12px;color:#1a1208;margin:0;padding:20px}h1{font-size:22px;font-weight:700;margin:0 0 2px;font-family:Georgia,serif}p{margin:0 0 16px;color:#888;font-size:11px}table{width:100%;border-collapse:collapse;font-size:11px}thead th{background:#f5efe0;font-size:9px;text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid #c8b89a;font-weight:800}td{padding:8px 10px;border-bottom:1px solid #ede8df;vertical-align:middle}tfoot td{background:#f5efe0;font-weight:800;border-top:2px solid #c8b89a;border-bottom:none}.stat{display:inline-block;margin-right:24px;margin-bottom:12px}.stat-label{font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#888;display:block}.stat-value{font-size:18px;font-weight:800}@media print{body{padding:10mm}@page{margin:10mm}}</style></head><body><h1>${show.name}</h1><p>Buying Plan · ${new Date().toLocaleDateString("en-IN",{day:"numeric",month:"long",year:"numeric"})}${planSummaryShapeFilter?" · "+planSummaryShapeFilter:""}</p><div><span class="stat"><span class="stat-label">Total CP</span><span class="stat-value">₹${fTotalCp.toLocaleString("en-IN",{maximumFractionDigits:0})}</span></span><span class="stat"><span class="stat-label">Total SP</span><span class="stat-value" style="color:#1a6a2a">₹${fTotalSp.toLocaleString("en-IN",{maximumFractionDigits:0})}</span></span><span class="stat"><span class="stat-label">SP USD</span><span class="stat-value" style="color:#1a3a8a">$${fTotalSpUsd.toLocaleString("en-IN",{maximumFractionDigits:0})}</span></span><span class="stat"><span class="stat-label">Margin</span><span class="stat-value" style="color:${fMargin!=null&&fMargin>=40?"#1a6a2a":fMargin!=null&&fMargin>=20?"#a06000":"#c0392b"}">${fMargin!=null?fMargin.toFixed(1)+"%":"—"}</span></span><span class="stat"><span class="stat-label">Qty</span><span class="stat-value">${fTotalKg.toLocaleString("en-IN",{maximumFractionDigits:2})} kg</span></span></div><table><thead><tr><th>Stone</th><th>Shape</th><th>Vendor</th><th align="right">Qty</th><th align="right">CP/kg</th><th align="right">SP/kg</th><th align="right">SP USD</th><th align="right">Total CP</th><th align="right">Total SP</th><th align="right">Margin</th><th>Status</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="7">${filteredRows.length} lines${planSummaryShapeFilter?" · "+planSummaryShapeFilter:""}</td><td align="right">₹${fTotalCp.toLocaleString("en-IN",{maximumFractionDigits:0})}</td><td align="right">₹${fTotalSp.toLocaleString("en-IN",{maximumFractionDigits:0})}</td><td align="right">${fMargin!=null?fMargin.toFixed(1)+"%":"—"}</td><td></td></tr></tfoot></table></body></html>`);
+                  w.document.close();setTimeout(()=>{w.focus();w.print();},400);
                 };
                 return(
-                <div onClick={()=>setPlanSummaryOpen(false)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.32)",zIndex:95}}>
-                  <div onClick={e=>e.stopPropagation()} style={{position:"absolute",top:0,right:0,bottom:0,width:mob?"100%":"min(820px,100vw)",background:C.surface,display:"flex",flexDirection:"column",boxShadow:"-6px 0 32px rgba(17,12,7,.16)"}}>
-                    {/* Header */}
-                    <div style={{flexShrink:0,borderBottom:`1px solid ${C.border}`,padding:"12px 16px",background:C.card}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                <div onClick={()=>setPlanSummaryOpen(false)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.38)",zIndex:98}}>
+                  <div onClick={e=>e.stopPropagation()} style={{position:"absolute",top:0,right:0,bottom:0,width:mob?"100%":"min(860px,100vw)",background:C.bg,display:"flex",flexDirection:"column",boxShadow:"-8px 0 40px rgba(17,12,7,.18)"}}>
+
+                    {/* ── Header ── */}
+                    <div style={{flexShrink:0,background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"14px 18px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:12}}>
                         <div>
-                          <div style={{fontSize:9,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:.8,marginBottom:2}}>Buying Plan Summary</div>
-                          <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:700,color:C.ink,lineHeight:1.1}}>{show.name}</div>
+                          <div style={{fontSize:9,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:1,marginBottom:3}}>Buying Plan Summary</div>
+                          <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:700,color:C.ink,lineHeight:1}}>{show.name}</div>
                         </div>
-                        <div style={{display:"flex",gap:7,alignItems:"center",flexShrink:0}}>
-                          <button onClick={doPrint} style={{background:C.greenBg,border:`1px solid ${C.green}50`,borderRadius:7,padding:"7px 13px",fontSize:11,fontWeight:700,cursor:"pointer",color:C.green,whiteSpace:"nowrap"}}>🖨 Print</button>
-                          <button onClick={()=>setPlanSummaryOpen(false)} style={{width:30,height:30,border:`1px solid ${C.border}`,borderRadius:7,background:C.surface,cursor:"pointer",fontSize:18,lineHeight:1,color:C.inkMid}}>&times;</button>
+                        <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                          <button onClick={doPrint} style={{display:"flex",alignItems:"center",gap:5,background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",color:C.inkMid,whiteSpace:"nowrap"}}>
+                            🖨 Print
+                          </button>
+                          <button onClick={()=>setPlanSummaryOpen(false)} style={{width:32,height:32,border:`1.5px solid ${C.border}`,borderRadius:8,background:C.surface,cursor:"pointer",fontSize:19,lineHeight:1,color:C.inkMid,display:"flex",alignItems:"center",justifyContent:"center"}}>&times;</button>
                         </div>
                       </div>
-                      {/* Filters + sort row */}
-                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:10}}>
-                        <div style={{display:"flex",alignItems:"center",gap:5}}>
-                          <span style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4}}>Shape:</span>
-                          <select value={planSummaryShapeFilter} onChange={e=>setPlanSummaryShapeFilter(e.target.value)} style={{...FI,fontSize:11,padding:"4px 8px",borderRadius:6}}>
+                      {/* Controls row */}
+                      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <span style={{fontSize:10,fontWeight:700,color:C.inkFaint}}>Shape</span>
+                          <select value={planSummaryShapeFilter} onChange={e=>setPlanSummaryShapeFilter(e.target.value)} style={{...FI,fontSize:12,padding:"5px 10px",borderRadius:7,minWidth:110}}>
                             <option value="">All shapes</option>
                             {allPlanShapes.map(s=><option key={s} value={s}>{s}</option>)}
                           </select>
                         </div>
-                        <div style={{display:"flex",alignItems:"center",gap:5}}>
-                          <span style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4}}>Sort:</span>
-                          {[["stone","Stone"],["vendor","Vendor"],["margin","Margin"],["cp","CP"],["sp","SP"],["qty","Qty"],["status","Status"]].map(([k,lbl])=>(
-                            <button key={k} onClick={()=>toggleSort(k)} style={{padding:"3px 9px",borderRadius:5,border:`1px solid ${planSummarySort===k?C.gold:C.border}`,background:planSummarySort===k?C.gold+"22":"none",color:planSummarySort===k?C.gold:C.inkMid,fontSize:10,fontWeight:planSummarySort===k?800:400,cursor:"pointer",whiteSpace:"nowrap"}}>
-                              {lbl}{planSummarySort===k?(planSummaryDir===1?" ↑":" ↓"):""}
-                            </button>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <span style={{fontSize:10,fontWeight:700,color:C.inkFaint}}>Sort</span>
+                          <select value={planSummarySort} onChange={e=>{setPlanSummarySort(e.target.value);setPlanSummaryDir(-1);}} style={{...FI,fontSize:12,padding:"5px 10px",borderRadius:7,minWidth:110}}>
+                            <option value="stone">Stone A→Z</option>
+                            <option value="vendor">Vendor A→Z</option>
+                            <option value="margin">Margin ↓</option>
+                            <option value="cp">CP ↓</option>
+                            <option value="sp">SP ↓</option>
+                            <option value="qty">Qty ↓</option>
+                          </select>
+                        </div>
+                        <div style={{marginLeft:"auto",display:"flex",gap:16}}>
+                          {[[`₹${fmtAmtIN(fTotalCp)}`,"Total CP",C.ink],[`₹${fmtAmtIN(fTotalSp)}`,"Total SP",C.green],[`$${fmtAmtIN(fTotalSpUsd)}`,"USD",C.blue],[fMargin!=null?`${fMargin.toFixed(1)}%`:"—","Margin",mCol(fMargin)]].map(([val,lbl,col])=>(
+                            <div key={lbl} style={{textAlign:"right"}}>
+                              <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>{lbl}</div>
+                              <div style={{fontSize:14,fontWeight:850,color:col,lineHeight:1.1}}>{val}</div>
+                            </div>
                           ))}
                         </div>
                       </div>
                     </div>
-                    {/* Totals strip */}
-                    <div style={{flexShrink:0,display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,overflowX:"auto"}}>
-                      {[["CP",`₹${fmtAmtIN(filtTotalCp)}`,C.ink],["SP INR",`₹${fmtAmtIN(filtTotalSp)}`,C.green],["SP USD",`$${fmtAmtIN(filtTotalSpUsd)}`,C.blue],["Margin",filtMargin!=null?`${filtMargin.toFixed(1)}%`:"—",marginCol(filtMargin)],["Qty",`${fmtAmtIN(filtTotalKg)} kg`,C.inkMid],["Lines",`${filteredRows.length}`,C.inkMid]].map(([lbl,val,col],i,arr)=>(
-                        <div key={lbl} style={{padding:"8px 14px",borderRight:i<arr.length-1?`1px solid ${C.border}`:"none",minWidth:80}}>
-                          <div style={{fontSize:8,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>{lbl}</div>
-                          <div style={{fontSize:13,fontWeight:850,color:col,lineHeight:1}}>{val}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {/* Table */}
+
+                    {/* ── Table ── */}
                     <div style={{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
-                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                        <thead style={{position:"sticky",top:0,zIndex:2}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                        <thead style={{position:"sticky",top:0,zIndex:3}}>
                           <tr>
-                            <SortHdr k="stone" label="Stone"/>
-                            <SortHdr k="shape" label="Shape"/>
-                            <SortHdr k="vendor" label="Vendor"/>
-                            <SortHdr k="qty" label="Qty"/>
-                            <SortHdr k="cp" label="CP/kg ₹"/>
-                            <SortHdr k="sp" label="SP/kg ₹"/>
-                            <th style={{padding:"7px 8px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,whiteSpace:"nowrap",background:C.card,textAlign:"right",borderBottom:`1px solid ${C.border}`}}>SP USD</th>
-                            <th style={{padding:"7px 8px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,whiteSpace:"nowrap",background:C.card,textAlign:"right",borderBottom:`1px solid ${C.border}`}}>Total CP</th>
-                            <th style={{padding:"7px 8px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,whiteSpace:"nowrap",background:C.card,textAlign:"right",borderBottom:`1px solid ${C.border}`}}>Total SP</th>
-                            <SortHdr k="margin" label="Margin"/>
-                            <SortHdr k="status" label="Status"/>
+                            {colHdr("stone","Stone")}
+                            <th style={{padding:"9px 10px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55,background:C.card,borderBottom:`2px solid ${C.border}`}}>Shape</th>
+                            {colHdr("vendor","Vendor")}
+                            {colHdr("qty","Qty",true)}
+                            {colHdr("cp","CP/kg ₹",true)}
+                            {colHdr("sp","SP/kg ₹",true)}
+                            <th style={{padding:"9px 10px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55,background:C.card,textAlign:"right",borderBottom:`2px solid ${C.border}`}}>SP USD</th>
+                            <th style={{padding:"9px 10px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55,background:C.card,textAlign:"right",borderBottom:`2px solid ${C.border}`}}>Total CP</th>
+                            <th style={{padding:"9px 10px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55,background:C.card,textAlign:"right",borderBottom:`2px solid ${C.border}`}}>Total SP</th>
+                            {colHdr("margin","Margin",true)}
+                            <th style={{padding:"9px 10px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55,background:C.card,borderBottom:`2px solid ${C.border}`}}>Status</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -10607,25 +10614,40 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             const ts=cq*(+r.targetSellPrice||0);
                             const tsu=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);
                             const mg=ts>0&&tc>0?((ts-tc)/ts)*100:null;
-                            const even=i%2===0;
-                            const td=(content,right=false,col=C.ink)=><td style={{padding:"7px 8px",borderBottom:`1px solid ${C.border}`,color:col,fontWeight:500,whiteSpace:"nowrap",background:even?C.surface:C.card,textAlign:right?"right":"left"}}>{content}</td>;
+                            const bg=i%2===0?C.surface:C.card;
+                            const cell=(v,right=false,col=C.ink,bold=false)=>(
+                              <td style={{padding:"10px 10px",borderBottom:`1px solid ${C.border}`,color:col,fontWeight:bold?700:400,background:bg,textAlign:right?"right":"left",whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>{v}</td>
+                            );
+                            const statusColor=r.status==="Bought"?{bg:C.greenBg,fg:C.green}:r.status==="Ordered"?{bg:C.amberBg,fg:C.amber}:{bg:"transparent",fg:C.inkFaint};
                             return(
-                              <tr key={r.id}>
-                                {td(r.stone||"—")}
-                                {td(r.shape||"—")}
-                                {td(r.vendor||"—")}
-                                {td(`${r.qty||"—"} ${r.unit||""}`,true)}
-                                {td(r.costPerKg?`₹${fmtAmtIN(r.costPerKg)}`:"—",true)}
-                                {td(r.targetSellPrice?`₹${fmtAmtIN(r.targetSellPrice)}`:"—",true,C.green)}
-                                {td(tsu>0?`$${fmtAmtIN(tsu/cq||0)}`:"—",true,C.blue)}
-                                {td(tc>0?`₹${fmtAmtIN(tc)}`:"—",true)}
-                                {td(ts>0?`₹${fmtAmtIN(ts)}`:"—",true,C.green)}
-                                {td(mg!=null?`${mg.toFixed(1)}%`:"—",false,marginCol(mg))}
-                                {td(<span style={{background:r.status==="Bought"?C.greenBg:r.status==="Ordered"?C.amberBg:C.card,color:r.status==="Bought"?C.green:r.status==="Ordered"?C.amber:C.inkFaint,borderRadius:4,padding:"2px 7px",fontSize:10,fontWeight:700}}>{r.status||"Idea"}</span>)}
+                              <tr key={r.id} style={{transition:"background .1s"}}>
+                                {cell(<span style={{fontWeight:600,color:C.ink}}>{r.stone||"—"}</span>)}
+                                {cell(<span style={{color:C.inkMid}}>{r.shape||"—"}</span>)}
+                                {cell(<span style={{color:C.inkMid,fontSize:11}}>{r.vendor||"—"}</span>)}
+                                {cell(`${r.qty||"—"} ${r.unit||""}`,true,C.inkMid)}
+                                {cell(r.costPerKg?`₹${fmtAmtIN(r.costPerKg)}`:"—",true,C.inkMid)}
+                                {cell(r.targetSellPrice?`₹${fmtAmtIN(r.targetSellPrice)}`:"—",true,C.green,true)}
+                                {cell(tsu>0?`$${fmtAmtIN(tsu/cq)}`:"—",true,C.blue)}
+                                {cell(tc>0?`₹${fmtAmtIN(tc)}`:"—",true,C.inkMid)}
+                                {cell(ts>0?`₹${fmtAmtIN(ts)}`:"—",true,C.green,true)}
+                                {cell(mg!=null?`${mg.toFixed(1)}%`:"—",true,mCol(mg),true)}
+                                <td style={{padding:"10px 10px",borderBottom:`1px solid ${C.border}`,background:bg}}>
+                                  <span style={{background:statusColor.bg,color:statusColor.fg,borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{r.status||"Idea"}</span>
+                                </td>
                               </tr>
                             );
                           })}
                         </tbody>
+                        {/* Totals row */}
+                        <tfoot>
+                          <tr style={{background:C.card}}>
+                            <td colSpan={7} style={{padding:"10px 10px",fontSize:11,fontWeight:700,color:C.inkMid,borderTop:`2px solid ${C.border}`}}>{filteredRows.length} lines{planSummaryShapeFilter?` · ${planSummaryShapeFilter}`:""} · {fmtAmtIN(fTotalKg)} kg</td>
+                            <td style={{padding:"10px 10px",textAlign:"right",fontWeight:800,color:C.ink,borderTop:`2px solid ${C.border}`,fontVariantNumeric:"tabular-nums"}}>₹{fmtAmtIN(fTotalCp)}</td>
+                            <td style={{padding:"10px 10px",textAlign:"right",fontWeight:800,color:C.green,borderTop:`2px solid ${C.border}`,fontVariantNumeric:"tabular-nums"}}>₹{fmtAmtIN(fTotalSp)}</td>
+                            <td style={{padding:"10px 10px",textAlign:"right",fontWeight:800,color:mCol(fMargin),borderTop:`2px solid ${C.border}`}}>{fMargin!=null?`${fMargin.toFixed(1)}%`:"—"}</td>
+                            <td style={{borderTop:`2px solid ${C.border}`}}/>
+                          </tr>
+                        </tfoot>
                       </table>
                     </div>
                   </div>
