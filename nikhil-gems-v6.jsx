@@ -10313,11 +10313,12 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
       </div>
       <table><thead><tr><th>Stone</th><th>Qty</th><th>CP</th><th>SP INR</th><th>SP USD</th><th>Margin</th><th>Lines</th><th>Shapes / vendors</th></tr></thead><tbody>${rowHtml}</tbody></table>
     </body></html>`;
-    const w=window.open("","_blank","noopener,noreferrer");
-    if(!w)return;
+    const w=window.open("","_blank");
+    if(!w){alert("Couldn't open the print window — please allow pop-ups for this site and try again.");return;}
     w.document.write(html);
     w.document.close();
     w.focus();
+    setTimeout(()=>w.print(),500);
   };
   const makeBuyingLine=(seed={})=>{
     const basis=findCostBasis(seed.stone,seed.shape);
