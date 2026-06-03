@@ -10154,6 +10154,9 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [planSummaryOpen,setPlanSummaryOpen]=useState(false);
   const [planSummaryVendor,setPlanSummaryVendor]=useState("all");
   const [vendorComparePopup,setVendorComparePopup]=useState(null);
+  const [planVendorFilter,setPlanVendorFilter]=useState("all");
+  const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
+  const [whatsappMode,setWhatsappMode]=useState("prices");
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
   const [compactStoneKey,setCompactStoneKey]=useState("");
   const allShapes=useShapes();
@@ -10430,7 +10433,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     }];
   }));
   const removeBuyingLine=id=>saveBuyingPlan(buyingPlan.filter(row=>row.id!==id));
-  const planOpen=buyingPlan.filter(row=>!["Bought","Skipped"].includes(row.status)).length;
+  const viewBuyingPlan=planVendorFilter==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planVendorFilter);
+  const planOpen=viewBuyingPlan.filter(row=>!["Bought","Skipped"].includes(row.status)).length;
   const buyingLineKg=row=>{
     const qty=+row.qty||0;
     const unit=String(row.unit||"kg").toLowerCase();
@@ -10474,7 +10478,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     if(totals.boxes>0)parts.push(`${fmtAmtIN(totals.boxes)} boxes`);
     return{...totals,text:parts.join(" / ")};
   };
-  const stoneBuyingTotals=buyingPlan.reduce((m,row)=>{
+  const stoneBuyingTotals=viewBuyingPlan.reduce((m,row)=>{
     const key=normPlanText(row.stone);
     if(!key)return m;
     const name=String(row.stone||"").trim();
@@ -10494,14 +10498,14 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const buyingStoneEntries=Object.entries(stoneBuyingTotals).sort((a,b)=>String(a[1].name||"").localeCompare(String(b[1].name||"")));
   const firstCompactStoneKey=buyingStoneEntries[0]?.[0]||"";
   const activeCompactStoneKey=buyingStoneEntries.some(([key])=>key===compactStoneKey)?compactStoneKey:firstCompactStoneKey;
-  const compactBuyingRows=activeCompactStoneKey?buyingPlan.filter(row=>normPlanText(row.stone)===activeCompactStoneKey):buyingPlan;
+  const compactBuyingRows=activeCompactStoneKey?viewBuyingPlan.filter(row=>normPlanText(row.stone)===activeCompactStoneKey):viewBuyingPlan;
   // Render-time grouping: keep all lines of the same stone contiguous (grouped under
   // its first occurrence) regardless of array order, so items added via any path —
   // "+ Add Item", linked POs, quotes — fold into the existing stone group instead of
   // spawning a duplicate group at the end. Empty-stone rows stay individual & in place.
   const groupedBuyingPlan=(()=>{
     const order=[];const groups=new Map();
-    buyingPlan.forEach(row=>{
+    viewBuyingPlan.forEach(row=>{
       const k=normPlanText(row.stone)||`__row-${row.id}`;
       if(!groups.has(k)){groups.set(k,[]);order.push(k);}
       groups.get(k).push(row);
@@ -10746,8 +10750,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 {[
-                  ["Planned",buyingPlan.length,`${planOpen} open`,C.inkMid,C.card],
-                  ["Bought",buyingPlan.filter(x=>x.status==="Bought").length,"ready",C.green,C.greenBg],
+                  ["Planned",viewBuyingPlan.length,`${planOpen} open`,C.inkMid,C.card],
+                  ["Bought",viewBuyingPlan.filter(x=>x.status==="Bought").length,"ready",C.green,C.greenBg],
                   ["History",purchaseHistory.length,"purchase lines",C.amber,C.amberBg],
                 ].map(([label,value,sub,color,bg])=>(
                   <div key={label} style={{display:"flex",alignItems:"center",gap:7,background:bg,border:`1px solid ${C.border}`,borderRadius:999,padding:"5px 9px",fontSize:10,color:C.inkMid}}>
@@ -10756,6 +10760,13 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <span style={{color:C.inkFaint}}>{sub}</span>
                   </div>
                 ))}
+                <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{...FI,fontSize:11,padding:"5px 9px",borderRadius:999,minWidth:130,cursor:"pointer",fontWeight:planVendorFilter!=="all"?900:undefined,color:planVendorFilter!=="all"?C.green:undefined,border:planVendorFilter!=="all"?`1.5px solid ${C.green}55`:undefined}}>
+                  <option value="all">All vendors</option>
+                  {[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort().map(v=><option key={v} value={v}>{v}</option>)}
+                </select>
+                <button onClick={e=>{e.stopPropagation();setWhatsappSummaryOpen(true);}} style={{background:"#25D366",color:"#fff",border:"none",borderRadius:999,padding:"5px 12px",fontSize:11,fontWeight:900,cursor:"pointer",display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",boxShadow:"0 2px 8px rgba(37,211,102,.3)"}}>
+                  <span style={{fontSize:14,lineHeight:1}}>📱</span> WhatsApp
+                </button>
               </div>
               </div>
               {buyingPlan.length===0?(
@@ -10944,7 +10955,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               )}
               <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
                 <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
-                  <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{buyingPlan.length} lines · {planOpen} open</div>
+                  <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{viewBuyingPlan.length} lines · {planOpen} open{planVendorFilter!=="all"?` · ${planVendorFilter}`:""}</div>
                   <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
                   <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Line</button>
                 </div>
@@ -11262,6 +11273,92 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             })}
                           </div>
                         )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+              {whatsappSummaryOpen&&(()=>{
+                const waVendorOptions=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
+                const waRows=planVendorFilter==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planVendorFilter);
+                const waGroups=(()=>{const order=[];const groups=new Map();waRows.forEach(row=>{const k=normPlanText(row.stone)||`__${row.id}`;if(!groups.has(k)){groups.set(k,[]);order.push(k);}groups.get(k).push(row);});return order.map(k=>({stoneKey:k,rows:groups.get(k)}));})();
+                const waTotals=waRows.reduce((m,r)=>{const cq=buyingLineCostQty(r);m.kg+=buyingLineKg(r);m.cp+=cq*(+r.costPerKg||0);m.sp+=cq*(+r.targetSellPrice||0);m.usd+=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);m.lines+=1;return m;},{kg:0,cp:0,sp:0,usd:0,lines:0});
+                const waMargin=waTotals.sp>0&&waTotals.cp>0?((waTotals.sp-waTotals.cp)/waTotals.sp)*100:null;
+                const buildMessage=()=>{
+                  const header=whatsappMode==="prices"?`*${show.name} - Buying Plan*`:`*${show.name} - Order List*`;
+                  const vendorLine=planVendorFilter!=="all"?`Vendor: ${planVendorFilter}`:`All Vendors`;
+                  const lines=[header,vendorLine,""];
+                  waGroups.forEach(({stoneKey,rows})=>{
+                    const stoneName=rows.find(r=>r.stone)?.stone||"Stone";
+                    if(whatsappMode==="prices"){
+                      const groupKg=rows.reduce((s,r)=>s+buyingLineKg(r),0);
+                      lines.push(`*${stoneName}*${groupKg>0?` (${fmtAmtIN(groupKg)} kg)`:""}`);
+                      rows.forEach(r=>{
+                        const cq=buyingLineCostQty(r);
+                        const cp=+r.costPerKg||0;
+                        const sp=+r.targetSellPrice||0;
+                        const usd=+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0;
+                        const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
+                        const parts=[r.shape||"—",qtyStr];
+                        if(cp>0)parts.push(`CP ₹${fmtAmtIN(cp)}`);
+                        if(sp>0)parts.push(`SP ₹${fmtAmtIN(sp)}`);
+                        if(usd>0)parts.push(`$${fmtAmtIN(usd)}`);
+                        if(sp>0&&cq>0)parts.push(`Total ₹${fmtAmtIN(cq*sp)}`);
+                        lines.push(`• ${parts.join(" | ")}`);
+                      });
+                    }else{
+                      lines.push(`*${stoneName}*`);
+                      rows.forEach(r=>{
+                        const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
+                        const notePart=r.notes?` - ${r.notes}`:"";
+                        lines.push(`• ${r.shape||"—"} - ${qtyStr}${notePart}`);
+                      });
+                    }
+                    lines.push("");
+                  });
+                  if(whatsappMode==="prices"){
+                    lines.push(`---`);
+                    const parts=[waTotals.kg>0?`${fmtAmtIN(waTotals.kg)} kg`:null,waTotals.cp>0?`CP ₹${fmtAmtIN(waTotals.cp)}`:null,waTotals.sp>0?`SP ₹${fmtAmtIN(waTotals.sp)}`:null,waTotals.usd>0?`$${fmtAmtIN(waTotals.usd)}`:null].filter(Boolean);
+                    lines.push(`*Total: ${parts.join(" | ")}*`);
+                    if(waMargin!=null)lines.push(`Margin: ${waMargin.toFixed(1)}%`);
+                  }else{
+                    lines.push(`Total: ${waTotals.kg>0?`${fmtAmtIN(waTotals.kg)} kg | `:""}${waTotals.lines} line${waTotals.lines===1?"":"s"}`);
+                  }
+                  return lines.join("\n");
+                };
+                const msgText=buildMessage();
+                return(
+                  <div onClick={()=>setWhatsappSummaryOpen(false)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.28)",zIndex:88,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+                    <div onClick={e=>e.stopPropagation()} style={{width:"min(640px,calc(100vw - 32px))",maxHeight:"min(780px,calc(100vh - 32px))",overflow:"hidden",background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,boxShadow:"0 24px 80px rgba(17,12,7,.28)",display:"flex",flexDirection:"column"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",padding:"14px 16px",borderBottom:`1px solid ${C.border}`,background:"#f0fdf4"}}>
+                        <div>
+                          <div style={{fontSize:10,color:"#16a34a",fontWeight:900,textTransform:"uppercase",letterSpacing:.75}}>WhatsApp Summary</div>
+                          <div style={{fontSize:18,fontWeight:900,color:C.ink,marginTop:2,lineHeight:1.1}}>{show.name}</div>
+                          <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>{planVendorFilter==="all"?"All vendors":planVendorFilter} · {waRows.length} line{waRows.length===1?"":"s"}</div>
+                        </div>
+                        <button onClick={()=>setWhatsappSummaryOpen(false)} style={{width:30,height:30,border:`1px solid ${C.border}`,borderRadius:8,background:C.surface,cursor:"pointer",fontSize:18,lineHeight:1,color:C.inkMid,flexShrink:0}}>&times;</button>
+                      </div>
+                      <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                        <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{...FI,fontSize:11,padding:"6px 9px",borderRadius:8,minWidth:150,cursor:"pointer"}}>
+                          <option value="all">All vendors</option>
+                          {waVendorOptions.map(v=><option key={v} value={v}>{v}</option>)}
+                        </select>
+                        <div style={{display:"flex",gap:2,background:C.card,border:`1px solid ${C.border}`,borderRadius:999,padding:2}}>
+                          {[["prices","With Prices"],["quality","Quality Only"]].map(([mode,label])=>(
+                            <button key={mode} onClick={()=>setWhatsappMode(mode)} style={{background:whatsappMode===mode?"#25D366":"transparent",border:"none",borderRadius:999,padding:"5px 11px",fontSize:11,fontWeight:850,color:whatsappMode===mode?"#fff":C.inkFaint,cursor:"pointer"}}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{flex:1,overflow:"auto",padding:14}}>
+                        <textarea readOnly value={msgText} onClick={e=>e.target.select()} style={{width:"100%",minHeight:280,fontFamily:"monospace",fontSize:12,lineHeight:1.55,padding:"10px 12px",background:C.card,border:`1px solid ${C.border}`,borderRadius:9,resize:"vertical",color:C.ink,boxSizing:"border-box",cursor:"text"}}/>
+                      </div>
+                      <div style={{padding:"10px 14px",borderTop:`1px solid ${C.border}`,display:"flex",gap:8,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                        <button onClick={()=>{navigator.clipboard?.writeText(msgText).then(()=>{}).catch(()=>{});}} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"8px 14px",fontSize:12,fontWeight:850,cursor:"pointer",color:C.ink}}>📋 Copy</button>
+                        <button onClick={()=>window.open(`https://wa.me/?text=${encodeURIComponent(msgText)}`,"_blank")} style={{background:"#25D366",color:"#fff",border:"none",borderRadius:9,padding:"8px 16px",fontSize:12,fontWeight:900,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+                          <span style={{fontSize:15}}>📱</span> Open in WhatsApp
+                        </button>
                       </div>
                     </div>
                   </div>
