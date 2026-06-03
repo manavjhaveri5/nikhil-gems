@@ -127,6 +127,11 @@ deploy_body = {
     "functions": functions_config,
     "routes": [
         {"src": "/api/(.*)", "dest": "/api/$1"},   # API functions
+        {"src": "/sw.js", "dest": "/api/sw.js"},
+        {"src": "/manifest.json", "dest": "/api/manifest.js"},
+        {"src": "/icon-192.png", "dest": "/icon-192.png"},
+        {"src": "/icon-512.png", "dest": "/icon-512.png"},
+        {"src": "/assets/(.*)", "dest": "/assets/$1"},
         {"handle": "filesystem"},
         {"src": "/(.*)", "dest": "/index.html"}    # SPA fallback
     ],

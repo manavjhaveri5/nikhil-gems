@@ -9,6 +9,9 @@ import { warmCache, DEMO_MODE, syncOfflineQueue, getOfflineQueueCount } from "./
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { err: null }; }
   static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch() {
+    try { localStorage.removeItem("ng-last-mod"); } catch {}
+  }
   render() {
     if (!this.state.err) return this.props.children;
     return (
@@ -16,7 +19,7 @@ class ErrorBoundary extends Component {
         <div style={{fontSize:32}}>⚠️</div>
         <div style={{fontSize:17,fontWeight:600,color:"#1a1208"}}>Something went wrong</div>
         <div style={{fontSize:13,color:"#7a6a4a",maxWidth:280}}>{this.state.err?.message||"An unexpected error occurred."}</div>
-        <button onClick={()=>window.location.reload()} style={{marginTop:8,padding:"10px 28px",background:"#c48208",color:"#fff",border:"none",borderRadius:10,fontSize:15,fontWeight:600,cursor:"pointer"}}>
+        <button onClick={()=>{try{localStorage.removeItem("ng-last-mod");}catch{} window.location.reload();}} style={{marginTop:8,padding:"10px 28px",background:"#c48208",color:"#fff",border:"none",borderRadius:10,fontSize:15,fontWeight:600,cursor:"pointer"}}>
           Reload
         </button>
       </div>
@@ -26,7 +29,20 @@ class ErrorBoundary extends Component {
 
 // ── Service Worker registration ───────────────────────────────────────────────
 if ("serviceWorker" in navigator && !DEMO_MODE) {
-  navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  navigator.serviceWorker.register("/sw.js", { scope: "/" }).then(reg => {
+    reg.update().catch(() => {});
+    setInterval(() => reg.update().catch(() => {}), 60 * 1000);
+    if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+    reg.addEventListener("updatefound", () => {
+      const worker = reg.installing;
+      if (!worker) return;
+      worker.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) {
+          worker.postMessage({ type: "SKIP_WAITING" });
+        }
+      });
+    });
+  }).catch(() => {});
 }
 
 function App() {

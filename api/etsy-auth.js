@@ -9,7 +9,7 @@
  *   GET /api/etsy-auth?action=start   → redirect to Etsy
  *   GET /api/etsy-auth?code=xxx       → exchange code → store token in env hint + show it
  *
- * Scopes: transactions_r listings_r listings_w shops_r
+ * Scopes: transactions_r transactions_w listings_r listings_w shops_r
  */
 
 import crypto from "crypto";
@@ -20,7 +20,7 @@ const REDIRECT_URI = process.env.ETSY_REDIRECT_URI   || "";
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL   || "";
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
 
-const SCOPES = "transactions_r listings_r listings_w listings_d shops_r";
+const SCOPES = "transactions_r transactions_w listings_r listings_w listings_d shops_r";
 
 // ── PKCE helpers ─────────────────────────────────────────────────────────────
 const b64u = buf => buf.toString("base64").replace(/\+/g,"-").replace(/\//g,"_").replace(/=/g,"");

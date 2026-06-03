@@ -9,3 +9,6 @@ dist-demo
 blob-url-map.json
 .claude/
 bot/
+export-recon-full-with-files-*.json
+export-recon-recovery-audit.csv
+export-recon-verification-report.csv

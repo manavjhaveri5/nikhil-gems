@@ -174,6 +174,42 @@ export default async function handler(req, res) {
       return res.json(data);
     }
 
+    // ── complete_order / add_tracking: mark receipt shipped with tracking ───
+    if (action === "complete_order" || action === "add_tracking" || action === "submit_tracking") {
+      if (req.method !== "POST") return res.status(405).json({ error: "POST required" });
+      if (!token) return res.status(401).json({
+        error: "OAuth token required to update Etsy orders.",
+        fix: "Reconnect Etsy so the app can request transactions_w."
+      });
+      const body = req.body || {};
+      const targetReceiptId = body.receipt_id || body.receiptId || receipt_id;
+      if (!targetReceiptId) return res.status(400).json({ error: "receipt_id required" });
+      const trackingCode = String(body.tracking_code || body.trackingCode || body.tracking || "").trim();
+      const carrierName = String(body.carrier_name || body.carrierName || body.carrier || "other").trim() || "other";
+      const payload = {};
+      if (trackingCode) payload.tracking_code = trackingCode;
+      if (carrierName) payload.carrier_name = carrierName;
+      if (body.note_to_buyer || body.noteToBuyer) payload.note_to_buyer = body.note_to_buyer || body.noteToBuyer;
+      if (body.send_bcc !== undefined) payload.send_bcc = !!body.send_bcc;
+      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${targetReceiptId}/tracking`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const { data } = await readJsonish(r);
+      if (!r.ok) {
+        const msg = etsyMessage(data);
+        return res.status(r.status).json({
+          error: msg,
+          details: data,
+          fix: /scope|permission|forbidden|transactions_w/i.test(String(msg))
+            ? "Reconnect Etsy from the Etsy manager so the new transactions_w permission is granted."
+            : undefined,
+        });
+      }
+      return res.json({ ok: true, receipt: data, tracking_code: trackingCode, carrier_name: carrierName });
+    }
+
     // ── discounts: active shop sales / discounts ─────────────────────────────
     if (action === "discounts") {
       if (!token) return res.status(401).json({ error: "OAuth token required" });
@@ -498,7 +534,7 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }

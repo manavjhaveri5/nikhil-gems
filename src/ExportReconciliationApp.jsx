@@ -527,22 +527,51 @@ export default function App({ company = "atyahara" }) {
   const clearedCount  = data.shippingBills.filter(sb=>sb.status==="cleared").length;
   const rejectedCount = data.shippingBills.filter(sb=>sb.status==="rejected").length;
 
+  const navButtons=NAV.map(n=>(
+    <button key={n.key} className={mob?`er-tab${view===n.key?" active":""}`:`nav-item${view===n.key?" active":""}`} onClick={()=>setView(n.key)}>
+      <span style={{fontSize:mob?14:15,width:mob?"auto":20,textAlign:"center",flexShrink:0}}>{n.icon}</span>
+      <span style={{flex:1}}>{n.label}</span>
+      {n.badge!=null&&<span style={{background:n.badgeAlert?C.amber:C.ink,color:C.surface,fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:20,minWidth:20,textAlign:"center"}}>{n.badge}</span>}
+    </button>
+  ));
+
   return (
-    <div className="er-app" style={{minWidth:0}}>
+    <div className="er-app" style={S.root}>
       <style>{CSS}</style>
 
-      {/* ── Segmented tab bar (sticky under the ERP topbar) ── */}
-      <div style={{position:"sticky",top:0,zIndex:90,background:C.bg,paddingBottom:12,marginBottom:6}}>
-        <div className="er-tabs">
-          {NAV.map(n=>(
-            <button key={n.key} className={`er-tab${view===n.key?" active":""}`} onClick={()=>setView(n.key)}>
-              <span style={{fontSize:14}}>{n.icon}</span>
-              <span>{n.label}</span>
-              {n.badge!=null&&<span style={{background:n.badgeAlert?C.amber:C.ink,color:C.surface,fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:20,minWidth:18,textAlign:"center"}}>{n.badge}</span>}
-            </button>
-          ))}
+      {!mob&&(
+        <div style={S.sidebar}>
+          <div style={S.sideHead}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+              <div style={S.logo}>ER</div>
+              <div>
+                <div style={S.appName}>Export Recon</div>
+                <div style={S.appSub}>FEMA Reconciliation</div>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.inkFaint,lineHeight:1.6,paddingLeft:2}}>
+              {data.shippingBills.filter(sb=>sb.fircId).length}/{data.shippingBills.length} matched
+              {clearedCount>0&&<span style={{color:C.green}}> · {clearedCount} cleared</span>}
+              {rejectedCount>0&&<span style={{color:C.red}}> · {rejectedCount} rejected</span>}
+            </div>
+          </div>
+
+          <div style={S.navSection}>{navButtons}</div>
+
+          <div style={S.sideFooter}>
+            <div style={{fontSize:11,color:pdfErr?C.red:pdfReady?C.green:C.inkFaint,display:"flex",alignItems:"center",gap:6}}>
+              <span>{pdfErr?"●":pdfReady?"●":"○"}</span>
+              <span>{pdfErr?"PDF engine failed":pdfReady?"PDF engine ready":"PDF engine loading…"}</span>
+            </div>
+          </div>
         </div>
-        {/* Compact summary line */}
+      )}
+
+      {mob&&(
+        <div style={{position:"sticky",top:0,zIndex:90,background:C.bg,paddingBottom:12,marginBottom:6}}>
+        <div className="er-tabs">
+          {navButtons}
+        </div>
         <div style={{fontSize:11.5,color:C.inkFaint,marginTop:8,paddingLeft:4,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
           <span>{data.shippingBills.filter(sb=>sb.fircId).length}/{data.shippingBills.length} matched</span>
           {clearedCount>0&&<span style={{color:C.green}}>· {clearedCount} cleared</span>}
@@ -552,6 +581,7 @@ export default function App({ company = "atyahara" }) {
             :!pdfReady&&<span style={{color:C.inkFaint,display:"inline-flex",alignItems:"center",gap:4}}>· <span style={{fontSize:8}}>○</span> PDF engine loading…</span>}
         </div>
       </div>
+      )}
 
       {/* ── Main content ── */}
       <div style={{...S.content, transition:"margin-right .25s var(--ease,ease)", marginRight: docViewer&&!mob ? 500 : 0}}>
@@ -663,7 +693,8 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
         const ex=await aiExtract(b64,"firc");
         const fircNumber=(ex.number||"").trim();
         if (fircNumber) {
-          const existing=data.fircs.find(f=>(f.number||"").trim()===fircNumber);
+          const normFirc = v => String(v||"").trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
+          const existing=data.fircs.find(f=>normFirc(f.number)===normFirc(fircNumber));
           if (existing){upd({status:"skipped",detail:`FIRC ${fircNumber} already uploaded — skipped`});continue;}
         }
         upd({status:"saving",detail:"saving…"});
@@ -1428,87 +1459,95 @@ function MatchView({ data, fircUsed, onAssign, onAuto, onUndo, onClearPending, o
   const [selId,    setSelId]  = useState(null);
   const [running,  setRunning]= useState(false);
   const matched   = data.shippingBills.filter(sb=>sb.fircId).length;
-  const unmatched = data.shippingBills.filter(sb=>!sb.fircId);
+  const unmatched = data.shippingBills.filter(sb=>!sb.fircId).sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));
   const selFirc   = data.fircs.find(f=>f.id===selId);
   const selRem    = selFirc?(+selFirc.amount||0)-fircUsed(selFirc.id):0;
-  const assigned  = data.shippingBills.filter(sb=>sb.fircId===selId);
+  const assigned  = data.shippingBills.filter(sb=>sb.fircId===selId).sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));
+  const sortedFircs=[...data.fircs].sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));
+  const totalSb=data.shippingBills.length;
+  const matchedPct=totalSb?Math.round(matched/totalSb*100):0;
 
   return (
-    <div style={{maxWidth:900}}>
-      <PH title="Match SBs → FIRCs" sub={`${matched} matched · ${unmatched.length} unmatched`}/>
-      <div className="ri" style={{marginBottom:14}}>
-        <div style={{fontSize:13,fontWeight:600,color:C.ink,marginBottom:4}}>Auto-match</div>
-        <div style={{fontSize:12,color:C.inkMid,marginBottom:10}}>Assigns oldest SBs first — so overdue ones clear before newer ones. Manual assign allows any date — use your judgement.</div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+    <div style={{maxWidth:1080}}>
+      <PH title="Match Payments to Shipping Bills" sub={`${matched} of ${totalSb} SBs matched · ${unmatched.length} still need a FIRC`}/>
+
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginBottom:14,display:"grid",gridTemplateColumns:mob?"1fr":"1.1fr .9fr .9fr",gap:10,alignItems:"stretch"}}>
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,marginBottom:8}}>
+            <div style={{fontSize:11,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Progress</div>
+            <div style={{fontSize:12,fontWeight:800,color:matchedPct===100?C.green:C.amber}}>{matchedPct}%</div>
+          </div>
+          <div style={{height:8,background:C.surface,borderRadius:99,overflow:"hidden",border:`1px solid ${C.border}`}}>
+            <div style={{width:`${matchedPct}%`,height:"100%",background:matchedPct===100?C.green:C.amber,borderRadius:99}}/>
+          </div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:8}}>{matched} matched · {unmatched.length} unmatched</div>
+        </div>
+
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px"}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Next action</div>
           <button className="pr" disabled={running||unmatched.length===0||data.fircs.length===0}
             onClick={async()=>{setRunning(true);await onAuto();setRunning(false);}}
-            style={{...S.btnPrimary,flex:1,display:"flex",alignItems:"center",justifyContent:"center",gap:5,opacity:(running||unmatched.length===0)?0.5:1}}>
-            {running?<><Spin/>Running…</>:`⚡ Auto-match ${unmatched.length} SBs`}
+            style={{...S.btnPrimary,width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:6,opacity:(running||unmatched.length===0||data.fircs.length===0)?0.5:1,padding:"10px 12px"}}>
+            {running?<><Spin/> Matching oldest first…</>:unmatched.length===0?"All SBs matched":"Auto-match oldest SBs"}
           </button>
-          {canUndo&&(
-            <button className="pr" onClick={onUndo}
-              style={{...S.btnGhost,display:"flex",alignItems:"center",gap:5,border:`1.5px solid ${C.gold}`,color:C.amber}}>
-              ↩ Undo
-            </button>
-          )}
+          <div style={{fontSize:11,color:C.inkFaint,marginTop:7,lineHeight:1.35}}>Best first step. It fills each FIRC without crossing the payment amount.</div>
         </div>
-        {matched>0&&(
-          <div style={{display:"flex",gap:8,marginTop:8}}>
-            <button className="pr" onClick={()=>onClearPending()}
-              style={{...S.btnGhost,flex:1,fontSize:12,padding:"7px"}}>
-              Clear pending only
-            </button>
-            <button className="pr" onClick={()=>{if(confirm("Hard reset — clears ALL matches including prepared/submitted/cleared?"))onClearAll();}}
-              style={{...S.btnDanger,flex:1,fontSize:12,padding:"7px"}}>
-              Hard reset all
-            </button>
-          </div>
-        )}
-        {canUndo&&<div style={{fontSize:11,color:C.amber,marginTop:8,background:C.amberBg,borderRadius:6,padding:"5px 9px"}}>⚠ Snapshot saved — tap Undo to revert (prepared/submitted/cleared SBs will stay as-is)</div>}
+
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px"}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Manual mode</div>
+          <div style={{fontSize:18,fontWeight:800,color:selFirc?C.ink:C.inkFaint,lineHeight:1.1}}>{selFirc?selFirc.number:"Choose a FIRC"}</div>
+          <div style={{fontSize:12,color:selFirc?(selRem>=0?C.green:C.red):C.inkFaint,marginTop:5}}>{selFirc?`${fc(selRem)} left to allocate`:"Then assign SBs below"}</div>
+        </div>
       </div>
 
-      {data.fircs.length===0?<Empty icon="₹" text="Add FIRCs first"/>:<>
-        <SecTitle>Select FIRC to assign manually</SecTitle>
-        {[...data.fircs].sort((a,b)=>new Date(a.date)-new Date(b.date)).map(f=>{
+      {canUndo&&(
+        <div style={{display:"flex",gap:8,alignItems:"center",background:C.amberBg,border:`1px solid ${C.goldLight}`,borderRadius:10,padding:"8px 10px",marginBottom:14}}>
+          <div style={{fontSize:12,color:C.amber,flex:1}}>Auto-match snapshot saved. Undo restores the last match run.</div>
+          <button className="pr" onClick={onUndo} style={{...S.btnGhost,fontSize:12,padding:"6px 12px",borderColor:C.gold,color:C.amber}}>Undo</button>
+        </div>
+      )}
+
+      {data.fircs.length===0?<Empty icon="₹" text="Add FIRCs before matching"/>:<>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginTop:2,marginBottom:10}}>
+          <SecTitle>Step 1 · Choose one FIRC</SecTitle>
+          {matched>0&&(
+            <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"flex-end"}}>
+              <button className="pr" onClick={()=>onClearPending()} style={{...S.btnGhost,fontSize:12,padding:"6px 10px"}}>Clear pending matches</button>
+              <button className="pr" onClick={()=>{if(confirm("Hard reset — clears ALL matches including prepared/submitted/cleared?"))onClearAll();}} style={{...S.btnDanger,fontSize:12,padding:"6px 10px"}}>Reset all</button>
+            </div>
+          )}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(2,minmax(0,1fr))",gap:8,marginBottom:selFirc?16:10}}>
+        {sortedFircs.map(f=>{
           const used=fircUsed(f.id), rem=(+f.amount||0)-used;
           const pct=+f.amount?Math.min(100,(used/+f.amount)*100):0;
           const cnt=data.shippingBills.filter(sb=>sb.fircId===f.id).length;
           const active=selId===f.id;
           return (
             <div key={f.id} className="pr" onClick={()=>setSelId(active?null:f.id)} style={{...S.fircPill,...(active?S.fircPillActive:{})}}>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:5,gap:8}}>
                 <b>{f.number||"—"}</b>
-                <span style={{fontSize:11,color:C.inkMid}}>{fd(f.date)} · {cnt} SBs</span>
+                <span style={{fontSize:11,color:active?C.amber:C.inkMid,whiteSpace:"nowrap",fontWeight:active?800:500}}>{active?"Selected":"Choose"}</span>
               </div>
               <div style={{height:5,background:C.card,borderRadius:3,marginBottom:4}}>
                 <div style={{width:`${pct}%`,height:"100%",background:pct>98?C.greenBright:C.gold,borderRadius:3}}/>
               </div>
               <div style={{display:"flex",justifyContent:"space-between",fontSize:11}}>
-                <span style={{color:C.inkMid}}>{fc(used)} used</span>
-                <span style={{color:rem>=0?C.green:C.red,fontWeight:500}}>{fc(rem)} left</span>
+                <span style={{color:C.inkMid}}>{fd(f.date)} · {cnt} SBs</span>
+                <span style={{color:rem>=0?C.green:C.red,fontWeight:700}}>{fc(rem)} left</span>
               </div>
             </div>
           );
         })}
+        </div>
 
-        {selFirc&&<>
-          {assigned.length>0&&<>
-            <SecTitle>Assigned to {selFirc.number} ({assigned.length})</SecTitle>
-            {assigned.map(sb=>(
-              <div key={sb.id} style={S.matchRow}>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:13}}>{sb.sbNumber}</div>
-                  <div style={{fontSize:11,color:C.inkMid}}>{fd(sb.date)} · {fc(sb.amount)}</div>
-                </div>
-                <Btn ghost small onClick={()=>showPdf(`sb:${sb.id}`,sb.sbNumber)}>View</Btn>
-                <button className="pr" onClick={()=>onAssign(sb.id,null)} style={S.btnDel}>✕</button>
-              </div>
-            ))}
-          </>}
+        {!selFirc&&<Tip yellow>Choose a FIRC above to open the assignment list.</Tip>}
 
-          {unmatched.length>0&&<>
-            <SecTitle>Unmatched SBs — tap Assign</SecTitle>
-            {unmatched.map(sb=>{
+        {selFirc&&(
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) minmax(0,1fr)",gap:14,alignItems:"start"}}>
+            <div>
+              <SecTitle>Step 2 · Assign unmatched SBs</SecTitle>
+              {unmatched.length===0?<Tip green>All shipping bills are matched.</Tip>:unmatched.map(sb=>{
               const fits=(+sb.amount||0)<=selRem;
               const dateWarn=sb.date&&selFirc.date&&new Date(sb.date)>new Date(selFirc.date);
               return (
@@ -1524,10 +1563,26 @@ function MatchView({ data, fircUsed, onAssign, onAuto, onUndo, onClearPending, o
                     style={{...S.btnPrimary,padding:"5px 12px",fontSize:12,opacity:fits?1:0.4}}>Assign</button>
                 </div>
               );
-            })}
-          </>}
-          {unmatched.length===0&&assigned.length>0&&<Tip green>All SBs assigned to this FIRC ✓</Tip>}
-        </>}
+              })}
+            </div>
+
+            <div>
+              <SecTitle>Step 3 · Review this FIRC</SecTitle>
+              {assigned.length===0?<Tip>Nothing assigned to {selFirc.number} yet.</Tip>:assigned.map(sb=>(
+                <div key={sb.id} style={S.matchRow}>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600,fontSize:13}}>{sb.sbNumber}</div>
+                    <div style={{fontSize:11,color:C.inkMid}}>{fd(sb.date)} · {fc(sb.amount)}</div>
+                  </div>
+                  <Btn ghost small onClick={()=>showPdf(`sb:${sb.id}`,sb.sbNumber)}>View</Btn>
+                  <button className="pr" onClick={()=>onAssign(sb.id,null)} style={S.btnDel}>Remove</button>
+                </div>
+              ))}
+              {assigned.length>0&&selRem>=0&&<Tip green>{fc(selRem)} still available on this FIRC.</Tip>}
+              {assigned.length>0&&selRem<0&&<Tip red>This FIRC is over-allocated by {fc(Math.abs(selRem))}.</Tip>}
+            </div>
+          </div>
+        )}
       </>}
     </div>
   );
@@ -1958,7 +2013,7 @@ Analyse for: 1) FIRC date gaps >3 weeks suggesting missed Payoneer payment 2) SB
           style={{...S.btnPrimary,width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:6,padding:"12px",opacity:loading?0.7:1}}>
           {loading?<><Spin/> Analysing your data…</>:"⚡ Run AI Analysis"}
         </button>
-        {loading&&<div style={{fontSize:11,color:C.surface,opacity:.5,textAlign:"center",marginTop:6}}>Sending {data.fircs.length} FIRCs + {data.shippingBills.length} SBs to Claude…</div>}
+        {loading&&<div style={{fontSize:11,color:C.surface,opacity:.5,textAlign:"center",marginTop:6}}>Sending {data.fircs.length} FIRCs + {data.shippingBills.length} SBs to OpenAI…</div>}
       </div>
 
       {error&&<Tip red>{error}</Tip>}
@@ -2445,11 +2500,23 @@ const CSS=`
   .er-tab{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:9px;cursor:pointer;border:none;background:transparent;color:var(--c-inkMid);font-size:13px;font-weight:500;white-space:nowrap;flex:0 0 auto;transition:background .18s var(--ease,ease),color .18s var(--ease,ease),box-shadow .18s var(--ease,ease);}
   .er-tab:hover{color:var(--c-ink);}
   .er-tab.active{background:var(--c-surface);color:var(--c-ink);font-weight:600;box-shadow:var(--e-1);}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:9px;cursor:pointer;border:none;background:transparent;width:100%;text-align:left;color:var(--c-inkMid);font-size:13px;font-weight:600;position:relative;transition:background .16s var(--ease,ease),color .16s var(--ease,ease),box-shadow .16s var(--ease,ease);}
+  .nav-item:hover{background:var(--c-card);color:var(--c-ink);}
+  .nav-item.active{background:${C.greenBg};color:var(--c-ink);font-weight:700;box-shadow:var(--e-1);}
+  .nav-item.active::before{content:"";position:absolute;left:0;top:18%;bottom:18%;width:3px;background:${C.gold};border-radius:0 3px 3px 0;}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
   .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
 `;
 const S={
-  content:    {minWidth:0},
+  root:       {display:"flex",alignItems:"flex-start",gap:24,minWidth:0,width:"100%"},
+  sidebar:    {width:235,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,display:"flex",flexDirection:"column",flexShrink:0,minHeight:"calc(100dvh - 118px)",maxHeight:"calc(100dvh - 118px)",position:"sticky",top:12,overflow:"hidden",boxShadow:"var(--e-1)"},
+  sideHead:   {padding:"18px 16px 12px",borderBottom:`1px solid ${C.border}`},
+  logo:       {width:38,height:38,background:C.ink,borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:FONT,fontWeight:800,color:C.gold,fontSize:13,flexShrink:0,letterSpacing:"-.02em"},
+  appName:    {fontFamily:FONT,color:C.ink,fontWeight:800,fontSize:17,lineHeight:1.05,letterSpacing:"-.02em"},
+  appSub:     {color:C.inkFaint,fontSize:11,marginTop:3},
+  navSection: {flex:1,padding:"10px 8px",overflowY:"auto",display:"flex",flexDirection:"column",gap:4},
+  sideFooter: {padding:"12px 16px",borderTop:`1px solid ${C.border}`,background:C.card},
+  content:    {flex:1,minWidth:0,transition:"margin-right .25s var(--ease,ease)"},
   btnPrimary: {background:C.gold,color:"#fff",border:"none",borderRadius:9,padding:"8px 18px",fontSize:13,fontWeight:600,cursor:"pointer"},
   btnGhost:   {background:C.fill||"rgba(118,118,128,.10)",color:C.ink,border:`1px solid ${C.border}`,borderRadius:9,padding:"7px 14px",fontSize:13,fontWeight:500,cursor:"pointer"},
   btnDark:    {background:C.ink,color:C.surface,border:"none",borderRadius:9,padding:"9px 18px",fontSize:13,fontWeight:600,cursor:"pointer"},

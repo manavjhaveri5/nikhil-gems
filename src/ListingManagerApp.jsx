@@ -1585,6 +1585,7 @@ function OrdersView({ orders, listings = [] }) {
   const [copied, setCopied] = useState("");
   const [shipGlobalState, setShipGlobalState] = useState({});
   const [shipGlobalConfig, setShipGlobalConfig] = useState(null);
+  const [etsyTracking, setEtsyTracking] = useState({});
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   const money = (amount, currency = "INR") => {
@@ -1609,6 +1610,65 @@ function OrdersView({ orders, listings = [] }) {
       setTimeout(() => setCopied(""), 1800);
     } catch {
       setCopied("");
+    }
+  };
+  const isEtsyOrder = o => o.platform === "etsy" || !!o.etsy_receipt_id || String(o.order_number || "").startsWith("ETSY-");
+  const etsyReceiptId = o => o.etsy_receipt_id || o.platform_order_id || String(o.order_number || "").replace(/^ETSY-/, "").split("-")[0];
+  const etsyHeaders = () => {
+    try {
+      const sess = JSON.parse(localStorage.getItem("etsy-session") || "{}");
+      return sess.access_token ? { "X-Etsy-Token": sess.access_token } : {};
+    } catch { return {}; }
+  };
+  const trackingDraft = o => etsyTracking[o.id] || {
+    tracking_code: o.tracking_code || o.tracking_number || "",
+    carrier_name: o.carrier_name || o.shipping_carrier || "other",
+    loading: false,
+    error: "",
+    success: "",
+  };
+  const updateTrackingDraft = (o, patch) => {
+    setEtsyTracking(s => ({ ...s, [o.id]: { ...trackingDraft(o), ...patch } }));
+  };
+  const completeEtsyOrder = async o => {
+    const receiptId = etsyReceiptId(o);
+    const draft = trackingDraft(o);
+    const trackingCode = String(draft.tracking_code || "").trim();
+    const carrierName = String(draft.carrier_name || "other").trim() || "other";
+    if (!receiptId) {
+      updateTrackingDraft(o, { error: "Missing Etsy receipt id.", success: "" });
+      return;
+    }
+    if (!trackingCode) {
+      updateTrackingDraft(o, { error: "Add a tracking number first.", success: "" });
+      return;
+    }
+    updateTrackingDraft(o, { loading: true, error: "", success: "" });
+    try {
+      const r = await fetch("/api/etsy?action=add_tracking", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...etsyHeaders() },
+        body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.fix || d.error || "Could not complete Etsy order");
+      const now = new Date().toISOString();
+      const current = await loadK(ORDERS_KEY);
+      const sameReceipt = x => isEtsyOrder(x) && String(etsyReceiptId(x)) === String(receiptId);
+      const next = (current || orders || []).map(x => sameReceipt(x) ? {
+        ...x,
+        status: "shipped",
+        shipped_at: x.shipped_at || now,
+        tracking_code: trackingCode,
+        tracking_number: trackingCode,
+        carrier_name: carrierName,
+        etsy_completed_at: now,
+      } : x);
+      await saveK(ORDERS_KEY, next);
+      window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+      updateTrackingDraft(o, { loading: false, error: "", success: "Completed on Etsy", tracking_code: trackingCode, carrier_name: carrierName });
+    } catch (e) {
+      updateTrackingDraft(o, { loading: false, error: e.message || "Could not complete Etsy order", success: "" });
     }
   };
   const shipGlobalDraft = o => {
@@ -1994,6 +2054,55 @@ function OrdersView({ orders, listings = [] }) {
                         </div>
                       )}
                     </div>
+                    {isEtsyOrder(order) && (
+                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: shipped ? 0 : 10 }}>
+                          <div>
+                            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: "#F56400", marginBottom: 3 }}>Etsy Fulfillment</div>
+                            <div style={{ fontSize: 12, color: C.inkMid }}>
+                              {shipped
+                                ? `Completed${order.tracking_code || order.tracking_number ? ` · ${order.tracking_code || order.tracking_number}` : ""}`
+                                : "Add tracking here and mark the Etsy order complete."}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700 }}>Receipt #{etsyReceiptId(order)}</div>
+                        </div>
+                        {!shipped && (
+                          <>
+                            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(220px,1fr) 160px auto", gap: 8, alignItems: "center" }}>
+                              <input
+                                value={trackingDraft(order).tracking_code}
+                                onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })}
+                                placeholder="Tracking number"
+                                style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8 }}
+                              />
+                              <input
+                                value={trackingDraft(order).carrier_name}
+                                onChange={e => updateTrackingDraft(order, { carrier_name: e.target.value })}
+                                placeholder="Carrier, e.g. DHL"
+                                style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8 }}
+                              />
+                              <button
+                                onClick={() => completeEtsyOrder(order)}
+                                disabled={!!trackingDraft(order).loading}
+                                style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: trackingDraft(order).loading ? "wait" : "pointer", opacity: trackingDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
+                                {trackingDraft(order).loading ? "Completing..." : "Add Tracking + Complete"}
+                              </button>
+                            </div>
+                            {trackingDraft(order).error && (
+                              <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
+                                {trackingDraft(order).error}
+                              </div>
+                            )}
+                            {trackingDraft(order).success && (
+                              <div style={{ marginTop: 8, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 8, padding: "7px 9px" }}>
+                                {trackingDraft(order).success}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
                       {[
                         ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
@@ -2057,6 +2166,7 @@ function EtsyLiveView() {
   const [error,     setError]     = useState(null);
   const [search,    setSearch]    = useState("");
   const [expanded,  setExpanded]  = useState(null);
+  const [etsyFulfill, setEtsyFulfill] = useState({});
 
   const [listingErr,   setListingErr]   = useState(null);
   const [stFilter,     setStFilter]     = useState("active");
@@ -2102,6 +2212,8 @@ function EtsyLiveView() {
     return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
   };
   const etsyBuyerEmail = o => o.buyer_email || o.email || o.customer_email || o.customer?.email || o.buyer?.email || "";
+  const receiptTrackingCode = o => o.tracking_code || o.tracking_number || o.shipments?.[0]?.tracking_code || o.shipments?.[0]?.tracking_number || "";
+  const receiptCarrierName = o => o.carrier_name || o.shipping_carrier || o.shipments?.[0]?.carrier_name || o.shipments?.[0]?.carrier || "other";
 
   const etsyListingImage = listing => {
     const imgs = listing?.images || listing?.Images || [];
@@ -2159,6 +2271,10 @@ function EtsyLiveView() {
           ship_country:      o.country_iso || "",
           ship_phone:        o.phone || o.formatted_phone || "",
           status:            o.is_shipped ? "shipped" : "sold",
+          tracking_code:     receiptTrackingCode(o),
+          tracking_number:   receiptTrackingCode(o),
+          carrier_name:      receiptCarrierName(o),
+          shipped_at:        o.is_shipped ? new Date().toISOString() : "",
           date:              etsyOrderDate(o),
           notes:             o.message_from_buyer || "",
           created_at:        new Date((o.create_timestamp || o.creation_tsz || Date.now() / 1000) * 1000).toISOString(),
@@ -2369,6 +2485,51 @@ function EtsyLiveView() {
     const tok = await getToken();
     const hdr = { "Content-Type": "application/json", ...(tok ? { "X-Etsy-Token": tok } : {}) };
     return fetch(url, { method: "POST", headers: hdr, body: JSON.stringify(body) });
+  };
+
+  const fulfillDraft = o => etsyFulfill[o.receipt_id] || {
+    tracking_code: receiptTrackingCode(o),
+    carrier_name: receiptCarrierName(o),
+    loading: false,
+    error: "",
+  };
+  const updateFulfillDraft = (o, patch) => {
+    setEtsyFulfill(s => ({ ...s, [o.receipt_id]: { ...fulfillDraft(o), ...patch } }));
+  };
+  const completeLiveEtsyOrder = async o => {
+    const draft = fulfillDraft(o);
+    const trackingCode = String(draft.tracking_code || "").trim();
+    const carrierName = String(draft.carrier_name || "other").trim() || "other";
+    if (!trackingCode) {
+      updateFulfillDraft(o, { error: "Add a tracking number first." });
+      return;
+    }
+    updateFulfillDraft(o, { loading: true, error: "" });
+    try {
+      const r = await etsyPost("/api/etsy?action=add_tracking", {
+        receipt_id: o.receipt_id,
+        tracking_code: trackingCode,
+        carrier_name: carrierName,
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.fix || d.error || "Could not complete Etsy order");
+      const next = orders.map(x => String(x.receipt_id) === String(o.receipt_id) ? {
+        ...x,
+        is_shipped: true,
+        status: "completed",
+        tracking_code: trackingCode,
+        tracking_number: trackingCode,
+        carrier_name: carrierName,
+        shipped_at: new Date().toISOString(),
+      } : x);
+      setOrders(next);
+      saveCache(listings, next);
+      syncOrdersToERP(next, listings).catch(e => console.warn("Etsy order ERP sync failed:", e));
+      updateFulfillDraft(o, { loading: false, error: "", tracking_code: trackingCode, carrier_name: carrierName });
+      showToast("✓ Etsy order completed");
+    } catch (e) {
+      updateFulfillDraft(o, { loading: false, error: e.message || "Could not complete Etsy order" });
+    }
   };
 
   const deleteListingImg = async (imgId) => {
@@ -2820,6 +2981,8 @@ function EtsyLiveView() {
                 const items  = txns.reduce((s,t)=>s+(t.quantity||1),0);
                 const isDone = o.is_shipped || DONE_STATUSES.includes(o.status);
                 const sc     = isDone ? C.green : C.amber;
+                const liveTrack = receiptTrackingCode(o);
+                const liveDraft = fulfillDraft(o);
                 // Hero image + title — match the global Orders row format so photos
                 // are visible on the collapsed row, not only after expanding.
                 const firstTxn   = txns[0];
@@ -2908,6 +3071,41 @@ function EtsyLiveView() {
                                 </div>
                               : <div style={{fontSize:12,color:C.inkFaint}}>No address available</div>}
                           </div>
+                        </div>
+
+                        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px"}}>
+                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:isDone?0:10}}>
+                            <div>
+                              <div style={{fontSize:10,fontWeight:800,textTransform:"uppercase",letterSpacing:.7,color:"#F56400",marginBottom:3}}>Complete Etsy Order</div>
+                              <div style={{fontSize:12,color:C.inkMid}}>
+                                {isDone ? `Completed${liveTrack ? ` · ${liveTrack}` : ""}` : "Enter tracking and this will mark the Etsy order complete."}
+                              </div>
+                            </div>
+                            <div style={{fontSize:11,color:C.inkFaint,fontWeight:700}}>Receipt #{o.receipt_id}</div>
+                          </div>
+                          {!isDone && (
+                            <>
+                              <div style={{display:"grid",gridTemplateColumns:mob()?"1fr":"minmax(220px,1fr) 160px auto",gap:8,alignItems:"center"}}>
+                                <input value={liveDraft.tracking_code}
+                                  onChange={e=>updateFulfillDraft(o,{tracking_code:e.target.value})}
+                                  placeholder="Tracking number"
+                                  style={{...FI(),fontSize:12,padding:"8px 10px",borderRadius:8}}/>
+                                <input value={liveDraft.carrier_name}
+                                  onChange={e=>updateFulfillDraft(o,{carrier_name:e.target.value})}
+                                  placeholder="Carrier, e.g. DHL"
+                                  style={{...FI(),fontSize:12,padding:"8px 10px",borderRadius:8}}/>
+                                <button onClick={()=>completeLiveEtsyOrder(o)} disabled={!!liveDraft.loading}
+                                  style={{background:"#F56400",color:"#fff",border:"none",borderRadius:8,padding:"8px 13px",fontSize:12,fontWeight:850,cursor:liveDraft.loading?"wait":"pointer",opacity:liveDraft.loading ? .7 : 1,whiteSpace:"nowrap"}}>
+                                  {liveDraft.loading ? "Completing..." : "Add Tracking + Complete"}
+                                </button>
+                              </div>
+                              {liveDraft.error && (
+                                <div style={{marginTop:8,fontSize:12,color:C.red,background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:8,padding:"7px 9px"}}>
+                                  {liveDraft.error}
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
 
                         {/* totals row + buyer message */}
