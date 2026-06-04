@@ -10263,8 +10263,6 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [usdInr,setUsdInr]=useState(85);
   const [vendorHistoryRow,setVendorHistoryRow]=useState(null);
   const [stoneSummaryPopup,setStoneSummaryPopup]=useState(null);
-  const [planSummaryOpen,setPlanSummaryOpen]=useState(false);
-  const [planSummaryVendor,setPlanSummaryVendor]=useState("all");
   const [vendorComparePopup,setVendorComparePopup]=useState(null);
   const [planVendorFilter,setPlanVendorFilter]=useState("all");
   const [sheetStones,setSheetStones]=useState([]);
@@ -10433,41 +10431,6 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     return next;
   }));
   const removeVendorQuote=(stoneKey,id)=>saveVendorQuotesForStone(stoneKey,vendorQuotesForStone(stoneKey).filter(q=>q.id!==id));
-  const printBuyingPlanSummary=({title,vendor,qtyLabel,totals,margin,stoneRows,summaryRows})=>{
-    const esc=v=>String(v??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
-    const rowHtml=stoneRows.map(([stoneKey,st])=>{
-      const rows=summaryRows.filter(r=>normPlanText(r.stone)===stoneKey);
-      const vendors=[...new Set(rows.map(r=>r.vendor).filter(Boolean))];
-      const shapes=[...st.shapes].filter(Boolean);
-      const otherTotals=Object.entries(st.other).filter(([,v])=>v>0);
-      const q=[st.kg>0?`${fmtAmtIN(st.kg)} kg`:"",...otherTotals.map(([u,v])=>`${fmtAmtIN(v)} ${u}`)].filter(Boolean).join(" + ")||"Qty open";
-      const stMargin=st.sp>0&&st.cp>0?((st.sp-st.cp)/st.sp)*100:null;
-      return`<tr><td>${esc(st.name)}</td><td>${esc(q)}</td><td>₹${esc(fmtAmtIN(st.cp)||"0")}</td><td>₹${esc(fmtAmtIN(st.sp)||"0")}</td><td>$${esc(fmtAmtIN(st.spUsd)||"0")}</td><td>${esc(stMargin==null?"—":`${stMargin.toFixed(1)}%`)}</td><td>${st.lines}</td><td>${esc(shapes.join(" / ")||"No shape")} · ${esc(vendors.join(" / ")||"No vendor")}</td></tr>`;
-    }).join("");
-    const html=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)} Buying Plan</title><style>
-      *{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:28px;color:#1a1308;background:#fff}
-      .top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:20px}.eyebrow{font-size:10px;color:#756955;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.title{font-size:28px;font-weight:800;line-height:1.05}.sub{font-size:12px;color:#756955;margin-top:6px}
-      .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:18px}.card{border:1px solid #ded5c7;border-radius:10px;padding:10px;background:#faf7f2}.lbl{font-size:9px;color:#857865;text-transform:uppercase;letter-spacing:.07em;font-weight:800}.val{font-size:16px;font-weight:850;margin-top:4px}.green{color:#0f6b42}.blue{color:#123f86}.red{color:#9f1d1d}
-      table{width:100%;border-collapse:collapse;border:1px solid #ded5c7;border-radius:10px;overflow:hidden}th{background:#faf7f2;text-align:left;font-size:9px;color:#756955;text-transform:uppercase;letter-spacing:.06em;padding:8px 9px;border-bottom:1px solid #ded5c7}td{font-size:12px;padding:8px 9px;border-bottom:1px solid #e8dfd2;vertical-align:top}tr:last-child td{border-bottom:0}td:first-child{font-weight:850;color:#0f6b42}
-      .btn{background:#0f6b42;color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:800;cursor:pointer}@media print{.btn{display:none}body{padding:18px}.cards{grid-template-columns:repeat(5,1fr)}}
-    </style></head><body>
-      <div class="top"><div><div class="eyebrow">Buying Plan Summary</div><div class="title">${esc(title)}</div><div class="sub">${esc(vendor==="all"?"All vendors":vendor)} · ${summaryRows.length} lines · printed ${new Date().toLocaleString("en-IN")}</div></div><button class="btn" onclick="window.print()">Print</button></div>
-      <div class="cards">
-        <div class="card"><div class="lbl">Qty</div><div class="val">${esc(qtyLabel)}</div></div>
-        <div class="card"><div class="lbl">Total CP</div><div class="val">₹${esc(fmtAmtIN(totals.cp)||"0")}</div></div>
-        <div class="card"><div class="lbl">SP INR</div><div class="val green">₹${esc(fmtAmtIN(totals.sp)||"0")}</div></div>
-        <div class="card"><div class="lbl">SP USD</div><div class="val blue">$${esc(fmtAmtIN(totals.usd)||"0")}</div></div>
-        <div class="card"><div class="lbl">Margin</div><div class="val green">${esc(margin==null?"—":`${margin.toFixed(1)}%`)}</div></div>
-      </div>
-      <table><thead><tr><th>Stone</th><th>Qty</th><th>CP</th><th>SP INR</th><th>SP USD</th><th>Margin</th><th>Lines</th><th>Shapes / vendors</th></tr></thead><tbody>${rowHtml}</tbody></table>
-    </body></html>`;
-    const w=window.open("","_blank");
-    if(!w){alert("Couldn't open the print window — please allow pop-ups for this site and try again.");return;}
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    setTimeout(()=>w.print(),500);
-  };
   const makeBuyingLine=(seed={})=>{
     const basis=findCostBasis(seed.stone,seed.shape);
     const shapeNote=seed.notes||shapeNoteFor(seed.shape);
@@ -10976,6 +10939,47 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 // Seed the new row so it satisfies any active filters — otherwise a blank
                 // row would be hidden by the filter and look like "nothing happened".
                 const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStones.length?(stoneMap.get(sheetStones[0])||""):"",shape:sheetShapes.length?(shapeMap.get(sheetShapes[0])||""):""});
+                // Print the exact rows currently shown (after filters + sort) as an A4 PDF.
+                const printSheet=()=>{
+                  const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+                  const fbits=[
+                    sheetStones.length?`${sheetStones.map(k=>stoneMap.get(k)||k).join(", ")}`:"",
+                    sheetShapes.length?`${sheetShapes.map(k=>shapeMap.get(k)||k).join(", ")}`:"",
+                    planVendorFilter!=="all"?planVendorFilter:"",
+                  ].filter(Boolean).join("  ·  ")||"All stones · All shapes · All vendors";
+                  const body=rows.map(r=>{
+                    const cp=+r.costPerKg||0,sp=+r.targetSellPrice||0;
+                    const m=sp>0&&cp>0?((sp-cp)/sp)*100:null;
+                    const su=r.targetSellPriceUsd||usdFromInr(r.targetSellPrice);
+                    const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");
+                    return`<tr><td class=b>${esc(r.stone)||"—"}</td><td>${esc(r.shape)||"—"}</td><td>${esc(r.vendor)||"—"}</td><td class=r>${esc(r.qty)||"0"}</td><td>${esc(u)}</td><td class=r>${esc(fmtAmtIN(r.costPerKg))||"0"}</td><td class=r>${esc(fmtAmtIN(r.targetSellPrice))||"0"}</td><td class=r>${esc(fmtAmtIN(su))||"0"}</td><td class="r g">${m==null?"—":m.toFixed(0)+"%"}</td><td>${lineOrdered(r)?esc(r.poNumber):"—"}</td></tr>`;
+                  }).join("");
+                  const html=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(show.name)} — Buying Plan</title><style>
+                    @page{size:A4 landscape;margin:10mm}
+                    *{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:0;color:#1a1308;background:#fff}
+                    .hd{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px}
+                    .eyebrow{font-size:9px;color:#0f6b42;text-transform:uppercase;letter-spacing:.08em;font-weight:800}
+                    .title{font-size:20px;font-weight:800;line-height:1.1}.sub{font-size:11px;color:#756955;margin-top:3px}
+                    table{width:100%;border-collapse:collapse}
+                    th{background:#faf7f2;text-align:left;font-size:8.5px;color:#756955;text-transform:uppercase;letter-spacing:.04em;padding:6px 7px;border-bottom:1.5px solid #d8cdb8}
+                    td{font-size:10.5px;padding:5px 7px;border-bottom:1px solid #ece3d4}
+                    td.b{font-weight:700}td.r,th.r{text-align:right}td.g{color:#0f6b42;font-weight:700}
+                    tfoot td{border-top:1.5px solid #d8cdb8;font-weight:800;background:#faf7f2}
+                    .btn{position:fixed;top:8px;right:8px;background:#0f6b42;color:#fff;border:0;border-radius:7px;padding:8px 14px;font-size:12px;font-weight:800;cursor:pointer}
+                    @media print{.btn{display:none}}
+                  </style></head><body>
+                    <button class="btn" onclick="window.print()">Print / Save PDF</button>
+                    <div class="hd"><div><div class="eyebrow">Buying Plan</div><div class="title">${esc(show.name)}</div><div class="sub">${esc(fbits)} · ${rows.length} line${rows.length===1?"":"s"} · ${esc(new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}))}</div></div></div>
+                    <table>
+                      <thead><tr><th>Stone</th><th>Shape</th><th>Vendor</th><th class=r>Qty</th><th>Unit</th><th class=r>CP ₹</th><th class=r>SP ₹</th><th class=r>SP $</th><th class=r>Margin</th><th>PO</th></tr></thead>
+                      <tbody>${body||'<tr><td colspan=10 style="text-align:center;color:#999;padding:20px">No rows</td></tr>'}</tbody>
+                      <tfoot><tr><td colspan=5>Total · ${rows.length} lines</td><td class=r>₹${esc(fmtAmtIN(Math.round(tCp)))||"0"}</td><td class=r>₹${esc(fmtAmtIN(Math.round(tSp)))||"0"}</td><td class=r>$${esc(fmtAmtIN(Math.round(tUsd)))||"0"}</td><td></td><td></td></tr></tfoot>
+                    </table>
+                  </body></html>`;
+                  const w=window.open("","_blank");
+                  if(!w){alert("Couldn't open the print window — please allow pop-ups for this site.");return;}
+                  w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),400);
+                };
                 return(
                 <div>
                   {/* Filters + actions */}
@@ -10989,6 +10993,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     </select>
                     {anyFilter&&<button onClick={()=>{setSheetStones([]);setSheetShapes([]);setPlanVendorFilter("all");}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,color:C.inkMid,cursor:"pointer"}}>Clear</button>}
                     <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{rows.length} row{rows.length===1?"":"s"}</span>
+                    <button onClick={printSheet} title="Print this view as a PDF (A4)" style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:800,color:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>🖨 Print</button>
                     <button onClick={addRow} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:900,cursor:"pointer"}}>+ Add row</button>
                   </div>
                   {/* Spreadsheet */}
@@ -11202,13 +11207,6 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   </div>
                 </div>
               )}
-              {!planSummaryOpen&&(
-                <button onClick={e=>{e.stopPropagation();setPlanSummaryOpen(true);}}
-                  style={{position:"fixed",right:mob?14:24,bottom:mob?92:78,zIndex:76,background:C.green,color:"#fff",border:"none",borderRadius:999,boxShadow:"0 12px 30px rgba(14,91,54,.26)",padding:"10px 15px",fontSize:12,fontWeight:900,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontSize:14,lineHeight:1}}>Σ</span>
-                  Plan Summary
-                </button>
-              )}
               <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
                 <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
                   <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{viewBuyingPlan.length} lines · {planOpen} open{planVendorFilter!=="all"?` · ${planVendorFilter}`:""}</div>
@@ -11216,120 +11214,6 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Line</button>
                 </div>
               </div>
-              {planSummaryOpen&&(()=>{
-                const vendorOptions=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
-                const summaryRows=planSummaryVendor==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planSummaryVendor);
-                const filteredStoneTotals=summaryRows.reduce((m,row)=>{
-                  const key=normPlanText(row.stone);
-                  if(!key)return m;
-                  const name=String(row.stone||"").trim();
-                  const unit=String(row.unit||"kg").toLowerCase();
-                  const bucket=m[key]||{name,kg:0,lines:0,shapes:new Set(),other:{},cp:0,sp:0,spUsd:0};
-                  const costQty=buyingLineCostQty(row);
-                  bucket.lines+=1;
-                  bucket.kg+=buyingLineKg(row);
-                  bucket.cp+=costQty*(+row.costPerKg||0);
-                  bucket.sp+=costQty*(+row.targetSellPrice||0);
-                  bucket.spUsd+=costQty*(+row.targetSellPriceUsd||+(usdFromInr(row.targetSellPrice))||0);
-                  if(row.shape)bucket.shapes.add(String(row.shape).trim());
-                  if(unit!=="kg"&&unit!=="g"&&unit!=="gm"&&(+row.qty||0)>0)bucket.other[unit]=(bucket.other[unit]||0)+(+row.qty||0);
-                  m[key]=bucket;
-                  return m;
-                },{});
-                const stoneRows=Object.entries(filteredStoneTotals).sort((a,b)=>String(a[1].name||"").localeCompare(String(b[1].name||"")));
-                const totals=summaryRows.reduce((m,r)=>{
-                  const costQty=buyingLineCostQty(r);
-                  const unit=String(r.unit||"kg").toLowerCase();
-                  m.lines+=1;
-                  m.open+=lineOrdered(r)?0:1;
-                  m.kg+=buyingLineKg(r);
-                  m.cp+=costQty*(+r.costPerKg||0);
-                  m.sp+=costQty*(+r.targetSellPrice||0);
-                  m.usd+=costQty*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);
-                  if(unit!=="kg"&&unit!=="g"&&unit!=="gm"&&(+r.qty||0)>0)m.other[unit]=(m.other[unit]||0)+(+r.qty||0);
-                  if(r.vendor)m.vendors.add(r.vendor);
-                  if(r.shape)m.shapes.add(r.shape);
-                  return m;
-                },{lines:0,open:0,kg:0,cp:0,sp:0,usd:0,other:{},vendors:new Set(),shapes:new Set()});
-                const inPoCount=summaryRows.filter(lineOrdered).length;
-                const margin=totals.sp>0&&totals.cp>0?((totals.sp-totals.cp)/totals.sp)*100:null;
-                const qtyLabel=[
-                  totals.kg>0?`${fmtAmtIN(totals.kg)} kg`:"",
-                  ...Object.entries(totals.other).filter(([,v])=>v>0).map(([u,v])=>`${fmtAmtIN(v)} ${u}`)
-                ].filter(Boolean).join(" + ")||"Qty open";
-                return(
-                  <div onClick={()=>setPlanSummaryOpen(false)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.24)",zIndex:86,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-                    <div onClick={e=>e.stopPropagation()} style={{width:"min(1100px,calc(100vw - 32px))",maxHeight:"min(760px,calc(100vh - 32px))",overflow:"hidden",background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,boxShadow:"0 24px 80px rgba(17,12,7,.24)"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start",padding:"14px 16px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
-                        <div>
-                          <div style={{fontSize:10,color:C.green,fontWeight:900,textTransform:"uppercase",letterSpacing:.75}}>Buying plan summary</div>
-                          <div style={{fontSize:22,fontWeight:900,color:C.ink,marginTop:2,lineHeight:1.05}}>{show.name}</div>
-                          <div style={{fontSize:11,color:C.inkFaint,marginTop:4}}>{totals.lines} lines · {totals.open} open · {totals.vendors.size} vendors · {totals.shapes.size} shapes</div>
-                        </div>
-                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",justifyContent:"flex-end"}}>
-                          <select value={planSummaryVendor} onChange={e=>setPlanSummaryVendor(e.target.value)} style={{...FI,fontSize:12,padding:"7px 10px",borderRadius:9,minWidth:170,cursor:"pointer"}}>
-                            <option value="all">All vendors</option>
-                            {vendorOptions.map(v=><option key={v} value={v}>{v}</option>)}
-                          </select>
-                          <button onClick={()=>printBuyingPlanSummary({title:show.name,vendor:planSummaryVendor,qtyLabel,totals,margin,stoneRows,summaryRows})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"7px 11px",fontSize:12,fontWeight:850,color:C.ink,cursor:"pointer",whiteSpace:"nowrap"}}>
-                            Print
-                          </button>
-                          <button onClick={()=>setPlanSummaryOpen(false)} aria-label="Close buying plan summary" style={{width:30,height:30,border:`1px solid ${C.border}`,borderRadius:8,background:C.surface,cursor:"pointer",fontSize:18,lineHeight:1,color:C.inkMid}}>&times;</button>
-                        </div>
-                      </div>
-                      <div style={{padding:14,overflow:"auto",maxHeight:"calc(min(760px,100vh - 32px) - 78px)"}}>
-                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(6,1fr)",gap:8,marginBottom:12}}>
-                          {[
-                            ["Qty",qtyLabel,C.ink],
-                            ["Total CP",`₹${fmtAmtIN(totals.cp)||"0"}`,C.ink],
-                            ["SP INR",`₹${fmtAmtIN(totals.sp)||"0"}`,C.green],
-                            ["SP USD",`$${fmtAmtIN(totals.usd)||"0"}`,C.blue],
-                            ["Margin",margin==null?"—":`${margin.toFixed(1)}%`,margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red],
-                            ["In PO",inPoCount,C.green],
-                          ].map(([label,value,color])=>(
-                            <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 10px"}}>
-                              <div style={{fontSize:9,color:C.inkFaint,fontWeight:900,textTransform:"uppercase",letterSpacing:.55,marginBottom:4}}>{label}</div>
-                              <div style={{fontSize:14,fontWeight:900,color,overflowWrap:"anywhere",lineHeight:1.15}}>{value}</div>
-                            </div>
-                          ))}
-                        </div>
-                        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:11,overflow:"hidden"}}>
-                          {!mob&&(
-                            <div style={{display:"grid",gridTemplateColumns:"1.05fr .9fr .75fr .72fr .72fr .64fr .55fr 1.1fr",gap:8,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.surface}}>
-                              {["Stone","Qty","CP","SP INR","SP USD","Margin","Lines","Shapes / vendors"].map(h=><div key={h} style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase",fontWeight:900,letterSpacing:.45}}>{h}</div>)}
-                            </div>
-                          )}
-                          <div style={{display:"grid",gap:0}}>
-                            {stoneRows.map(([stoneKey,st])=>{
-                              const rows=summaryRows.filter(r=>normPlanText(r.stone)===stoneKey);
-                              const vendors=[...new Set(rows.map(r=>r.vendor).filter(Boolean))];
-                              const shapes=[...st.shapes].filter(Boolean);
-                              const otherTotals=Object.entries(st.other).filter(([,v])=>v>0);
-                              const q=[
-                                st.kg>0?`${fmtAmtIN(st.kg)} kg`:"",
-                                ...otherTotals.map(([u,v])=>`${fmtAmtIN(v)} ${u}`)
-                              ].filter(Boolean).join(" + ")||"Qty open";
-                              const stMargin=st.sp>0&&st.cp>0?((st.sp-st.cp)/st.sp)*100:null;
-                              return(
-                                <button key={stoneKey} onClick={()=>{setPlanSummaryOpen(false);setStoneSummaryPopup({stoneKey,shape:"all"});}} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.05fr .9fr .75fr .72fr .72fr .64fr .55fr 1.1fr",gap:8,alignItems:"center",padding:"9px 10px",border:"none",borderBottom:`1px solid ${C.border}`,background:C.surface,cursor:"pointer",textAlign:"left"}}>
-                                  <div style={{fontSize:12,fontWeight:900,color:C.green,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{st.name}</div>
-                                  <div style={{fontSize:11,color:C.ink,fontWeight:800}}>{q}</div>
-                                  <div style={{fontSize:11,color:C.ink}}>₹{fmtAmtIN(st.cp)||"0"}</div>
-                                  <div style={{fontSize:11,color:C.green,fontWeight:850}}>₹{fmtAmtIN(st.sp)||"0"}</div>
-                                  <div style={{fontSize:11,color:C.blue,fontWeight:850}}>${fmtAmtIN(st.spUsd)||"0"}</div>
-                                  <div style={{fontSize:11,fontWeight:900,color:stMargin==null?C.inkFaint:stMargin>=40?C.green:stMargin>=20?C.amber:C.red}}>{stMargin==null?"—":`${stMargin.toFixed(1)}%`}</div>
-                                  <div style={{fontSize:11,color:C.inkMid}}>{st.lines}</div>
-                                  <div style={{fontSize:10,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:mob?"normal":"nowrap"}}>{shapes.join(" / ")||"No shape"} · {vendors.join(" / ")||"No vendor"}</div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
               {stoneSummaryPopup&&(()=>{
                 const allRows=buyingPlan.filter(r=>normPlanText(r.stone)===stoneSummaryPopup.stoneKey);
                 if(!allRows.length)return null;
