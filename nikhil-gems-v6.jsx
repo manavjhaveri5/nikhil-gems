@@ -10130,6 +10130,57 @@ function ShowsApp({onHome}){
 
 // ShowCard defined OUTSIDE ShowsApp so React sees a stable component type across re-renders
 // (prevents focus-loss on every keystroke in checklist inputs)
+// Checkbox multi-select dropdown for the Buying Plan sheet filters.
+// `selected` is an array of keys; [] means "all". `options` = [{key,label}].
+function SheetMultiSelect({allLabel,options,selected,onChange}){
+  const [open,setOpen]=React.useState(false);
+  const ref=React.useRef(null);
+  React.useEffect(()=>{
+    if(!open)return;
+    const h=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    document.addEventListener("mousedown",h);
+    return ()=>document.removeEventListener("mousedown",h);
+  },[open]);
+  const active=selected.length>0;
+  const text=!active?allLabel:(selected.length===1?(options.find(o=>o.key===selected[0])?.label||"1 selected"):`${selected.length} selected`);
+  const toggle=k=>onChange(selected.includes(k)?selected.filter(x=>x!==k):[...selected,k]);
+  return(
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} style={{background:C.surface,border:`1.5px solid ${active?C.green+"88":C.border}`,color:active?C.green:C.ink,borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:active?900:600,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
+        {text}<span style={{fontSize:8,opacity:.6}}>▾</span>
+      </button>
+      {open&&(
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:60,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 10px 30px rgba(26,19,8,.18)",padding:5,minWidth:190,maxHeight:300,overflowY:"auto"}}>
+          <button onClick={()=>onChange([])} style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:!active?C.greenBg:"transparent",border:"none",borderRadius:7,padding:"7px 9px",fontSize:12,fontWeight:800,color:!active?C.green:C.inkMid,cursor:"pointer"}}>{allLabel}</button>
+          {options.map(o=>{
+            const on=selected.includes(o.key);
+            return(
+              <button key={o.key} onClick={()=>toggle(o.key)} style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:on?C.greenBg:"transparent",border:"none",borderRadius:7,padding:"7px 9px",fontSize:12,fontWeight:on?800:500,color:on?C.green:C.ink,cursor:"pointer"}}>
+                <span style={{width:15,height:15,borderRadius:4,border:`1.5px solid ${on?C.green:C.border}`,background:on?C.green:"transparent",color:"#fff",fontSize:10,lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{on?"✓":""}</span>
+                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{o.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+// Spreadsheet cell that edits a local draft and only commits on blur / Enter.
+// Prevents the row from re-filtering (and vanishing) mid-keystroke when a filter
+// is active on the field being edited.
+function SheetCell({value,onCommit,style,list,placeholder,inputMode}){
+  const [draft,setDraft]=React.useState(value==null?"":value);
+  const focused=React.useRef(false);
+  React.useEffect(()=>{ if(!focused.current) setDraft(value==null?"":value); },[value]);
+  const commit=()=>{ const v=draft==null?"":draft; if(v!==(value==null?"":value)) onCommit(v); };
+  return <input value={draft} list={list} placeholder={placeholder} inputMode={inputMode}
+    onChange={e=>setDraft(e.target.value)}
+    onFocus={()=>{focused.current=true;}}
+    onBlur={()=>{focused.current=false;commit();}}
+    onKeyDown={e=>{if(e.key==="Enter"){commit();e.currentTarget.blur();}}}
+    style={style}/>;
+}
 function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
@@ -10167,8 +10218,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [planSummaryVendor,setPlanSummaryVendor]=useState("all");
   const [vendorComparePopup,setVendorComparePopup]=useState(null);
   const [planVendorFilter,setPlanVendorFilter]=useState("all");
-  const [sheetStone,setSheetStone]=useState("all");
-  const [sheetShape,setSheetShape]=useState("all");
+  const [sheetStones,setSheetStones]=useState([]);
+  const [sheetShapes,setSheetShapes]=useState([]);
   const [sheetSort,setSheetSort]=useState({col:null,dir:"asc"});
   const [sheetHoverRow,setSheetHoverRow]=useState(null);
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
@@ -10804,8 +10855,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 const vendorOpts=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
                 const filtered=groupedBuyingPlan.filter(r=>
                   (planVendorFilter==="all"||r.vendor===planVendorFilter)&&
-                  (sheetStone==="all"||normPlanText(r.stone)===sheetStone)&&
-                  (sheetShape==="all"||normPlanText(r.shape)===sheetShape));
+                  (sheetStones.length===0||sheetStones.includes(normPlanText(r.stone)))&&
+                  (sheetShapes.length===0||sheetShapes.includes(normPlanText(r.shape))));
                 const sortVal={
                   stone:r=>String(r.stone||"").toLowerCase(), shape:r=>String(r.shape||"").toLowerCase(), vendor:r=>String(r.vendor||"").toLowerCase(),
                   qty:r=>+r.qty||0, unit:r=>String(r.unit||"").toLowerCase(), cp:r=>+r.costPerKg||0, sp:r=>+r.targetSellPrice||0,
@@ -10819,7 +10870,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   return sheetSort.dir==="asc"?cmp:-cmp;
                 }):filtered;
                 const toggleSort=key=>setSheetSort(s=>s.col===key?{col:key,dir:s.dir==="asc"?"desc":"asc"}:{col:key,dir:"asc"});
-                const anyFilter=planVendorFilter!=="all"||sheetStone!=="all"||sheetShape!=="all";
+                const anyFilter=planVendorFilter!=="all"||sheetStones.length>0||sheetShapes.length>0;
                 const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
                 const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
                 const tUsd=rows.reduce((s,r)=>s+(+r.qty||0)*(+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0),0);
@@ -10834,25 +10885,19 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     {total!=null&&<div style={{fontSize:10.5,fontWeight:900,marginTop:3,color:totalColor||C.ink,textTransform:"none",letterSpacing:0,textAlign:align||"left"}}>{total}</div>}
                   </th>);
                 };
-                const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStone!=="all"?(stoneMap.get(sheetStone)||""):"",shape:sheetShape!=="all"?(shapeMap.get(sheetShape)||""):""});
+                const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStones.length===1?(stoneMap.get(sheetStones[0])||""):"",shape:sheetShapes.length===1?(shapeMap.get(sheetShapes[0])||""):""});
                 return(
                 <div>
                   {/* Filters + actions */}
                   <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap",marginBottom:9}}>
                     <span style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Filter</span>
-                    <select value={sheetStone} onChange={e=>setSheetStone(e.target.value)} style={{...sel,...(sheetStone!=="all"?{border:`1.5px solid ${C.green}88`,color:C.green,fontWeight:900}:{})}}>
-                      <option value="all">All stones</option>
-                      {[...stoneMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-                    </select>
-                    <select value={sheetShape} onChange={e=>setSheetShape(e.target.value)} style={{...sel,...(sheetShape!=="all"?{border:`1.5px solid ${C.green}88`,color:C.green,fontWeight:900}:{})}}>
-                      <option value="all">All shapes</option>
-                      {[...shapeMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=><option key={k} value={k}>{v}</option>)}
-                    </select>
+                    <SheetMultiSelect allLabel="All stones" selected={sheetStones} onChange={setSheetStones} options={[...stoneMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=>({key:k,label:v}))}/>
+                    <SheetMultiSelect allLabel="All shapes" selected={sheetShapes} onChange={setSheetShapes} options={[...shapeMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=>({key:k,label:v}))}/>
                     <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{...sel,...(planVendorFilter!=="all"?{border:`1.5px solid ${C.green}88`,color:C.green,fontWeight:900}:{})}}>
                       <option value="all">All vendors</option>
                       {vendorOpts.map(v=><option key={v} value={v}>{v}</option>)}
                     </select>
-                    {anyFilter&&<button onClick={()=>{setSheetStone("all");setSheetShape("all");setPlanVendorFilter("all");}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,color:C.inkMid,cursor:"pointer"}}>Clear</button>}
+                    {anyFilter&&<button onClick={()=>{setSheetStones([]);setSheetShapes([]);setPlanVendorFilter("all");}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,color:C.inkMid,cursor:"pointer"}}>Clear</button>}
                     <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{rows.length} row{rows.length===1?"":"s"}</span>
                     <button onClick={addRow} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:900,cursor:"pointer"}}>+ Add row</button>
                   </div>
@@ -10874,23 +10919,23 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           return(
                             <tr key={r.id} onMouseEnter={()=>setSheetHoverRow(r.id)} onMouseLeave={()=>setSheetHoverRow(s=>s===r.id?null:s)}>
                               <td style={{...td,minWidth:130,position:"relative"}}>
-                                <input value={r.stone||""} list={`${planDatalistId}-stones`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{stone:e.target.value})} style={{...ci,fontWeight:700}}/>
+                                <SheetCell value={r.stone||""} list={`${planDatalistId}-stones`} placeholder="—" onCommit={v=>updateBuyingLine(r.id,{stone:v})} style={{...ci,fontWeight:700}}/>
                                 {sheetHoverRow===r.id&&(
                                   <button title="Insert a line below this one" onClick={()=>insertBuyingLineAfter(r.id,{stone:r.stone,shape:r.shape,vendor:r.vendor,unit:r.unit})}
                                     style={{position:"absolute",left:5,bottom:-10,zIndex:6,width:20,height:20,borderRadius:"50%",background:C.green,color:"#fff",border:`2px solid ${C.surface}`,fontSize:14,fontWeight:900,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,boxShadow:"0 1px 5px rgba(26,19,8,.25)"}}>+</button>
                                 )}
                               </td>
-                              <td style={{...td,minWidth:95}}><input value={r.shape||""} list={`${planDatalistId}-shapes`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{shape:e.target.value})} onBlur={e=>{const ex=expandPlanShape(e.target.value);if(ex!==e.target.value)updateBuyingLine(r.id,{shape:ex});}} style={ci}/></td>
-                              <td style={{...td,minWidth:110}}><input value={r.vendor||""} list={`${planDatalistId}-vendors`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{vendor:e.target.value})} style={ci}/></td>
-                              <td style={{...td,width:64}}><input value={r.qty||""} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{qty:rawAmt(e.target.value)})} style={num}/></td>
+                              <td style={{...td,minWidth:95}}><SheetCell value={r.shape||""} list={`${planDatalistId}-shapes`} placeholder="—" onCommit={v=>{const ex=expandPlanShape(v);updateBuyingLine(r.id,{shape:ex});}} style={ci}/></td>
+                              <td style={{...td,minWidth:110}}><SheetCell value={r.vendor||""} list={`${planDatalistId}-vendors`} placeholder="—" onCommit={v=>updateBuyingLine(r.id,{vendor:v})} style={ci}/></td>
+                              <td style={{...td,width:64}}><SheetCell value={r.qty||""} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{qty:rawAmt(v)})} style={num}/></td>
                               <td style={{...td,width:62}}>
                                 <select value={u} onChange={e=>updateBuyingLine(r.id,{unit:e.target.value,unitTouched:true})} style={{...ci,cursor:"pointer"}}>
                                   {["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}
                                 </select>
                               </td>
-                              <td style={{...td,width:78}}><input value={fmtAmtIN(r.costPerKg)} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{costPerKg:rawAmt(e.target.value),currency:"INR"})} style={num}/></td>
-                              <td style={{...td,width:78}}><input value={fmtAmtIN(r.targetSellPrice)} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{targetSellPrice:rawAmt(e.target.value)})} style={num}/></td>
-                              <td style={{...td,width:70}}><input value={fmtAmtIN(su)} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{targetSellPriceUsd:rawAmt(e.target.value)})} style={num}/></td>
+                              <td style={{...td,width:78}}><SheetCell value={fmtAmtIN(r.costPerKg)} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{costPerKg:rawAmt(v),currency:"INR"})} style={num}/></td>
+                              <td style={{...td,width:78}}><SheetCell value={fmtAmtIN(r.targetSellPrice)} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{targetSellPrice:rawAmt(v)})} style={num}/></td>
+                              <td style={{...td,width:70}}><SheetCell value={fmtAmtIN(su)} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{targetSellPriceUsd:rawAmt(v)})} style={num}/></td>
                               <td style={{...td,width:62,textAlign:"right",padding:"6px 8px",fontSize:11,fontWeight:800,color:mColor}}>{margin==null?"—":`${margin.toFixed(0)}%`}</td>
                               <td style={{...td,width:90,padding:"6px 8px",fontSize:10,color:lineOrdered(r)?C.green:C.inkFaint,whiteSpace:"nowrap"}}>{lineOrdered(r)?r.poNumber:"—"}</td>
                               <td style={{...td,width:30,textAlign:"center"}}><button title="Delete row" onClick={()=>removeBuyingLine(r.id)} style={{background:"none",border:"none",color:C.red,fontSize:15,cursor:"pointer",padding:"4px 6px",lineHeight:1}}>×</button></td>
