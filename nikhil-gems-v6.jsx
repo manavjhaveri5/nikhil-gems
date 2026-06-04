@@ -10166,20 +10166,68 @@ function SheetMultiSelect({allLabel,options,selected,onChange}){
     </div>
   );
 }
-// Spreadsheet cell that edits a local draft and only commits on blur / Enter.
-// Prevents the row from re-filtering (and vanishing) mid-keystroke when a filter
-// is active on the field being edited.
-function SheetCell({value,onCommit,style,list,placeholder,inputMode}){
-  const [draft,setDraft]=React.useState(value==null?"":value);
-  const focused=React.useRef(false);
-  React.useEffect(()=>{ if(!focused.current) setDraft(value==null?"":value); },[value]);
-  const commit=()=>{ const v=draft==null?"":draft; if(v!==(value==null?"":value)) onCommit(v); };
-  return <input value={draft} list={list} placeholder={placeholder} inputMode={inputMode}
-    onChange={e=>setDraft(e.target.value)}
-    onFocus={()=>{focused.current=true;}}
-    onBlur={()=>{focused.current=false;commit();}}
-    onKeyDown={e=>{if(e.key==="Enter"){commit();e.currentTarget.blur();}}}
-    style={style}/>;
+// One spreadsheet row that holds a draft of ALL its cells and only commits when
+// focus leaves the whole row (or Enter). Tabbing/clicking between cells in the
+// same row does NOT commit — so an active filter can't drop the row while you're
+// still editing it.
+function SheetRow({row,datalistId,onCommit,onDelete,onInsert,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
+  const make=()=>({
+    stone:row.stone||"",shape:row.shape||"",vendor:row.vendor||"",qty:row.qty||"",
+    unit:(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":(row.unit||"kg"),
+    cp:fmtAmtIN(row.costPerKg),sp:fmtAmtIN(row.targetSellPrice),
+    usd:fmtAmtIN(row.targetSellPriceUsd||usdFromInr(row.targetSellPrice)),
+  });
+  const [d,setD]=React.useState(make);
+  const editing=React.useRef(false);
+  const dirty=React.useRef(false);
+  React.useEffect(()=>{ if(!editing.current) setD(make()); },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.targetSellPrice,row.targetSellPriceUsd]);
+  const set=(k,v)=>{dirty.current=true;setD(p=>({...p,[k]:v}));};
+  const commit=()=>{
+    if(!dirty.current)return; dirty.current=false;
+    const patch={};
+    const shp=expandPlanShape(d.shape);
+    if(d.stone!==(row.stone||""))patch.stone=d.stone;
+    if(shp!==(row.shape||""))patch.shape=shp;
+    if(d.vendor!==(row.vendor||""))patch.vendor=d.vendor;
+    if(rawAmt(d.qty)!==(row.qty||""))patch.qty=rawAmt(d.qty);
+    if(d.unit!==(row.unit||"")){patch.unit=d.unit;patch.unitTouched=true;}
+    if(rawAmt(d.cp)!==(row.costPerKg||"")){patch.costPerKg=rawAmt(d.cp);patch.currency="INR";}
+    if(rawAmt(d.sp)!==(row.targetSellPrice||""))patch.targetSellPrice=rawAmt(d.sp);
+    if(rawAmt(d.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(d.usd);
+    if(Object.keys(patch).length)onCommit(row.id,patch);
+  };
+  const td={border:`1px solid ${C.border}`,padding:0,background:C.surface,verticalAlign:"middle"};
+  const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
+  const num={...ci,textAlign:"right"};
+  const cp=+rawAmt(d.cp)||0,sp=+rawAmt(d.sp)||0;
+  const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
+  const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
+  const ordered=lineOrdered(row);
+  return(
+    <tr
+      onFocus={()=>{editing.current=true;}}
+      onBlur={e=>{ if(e.currentTarget.contains(e.relatedTarget))return; editing.current=false; commit(); }}
+      onKeyDown={e=>{ if(e.key==="Enter"){ commit(); if(e.target&&e.target.blur)e.target.blur(); } }}
+      onMouseEnter={()=>setHover(row.id)} onMouseLeave={()=>setHover(s=>s===row.id?null:s)}>
+      <td style={{...td,minWidth:130,position:"relative"}}>
+        <input value={d.stone} list={`${datalistId}-stones`} placeholder="—" onChange={e=>set("stone",e.target.value)} style={{...ci,fontWeight:700}}/>
+        {hovered&&(
+          <button title="Insert a line below this one" onClick={()=>onInsert(row.id,{stone:row.stone,shape:row.shape,vendor:row.vendor,unit:row.unit})}
+            style={{position:"absolute",left:5,bottom:-10,zIndex:6,width:20,height:20,borderRadius:"50%",background:C.green,color:"#fff",border:`2px solid ${C.surface}`,fontSize:14,fontWeight:900,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,boxShadow:"0 1px 5px rgba(26,19,8,.25)"}}>+</button>
+        )}
+      </td>
+      <td style={{...td,minWidth:95}}><input value={d.shape} list={`${datalistId}-shapes`} placeholder="—" onChange={e=>set("shape",e.target.value)} style={ci}/></td>
+      <td style={{...td,minWidth:110}}><input value={d.vendor} list={`${datalistId}-vendors`} placeholder="—" onChange={e=>set("vendor",e.target.value)} style={ci}/></td>
+      <td style={{...td,width:64}}><input value={d.qty} inputMode="decimal" placeholder="0" onChange={e=>set("qty",e.target.value)} style={num}/></td>
+      <td style={{...td,width:62}}><select value={d.unit} onChange={e=>set("unit",e.target.value)} style={{...ci,cursor:"pointer"}}>{["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}</select></td>
+      <td style={{...td,width:78}}><input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={num}/></td>
+      <td style={{...td,width:78}}><input value={d.sp} inputMode="decimal" placeholder="0" onChange={e=>set("sp",e.target.value)} style={num}/></td>
+      <td style={{...td,width:70}}><input value={d.usd} inputMode="decimal" placeholder="0" onChange={e=>set("usd",e.target.value)} style={num}/></td>
+      <td style={{...td,width:62,textAlign:"right",padding:"6px 8px",fontSize:11,fontWeight:800,color:mColor}}>{margin==null?"—":`${margin.toFixed(0)}%`}</td>
+      <td style={{...td,width:90,padding:"6px 8px",fontSize:10,color:ordered?C.green:C.inkFaint,whiteSpace:"nowrap"}}>{ordered?row.poNumber:"—"}</td>
+      <td style={{...td,width:30,textAlign:"center"}}><button title="Delete row" onClick={()=>onDelete(row.id)} style={{background:"none",border:"none",color:C.red,fontSize:15,cursor:"pointer",padding:"4px 6px",lineHeight:1}}>×</button></td>
+    </tr>
+  );
 }
 function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
@@ -10910,38 +10958,12 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                       <tbody>
                         {rows.length===0?(
                           <tr><td colSpan={11} style={{padding:"22px",textAlign:"center",fontSize:12,color:C.inkFaint,background:C.surface}}>No rows match these filters. <button onClick={addRow} style={{background:"none",border:"none",color:C.green,fontWeight:800,cursor:"pointer",textDecoration:"underline"}}>Add one</button></td></tr>
-                        ):rows.map(r=>{
-                          const cp=+r.costPerKg||0,sp=+r.targetSellPrice||0;
-                          const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
-                          const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
-                          const su=r.targetSellPriceUsd||usdFromInr(r.targetSellPrice);
-                          const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":r.unit||"kg";
-                          return(
-                            <tr key={r.id} onMouseEnter={()=>setSheetHoverRow(r.id)} onMouseLeave={()=>setSheetHoverRow(s=>s===r.id?null:s)}>
-                              <td style={{...td,minWidth:130,position:"relative"}}>
-                                <SheetCell value={r.stone||""} list={`${planDatalistId}-stones`} placeholder="—" onCommit={v=>updateBuyingLine(r.id,{stone:v})} style={{...ci,fontWeight:700}}/>
-                                {sheetHoverRow===r.id&&(
-                                  <button title="Insert a line below this one" onClick={()=>insertBuyingLineAfter(r.id,{stone:r.stone,shape:r.shape,vendor:r.vendor,unit:r.unit})}
-                                    style={{position:"absolute",left:5,bottom:-10,zIndex:6,width:20,height:20,borderRadius:"50%",background:C.green,color:"#fff",border:`2px solid ${C.surface}`,fontSize:14,fontWeight:900,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,boxShadow:"0 1px 5px rgba(26,19,8,.25)"}}>+</button>
-                                )}
-                              </td>
-                              <td style={{...td,minWidth:95}}><SheetCell value={r.shape||""} list={`${planDatalistId}-shapes`} placeholder="—" onCommit={v=>{const ex=expandPlanShape(v);updateBuyingLine(r.id,{shape:ex});}} style={ci}/></td>
-                              <td style={{...td,minWidth:110}}><SheetCell value={r.vendor||""} list={`${planDatalistId}-vendors`} placeholder="—" onCommit={v=>updateBuyingLine(r.id,{vendor:v})} style={ci}/></td>
-                              <td style={{...td,width:64}}><SheetCell value={r.qty||""} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{qty:rawAmt(v)})} style={num}/></td>
-                              <td style={{...td,width:62}}>
-                                <select value={u} onChange={e=>updateBuyingLine(r.id,{unit:e.target.value,unitTouched:true})} style={{...ci,cursor:"pointer"}}>
-                                  {["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}
-                                </select>
-                              </td>
-                              <td style={{...td,width:78}}><SheetCell value={fmtAmtIN(r.costPerKg)} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{costPerKg:rawAmt(v),currency:"INR"})} style={num}/></td>
-                              <td style={{...td,width:78}}><SheetCell value={fmtAmtIN(r.targetSellPrice)} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{targetSellPrice:rawAmt(v)})} style={num}/></td>
-                              <td style={{...td,width:70}}><SheetCell value={fmtAmtIN(su)} inputMode="decimal" placeholder="0" onCommit={v=>updateBuyingLine(r.id,{targetSellPriceUsd:rawAmt(v)})} style={num}/></td>
-                              <td style={{...td,width:62,textAlign:"right",padding:"6px 8px",fontSize:11,fontWeight:800,color:mColor}}>{margin==null?"—":`${margin.toFixed(0)}%`}</td>
-                              <td style={{...td,width:90,padding:"6px 8px",fontSize:10,color:lineOrdered(r)?C.green:C.inkFaint,whiteSpace:"nowrap"}}>{lineOrdered(r)?r.poNumber:"—"}</td>
-                              <td style={{...td,width:30,textAlign:"center"}}><button title="Delete row" onClick={()=>removeBuyingLine(r.id)} style={{background:"none",border:"none",color:C.red,fontSize:15,cursor:"pointer",padding:"4px 6px",lineHeight:1}}>×</button></td>
-                            </tr>
-                          );
-                        })}
+                        ):rows.map(r=>(
+                          <SheetRow key={r.id} row={r} datalistId={planDatalistId}
+                            onCommit={updateBuyingLine} onDelete={removeBuyingLine} onInsert={insertBuyingLineAfter}
+                            lineOrdered={lineOrdered} hovered={sheetHoverRow===r.id} setHover={setSheetHoverRow}
+                            rawAmt={rawAmt} usdFromInr={usdFromInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
+                        ))}
                       </tbody>
                     </table>
                   </div>
