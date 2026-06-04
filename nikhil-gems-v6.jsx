@@ -9966,9 +9966,13 @@ function ShowsApp({onHome}){
     const show=shows.find(s=>s.id===sid);
     if(!show)return;
     const plan=show.buyingPlan||[];
-    const rows=plan.filter(r=>!r.poId&&String(r.stone||"").trim()&&(vendorFilter==="all"||r.vendor===vendorFilter));
+    // A line is "already ordered" only if its linked PO still exists. Orphaned poIds
+    // (from deleted POs) are treated as open so they can be re-ordered.
+    const livePoIds=new Set(purchases.map(p=>p.id));
+    const isOrdered=r=>!!r.poId&&livePoIds.has(r.poId);
+    const rows=plan.filter(r=>!isOrdered(r)&&String(r.stone||"").trim()&&(vendorFilter==="all"||r.vendor===vendorFilter));
     if(!rows.length){
-      const allOpen=plan.filter(r=>!r.poId&&String(r.stone||"").trim());
+      const allOpen=plan.filter(r=>!isOrdered(r)&&String(r.stone||"").trim());
       if(vendorFilter!=="all"&&allOpen.length>0)showToast(`All ${vendorFilter} lines are already in POs`);
       else showToast("All lines are already in purchase orders");
       return;
@@ -9981,7 +9985,10 @@ function ShowsApp({onHome}){
       groups[key]=groups[key]||[];
       groups[key].push(r);
     });
-    let poCount=purchases.filter(p=>p.type==="po").length;
+    // Number from the highest sequence ever used (not the count) so deleting POs
+    // never recycles a number onto a different vendor's order.
+    const poNumRe=/PO\/\d{4}\/(\d+)/;
+    let poCount=purchases.reduce((mx,p)=>{const m=poNumRe.exec(p.poNumber||"");return m?Math.max(mx,+m[1]):mx;},0);
     const created=Object.entries(groups).map(([key,lines])=>{
       const [supplier,currency]=key.split("__");
       poCount+=1;
@@ -10436,7 +10443,13 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   }));
   const removeBuyingLine=id=>saveBuyingPlan(buyingPlan.filter(row=>row.id!==id));
   const viewBuyingPlan=planVendorFilter==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planVendorFilter);
-  const planOpen=viewBuyingPlan.filter(row=>!row.poId).length;
+  // A line counts as "ordered" only if its linked PO still exists. Deleting a PO
+  // used to leave an orphaned poId, which stuck the line as ordered forever and
+  // made "Create PO" refuse to recreate it. Validating against live purchases
+  // self-heals that stale state.
+  const livePoIds=React.useMemo(()=>new Set((purchases||[]).map(p=>p.id)),[purchases]);
+  const lineOrdered=row=>!!row.poId&&livePoIds.has(row.poId);
+  const planOpen=viewBuyingPlan.filter(row=>!lineOrdered(row)).length;
   const buyingLineKg=row=>{
     const qty=+row.qty||0;
     const unit=String(row.unit||"kg").toLowerCase();
@@ -10753,7 +10766,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 {[
                   ["Planned",viewBuyingPlan.length,`${planOpen} open`,C.inkMid,C.card],
-                  ["In PO",viewBuyingPlan.filter(x=>x.poId).length,"ordered",C.green,C.greenBg],
+                  ["In PO",viewBuyingPlan.filter(lineOrdered).length,"ordered",C.green,C.greenBg],
                   ["History",purchaseHistory.length,"purchase lines",C.amber,C.amberBg],
                 ].map(([label,value,sub,color,bg])=>(
                   <div key={label} style={{display:"flex",alignItems:"center",gap:7,background:bg,border:`1px solid ${C.border}`,borderRadius:999,padding:"5px 9px",fontSize:10,color:C.inkMid}}>
@@ -10919,7 +10932,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                               </button>
                             ):null}
                             <span>
-                            {row.poNumber
+                            {lineOrdered(row)
                               ?`Linked PO: ${row.poNumber}`
                               :last?`Last: ${last.currency||row.currency||"INR"} ${fmtAmtIN(last.rate)} / ${last.unit||lineUnit}${last.vendor?` · ${last.vendor}`:""}${last.date?` · ${fmtDate(last.date)}`:""}`
                               :"No matching purchase history yet"}
@@ -10984,7 +10997,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   const costQty=buyingLineCostQty(r);
                   const unit=String(r.unit||"kg").toLowerCase();
                   m.lines+=1;
-                  m.open+=r.poId?0:1;
+                  m.open+=lineOrdered(r)?0:1;
                   m.kg+=buyingLineKg(r);
                   m.cp+=costQty*(+r.costPerKg||0);
                   m.sp+=costQty*(+r.targetSellPrice||0);
@@ -10994,7 +11007,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   if(r.shape)m.shapes.add(r.shape);
                   return m;
                 },{lines:0,open:0,kg:0,cp:0,sp:0,usd:0,other:{},vendors:new Set(),shapes:new Set()});
-                const inPoCount=summaryRows.filter(x=>x.poId).length;
+                const inPoCount=summaryRows.filter(lineOrdered).length;
                 const margin=totals.sp>0&&totals.cp>0?((totals.sp-totals.cp)/totals.sp)*100:null;
                 const qtyLabel=[
                   totals.kg>0?`${fmtAmtIN(totals.kg)} kg`:"",
