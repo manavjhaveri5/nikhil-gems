@@ -9966,9 +9966,9 @@ function ShowsApp({onHome}){
     const show=shows.find(s=>s.id===sid);
     if(!show)return;
     const plan=show.buyingPlan||[];
-    const rows=plan.filter(r=>!r.poId&&!["Bought","Skipped"].includes(r.status)&&String(r.stone||"").trim()&&(vendorFilter==="all"||r.vendor===vendorFilter));
+    const rows=plan.filter(r=>!r.poId&&String(r.stone||"").trim()&&(vendorFilter==="all"||r.vendor===vendorFilter));
     if(!rows.length){
-      const allOpen=plan.filter(r=>!r.poId&&!["Bought","Skipped"].includes(r.status)&&String(r.stone||"").trim());
+      const allOpen=plan.filter(r=>!r.poId&&String(r.stone||"").trim());
       if(vendorFilter!=="all"&&allOpen.length>0)showToast(`All ${vendorFilter} lines are already in POs`);
       else showToast("All lines are already in purchase orders");
       return;
@@ -10003,7 +10003,7 @@ function ShowsApp({onHome}){
     });
     const lineToPO={};
     created.forEach(po=>(po.buyingPlanLineIds||[]).forEach(id=>{lineToPO[id]={poId:po.id,poNumber:po.poNumber};}));
-    const updatedShows=shows.map(s=>s.id!==sid?s:{...s,buyingPlan:plan.map(r=>lineToPO[r.id]?{...r,...lineToPO[r.id],status:"Ordered",orderedAt:today(),updatedAt:new Date().toISOString()}:r)});
+    const updatedShows=shows.map(s=>s.id!==sid?s:{...s,buyingPlan:plan.map(r=>lineToPO[r.id]?{...r,...lineToPO[r.id],orderedAt:today(),updatedAt:new Date().toISOString()}:r)});
     const updatedPurchases=[...created,...purchases];
     setPurchases(updatedPurchases);
     setShows(updatedShows);
@@ -10334,7 +10334,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     return{
       id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||basis?.vendor||"",
       qty:seed.qty||"",unit:seed.unit||"kg",targetRate:seed.targetRate||"",
-      currency:"INR",priority:seed.priority||"Medium",status:seed.status||"Idea",
+      currency:"INR",priority:seed.priority||"Medium",
       notes:shapeNote,notesAuto:!!shapeNote&&!seed.notes,
       costPerKg:seed.costPerKg||seed.targetRate||(basis?.costPerKg?String(+basis.costPerKg.toFixed(2)):""),
       targetSellPrice:seed.targetSellPrice||"",
@@ -10357,7 +10357,6 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
       stone,
       vendor,
       unit:source.unit||"kg",
-      status:"Idea",
       costPerKg:source.costPerKg||"",
       targetSellPrice:source.targetSellPrice||"",
       targetSellPriceUsd:source.targetSellPriceUsd||usdFromInr(source.targetSellPrice),
@@ -10379,7 +10378,6 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
       targetSellPrice:quote.spInr||"",
       targetSellPriceUsd:quote.spUsd||usdFromInr(quote.spInr),
       notes:quote.notes||"",
-      status:"Idea",
     });
     saveBuyingPlan([...buyingPlan.slice(0,insertAt+1),next,...buyingPlan.slice(insertAt+1)]);
   };
@@ -10432,14 +10430,13 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     return [row,{
       ...copy,
       id:uid(),
-      status:row.status==="Ordered"?"Idea":row.status||"Idea",
       createdAt:new Date().toISOString(),
       updatedAt:new Date().toISOString()
     }];
   }));
   const removeBuyingLine=id=>saveBuyingPlan(buyingPlan.filter(row=>row.id!==id));
   const viewBuyingPlan=planVendorFilter==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planVendorFilter);
-  const planOpen=viewBuyingPlan.filter(row=>!row.poId&&!["Bought","Skipped","Ordered"].includes(row.status)).length;
+  const planOpen=viewBuyingPlan.filter(row=>!row.poId).length;
   const buyingLineKg=row=>{
     const qty=+row.qty||0;
     const unit=String(row.unit||"kg").toLowerCase();
@@ -10756,7 +10753,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 {[
                   ["Planned",viewBuyingPlan.length,`${planOpen} open`,C.inkMid,C.card],
-                  ["Bought",viewBuyingPlan.filter(x=>x.status==="Bought").length,"ready",C.green,C.greenBg],
+                  ["In PO",viewBuyingPlan.filter(x=>x.poId).length,"ordered",C.green,C.greenBg],
                   ["History",purchaseHistory.length,"purchase lines",C.amber,C.amberBg],
                 ].map(([label,value,sub,color,bg])=>(
                   <div key={label} style={{display:"flex",alignItems:"center",gap:7,background:bg,border:`1px solid ${C.border}`,borderRadius:999,padding:"5px 9px",fontSize:10,color:C.inkMid}}>
@@ -10874,16 +10871,13 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             </div>
                           </div>
                         )}
-                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":cardMode?"1fr 1fr 1fr":"1.2fr .85fr 1fr .45fr .48fr .68fr 70px",gap:cardMode?6:5,alignItems:"center"}}>
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":cardMode?"1fr 1fr 1fr":"1.2fr .85fr 1fr .45fr .58fr 70px",gap:cardMode?6:5,alignItems:"center"}}>
                           <input value={row.stone||""} onChange={e=>updateBuyingLine(row.id,{stone:e.target.value})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6}} placeholder="Stone" list={`${planDatalistId}-stones`}/>
                           <input value={row.shape||""} onChange={e=>updateBuyingLine(row.id,{shape:e.target.value})} onBlur={e=>{const expanded=expandPlanShape(e.target.value);if(expanded!==e.target.value)updateBuyingLine(row.id,{shape:expanded});}} onKeyDown={e=>{if(e.key==="Enter"){const expanded=expandPlanShape(e.currentTarget.value);if(expanded!==e.currentTarget.value)updateBuyingLine(row.id,{shape:expanded});}}} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6}} placeholder="Shape" list={`${planDatalistId}-shapes`}/>
                           <input value={row.vendor||""} onChange={e=>updateBuyingLine(row.id,{vendor:e.target.value})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6}} placeholder="Vendor" list={`${planDatalistId}-vendors`}/>
                           <input value={row.qty||""} onChange={e=>updateBuyingLine(row.id,{qty:rawAmt(e.target.value)})} inputMode="decimal" style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,textAlign:"right"}} placeholder="Qty"/>
                           <select value={lineUnit} onChange={e=>updateBuyingLine(row.id,{unit:e.target.value,unitTouched:true})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,cursor:"pointer"}}>
                             {["pcs","kg","g","lots","boxes"].map(u=><option key={u}>{u}</option>)}
-                          </select>
-                          <select value={row.status||"Idea"} onChange={e=>updateBuyingLine(row.id,{status:e.target.value})} style={{...FI,fontSize:10.5,padding:"4px 6px",borderRadius:6,cursor:"pointer"}}>
-                            {PLAN_STATUS.map(s=><option key={s}>{s}</option>)}
                           </select>
                           <div style={{display:"flex",alignItems:"center",justifyContent:mob?"flex-start":"flex-end",gap:4}}>
                             <button title={vendorHistory.length?`Previous buys from ${row.vendor}`:"No previous buys for this vendor"} aria-label="Show vendor purchase history" disabled={!vendorHistory.length} onClick={e=>{e.stopPropagation();setVendorHistoryRow(row);}} style={{width:20,height:20,background:vendorHistory.length?C.amberBg:C.card,border:`1px solid ${C.border}`,borderRadius:4,cursor:vendorHistory.length?"pointer":"not-allowed",color:vendorHistory.length?C.amber:C.inkFaint,fontSize:11,padding:0,lineHeight:1,display:"flex",alignItems:"center",justifyContent:"center",opacity:vendorHistory.length?1:.45}}>▤</button>
@@ -10990,7 +10984,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   const costQty=buyingLineCostQty(r);
                   const unit=String(r.unit||"kg").toLowerCase();
                   m.lines+=1;
-                  m.open+=["Bought","Skipped"].includes(r.status)?0:1;
+                  m.open+=r.poId?0:1;
                   m.kg+=buyingLineKg(r);
                   m.cp+=costQty*(+r.costPerKg||0);
                   m.sp+=costQty*(+r.targetSellPrice||0);
@@ -11000,7 +10994,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   if(r.shape)m.shapes.add(r.shape);
                   return m;
                 },{lines:0,open:0,kg:0,cp:0,sp:0,usd:0,other:{},vendors:new Set(),shapes:new Set()});
-                const boughtCount=summaryRows.filter(x=>x.status==="Bought").length;
+                const inPoCount=summaryRows.filter(x=>x.poId).length;
                 const margin=totals.sp>0&&totals.cp>0?((totals.sp-totals.cp)/totals.sp)*100:null;
                 const qtyLabel=[
                   totals.kg>0?`${fmtAmtIN(totals.kg)} kg`:"",
@@ -11034,7 +11028,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             ["SP INR",`₹${fmtAmtIN(totals.sp)||"0"}`,C.green],
                             ["SP USD",`$${fmtAmtIN(totals.usd)||"0"}`,C.blue],
                             ["Margin",margin==null?"—":`${margin.toFixed(1)}%`,margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red],
-                            ["Bought",boughtCount,C.amber],
+                            ["In PO",inPoCount,C.green],
                           ].map(([label,value,color])=>(
                             <div key={label} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 10px"}}>
                               <div style={{fontSize:9,color:C.inkFaint,fontWeight:900,textTransform:"uppercase",letterSpacing:.55,marginBottom:4}}>{label}</div>
