@@ -10827,10 +10827,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 const td={border:`1px solid ${C.border}`,padding:0,background:C.surface,verticalAlign:"middle"};
                 const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
                 const num={...ci,textAlign:"right"};
-                const th=(label,key,align)=>{
+                const th=(label,key,align,total,totalColor)=>{
                   const active=key&&sheetSort.col===key;
-                  return(<th onClick={key?()=>toggleSort(key):undefined} title={key?"Click to sort":undefined} style={{position:"sticky",top:0,zIndex:1,background:active?C.greenBg:C.card,borderBottom:`2px solid ${active?C.green+"66":C.border}`,borderRight:`1px solid ${C.border}`,padding:"7px 8px",textAlign:align||"left",fontSize:9,fontWeight:900,color:active?C.green:C.inkFaint,textTransform:"uppercase",letterSpacing:.4,whiteSpace:"nowrap",cursor:key?"pointer":"default",userSelect:"none"}}>
-                    <span style={{display:"inline-flex",alignItems:"center",gap:3,justifyContent:align==="right"?"flex-end":"flex-start",width:"100%"}}>{label}{key&&<span style={{fontSize:9,opacity:active?1:.35}}>{active?(sheetSort.dir==="asc"?"▲":"▼"):"↕"}</span>}</span>
+                  return(<th onClick={key?()=>toggleSort(key):undefined} title={key?"Click to sort":undefined} style={{position:"sticky",top:0,zIndex:1,background:active?C.greenBg:C.card,borderBottom:`2px solid ${active?C.green+"66":C.border}`,borderRight:`1px solid ${C.border}`,padding:"6px 8px",textAlign:align||"left",fontSize:9,fontWeight:900,color:active?C.green:C.inkFaint,textTransform:"uppercase",letterSpacing:.4,whiteSpace:"nowrap",cursor:key?"pointer":"default",userSelect:"none",verticalAlign:"bottom"}}>
+                    <span style={{display:"flex",alignItems:"center",gap:3,justifyContent:align==="right"?"flex-end":"flex-start",width:"100%"}}>{label}{key&&<span style={{fontSize:9,opacity:active?1:.35}}>{active?(sheetSort.dir==="asc"?"▲":"▼"):"↕"}</span>}</span>
+                    {total!=null&&<div style={{fontSize:10.5,fontWeight:900,marginTop:3,color:totalColor||C.ink,textTransform:"none",letterSpacing:0,textAlign:align||"left"}}>{total}</div>}
                   </th>);
                 };
                 const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStone!=="all"?(stoneMap.get(sheetStone)||""):"",shape:sheetShape!=="all"?(shapeMap.get(sheetShape)||""):""});
@@ -10859,7 +10860,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
                     <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
                       <thead>
-                        <tr>{th("Stone","stone")}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right")}{th("Unit","unit")}{th("CP ₹","cp","right")}{th("SP ₹","sp","right")}{th("SP $","usd","right")}{th("Margin","margin","right")}{th("PO","po")}{th("")}</tr>
+                        <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right")}{th("Unit","unit")}{th("CP ₹","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("")}</tr>
                       </thead>
                       <tbody>
                         {rows.length===0?(
@@ -10897,17 +10898,6 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           );
                         })}
                       </tbody>
-                      {rows.length>0&&(
-                        <tfoot>
-                          <tr style={{background:C.card,fontWeight:900}}>
-                            <td colSpan={5} style={{border:`1px solid ${C.border}`,padding:"7px 8px",fontSize:10,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4}}>Total · {rows.length} lines</td>
-                            <td style={{border:`1px solid ${C.border}`,padding:"7px 8px",textAlign:"right",fontSize:11,color:C.ink}}>₹{fmtAmtIN(Math.round(tCp))}</td>
-                            <td style={{border:`1px solid ${C.border}`,padding:"7px 8px",textAlign:"right",fontSize:11,color:C.green}}>₹{fmtAmtIN(Math.round(tSp))}</td>
-                            <td style={{border:`1px solid ${C.border}`,padding:"7px 8px",textAlign:"right",fontSize:11,color:C.blue}}>${fmtAmtIN(Math.round(tUsd))}</td>
-                            <td colSpan={3} style={{border:`1px solid ${C.border}`,background:C.card}}></td>
-                          </tr>
-                        </tfoot>
-                      )}
                     </table>
                   </div>
                   <div style={{marginTop:9}}>
