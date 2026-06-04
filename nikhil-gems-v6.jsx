@@ -9962,12 +9962,17 @@ function ShowsApp({onHome}){
   },[]);
 
   const save=async(list)=>{setShows(list);await saveK(SHOWS_KEY,list);};
-  const createPOFromBuyingPlan=async sid=>{
+  const createPOFromBuyingPlan=async (sid,vendorFilter="all")=>{
     const show=shows.find(s=>s.id===sid);
     if(!show)return;
     const plan=show.buyingPlan||[];
-    const rows=plan.filter(r=>!r.poId&&!["Bought","Skipped"].includes(r.status)&&String(r.stone||"").trim());
-    if(!rows.length){showToast("Add open buying plan lines first");return;}
+    const rows=plan.filter(r=>!r.poId&&!["Bought","Skipped"].includes(r.status)&&String(r.stone||"").trim()&&(vendorFilter==="all"||r.vendor===vendorFilter));
+    if(!rows.length){
+      const allOpen=plan.filter(r=>!r.poId&&!["Bought","Skipped"].includes(r.status)&&String(r.stone||"").trim());
+      if(vendorFilter!=="all"&&allOpen.length>0)showToast(`All ${vendorFilter} lines are already in POs`);
+      else showToast("All lines are already in purchase orders");
+      return;
+    }
     const incomplete=rows.filter(r=>!String(r.vendor||"").trim()||!(+r.qty>0)||!(+r.costPerKg>0));
     if(incomplete.length){showToast("Add vendor, qty and CP before creating PO");return;}
     const groups={};
@@ -10434,7 +10439,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   }));
   const removeBuyingLine=id=>saveBuyingPlan(buyingPlan.filter(row=>row.id!==id));
   const viewBuyingPlan=planVendorFilter==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planVendorFilter);
-  const planOpen=viewBuyingPlan.filter(row=>!["Bought","Skipped"].includes(row.status)).length;
+  const planOpen=viewBuyingPlan.filter(row=>!row.poId&&!["Bought","Skipped","Ordered"].includes(row.status)).length;
   const buyingLineKg=row=>{
     const qty=+row.qty||0;
     const unit=String(row.unit||"kg").toLowerCase();
@@ -10744,7 +10749,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                       </button>
                     ))}
                   </div>
-                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
+                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id,planVendorFilter);}}>Create PO</button>
                   <button className="bp" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Item</button>
                 </div>
               </div>
@@ -10956,7 +10961,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
                 <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
                   <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{viewBuyingPlan.length} lines · {planOpen} open{planVendorFilter!=="all"?` · ${planVendorFilter}`:""}</div>
-                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id);}}>Create PO</button>
+                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id,planVendorFilter);}}>Create PO</button>
                   <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Line</button>
                 </div>
               </div>
