@@ -10267,10 +10267,12 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [planVendorFilter,setPlanVendorFilter]=useState("all");
   const [sheetStones,setSheetStones]=useState([]);
   const [sheetShapes,setSheetShapes]=useState([]);
+  const [sheetVendors,setSheetVendors]=useState([]);
   const [sheetSort,setSheetSort]=useState({col:null,dir:"asc"});
   const [sheetHoverRow,setSheetHoverRow]=useState(null);
   const [sheetCtxMenu,setSheetCtxMenu]=useState(null);
   const [buyingUndoFlash,setBuyingUndoFlash]=useState(false);
+  const [sheetCopyFlash,setSheetCopyFlash]=useState(false);
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
   const [whatsappMode,setWhatsappMode]=useState("prices");
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
@@ -10887,10 +10889,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <span style={{color:C.inkFaint}}>{sub}</span>
                   </div>
                 ))}
+                {buyingPlanView!=="sheet"&&(
                 <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{background:C.surface,border:`1.5px solid ${planVendorFilter!=="all"?C.green+"88":C.border}`,color:planVendorFilter!=="all"?C.green:C.ink,borderRadius:999,padding:"5px 10px",fontSize:11,fontWeight:planVendorFilter!=="all"?900:undefined,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>
                   <option value="all">All vendors</option>
                   {[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort().map(v=><option key={v} value={v}>{v}</option>)}
-                </select>
+                </select>)}
                 <button onClick={e=>{e.stopPropagation();setWhatsappSummaryOpen(true);}} style={{background:"#25D366",color:"#fff",border:"none",borderRadius:999,padding:"5px 12px",fontSize:11,fontWeight:900,cursor:"pointer",display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",boxShadow:"0 2px 8px rgba(37,211,102,.3)",flexShrink:0}}>
                   <span style={{fontSize:14,lineHeight:1}}>📱</span> WhatsApp
                 </button>
@@ -10905,7 +10908,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 const shapeMap=new Map(buyingPlan.filter(r=>String(r.shape||"").trim()).map(r=>[normPlanText(r.shape),String(r.shape).trim()]));
                 const vendorOpts=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
                 const filtered=groupedBuyingPlan.filter(r=>
-                  (planVendorFilter==="all"||r.vendor===planVendorFilter)&&
+                  (sheetVendors.length===0||sheetVendors.includes(r.vendor))&&
                   (sheetStones.length===0||sheetStones.includes(normPlanText(r.stone)))&&
                   (sheetShapes.length===0||sheetShapes.includes(normPlanText(r.shape))));
                 const sortVal={
@@ -10921,7 +10924,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   return sheetSort.dir==="asc"?cmp:-cmp;
                 }):filtered;
                 const toggleSort=key=>setSheetSort(s=>s.col===key?{col:key,dir:s.dir==="asc"?"desc":"asc"}:{col:key,dir:"asc"});
-                const anyFilter=planVendorFilter!=="all"||sheetStones.length>0||sheetShapes.length>0;
+                const anyFilter=sheetVendors.length>0||sheetStones.length>0||sheetShapes.length>0;
                 const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
                 const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
                 const tUsd=rows.reduce((s,r)=>s+(+r.qty||0)*(+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0),0);
@@ -10938,14 +10941,14 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 };
                 // Seed the new row so it satisfies any active filters — otherwise a blank
                 // row would be hidden by the filter and look like "nothing happened".
-                const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStones.length?(stoneMap.get(sheetStones[0])||""):"",shape:sheetShapes.length?(shapeMap.get(sheetShapes[0])||""):""});
+                const addRow=()=>addBuyingLine({vendor:sheetVendors.length===1?sheetVendors[0]:"",stone:sheetStones.length?(stoneMap.get(sheetStones[0])||""):"",shape:sheetShapes.length?(shapeMap.get(sheetShapes[0])||""):""});
                 // Print the exact rows currently shown (after filters + sort) as an A4 PDF.
                 const printSheet=()=>{
                   const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
                   const fbits=[
                     sheetStones.length?`${sheetStones.map(k=>stoneMap.get(k)||k).join(", ")}`:"",
                     sheetShapes.length?`${sheetShapes.map(k=>shapeMap.get(k)||k).join(", ")}`:"",
-                    planVendorFilter!=="all"?planVendorFilter:"",
+                    sheetVendors.length?sheetVendors.join(", "):"",
                   ].filter(Boolean).join("  ·  ")||"All stones · All shapes · All vendors";
                   const body=rows.map(r=>{
                     const cp=+r.costPerKg||0,sp=+r.targetSellPrice||0;
@@ -10980,6 +10983,19 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   if(!w){alert("Couldn't open the print window — please allow pop-ups for this site.");return;}
                   w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),400);
                 };
+                // Copy a clean vendor message of the current rows — no prices, just
+                // stone · shape — qty, ready to paste into WhatsApp / a chat.
+                const copyOrder=async()=>{
+                  const lines=rows.map((r,i)=>{
+                    const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");
+                    const name=[r.stone||"(stone?)",r.shape].filter(Boolean).join(" · ");
+                    return `${i+1}. ${name} — ${r.qty||"?"} ${u}`;
+                  });
+                  const vlabel=sheetVendors.length?sheetVendors.join(", "):"";
+                  const msg=[`*${show.name} — Order${vlabel?` · ${vlabel}`:""}*`,"",...lines].join("\n");
+                  try{ await navigator.clipboard.writeText(msg); setSheetCopyFlash(true); setTimeout(()=>setSheetCopyFlash(false),1500); }
+                  catch{ window.prompt("Copy this message to send your vendor:",msg); }
+                };
                 return(
                 <div>
                   {/* Filters + actions */}
@@ -10987,12 +11003,10 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <span style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Filter</span>
                     <SheetMultiSelect allLabel="All stones" selected={sheetStones} onChange={setSheetStones} options={[...stoneMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=>({key:k,label:v}))}/>
                     <SheetMultiSelect allLabel="All shapes" selected={sheetShapes} onChange={setSheetShapes} options={[...shapeMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=>({key:k,label:v}))}/>
-                    <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{...sel,...(planVendorFilter!=="all"?{border:`1.5px solid ${C.green}88`,color:C.green,fontWeight:900}:{})}}>
-                      <option value="all">All vendors</option>
-                      {vendorOpts.map(v=><option key={v} value={v}>{v}</option>)}
-                    </select>
-                    {anyFilter&&<button onClick={()=>{setSheetStones([]);setSheetShapes([]);setPlanVendorFilter("all");}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,color:C.inkMid,cursor:"pointer"}}>Clear</button>}
+                    <SheetMultiSelect allLabel="All vendors" selected={sheetVendors} onChange={setSheetVendors} options={vendorOpts.map(v=>({key:v,label:v}))}/>
+                    {anyFilter&&<button onClick={()=>{setSheetStones([]);setSheetShapes([]);setSheetVendors([]);}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,color:C.inkMid,cursor:"pointer"}}>Clear</button>}
                     <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{rows.length} row{rows.length===1?"":"s"}</span>
+                    <button onClick={copyOrder} title="Copy a vendor message (no prices) to paste into chat" style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:800,color:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>📋 Copy order</button>
                     <button onClick={printSheet} title="Print this view as a PDF (A4)" style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:800,color:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>🖨 Print</button>
                     <button onClick={addRow} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:900,cursor:"pointer"}}>+ Add row</button>
                   </div>
@@ -11019,8 +11033,10 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <button onClick={addRow} style={{background:C.surface,border:`1.5px dashed ${C.green}66`,borderRadius:9,padding:"9px 14px",fontSize:12,fontWeight:800,color:C.green,cursor:"pointer",width:"100%"}}>+ Add row</button>
                   </div>
                   {buyingUndoFlash&&<div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:300,background:C.ink,color:C.surface,fontSize:12,fontWeight:700,padding:"8px 16px",borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.3)"}}>↩ Undid last change</div>}
+                  {sheetCopyFlash&&<div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:300,background:C.green,color:"#fff",fontSize:12,fontWeight:700,padding:"8px 16px",borderRadius:999,boxShadow:"0 8px 24px rgba(14,91,54,.3)"}}>📋 Order copied — paste to your vendor</div>}
                   {sheetCtxMenu&&(()=>{
                     const ctxRow=buyingPlan.find(r=>r.id===sheetCtxMenu.rowId);
+                    const q=+(ctxRow?.qty)||0, lineCp=q*(+(ctxRow?.costPerKg)||0), lineSp=q*(+(ctxRow?.targetSellPrice)||0), lineUsd=q*(+(ctxRow?.targetSellPriceUsd||usdFromInr(ctxRow?.targetSellPrice))||0);
                     const items=[
                       ["⎘  Duplicate row",()=>duplicateBuyingLine(sheetCtxMenu.rowId)],
                       ["＋  Insert row below",()=>insertBuyingLineAfter(sheetCtxMenu.rowId,{stone:ctxRow?.stone,shape:ctxRow?.shape,vendor:ctxRow?.vendor,unit:ctxRow?.unit})],
@@ -11028,7 +11044,18 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     ];
                     return(<>
                       <div onClick={()=>setSheetCtxMenu(null)} onContextMenu={e=>{e.preventDefault();setSheetCtxMenu(null);}} style={{position:"fixed",inset:0,zIndex:200}}/>
-                      <div style={{position:"fixed",left:Math.min(sheetCtxMenu.x,window.innerWidth-200),top:Math.min(sheetCtxMenu.y,window.innerHeight-150),zIndex:201,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 12px 32px rgba(26,19,8,.22)",padding:5,minWidth:184}}>
+                      <div style={{position:"fixed",left:Math.min(sheetCtxMenu.x,window.innerWidth-220),top:Math.min(sheetCtxMenu.y,window.innerHeight-220),zIndex:201,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 12px 32px rgba(26,19,8,.22)",padding:5,minWidth:204}}>
+                        {ctxRow&&(
+                          <div style={{padding:"8px 11px 9px",borderBottom:`1px solid ${C.border}`,marginBottom:4}}>
+                            <div style={{fontSize:12,fontWeight:900,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[ctxRow.stone,ctxRow.shape].filter(Boolean).join(" · ")||"This line"}</div>
+                            <div style={{fontSize:10.5,color:C.inkFaint,marginTop:1}}>{q||0} {ctxRow.unit||"kg"}{ctxRow.vendor?` · ${ctxRow.vendor}`:""}</div>
+                            <div style={{display:"flex",gap:10,marginTop:6,flexWrap:"wrap"}}>
+                              <span style={{fontSize:11}}><span style={{color:C.inkFaint,fontWeight:700}}>Total CP </span><b style={{color:C.ink}}>₹{fmtAmtIN(Math.round(lineCp))||"0"}</b></span>
+                              <span style={{fontSize:11}}><span style={{color:C.inkFaint,fontWeight:700}}>Total SP </span><b style={{color:C.green}}>₹{fmtAmtIN(Math.round(lineSp))||"0"}</b></span>
+                              <span style={{fontSize:11}}><span style={{color:C.inkFaint,fontWeight:700}}>SP $ </span><b style={{color:C.blue}}>${fmtAmtIN(Math.round(lineUsd))||"0"}</b></span>
+                            </div>
+                          </div>
+                        )}
                         {items.map(([label,fn,danger],i)=>(
                           <button key={i} onClick={()=>{fn();setSheetCtxMenu(null);}} style={{display:"block",width:"100%",textAlign:"left",background:"transparent",border:"none",borderRadius:7,padding:"9px 11px",fontSize:12.5,fontWeight:600,color:danger?C.red:C.ink,cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=danger?C.redBg:C.fill} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>{label}</button>
                         ))}
