@@ -10167,6 +10167,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [planSummaryVendor,setPlanSummaryVendor]=useState("all");
   const [vendorComparePopup,setVendorComparePopup]=useState(null);
   const [planVendorFilter,setPlanVendorFilter]=useState("all");
+  const [sheetStone,setSheetStone]=useState("all");
+  const [sheetShape,setSheetShape]=useState("all");
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
   const [whatsappMode,setWhatsappMode]=useState("prices");
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
@@ -10752,7 +10754,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 </div>
                 <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"flex-end"}}>
                   <div style={{display:"flex",gap:2,background:C.card,border:`1px solid ${C.border}`,borderRadius:999,padding:2}}>
-                    {["cards","compact","rows"].map(mode=>(
+                    {["cards","compact","rows","sheet"].map(mode=>(
                       <button key={mode} onClick={e=>{e.stopPropagation();setBuyingPlanView(mode);try{localStorage.setItem("ng-buying-plan-view",mode);}catch{}}}
                         style={{background:buyingPlanView===mode?C.surface:"transparent",border:"none",borderRadius:999,padding:"5px 10px",fontSize:10,fontWeight:850,color:buyingPlanView===mode?C.ink:C.inkFaint,cursor:"pointer",boxShadow:buyingPlanView===mode?"0 1px 4px rgba(26,19,8,.08)":"none",textTransform:"capitalize"}}>
                         {mode}
@@ -10788,7 +10790,100 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:"18px 16px",textAlign:"center"}}>
                   No buying plan yet. Add what you want to source at this show, then fill CP and SP.
                 </div>
-              ):(
+              ):buyingPlanView==="sheet"?(()=>{
+                const stoneMap=new Map(buyingPlan.filter(r=>String(r.stone||"").trim()).map(r=>[normPlanText(r.stone),String(r.stone).trim()]));
+                const shapeMap=new Map(buyingPlan.filter(r=>String(r.shape||"").trim()).map(r=>[normPlanText(r.shape),String(r.shape).trim()]));
+                const vendorOpts=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
+                const rows=groupedBuyingPlan.filter(r=>
+                  (planVendorFilter==="all"||r.vendor===planVendorFilter)&&
+                  (sheetStone==="all"||normPlanText(r.stone)===sheetStone)&&
+                  (sheetShape==="all"||normPlanText(r.shape)===sheetShape));
+                const anyFilter=planVendorFilter!=="all"||sheetStone!=="all"||sheetShape!=="all";
+                const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
+                const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
+                const tUsd=rows.reduce((s,r)=>s+(+r.qty||0)*(+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0),0);
+                const sel={background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,cursor:"pointer",fontFamily:"inherit",color:C.ink};
+                const td={border:`1px solid ${C.border}`,padding:0,background:C.surface,verticalAlign:"middle"};
+                const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
+                const num={...ci,textAlign:"right"};
+                const th=(label,align)=>(<th style={{position:"sticky",top:0,zIndex:1,background:C.card,borderBottom:`2px solid ${C.border}`,borderRight:`1px solid ${C.border}`,padding:"7px 8px",textAlign:align||"left",fontSize:9,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4,whiteSpace:"nowrap"}}>{label}</th>);
+                const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStone!=="all"?(stoneMap.get(sheetStone)||""):"",shape:sheetShape!=="all"?(shapeMap.get(sheetShape)||""):""});
+                return(
+                <div>
+                  {/* Filters + actions */}
+                  <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap",marginBottom:9}}>
+                    <span style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Filter</span>
+                    <select value={sheetStone} onChange={e=>setSheetStone(e.target.value)} style={{...sel,...(sheetStone!=="all"?{border:`1.5px solid ${C.green}88`,color:C.green,fontWeight:900}:{})}}>
+                      <option value="all">All stones</option>
+                      {[...stoneMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                    </select>
+                    <select value={sheetShape} onChange={e=>setSheetShape(e.target.value)} style={{...sel,...(sheetShape!=="all"?{border:`1.5px solid ${C.green}88`,color:C.green,fontWeight:900}:{})}}>
+                      <option value="all">All shapes</option>
+                      {[...shapeMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                    </select>
+                    <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{...sel,...(planVendorFilter!=="all"?{border:`1.5px solid ${C.green}88`,color:C.green,fontWeight:900}:{})}}>
+                      <option value="all">All vendors</option>
+                      {vendorOpts.map(v=><option key={v} value={v}>{v}</option>)}
+                    </select>
+                    {anyFilter&&<button onClick={()=>{setSheetStone("all");setSheetShape("all");setPlanVendorFilter("all");}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,color:C.inkMid,cursor:"pointer"}}>Clear</button>}
+                    <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{rows.length} row{rows.length===1?"":"s"}</span>
+                    <button onClick={addRow} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:900,cursor:"pointer"}}>+ Add row</button>
+                  </div>
+                  {/* Spreadsheet */}
+                  <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
+                    <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
+                      <thead>
+                        <tr>{th("Stone")}{th("Shape")}{th("Vendor")}{th("Qty","right")}{th("Unit")}{th("CP ₹","right")}{th("SP ₹","right")}{th("SP $","right")}{th("Margin","right")}{th("PO")}{th("")}</tr>
+                      </thead>
+                      <tbody>
+                        {rows.length===0?(
+                          <tr><td colSpan={11} style={{padding:"22px",textAlign:"center",fontSize:12,color:C.inkFaint,background:C.surface}}>No rows match these filters. <button onClick={addRow} style={{background:"none",border:"none",color:C.green,fontWeight:800,cursor:"pointer",textDecoration:"underline"}}>Add one</button></td></tr>
+                        ):rows.map(r=>{
+                          const cp=+r.costPerKg||0,sp=+r.targetSellPrice||0;
+                          const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
+                          const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
+                          const su=r.targetSellPriceUsd||usdFromInr(r.targetSellPrice);
+                          const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":r.unit||"kg";
+                          return(
+                            <tr key={r.id}>
+                              <td style={{...td,minWidth:130}}><input value={r.stone||""} list={`${planDatalistId}-stones`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{stone:e.target.value})} style={{...ci,fontWeight:700}}/></td>
+                              <td style={{...td,minWidth:95}}><input value={r.shape||""} list={`${planDatalistId}-shapes`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{shape:e.target.value})} onBlur={e=>{const ex=expandPlanShape(e.target.value);if(ex!==e.target.value)updateBuyingLine(r.id,{shape:ex});}} style={ci}/></td>
+                              <td style={{...td,minWidth:110}}><input value={r.vendor||""} list={`${planDatalistId}-vendors`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{vendor:e.target.value})} style={ci}/></td>
+                              <td style={{...td,width:64}}><input value={r.qty||""} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{qty:rawAmt(e.target.value)})} style={num}/></td>
+                              <td style={{...td,width:62}}>
+                                <select value={u} onChange={e=>updateBuyingLine(r.id,{unit:e.target.value,unitTouched:true})} style={{...ci,cursor:"pointer"}}>
+                                  {["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}
+                                </select>
+                              </td>
+                              <td style={{...td,width:78}}><input value={fmtAmtIN(r.costPerKg)} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{costPerKg:rawAmt(e.target.value),currency:"INR"})} style={num}/></td>
+                              <td style={{...td,width:78}}><input value={fmtAmtIN(r.targetSellPrice)} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{targetSellPrice:rawAmt(e.target.value)})} style={num}/></td>
+                              <td style={{...td,width:70}}><input value={fmtAmtIN(su)} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{targetSellPriceUsd:rawAmt(e.target.value)})} style={num}/></td>
+                              <td style={{...td,width:62,textAlign:"right",padding:"6px 8px",fontSize:11,fontWeight:800,color:mColor}}>{margin==null?"—":`${margin.toFixed(0)}%`}</td>
+                              <td style={{...td,width:90,padding:"6px 8px",fontSize:10,color:lineOrdered(r)?C.green:C.inkFaint,whiteSpace:"nowrap"}}>{lineOrdered(r)?r.poNumber:"—"}</td>
+                              <td style={{...td,width:30,textAlign:"center"}}><button title="Delete row" onClick={()=>removeBuyingLine(r.id)} style={{background:"none",border:"none",color:C.red,fontSize:15,cursor:"pointer",padding:"4px 6px",lineHeight:1}}>×</button></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      {rows.length>0&&(
+                        <tfoot>
+                          <tr style={{background:C.card,fontWeight:900}}>
+                            <td colSpan={5} style={{border:`1px solid ${C.border}`,padding:"7px 8px",fontSize:10,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4}}>Total · {rows.length} lines</td>
+                            <td style={{border:`1px solid ${C.border}`,padding:"7px 8px",textAlign:"right",fontSize:11,color:C.ink}}>₹{fmtAmtIN(Math.round(tCp))}</td>
+                            <td style={{border:`1px solid ${C.border}`,padding:"7px 8px",textAlign:"right",fontSize:11,color:C.green}}>₹{fmtAmtIN(Math.round(tSp))}</td>
+                            <td style={{border:`1px solid ${C.border}`,padding:"7px 8px",textAlign:"right",fontSize:11,color:C.blue}}>${fmtAmtIN(Math.round(tUsd))}</td>
+                            <td colSpan={3} style={{border:`1px solid ${C.border}`,background:C.card}}></td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                  <div style={{marginTop:9}}>
+                    <button onClick={addRow} style={{background:C.surface,border:`1.5px dashed ${C.green}66`,borderRadius:9,padding:"9px 14px",fontSize:12,fontWeight:800,color:C.green,cursor:"pointer",width:"100%"}}>+ Add row</button>
+                  </div>
+                </div>
+                );
+              })():(
                 <div style={{display:"grid",gridTemplateColumns:buyingPlanView==="compact"&&!mob?"minmax(230px,30%) minmax(0,70%)":buyingPlanView==="cards"&&!mob?"repeat(3,minmax(0,1fr))":"1fr",gap:buyingPlanView==="compact"&&!mob?12:buyingPlanView==="cards"&&!mob?10:6,alignItems:"start"}}>
                   {!mob&&buyingPlanView==="rows"&&(
                     <div style={{display:"grid",gridTemplateColumns:"1.2fr .85fr 1fr .45fr .48fr .68fr 70px",gap:5,padding:"0 7px",gridColumn:"1 / -1"}}>
