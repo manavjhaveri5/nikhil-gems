@@ -10170,7 +10170,7 @@ function SheetMultiSelect({allLabel,options,selected,onChange}){
 // focus leaves the whole row (or Enter). Tabbing/clicking between cells in the
 // same row does NOT commit — so an active filter can't drop the row while you're
 // still editing it.
-function SheetRow({row,datalistId,onCommit,onDelete,onInsert,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
+function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
   const make=()=>({
     stone:row.stone||"",shape:row.shape||"",vendor:row.vendor||"",qty:row.qty||"",
     unit:(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":(row.unit||"kg"),
@@ -10208,6 +10208,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,lineOrdered,hovered
       onFocus={()=>{editing.current=true;}}
       onBlur={e=>{ if(e.currentTarget.contains(e.relatedTarget))return; editing.current=false; commit(); }}
       onKeyDown={e=>{ if(e.key==="Enter"){ commit(); if(e.target&&e.target.blur)e.target.blur(); } }}
+      onContextMenu={e=>{ if(onContext){ e.preventDefault(); onContext(e.clientX,e.clientY,row.id); } }}
       onMouseEnter={()=>setHover(row.id)} onMouseLeave={()=>setHover(s=>s===row.id?null:s)}>
       <td style={{...td,minWidth:130,position:"relative"}}>
         <input value={d.stone} list={`${datalistId}-stones`} placeholder="—" onChange={e=>set("stone",e.target.value)} style={{...ci,fontWeight:700}}/>
@@ -10270,6 +10271,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [sheetShapes,setSheetShapes]=useState([]);
   const [sheetSort,setSheetSort]=useState({col:null,dir:"asc"});
   const [sheetHoverRow,setSheetHoverRow]=useState(null);
+  const [sheetCtxMenu,setSheetCtxMenu]=useState(null);
+  const [buyingUndoFlash,setBuyingUndoFlash]=useState(false);
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
   const [whatsappMode,setWhatsappMode]=useState("prices");
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
@@ -10382,7 +10385,34 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const shapeNotePresets=show.buyingPlanShapeNotes||{};
   const shapeNoteFor=shape=>shapeNotePresets[normPlanText(shape)]||"";
   const saveShapeNotePresets=next=>onUpdateShow(show.id,"buyingPlanShapeNotes",next);
-  const saveBuyingPlan=plan=>onUpdateShow(show.id,"buyingPlan",plan);
+  const buyingUndoRef=useRef([]);
+  const saveBuyingPlan=plan=>{
+    buyingUndoRef.current=[...buyingUndoRef.current,buyingPlan].slice(-100);
+    onUpdateShow(show.id,"buyingPlan",plan);
+  };
+  // Cmd/Ctrl+Z restores the previous buying-plan state (last add / edit / delete /
+  // duplicate). Skipped while a text field is focused so native text-undo still works.
+  const undoBuyingRef=useRef(()=>false);
+  undoBuyingRef.current=()=>{
+    if(showTab!=="buying")return false;
+    const stack=buyingUndoRef.current;
+    if(!stack.length)return false;
+    const prev=stack[stack.length-1];
+    buyingUndoRef.current=stack.slice(0,-1);
+    onUpdateShow(show.id,"buyingPlan",prev);
+    setBuyingUndoFlash(true);setTimeout(()=>setBuyingUndoFlash(false),1100);
+    return true;
+  };
+  useEffect(()=>{
+    const onKey=e=>{
+      if(!((e.metaKey||e.ctrlKey)&&!e.shiftKey&&(e.key==="z"||e.key==="Z")))return;
+      const t=document.activeElement&&document.activeElement.tagName;
+      if(t==="INPUT"||t==="SELECT"||t==="TEXTAREA")return;
+      if(undoBuyingRef.current())e.preventDefault();
+    };
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[]);
   const vendorQuotesForStone=stoneKey=>vendorQuoteBook[stoneKey]||[];
   const saveVendorQuotesForStone=(stoneKey,rows)=>onUpdateShow(show.id,"buyingPlanVendorQuotes",{...vendorQuoteBook,[stoneKey]:rows});
   const addVendorQuote=(stoneKey,seed={})=>{
@@ -10963,6 +10993,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         ):rows.map(r=>(
                           <SheetRow key={r.id} row={r} datalistId={planDatalistId}
                             onCommit={updateBuyingLine} onDelete={removeBuyingLine} onInsert={insertBuyingLineAfter}
+                            onContext={(x,y,id)=>setSheetCtxMenu({x,y,rowId:id})}
                             lineOrdered={lineOrdered} hovered={sheetHoverRow===r.id} setHover={setSheetHoverRow}
                             rawAmt={rawAmt} usdFromInr={usdFromInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
                         ))}
@@ -10972,6 +11003,23 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{marginTop:9}}>
                     <button onClick={addRow} style={{background:C.surface,border:`1.5px dashed ${C.green}66`,borderRadius:9,padding:"9px 14px",fontSize:12,fontWeight:800,color:C.green,cursor:"pointer",width:"100%"}}>+ Add row</button>
                   </div>
+                  {buyingUndoFlash&&<div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:300,background:C.ink,color:C.surface,fontSize:12,fontWeight:700,padding:"8px 16px",borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.3)"}}>↩ Undid last change</div>}
+                  {sheetCtxMenu&&(()=>{
+                    const ctxRow=buyingPlan.find(r=>r.id===sheetCtxMenu.rowId);
+                    const items=[
+                      ["⎘  Duplicate row",()=>duplicateBuyingLine(sheetCtxMenu.rowId)],
+                      ["＋  Insert row below",()=>insertBuyingLineAfter(sheetCtxMenu.rowId,{stone:ctxRow?.stone,shape:ctxRow?.shape,vendor:ctxRow?.vendor,unit:ctxRow?.unit})],
+                      ["✕  Delete row",()=>removeBuyingLine(sheetCtxMenu.rowId),true],
+                    ];
+                    return(<>
+                      <div onClick={()=>setSheetCtxMenu(null)} onContextMenu={e=>{e.preventDefault();setSheetCtxMenu(null);}} style={{position:"fixed",inset:0,zIndex:200}}/>
+                      <div style={{position:"fixed",left:Math.min(sheetCtxMenu.x,window.innerWidth-200),top:Math.min(sheetCtxMenu.y,window.innerHeight-150),zIndex:201,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,boxShadow:"0 12px 32px rgba(26,19,8,.22)",padding:5,minWidth:184}}>
+                        {items.map(([label,fn,danger],i)=>(
+                          <button key={i} onClick={()=>{fn();setSheetCtxMenu(null);}} style={{display:"block",width:"100%",textAlign:"left",background:"transparent",border:"none",borderRadius:7,padding:"9px 11px",fontSize:12.5,fontWeight:600,color:danger?C.red:C.ink,cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background=danger?C.redBg:C.fill} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>{label}</button>
+                        ))}
+                      </div>
+                    </>);
+                  })()}
                 </div>
                 );
               })():(
