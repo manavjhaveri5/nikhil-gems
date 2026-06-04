@@ -10169,6 +10169,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [planVendorFilter,setPlanVendorFilter]=useState("all");
   const [sheetStone,setSheetStone]=useState("all");
   const [sheetShape,setSheetShape]=useState("all");
+  const [sheetSort,setSheetSort]=useState({col:null,dir:"asc"});
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
   const [whatsappMode,setWhatsappMode]=useState("prices");
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
@@ -10794,10 +10795,23 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 const stoneMap=new Map(buyingPlan.filter(r=>String(r.stone||"").trim()).map(r=>[normPlanText(r.stone),String(r.stone).trim()]));
                 const shapeMap=new Map(buyingPlan.filter(r=>String(r.shape||"").trim()).map(r=>[normPlanText(r.shape),String(r.shape).trim()]));
                 const vendorOpts=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
-                const rows=groupedBuyingPlan.filter(r=>
+                const filtered=groupedBuyingPlan.filter(r=>
                   (planVendorFilter==="all"||r.vendor===planVendorFilter)&&
                   (sheetStone==="all"||normPlanText(r.stone)===sheetStone)&&
                   (sheetShape==="all"||normPlanText(r.shape)===sheetShape));
+                const sortVal={
+                  stone:r=>String(r.stone||"").toLowerCase(), shape:r=>String(r.shape||"").toLowerCase(), vendor:r=>String(r.vendor||"").toLowerCase(),
+                  qty:r=>+r.qty||0, unit:r=>String(r.unit||"").toLowerCase(), cp:r=>+r.costPerKg||0, sp:r=>+r.targetSellPrice||0,
+                  usd:r=>+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0,
+                  margin:r=>{const c=+r.costPerKg||0,s=+r.targetSellPrice||0;return s>0&&c>0?((s-c)/s)*100:-1;},
+                  po:r=>lineOrdered(r)?String(r.poNumber||"").toLowerCase():"",
+                };
+                const rows=(sheetSort.col&&sortVal[sheetSort.col])?[...filtered].sort((a,b)=>{
+                  const f=sortVal[sheetSort.col],va=f(a),vb=f(b);
+                  const cmp=typeof va==="number"?va-vb:String(va).localeCompare(String(vb));
+                  return sheetSort.dir==="asc"?cmp:-cmp;
+                }):filtered;
+                const toggleSort=key=>setSheetSort(s=>s.col===key?{col:key,dir:s.dir==="asc"?"desc":"asc"}:{col:key,dir:"asc"});
                 const anyFilter=planVendorFilter!=="all"||sheetStone!=="all"||sheetShape!=="all";
                 const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
                 const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
@@ -10806,7 +10820,12 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 const td={border:`1px solid ${C.border}`,padding:0,background:C.surface,verticalAlign:"middle"};
                 const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
                 const num={...ci,textAlign:"right"};
-                const th=(label,align)=>(<th style={{position:"sticky",top:0,zIndex:1,background:C.card,borderBottom:`2px solid ${C.border}`,borderRight:`1px solid ${C.border}`,padding:"7px 8px",textAlign:align||"left",fontSize:9,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4,whiteSpace:"nowrap"}}>{label}</th>);
+                const th=(label,key,align)=>{
+                  const active=key&&sheetSort.col===key;
+                  return(<th onClick={key?()=>toggleSort(key):undefined} title={key?"Click to sort":undefined} style={{position:"sticky",top:0,zIndex:1,background:active?C.greenBg:C.card,borderBottom:`2px solid ${active?C.green+"66":C.border}`,borderRight:`1px solid ${C.border}`,padding:"7px 8px",textAlign:align||"left",fontSize:9,fontWeight:900,color:active?C.green:C.inkFaint,textTransform:"uppercase",letterSpacing:.4,whiteSpace:"nowrap",cursor:key?"pointer":"default",userSelect:"none"}}>
+                    <span style={{display:"inline-flex",alignItems:"center",gap:3,justifyContent:align==="right"?"flex-end":"flex-start",width:"100%"}}>{label}{key&&<span style={{fontSize:9,opacity:active?1:.35}}>{active?(sheetSort.dir==="asc"?"▲":"▼"):"↕"}</span>}</span>
+                  </th>);
+                };
                 const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStone!=="all"?(stoneMap.get(sheetStone)||""):"",shape:sheetShape!=="all"?(shapeMap.get(sheetShape)||""):""});
                 return(
                 <div>
@@ -10833,7 +10852,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
                     <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
                       <thead>
-                        <tr>{th("Stone")}{th("Shape")}{th("Vendor")}{th("Qty","right")}{th("Unit")}{th("CP ₹","right")}{th("SP ₹","right")}{th("SP $","right")}{th("Margin","right")}{th("PO")}{th("")}</tr>
+                        <tr>{th("Stone","stone")}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right")}{th("Unit","unit")}{th("CP ₹","cp","right")}{th("SP ₹","sp","right")}{th("SP $","usd","right")}{th("Margin","margin","right")}{th("PO","po")}{th("")}</tr>
                       </thead>
                       <tbody>
                         {rows.length===0?(
