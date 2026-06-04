@@ -10671,6 +10671,16 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
       addBuyingLineForStone(compactBuyingRows[compactBuyingRows.length-1]);
       return;
     }
+    if(buyingPlanView==="sheet"){
+      // Seed with the active sheet filters so the new line shows up in the
+      // current filtered view instead of landing "outside" it.
+      addBuyingLine({
+        vendor:planVendorFilter!=="all"?planVendorFilter:"",
+        stone:sheetStones.length?(buyingPlan.find(r=>normPlanText(r.stone)===sheetStones[0])?.stone||""):"",
+        shape:sheetShapes.length?(buyingPlan.find(r=>normPlanText(r.shape)===sheetShapes[0])?.shape||""):"",
+      });
+      return;
+    }
     addBuyingLine();
   };
   const planDatalistId=`buy-plan-${show.id}`;
