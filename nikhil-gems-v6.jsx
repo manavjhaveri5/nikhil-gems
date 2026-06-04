@@ -10170,7 +10170,7 @@ function SheetMultiSelect({allLabel,options,selected,onChange}){
 // focus leaves the whole row (or Enter). Tabbing/clicking between cells in the
 // same row does NOT commit — so an active filter can't drop the row while you're
 // still editing it.
-function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
+function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
   const make=()=>({
     stone:row.stone||"",shape:row.shape||"",vendor:row.vendor||"",qty:row.qty||"",
     unit:(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":(row.unit||"kg"),
@@ -10196,7 +10196,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,lineOrder
     if(rawAmt(d.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(d.usd);
     if(Object.keys(patch).length)onCommit(row.id,patch);
   };
-  const td={border:`1px solid ${C.border}`,padding:0,background:C.surface,verticalAlign:"middle"};
+  const td={border:`1px solid ${C.border}`,padding:0,background:bandBg||C.surface,verticalAlign:"middle"};
   const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
   const num={...ci,textAlign:"right"};
   const cp=+rawAmt(d.cp)||0,sp=+rawAmt(d.sp)||0;
@@ -10924,6 +10924,16 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   return sheetSort.dir==="asc"?cmp:-cmp;
                 }):filtered;
                 const toggleSort=key=>setSheetSort(s=>s.col===key?{col:key,dir:s.dir==="asc"?"desc":"asc"}:{col:key,dir:"asc"});
+                // Zebra-band by the active grouping (the sorted column; stone when unsorted)
+                // so consecutive rows that share that value get one shade — easy to separate.
+                const bandKeyFor=r=>{
+                  const col=sheetSort.col;
+                  if(col==="vendor")return String(r.vendor||"").toLowerCase();
+                  if(col==="shape")return normPlanText(r.shape);
+                  if(col&&col!=="stone"&&sortVal[col])return String(sortVal[col](r));
+                  return normPlanText(r.stone);
+                };
+                const bandMap={};{let bi=0,pk=null;rows.forEach(r=>{const k=bandKeyFor(r);if(pk!==null&&k!==pk)bi^=1;pk=k;bandMap[r.id]=bi;});}
                 const anyFilter=sheetVendors.length>0||sheetStones.length>0||sheetShapes.length>0;
                 const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
                 const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
@@ -11023,6 +11033,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           <SheetRow key={r.id} row={r} datalistId={planDatalistId}
                             onCommit={updateBuyingLine} onDelete={removeBuyingLine} onInsert={insertBuyingLineAfter}
                             onContext={(x,y,id)=>setSheetCtxMenu({x,y,rowId:id})}
+                            bandBg={bandMap[r.id]?C.greenBg:C.surface}
                             lineOrdered={lineOrdered} hovered={sheetHoverRow===r.id} setHover={setSheetHoverRow}
                             rawAmt={rawAmt} usdFromInr={usdFromInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
                         ))}
