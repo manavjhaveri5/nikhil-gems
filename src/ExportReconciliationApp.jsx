@@ -585,6 +585,7 @@ export default function App({ company = "atyahara" }) {
 
       {/* ── Main content ── */}
       <div style={{...S.content, transition:"margin-right .25s var(--ease,ease)", marginRight: docViewer&&!mob ? 500 : 0}}>
+        <HowItWorks setView={setView}/>
         {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={setSheet}/>}
         {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={setSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
         {view==="invoices" && <InvoicesView data={data} onAddInvoice={addInvoice} onPatchInvoice={patchInvoice} onDeleteInvoice={deleteInvoice} onApprove={approveInvoice} showPdf={showPdf}/>}
@@ -2335,6 +2336,54 @@ function Loader(){return <div style={{display:"flex",alignItems:"center",justify
 function PH({title,sub}){return <div style={{marginBottom:22}}><div style={{fontFamily:FONT,fontSize:mob?22:26,fontWeight:700,letterSpacing:"-.02em",color:C.ink,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontSize:13,color:C.inkMid,marginTop:4}}>{sub}</div>}</div>;}
 function SecTitle({children}){return <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:"0.6px",marginBottom:10,marginTop:18}}>{children}</div>;}
 function Empty({icon,text}){return <div style={{textAlign:"center",padding:"60px 20px",color:C.inkFaint}}><div style={{fontSize:42,marginBottom:12}}>{icon}</div><div style={{fontSize:14}}>{text}</div></div>;}
+
+/* Plain-language onboarding guide. Collapsible + remembered, so it helps newcomers
+   without nagging power users. Steps double as quick-nav into the matching tabs. */
+const HOWTO_STEPS=[
+  {key:"fircs", n:1, icon:"💵", title:"Add FIRCs",          desc:"Bank certificates proving you received the foreign payment for your exports."},
+  {key:"sbs",   n:2, icon:"📦", title:"Add Shipping Bills", desc:"Customs documents proving the goods actually left the country."},
+  {key:"match", n:3, icon:"⇄",  title:"Match them",         desc:"Allocate each shipping bill against a FIRC, until the money received covers the goods shipped."},
+  {key:"sbs",   n:4, icon:"🏦", title:"Generate packet",    desc:"Once a FIRC is fully matched, generate the bank / FEMA submission packet."},
+];
+function HowItWorks({ setView }){
+  const [open,setOpen]=useState(()=>{try{return localStorage.getItem("er-howto-hidden")!=="1";}catch{return true;}});
+  const set=v=>{setOpen(v);try{localStorage.setItem("er-howto-hidden",v?"0":"1");}catch{}};
+  if(!open) return (
+    <button className="pr" onClick={()=>set(true)}
+      style={{display:"inline-flex",alignItems:"center",gap:6,background:"transparent",border:`1px solid ${C.border}`,borderRadius:20,padding:"5px 12px",fontSize:12,fontWeight:500,color:C.inkMid,cursor:"pointer",marginBottom:14}}>
+      ⓘ New here? How Export Recon works
+    </button>
+  );
+  return (
+    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:mob?"14px 14px 16px":"16px 18px 18px",marginBottom:16,boxShadow:"var(--e-1)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:15}}>🧭</span>
+          <span style={{fontFamily:FONT,fontSize:14,fontWeight:700,color:C.ink}}>How Export Recon works</span>
+        </div>
+        <button className="pr" onClick={()=>set(false)}
+          style={{background:C.fill,border:"none",borderRadius:7,padding:"5px 11px",fontSize:12,fontWeight:500,color:C.inkMid,cursor:"pointer"}}>
+          Got it · hide
+        </button>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(4,1fr)",gap:9}}>
+        {HOWTO_STEPS.map((s,i)=>(
+          <button key={i} className="pr" onClick={()=>setView(s.key)}
+            style={{textAlign:"left",background:C.card,border:`1px solid ${C.border}`,borderRadius:11,padding:"11px 12px",cursor:"pointer",display:"flex",flexDirection:"column",gap:5}}>
+            <div style={{display:"flex",alignItems:"center",gap:7}}>
+              <span style={{width:20,height:20,borderRadius:"50%",background:C.goldLight,color:C.amber,fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{s.n}</span>
+              <span style={{fontSize:13,fontWeight:700,color:C.ink}}>{s.icon} {s.title}</span>
+            </div>
+            <div style={{fontSize:11.5,color:C.inkMid,lineHeight:1.45}}>{s.desc}</div>
+          </button>
+        ))}
+      </div>
+      <div style={{fontSize:11.5,color:C.inkFaint,marginTop:11,lineHeight:1.5}}>
+        Why match? Indian FEMA rules require every export (shipping bill) to be accounted against an inward foreign payment (FIRC). Matching does exactly that — and the packet is your proof for the bank.
+      </div>
+    </div>
+  );
+}
 function Warn({text}){return <span style={{color:C.amber,fontSize:13}}>{text}</span>;}
 
 /* ══ DOCUMENT VIEWER PANEL ═══════════════════════════════════════ */
