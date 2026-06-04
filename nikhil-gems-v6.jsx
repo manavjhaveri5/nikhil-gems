@@ -10760,11 +10760,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <span style={{color:C.inkFaint}}>{sub}</span>
                   </div>
                 ))}
-                <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{...FI,fontSize:11,padding:"5px 9px",borderRadius:999,minWidth:130,cursor:"pointer",fontWeight:planVendorFilter!=="all"?900:undefined,color:planVendorFilter!=="all"?C.green:undefined,border:planVendorFilter!=="all"?`1.5px solid ${C.green}55`:undefined}}>
+                <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{background:C.surface,border:`1.5px solid ${planVendorFilter!=="all"?C.green+"88":C.border}`,color:planVendorFilter!=="all"?C.green:C.ink,borderRadius:999,padding:"5px 10px",fontSize:11,fontWeight:planVendorFilter!=="all"?900:undefined,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>
                   <option value="all">All vendors</option>
                   {[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort().map(v=><option key={v} value={v}>{v}</option>)}
                 </select>
-                <button onClick={e=>{e.stopPropagation();setWhatsappSummaryOpen(true);}} style={{background:"#25D366",color:"#fff",border:"none",borderRadius:999,padding:"5px 12px",fontSize:11,fontWeight:900,cursor:"pointer",display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",boxShadow:"0 2px 8px rgba(37,211,102,.3)"}}>
+                <button onClick={e=>{e.stopPropagation();setWhatsappSummaryOpen(true);}} style={{background:"#25D366",color:"#fff",border:"none",borderRadius:999,padding:"5px 12px",fontSize:11,fontWeight:900,cursor:"pointer",display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",boxShadow:"0 2px 8px rgba(37,211,102,.3)",flexShrink:0}}>
                   <span style={{fontSize:14,lineHeight:1}}>📱</span> WhatsApp
                 </button>
               </div>
@@ -11339,7 +11339,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         <button onClick={()=>setWhatsappSummaryOpen(false)} style={{width:30,height:30,border:`1px solid ${C.border}`,borderRadius:8,background:C.surface,cursor:"pointer",fontSize:18,lineHeight:1,color:C.inkMid,flexShrink:0}}>&times;</button>
                       </div>
                       <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                        <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{...FI,fontSize:11,padding:"6px 9px",borderRadius:8,minWidth:150,cursor:"pointer"}}>
+                        <select value={planVendorFilter} onChange={e=>setPlanVendorFilter(e.target.value)} style={{background:C.surface,border:`1px solid ${C.border}`,color:C.ink,borderRadius:8,padding:"6px 9px",fontSize:11,cursor:"pointer",fontFamily:"inherit",minWidth:150,flexShrink:0}}>
                           <option value="all">All vendors</option>
                           {waVendorOptions.map(v=><option key={v} value={v}>{v}</option>)}
                         </select>
