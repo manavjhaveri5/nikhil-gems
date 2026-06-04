@@ -10170,6 +10170,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [sheetStone,setSheetStone]=useState("all");
   const [sheetShape,setSheetShape]=useState("all");
   const [sheetSort,setSheetSort]=useState({col:null,dir:"asc"});
+  const [sheetHoverRow,setSheetHoverRow]=useState(null);
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
   const [whatsappMode,setWhatsappMode]=useState("prices");
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
@@ -10354,6 +10355,12 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     };
   };
   const addBuyingLine=(seed={})=>saveBuyingPlan([...buyingPlan,makeBuyingLine(seed)]);
+  const insertBuyingLineAfter=(afterId,seed={})=>{
+    const i=buyingPlan.findIndex(r=>r.id===afterId);
+    const line=makeBuyingLine(seed);
+    if(i<0){saveBuyingPlan([...buyingPlan,line]);return;}
+    saveBuyingPlan([...buyingPlan.slice(0,i+1),line,...buyingPlan.slice(i+1)]);
+  };
   const addBuyingLineForStone=row=>{
     const stone=String(row.stone||"").trim();
     if(!stone){addBuyingLine({vendor:row.vendor||"",unit:row.unit||"kg"});return;}
@@ -10864,8 +10871,14 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           const su=r.targetSellPriceUsd||usdFromInr(r.targetSellPrice);
                           const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":r.unit||"kg";
                           return(
-                            <tr key={r.id}>
-                              <td style={{...td,minWidth:130}}><input value={r.stone||""} list={`${planDatalistId}-stones`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{stone:e.target.value})} style={{...ci,fontWeight:700}}/></td>
+                            <tr key={r.id} onMouseEnter={()=>setSheetHoverRow(r.id)} onMouseLeave={()=>setSheetHoverRow(s=>s===r.id?null:s)}>
+                              <td style={{...td,minWidth:130,position:"relative"}}>
+                                <input value={r.stone||""} list={`${planDatalistId}-stones`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{stone:e.target.value})} style={{...ci,fontWeight:700}}/>
+                                {sheetHoverRow===r.id&&(
+                                  <button title="Insert a line below this one" onClick={()=>insertBuyingLineAfter(r.id,{stone:r.stone,shape:r.shape,vendor:r.vendor,unit:r.unit})}
+                                    style={{position:"absolute",left:5,bottom:-10,zIndex:6,width:20,height:20,borderRadius:"50%",background:C.green,color:"#fff",border:`2px solid ${C.surface}`,fontSize:14,fontWeight:900,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,boxShadow:"0 1px 5px rgba(26,19,8,.25)"}}>+</button>
+                                )}
+                              </td>
                               <td style={{...td,minWidth:95}}><input value={r.shape||""} list={`${planDatalistId}-shapes`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{shape:e.target.value})} onBlur={e=>{const ex=expandPlanShape(e.target.value);if(ex!==e.target.value)updateBuyingLine(r.id,{shape:ex});}} style={ci}/></td>
                               <td style={{...td,minWidth:110}}><input value={r.vendor||""} list={`${planDatalistId}-vendors`} placeholder="—" onChange={e=>updateBuyingLine(r.id,{vendor:e.target.value})} style={ci}/></td>
                               <td style={{...td,width:64}}><input value={r.qty||""} inputMode="decimal" placeholder="0" onChange={e=>updateBuyingLine(r.id,{qty:rawAmt(e.target.value)})} style={num}/></td>
