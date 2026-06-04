@@ -10933,7 +10933,9 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     {total!=null&&<div style={{fontSize:10.5,fontWeight:900,marginTop:3,color:totalColor||C.ink,textTransform:"none",letterSpacing:0,textAlign:align||"left"}}>{total}</div>}
                   </th>);
                 };
-                const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStones.length===1?(stoneMap.get(sheetStones[0])||""):"",shape:sheetShapes.length===1?(shapeMap.get(sheetShapes[0])||""):""});
+                // Seed the new row so it satisfies any active filters — otherwise a blank
+                // row would be hidden by the filter and look like "nothing happened".
+                const addRow=()=>addBuyingLine({vendor:planVendorFilter!=="all"?planVendorFilter:"",stone:sheetStones.length?(stoneMap.get(sheetStones[0])||""):"",shape:sheetShapes.length?(shapeMap.get(sheetShapes[0])||""):""});
                 return(
                 <div>
                   {/* Filters + actions */}
