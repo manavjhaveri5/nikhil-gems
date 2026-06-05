@@ -10172,7 +10172,7 @@ function SheetMultiSelect({allLabel,options,selected,onChange}){
 // focus leaves the whole row (or Enter). Tabbing/clicking between cells in the
 // same row does NOT commit — so an active filter can't drop the row while you're
 // still editing it.
-function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
+function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
   const make=()=>({
     stone:row.stone||"",shape:row.shape||"",vendor:row.vendor||"",qty:row.qty||"",
     unit:(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":(row.unit||"kg"),
@@ -10213,7 +10213,11 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,bandBg,li
       onContextMenu={e=>{ if(onContext){ e.preventDefault(); onContext(e.clientX,e.clientY,row.id); } }}
       onMouseEnter={()=>setHover(row.id)} onMouseLeave={()=>setHover(s=>s===row.id?null:s)}>
       <td style={{...td,minWidth:130,position:"relative"}}>
-        <input value={d.stone} list={`${datalistId}-stones`} placeholder="—" onChange={e=>set("stone",e.target.value)} style={{...ci,fontWeight:700}}/>
+        <input value={d.stone} list={`${datalistId}-stones`} placeholder="—" onChange={e=>set("stone",e.target.value)} style={{...ci,fontWeight:700,paddingRight:row.notes?20:8}}/>
+        {row.notes&&(
+          <button onClick={()=>onNote&&onNote(row.id,row.notes)} title={row.notes}
+            style={{position:"absolute",right:3,top:"50%",transform:"translateY(-50%)",zIndex:5,background:"transparent",border:"none",cursor:"pointer",fontSize:11,lineHeight:1,padding:2}}>📝</button>
+        )}
         {hovered&&(
           <button title="Insert a line below this one" onClick={()=>onInsert(row.id,{stone:row.stone,shape:row.shape,vendor:row.vendor,unit:row.unit})}
             style={{position:"absolute",left:5,bottom:-10,zIndex:6,width:20,height:20,borderRadius:"50%",background:C.green,color:"#fff",border:`2px solid ${C.surface}`,fontSize:14,fontWeight:900,lineHeight:1,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0,boxShadow:"0 1px 5px rgba(26,19,8,.25)"}}>+</button>
@@ -10275,6 +10279,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [sheetCtxMenu,setSheetCtxMenu]=useState(null);
   const [buyingUndoFlash,setBuyingUndoFlash]=useState(false);
   const [sheetCopyFlash,setSheetCopyFlash]=useState(false);
+  const [sheetNoteEdit,setSheetNoteEdit]=useState(null);
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
   const [whatsappMode,setWhatsappMode]=useState("prices");
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
@@ -11035,6 +11040,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           <SheetRow key={r.id} row={r} datalistId={planDatalistId}
                             onCommit={updateBuyingLine} onDelete={removeBuyingLine} onInsert={insertBuyingLineAfter}
                             onContext={(x,y,id)=>setSheetCtxMenu({x,y,rowId:id})}
+                            onNote={(id,note)=>setSheetNoteEdit({rowId:id,value:note||""})}
                             bandBg={bandMap[r.id]?C.greenBg:C.surface}
                             lineOrdered={lineOrdered} hovered={sheetHoverRow===r.id} setHover={setSheetHoverRow}
                             rawAmt={rawAmt} usdFromInr={usdFromInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
@@ -11047,10 +11053,30 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   </div>
                   {buyingUndoFlash&&<div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:300,background:C.ink,color:C.surface,fontSize:12,fontWeight:700,padding:"8px 16px",borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.3)"}}>↩ Undid last change</div>}
                   {sheetCopyFlash&&<div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:300,background:C.green,color:"#fff",fontSize:12,fontWeight:700,padding:"8px 16px",borderRadius:999,boxShadow:"0 8px 24px rgba(14,91,54,.3)"}}>📋 Order copied — paste to your vendor</div>}
+                  {sheetNoteEdit&&(()=>{
+                    const nr=buyingPlan.find(r=>r.id===sheetNoteEdit.rowId);
+                    const save=()=>{updateBuyingLine(sheetNoteEdit.rowId,{notes:sheetNoteEdit.value.trim(),notesAuto:false});setSheetNoteEdit(null);};
+                    return(
+                      <div onClick={()=>setSheetNoteEdit(null)} style={{position:"fixed",inset:0,background:"rgba(17,12,7,.28)",zIndex:210,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+                        <div onClick={e=>e.stopPropagation()} style={{width:"min(440px,calc(100vw - 32px))",background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,boxShadow:"0 24px 80px rgba(17,12,7,.28)",padding:18}}>
+                          <div style={{fontSize:13,fontWeight:900,color:C.ink}}>Note{nr?` · ${[nr.stone,nr.shape].filter(Boolean).join(" · ")}`:""}</div>
+                          <textarea autoFocus value={sheetNoteEdit.value} onChange={e=>setSheetNoteEdit(s=>({...s,value:e.target.value}))}
+                            onKeyDown={e=>{if((e.metaKey||e.ctrlKey)&&e.key==="Enter")save();if(e.key==="Escape")setSheetNoteEdit(null);}}
+                            placeholder="Quality, size, quote, anything for this line…"
+                            style={{width:"100%",boxSizing:"border-box",minHeight:90,marginTop:10,padding:"9px 11px",fontSize:13,fontFamily:"inherit",border:`1px solid ${C.border}`,borderRadius:9,resize:"vertical",outline:"none",color:C.ink,background:C.card}}/>
+                          <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:12}}>
+                            <button onClick={()=>setSheetNoteEdit(null)} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 14px",fontSize:12,fontWeight:700,color:C.inkMid,cursor:"pointer"}}>Cancel</button>
+                            <button onClick={save} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:12,fontWeight:900,cursor:"pointer"}}>Save note</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {sheetCtxMenu&&(()=>{
                     const ctxRow=buyingPlan.find(r=>r.id===sheetCtxMenu.rowId);
                     const q=+(ctxRow?.qty)||0, lineCp=q*(+(ctxRow?.costPerKg)||0), lineSp=q*(+(ctxRow?.targetSellPrice)||0), lineUsd=q*(+(ctxRow?.targetSellPriceUsd||usdFromInr(ctxRow?.targetSellPrice))||0);
                     const items=[
+                      [(ctxRow?.notes?"📝  Edit note":"📝  Add note"),()=>setSheetNoteEdit({rowId:sheetCtxMenu.rowId,value:ctxRow?.notes||""})],
                       ["⎘  Duplicate row",()=>duplicateBuyingLine(sheetCtxMenu.rowId)],
                       ["＋  Insert row below",()=>insertBuyingLineAfter(sheetCtxMenu.rowId,{stone:ctxRow?.stone,shape:ctxRow?.shape,vendor:ctxRow?.vendor,unit:ctxRow?.unit})],
                       ["✕  Delete row",()=>removeBuyingLine(sheetCtxMenu.rowId),true],
