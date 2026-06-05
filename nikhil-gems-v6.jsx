@@ -11514,6 +11514,18 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         if(sp>0&&cq>0)parts.push(`Total ₹${fmtAmtIN(cq*sp)}`);
                         lines.push(`• ${parts.join(" | ")}`);
                       });
+                    }else if(whatsappMode==="cost"){
+                      const groupKg=rows.reduce((s,r)=>s+buyingLineKg(r),0);
+                      lines.push(`*${shapeName}*${groupKg>0?` (${fmtAmtIN(groupKg)} kg)`:""}`);
+                      rows.forEach(r=>{
+                        const cq=buyingLineCostQty(r);
+                        const cp=+r.costPerKg||0;
+                        const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
+                        const parts=[r.stone||"—",qtyStr];
+                        if(cp>0)parts.push(`CP ₹${fmtAmtIN(cp)}`);
+                        if(cp>0&&cq>0)parts.push(`Total ₹${fmtAmtIN(cq*cp)}`);
+                        lines.push(`• ${parts.join(" | ")}`);
+                      });
                     }else{
                       lines.push(`*${shapeName}*`);
                       rows.forEach(r=>{
@@ -11529,6 +11541,10 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     const parts=[waTotals.kg>0?`${fmtAmtIN(waTotals.kg)} kg`:null,waTotals.cp>0?`CP ₹${fmtAmtIN(waTotals.cp)}`:null,waTotals.sp>0?`SP ₹${fmtAmtIN(waTotals.sp)}`:null,waTotals.usd>0?`$${fmtAmtIN(waTotals.usd)}`:null].filter(Boolean);
                     lines.push(`*Total: ${parts.join(" | ")}*`);
                     if(waMargin!=null)lines.push(`Margin: ${waMargin.toFixed(1)}%`);
+                  }else if(whatsappMode==="cost"){
+                    lines.push(`---`);
+                    const parts=[waTotals.kg>0?`${fmtAmtIN(waTotals.kg)} kg`:null,waTotals.cp>0?`Total ₹${fmtAmtIN(waTotals.cp)}`:null].filter(Boolean);
+                    lines.push(`*${parts.join(" | ")}*`);
                   }else{
                     lines.push(`Total: ${waTotals.kg>0?`${fmtAmtIN(waTotals.kg)} kg | `:""}${waTotals.lines} line${waTotals.lines===1?"":"s"}`);
                   }
@@ -11552,7 +11568,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                           {waVendorOptions.map(v=><option key={v} value={v}>{v}</option>)}
                         </select>
                         <div style={{display:"flex",gap:2,background:C.card,border:`1px solid ${C.border}`,borderRadius:999,padding:2}}>
-                          {[["prices","With Prices"],["quality","Quality Only"]].map(([mode,label])=>(
+                          {[["prices","With Prices"],["cost","Cost (Vendor)"],["quality","Quality Only"]].map(([mode,label])=>(
                             <button key={mode} onClick={()=>setWhatsappMode(mode)} style={{background:whatsappMode===mode?"#25D366":"transparent",border:"none",borderRadius:999,padding:"5px 11px",fontSize:11,fontWeight:850,color:whatsappMode===mode?"#fff":C.inkFaint,cursor:"pointer"}}>
                               {label}
                             </button>
