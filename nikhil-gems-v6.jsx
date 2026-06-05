@@ -10947,6 +10947,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
                 const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
                 const tUsd=rows.reduce((s,r)=>s+(+r.qty||0)*(+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0),0);
+                const tQty=(()=>{const m=new Map();rows.forEach(r=>{const q=+r.qty||0;if(!q)return;const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");m.set(u,(m.get(u)||0)+q);});const order=["kg","pcs"];return [...m.entries()].sort((a,b)=>{const ia=order.indexOf(a[0]),ib=order.indexOf(b[0]);return (ia<0?9:ia)-(ib<0?9:ib);}).map(([u,q])=>`${fmtAmtIN(q)} ${u}`).join(" · ");})();
                 const sel={background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,cursor:"pointer",fontFamily:"inherit",color:C.ink};
                 const td={border:`1px solid ${C.border}`,padding:0,background:C.surface,verticalAlign:"middle"};
                 const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
@@ -10995,7 +10996,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <table>
                       <thead><tr><th>Stone</th><th>Shape</th><th>Vendor</th><th class=r>Qty</th><th>Unit</th><th class=r>CP ₹</th><th class=r>SP ₹</th><th class=r>SP $</th><th class=r>Margin</th><th>PO</th></tr></thead>
                       <tbody>${body||'<tr><td colspan=10 style="text-align:center;color:#999;padding:20px">No rows</td></tr>'}</tbody>
-                      <tfoot><tr><td colspan=5>Total · ${rows.length} lines</td><td class=r>₹${esc(fmtAmtIN(Math.round(tCp)))||"0"}</td><td class=r>₹${esc(fmtAmtIN(Math.round(tSp)))||"0"}</td><td class=r>$${esc(fmtAmtIN(Math.round(tUsd)))||"0"}</td><td></td><td></td></tr></tfoot>
+                      <tfoot><tr><td colspan=3>Total · ${rows.length} lines</td><td class=r>${esc(tQty)||""}</td><td></td><td class=r>₹${esc(fmtAmtIN(Math.round(tCp)))||"0"}</td><td class=r>₹${esc(fmtAmtIN(Math.round(tSp)))||"0"}</td><td class=r>$${esc(fmtAmtIN(Math.round(tUsd)))||"0"}</td><td></td><td></td></tr></tfoot>
                     </table>
                   </body></html>`;
                   const w=window.open("","_blank");
@@ -11033,7 +11034,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
                     <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
                       <thead>
-                        <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right")}{th("Unit","unit")}{th("CP ₹","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("Ordered","ordered")}{th("")}</tr>
+                        <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right",tQty||null,C.ink)}{th("Unit","unit")}{th("CP ₹","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("Ordered","ordered")}{th("")}</tr>
                       </thead>
                       <tbody>
                         {rows.length===0?(
