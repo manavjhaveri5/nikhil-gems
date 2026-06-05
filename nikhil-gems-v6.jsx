@@ -11521,10 +11521,13 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         const cq=buyingLineCostQty(r);
                         const cp=+r.costPerKg||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
-                        const parts=[r.stone||"—",qtyStr];
-                        if(cp>0)parts.push(`CP ₹${fmtAmtIN(cp)}`);
-                        if(cp>0&&cq>0)parts.push(`Total ₹${fmtAmtIN(cq*cp)}`);
-                        lines.push(`• ${parts.join(" | ")}`);
+                        if(cp>0&&cq>0){
+                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)} = ₹${fmtAmtIN(cq*cp)}`);
+                        }else if(cp>0){
+                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)}`);
+                        }else{
+                          lines.push(`• ${r.stone||"—"} - ${qtyStr}`);
+                        }
                       });
                     }else{
                       lines.push(`*${shapeName}*`);
