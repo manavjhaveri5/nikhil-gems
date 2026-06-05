@@ -4418,7 +4418,9 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     const merged={...keepItem,qty:String(newQty),...(newQty2>0?{qty2:String(newQty2)}:{}),updatedAt:new Date().toISOString()};
     const newStock=stock.filter(s=>s.id!==dropId).map(s=>s.id===keepId?merged:s);
     setStock(newStock);
-    try{await saveStockK(newStock);showToast("✓ Items merged");setSelectedIds(new Set());setSelectMode(false);setMergeOpen(false);}
+    // Pass deletedIds so saveStockK's remote-merge drops the merged-away item too —
+    // without it the server copy is re-added on save and the duplicate reappears on reload.
+    try{await saveStockK(newStock,{deletedIds:[dropId]});showToast("✓ Items merged");setSelectedIds(new Set());setSelectMode(false);setMergeOpen(false);}
     catch(e){showToast("⚠ Save failed: "+e.message);}
   };
   const swapQtyBulk=async ids=>{if(!ids.size)return;const list=stock.map(s=>ids.has(s.id)?{...s,qty:s.qty2||"",unit:s.unit2||"pcs",qty2:s.qty||"",unit2:s.unit||"pcs",updatedAt:new Date().toISOString()}:s);setStock(list);try{await saveStockK(list);showToast(ids.size+" items swapped");}catch(e){showToast("Swap failed: "+e.message);};};
