@@ -11461,25 +11461,25 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               {whatsappSummaryOpen&&(()=>{
                 const waVendorOptions=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
                 const waRows=planVendorFilter==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planVendorFilter);
-                const waGroups=(()=>{const order=[];const groups=new Map();waRows.forEach(row=>{const k=normPlanText(row.stone)||`__${row.id}`;if(!groups.has(k)){groups.set(k,[]);order.push(k);}groups.get(k).push(row);});return order.map(k=>({stoneKey:k,rows:groups.get(k)}));})();
+                const waGroups=(()=>{const order=[];const groups=new Map();waRows.forEach(row=>{const k=normPlanText(row.shape)||`__${row.id}`;if(!groups.has(k)){groups.set(k,[]);order.push(k);}groups.get(k).push(row);});return order.map(k=>({shapeKey:k,rows:groups.get(k)}));})();
                 const waTotals=waRows.reduce((m,r)=>{const cq=buyingLineCostQty(r);m.kg+=buyingLineKg(r);m.cp+=cq*(+r.costPerKg||0);m.sp+=cq*(+r.targetSellPrice||0);m.usd+=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);m.lines+=1;return m;},{kg:0,cp:0,sp:0,usd:0,lines:0});
                 const waMargin=waTotals.sp>0&&waTotals.cp>0?((waTotals.sp-waTotals.cp)/waTotals.sp)*100:null;
                 const buildMessage=()=>{
                   const header=whatsappMode==="prices"?`*${show.name} - Buying Plan*`:`*${show.name} - Order List*`;
                   const vendorLine=planVendorFilter!=="all"?`Vendor: ${planVendorFilter}`:`All Vendors`;
                   const lines=[header,vendorLine,""];
-                  waGroups.forEach(({stoneKey,rows})=>{
-                    const stoneName=rows.find(r=>r.stone)?.stone||"Stone";
+                  waGroups.forEach(({rows})=>{
+                    const shapeName=rows.find(r=>r.shape)?.shape||"(no shape)";
                     if(whatsappMode==="prices"){
                       const groupKg=rows.reduce((s,r)=>s+buyingLineKg(r),0);
-                      lines.push(`*${stoneName}*${groupKg>0?` (${fmtAmtIN(groupKg)} kg)`:""}`);
+                      lines.push(`*${shapeName}*${groupKg>0?` (${fmtAmtIN(groupKg)} kg)`:""}`);
                       rows.forEach(r=>{
                         const cq=buyingLineCostQty(r);
                         const cp=+r.costPerKg||0;
                         const sp=+r.targetSellPrice||0;
                         const usd=+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
-                        const parts=[r.shape||"—",qtyStr];
+                        const parts=[r.stone||"—",qtyStr];
                         if(cp>0)parts.push(`CP ₹${fmtAmtIN(cp)}`);
                         if(sp>0)parts.push(`SP ₹${fmtAmtIN(sp)}`);
                         if(usd>0)parts.push(`$${fmtAmtIN(usd)}`);
@@ -11487,11 +11487,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         lines.push(`• ${parts.join(" | ")}`);
                       });
                     }else{
-                      lines.push(`*${stoneName}*`);
+                      lines.push(`*${shapeName}*`);
                       rows.forEach(r=>{
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
                         const notePart=r.notes?` - ${r.notes}`:"";
-                        lines.push(`• ${r.shape||"—"} - ${qtyStr}${notePart}`);
+                        lines.push(`• ${r.stone||"—"} - ${qtyStr}${notePart}`);
                       });
                     }
                     lines.push("");
