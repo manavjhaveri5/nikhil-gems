@@ -2090,8 +2090,14 @@ function OrdersView({ orders, listings = [] }) {
                               </button>
                             </div>
                             {trackingDraft(order).error && (
-                              <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
-                                {trackingDraft(order).error}
+                              <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <span style={{ flex: 1, minWidth: 180 }}>{trackingDraft(order).error}</span>
+                                {/reconnect|permission|transactions_w|scope|re-?authori/i.test(String(trackingDraft(order).error)) && (
+                                  <button onClick={async () => { await fetch("/api/etsy-auth?action=invalidate").catch(() => {}); window.open("/api/etsy-auth?action=start", "_blank"); }}
+                                    style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 850, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                    🔑 Reconnect Etsy
+                                  </button>
+                                )}
                               </div>
                             )}
                             {trackingDraft(order).success && (
@@ -3100,8 +3106,14 @@ function EtsyLiveView() {
                                 </button>
                               </div>
                               {liveDraft.error && (
-                                <div style={{marginTop:8,fontSize:12,color:C.red,background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:8,padding:"7px 9px"}}>
-                                  {liveDraft.error}
+                                <div style={{marginTop:8,fontSize:12,color:C.red,background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:8,padding:"7px 9px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                                  <span style={{flex:1,minWidth:180}}>{liveDraft.error}</span>
+                                  {/reconnect|permission|transactions_w|scope|re-?authori/i.test(String(liveDraft.error)) && (
+                                    <button onClick={async()=>{await fetch("/api/etsy-auth?action=invalidate").catch(()=>{});window.open("/api/etsy-auth?action=start","_blank");}}
+                                      style={{background:"#F56400",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:850,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                                      🔑 Reconnect Etsy
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </>
