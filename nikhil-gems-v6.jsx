@@ -10232,6 +10232,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,width:70}}><input value={d.usd} inputMode="decimal" placeholder="0" onChange={e=>set("usd",e.target.value)} style={num}/></td>
       <td style={{...td,width:62,textAlign:"right",padding:"6px 8px",fontSize:11,fontWeight:800,color:mColor}}>{margin==null?"—":`${margin.toFixed(0)}%`}</td>
       <td style={{...td,width:90,padding:"6px 8px",fontSize:10,color:ordered?C.green:C.inkFaint,whiteSpace:"nowrap"}}>{ordered?row.poNumber:"—"}</td>
+      <td style={{...td,width:64,textAlign:"center"}}><input type="checkbox" checked={ordered||!!row.ordered} disabled={ordered} title={ordered?`Ordered · ${row.poNumber||"PO"}`:"Mark as ordered"} onChange={e=>onCommit(row.id,{ordered:e.target.checked})} style={{width:15,height:15,cursor:ordered?"not-allowed":"pointer",accentColor:C.green}}/></td>
       <td style={{...td,width:30,textAlign:"center"}}><button title="Delete row" onClick={()=>onDelete(row.id)} style={{background:"none",border:"none",color:C.red,fontSize:15,cursor:"pointer",padding:"4px 6px",lineHeight:1}}>×</button></td>
     </tr>
   );
@@ -10924,6 +10925,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   usd:r=>+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0,
                   margin:r=>{const c=+r.costPerKg||0,s=+r.targetSellPrice||0;return s>0&&c>0?((s-c)/s)*100:-1;},
                   po:r=>lineOrdered(r)?String(r.poNumber||"").toLowerCase():"",
+                  ordered:r=>(lineOrdered(r)||r.ordered)?1:0,
                 };
                 const rows=(sheetSort.col&&sortVal[sheetSort.col])?[...filtered].sort((a,b)=>{
                   const f=sortVal[sheetSort.col],va=f(a),vb=f(b);
@@ -11031,11 +11033,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
                     <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
                       <thead>
-                        <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right")}{th("Unit","unit")}{th("CP ₹","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("")}</tr>
+                        <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right")}{th("Unit","unit")}{th("CP ₹","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("Ordered","ordered")}{th("")}</tr>
                       </thead>
                       <tbody>
                         {rows.length===0?(
-                          <tr><td colSpan={11} style={{padding:"22px",textAlign:"center",fontSize:12,color:C.inkFaint,background:C.surface}}>No rows match these filters. <button onClick={addRow} style={{background:"none",border:"none",color:C.green,fontWeight:800,cursor:"pointer",textDecoration:"underline"}}>Add one</button></td></tr>
+                          <tr><td colSpan={12} style={{padding:"22px",textAlign:"center",fontSize:12,color:C.inkFaint,background:C.surface}}>No rows match these filters. <button onClick={addRow} style={{background:"none",border:"none",color:C.green,fontWeight:800,cursor:"pointer",textDecoration:"underline"}}>Add one</button></td></tr>
                         ):rows.map(r=>(
                           <SheetRow key={r.id} row={r} datalistId={planDatalistId}
                             onCommit={updateBuyingLine} onDelete={removeBuyingLine} onInsert={insertBuyingLineAfter}
