@@ -3006,7 +3006,10 @@ const normalizeAccountingExpenseCat=cat=>{
   if(compact.includes("internet"))return"Internet";
   if(compact.includes("petrol")||compact.includes("diesel")||compact.includes("fuel")||compact.includes("gas"))return"Petrol";
   if(compact.includes("rent"))return"Rent";
-  return ACCOUNTING_LEDGER_CATS.includes(raw) ? raw : "Other";
+  // Preserve custom categories (e.g. a free-typed "Milk" under Other) instead of
+  // collapsing every unknown to "Other" — otherwise they'd read as unclassified.
+  if(ACCOUNTING_METHOD_CATS.has(raw))return"Other";
+  return raw || "Other";
 };
 const ACCOUNTING_LEDGER_GROUPS=[
   {label:"Main",cats:["Rent","Salary","Train / Flight","Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Bank Charges","Petty Cash"]},
@@ -14506,12 +14509,17 @@ function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil"}){
   const [payModal,setPayModal]=useState(null); // {bill, amount, note}
   const [downloading,setDownloading]=useState(null);
 
-  const load=()=>loadK(KEYS.purchases).then(d=>{
+  const apply=d=>{
     const misc=(d||[]).filter(b=>b.source==="misc-bill-maker"&&(b.company||"nikhil")===company);
     misc.sort((a,b)=>new Date(b.createdAt||b.billDate||0)-new Date(a.createdAt||a.billDate||0));
     setBills(misc);
-  });
+  };
+  // Always fetch fresh from the server (a plain loadK can serve a stale cached list,
+  // so a bill created on another device — or just now — may be missing).
+  const load=()=>loadKFresh(KEYS.purchases).then(apply);
   useEffect(()=>{load();},[company]);
+  // Live updates: refresh when bills change on any device.
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(KEYS.purchases))loadKFresh(KEYS.purchases).then(apply);}),[company]);
 
   const markPaid=async()=>{
     if(!payModal)return;
