@@ -4163,15 +4163,37 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             const linkedBillDoc=(()=>{
               if(activeAtt||linkedInv||selected.classifiedAs!=="vendor_bill")return null;
               const ids=selected.classifiedRef?.billIds||(selected.classifiedRef?.billId?[selected.classifiedRef.billId]:[]);
+              const billDoc=p=>p.docUrl||p.docData||p.attachUrl||p.attachData;
               let bill=ids.length?purchases.find(p=>ids.includes(p.id)):null;
+              // Match by bill number appearing in the notes/payee.
               if(!bill){
                 const hay=`${selected.notes||""} ${selected.payee||""}`.toLowerCase();
                 bill=purchases.find(p=>p.type==="bill"&&p.billNumber&&String(p.billNumber).length>=3&&hay.includes(String(p.billNumber).toLowerCase()));
               }
-              const url=bill&&(bill.docUrl||bill.docData||bill.attachUrl||bill.attachData);
-              if(!url)return null;
-              const ext=bill.docExt||bill.attachExt||(url.startsWith("data:image/png")?"png":url.startsWith("data:image")?"jpg":"pdf");
-              return{url,name:bill.billName||bill.attachName||bill.billNumber||"Bill",billNumber:bill.billNumber||"",img:/^data:image/.test(url)||/(png|jpe?g|gif|webp|bmp|avif)/i.test(ext)};
+              // Fall back to supplier name + amount (e.g. a misc-tab bill whose payment
+              // notes only carry a bank reference, not the bill number).
+              if(!bill){
+                const payee=String(selected.payee||"").trim().toLowerCase();
+                const amt=+selected.amount||0;
+                if(payee.length>=3){
+                  bill=purchases.find(p=>{
+                    if(p.type!=="bill")return false;
+                    const sup=String(p.supplier||"").trim().toLowerCase();
+                    const nameMatch=sup&&(sup===payee||sup.includes(payee)||payee.includes(sup));
+                    const amtMatch=amt>0&&(Math.abs((+p.totalAmount||0)-amt)<1||Math.abs((+p.paidAmount||0)-amt)<1);
+                    return nameMatch&&amtMatch;
+                  });
+                }
+              }
+              if(!bill)return null;
+              const billNumber=bill.billNumber||"";
+              const url=billDoc(bill);
+              if(url){
+                const ext=bill.docExt||bill.attachExt||(url.startsWith("data:image/png")?"png":url.startsWith("data:image")?"jpg":"pdf");
+                return{kind:"file",url,name:bill.billName||bill.attachName||billNumber||"Bill",billNumber,img:/^data:image/.test(url)||/(png|jpe?g|gif|webp|bmp|avif)/i.test(ext)};
+              }
+              // No uploaded file → render the generated bill itself (misc-tab bills).
+              return{kind:"html",html:buildMiscBillHTML(bill),billNumber};
             })();
             return(
               <div style={{display:"flex",flexDirection:"column",gap:12,minHeight:400}}>
@@ -4190,7 +4212,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                   {!activeAtt&&linkedInv?(
                     <iframe title={`Invoice ${linkedInvNo}`} srcDoc={linkedInvHTML} style={{width:"100%",height:520,border:0,background:"#fff"}}/>
                   ):!activeAtt&&linkedBillDoc?(
-                    linkedBillDoc.img?(
+                    linkedBillDoc.kind==="html"?(
+                      <iframe title={`Bill ${linkedBillDoc.billNumber||""}`} srcDoc={linkedBillDoc.html} style={{width:"100%",height:520,border:0,background:"#fff"}}/>
+                    ):linkedBillDoc.img?(
                       <button onClick={()=>window.open(linkedBillDoc.url,"_blank","noreferrer")} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:C.card,cursor:"zoom-in",padding:0}}>
                         <img src={linkedBillDoc.url} alt={linkedBillDoc.name} style={{width:"100%",height:"100%",maxHeight:520,objectFit:"contain",display:"block"}}/>
                       </button>
@@ -14316,6 +14340,22 @@ function AIAssistantApp({onHome}){
 // MISC APP — Purchase Bill Maker (no-GST parties)
 // ══════════════════════════════════════════════════════════════════
 const MISC_BILL_KEY="ng-misc-bill-counter-v1";
+
+// Synchronous bill renderer (no remote image fetch) used to show a misc bill on the
+// accounting-journal classification screen — same idea as rendering invoices on the fly.
+function buildMiscBillHTML(bill){
+  const co=COMPANIES[bill.company||"nikhil"]||CO;
+  const shipping=+bill.shipping||0;
+  const subtotal=(bill.items||[]).reduce((s,it)=>s+(+it.qty||0)*(+it.rate||0),0);
+  const total=subtotal+shipping;
+  const esc=s=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  const itemRows=(bill.items||[]).map((it,i)=>{const base=(+it.qty||0)*(+it.rate||0);return`<tr><td style="border:1px solid #ccc;padding:6px 9px;text-align:center">${i+1}</td><td style="border:1px solid #ccc;padding:6px 9px">${esc(it.desc)||"—"}</td><td style="border:1px solid #ccc;padding:6px 9px;text-align:center">${esc(it.hsn)}</td><td style="border:1px solid #ccc;padding:6px 9px;text-align:right">${esc(it.qty)} ${esc(it.unit)}</td><td style="border:1px solid #ccc;padding:6px 9px;text-align:right">₹${(+it.rate||0).toLocaleString("en-IN",{minimumFractionDigits:2})}</td><td style="border:1px solid #ccc;padding:6px 9px;text-align:right;font-weight:600">₹${base.toLocaleString("en-IN",{minimumFractionDigits:2})}</td></tr>`;}).join("");
+  const panPhotos=(bill.panPhotos?.length?bill.panPhotos:(bill.panDocUrl||bill.panDocData?[{url:bill.panDocUrl||"",data:bill.panDocData||"",name:"PAN Card"}]:[])).map(ph=>ph.url||ph.data||"").filter(Boolean);
+  const panSection=panPhotos.length?`<div style="margin-top:24px;border-top:1px solid #ddd;padding-top:16px"><div style="font-size:11px;font-weight:700;color:#666;text-transform:uppercase;margin-bottom:8px">🪪 Party PAN${bill.panNumber?` · ${esc(bill.panNumber)}`:""}</div><div style="display:flex;gap:12px;flex-wrap:wrap">${panPhotos.map(s=>`<img src="${s}" style="max-width:300px;max-height:200px;border:1px solid #ccc;border-radius:6px"/>`).join("")}</div></div>`:(bill.panNumber?`<div style="margin-top:16px;padding:8px 12px;background:#f8f6f0;border-radius:6px;font-size:12px">PAN: <b style="font-family:monospace">${esc(bill.panNumber)}</b></div>`:"");
+  const paySrc=bill.paymentScreenshot||"";
+  const paySection=paySrc?`<div style="margin-top:24px;border-top:1px solid #ddd;padding-top:16px"><div style="font-size:11px;font-weight:700;color:#666;text-transform:uppercase;margin-bottom:8px">💳 Payment Screenshot</div><img src="${paySrc}" style="max-width:100%;max-height:480px;border:1px solid #ccc;border-radius:6px"/></div>`:"";
+  return`<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;font-size:12px;color:#1a1300;padding:24px}.header{display:flex;justify-content:space-between;border-bottom:2px solid #1a1300;padding-bottom:12px;margin-bottom:16px}.co-name{font-size:20px;font-weight:700}.co-info{font-size:10px;line-height:1.6;color:#444}.bill-title{font-size:16px;font-weight:700;text-align:right}.bill-meta{font-size:11px;text-align:right;color:#555;margin-top:4px;line-height:1.7}.supplier-box{background:#f8f6f0;border:1px solid #e0d8c8;border-radius:7px;padding:12px 14px;margin-bottom:16px}table{width:100%;border-collapse:collapse;margin-bottom:12px}th{background:#f0ede4;border:1px solid #ccc;padding:7px 9px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase}.totals{margin-left:auto;width:240px}.totals td{padding:4px 10px;font-size:12px}.totals .grand{font-size:14px;font-weight:700;border-top:1.5px solid #1a1300;padding-top:6px}</style></head><body><div class="header"><div><div class="co-name">${esc(co.name)}</div><div class="co-info">${esc(co.address).replace(/\n/g,"<br/>")}<br/>GSTIN: ${esc(co.gstin)}</div></div><div><div class="bill-title">PURCHASE BILL</div><div class="bill-meta">Bill No: <b>${esc(bill.billNumber)||"—"}</b><br/>Date: <b>${fmtDate(bill.billDate||bill.date)}</b>${bill.paymentDate?`<br/>Paid: <b>${fmtDate(bill.paymentDate)}</b>`:""}</div></div></div><div class="supplier-box"><div style="font-size:10px;font-weight:700;color:#666;text-transform:uppercase;margin-bottom:4px">Supplier / Party</div><div style="font-size:15px;font-weight:700">${esc(bill.supplier)||"—"}</div><div style="font-size:11px;color:#666">Unregistered — No GSTIN</div></div><table><thead><tr><th style="width:32px">#</th><th>Description</th><th style="width:64px">HSN</th><th style="width:80px;text-align:right">Qty</th><th style="width:90px;text-align:right">Rate</th><th style="width:100px;text-align:right">Amount</th></tr></thead><tbody>${itemRows}</tbody></table><table class="totals"><tr><td>Subtotal (GST 0%)</td><td style="text-align:right">₹${subtotal.toLocaleString("en-IN",{minimumFractionDigits:2})}</td></tr>${shipping>0?`<tr><td>Shipping</td><td style="text-align:right">₹${shipping.toLocaleString("en-IN",{minimumFractionDigits:2})}</td></tr>`:""}<tr class="grand"><td><b>Total</b></td><td style="text-align:right"><b>₹${total.toLocaleString("en-IN",{minimumFractionDigits:2})}</b></td></tr></table>${bill.notes?`<div style="margin-top:10px;padding:9px 12px;background:#fafaf7;border-radius:6px;font-size:11px;color:#555"><b>Notes:</b> ${esc(bill.notes)}</div>`:""}${panSection}${paySection}</body></html>`;
+}
 
 async function downloadMiscBill(bill){
   const co=COMPANIES[bill.company||"nikhil"]||CO;
