@@ -3617,7 +3617,7 @@ function AccountingTxnClassifyModal({txn,company,keys,accounts=[],vendors=[],pur
       const fromAcc=accounts.find(a=>a.id===fromId),toAcc=accounts.find(a=>a.id===toId);
       const amount=Math.round(convSrcAmt*100)/100,received=Math.round(convDstAmt*100)/100;
       classifiedRef={conversion:true,fromAccountId:fromId,toAccountId:toId,fromAccountName:fromAcc?.name||"",toAccountName:toAcc?.name||"",rate:convRateNum,convOtherAccountId:convOtherAcct,sourceAmount:amount,sourceCurrency:fromAcc?.currency||convSrcCur,targetAmount:received,targetCurrency:toAcc?.currency||convDstCur};
-      sideEffects.txnPatch={type:"conversion",accountFrom:fromId,accountTo:toId,amount,receivedAmount:received,rate:convRateNum,currency:fromAcc?.currency||convSrcCur,toCurrency:toAcc?.currency||convDstCur,category:"Transfer"};
+      sideEffects.txnPatch={type:"conversion",accountFrom:fromId,accountTo:toId,amount,receivedAmount:received,rate:convRateNum,convRate:convRateNum,currency:fromAcc?.currency||convSrcCur,toCurrency:toAcc?.currency||convDstCur,category:"Transfer"};
     }
     await onSave({classifiedAs:classType,classifiedRef,sideEffects});
   };
@@ -3985,6 +3985,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
         amount:+manual.amount||0,
         receivedAmount:received||0,
         rate:+manual.rate||0,
+        convRate:(+manual.amount>0?(received/(+manual.amount)):(+manual.rate||0))||0,
         currency:fromAcc?.currency||manual.currency||"INR",
         toCurrency:toAcc?.currency||manual.currency||"INR",
         payee:String(manual.payee||"").trim()||"Conversion / Transfer",
