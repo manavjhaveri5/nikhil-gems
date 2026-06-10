@@ -815,6 +815,9 @@ function ClassifyModal({ txn, accounts = [], vendors, purchases, invoices, buyer
   // (FX swing / SWIFT & bank charges). Default: close the invoice and book the
   // difference as Bank Charges. "advance" keeps the remainder as a buyer advance.
   const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "bank_charges");
+  // Reclassify an imported credit/debit as a currency conversion (e.g. EEFC → BOI INR).
+  const [convOtherAcct, setConvOtherAcct] = useState(txn.classifiedRef?.convOtherAccountId || "");
+  const [convRateInput, setConvRateInput] = useState(txn.classifiedRef?.convRate ? String(txn.classifiedRef.convRate) : "");
   const cardAccounts = accounts.filter(a => a.type === "credit_card" && a.active !== false);
   const guessCard = () => {
     const p = `${txn.payee || ""} ${txn.notes || ""}`.toLowerCase();
@@ -879,16 +882,30 @@ function ClassifyModal({ txn, accounts = [], vendors, purchases, invoices, buyer
   }, {});
   const totalInvDueInTxnCurrency = selectedInvsList.reduce((s, inv) => s + convertMoney(invDueOf(inv), inv.currency || "USD", cur, rates), 0);
 
+  // ── Currency-conversion reclassification helpers ──
+  // For a debit, this txn's account is the source; for a credit it's the destination.
+  const convThisAcctId = isDebit ? txn.accountFrom : txn.accountTo;
+  const convThisAcct   = accounts.find(a => a.id === convThisAcctId);
+  const convOther      = accounts.find(a => a.id === convOtherAcct);
+  const convSrcCur     = isDebit ? cur : (convOther?.currency || "INR");
+  const convDstCur     = isDebit ? (convOther?.currency || "INR") : cur;
+  const convRateNum    = +convRateInput || 0;
+  // amount is always expressed in the SOURCE account's currency (per computeBalances)
+  const convSrcAmt     = isDebit ? txnAmt : (convRateNum ? txnAmt / convRateNum : 0);
+  const convDstAmt     = convSrcAmt * convRateNum;
+
   const canSave = classType === "expense" ? !!expCat
     : classType === "vendor_bill"      ? selectedBillIds.size > 0
     : classType === "vendor_po"        ? !!selectedPoId
     : classType === "customer_receipt" ? selectedInvIds.size > 0
     : classType === "cc_payment"       ? !!ccAccountId
+    : classType === "conversion"       ? (!!convOtherAcct && convRateNum > 0)
     : false;
 
   const handleSave = () => {
     let classifiedRef = {};
     let sideEffects   = {};
+    let accountPatch;
 
     if (classType === "expense") {
       classifiedRef = { cat: expCat, party: expParty, ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
@@ -980,9 +997,31 @@ function ClassifyModal({ txn, accounts = [], vendors, purchases, invoices, buyer
     } else if (classType === "cc_payment") {
       const card = cardAccounts.find(a => a.id === ccAccountId);
       classifiedRef = { cardAccountId: ccAccountId, cardAccountName: card?.name || "", note: expNotes || "Credit card payment" };
+    } else if (classType === "conversion") {
+      // Turn this imported credit/debit into a proper account-to-account conversion.
+      const fromAcctId = isDebit ? convThisAcctId : convOtherAcct;
+      const toAcctId   = isDebit ? convOtherAcct  : convThisAcctId;
+      accountPatch = {
+        type: "conversion",
+        accountFrom: fromAcctId,
+        accountTo:   toAcctId,
+        amount:      Math.round(convSrcAmt * 100) / 100,
+        currency:    convSrcCur,
+        convRate:    convRateNum,
+      };
+      classifiedRef = {
+        conversion: true,
+        fromAccountId: fromAcctId, toAccountId: toAcctId,
+        fromAccountName: accounts.find(a => a.id === fromAcctId)?.name || "",
+        toAccountName:   accounts.find(a => a.id === toAcctId)?.name || "",
+        convRate: convRateNum,
+        convOtherAccountId: convOtherAcct,
+        sourceAmount: Math.round(convSrcAmt * 100) / 100, sourceCurrency: convSrcCur,
+        targetAmount: Math.round(convDstAmt * 100) / 100, targetCurrency: convDstCur,
+      };
     }
 
-    onSave(txn.id, { classifiedAs: classType, classifiedRef, sideEffects });
+    onSave(txn.id, { classifiedAs: classType, classifiedRef, sideEffects, ...(accountPatch && { _accountPatch: accountPatch }) });
     onClose();
   };
 
@@ -994,10 +1033,12 @@ function ClassifyModal({ txn, accounts = [], vendors, purchases, invoices, buyer
         { id: "vendor_bill",  label: "Vendor Bill Payment",    desc: "Apply against an existing bill",      color: C.blue   },
         { id: "vendor_po",    label: "Advance against PO",     desc: "Advance payment on a Purchase Order", color: C.purple },
         { id: "cc_payment",   label: "Credit Card Payment",    desc: "Payment made to credit card company", color: C.teal   },
+        { id: "conversion",   label: "Currency Conversion",    desc: "Transfer between accounts (e.g. EEFC → INR)", color: C.blue },
       ]
     : [
         { id: "customer_receipt", label: "Customer Receipt",    desc: "Apply against an open invoice",           color: C.green },
         { id: "cc_payment",       label: "Credit Card Payment", desc: "Payment received against credit card bill", color: C.teal  },
+        { id: "conversion",       label: "Currency Conversion", desc: "Transfer between accounts (e.g. EEFC → INR)", color: C.blue  },
         { id: "expense",          label: "Other Credit",        desc: "Loan, refund, misc. income, etc.",          color: C.amber },
       ];
 
@@ -1319,6 +1360,40 @@ function ClassifyModal({ txn, accounts = [], vendors, purchases, invoices, buyer
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {/* Currency conversion — reclassify this entry as an account-to-account transfer */}
+        {classType === "conversion" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ padding: "9px 11px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>
+              This {isDebit ? "outflow from" : "deposit into"} <strong>{convThisAcct?.name || "this account"}</strong> {convThisAcct?.currency ? `(${convThisAcct.currency})` : ""} is a transfer between your own accounts — e.g. converting EEFC to INR. Pick the {isDebit ? "destination" : "source"} account and the rate used.
+            </div>
+            <div>
+              <FTag>{isDebit ? "Converted into" : "Converted from"}</FTag>
+              <select value={convOtherAcct} onChange={e => setConvOtherAcct(e.target.value)} style={SI}>
+                <option value="">— Select account —</option>
+                {accounts.filter(a => a.active !== false && a.id !== convThisAcctId && a.type !== "credit_card").map(a => (
+                  <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <FTag>Rate {convSrcCur && convDstCur && convSrcCur !== convDstCur ? `(1 ${convSrcCur} = ? ${convDstCur})` : ""}</FTag>
+              <input type="number" inputMode="decimal" value={convRateInput} onChange={e => setConvRateInput(e.target.value)} placeholder={convSrcCur !== convDstCur ? `e.g. ${(convertMoney(1, convSrcCur, convDstCur, rates) || 1).toFixed(2)}` : "1"} style={SI} />
+            </div>
+            {convOtherAcct && convRateNum > 0 && (
+              <div style={{ padding: "10px 13px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ color: C.inkFaint }}>Out of {accounts.find(a => a.id === (isDebit ? convThisAcctId : convOtherAcct))?.name}</span>
+                  <span style={{ fontWeight: 700, color: C.red }}>− {moneyText(convSrcAmt, convSrcCur)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: C.inkFaint }}>Into {accounts.find(a => a.id === (isDebit ? convOtherAcct : convThisAcctId))?.name}</span>
+                  <span style={{ fontWeight: 700, color: C.green }}>+ {moneyText(convDstAmt, convDstCur)}</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
