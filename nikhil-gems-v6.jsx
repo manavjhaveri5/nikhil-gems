@@ -3479,6 +3479,10 @@ function AccountingTxnClassifyModal({txn,company,keys,accounts=[],vendors=[],pur
   const [selectedPoId,setSelectedPoId]=useState(txn.classifiedRef?.poId||"");
   const [selectedInvIds,setSelectedInvIds]=useState(()=>new Set(txn.classifiedRef?.invoiceIds||(txn.classifiedRef?.invoiceId?[txn.classifiedRef.invoiceId]:[])));
   const [linkedInvId,setLinkedInvId]=useState(txn.classifiedRef?.linkedInvoiceId||"");
+  // Receipt FX/bank-charge difference handling, and currency-conversion reclassification.
+  const [recvDiffMode,setRecvDiffMode]=useState(txn.classifiedRef?.differenceMode||"bank_charges");
+  const [convOtherAcct,setConvOtherAcct]=useState(txn.classifiedRef?.convOtherAccountId||"");
+  const [convRateInput,setConvRateInput]=useState(txn.classifiedRef?.rate?String(txn.classifiedRef.rate):"");
   const [expCat,setExpCat]=useState(()=>{
     const cat=normalizeAccountingExpenseCat(txn.classifiedRef?.cat||txn.category||"Other");
     return ACCOUNTING_LEDGER_CATS.includes(cat)?cat:"Other";
@@ -3526,12 +3530,24 @@ function AccountingTxnClassifyModal({txn,company,keys,accounts=[],vendors=[],pur
     ["vendor_bill","Vendor Bill Payment","Apply against an existing bill",C.blue],
     ["vendor_po","Advance against PO","Advance payment on a Purchase Order",C.purple],
     ["cc_payment","Credit Card Payment","Payment made to credit card company",C.teal],
+    ["conversion","Currency Conversion","Transfer between accounts (e.g. EEFC → INR)",C.blue],
   ]:[
     ["customer_receipt","Sales Receipt","Apply against an open invoice",C.green],
     ["cc_payment","Credit Card Payment","Payment received against credit card bill",C.teal],
+    ["conversion","Currency Conversion","Transfer between accounts (e.g. EEFC → INR)",C.blue],
     ["expense","Other Credit","Loan, refund, misc. income, etc.",C.amber],
   ];
-  const canSave=classType==="expense"?!!expCat:classType==="vendor_bill"?(selectedBillIds.size>0||!!vendorId):classType==="vendor_po"?!!selectedPoId:classType==="customer_receipt"?selectedInvIds.size>0:classType==="cc_payment"?!!ccAccountId:true;
+  // ── Currency-conversion reclassification helpers ──
+  // For a debit this txn's account is the source; for a credit it's the destination.
+  const convThisAcctId=isDebit?txn.accountFrom:txn.accountTo;
+  const convThisAcct=accounts.find(a=>a.id===convThisAcctId);
+  const convOther=accounts.find(a=>a.id===convOtherAcct);
+  const convSrcCur=isDebit?cur:(convOther?.currency||"INR");
+  const convDstCur=isDebit?(convOther?.currency||"INR"):cur;
+  const convRateNum=+convRateInput||0;
+  const convSrcAmt=isDebit?txnAmt:(convRateNum?txnAmt/convRateNum:0); // amount in source currency
+  const convDstAmt=convSrcAmt*convRateNum;                            // received in target currency
+  const canSave=classType==="expense"?!!expCat:classType==="vendor_bill"?(selectedBillIds.size>0||!!vendorId):classType==="vendor_po"?!!selectedPoId:classType==="customer_receipt"?selectedInvIds.size>0:classType==="cc_payment"?!!ccAccountId:classType==="conversion"?(!!convOtherAcct&&convRateNum>0):true;
   const SI={...FI,fontSize:13,padding:"8px 10px",borderRadius:7};
   const save=async()=>{
     let classifiedRef={},sideEffects={};
@@ -3562,23 +3578,46 @@ function AccountingTxnClassifyModal({txn,company,keys,accounts=[],vendors=[],pur
       classifiedRef={vendorId,vendorName:vendor?.name,poId:selectedPoId,poNumber:po?.poNumber};
       sideEffects.poUpdate={id:selectedPoId,paidAmount:(+po?.paidAmount||0)+txnAmt};
     }else if(classType==="customer_receipt"){
-      let remainingInr=toInr(txnAmt,cur);
-      const invoiceUpdates=[];
-      for(const inv of selectedInvs){
-        const invCur=inv.currency||"USD";
-        const total=invTotal(inv),already=invPaid(inv),due=Math.max(0,total-already);
-        const applyingInr=Math.min(toInr(due,invCur),remainingInr);
-        const applying=convertMoney(applyingInr,"INR",invCur);
-        const newPaid=already+applying,newStatus=newPaid>=total&&total>0?"paid":"partial";
-        invoiceUpdates.push({id:inv.id,paidAmount:newPaid,status:newStatus,paidDate:newStatus==="paid"?txn.date:undefined});
-        remainingInr-=applyingInr;
-      }
+      const paymentInr=toInr(txnAmt,cur);
+      const dueInr=selectedInvs.reduce((s,inv)=>s+toInr(invDue(inv),inv.currency||"USD"),0);
+      const diffInr=Math.round((dueInr-paymentInr)*100)/100; // >0 short (bank ate it), <0 over
       const buyerNames=[...new Set(selectedInvs.map(inv=>buyers.find(b=>b.id===inv.buyerId)?.name||inv.buyerName||"").filter(Boolean))];
-      classifiedRef={invoiceIds:[...selectedInvIds],invoiceId:[...selectedInvIds][0],invNumbers:selectedInvs.map(i=>i.invNo||i.invNumber||i.number).filter(Boolean),invNumber:selectedInvs[0]?.invNo||selectedInvs[0]?.invNumber||selectedInvs[0]?.number,buyer:buyerNames.join(", "),paymentAmount:txnAmt,paymentCurrency:cur,invoiceDueByCurrency:selectedInvDueByCurrency};
+      const invoiceUpdates=[];
+      if(recvDiffMode==="bank_charges"){
+        // Customer settled in full; the gap is FX swing / SWIFT & bank charges. Close every selected invoice.
+        for(const inv of selectedInvs){
+          invoiceUpdates.push({id:inv.id,paidAmount:invTotal(inv),status:"paid",paidDate:txn.date});
+        }
+      }else{
+        // "advance": apply what the payment covers; leave any shortfall outstanding, keep any excess as a buyer advance.
+        let remainingInr=paymentInr;
+        for(const inv of selectedInvs){
+          const invCur=inv.currency||"USD";
+          const total=invTotal(inv),already=invPaid(inv),due=Math.max(0,total-already);
+          const applyingInr=Math.min(toInr(due,invCur),remainingInr);
+          const applying=convertMoney(applyingInr,"INR",invCur);
+          const newPaid=already+applying,newStatus=newPaid>=total&&total>0?"paid":"partial";
+          invoiceUpdates.push({id:inv.id,paidAmount:newPaid,status:newStatus,paidDate:newStatus==="paid"?txn.date:undefined});
+          remainingInr-=applyingInr;
+        }
+      }
+      classifiedRef={invoiceIds:[...selectedInvIds],invoiceId:[...selectedInvIds][0],invNumbers:selectedInvs.map(i=>i.invNo||i.invNumber||i.number).filter(Boolean),invNumber:selectedInvs[0]?.invNo||selectedInvs[0]?.invNumber||selectedInvs[0]?.number,buyer:buyerNames.join(", "),paymentAmount:txnAmt,paymentCurrency:cur,invoiceDueByCurrency:selectedInvDueByCurrency,differenceMode:recvDiffMode,differenceInr:diffInr,...(recvDiffMode==="advance"&&diffInr<-0.01&&{advanceReceivedInr:Math.round(-diffInr*100)/100})};
       sideEffects.invoiceUpdates=invoiceUpdates;
+      // Book the shortfall as a Bank Charges expense so the invoice can close cleanly.
+      if(recvDiffMode==="bank_charges"&&diffInr>0.01){
+        sideEffects.newExpense={id:"exp-"+uid(),date:txn.date,cat:"Bank Charges",party:buyerNames.join(", ")||txn.payee||"",amount:diffInr,currency:"INR",notes:`FX / bank charges on receipt${classifiedRef.invNumbers?.length?` for ${classifiedRef.invNumbers.join(", ")}`:""}`,payFromAccount:txn.accountTo,createdAt:new Date().toISOString(),ledgerTxnId:txn.id};
+      }
     }else if(classType==="cc_payment"){
       const card=cardAccounts.find(a=>a.id===ccAccountId);
       classifiedRef={cardAccountId:ccAccountId,cardAccountName:card?.name||"",note:expNotes||"Credit card payment"};
+    }else if(classType==="conversion"){
+      // Turn this imported credit/debit into a proper account-to-account conversion.
+      const fromId=isDebit?convThisAcctId:convOtherAcct;
+      const toId=isDebit?convOtherAcct:convThisAcctId;
+      const fromAcc=accounts.find(a=>a.id===fromId),toAcc=accounts.find(a=>a.id===toId);
+      const amount=Math.round(convSrcAmt*100)/100,received=Math.round(convDstAmt*100)/100;
+      classifiedRef={conversion:true,fromAccountId:fromId,toAccountId:toId,fromAccountName:fromAcc?.name||"",toAccountName:toAcc?.name||"",rate:convRateNum,convOtherAccountId:convOtherAcct,sourceAmount:amount,sourceCurrency:fromAcc?.currency||convSrcCur,targetAmount:received,targetCurrency:toAcc?.currency||convDstCur};
+      sideEffects.txnPatch={type:"conversion",accountFrom:fromId,accountTo:toId,amount,receivedAmount:received,rate:convRateNum,currency:fromAcc?.currency||convSrcCur,toCurrency:toAcc?.currency||convDstCur,category:"Transfer"};
     }
     await onSave({classifiedAs:classType,classifiedRef,sideEffects});
   };
@@ -3665,6 +3704,39 @@ function AccountingTxnClassifyModal({txn,company,keys,accounts=[],vendors=[],pur
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,gap:10}}><span style={{color:C.inkFaint}}>Payment received</span><b>{moneyText(txnAmt,cur)}</b></div>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,gap:10}}><span style={{color:C.inkFaint}}>Selected invoice due</span><b style={{color:C.red}}>{Object.entries(selectedInvDueByCurrency).map(([c,a])=>moneyText(a,c)).join(" + ")}</b></div>
             {Object.keys(selectedInvDueByCurrency).some(c=>c!==cur)&&<div style={{display:"flex",justifyContent:"space-between",gap:10,paddingTop:6,borderTop:`1px solid ${C.border}`,color:C.inkFaint}}><span>Approx in payment currency</span><b>{moneyText(totalInvDueInTxnCurrency,cur)}</b></div>}
+            {(()=>{
+              const paymentInr=toInr(txnAmt,cur);
+              const dueInr=selectedInvs.reduce((s,inv)=>s+toInr(invDue(inv),inv.currency||"USD"),0);
+              const diffInr=Math.round((dueInr-paymentInr)*100)/100;
+              if(Math.abs(diffInr)<=0.5)return null;
+              return <div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:7,gap:10}}><span style={{color:C.inkFaint}}>Difference vs. invoice{selectedInvIds.size>1?"s":""}</span><b style={{color:diffInr>0?C.amber:C.green}}>{diffInr>0?"−":"+"}{moneyText(Math.abs(diffInr),"INR")} {diffInr>0?"short":"over"}</b></div>
+                <div style={{display:"flex",gap:6}}>
+                  {[["bank_charges",diffInr>0?"Bank charges":"Round-off","Close invoice"],["advance","Advance",diffInr>0?"Leave outstanding":"Keep as credit"]].map(([id,label,desc])=>(
+                    <button key={id} onClick={()=>setRecvDiffMode(id)} style={{flex:1,padding:"7px 8px",borderRadius:7,cursor:"pointer",textAlign:"left",background:recvDiffMode===id?C.surface:"transparent",border:`1.5px solid ${recvDiffMode===id?C.gold:C.border}`}}>
+                      <div style={{fontSize:12,fontWeight:800,color:C.ink}}>{label}</div><div style={{fontSize:10,color:C.inkFaint}}>{desc}</div>
+                    </button>
+                  ))}
+                </div>
+                <div style={{fontSize:11,color:C.inkMid,marginTop:7,lineHeight:1.4}}>{recvDiffMode==="bank_charges"?(diffInr>0?`Invoice${selectedInvIds.size>1?"s":""} marked fully paid; ${moneyText(diffInr,"INR")} booked as Bank Charges.`:`Invoice${selectedInvIds.size>1?"s":""} marked fully paid; ${moneyText(-diffInr,"INR")} excess absorbed as round-off.`):(diffInr>0?`Applies ${moneyText(paymentInr,"INR")}; remainder stays outstanding.`:`Settles the invoice${selectedInvIds.size>1?"s":""}; ${moneyText(-diffInr,"INR")} kept as a buyer advance.`)}</div>
+              </div>;
+            })()}
+          </div>}
+        </div>}
+        {classType==="conversion"&&<div style={{display:"grid",gap:12}}>
+          <div style={{padding:"9px 11px",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,fontSize:12,color:C.inkMid}}>This {isDebit?"outflow from":"deposit into"} <b>{convThisAcct?.name||"this account"}</b>{convThisAcct?.currency?` (${convThisAcct.currency})`:""} is a transfer between your own accounts — e.g. converting EEFC to INR. Pick the {isDebit?"destination":"source"} account and the rate used.</div>
+          <Field label={isDebit?"Converted into":"Converted from"}>
+            <select value={convOtherAcct} onChange={e=>setConvOtherAcct(e.target.value)} style={SI}>
+              <option value="">- Select account -</option>
+              {accounts.filter(a=>a.active!==false&&a.id!==convThisAcctId&&a.type!=="credit_card").map(a=><option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
+            </select>
+          </Field>
+          <Field label={`Rate${convSrcCur&&convDstCur&&convSrcCur!==convDstCur?` (1 ${convSrcCur} = ? ${convDstCur})`:""}`}>
+            <input type="number" inputMode="decimal" value={convRateInput} onChange={e=>setConvRateInput(e.target.value)} placeholder={convSrcCur!==convDstCur?`e.g. ${(convertMoney(1,convSrcCur,convDstCur)||1).toFixed(2)}`:"1"} style={SI}/>
+          </Field>
+          {convOtherAcct&&convRateNum>0&&<div style={{padding:"10px 13px",background:C.card,borderRadius:8,border:`1px solid ${C.border}`,fontSize:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,gap:10}}><span style={{color:C.inkFaint}}>Out of {accounts.find(a=>a.id===(isDebit?convThisAcctId:convOtherAcct))?.name}</span><b style={{color:C.red}}>− {moneyText(convSrcAmt,convSrcCur)}</b></div>
+            <div style={{display:"flex",justifyContent:"space-between",gap:10}}><span style={{color:C.inkFaint}}>Into {accounts.find(a=>a.id===(isDebit?convOtherAcct:convThisAcctId))?.name}</span><b style={{color:C.green}}>+ {moneyText(convDstAmt,convDstCur)}</b></div>
           </div>}
         </div>}
         {(classType==="expense"||classType==="vendor_bill")&&invoices.length>0&&<div style={{marginTop:16,borderTop:`1px solid ${C.border}`,paddingTop:14}}><Field label="Link to Invoice (optional)"><select value={linkedInvId} onChange={e=>setLinkedInvId(e.target.value)} style={SI}><option value="">- Not linked to an invoice -</option>{invoices.map(inv=><option key={inv.id} value={inv.id}>{inv.invNo||inv.number||"Invoice"} · {fmtDate(inv.date)}{inv.totalAmt?` · ${inv.currency||"$"} ${(+inv.totalAmt).toLocaleString()}`:""}</option>)}</select></Field></div>}
@@ -3981,7 +4053,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
       ...currentAttachments,
       ...billAttachments.filter(att=>!currentAttachments.some(cur=>(cur.sourceBillId&&cur.sourceBillId===att.sourceBillId)||cur.url===att.url))
     ];
-    const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now}:t);
+    const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),...(sideEffects.txnPatch||{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now}:t);
     await saveTxns(nextTxns);
     if(sideEffects.newExpense){
       const newExpense=classifiedAs==="expense"?{...sideEffects.newExpense,cat:normalizedRef.cat}:sideEffects.newExpense;
