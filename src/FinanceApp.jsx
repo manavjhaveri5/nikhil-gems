@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext } from "react";
 import { supabase } from "./supabase.js";
-import { loadK, loadKFresh, saveK } from "./utils.js";
+import { loadK, loadKFresh, saveK, onCacheRefresh } from "./utils.js";
 import ClassifyTransactionModal from "./ClassifyTransaction.jsx";
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
@@ -2420,6 +2420,19 @@ export default function FinanceApp({ onHome }) {
       if (stale) fetchLiveRates(savedRates);
     });
   }, [company]);
+
+  // Live updates: reload a key when another device changes it (add/edit/delete).
+  useEffect(() => onCacheRefresh(changed => {
+    const keys = companyKeys(company);
+    if (changed.includes(keys.transactions)) loadKFresh(keys.transactions).then(v => Array.isArray(v) && setTxns(v));
+    if (changed.includes(keys.accounts))     loadKFresh(keys.accounts).then(v => Array.isArray(v) && v.length && setAccounts(v));
+    if (changed.includes(keys.rates))        loadKFresh(keys.rates).then(v => v && Object.keys(v).length && setRates(v));
+    if (changed.includes(keys.invoices))     loadKFresh(keys.invoices).then(v => Array.isArray(v) && setInvoices(v));
+    if (changed.includes(keys.buyers))       loadKFresh(keys.buyers).then(v => Array.isArray(v) && setBuyers(v));
+    if (changed.includes(keys.purchases))    loadKFresh(keys.purchases).then(v => Array.isArray(v) && setPurchases(v));
+    if (changed.includes(keys.vendors))      loadKFresh(keys.vendors).then(v => Array.isArray(v) && setVendors(v));
+    if (changed.includes(keys.expenses))     loadKFresh(keys.expenses).then(v => Array.isArray(v) && setExpenses(v));
+  }), [company]);
 
   const saveAccounts = async accs => { setAccounts(accs); await saveK(companyKeys(company).accounts, accs); showToast("Accounts saved"); };
   const saveRates    = async r    => { setRates(r);        await saveK(companyKeys(company).rates, r);    showToast("Rates updated"); };

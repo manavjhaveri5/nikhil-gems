@@ -3593,6 +3593,19 @@ function AccountingFinanceLedger({showToast,onViewBill}){
   // Share the same live/configured FX rates the Finance module uses, so the
   // accountant's journal computes identical numbers (no hardcoded rates).
   useEffect(()=>{loadK("ng-fin-rates-v1").then(v=>{if(v&&typeof v==="object")setRates(r=>({...r,...v,INR:1}));});},[]);
+  // Live updates: when another device adds/edits/deletes data, the cache fires a
+  // refresh for the changed key — reload it so this screen updates without a manual refresh.
+  useEffect(()=>onCacheRefresh(changed=>{
+    const k=accountingCompanyKeys(company);
+    if(changed.includes(k.transactions))loadKFresh(k.transactions).then(v=>Array.isArray(v)&&setTxns(v));
+    if(changed.includes(k.accounts))loadKFresh(k.accounts).then(v=>Array.isArray(v)&&v.length&&setAccounts(v));
+    if(changed.includes(k.vendors))loadKFresh(k.vendors).then(v=>Array.isArray(v)&&setVendors(v));
+    if(changed.includes(k.purchases))loadKFresh(k.purchases).then(v=>Array.isArray(v)&&setPurchases(v));
+    if(changed.includes(k.invoices))loadKFresh(k.invoices).then(v=>Array.isArray(v)&&setInvoices(v));
+    if(changed.includes(k.buyers))loadKFresh(k.buyers).then(v=>Array.isArray(v)&&setBuyers(v));
+    if(changed.includes(k.expenses))loadKFresh(k.expenses).then(v=>Array.isArray(v)&&setExpenses(v));
+    if(changed.includes("ng-fin-rates-v1"))loadKFresh("ng-fin-rates-v1").then(v=>v&&typeof v==="object"&&setRates(r=>({...r,...v,INR:1})));
+  }),[company]);
   const ACCOUNTING_STRUCTURED_CLASSIFICATIONS=new Set(["vendor_bill","vendor_po","customer_receipt","cc_payment"]);
   const ACCOUNTING_VALID_CLASSIFICATIONS=new Set([...ACCOUNTING_LEDGER_CATS,"expense",...ACCOUNTING_STRUCTURED_CLASSIFICATIONS]);
   const isUnclassified=t=>{
