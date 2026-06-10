@@ -885,12 +885,23 @@ function EditTxnModal({ txn, accounts, onSave, onClose }) {
   const [payee,    setPayee]    = useState(txn.payee || "");
   const [category, setCategory] = useState(txn.category || "");
   const [notes,    setNotes]    = useState(txn.notes || "");
+  const [type,     setType]     = useState(txn.type || "debit");
 
   const FI2 = { background: C.surface, border: `1px solid ${C.border}`, color: C.ink, borderRadius: 6, padding: "7px 10px", fontSize: 13, fontFamily: "inherit", width: "100%", boxSizing: "border-box" };
 
   const handleSave = () => {
     const patch = { date, payee, category, notes };
-    if (!isConv) { patch.amount = amount; patch.currency = currency; }
+    if (!isConv) {
+      patch.amount = amount; patch.currency = currency;
+      // Flip Debit (money out) ↔ Credit (money in): move the account to the correct
+      // side and reset any now-wrong classification.
+      if (type !== txn.type) {
+        const acct = txn.type === "credit" ? txn.accountTo : txn.accountFrom;
+        if (type === "credit") { patch.type = "credit"; patch.accountTo = acct || ""; patch.accountFrom = undefined; }
+        else { patch.type = "debit"; patch.accountFrom = acct || ""; patch.accountTo = undefined; }
+        if (txn.classifiedAs) { patch.classifiedAs = undefined; patch.classifiedRef = undefined; patch.classifiedAt = undefined; }
+      }
+    }
     onSave(txn.id, patch);
     onClose();
   };
@@ -908,6 +919,16 @@ function EditTxnModal({ txn, accounts, onSave, onClose }) {
             <div style={{ fontSize: 10, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .7, marginBottom: 4 }}>Date</div>
             <input type="date" value={date} onChange={e => setDate(e.target.value)} style={FI2} />
           </div>
+          {!isConv && (
+            <div>
+              <div style={{ fontSize: 10, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .7, marginBottom: 4 }}>Type</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {[["debit", "Debit", C.red], ["credit", "Credit", C.green]].map(([id, label, col]) => (
+                  <button key={id} onClick={() => setType(id)} style={{ flex: 1, padding: "9px 10px", borderRadius: 6, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit", border: `1.5px solid ${type === id ? col : C.border}`, background: type === id ? col : C.surface, color: type === id ? "#fff" : C.inkMid }}>{label}</button>
+                ))}
+              </div>
+            </div>
+          )}
           {!isConv && (
             <div style={{ display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
