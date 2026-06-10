@@ -19,7 +19,7 @@ const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "
 
 export default function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
-  rates, categoryGroups, expenseCats = [], normalizeCat, suggestedType, onSave, onClose,
+  rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType, onSave, onClose,
 }) {
   const R = { ...DEFAULT_RATES, ...(rates || {}) };
   const toInr = (amt, currency) => (+amt || 0) * (R[currency || "INR"] || 1);
@@ -59,11 +59,15 @@ export default function ClassifyTransactionModal({
   const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "bank_charges");
   const [convOtherAcct, setConvOtherAcct] = useState(txn.classifiedRef?.convOtherAccountId || "");
   const [convRateInput, setConvRateInput] = useState(txn.classifiedRef?.rate ? String(txn.classifiedRef.rate) : "");
+  const rawCat = txn.classifiedRef?.cat || txn.category || "";
   const [expCat, setExpCat] = useState(() => {
-    const raw = norm(txn.classifiedRef?.cat || txn.category || "Other");
-    if (expenseCats.includes(raw)) return raw;
+    const n = norm(rawCat || "Other");
+    if (expenseCats.includes(n)) return n;
     return expenseCats.includes("Other") ? "Other" : (expenseCats[0] || "");
   });
+  // Free-text sub-category typed under "Other" (e.g. "Milk"). Saved as the real
+  // category but kept out of the main picker; remembered for next time.
+  const [otherCat, setOtherCat] = useState(() => (rawCat && !expenseCats.includes(rawCat)) ? rawCat : "");
   const [catOpen, setCatOpen] = useState(false);
   const [expParty, setExpParty] = useState(txn.classifiedRef?.party || txn.payee || "");
   const [expNotes, setExpNotes] = useState(txn.notes || "");
@@ -129,14 +133,21 @@ export default function ClassifyTransactionModal({
   const convSrcAmt = isDebit ? txnAmt : (convRateNum ? txnAmt / convRateNum : 0);
   const convDstAmt = convSrcAmt * convRateNum;
 
-  const canSave = classType === "expense" ? !!expCat : classType === "vendor_bill" ? (selectedBillIds.size > 0 || !!vendorId) : classType === "vendor_po" ? !!selectedPoId : classType === "customer_receipt" ? selectedInvIds.size > 0 : classType === "cc_payment" ? !!ccAccountId : classType === "conversion" ? (!!convOtherAcct && convRateNum > 0) : true;
+  // Under "Other", the typed sub-category becomes the real category.
+  const effectiveExpenseCat = (expCat === "Other" && otherCat.trim()) ? otherCat.trim() : expCat;
+  const canSave = classType === "expense" ? !!effectiveExpenseCat : classType === "vendor_bill" ? (selectedBillIds.size > 0 || !!vendorId) : classType === "vendor_po" ? !!selectedPoId : classType === "customer_receipt" ? selectedInvIds.size > 0 : classType === "cc_payment" ? !!ccAccountId : classType === "conversion" ? (!!convOtherAcct && convRateNum > 0) : true;
   const SI = { ...FI, fontSize: 13, padding: "8px 10px", borderRadius: 7 };
 
   const save = async () => {
     let classifiedRef = {}, sideEffects = {};
     if (classType === "expense") {
-      classifiedRef = { cat: expCat, party: expParty, ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
-      sideEffects.newExpense = { id: "exp-" + uid(), date: txn.date, cat: expCat, party: expParty, amount: txnAmt, currency: cur, notes: expNotes, payFromAccount: txn.accountFrom, createdAt: new Date().toISOString(), ledgerTxnId: txn.id };
+      const cat = effectiveExpenseCat;
+      // Remember a newly-typed custom sub-category for next time (and the expense module).
+      if (expCat === "Other" && otherCat.trim() && !expenseCats.includes(cat) && !customCats.includes(cat)) {
+        try { await onAddCustomCat?.(cat); } catch {}
+      }
+      classifiedRef = { cat, party: expParty, ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
+      sideEffects.newExpense = { id: "exp-" + uid(), date: txn.date, cat, party: expParty, amount: txnAmt, currency: cur, notes: expNotes, payFromAccount: txn.accountFrom, createdAt: new Date().toISOString(), ledgerTxnId: txn.id };
     } else if (classType === "vendor_bill") {
       let remaining = txnAmt;
       const billUpdates = [];
@@ -242,6 +253,12 @@ export default function ClassifyTransactionModal({
         {classType === "expense" && <div style={{ display: "grid", gap: 12 }}>
           {cardSpendAccount && <div style={{ padding: "9px 11px", background: C.tealBg, border: `1px solid ${C.teal}55`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>Paid using <strong>{cardSpendAccount.name}</strong>. This expense will increase that card's amount due.</div>}
           <Field label="Category"><CategoryPicker /></Field>
+          {expCat === "Other" && (
+            <Field label="Specify (optional)">
+              <input value={otherCat} onChange={e => setOtherCat(e.target.value)} list="acct-class-othercats" style={SI} placeholder="e.g. Milk — type or pick a past one" />
+              <datalist id="acct-class-othercats">{customCats.map(c => <option key={c} value={c} />)}</datalist>
+            </Field>
+          )}
           <Field label="Party / Vendor"><input value={expParty} onChange={e => setExpParty(e.target.value)} list="acct-class-vendors" style={SI} placeholder="Type or pick a vendor" /></Field>
           <Field label="Details"><input value={expNotes} onChange={e => setExpNotes(e.target.value)} style={SI} placeholder="Line item / reference / note" /></Field>
         </div>}

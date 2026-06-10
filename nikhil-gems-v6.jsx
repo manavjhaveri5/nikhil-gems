@@ -4237,6 +4237,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             rates={rates}
             categoryGroups={ACCOUNTING_LEDGER_GROUPS}
             expenseCats={ACCOUNTING_LEDGER_CATS}
+            customCats={customCats}
+            onAddCustomCat={saveCustomCategory}
             normalizeCat={normalizeAccountingExpenseCat}
             suggestedType={isUnclassified(selected)?suggestClassification(selected,attTextByTxn[selected.id])?.classifiedAs:undefined}
             onSave={handleStructuredClassify}
@@ -8853,7 +8855,9 @@ function ExpensesApp({onHome}){
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   useEffect(()=>{Promise.all([loadK(KEYS.expenses),loadK("ng-recurring-v1"),loadK(KEYS.vendors),loadK("ng-fin-accounts-v1")]).then(([e,r,v,fa])=>{setExpenses(e||[]);setRecurring(r||[]);setVendors(v||[]);setFinAccounts((fa||[]).filter(a=>a.active!==false));setLoaded(true);});},[]);
 
-  const allCats=[...DEFAULT_EXP_CATS,...customCats];
+  // Include any custom categories already used on expenses (e.g. created from the
+  // accounting-journal "Other → specify" flow) so they show in the dropdown here too.
+  const allCats=[...new Set([...DEFAULT_EXP_CATS,...customCats,...expenses.map(e=>e.cat).filter(Boolean)])];
   const saveRecurring=async list=>{setRecurring(list);await saveK("ng-recurring-v1",list);};
   const newRec=()=>({id:uid(),title:"",cat:"",amount:"",gst:"0",party:"",frequency:"monthly",nextDue:today(),notes:"",emiBank:"",emiAssetName:"",emiAssetTotal:"",emiLoanAmount:"",emiStartDate:"",emiTenureMonths:"",emiCurrentBalance:""});
   const dueRecurring=recurring.filter(r=>r.nextDue<=today());
