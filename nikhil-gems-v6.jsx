@@ -2995,7 +2995,7 @@ const normalizeAccountingExpenseCat=cat=>{
   if(compact.includes("booth")||compact.includes("travel")||compact.includes("hotel"))return"Flights / Hotels";
   if(compact.includes("packaging")||compact.includes("packing"))return"Packaging & Supplies";
   if(compact.includes("gst")||compact.includes("tax")||compact.includes("duty"))return"Taxes & Duties";
-  if(compact.includes("courier")||compact.includes("local delivery")||compact.includes("land freight")||compact==="shipping")return"Land Freight";
+  if(compact.includes("courier")||compact.includes("local delivery")||compact.includes("land freight")||compact==="shipping")return"Land Freight / Courier";
   if(compact.includes("sea freight"))return"Sea Freight";
   if(compact.includes("air freight"))return"Air Freight";
   if(compact.includes("electricity"))return"Electricity";
@@ -3006,7 +3006,7 @@ const normalizeAccountingExpenseCat=cat=>{
 };
 const ACCOUNTING_LEDGER_GROUPS=[
   {label:"Main",cats:["Rent","Salary","Flights / Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Petty Cash"]},
-  {label:"Freight",cats:["Sea Freight","Air Freight","Land Freight"]},
+  {label:"Freight",cats:["Sea Freight","Air Freight","Land Freight / Courier"]},
   {label:"Utilities",cats:["Electricity","Internet","Gas"]},
   {label:"Other",cats:["Other"]},
 ].map(g=>({...g,cats:g.cats.filter(c=>ACCOUNTING_LEDGER_CATS.includes(c))}));
@@ -3642,7 +3642,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
     if(hit(["tax","gst","tds","duty","duties","customs"]))return expense("Taxes & Duties","Payee/notes mention tax, GST, duty, or customs.");
     if(hit(["sea freight","container","maersk","shipping line"]))return expense("Sea Freight","Payee/notes mention sea freight or shipping line.");
     if(hit(["air freight","air cargo"]))return expense("Air Freight","Payee/notes mention air freight.");
-    if(hit(["courier","dhl","fedex","ups","shipglobal","freight","delivery","transport"]))return expense("Land Freight","Payee/notes mention courier, delivery, or freight.");
+    if(hit(["courier","dhl","fedex","ups","shipglobal","freight","delivery","transport"]))return expense("Land Freight / Courier","Payee/notes mention courier, delivery, or freight.");
     if(hit(["electricity","power bill"]))return expense("Electricity","Payee/notes mention electricity.");
     if(hit(["internet","broadband","wifi"]))return expense("Internet","Payee/notes mention internet.");
     if(hit(["gas cylinder","gas bill"]))return expense("Gas","Payee/notes mention gas.");
