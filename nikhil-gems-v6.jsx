@@ -3004,14 +3004,14 @@ const normalizeAccountingExpenseCat=cat=>{
   if(compact.includes("air freight"))return"Air Freight";
   if(compact.includes("electricity"))return"Electricity";
   if(compact.includes("internet"))return"Internet";
-  if(compact.includes("gas"))return"Gas";
+  if(compact.includes("petrol")||compact.includes("diesel")||compact.includes("fuel")||compact.includes("gas"))return"Petrol";
   if(compact.includes("rent"))return"Rent";
   return ACCOUNTING_LEDGER_CATS.includes(raw) ? raw : "Other";
 };
 const ACCOUNTING_LEDGER_GROUPS=[
   {label:"Main",cats:["Rent","Salary","Train / Flight","Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Bank Charges","Petty Cash"]},
   {label:"Freight",cats:["Sea Freight","Air Freight","Land Freight / Courier"]},
-  {label:"Utilities",cats:["Electricity","Internet","Gas"]},
+  {label:"Utilities",cats:["Electricity","Internet","Petrol"]},
   {label:"Other",cats:["Other"]},
 ].map(g=>({...g,cats:g.cats.filter(c=>ACCOUNTING_LEDGER_CATS.includes(c))}));
 const ACCOUNTING_METHOD_CATS=new Set(["UPI","NEFT","IMPS","ATM","Transfer","Other",""]);
@@ -3682,7 +3682,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(hit(["courier","dhl","fedex","ups","shipglobal","freight","delivery","transport"]))return expense("Land Freight / Courier","Payee/notes mention courier, delivery, or freight.");
     if(hit(["electricity","power bill"]))return expense("Electricity","Payee/notes mention electricity.");
     if(hit(["internet","broadband","wifi"]))return expense("Internet","Payee/notes mention internet.");
-    if(hit(["gas cylinder","gas bill"]))return expense("Gas","Payee/notes mention gas.");
+    if(hit(["petrol","diesel","fuel","petrol pump","hpcl","bharat petroleum","indian oil"]))return expense("Petrol","Payee/notes mention petrol or fuel.");
     const vendor=vendors.find(v=>{
       const name=(v.name||"").toLowerCase();
       return name&&text&&(text.includes(name)||name.includes((t.payee||"").toLowerCase()));
