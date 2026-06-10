@@ -3576,7 +3576,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     Promise.all([loadK(keys.accounts),loadK(keys.transactions)]).then(([a,t])=>{
       const acc=Array.isArray(a)&&a.length?a:(company==="ng"?ACCOUNTING_DEFAULT_ACCOUNTS_NG:ACCOUNTING_DEFAULT_ACCOUNTS_AT);
       const arr=Array.isArray(t)?t:[];
-      const defaultAccount=company==="ng"?acc.find(x=>String(x.name||"").trim().toLowerCase()==="bank of india 0451"):null;
+      const defName=company==="ng"?"bank of india 0451":"indusind bank";
+      const defaultAccount=acc.find(x=>String(x.name||"").trim().toLowerCase()===defName)||null;
       setAccountFilter(defaultAccount?.id||"");
       setAccounts(acc);
       setTxns(arr);
