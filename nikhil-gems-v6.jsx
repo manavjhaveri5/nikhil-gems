@@ -2994,6 +2994,7 @@ const normalizeAccountingExpenseCat=cat=>{
   if(compact.includes("car loan")||compact.includes("emi"))return"Car Loan";
   if(compact.includes("booth")||compact.includes("travel")||compact.includes("hotel"))return"Flights / Hotels";
   if(compact.includes("packaging")||compact.includes("packing"))return"Packaging & Supplies";
+  if(compact.includes("bank charge")||compact.includes("swift")||compact.includes("forex")||compact.includes("fx charge"))return"Bank Charges";
   if(compact.includes("gst")||compact.includes("tax")||compact.includes("duty"))return"Taxes & Duties";
   if(compact.includes("courier")||compact.includes("local delivery")||compact.includes("land freight")||compact==="shipping")return"Land Freight / Courier";
   if(compact.includes("sea freight"))return"Sea Freight";
@@ -3005,7 +3006,7 @@ const normalizeAccountingExpenseCat=cat=>{
   return ACCOUNTING_LEDGER_CATS.includes(raw) ? raw : "Other";
 };
 const ACCOUNTING_LEDGER_GROUPS=[
-  {label:"Main",cats:["Rent","Salary","Flights / Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Petty Cash"]},
+  {label:"Main",cats:["Rent","Salary","Flights / Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Bank Charges","Petty Cash"]},
   {label:"Freight",cats:["Sea Freight","Air Freight","Land Freight / Courier"]},
   {label:"Utilities",cats:["Electricity","Internet","Gas"]},
   {label:"Other",cats:["Other"]},
