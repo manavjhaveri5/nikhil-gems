@@ -3520,6 +3520,24 @@ function AccountingTxnAttachmentModal({txn,company,onSave,onClose,showToast,onVi
   );
 }
 
+// Pull the plain text out of a (text-based) PDF attachment so the classification
+// suggester can read remittance advices, FIRCs, bank letters, etc.
+async function extractPdfText(url){
+  try{
+    const buf=await (await fetch(url)).arrayBuffer();
+    const pdfjsLib=await import("pdfjs-dist");
+    pdfjsLib.GlobalWorkerOptions.workerSrc=`https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    let out="";
+    const maxPages=Math.min(pdf.numPages,4);
+    for(let p=1;p<=maxPages;p++){
+      const page=await pdf.getPage(p);
+      const tc=await page.getTextContent();
+      out+=" "+tc.items.map(i=>i.str).join(" ");
+    }
+    return out.trim();
+  }catch{return"";}
+}
 function AccountingFinanceLedger({showToast,onViewBill}){
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-accounting-ledger-company")||"ng");
   const [accounts,setAccounts]=useState([]);
@@ -3530,6 +3548,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
   const [buyers,setBuyers]=useState([]);
   const [expenses,setExpenses]=useState([]);
   const [rates,setRates]=useState({USD:85,EUR:92,JPY:0.57,GBP:107,AUD:55,INR:1});
+  const [attTextByTxn,setAttTextByTxn]=useState({});
   const [loaded,setLoaded]=useState(false);
   const [selectedId,setSelectedId]=useState("");
   const [classifyOpen,setClassifyOpen]=useState(false);
@@ -3593,11 +3612,22 @@ function AccountingFinanceLedger({showToast,onViewBill}){
     if((t.classifiedAs||t.category)==="customer_receipt")return"Sales Receipt";
     return normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)||t.classifiedAs||"Classified";
   };
-  const suggestClassification=t=>{
+  const suggestClassification=(t,extraText="")=>{
     if(!t||t.type==="conversion"||!isUnclassified(t))return null;
-    const text=`${t.payee||""} ${t.notes||""} ${t.category||""}`.toLowerCase();
+    const docText=String(extraText||"").toLowerCase();
+    const text=`${t.payee||""} ${t.notes||""} ${t.category||""} ${docText}`.toLowerCase();
     const hit=words=>words.some(w=>text.includes(w));
     const expense=(cat,why,confidence="high")=>({classifiedAs:"expense",cat,label:`Expense · ${cat}`,why,confidence});
+    const fromDoc=docText?" (from the attached document)":"";
+    // Document-aware: a foreign inward remittance advice / FIRC means money was
+    // received from an overseas buyer — i.e. a Sales Receipt (and a Credit).
+    if(hit(["foreign inward remittance","inward remittance","remittance advice","firc","nostro value","remitter name","remitter bank"])){
+      return{classifiedAs:"customer_receipt",label:"Sales Receipt · inward remittance",
+        why:t.type!=="credit"
+          ?`This is a foreign inward remittance${fromDoc} — money received from an overseas buyer. Switch this entry to Credit, then match it to the buyer's invoice.`
+          :`Foreign inward remittance from an overseas buyer${fromDoc} — match it to the invoice.`,
+        confidence:"high"};
+    }
     if(t.type==="credit"){
       if(hit(["invoice","inv ","sales","buyer","receipt","payment received"]))return{classifiedAs:"customer_receipt",label:"Sales Receipt",why:"Looks like money received from a customer or invoice.",confidence:"medium"};
       if(hit(["refund","reversal","cashback"]))return expense("Other","Looks like a refund or reversal coming in.","medium");
@@ -3642,6 +3672,19 @@ function AccountingFinanceLedger({showToast,onViewBill}){
     return true;
   }).sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.createdAt||"").localeCompare(a.createdAt||""));
   const selected=filtered.find(t=>t.id===selectedId)||filtered[0]||null;
+  // Read text from an attached PDF for the selected (unclassified) entry, so the
+  // suggester can use the document (e.g. a foreign inward remittance advice).
+  useEffect(()=>{
+    if(!selected||selected.type==="conversion"||!isUnclassified(selected))return;
+    if(attTextByTxn[selected.id]!==undefined)return; // already fetched / in-progress
+    const atts=selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName,type:selected.attachmentType}]:[]);
+    const pdf=atts.find(a=>/pdf/i.test(a?.type||"")||/\.pdf($|\?)/i.test(a?.name||a?.url||""));
+    if(!pdf?.url)return;
+    let cancelled=false;
+    setAttTextByTxn(m=>({...m,[selected.id]:""})); // mark in-progress
+    extractPdfText(pdf.url).then(txt=>{if(!cancelled&&txt)setAttTextByTxn(m=>({...m,[selected.id]:txt}));}).catch(()=>{});
+    return()=>{cancelled=true;};
+  },[selected?.id]);
   const accountName=t=>{
     const id=t?.type==="credit"?t?.accountTo:t?.accountFrom;
     return accounts.find(a=>a.id===id)?.name||"Account";
@@ -4022,7 +4065,9 @@ function AccountingFinanceLedger({showToast,onViewBill}){
             const transfer=selected.type==="conversion";
             const done=transfer||!isUnclassified(selected);
             const attachments=(selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName||"Attachment"}]:[]));
-            const suggestion=suggestClassification(selected);
+            const attText=attTextByTxn[selected.id];
+            const readingAtt=attText===""&&attachments.some(a=>/pdf/i.test(a?.type||"")||/\.pdf($|\?)/i.test(a?.name||a?.url||""));
+            const suggestion=suggestClassification(selected,attText);
             return(
               <div style={{display:"grid",gap:12}}>
                 <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start"}}>
@@ -4050,6 +4095,11 @@ function AccountingFinanceLedger({showToast,onViewBill}){
                   </div></Field>}
                 </div>
                 <Field label="Notes"><textarea value={selected.notes||""} onChange={e=>updateNotes(e.target.value)} rows={3} style={{...inputS,resize:"vertical"}} placeholder="Accountant notes, invoice ref, bill ref..."/></Field>
+                {!done&&readingAtt&&(
+                  <div style={{border:`1px dashed ${C.border}`,borderRadius:10,padding:"9px 13px",fontSize:12,color:C.inkMid,display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:14}}>📄</span> Reading the attached document to suggest a classification…
+                  </div>
+                )}
                 {!done&&suggestion&&(
                   <div style={{border:`1.5px solid ${suggestion.confidence==="low"?C.border:C.gold}`,background:suggestion.confidence==="low"?C.card:C.goldLight,borderRadius:10,padding:"11px 13px",display:"grid",gap:8}}>
                     <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"start"}}>
