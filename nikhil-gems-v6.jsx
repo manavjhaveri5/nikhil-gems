@@ -3880,19 +3880,6 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
 	    setClassifyOpen(false);
 	    showToast?.("✓ Classified");
 	  };
-	  const applySuggestion=async suggestion=>{
-	    if(!selected||!suggestion)return;
-	    if(suggestion.classifiedAs==="expense"){
-	      const now=new Date().toISOString();
-	      await handleStructuredClassify({
-	        classifiedAs:"expense",
-	        classifiedRef:{cat:suggestion.cat||"Other",party:selected.payee||""},
-	        sideEffects:{newExpense:{id:"exp-"+uid(),date:selected.date,cat:suggestion.cat||"Other",party:selected.payee||"",amount:+selected.amount||0,currency:txnCur(selected),notes:selected.notes||"",payFromAccount:selected.accountFrom,createdAt:now,ledgerTxnId:selected.id}}
-	      });
-	    }else{
-	      setClassifyOpen(true);
-	    }
-	  };
   const classify=async cat=>{
     if(!selected||!cat)return;
     await patchTxn(selected.id,{category:cat,classifiedBy:"accounting-journal",classifiedAt:new Date().toISOString()});
@@ -4109,7 +4096,6 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             const attachments=(selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName||"Attachment"}]:[]));
             const attText=attTextByTxn[selected.id];
             const readingAtt=attText===""&&attachments.some(a=>/pdf/i.test(a?.type||"")||/\.pdf($|\?)/i.test(a?.name||a?.url||""));
-            const suggestion=suggestClassification(selected,attText);
             return(
               <div style={{display:"grid",gap:12}}>
                 <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start"}}>
@@ -4172,12 +4158,27 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             })();
             const linkedInvNo=linkedInv?(linkedInv.invNo||linkedInv.invNumber||linkedInv.number||"Invoice"):"";
             const linkedInvHTML=linkedInv?wrapInvDoc(linkedInvNo,[buildInvBodyHTML(linkedInv,buyers)]):"";
+            // Vendor bill payment with no attachment → find the linked/matched bill's
+            // document (by billIds, else bill number appearing in the notes/payee).
+            const linkedBillDoc=(()=>{
+              if(activeAtt||linkedInv||selected.classifiedAs!=="vendor_bill")return null;
+              const ids=selected.classifiedRef?.billIds||(selected.classifiedRef?.billId?[selected.classifiedRef.billId]:[]);
+              let bill=ids.length?purchases.find(p=>ids.includes(p.id)):null;
+              if(!bill){
+                const hay=`${selected.notes||""} ${selected.payee||""}`.toLowerCase();
+                bill=purchases.find(p=>p.type==="bill"&&p.billNumber&&String(p.billNumber).length>=3&&hay.includes(String(p.billNumber).toLowerCase()));
+              }
+              const url=bill&&(bill.docUrl||bill.docData||bill.attachUrl||bill.attachData);
+              if(!url)return null;
+              const ext=bill.docExt||bill.attachExt||(url.startsWith("data:image/png")?"png":url.startsWith("data:image")?"jpg":"pdf");
+              return{url,name:bill.billName||bill.attachName||bill.billNumber||"Bill",billNumber:bill.billNumber||"",img:/^data:image/.test(url)||/(png|jpe?g|gif|webp|bmp|avif)/i.test(ext)};
+            })();
             return(
               <div style={{display:"flex",flexDirection:"column",gap:12,minHeight:400}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
                   <div>
                     <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Attachment preview</div>
-                    <div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>{attachments.length?`${attachments.length} file${attachments.length===1?"":"s"} attached`:(!activeAtt&&linkedInv)?`Showing invoice ${linkedInvNo}`:"No document attached"}</div>
+                    <div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>{attachments.length?`${attachments.length} file${attachments.length===1?"":"s"} attached`:(!activeAtt&&linkedInv)?`Showing invoice ${linkedInvNo}`:(!activeAtt&&linkedBillDoc)?`Showing bill ${linkedBillDoc.billNumber||""}`.trim():"No document attached"}</div>
                     {activeAtt?.sourceBillId&&<div style={{fontSize:11,color:C.blue,fontWeight:850,marginTop:3}}>{isImg(activeAtt)?"Image":"Document"} from bill {activeAtt.sourceBillNumber||""}</div>}
                   </div>
                   <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
@@ -4188,6 +4189,18 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                 <div style={{flex:1,minHeight:300,border:`1px solid ${C.border}`,borderRadius:10,background:C.card,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
                   {!activeAtt&&linkedInv?(
                     <iframe title={`Invoice ${linkedInvNo}`} srcDoc={linkedInvHTML} style={{width:"100%",height:520,border:0,background:"#fff"}}/>
+                  ):!activeAtt&&linkedBillDoc?(
+                    linkedBillDoc.img?(
+                      <button onClick={()=>window.open(linkedBillDoc.url,"_blank","noreferrer")} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:C.card,cursor:"zoom-in",padding:0}}>
+                        <img src={linkedBillDoc.url} alt={linkedBillDoc.name} style={{width:"100%",height:"100%",maxHeight:520,objectFit:"contain",display:"block"}}/>
+                      </button>
+                    ):(
+                      <div style={{position:"relative",width:"100%",height:520}}>
+                        <iframe title={linkedBillDoc.name} src={linkedBillDoc.url} style={{width:"100%",height:520,border:0,background:C.surface,pointerEvents:"none"}}/>
+                        <button onClick={()=>window.open(linkedBillDoc.url,"_blank","noreferrer")} title="Open bill in new tab" style={{position:"absolute",inset:0,width:"100%",height:"100%",border:"none",background:"transparent",cursor:"pointer",padding:0}}/>
+                        <div style={{position:"absolute",top:8,right:8,background:"rgba(26,19,8,.72)",color:"#fff",fontSize:10,fontWeight:800,padding:"4px 8px",borderRadius:6,pointerEvents:"none"}}>Click to open ↗</div>
+                      </div>
+                    )
                   ):!activeAtt?(
                     <button onClick={()=>setAttachOpen(true)} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
                       <div style={{textAlign:"center"}}>
@@ -14714,12 +14727,22 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(null);
   const [vendors,setVendors]=useState([]);
+  const [customsDescs,setCustomsDescs]=useState([]); // [{shape,desc,hsn}] from Customs Descriptions dataset
   const panRef=useRef();
   const attachRef=useRef();
   const payRef=useRef();
   const payScreenshotRef=useRef();
 
   useEffect(()=>{loadK(KEYS.vendors).then(v=>setVendors(Array.isArray(v)?v:[]));},[]);
+  useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setCustomsDescs(Array.isArray(cd)?cd:[]));},[]);
+  // Pick a shape/category from the Customs Descriptions dataset → fill the line's
+  // description with that customs bill description and its HSN code.
+  const applyCustomsShape=(i,shape)=>{
+    const hit=customsDescs.find(d=>d.shape&&d.shape.trim().toLowerCase()===String(shape||"").trim().toLowerCase());
+    if(!hit)return false;
+    setForm(f=>{const items=[...f.items];items[i]={...items[i],desc:hit.desc||shape,hsn:hit.hsn||items[i].hsn};return{...f,items};});
+    return true;
+  };
 
   // Re-hydrate when editBill changes (e.g. switching between edits)
   useEffect(()=>{
@@ -14964,7 +14987,7 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
 
         {form.items.map((it,i)=>(
           <div key={it.id} style={{display:"grid",gridTemplateColumns:"1fr 90px 72px 72px 88px 88px 24px",gap:6,marginBottom:8,alignItems:"center"}}>
-            <input value={it.desc} onChange={e=>setItem(i,"desc",e.target.value)} style={FI} placeholder="Emerald rough, 5A grade…"/>
+            <input value={it.desc} list="misc-customs-shapes" onChange={e=>{const v=e.target.value;if(!applyCustomsShape(i,v))setItem(i,"desc",v);}} style={FI} placeholder="Type a shape (Heart, Palmstone…) or free text"/>
             <input value={it.hsn} onChange={e=>setItem(i,"hsn",e.target.value)} style={{...FI,fontFamily:"monospace",fontSize:11}} placeholder="7103"/>
             <input type="number" value={it.qty} onChange={e=>setItem(i,"qty",e.target.value)} style={FI} placeholder="0" min="0"/>
             <select value={it.unit} onChange={e=>setItem(i,"unit",e.target.value)} style={{...FI,cursor:"pointer",padding:"8px 4px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
@@ -14978,6 +15001,7 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
             }
           </div>
         ))}
+        <datalist id="misc-customs-shapes">{customsDescs.map(d=><option key={d.shape} value={d.shape}>{d.desc}</option>)}</datalist>
 
         <button onClick={addLine} style={{fontSize:12,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",marginTop:4}}>+ Add Line</button>
 
