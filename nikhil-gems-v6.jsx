@@ -2992,7 +2992,8 @@ const normalizeAccountingExpenseCat=cat=>{
   if(ACCOUNTING_LEDGER_CATS.includes(raw))return raw;
   if(["staff / labour","staff / labor","staff / salary","staff salary","labour","labor","wages"].includes(compact)||compact.includes("salary"))return"Salary";
   if(compact.includes("car loan")||compact.includes("emi"))return"Car Loan";
-  if(compact.includes("booth")||compact.includes("travel")||compact.includes("hotel"))return"Flights / Hotels";
+  if(compact.includes("hotel")||compact.includes("airbnb")||compact.includes("lodge")||compact.includes("stay"))return"Hotels";
+  if(compact.includes("booth")||compact.includes("travel")||compact.includes("flight")||compact.includes("train")||compact.includes("airline"))return"Train / Flight";
   if(compact.includes("packaging")||compact.includes("packing"))return"Packaging & Supplies";
   if(compact.includes("bank charge")||compact.includes("swift")||compact.includes("forex")||compact.includes("fx charge"))return"Bank Charges";
   if(compact.includes("gst")||compact.includes("tax")||compact.includes("duty"))return"Taxes & Duties";
@@ -3006,7 +3007,7 @@ const normalizeAccountingExpenseCat=cat=>{
   return ACCOUNTING_LEDGER_CATS.includes(raw) ? raw : "Other";
 };
 const ACCOUNTING_LEDGER_GROUPS=[
-  {label:"Main",cats:["Rent","Salary","Flights / Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Bank Charges","Petty Cash"]},
+  {label:"Main",cats:["Rent","Salary","Train / Flight","Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Bank Charges","Petty Cash"]},
   {label:"Freight",cats:["Sea Freight","Air Freight","Land Freight / Courier"]},
   {label:"Utilities",cats:["Electricity","Internet","Gas"]},
   {label:"Other",cats:["Other"]},
@@ -3638,7 +3639,8 @@ function AccountingFinanceLedger({showToast,onViewBill}){
     if(hit(["credit card","card payment","cc payment"]))return{classifiedAs:"cc_payment",label:"Credit Card Payment",why:"Looks like a payment to a credit card account.",confidence:"high"};
     if(hit(["rent"]))return expense("Rent","Payee/notes mention rent.");
     if(hit(["salary","staff","labour","labor","wage"]))return expense("Salary","Payee/notes mention salary/staff payment.");
-    if(hit(["flight","hotel","airbnb","booking.com","travel"]))return expense("Flights / Hotels","Payee/notes mention travel, flights, or hotel.");
+    if(hit(["hotel","airbnb","booking.com","lodging","guest house"]))return expense("Hotels","Payee/notes mention a hotel or stay.");
+    if(hit(["flight","train","airline","irctc","travel"]))return expense("Train / Flight","Payee/notes mention travel, flights, or train.");
     if(hit(["packaging","packing","box","carton","supplies"]))return expense("Packaging & Supplies","Payee/notes mention packaging or supplies.");
     if(hit(["tax","gst","tds","duty","duties","customs"]))return expense("Taxes & Duties","Payee/notes mention tax, GST, duty, or customs.");
     if(hit(["sea freight","container","maersk","shipping line"]))return expense("Sea Freight","Payee/notes mention sea freight or shipping line.");
