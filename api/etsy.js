@@ -77,13 +77,20 @@ export default async function handler(req, res) {
 
     // ── orders: list paid receipts (requires OAuth) ────────────────────────────
     if (action === "orders") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
       if (!token) return res.status(401).json({
         error: "OAuth token required to read orders.",
         fix: "Visit /api/etsy-auth?action=start to authorize your shop."
       });
       const pageLimit = String(Math.min(100, Math.max(1, parseInt(limit, 10) || 100)));
       const fetchPage = async pageOffset => {
-        const p = new URLSearchParams({ was_paid: "true", limit: pageLimit, offset: String(pageOffset) });
+        const p = new URLSearchParams({
+          was_paid: "true",
+          limit: pageLimit,
+          offset: String(pageOffset),
+          sort_on: "created",
+          sort_order: "desc",
+        });
         p.append("includes[]", "Transactions");
         if (min_created) p.set("min_created", min_created);
         return fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts?${p}`, { headers: authHeaders });
@@ -161,6 +168,10 @@ export default async function handler(req, res) {
           if (img && !txn.image_data) txn.image_data = img;
         });
       });
+      results.sort((a, b) =>
+        (b.create_timestamp || b.creation_tsz || b.created_timestamp || b.update_timestamp || 0) -
+        (a.create_timestamp || a.creation_tsz || a.created_timestamp || a.update_timestamp || 0)
+      );
       return res.json({ ...data, count, results });
     }
 

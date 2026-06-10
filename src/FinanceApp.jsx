@@ -94,6 +94,9 @@ function computeBalances(accounts, transactions) {
         if (cardIds.has(t.accountFrom)) bals[t.accountFrom] = (bals[t.accountFrom] || 0) + (+t.amount || 0);
         else bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
       }
+      if (t.classifiedAs === "cc_payment" && t.classifiedRef?.cardAccountId) {
+        bals[t.classifiedRef.cardAccountId] = (bals[t.classifiedRef.cardAccountId] || 0) - (+t.amount || 0);
+      }
     } else if (t.type === "conversion") {
       if (t.accountFrom) bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
       if (t.accountTo)   bals[t.accountTo]   = (bals[t.accountTo]   || 0) + (+t.amount || 0) * (+t.convRate || 1);
@@ -105,6 +108,20 @@ function computeBalances(accounts, transactions) {
 function toINR(amount, currency, rates) {
   if (!currency || currency === "INR") return +amount || 0;
   return (+amount || 0) * (rates[currency] || 1);
+}
+function fromINR(amount, currency, rates) {
+  if (!currency || currency === "INR") return +amount || 0;
+  return (+amount || 0) / (rates[currency] || 1);
+}
+function convertMoney(amount, fromCurrency, toCurrency, rates) {
+  const from = fromCurrency || "INR";
+  const to = toCurrency || "INR";
+  if (from === to) return +amount || 0;
+  return fromINR(toINR(amount, from, rates), to, rates);
+}
+function moneyText(amount, currency) {
+  const cur = currency || "INR";
+  return `${cur} ${(+amount || 0).toLocaleString("en-IN", { minimumFractionDigits: cur === "JPY" ? 0 : 2, maximumFractionDigits: cur === "JPY" ? 0 : 2 })}`;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -769,7 +786,7 @@ function guessVendorId(txn, vendors) {
   return match?.id || "";
 }
 
-function ClassifyModal({ txn, vendors, purchases, invoices, buyers = [], onSave, onClose }) {
+function ClassifyModal({ txn, accounts = [], vendors, purchases, invoices, buyers = [], rates = DEFAULT_RATES, onSave, onClose }) {
   const isDebit = txn.type !== "credit";
   const [classType, setClassType] = useState(() => {
     if (txn.classifiedAs) return txn.classifiedAs;
@@ -794,6 +811,20 @@ function ClassifyModal({ txn, vendors, purchases, invoices, buyers = [], onSave,
     return new Set(existing);
   });
   const [linkedInvId,  setLinkedInvId]  = useState(txn.classifiedRef?.linkedInvoiceId || "");
+  // How to treat the gap between the payment received and the invoice(s) due
+  // (FX swing / SWIFT & bank charges). Default: close the invoice and book the
+  // difference as Bank Charges. "advance" keeps the remainder as a buyer advance.
+  const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "bank_charges");
+  const cardAccounts = accounts.filter(a => a.type === "credit_card" && a.active !== false);
+  const guessCard = () => {
+    const p = `${txn.payee || ""} ${txn.notes || ""}`.toLowerCase();
+    return cardAccounts.find(a => {
+      const n = (a.name || "").toLowerCase();
+      return n && p && (p.includes(n) || n.includes(p) || n.split(/\s+/).filter(w => w.length > 3).some(w => p.includes(w)));
+    })?.id || cardAccounts[0]?.id || "";
+  };
+  const [ccAccountId, setCcAccountId] = useState(txn.classifiedRef?.cardAccountId || guessCard());
+  const cardSpendAccount = cardAccounts.find(a => a.id === txn.accountFrom);
 
   const vendor = vendors.find(v => v.id === vendorId);
   const allOpenBills = purchases.filter(p => p.type === "bill" && p.status !== "paid");
@@ -835,17 +866,24 @@ function ClassifyModal({ txn, vendors, purchases, invoices, buyers = [], onSave,
 
   const toggleInv = id => setSelectedInvIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const selectedInvsList = openInvoices.filter(i => selectedInvIds.has(i.id));
+  const invTotalOf = inv => +inv.totalAmt || (inv.items || []).reduce((a, i) => a + (+i.amt || 0), 0);
+  const invPaidOf = inv => (+inv.paidAmount || 0) + (inv.payments || []).reduce((a, p) => a + (+p.amount || 0), 0);
+  const invDueOf = inv => Math.max(0, invTotalOf(inv) - invPaidOf(inv));
   const totalInvDue = selectedInvsList.reduce((s, inv) => {
-    const tot = +inv.totalAmt || (inv.items || []).reduce((a, i) => a + (+i.amt || 0), 0);
-    const paid = (+inv.paidAmount || 0) + (inv.payments || []).reduce((a, p) => a + (+p.amount || 0), 0);
-    return s + Math.max(0, tot - paid);
+    return s + invDueOf(inv);
   }, 0);
+  const selectedInvDueByCurrency = selectedInvsList.reduce((acc, inv) => {
+    const invCur = inv.currency || "USD";
+    acc[invCur] = (acc[invCur] || 0) + invDueOf(inv);
+    return acc;
+  }, {});
+  const totalInvDueInTxnCurrency = selectedInvsList.reduce((s, inv) => s + convertMoney(invDueOf(inv), inv.currency || "USD", cur, rates), 0);
 
   const canSave = classType === "expense" ? !!expCat
     : classType === "vendor_bill"      ? selectedBillIds.size > 0
     : classType === "vendor_po"        ? !!selectedPoId
     : classType === "customer_receipt" ? selectedInvIds.size > 0
-    : classType === "cc_payment"       ? true
+    : classType === "cc_payment"       ? !!ccAccountId
     : false;
 
   const handleSave = () => {
@@ -886,29 +924,62 @@ function ClassifyModal({ txn, vendors, purchases, invoices, buyers = [], onSave,
       classifiedRef = { vendorId, vendorName: vendor?.name, poId: selectedPoId, poNumber: po?.poNumber };
       sideEffects.poUpdate = { id: selectedPoId, paidAmount: (+po?.paidAmount || 0) + txnAmt };
     } else if (classType === "customer_receipt") {
-      let remaining = txnAmt;
-      const invUpdates = [];
-      for (const inv of selectedInvsList) {
-        const invTotal    = +inv.totalAmt || (inv.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
-        const alreadyPaid = (+inv.paidAmount || 0) + (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0);
-        const due         = Math.max(0, invTotal - alreadyPaid);
-        const applying    = Math.min(due, remaining);
-        const newPaid     = alreadyPaid + applying;
-        const newStatus   = newPaid >= invTotal && invTotal > 0 ? "paid" : "partial";
-        invUpdates.push({ id: inv.id, paidAmount: newPaid, status: newStatus, paidDate: newStatus === "paid" ? txn.date : undefined });
-        remaining -= applying;
-      }
+      const paymentInr = toINR(txnAmt, cur, rates);
+      const dueInr     = selectedInvsList.reduce((s, inv) => s + toINR(invDueOf(inv), inv.currency || "USD", rates), 0);
+      const diffInr    = Math.round((dueInr - paymentInr) * 100) / 100; // >0 short (bank ate it), <0 over
       const buyerNames = [...new Set(selectedInvsList.map(inv => buyers.find(b => b.id === inv.buyerId)?.name || inv.buyerName || "").filter(Boolean))];
+      const invUpdates = [];
+      if (recvDiffMode === "bank_charges") {
+        // The customer settled in full; the gap is FX swing / SWIFT & bank charges.
+        // Close every selected invoice and book the difference (if any) as an expense.
+        for (const inv of selectedInvsList) {
+          const invTotal = invTotalOf(inv);
+          invUpdates.push({ id: inv.id, paidAmount: invTotal, status: "paid", paidDate: txn.date });
+        }
+      } else {
+        // "advance": apply what the payment covers (oldest/selection order),
+        // leave any shortfall outstanding and keep any excess as a buyer advance.
+        let remainingInr = paymentInr;
+        for (const inv of selectedInvsList) {
+          const invCur      = inv.currency || "USD";
+          const invTotal    = invTotalOf(inv);
+          const alreadyPaid = invPaidOf(inv);
+          const due         = Math.max(0, invTotal - alreadyPaid);
+          const applyingInr = Math.min(toINR(due, invCur, rates), remainingInr);
+          const applying    = convertMoney(applyingInr, "INR", invCur, rates);
+          const newPaid     = alreadyPaid + applying;
+          const newStatus   = newPaid >= invTotal && invTotal > 0 ? "paid" : "partial";
+          invUpdates.push({ id: inv.id, paidAmount: newPaid, status: newStatus, paidDate: newStatus === "paid" ? txn.date : undefined });
+          remainingInr -= applyingInr;
+        }
+      }
       classifiedRef = {
         invoiceIds:  [...selectedInvIds],
         invoiceId:   [...selectedInvIds][0], // backward compat
         invNumbers:  selectedInvsList.map(i => i.invNo || i.invNumber || i.number).filter(Boolean),
         invNumber:   selectedInvsList[0]?.invNo || selectedInvsList[0]?.invNumber || selectedInvsList[0]?.number,
         buyer:       buyerNames.join(", "),
+        paymentAmount: txnAmt,
+        paymentCurrency: cur,
+        invoiceDueByCurrency: selectedInvDueByCurrency,
+        differenceMode: recvDiffMode,
+        differenceInr: diffInr,
+        ...(recvDiffMode === "advance" && diffInr < -0.01 && { advanceReceivedInr: Math.round(-diffInr * 100) / 100 }),
       };
       sideEffects.invoiceUpdates = invUpdates;
+      // Book the shortfall as a Bank Charges expense so the invoice can close cleanly.
+      if (recvDiffMode === "bank_charges" && diffInr > 0.01) {
+        sideEffects.newExpense = {
+          id: "exp-" + uid(), date: txn.date, cat: "Bank Charges",
+          party: buyerNames.join(", ") || txn.payee || "",
+          amount: diffInr, currency: "INR",
+          notes: `FX / bank charges on receipt${classifiedRef.invNumbers?.length ? ` for ${classifiedRef.invNumbers.join(", ")}` : ""}`,
+          payFromAccount: txn.accountTo, createdAt: new Date().toISOString(), ledgerTxnId: txn.id,
+        };
+      }
     } else if (classType === "cc_payment") {
-      classifiedRef = { note: expNotes || "Credit card payment" };
+      const card = cardAccounts.find(a => a.id === ccAccountId);
+      classifiedRef = { cardAccountId: ccAccountId, cardAccountName: card?.name || "", note: expNotes || "Credit card payment" };
     }
 
     onSave(txn.id, { classifiedAs: classType, classifiedRef, sideEffects });
@@ -966,6 +1037,7 @@ function ClassifyModal({ txn, vendors, purchases, invoices, buyers = [], onSave,
         {/* Expense fields */}
         {classType === "expense" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {cardSpendAccount && <div style={{ padding: "9px 11px", background: C.tealBg, border: `1px solid ${C.teal}55`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>Paid using <strong>{cardSpendAccount.name}</strong>. This expense will increase that card's amount due.</div>}
             <div><FTag>Category</FTag>
               <input list="exp-cats" value={expCat} onChange={e => setExpCat(e.target.value)} placeholder="Type or pick a category…" style={SI} />
               <datalist id="exp-cats">{EXP_CATS.map(c => <option key={c} value={c} />)}</datalist>
@@ -996,10 +1068,19 @@ function ClassifyModal({ txn, vendors, purchases, invoices, buyers = [], onSave,
 
         {/* Credit card payment */}
         {classType === "cc_payment" && (
-          <div style={{ padding: "12px 14px", background: C.tealBg, border: `1px solid ${C.teal}`, borderRadius: 8, fontSize: 12, color: C.ink }}>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>Credit Card Payment</div>
-            <div style={{ color: C.inkFaint, marginBottom: 10 }}>This transaction will be recorded as a credit card payment. No invoice or bill linkage required.</div>
-            <input value={expNotes} onChange={e => setExpNotes(e.target.value)} placeholder="Notes (optional)" style={SI} />
+          <div style={{ padding: "12px 14px", background: C.tealBg, border: `1px solid ${C.teal}`, borderRadius: 8, fontSize: 12, color: C.ink, display: "grid", gap: 10 }}>
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>Credit Card Payment</div>
+              <div style={{ color: C.inkFaint }}>This keeps the bank payment and reduces the selected card's amount due.</div>
+            </div>
+            <div><FTag>Credit Card Account</FTag>
+              <select value={ccAccountId} onChange={e => setCcAccountId(e.target.value)} style={SI}>
+                <option value="">- Select credit card -</option>
+                {cardAccounts.map(a => <option key={a.id} value={a.id}>{a.name}{a.creditLimit ? ` · limit ₹${(+a.creditLimit || 0).toLocaleString("en-IN")}` : ""}</option>)}
+              </select>
+              {cardAccounts.length === 0 && <div style={{ fontSize: 11, color: C.red, marginTop: 5 }}>Add a credit card account in Finance settings first.</div>}
+            </div>
+            <div><FTag>Notes</FTag><input value={expNotes} onChange={e => setExpNotes(e.target.value)} placeholder="Statement month, card ending, reference..." style={SI} /></div>
           </div>
         )}
 
@@ -1154,39 +1235,85 @@ function ClassifyModal({ txn, vendors, purchases, invoices, buyers = [], onSave,
             }
             {/* Payment summary across selected invoices */}
             {selectedInvIds.size > 0 && (() => {
-              const applying  = Math.min(totalInvDue, txnAmt);
-              const stillDue  = Math.max(0, totalInvDue - applying);
-              const overpay   = Math.max(0, txnAmt - totalInvDue);
-              const cur       = selectedInvsList[0]?.currency || "USD";
+              const applying  = Math.min(totalInvDueInTxnCurrency, txnAmt);
+              const stillDue  = Math.max(0, totalInvDueInTxnCurrency - applying);
+              const overpay   = Math.max(0, txnAmt - totalInvDueInTxnCurrency);
+              const invDueLabel = Object.entries(selectedInvDueByCurrency).map(([c, a]) => moneyText(a, c)).join(" + ");
+              const paymentInr = toINR(txnAmt, cur, rates);
+              const dueInrTotal = selectedInvsList.reduce((s, inv) => s + toINR(invDueOf(inv), inv.currency || "USD", rates), 0);
+              const diffInr = Math.round((dueInrTotal - paymentInr) * 100) / 100; // >0 short, <0 over
+              const hasGap = Math.abs(diffInr) > 0.5;
               return (
                 <div style={{ marginTop: 10, padding: "10px 13px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                     <span style={{ color: C.inkFaint }}>Payment received</span>
-                    <span style={{ fontWeight: 600, color: C.ink }}>{cur} {txnAmt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <span style={{ fontWeight: 600, color: C.ink }}>{moneyText(txnAmt, cur)}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                     <span style={{ color: C.inkFaint }}>Total due ({selectedInvIds.size} invoice{selectedInvIds.size > 1 ? "s" : ""})</span>
-                    <span style={{ fontWeight: 600, color: C.red }}>{cur} {totalInvDue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <span style={{ fontWeight: 600, color: C.red }}>{invDueLabel}</span>
                   </div>
+                  {Object.keys(selectedInvDueByCurrency).some(c => c !== cur) && (
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4, paddingTop: 4, borderTop: `1px solid ${C.border}` }}>
+                      <span style={{ color: C.inkFaint }}>Approx in payment currency</span>
+                      <span style={{ fontWeight: 600, color: C.ink }}>{moneyText(totalInvDueInTxnCurrency, cur)}</span>
+                    </div>
+                  )}
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                     <span style={{ color: C.inkFaint }}>Applied</span>
-                    <span style={{ fontWeight: 600, color: C.green }}>− {cur} {applying.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    <span style={{ fontWeight: 600, color: C.green }}>- {moneyText(applying, cur)}</span>
                   </div>
                   {stillDue > 0 && (
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}` }}>
                       <span style={{ color: C.amber, fontWeight: 600 }}>Still outstanding</span>
-                      <span style={{ fontWeight: 700, color: C.amber }}>{cur} {stillDue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      <span style={{ fontWeight: 700, color: C.amber }}>{moneyText(stillDue, cur)}</span>
                     </div>
                   )}
                   {overpay > 0 && (
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}` }}>
                       <span style={{ color: C.green, fontWeight: 600 }}>Overpayment / advance</span>
-                      <span style={{ fontWeight: 700, color: C.green }}>{cur} {overpay.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      <span style={{ fontWeight: 700, color: C.green }}>{moneyText(overpay, cur)}</span>
                     </div>
                   )}
-                  {stillDue === 0 && overpay === 0 && (
+                  {stillDue === 0 && overpay === 0 && !hasGap && (
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}` }}>
                       <span style={{ color: C.green, fontWeight: 600 }}>✓ Exact match</span>
+                    </div>
+                  )}
+
+                  {/* Difference handling — FX swing / bank charges vs. advance */}
+                  {hasGap && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 7 }}>
+                        <span style={{ color: C.inkFaint }}>Difference vs. invoice{selectedInvIds.size > 1 ? "s" : ""}</span>
+                        <span style={{ fontWeight: 700, color: diffInr > 0 ? C.amber : C.green }}>
+                          {diffInr > 0 ? "−" : "+"}{moneyText(Math.abs(diffInr), "INR")} {diffInr > 0 ? "short" : "over"}
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {[
+                          { id: "bank_charges", label: diffInr > 0 ? "Bank charges" : "Round-off", desc: "Close invoice" },
+                          { id: "advance",      label: "Advance",       desc: diffInr > 0 ? "Leave outstanding" : "Keep as credit" },
+                        ].map(o => (
+                          <button key={o.id} onClick={() => setRecvDiffMode(o.id)} style={{
+                            flex: 1, padding: "7px 8px", borderRadius: 7, cursor: "pointer", textAlign: "left",
+                            background: recvDiffMode === o.id ? C.surface : "transparent",
+                            border: `1.5px solid ${recvDiffMode === o.id ? C.gold : C.border}`,
+                          }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{o.label}</div>
+                            <div style={{ fontSize: 10, color: C.inkFaint }}>{o.desc}</div>
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 11, color: C.inkMid, marginTop: 7, lineHeight: 1.4 }}>
+                        {recvDiffMode === "bank_charges"
+                          ? (diffInr > 0
+                              ? `Invoice${selectedInvIds.size > 1 ? "s" : ""} marked fully paid; ${moneyText(diffInr, "INR")} booked as Bank Charges.`
+                              : `Invoice${selectedInvIds.size > 1 ? "s" : ""} marked fully paid; ${moneyText(-diffInr, "INR")} excess absorbed as round-off.`)
+                          : (diffInr > 0
+                              ? `Applies ${moneyText(paymentInr, "INR")}; remainder stays outstanding on the invoice.`
+                              : `Settles the invoice${selectedInvIds.size > 1 ? "s" : ""}; ${moneyText(-diffInr, "INR")} kept as a buyer advance.`)}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1467,12 +1594,14 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
   return (
     <div>
       {classifyTxn && (
-        <ClassifyModal
-          txn={classifyTxn}
-          vendors={vendors}
+	        <ClassifyModal
+	          txn={classifyTxn}
+	          accounts={accounts}
+	          vendors={vendors}
           purchases={purchases}
           invoices={invoices}
           buyers={buyers}
+          rates={rates}
           onSave={(txnId, result) => { onClassify(txnId, result); }}
           onClose={() => setClassifyTxn(null)}
         />
@@ -1996,39 +2125,21 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
     });
   }
 
-  // ERP running balance for this account at each PDF transaction date
-  // Start from account opening balance + all ERP txns before statement start
-  const stmtStartDate = enriched[0]?.date || "9999";
-  const erpOpeningBal = (() => {
-    let b = +(acc?.openingBal || 0);
-    accTxns.filter(t => t.date < stmtStartDate).forEach(t => {
-      b += t.type === "credit" ? +t.amount : t.type === "debit" ? -(+t.amount) : 0;
+  // Statement-period summary. This import should reconcile the statement's
+  // own opening and closing balances, not compare May against today's ERP cash.
+  const stmtStartDate = enriched[0]?.date || "";
+  const stmtEndDate = enriched[enriched.length - 1]?.date || "";
+  const bankClosing = closingBalance ?? bankRunning[bankRunning.length - 1];
+  const coveredClosing = (() => {
+    if (openingBalance == null) return null;
+    let b = +openingBalance;
+    enriched.forEach((t, i) => {
+      if (t.matched || sel.has(i)) b += t.type === "credit" ? +t.amount : -(+t.amount);
     });
-    return b;
+    return +b.toFixed(2);
   })();
-
-  // For each PDF row, compute what ERP balance would be at that date
-  // (only counting matched transactions up to and including that row)
-  const erpRunning = enriched.map((t, i) => {
-    let b = erpOpeningBal;
-    // Add all ERP txns up to and including this date
-    accTxns.filter(l => l.date <= t.date).forEach(l => {
-      b += l.type === "credit" ? +l.amount : l.type === "debit" ? -(+l.amount) : 0;
-    });
-    return b;
-  });
-
-  // Discrepancy per row
-  const discrepancies = enriched.map((_, i) => {
-    if (bankRunning[i] == null) return null;
-    return bankRunning[i] - erpRunning[i];
-  });
-
-  // Summary
-  const bankClosing   = bankRunning[bankRunning.length - 1];
-  const erpClosing    = erpRunning[erpRunning.length - 1];
-  const totalDiscrep  = bankClosing != null ? bankClosing - erpClosing : null;
-  const erpOpenDiscrep = openingBalance != null ? openingBalance - erpOpeningBal : null;
+  const importDiff = bankClosing != null && coveredClosing != null ? +(bankClosing - coveredClosing).toFixed(2) : null;
+  const statementDiff = bankClosing != null && bankRunning[bankRunning.length - 1] != null ? +(bankClosing - bankRunning[bankRunning.length - 1]).toFixed(2) : null;
 
   const handleAdd = async () => {
     setSaving(true);
@@ -2072,10 +2183,10 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
           {!done && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 14 }}>
               {[
-                { label: "Bank Opening", val: openingBalance, sub: null },
-                { label: "ERP Opening", val: erpOpeningBal, sub: erpOpenDiscrep != null ? `Δ ${erpOpenDiscrep >= 0 ? "+" : ""}${sym}${f2(erpOpenDiscrep)}` : null, subCol: erpOpenDiscrep == null || Math.abs(erpOpenDiscrep) < 1 ? "#2d7a4f" : "#c0392b" },
-                { label: "Bank Closing", val: closingBalance ?? bankClosing },
-                { label: "ERP Closing", val: erpClosing, sub: totalDiscrep != null ? `Δ ${totalDiscrep >= 0 ? "+" : ""}${sym}${f2(totalDiscrep)}` : null, subCol: totalDiscrep == null || Math.abs(totalDiscrep) < 1 ? "#2d7a4f" : "#c0392b" },
+                { label: "Statement Opening", val: openingBalance, sub: stmtStartDate || null },
+                { label: "Statement Closing", val: bankClosing, sub: stmtEndDate || null },
+                { label: "After Selected Import", val: coveredClosing, sub: importDiff != null ? `Remaining ${importDiff >= 0 ? "+" : ""}${sym}${f2(importDiff)}` : null, subCol: importDiff == null || Math.abs(importDiff) < 1 ? "#2d7a4f" : "#c0392b" },
+                { label: "Statement Check", val: statementDiff == null ? null : statementDiff, sub: statementDiff == null ? null : Math.abs(statementDiff) < 1 ? "Opening + rows = closing" : "Statement balances differ", subCol: statementDiff == null || Math.abs(statementDiff) < 1 ? "#2d7a4f" : "#c0392b" },
               ].map(({ label, val, sub, subCol }) => (
                 <div key={label} style={{ background: "#faf9f7", borderRadius: 10, padding: "10px 12px", border: "1px solid #ede9e3" }}>
                   <div style={{ fontSize: 9, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: .5, marginBottom: 4 }}>{label}</div>
@@ -2090,7 +2201,7 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
 
           {/* ── Column headers ── */}
           {!done && (
-            <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 90px 90px 100px 100px 80px", gap: 0, padding: "6px 8px", background: "#f5f3f0", borderRadius: "8px 8px 0 0", borderBottom: "1px solid #ede9e3" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 90px 90px 110px 76px", gap: 0, padding: "6px 8px", background: "#f5f3f0", borderRadius: "8px 8px 0 0", borderBottom: "1px solid #ede9e3" }}>
               <div style={{ display: "flex", alignItems: "center" }}>
                 <input type="checkbox"
                   checked={sel.size > 0 && sel.size === newCount}
@@ -2098,7 +2209,7 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
                   onChange={toggleAll}
                   style={{ width: 13, height: 13, accentColor: "#1a1a1a", cursor: "pointer" }} />
               </div>
-              {["Date / Description", "Debit", "Credit", "Bank Bal", "ERP Bal", "Diff"].map(h => (
+              {["Date / Description", "Debit", "Credit", "Bank Bal", "Status"].map(h => (
                 <div key={h} style={{ fontSize: 9, fontWeight: 700, color: "#aaa", textTransform: "uppercase", letterSpacing: .5, textAlign: "right", padding: "0 4px" }}>{h === "Date / Description" ? <span style={{ textAlign: "left", display: "block" }}>{h}</span> : h}</div>
               ))}
             </div>
@@ -2112,14 +2223,11 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
             const checked  = sel.has(i);
             const isNew    = !t.matched;
             const bankBal  = bankRunning[i];
-            const erpBal   = erpRunning[i];
-            const diff     = discrepancies[i];
-            const diffBig  = diff != null && Math.abs(diff) >= 1;
             const rowBg    = done ? "#fff" : checked ? "#fafaf8" : t.matched ? "#f9fdfb" : "#fff";
 
             return (
               <div key={i} onClick={() => !done && isNew && toggle(i)}
-                style={{ display: "grid", gridTemplateColumns: "28px 1fr 90px 90px 100px 100px 80px", gap: 0, padding: "10px 8px", borderBottom: "1px solid #f5f3f0", background: rowBg, cursor: !done && isNew ? "pointer" : "default", transition: "background .12s", alignItems: "center" }}>
+                style={{ display: "grid", gridTemplateColumns: "28px 1fr 90px 90px 110px 76px", gap: 0, padding: "10px 8px", borderBottom: "1px solid #f5f3f0", background: rowBg, cursor: !done && isNew ? "pointer" : "default", transition: "background .12s", alignItems: "center" }}>
 
                 {/* Checkbox */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -2153,14 +2261,9 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
                   {bankBal != null ? sym + f2(bankBal) : "—"}
                 </div>
 
-                {/* ERP balance */}
-                <div style={{ textAlign: "right", fontSize: 12, color: "#333", fontFamily: "'Cormorant Garamond',Georgia,serif", padding: "0 4px" }}>
-                  {sym + f2(erpBal)}
-                </div>
-
-                {/* Diff */}
-                <div style={{ textAlign: "right", fontSize: 11, fontWeight: 700, color: diff == null ? "#ccc" : Math.abs(diff) < 1 ? "#2d7a4f" : "#c0392b", padding: "0 4px" }}>
-                  {diff == null ? "—" : Math.abs(diff) < 1 ? "✓" : (diff > 0 ? "+" : "") + sym + f2(diff)}
+                {/* Status */}
+                <div style={{ textAlign: "right", fontSize: 11, fontWeight: 700, color: t.matched ? "#2d7a4f" : checked ? "#111" : "#aaa", padding: "0 4px" }}>
+                  {t.matched ? "In ERP" : checked ? "Import" : "Skip"}
                 </div>
               </div>
             );
@@ -2172,7 +2275,7 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
           <div style={{ padding: "14px 20px", borderTop: "1px solid #ede9e3", flexShrink: 0, background: "#fff", display: "flex", gap: 10, alignItems: "center" }}>
             <div style={{ flex: 1, fontSize: 12, color: "#888" }}>
               {sel.size > 0
-                ? <>{sel.size} selected · {matchedCount} already in ledger</>
+                ? <>{sel.size} selected · {matchedCount} already in ledger{importDiff != null ? ` · ${Math.abs(importDiff) < 1 ? "statement closes" : `remaining ${importDiff >= 0 ? "+" : ""}${sym}${f2(importDiff)}`}` : ""}</>
                 : <>{newCount} new · {matchedCount} already matched</>}
             </div>
             <button onClick={handleAdd} disabled={saving || sel.size === 0}
@@ -2420,9 +2523,9 @@ function parseDateStr(s) {
   const months = {jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"};
   m = s.match(/^(\d{1,2})[\/\-]([A-Za-z]{3})[\/\-](\d{4})$/);
   if (m && months[m[2].toLowerCase()]) return `${m[3]}-${months[m[2].toLowerCase()]}-${m[1].padStart(2,'0')}`;
-  // MM/DD/YYYY (US) — ambiguous, try last
+  // DD/MM/YY or DD-MM-YY. Indian bank statements commonly use this format.
   m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})$/);
-  if (m) { const yr = +m[3] > 50 ? `19${m[3]}` : `20${m[3]}`; return `${yr}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`; }
+  if (m) { const yr = +m[3] > 50 ? `19${m[3]}` : `20${m[3]}`; return `${yr}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`; }
   return null;
 }
 function parseAmtStr(s) {
@@ -2959,9 +3062,11 @@ export default function FinanceApp({ onHome }) {
       {pendingClassify && (
         <ClassifyModal
           txn={pendingClassify}
+          accounts={accounts}
           vendors={vendors}
           purchases={purchases}
           invoices={invoices}
+          rates={rates}
           onSave={(txnId, result) => {
             handleClassify(txnId, result);
             setPendingClassify(null);

@@ -7,6 +7,7 @@ export default async function handler(req, res) {
     const { images, account = "" } = req.body || {};
     if (!images?.length) return res.status(400).json({ error: "images required" });
 
+    const today = new Date().toISOString().slice(0, 10);
     const content = [
       ...images.map(b64 => ({
         type: "image_url",
@@ -26,6 +27,9 @@ Extract all rows and respond with ONLY this JSON (no markdown, no explanation):
 }
 
 Rules:
+- Today is ${today}; do not output transaction dates after today.
+- Indian bank statements usually use DD/MM/YY or DD-MM-YY. Interpret ambiguous numeric dates as day/month/year unless the statement clearly says otherwise.
+- If an OCR date would land in the future, re-check the day/month order and surrounding statement period before outputting it.
 - opening_balance: the starting balance shown before any rows
 - closing_balance: the final balance at the end
 - balance on each row: the running balance shown AFTER that transaction

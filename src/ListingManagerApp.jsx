@@ -1756,56 +1756,165 @@ function OrdersView({ orders, listings = [] }) {
     return img.url_570xN || img.url_fullxfull || img.url_170x135 || img.url_75x75 || "";
   };
   const etsyEmailFromReceipt = receipt => receipt?.buyer_email || receipt?.email || receipt?.customer_email || receipt?.customer?.email || receipt?.buyer?.email || "";
-  const etsyOrderPatchMap = rawOrders => {
-    const patches = {};
+  const receiptTrackingCode = receipt => receipt?.tracking_code || receipt?.tracking_number || receipt?.shipments?.[0]?.tracking_code || receipt?.shipments?.[0]?.tracking_number || "";
+  const receiptCarrierName = receipt => receipt?.carrier_name || receipt?.shipping_carrier || receipt?.shipments?.[0]?.carrier_name || receipt?.shipments?.[0]?.carrier || "";
+  const receiptShippedAt = receipt => {
+    const shipment = receipt?.shipments?.[0] || {};
+    const ts = receipt?.shipped_timestamp || receipt?.ship_date || receipt?.shipped_at ||
+      shipment.shipped_timestamp || shipment.shipment_notification_timestamp || shipment.mail_date ||
+      shipment.created_timestamp || shipment.created_at;
+    if (!ts) return "";
+    if (typeof ts === "number") return new Date(ts * 1000).toISOString();
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  };
+  const receiptIsShipped = receipt => {
+    const status = String(receipt?.status || receipt?.shipping_status || "").toLowerCase();
+    return !!(
+      receipt?.is_shipped ||
+      receipt?.was_shipped ||
+      receiptTrackingCode(receipt) ||
+      (receipt?.shipments || []).length ||
+      ["shipped", "fulfilled", "pre_transit", "in_transit", "delivered"].includes(status)
+    );
+  };
+  const etsyMoney = m => (m?.amount || 0) / (m?.divisor || 100);
+  const etsyOrderDate = receipt => {
+    const ts = receipt?.create_timestamp || receipt?.creation_tsz || receipt?.created_timestamp || receipt?.update_timestamp;
+    return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+  };
+  const etsyCreatedAt = receipt => {
+    const ts = receipt?.create_timestamp || receipt?.creation_tsz || receipt?.created_timestamp || receipt?.update_timestamp;
+    return new Date((ts || Date.now() / 1000) * 1000).toISOString();
+  };
+  const normalizeEtsyOrdersForERP = rawOrders => {
+    const listingByEtsyId = {};
+    (listings || []).forEach(l => {
+      const id = l.platforms?.etsy?.listing_id;
+      if (id) listingByEtsyId[String(id)] = l;
+    });
+    const rows = [];
     (rawOrders || []).forEach(receipt => {
       const txns = receipt.transactions?.length ? receipt.transactions : [null];
+      const shipped = receiptIsShipped(receipt);
       txns.forEach((txn, idx) => {
-        const receiptId = receipt.receipt_id;
+        const etsyListingId = txn?.listing_id || "";
+        const linked = etsyListingId ? listingByEtsyId[String(etsyListingId)] : null;
+        const currency = txn?.price?.currency_code || receipt.grandtotal?.currency_code || "USD";
+        const lineTotal = txn?.price ? etsyMoney(txn.price) * (txn.quantity || 1) : etsyMoney(receipt.grandtotal);
+        rows.push({
+          id:                `etsy-${receipt.receipt_id}-${txn?.transaction_id || etsyListingId || idx}`,
+          order_number:      `ETSY-${receipt.receipt_id}${txns.length > 1 ? `-${idx + 1}` : ""}`,
+          listing_id:        linked?.id || "",
+          listing_title:     txn?.title || linked?.title || `Etsy order #${receipt.receipt_id}`,
+          listing_material:  linked?.material || "",
+          listing_shape:     linked?.shape || "",
+          listing_sku:       txn?.sku || linked?.sku || "",
+          listing_image:     etsyImageFromTxn(txn) || linked?.images?.[0] || "",
+          platform:          "etsy",
+          platform_order_id: String(receipt.receipt_id),
+          etsy_listing_id:   etsyListingId,
+          etsy_receipt_id:   receipt.receipt_id,
+          etsy_transaction_id: txn?.transaction_id || "",
+          sale_price:        Number(lineTotal.toFixed(2)),
+          currency,
+          buyer_name:        receipt.name || etsyEmailFromReceipt(receipt) || "",
+          buyer_country:     receipt.country_iso || "",
+          buyer_email:       etsyEmailFromReceipt(receipt),
+          ship_name:         receipt.name || "",
+          ship_address1:     receipt.first_line || "",
+          ship_address2:     receipt.second_line || "",
+          ship_city:         receipt.city || "",
+          ship_state:        receipt.state || "",
+          ship_postcode:     receipt.zip || "",
+          ship_country:      receipt.country_iso || "",
+          ship_phone:        receipt.phone || receipt.formatted_phone || "",
+          status:            shipped ? "shipped" : "sold",
+          tracking_code:     receiptTrackingCode(receipt),
+          tracking_number:   receiptTrackingCode(receipt),
+          carrier_name:      receiptCarrierName(receipt) || "other",
+          shipped_at:        shipped ? receiptShippedAt(receipt) || new Date().toISOString() : "",
+          date:              etsyOrderDate(receipt),
+          notes:             receipt.message_from_buyer || "",
+          created_at:        etsyCreatedAt(receipt),
+          source:            "etsy-sync",
+        });
+      });
+    });
+    return rows;
+  };
+  const etsyOrderPatchMap = rawOrders => {
+    const patches = {};
+    const byReceipt = {};
+    (rawOrders || []).forEach(receipt => {
+      const txns = receipt.transactions?.length ? receipt.transactions : [null];
+      const receiptId = String(receipt.receipt_id || "");
+      const shipped = receiptIsShipped(receipt);
+      byReceipt[receiptId] = {
+        buyer_email: etsyEmailFromReceipt(receipt),
+        buyer_name: receipt.name || etsyEmailFromReceipt(receipt),
+        buyer_country: receipt.country_iso || "",
+        ship_name: receipt.name || "",
+        ship_address1: receipt.first_line || "",
+        ship_address2: receipt.second_line || "",
+        ship_city: receipt.city || "",
+        ship_state: receipt.state || "",
+        ship_postcode: receipt.zip || "",
+        ship_country: receipt.country_iso || "",
+        ship_phone: receipt.phone || receipt.formatted_phone || "",
+        tracking_code: receiptTrackingCode(receipt),
+        tracking_number: receiptTrackingCode(receipt),
+        carrier_name: receiptCarrierName(receipt),
+        status: shipped ? "shipped" : "sold",
+        shipped_at: shipped ? receiptShippedAt(receipt) || new Date().toISOString() : "",
+        etsy_live_is_shipped: shipped,
+        etsy_status_synced_at: new Date().toISOString(),
+      };
+      txns.forEach((txn, idx) => {
         const listingId = txn?.listing_id || "";
         const txnId = txn?.transaction_id || "";
         const id = `etsy-${receiptId}-${txnId || listingId || idx}`;
         patches[id] = {
+          ...byReceipt[receiptId],
           listing_image: etsyImageFromTxn(txn),
-          buyer_email: etsyEmailFromReceipt(receipt),
-          buyer_name: receipt.name || etsyEmailFromReceipt(receipt),
-          buyer_country: receipt.country_iso || "",
           etsy_listing_id: listingId,
-          ship_name: receipt.name || "",
-          ship_address1: receipt.first_line || "",
-          ship_address2: receipt.second_line || "",
-          ship_city: receipt.city || "",
-          ship_state: receipt.state || "",
-          ship_postcode: receipt.zip || "",
-          ship_country: receipt.country_iso || "",
-          ship_phone: receipt.phone || receipt.formatted_phone || "",
         };
       });
     });
-    return patches;
+    return { patches, byReceipt };
   };
   const mergeEtsyBackfill = async rawOrders => {
-    const patches = etsyOrderPatchMap(rawOrders);
-    if (!Object.keys(patches).length) return false;
+    const { patches, byReceipt } = etsyOrderPatchMap(rawOrders);
+    if (!Object.keys(patches).length && !Object.keys(byReceipt).length) return false;
     const current = await loadK(ORDERS_KEY);
     let changed = false;
-    const next = (current || orders || []).map(order => {
+    const baseOrders = current || orders || [];
+    const nextExisting = baseOrders.map(order => {
       if (order.platform !== "etsy") return order;
-      const receiptId = order.etsy_receipt_id || order.platform_order_id || String(order.order_number || "").replace(/^ETSY-/, "").split("-")[0];
+      const receiptId = String(order.etsy_receipt_id || order.platform_order_id || String(order.order_number || "").replace(/^ETSY-/, "").split("-")[0]);
       const candidates = [
         order.id,
         order.etsy_transaction_id ? `etsy-${receiptId}-${order.etsy_transaction_id}` : "",
         order.etsy_listing_id ? `etsy-${receiptId}-${order.etsy_listing_id}` : "",
       ].filter(Boolean);
-      const patch = candidates.map(k => patches[k]).find(Boolean);
+      const patch = candidates.map(k => patches[k]).find(Boolean) || byReceipt[receiptId];
       if (!patch) return order;
       const merged = { ...order };
       Object.entries(patch).forEach(([k, v]) => {
-        if (v && !merged[k]) merged[k] = v;
+        if (["status", "shipped_at", "tracking_code", "tracking_number", "carrier_name", "etsy_live_is_shipped", "etsy_status_synced_at"].includes(k)) {
+          if (v || k === "shipped_at") merged[k] = v;
+        } else if (v && !merged[k]) {
+          merged[k] = v;
+        }
       });
       if (JSON.stringify(merged) !== JSON.stringify(order)) changed = true;
       return merged;
     });
+    const existingIds = new Set(nextExisting.map(o => o.id));
+    const additions = normalizeEtsyOrdersForERP(rawOrders).filter(o => !existingIds.has(o.id));
+    if (additions.length) changed = true;
+    const next = [...additions, ...nextExisting]
+      .sort((a, b) => new Date(b.created_at || b.date || 0) - new Date(a.created_at || a.date || 0));
     if (changed) {
       await saveK(ORDERS_KEY, next);
       window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
@@ -1821,7 +1930,8 @@ function OrdersView({ orders, listings = [] }) {
   }, []);
 
   useEffect(() => {
-    const needsBackfill = (orders || []).some(o => o.platform === "etsy" && (!findOrderImage(o) || !o.buyer_email || !o.ship_address1));
+    const hasEtsyOrders = (orders || []).some(o => o.platform === "etsy");
+    const needsBackfill = hasEtsyOrders || (orders || []).some(o => o.platform === "etsy" && (!findOrderImage(o) || !o.buyer_email || !o.ship_address1));
     if (!needsBackfill || etsyBackfillRef.current) return;
     etsyBackfillRef.current = true;
     setEtsyBackfilling(true);
@@ -1831,7 +1941,7 @@ function OrdersView({ orders, listings = [] }) {
         return sess.access_token ? { "X-Etsy-Token": sess.access_token } : {};
       } catch { return {}; }
     })();
-    fetch("/api/etsy?action=orders&limit=100&enrich=true", { headers: authHeaders })
+    fetch(`/api/etsy?action=orders&limit=100&enrich=true&_=${Date.now()}`, { headers: authHeaders, cache: "no-store" })
       .then(r => r.ok ? r.json() : null)
       .then(d => mergeEtsyBackfill(d?.results || []))
       .catch(() => {})
@@ -2213,6 +2323,17 @@ function EtsyLiveView() {
   };
 
   const etsyMoney = m => (m?.amount || 0) / (m?.divisor || 100);
+  const etsyReceiptTs = o => o?.create_timestamp || o?.creation_tsz || o?.created_timestamp || o?.update_timestamp || 0;
+  const sortEtsyReceipts = rows => [...(rows || [])].sort((a, b) => etsyReceiptTs(b) - etsyReceiptTs(a));
+  const mergeEtsyReceipts = (existing = [], fresh = []) => {
+    const byId = new Map();
+    existing.forEach(o => byId.set(String(o.receipt_id), o));
+    fresh.forEach(o => {
+      const key = String(o.receipt_id);
+      byId.set(key, { ...(byId.get(key) || {}), ...o });
+    });
+    return sortEtsyReceipts([...byId.values()]);
+  };
   const etsyOrderDate = o => {
     const ts = o.create_timestamp || o.creation_tsz || o.created_timestamp || o.update_timestamp;
     return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
@@ -2220,6 +2341,26 @@ function EtsyLiveView() {
   const etsyBuyerEmail = o => o.buyer_email || o.email || o.customer_email || o.customer?.email || o.buyer?.email || "";
   const receiptTrackingCode = o => o.tracking_code || o.tracking_number || o.shipments?.[0]?.tracking_code || o.shipments?.[0]?.tracking_number || "";
   const receiptCarrierName = o => o.carrier_name || o.shipping_carrier || o.shipments?.[0]?.carrier_name || o.shipments?.[0]?.carrier || "other";
+  const receiptShippedAt = o => {
+    const shipment = o?.shipments?.[0] || {};
+    const ts = o?.shipped_timestamp || o?.ship_date || o?.shipped_at ||
+      shipment.shipped_timestamp || shipment.shipment_notification_timestamp || shipment.mail_date ||
+      shipment.created_timestamp || shipment.created_at;
+    if (!ts) return "";
+    if (typeof ts === "number") return new Date(ts * 1000).toISOString();
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+  };
+  const receiptIsShipped = o => {
+    const status = String(o?.status || o?.shipping_status || "").toLowerCase();
+    return !!(
+      o?.is_shipped ||
+      o?.was_shipped ||
+      receiptTrackingCode(o) ||
+      (o?.shipments || []).length ||
+      ["shipped", "fulfilled", "pre_transit", "in_transit", "delivered"].includes(status)
+    );
+  };
 
   const etsyListingImage = listing => {
     const imgs = listing?.images || listing?.Images || [];
@@ -2249,6 +2390,7 @@ function EtsyLiveView() {
         const currency = txn?.price?.currency_code || o.grandtotal?.currency_code || "USD";
         const lineTotal = txn?.price ? etsyMoney(txn.price) * (txn.quantity || 1) : etsyMoney(o.grandtotal);
         const id = `etsy-${o.receipt_id}-${txn?.transaction_id || etsyListingId || idx}`;
+        const shipped = receiptIsShipped(o);
         normalized.push({
           id,
           order_number:      `ETSY-${o.receipt_id}${txns.length > 1 ? `-${idx + 1}` : ""}`,
@@ -2276,11 +2418,11 @@ function EtsyLiveView() {
           ship_postcode:     o.zip || "",
           ship_country:      o.country_iso || "",
           ship_phone:        o.phone || o.formatted_phone || "",
-          status:            o.is_shipped ? "shipped" : "sold",
+          status:            shipped ? "shipped" : "sold",
           tracking_code:     receiptTrackingCode(o),
           tracking_number:   receiptTrackingCode(o),
           carrier_name:      receiptCarrierName(o),
-          shipped_at:        o.is_shipped ? new Date().toISOString() : "",
+          shipped_at:        shipped ? receiptShippedAt(o) || new Date().toISOString() : "",
           date:              etsyOrderDate(o),
           notes:             o.message_from_buyer || "",
           created_at:        new Date((o.create_timestamp || o.creation_tsz || Date.now() / 1000) * 1000).toISOString(),
@@ -2346,7 +2488,7 @@ function EtsyLiveView() {
       const [pr, lr, or_, sr, dr] = await Promise.all([
         fetch("/api/etsy?action=ping", { headers: authHdr }),
         fetch("/api/etsy?action=listings_all", { headers: authHdr }),
-        fetch("/api/etsy?action=orders&limit=100&enrich=true", { headers: authHdr }),
+        fetch(`/api/etsy?action=orders&limit=100&enrich=true&_=${Date.now()}`, { headers: authHdr, cache: "no-store" }),
         fetch("/api/etsy?action=sections", { headers: authHdr }),
         fetch("/api/etsy?action=discounts", { headers: authHdr }),
       ]);
@@ -2376,7 +2518,7 @@ function EtsyLiveView() {
       let newOrders = orders;
       if (oauth && or_.ok) {
         const od = await or_.json();
-        newOrders = od.results || [];
+        newOrders = mergeEtsyReceipts(orders, od.results || []);
         setOrders(newOrders);
         syncOrdersToERP(newOrders, newListings).catch(e => console.warn("Etsy order ERP sync failed:", e));
       }

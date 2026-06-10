@@ -674,6 +674,9 @@ function computeBalances(accs, txns) {
         if (cardIds.has(t.accountFrom)) bals[t.accountFrom] = (bals[t.accountFrom] || 0) + (+t.amount || 0);
         else bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
       }
+      if (t.classifiedAs === "cc_payment" && t.classifiedRef?.cardAccountId) {
+        bals[t.classifiedRef.cardAccountId] = (bals[t.classifiedRef.cardAccountId] || 0) - (+t.amount || 0);
+      }
     } else if (t.type === "conversion") {
       if (t.accountFrom) bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
       if (t.accountTo)   bals[t.accountTo]   = (bals[t.accountTo]   || 0) + (+t.amount || 0) * (+t.convRate || 1);

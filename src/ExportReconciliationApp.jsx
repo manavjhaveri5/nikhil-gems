@@ -52,6 +52,13 @@ const idb = {
 /* ══ METADATA ═══════════════════════════════════════════════════ */
 const META_KEY      = "er-meta-v5";
 const INSIGHTS_KEY  = "er-insights-v1";
+const emptyManualFirc = () => ({
+  number:"", date:"", amount:"",
+  foreignAmount:"", currency:"USD", exchangeRate:"",
+  bankName:"", bankAccount:"", remitterName:"", buyerName:"",
+  purposeCode:"P0102", transactionRef:"", charges:"",
+  evidenceType:"Bank reference", thirdParty:false, notes:"",
+});
 let activeReconCompany = "atyahara";
 const scopedKey = key => `${key}:${activeReconCompany}`;
 const emptyMeta = () => ({ fircs: [], shippingBills: [], invoices: [] });
@@ -313,7 +320,7 @@ export default function App({ company = "atyahara" }) {
   const deleteFirc = useCallback(async id  => { await persist(d=>({...d,fircs:d.fircs.filter(f=>f.id!==id),shippingBills:d.shippingBills.map(sb=>sb.fircId===id?{...sb,fircId:null}:sb)})); await idb.del(`firc:${id}`); },[persist]);
   const updateFirc = useCallback(async (id,p)=>persist(d=>({...d,fircs:d.fircs.map(f=>f.id===id?{...f,...p}:f)})),[persist]);
   const addSb      = useCallback(async sb  => persist(d=>({...d,shippingBills:[...d.shippingBills,sb].sort((a,b)=>new Date(a.date)-new Date(b.date))})),[persist]);
-  const deleteSb   = useCallback(async id  => { await persist(d=>({...d,shippingBills:d.shippingBills.filter(sb=>sb.id!==id)})); await Promise.all(["sb","inv","hawb","erf"].map(t=>idb.del(`${t}:${id}`))); },[persist]);
+  const deleteSb   = useCallback(async id  => { await persist(d=>({...d,shippingBills:d.shippingBills.filter(sb=>sb.id!==id)})); await Promise.all(["sb","inv","hawb","erf","brc"].map(t=>idb.del(`${t}:${id}`))); },[persist]);
   const patchSb    = useCallback(async (id,p)=>persist(d=>({...d,shippingBills:d.shippingBills.map(sb=>sb.id===id?{...sb,...p}:sb)})),[persist]);
   const assignSb   = useCallback(async (sbId,fircId)=>persist(d=>({...d,shippingBills:d.shippingBills.map(sb=>sb.id===sbId?{...sb,fircId}:sb)})),[persist]);
   const cycleStatus= useCallback(async id=>{ const sb=dataRef.current.shippingBills.find(x=>x.id===id); if(sb) await patchSb(id,{status:STATUS_NEXT[sb.status||"pending"]}); },[patchSb]);
@@ -378,9 +385,9 @@ export default function App({ company = "atyahara" }) {
     setGenId(sbId);
     try {
       const {PDFDocument,StandardFonts,rgb}=pdfLib.current||window.PDFLib;
-      const [sbB,invB,fircB,hawbB,femaB,erfB]=await Promise.all([
+      const [sbB,invB,fircB,hawbB,femaB,erfB,brcB]=await Promise.all([
         idb.get(`sb:${sb.id}`),idb.get(`inv:${sb.id}`),idb.get(`firc:${firc.id}`),
-        idb.get(`hawb:${sb.id}`),idb.get("fema"),idb.get(`erf:${sb.id}`),
+        idb.get(`hawb:${sb.id}`),idb.get("fema"),idb.get(`erf:${sb.id}`),idb.get(`brc:${sb.id}`),
       ]);
       const merged=await PDFDocument.create();
       const font=await merged.embedFont(StandardFonts.Helvetica);
@@ -419,6 +426,7 @@ export default function App({ company = "atyahara" }) {
       await app(femaB,"FEMA Declaration");
       await app(hawbB,`HAWB — ${sb.sbNumber}`);
       await app(erfB, "Export Reconciliation Form");
+      if(brcB||sb.status==="cleared")await app(brcB, "BRC Certificate");
       const out=await merged.save();
       setPdfModal({url:URL.createObjectURL(new Blob([out],{type:"application/pdf"})),name:`Packet_${sb.sbNumber}.pdf`});
     } catch(e){ alert(`Packet error: ${e.message}`); }
@@ -677,6 +685,8 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
   const [sortBy,      setSortBy]   = useState("date-asc");
   const [filterUtil,  setFilterUtil]= useState("all");   // all full partial empty
   const [showFilters, setShowFilters]=useState(false);
+  const [manualOpen,  setManualOpen]= useState(false);
+  const [manualVals,  setManualVals]= useState(()=>emptyManualFirc());
   const busyRef = useRef(false);
   const fileRef = useRef();
 
@@ -707,6 +717,37 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
     }
     busyRef.current=false;
     if(fileRef.current) fileRef.current.value="";
+  }
+
+  async function addManualFirc() {
+    const number=(manualVals.number||"").trim();
+    const explicitAmount=+String(manualVals.amount||"").replace(/,/g,"");
+    const foreignAmount=+String(manualVals.foreignAmount||"").replace(/,/g,"");
+    const exchangeRate=+String(manualVals.exchangeRate||"").replace(/,/g,"");
+    const charges=+String(manualVals.charges||"").replace(/,/g,"")||0;
+    const derivedAmount=foreignAmount>0&&exchangeRate>0?Math.max(0,Math.round((foreignAmount*exchangeRate-charges)*100)/100):0;
+    const amount=String(explicitAmount>0?explicitAmount:derivedAmount);
+    if (!number || !manualVals.date || !(+amount>0)) {
+      alert("Add FIRC/reference number, date, and INR amount — or foreign amount with exchange rate.");
+      return;
+    }
+    const normFirc = v => String(v||"").trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
+    const existing=data.fircs.find(f=>normFirc(f.number)===normFirc(number));
+    if (existing) {
+      alert(`FIRC ${number} already exists.`);
+      return;
+    }
+    await onAdd({
+      ...manualVals,
+      id:uid(),
+      number,
+      amount,
+      hasPdf:false,
+      manual:true,
+      thirdParty:!!manualVals.thirdParty,
+    });
+    setManualVals(emptyManualFirc());
+    setManualOpen(false);
   }
 
   // Build list with utilisation
@@ -750,6 +791,114 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
     <div style={{maxWidth:900}}>
       <PH title="FIRCs" sub={`${data.fircs.length} loaded · click to see attached SBs`}/>
       <DropZone label="Upload FIRC PDFs" multi disabled={busy} fileRef={fileRef} onFiles={handleFiles}/>
+      <div style={{marginTop:-6,marginBottom:14}}>
+        <button className="pr" onClick={()=>setManualOpen(v=>!v)}
+          style={{...S.btnGhost,width:"100%",padding:"9px 12px",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+          {manualOpen?"Close manual entry":"＋ Add FIRC manually"}
+        </button>
+        {manualOpen&&(
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:14,marginTop:8}}>
+            <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:4}}>Manual FIRC / wire receipt</div>
+            <div style={{fontSize:11.5,color:C.inkMid,lineHeight:1.5,marginBottom:12}}>
+              Use this when the client paid by direct wire and you only have a bank reference, not a FIRC PDF. It can still be matched to SBs.
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr .8fr .8fr",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>IRM / FIRC / bank reference</div>
+                <input value={manualVals.number} onChange={e=>setManualVals(v=>({...v,number:e.target.value}))} placeholder="e.g. WIRE-BOFA-2026-001"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Date received</div>
+                <input type="date" value={manualVals.date} onChange={e=>setManualVals(v=>({...v,date:e.target.value}))}
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Amount (₹)</div>
+                <input type="number" inputMode="decimal" value={manualVals.amount} onChange={e=>setManualVals(v=>({...v,amount:e.target.value}))} placeholder="0"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr .5fr .7fr .7fr",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Foreign amount</div>
+                <input type="number" inputMode="decimal" value={manualVals.foreignAmount} onChange={e=>setManualVals(v=>({...v,foreignAmount:e.target.value}))} placeholder="0"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Currency</div>
+                <select value={manualVals.currency} onChange={e=>setManualVals(v=>({...v,currency:e.target.value}))}
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box",background:C.bg,color:C.ink}}>
+                  {["USD","EUR","GBP","JPY","AUD","CAD","INR"].map(c=><option key={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Exchange rate</div>
+                <input type="number" inputMode="decimal" value={manualVals.exchangeRate} onChange={e=>setManualVals(v=>({...v,exchangeRate:e.target.value}))} placeholder="83.25"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Charges (₹)</div>
+                <input type="number" inputMode="decimal" value={manualVals.charges} onChange={e=>setManualVals(v=>({...v,charges:e.target.value}))} placeholder="0"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Buyer / client</div>
+                <input value={manualVals.buyerName} onChange={e=>setManualVals(v=>({...v,buyerName:e.target.value}))} placeholder="Buyer on invoice"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Sender / remitter</div>
+                <input value={manualVals.remitterName} onChange={e=>setManualVals(v=>({...v,remitterName:e.target.value}))} placeholder="Party sending the money"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Bank name</div>
+                <input value={manualVals.bankName} onChange={e=>setManualVals(v=>({...v,bankName:e.target.value}))} placeholder="Receiving bank"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Bank account credited</div>
+                <input value={manualVals.bankAccount} onChange={e=>setManualVals(v=>({...v,bankAccount:e.target.value}))} placeholder="Account nickname or last 4"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Purpose code</div>
+                <input value={manualVals.purposeCode} onChange={e=>setManualVals(v=>({...v,purposeCode:e.target.value}))} placeholder="P0102"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>SWIFT / UTR / txn ref</div>
+                <input value={manualVals.transactionRef} onChange={e=>setManualVals(v=>({...v,transactionRef:e.target.value}))} placeholder="Transaction reference"
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Evidence type</div>
+                <select value={manualVals.evidenceType} onChange={e=>setManualVals(v=>({...v,evidenceType:e.target.value}))}
+                  style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box",background:C.bg,color:C.ink}}>
+                  {["Bank reference","Wire advice","Bank statement","Email confirmation","Manual only"].map(x=><option key={x}>{x}</option>)}
+                </select>
+              </div>
+            </div>
+            <label style={{display:"flex",alignItems:"center",gap:7,fontSize:12,color:C.inkMid,marginBottom:10,cursor:"pointer",userSelect:"none"}}>
+              <input type="checkbox" checked={!!manualVals.thirdParty} onChange={e=>setManualVals(v=>({...v,thirdParty:e.target.checked}))} style={{width:14,height:14,accentColor:C.gold,cursor:"pointer"}}/>
+              Payment sender is different from buyer
+            </label>
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>Notes</div>
+              <input value={manualVals.notes} onChange={e=>setManualVals(v=>({...v,notes:e.target.value}))} placeholder="Any extra bank note, invoice group, or follow-up needed"
+                style={{width:"100%",border:`1.5px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,boxSizing:"border-box"}}/>
+            </div>
+            <button className="pr" onClick={addManualFirc} style={{...S.btnDark,width:"100%",padding:"10px",fontSize:13}}>Save manual FIRC</button>
+          </div>
+        )}
+      </div>
       {log.length>0&&<LogList log={log} onClear={()=>setLog([])} busy={busy}/>}
 
       {data.fircs.length>0&&(
@@ -806,13 +955,17 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
               {isEdit?(
                 <div onClick={e=>e.stopPropagation()}>
                   <div style={{fontSize:11,fontWeight:600,color:C.ink,marginBottom:10}}>Edit FIRC</div>
-                  {[["FIRC Number","number","text"],["Date","date","date"],["Amount (₹)","amount","number"]].map(([lbl,k,t])=>(
-                    <div key={k} style={{marginBottom:8}}>
+                  {[["FIRC Number","number","text"],["Date","date","date"],["Amount (₹)","amount","number"],["Foreign Amount","foreignAmount","number"],["Currency","currency","text"],["Exchange Rate","exchangeRate","number"],["Bank Name","bankName","text"],["Account Credited","bankAccount","text"],["Buyer / Client","buyerName","text"],["Sender / Remitter","remitterName","text"],["Purpose Code","purposeCode","text"],["Transaction Ref","transactionRef","text"],["Charges (₹)","charges","number"],["Evidence Type","evidenceType","text"],["Notes","notes","text"]].map(([lbl,k,t])=>(
+                    <div key={k} style={{marginBottom:8,display:k==="notes"?"block":"inline-block",width:k==="notes"?"100%":mob?"100%":"calc(50% - 4px)",marginRight:k==="notes"?0:8,verticalAlign:"top"}}>
                       <div style={{fontSize:10,color:C.inkMid,marginBottom:3}}>{lbl}</div>
                       <input type={t} value={editVals[k]||""} onChange={e=>setEditVals(v=>({...v,[k]:e.target.value}))}
                         style={{width:"100%",border:`1.5px solid ${C.borderHi}`,borderRadius:7,padding:"8px 10px",fontSize:13,background:C.bg,boxSizing:"border-box"}}/>
                     </div>
                   ))}
+                  <label style={{display:"flex",alignItems:"center",gap:7,fontSize:12,color:C.inkMid,marginTop:2,cursor:"pointer",userSelect:"none"}}>
+                    <input type="checkbox" checked={!!editVals.thirdParty} onChange={e=>setEditVals(v=>({...v,thirdParty:e.target.checked}))} style={{width:14,height:14,accentColor:C.gold,cursor:"pointer"}}/>
+                    Payment sender is different from buyer
+                  </label>
                   <div style={{display:"flex",gap:8,marginTop:12}}>
                     <button className="pr" onClick={async()=>{await onUpdate(f.id,editVals);setEditId(null);}} style={{...S.btnDark,flex:1,padding:"9px",fontSize:13}}>Save</button>
                     <button className="pr" onClick={()=>setEditId(null)} style={{...S.btnGhost,padding:"9px"}}>Cancel</button>
@@ -822,12 +975,18 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
                 <>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:700,fontSize:14,color:C.ink}}>{f.number||<Warn text="No number"/>}</div>
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                        <div style={{fontWeight:700,fontSize:14,color:C.ink}}>{f.number||<Warn text="No number"/>}</div>
+                        {!f.hasPdf&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:C.amberBg,color:C.amber,fontWeight:600}}>Manual</span>}
+                      </div>
                       <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{fd(f.date)} · {f._cnt} SB{f._cnt!==1?"s":""} · {fc(f._used)} used</div>
+                      {(f.buyerName||f.remitterName)&&<div style={{fontSize:10.5,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.buyerName?`Buyer: ${f.buyerName}`:""}{f.buyerName&&f.remitterName?" · ":""}{f.remitterName?`Sender: ${f.remitterName}`:""}</div>}
+                      {(f.foreignAmount||f.currency||f.purposeCode)&&<div style={{fontSize:10.5,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.foreignAmount?`${f.currency||""} ${f.foreignAmount}`:""}{f.foreignAmount&&f.exchangeRate?` @ ${f.exchangeRate}`:""}{f.purposeCode?`${f.foreignAmount?" · ":""}${f.purposeCode}`:""}{f.thirdParty?" · Third-party payer":""}</div>}
+                      {f.notes&&<div style={{fontSize:10.5,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.notes}</div>}
                     </div>
                     <div style={{display:"flex",gap:5,flexShrink:0,marginLeft:8}} onClick={e=>e.stopPropagation()}>
                       {f.hasPdf&&<Btn ghost small onClick={()=>showPdf(`firc:${f.id}`,f.number||"FIRC")}>👁</Btn>}
-                      <Btn ghost small onClick={()=>{setEditId(f.id);setEditVals({number:f.number,date:f.date,amount:f.amount});}}>✏</Btn>
+                      <Btn ghost small onClick={()=>{setEditId(f.id);setEditVals({...emptyManualFirc(),...f});}}>✏</Btn>
                       <Btn danger small onClick={()=>onDelete(f.id)}>🗑</Btn>
                     </div>
                   </div>
@@ -1042,7 +1201,7 @@ function SBsView({ data, onAdd, onDelete, onPatch, onCycle, setSheet, onGen, gen
         // Use AI-detected docType; fall back to filename heuristic
         const rawType = (ex.docType||"").toLowerCase();
         const sbType = rawType==="pbe" ? "pbe" : rawType==="csb" ? "csb" : "commercial";
-        await onAdd({id,sbNumber,date:ex.date||"",amount:String(ex.amount||""),fircId:null,status:"pending",sbType,hasSbPdf:true,hasInvPdf:false,hasHawbPdf:false,hasErfPdf:false});
+        await onAdd({id,sbNumber,date:ex.date||"",amount:String(ex.amount||""),fircId:null,status:"pending",sbType,hasSbPdf:true,hasInvPdf:false,hasHawbPdf:false,hasErfPdf:false,hasBrcPdf:false});
         upd({status:"done",detail:`${sbNumber} (${sbType.toUpperCase()})`});
       } catch(e){upd({status:"error",detail:e.message});}
     }
@@ -1733,7 +1892,9 @@ function StatsView({ data, fircUsed, onExport, onImport, onFixDates }) {
             {l:"Invoice uploaded", n:sbs.filter(sb=>sb.hasInvPdf).length},
             {l:"HAWB uploaded",    n:sbs.filter(sb=>sb.hasHawbPdf).length},
             {l:"ERF uploaded",     n:sbs.filter(sb=>sb.hasErfPdf).length},
-            {l:"Packet-ready",     n:sbs.filter(sb=>sb.fircId&&sb.hasSbPdf&&sb.hasInvPdf&&sb.hasHawbPdf&&sb.hasErfPdf).length, bold:true},
+            {l:"BRC uploaded",     n:sbs.filter(sb=>sb.hasBrcPdf).length},
+            {l:"Packet-ready",     n:sbs.filter(sb=>sb.fircId&&sb.hasSbPdf&&sb.hasInvPdf&&sb.hasHawbPdf&&sb.hasErfPdf&&((sb.status||"pending")!=="cleared"||sb.hasBrcPdf)).length, bold:true},
+            {l:"Closed + BRC",      n:sbs.filter(sb=>(sb.status||"pending")==="cleared"&&sb.hasBrcPdf).length, bold:true},
           ].map(r=>(
             <div key={r.l} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
               <span style={{fontSize:12,flex:1,color:r.bold?C.ink:C.inkMid,fontWeight:r.bold?600:400}}>{r.l}</span>
@@ -2161,7 +2322,7 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
 
   async function handleDoc(type,files){
     const file=files[0]; if(!file)return;
-    const flagMap={inv:"hasInvPdf",hawb:"hasHawbPdf",erf:"hasErfPdf"};
+    const flagMap={inv:"hasInvPdf",hawb:"hasHawbPdf",erf:"hasErfPdf",brc:"hasBrcPdf"};
     setUploading(u=>({...u,[type]:true})); setErrors(e=>({...e,[type]:null}));
     try{
       const {b64,mime}=await readB64WithMime(file);
@@ -2172,7 +2333,7 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
     setUploading(u=>({...u,[type]:false}));
   }
   async function removeDoc(type){
-    const flagMap={inv:"hasInvPdf",hawb:"hasHawbPdf",erf:"hasErfPdf"};
+    const flagMap={inv:"hasInvPdf",hawb:"hasHawbPdf",erf:"hasErfPdf",brc:"hasBrcPdf"};
     await idb.del(`${type}:${sbId}`);
     await onPatch(sbId,{[flagMap[type]]:false});
     setLocalHas(h=>({...h,[flagMap[type]]:false}));
@@ -2182,6 +2343,7 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
     {type:"inv", label:"Invoice",                    flag:"hasInvPdf",  note:"PDF, JPG or PNG accepted"},
     {type:"hawb",label:"HAWB",                        flag:"hasHawbPdf", note:"PDF, JPG or PNG accepted"},
     {type:"erf", label:"Export Reconciliation Form",  flag:"hasErfPdf",  note:"Bank-provided, per SB · PDF, JPG or PNG"},
+    {type:"brc", label:"BRC Certificate",             flag:"hasBrcPdf",  note:"For forms closed / accepted by the bank · PDF, JPG or PNG"},
   ];
   const packet=[
     {label:"Invoice",                    ready:has("hasInvPdf"), src:"below"},
@@ -2190,6 +2352,7 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
     {label:"FEMA Declaration",           ready:hasFema,          src:"global"},
     {label:"HAWB",                       ready:has("hasHawbPdf"),src:"below"},
     {label:"Export Reconciliation Form", ready:has("hasErfPdf"), src:"below"},
+    ...(st==="cleared"||has("hasBrcPdf")?[{label:"BRC Certificate",ready:has("hasBrcPdf"),src:"bank"}]:[]),
   ];
   const readyCount=packet.filter(p=>p.ready).length;
 
@@ -2229,8 +2392,8 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
       {/* Packet checklist */}
       <div style={{background:C.card,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <div style={{fontSize:12,fontWeight:600,color:C.inkMid}}>Packet — 6 documents</div>
-          <div style={{fontSize:11,color:readyCount===6?C.greenBright:C.inkMid}}>{readyCount}/6 ready</div>
+          <div style={{fontSize:12,fontWeight:600,color:C.inkMid}}>Packet — {packet.length} documents</div>
+          <div style={{fontSize:11,color:readyCount===packet.length?C.greenBright:C.inkMid}}>{readyCount}/{packet.length} ready</div>
         </div>
         {packet.map(p=>(
           <div key={p.label} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>

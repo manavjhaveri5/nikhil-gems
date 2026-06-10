@@ -2,8 +2,16 @@ const sw = String.raw`/**
  * Nikhil Gems Service Worker
  */
 
-const CACHE = "ng-shell-2026-06-03-v7";
+const CACHE = "ng-shell-2026-06-09-v12";
 const SHELL = ["/", "/index.html"];
+
+const freshRequest = req => new Request(req, { cache: "no-store" });
+const clearShellCaches = () =>
+  caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith("ng-shell-")).map(k => caches.delete(k))));
+const reloadModule = () => new Response(
+  "caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('ng-shell-')).map(k=>caches.delete(k)))).finally(()=>location.reload()); export default {};",
+  { headers: { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" } }
+);
 
 self.addEventListener("install", e => {
   e.waitUntil(
@@ -36,9 +44,22 @@ self.addEventListener("fetch", e => {
     e.respondWith(
       caches.match(e.request).then(cached => {
         if (cached) return cached;
-        return fetch(e.request).then(res => {
+        return fetch(freshRequest(e.request)).then(res => {
+          if (!res.ok) {
+            if (url.pathname.endsWith(".js")) {
+              clearShellCaches().catch(() => {});
+              return reloadModule();
+            }
+            return res;
+          }
           caches.open(CACHE).then(c => c.put(e.request, res.clone()));
           return res;
+        }).catch(err => {
+          if (url.pathname.endsWith(".js")) {
+            clearShellCaches().catch(() => {});
+            return reloadModule();
+          }
+          throw err;
         });
       })
     );
@@ -48,7 +69,8 @@ self.addEventListener("fetch", e => {
   if (e.request.mode === "navigate") {
     e.respondWith(
       Promise.race([
-        fetch(e.request).then(res => {
+        fetch(freshRequest(e.request)).then(res => {
+          if (!res.ok) throw new Error("navigation failed");
           caches.open(CACHE).then(c => c.put(e.request, res.clone()));
           return res;
         }),

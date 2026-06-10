@@ -353,7 +353,7 @@ const MODS=[
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
   {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",ready:true},
   {id:"misc",icon:"🗂️",title:"Miscellaneous",desc:"Purchase bill maker, utilities",ready:true},
-  {id:"journal",icon:"📒",title:"Accounting Journal",desc:"Stock movements, customer orders, purchase orders",ready:true},
+  {id:"journal",icon:"🧾",title:"Accounting Journal",desc:"Stock movements, customer orders, purchase orders",ready:true},
 ];
 // ── FINANCIAL CHART (standalone — Y-axis + hover tooltips) ────────
 function FinancialChart({chartData,months6,nextM,openPOtotal,pendingReceivables,todayStr}){
@@ -1546,7 +1546,7 @@ function VendorsApp({onHome,startVendor}){
     const ledgerRows=[
       ...txns.map(p=>({id:p.id,date:p.date||p.billDate,type:p.type==="bill"?"Bill":"PO",ref:p.billNumber||p.poNumber||"—",amount:+p.totalAmount||0,paid:+p.paidAmount||0,status:p.status,doc:p.docData||p.docUrl,docName:p.billName||p.billNumber||"",docIsUrl:!!(!p.docData&&p.docUrl),docExt:p.docExt,writtenOff:p.writtenOff,writtenOffAmount:p.writtenOffAmount,items:p.items||[]})),
       ...vendExp.map(e=>({id:e.id,date:e.date,type:"Expense",ref:e.cat||"—",amount:+e.amount||0,paid:+e.amount||0,status:"paid",doc:e.receipt,docName:e.receiptName||e.cat||"receipt"})),
-      ...vendorFinTxns.map(t=>({id:t.id,date:t.date,type:"Payment",ref:t.classifiedRef?.billNumbers?.join(", ")||t.classifiedRef?.billId||t.notes||"—",amount:+t.amount||0,paid:+t.amount||0,status:"paid",isFinTxn:true,account:t.accountFrom,notes:t.notes})),
+      ...vendorFinTxns.map(t=>({id:t.id,date:t.date,type:"Payment",ref:t.classifiedRef?.billNumbers?.join(", ")||t.classifiedRef?.billId||(t.classifiedRef?.paymentOnAccount?"Payment on account":null)||t.notes||"—",amount:+t.amount||0,paid:+t.amount||0,status:"paid",isFinTxn:true,account:t.accountFrom,notes:t.notes})),
     ].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
     const vendorFiles=selected.files||[];
     // All files: vendor files + expense receipts
@@ -2957,9 +2957,73 @@ const journalParty=e=>e?.type==="exit"?(e.customerName||e.buyerName||e.vendorNam
 const journalQtyText=it=>[it.qty?`${it.qty} ${it.unit||"pcs"}`:"",it.qty2?`${it.qty2} ${it.unit2||"kg"}`:""].filter(Boolean).join(" / ");
 const journalItemText=it=>`${[it.material,it.shape].filter(Boolean).join(" · ")||"Item"}${journalQtyText(it)?` · ${journalQtyText(it)}`:""}`;
 const journalSummary=e=>journalLines(e).map(journalItemText).join(" | ");
-const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||"")});
+const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||""),boxWeight:e.boxWeight||"",boxWeightUnit:e.boxWeightUnit||"kg"});
 const CUSTOMER_ORDERS_KEY="ng-customer-orders-v1";
 const CUSTOMER_ORDER_STATUS=["Open","PO Created","Part Ready","Ready","Fulfilled","Cancelled"];
+const ACCOUNTANT_PACKET_KEY="ng-accountant-packets-v1";
+const accountantMonth=()=>new Date().toISOString().slice(0,7);
+const accountantPacketRows=()=>[
+  {id:"sales-invoices",title:"Sales invoices",source:"Invoices module",mode:"auto",included:true,notes:""},
+  {id:"purchase-bills",title:"Purchase bills",source:"Manual upload",mode:"manual",included:true,notes:""},
+  {id:"credit-cards",title:"Credit card statements",source:"Manual upload",mode:"manual",included:true,notes:""},
+  {id:"bank-statement",title:"Bank statement",source:"Manual upload",mode:"manual",included:true,notes:""},
+  {id:"car-loan",title:"Car loan statement",source:"Manual upload",mode:"manual",included:true,notes:""},
+];
+const accountingFinanceKeys=co=>({
+  accounts:`${co}-fin-accounts-v1`,
+  transactions:`${co}-fin-txns-v1`,
+});
+const accountingCompanyKeys=co=>({
+  accounts:`${co}-fin-accounts-v1`,
+  transactions:`${co}-fin-txns-v1`,
+  invoices:co==="ng"?"ng-invoices-v2":"at-invoices-v1",
+  buyers:co==="ng"?"ng-buyers-v2":"at-buyers-v1",
+  purchases:co==="ng"?"ng-purch-v5":"at-purch-v1",
+  vendors:co==="ng"?"ng-vendors-v5":"at-vendors-v1",
+  expenses:co==="ng"?"ng-expenses-v1":"at-expenses-v1",
+});
+const ACCOUNTING_CUSTOM_CATS_KEY="ng-accounting-ledger-custom-cats-v1";
+const ACCOUNTING_LEDGER_CATS=[...DEFAULT_EXP_CATS].filter((v,i,a)=>v&&a.indexOf(v)===i);
+const normalizeAccountingExpenseCat=cat=>{
+  const raw=String(cat||"").trim();
+  if(!raw)return"";
+  const compact=raw.toLowerCase().replace(/\s+/g," ");
+  if(ACCOUNTING_LEDGER_CATS.includes(raw))return raw;
+  if(["staff / labour","staff / labor","staff / salary","staff salary","labour","labor","wages"].includes(compact)||compact.includes("salary"))return"Salary";
+  if(compact.includes("car loan")||compact.includes("emi"))return"Car Loan";
+  if(compact.includes("booth")||compact.includes("travel")||compact.includes("hotel"))return"Flights / Hotels";
+  if(compact.includes("packaging")||compact.includes("packing"))return"Packaging & Supplies";
+  if(compact.includes("gst")||compact.includes("tax")||compact.includes("duty"))return"Taxes & Duties";
+  if(compact.includes("courier")||compact.includes("local delivery")||compact.includes("land freight")||compact==="shipping")return"Land Freight";
+  if(compact.includes("sea freight"))return"Sea Freight";
+  if(compact.includes("air freight"))return"Air Freight";
+  if(compact.includes("electricity"))return"Electricity";
+  if(compact.includes("internet"))return"Internet";
+  if(compact.includes("gas"))return"Gas";
+  if(compact.includes("rent"))return"Rent";
+  return ACCOUNTING_LEDGER_CATS.includes(raw) ? raw : "Other";
+};
+const ACCOUNTING_LEDGER_GROUPS=[
+  {label:"Main",cats:["Rent","Salary","Flights / Hotels","Packaging & Supplies","Taxes & Duties","Car Loan"]},
+  {label:"Freight",cats:["Sea Freight","Air Freight","Land Freight"]},
+  {label:"Utilities",cats:["Electricity","Internet","Gas"]},
+  {label:"Other",cats:["Other"]},
+].map(g=>({...g,cats:g.cats.filter(c=>ACCOUNTING_LEDGER_CATS.includes(c))}));
+const ACCOUNTING_METHOD_CATS=new Set(["UPI","NEFT","IMPS","ATM","Transfer","Other",""]);
+const ACCOUNTING_DEFAULT_ACCOUNTS_NG=[
+  {id:"fa-inr-cash",name:"INR Cash",type:"cash",currency:"INR",openingBal:0,active:true},
+  {id:"fa-usd-cash",name:"USD Cash",type:"cash",currency:"USD",openingBal:0,active:true},
+  {id:"fa-eur-cash",name:"EUR Cash",type:"cash",currency:"EUR",openingBal:0,active:true},
+  {id:"fa-jpy-cash",name:"JPY Cash",type:"cash",currency:"JPY",openingBal:0,active:true},
+  {id:"fa-boi-0451",name:"Bank of India 0451",type:"bank",currency:"INR",openingBal:0,active:true},
+  {id:"fa-eefc",name:"EEFC",type:"bank",currency:"USD",openingBal:0,active:true},
+  {id:"fa-vantage",name:"Vantage West",type:"bank",currency:"USD",openingBal:0,active:true},
+  {id:"fa-chase",name:"Chase Earth Editions",type:"bank",currency:"USD",openingBal:0,active:true},
+];
+const ACCOUNTING_DEFAULT_ACCOUNTS_AT=[
+  {id:"at-induslnd",name:"IndusInd Bank",type:"bank",currency:"INR",openingBal:0,active:true},
+  {id:"at-boi",name:"Bank of India",type:"bank",currency:"INR",openingBal:0,active:true},
+];
 const customerOrderLine=(seed={})=>({id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||"",qty:seed.qty||"",unit:seed.unit||"kg",rate:seed.rate||"",spUsd:seed.spUsd||"",readyBy:seed.readyBy||"",status:seed.status||"Open",notes:seed.notes||"",poId:seed.poId||"",poNumber:seed.poNumber||""});
 const coLineInr=it=>(+it.qty||0)*(+it.rate||0);
 const coLineUsd=it=>(+it.qty||0)*(+it.spUsd||0);
@@ -3086,13 +3150,1235 @@ function AccountingPOList({purchaseOrders,onOpen,onNew,onQuickPaid,onQuickClose}
   </div>;
 }
 
-function StockJournalApp({onHome}){
+function MonthlyPacket({month,setMonth,rows,setRows,notes,setNotes,invoices=[],buyers=[],onPersist,showToast}){
+  const [activeRowId,setActiveRowId]=useState("");
+  const [activeFileId,setActiveFileId]=useState("");
+  const [activeInvoiceId,setActiveInvoiceId]=useState("");
+  const monthLabel=new Date(`${month}-01T12:00:00`).toLocaleDateString("en-IN",{month:"long",year:"numeric"});
+  const monthInvoices=(invoices||[]).filter(inv=>(inv.date||"").startsWith(month)).sort((a,b)=>(a.date||"").localeCompare(b.date||"")||(a.invNo||"").localeCompare(b.invNo||""));
+  const selected=rows.filter(r=>r.included);
+  const activeRow=rows.find(r=>r.id===activeRowId)||rows[0]||null;
+  const activeFiles=activeRow?.files||[];
+  const activeFile=activeFiles.find(f=>f.id===activeFileId)||activeFiles[0]||null;
+  const activeInvoice=activeRow?.id==="sales-invoices"?(monthInvoices.find(inv=>(inv.id||inv.invNo)===activeInvoiceId)||monthInvoices[0]||null):null;
+  const activeInvoiceHTML=activeInvoice?wrapInvDoc(activeInvoice.invNo||"Invoice",[buildInvBodyHTML(activeInvoice,buyers)]):"";
+  const rowReady=r=>r.id==="sales-invoices"?monthInvoices.length>0:(r.files||[]).length>0||String(r.notes||"").trim();
+  const readyCount=rows.filter(rowReady).length;
+  const selectedReady=selected.filter(rowReady).length;
+  const missingSelected=selected.length-selectedReady;
+  const progress=rows.length?Math.round((readyCount/rows.length)*100):0;
+  const allSelected=rows.length>0&&rows.every(r=>r.included);
+  const patchRow=(id,patch)=>{
+    const next=rows.map(r=>r.id===id?{...r,...patch}:r);
+    setRows(next);onPersist?.(next,notes);
+  };
+  const addRow=()=>{
+    const next=[...rows,{id:uid(),title:"New item",source:"Manual upload",mode:"manual",included:true,notes:"",files:[]}];
+    setRows(next);onPersist?.(next,notes);
+  };
+  const deleteRow=id=>{
+    if(!window.confirm("Remove this packet item?"))return;
+    const next=rows.filter(r=>r.id!==id);
+    if(activeRowId===id){setActiveRowId(next[0]?.id||"");setActiveFileId((next[0]?.files||[])[0]?.id||"");}
+    setRows(next);onPersist?.(next,notes);
+  };
+  const selectRow=row=>{
+    setActiveRowId(row.id);
+    setActiveFileId((row.files||[])[0]?.id||"");
+    if(row.id==="sales-invoices")setActiveInvoiceId((monthInvoices[0]?.id||monthInvoices[0]?.invNo)||"");
+  };
+  useEffect(()=>{
+    const onKey=e=>{
+      if(!["ArrowDown","ArrowUp"].includes(e.key)||!rows.length)return;
+      const tag=(e.target?.tagName||"").toLowerCase();
+      if(["input","textarea","select"].includes(tag)||e.target?.isContentEditable)return;
+      const current=Math.max(0,rows.findIndex(r=>r.id===(activeRowId||activeRow?.id)));
+      const nextIdx=e.key==="ArrowDown"?Math.min(rows.length-1,current+1):Math.max(0,current-1);
+      if(nextIdx===current)return;
+      e.preventDefault();
+      selectRow(rows[nextIdx]);
+    };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[rows,activeRowId,activeRow?.id,monthInvoices]);
+  const uploadFiles=async(row,files)=>{
+    const picked=[...files];
+    if(!picked.length)return;
+    showToast?.("Uploading...");
+    try{
+      const uploaded=[];
+      for(const file of picked){
+        const ext=(file.name||"file").split(".").pop().toLowerCase()||"bin";
+        const url=await supabaseUpload(`accounting-packets/${month}/${row.id}-${uid()}.${ext}`,file);
+        uploaded.push({id:uid(),name:file.name||`file.${ext}`,url,size:file.size||0,type:file.type||"",uploadedAt:new Date().toISOString()});
+      }
+      patchRow(row.id,{files:[...(row.files||[]),...uploaded]});
+      showToast?.(`${uploaded.length} file${uploaded.length===1?"":"s"} uploaded`);
+    }catch(e){showToast?.("Upload failed: "+e.message);}
+  };
+  const invoiceSummary=()=>{
+    const lines=[
+      `Sales invoices - ${monthLabel}`,
+      `Count: ${monthInvoices.length}`,
+      "",
+      ...monthInvoices.map(inv=>
+        [inv.date||"",inv.invNo||inv.id,inv.buyerName||inv.buyer||"",inv.currency||"",inv.totalAmt||0,inv.status||""].join(" | ")
+      )
+    ];
+    return lines.join("\n");
+  };
+  const saveTextFile=(name,text)=>{
+    const url=URL.createObjectURL(new Blob([text],{type:"text/plain;charset=utf-8"}));
+    const a=document.createElement("a");a.href=url;a.download=name;a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  const downloadRow=row=>{
+    if(row.id==="sales-invoices"){saveTextFile(`${month}-sales-invoices.txt`,invoiceSummary());return;}
+    (row.files||[]).forEach(f=>{const a=document.createElement("a");a.href=f.url;a.download=f.name||"file";a.target="_blank";a.rel="noreferrer";a.click();});
+    if(!(row.files||[]).length&&row.notes)saveTextFile(`${month}-${row.title.replace(/[^a-z0-9]+/gi,"-").toLowerCase()}-notes.txt`,row.notes);
+  };
+  const viewFile=file=>{if(file?.url)window.open(file.url,"_blank","noreferrer");};
+  const openInvoice=inv=>{
+    if(!inv)return;
+    const w=window.open("","_blank");
+    if(!w){showToast?.("Popup blocked. Allow popups to open invoice preview.");return;}
+    w.document.write(wrapInvDoc(inv.invNo||"Invoice",[buildInvBodyHTML(inv,buyers)]));
+    w.document.close();
+    w.focus();
+  };
+  const deleteFile=(row,fileId)=>{
+    if(!window.confirm("Remove this attached file?"))return;
+    const nextFiles=(row.files||[]).filter(f=>f.id!==fileId);
+    if(activeFileId===fileId)setActiveFileId(nextFiles[0]?.id||"");
+    patchRow(row.id,{files:nextFiles});
+  };
+  const downloadSelected=()=>{
+    selected.forEach(downloadRow);
+    const summary=[
+      `Accountant packet - ${monthLabel}`,
+      `Generated: ${new Date().toLocaleString("en-IN")}`,
+      "",
+      "Included:",
+      ...selected.map(r=>`- ${r.title}: ${rowReady(r)?"ready":"missing"}${r.notes?` | ${r.notes}`:""}`),
+      "",
+      notes?`Overall notes:\n${notes}`:"Overall notes: -"
+    ].join("\n");
+    saveTextFile(`${month}-accountant-packet-summary.txt`,summary);
+    showToast?.(`Downloading ${selected.length} selected item${selected.length===1?"":"s"}`);
+  };
+  const setAll=checked=>{
+    const next=rows.map(r=>({...r,included:checked}));
+    setRows(next);onPersist?.(next,notes);
+  };
+  const updateNotes=v=>{setNotes(v);onPersist?.(rows,v);};
+  const chip=(label,value,color,bg)=>(
+    <div style={{background:bg||C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",minWidth:mob?0:112}}>
+      <div style={{fontSize:9,fontWeight:850,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55,marginBottom:2}}>{label}</div>
+      <div style={{fontSize:15,fontWeight:900,color:color||C.ink,lineHeight:1.1}}>{value}</div>
+    </div>
+  );
+  const isImageFile=file=>/^image\//i.test(file?.type||"")||/\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(file?.name||file?.url||"");
+  return(
+    <div style={{display:"grid",gap:12}}>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:mob?"12px":"14px 16px",boxShadow:"0 1px 2px rgba(15,23,42,.04)"}}>
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:12,alignItems:"start"}}>
+          <div>
+            <div style={{fontSize:10,fontWeight:850,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:5}}>Accountant Packet</div>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{fontSize:22,fontWeight:900,color:C.ink,lineHeight:1.1}}>{monthLabel}</div>
+            </div>
+            <div style={{fontSize:12,color:C.inkMid,marginTop:7,lineHeight:1.45}}>
+              Include the documents your accountant needs, attach missing files, then download the selected packet.
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",justifyContent:mob?"stretch":"flex-end"}}>
+            <button className="bs" style={{fontSize:12}} onClick={addRow}>+ Add item</button>
+            <button className="bp" style={{fontSize:12,minWidth:mob?"100%":156}} disabled={!selected.length} onClick={downloadSelected}>Download packet</button>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4, minmax(112px, 1fr))",gap:8,marginTop:14}}>
+          {chip("Ready",`${readyCount}/${rows.length}`,readyCount===rows.length?C.green:C.amber,readyCount===rows.length?C.greenBg:C.amberBg)}
+          {chip("Included",selected.length,C.blue,C.blueBg)}
+          {chip("Needs action",missingSelected,missingSelected?C.red:C.green,missingSelected?C.redBg:C.greenBg)}
+          {chip("Sales invoices",monthInvoices.length,C.purple,C.purpleBg)}
+        </div>
+        <div style={{height:7,background:C.card,borderRadius:999,overflow:"hidden",marginTop:12,border:`1px solid ${C.border}`}}>
+          <div style={{height:"100%",width:`${progress}%`,background:progress===100?C.green:C.amber,borderRadius:999,transition:"width .2s"}}/>
+        </div>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{fontSize:11,fontWeight:850,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Documents</div>
+          <input aria-label="Packet month" type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} style={{...FI,width:150,fontSize:12,padding:"7px 9px",borderRadius:7}}/>
+        </div>
+        <label style={{display:"flex",alignItems:"center",gap:7,fontSize:12,color:C.inkMid,cursor:"pointer",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px"}}>
+          <input type="checkbox" checked={allSelected} onChange={e=>setAll(e.target.checked)}/> Include all
+        </label>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(250px,.8fr) minmax(340px,1fr) minmax(320px,1fr)",gap:10,alignItems:"stretch"}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",minHeight:mob?0:460}}>
+          <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.border}`,background:C.card,fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>All items</div>
+          <div style={{display:"grid",gap:0}}>
+            {rows.map(row=>{
+              const ready=rowReady(row);
+              const isActive=activeRow?.id===row.id;
+              const fileCount=row.id==="sales-invoices"?monthInvoices.length:(row.files||[]).length;
+              return(
+                <button key={row.id} data-packet-row-id={row.id} onClick={()=>selectRow(row)} style={{display:"grid",gridTemplateColumns:"24px 1fr",gap:9,alignItems:"start",textAlign:"left",padding:"11px 12px",background:isActive?C.goldLight:C.surface,border:"none",borderBottom:`1px solid ${C.border}`,borderLeft:`4px solid ${isActive?C.gold:"transparent"}`,cursor:"pointer",fontFamily:"inherit"}}>
+                  <input aria-label={`Include ${row.title}`} type="checkbox" checked={!!row.included} onClick={e=>e.stopPropagation()} onChange={e=>patchRow(row.id,{included:e.target.checked})} style={{marginTop:3,accentColor:C.gold}}/>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:900,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.title||"Untitled item"}</div>
+                    <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:6}}>
+                      <span style={{fontSize:9,fontWeight:850,color:ready?C.green:C.amber,background:ready?C.greenBg:C.amberBg,borderRadius:999,padding:"2px 7px"}}>{ready?"Ready":"Needs action"}</span>
+                      <span style={{fontSize:9,color:C.inkFaint,background:C.card,borderRadius:999,padding:"2px 7px"}}>{fileCount} {row.id==="sales-invoices"?"invoice":"file"}{fileCount===1?"":"s"}</span>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:12,minHeight:mob?0:460,display:"flex",flexDirection:"column",gap:10}}>
+          {activeRow?(()=>{
+            const ready=rowReady(activeRow);
+            const statusText=ready?"Ready":activeRow.id==="sales-invoices"?"No invoices found":"Needs upload or note";
+            return(<>
+              <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                <input aria-label={`Include ${activeRow.title}`} type="checkbox" checked={!!activeRow.included} onChange={e=>patchRow(activeRow.id,{included:e.target.checked})} style={{marginTop:10,accentColor:C.gold,flexShrink:0}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <input value={activeRow.title||""} onChange={e=>patchRow(activeRow.id,{title:e.target.value})} style={{...CI,fontWeight:900,color:C.ink,fontSize:13,padding:"8px 9px"}}/>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:7}}>
+                    <span style={{fontSize:10,fontWeight:850,color:ready?C.green:C.amber,background:ready?C.greenBg:C.amberBg,borderRadius:999,padding:"3px 8px"}}>{statusText}</span>
+                    <span style={{fontSize:10,color:C.inkFaint,background:C.card,borderRadius:999,padding:"3px 8px"}}>{activeRow.source||"Manual"}</span>
+                    {!activeRow.included&&<span style={{fontSize:10,color:C.inkFaint,background:C.card,borderRadius:999,padding:"3px 8px"}}>Not included</span>}
+                  </div>
+                </div>
+              </div>
+
+              {(activeRow.id==="sales-invoices"||activeFiles.length>0)&&<div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginTop:2}}>Uploaded items</div>}
+              {(activeRow.id==="sales-invoices"||activeFiles.length>0)&&<div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:10,minHeight:activeFiles.length?0:120}}>
+                {activeRow.id==="sales-invoices"?(
+                  <div>
+                    <div style={{fontSize:14,fontWeight:900,color:C.ink}}>{monthInvoices.length} invoice{monthInvoices.length===1?"":"s"} found</div>
+                    {monthInvoices.length?(
+                      <div style={{display:"grid",gap:7,marginTop:9}}>
+                        {monthInvoices.map(inv=>{
+                          const selected=(activeInvoice?.id||activeInvoice?.invNo)===(inv.id||inv.invNo);
+                          return(
+                          <button key={inv.id||inv.invNo} onClick={()=>setActiveInvoiceId(inv.id||inv.invNo)} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:7,alignItems:"start",textAlign:"left",background:selected?C.goldLight:C.surface,border:`1px solid ${selected?C.gold:C.border}`,borderRadius:8,padding:"8px 9px",cursor:"pointer",fontFamily:"inherit"}}>
+                            <div style={{minWidth:0}}>
+                              <div style={{fontSize:12,fontWeight:900,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.invNo||inv.id||"Invoice"}</div>
+                              <div style={{fontSize:11,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fmtDate(inv.date)} · {inv.buyerName||inv.buyer||"Buyer"}</div>
+                            </div>
+                            <div style={{textAlign:mob?"left":"right"}}>
+                              <div style={{fontSize:12,fontWeight:900,color:C.ink}}>{inv.currency||""} {fmtNum(inv.totalAmt||inv.total||0)}</div>
+                              <div style={{fontSize:10,color:C.inkFaint,marginTop:2,textTransform:"capitalize"}}>{inv.status||"draft"}</div>
+                            </div>
+                          </button>
+                        );})}
+                      </div>
+                    ):<div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>No invoices found for this month.</div>}
+                  </div>
+                ):(
+                  <div style={{display:"grid",gap:7}}>
+                    {activeFiles.map(file=>{
+                      const selected=activeFile?.id===file.id;
+                      return(
+                        <div key={file.id||file.url||file.name} onClick={()=>setActiveFileId(file.id)} style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:7,alignItems:"center",background:selected?C.goldLight:C.surface,border:`1px solid ${selected?C.gold:C.border}`,borderRadius:8,padding:"7px 8px",cursor:"pointer"}}>
+                          <div title={file.name} style={{fontSize:12,fontWeight:selected?850:700,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{file.name||"Attached file"}</div>
+                          <button className="bs" style={{fontSize:10,padding:"4px 8px",minHeight:0}} disabled={!file.url} onClick={e=>{e.stopPropagation();viewFile(file);}}>View</button>
+                          <button style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:11,fontWeight:850,padding:"4px 6px"}} onClick={e=>{e.stopPropagation();deleteFile(activeRow,file.id);}}>Delete</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>}
+
+              <textarea value={activeRow.notes||""} onChange={e=>patchRow(activeRow.id,{notes:e.target.value})} rows={3} style={{...CI,resize:"vertical",minHeight:72}} placeholder="Notes for this document"/>
+
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:"auto"}}>
+                {activeRow.mode!=="auto"&&<label className="bp" style={{fontSize:11,padding:"7px 11px",cursor:"pointer",minHeight:0}}>Upload<input type="file" multiple hidden onChange={e=>uploadFiles(activeRow,e.target.files)}/></label>}
+                <button className="bs" style={{fontSize:11,padding:"7px 11px",minHeight:0}} disabled={activeRow.id==="sales-invoices"?!activeInvoice:(!activeFiles.length&&!activeRow.notes)} onClick={()=>activeRow.id==="sales-invoices"?openInvoice(activeInvoice):activeFile?.url?viewFile(activeFile):downloadRow(activeRow)}>View</button>
+                <button className="bs" style={{fontSize:11,padding:"7px 11px",minHeight:0}} disabled={!ready} onClick={()=>downloadRow(activeRow)}>Download</button>
+                <button onClick={()=>activeRow.mode==="auto"?patchRow(activeRow.id,{included:false}):deleteRow(activeRow.id)} style={{marginLeft:"auto",background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:activeRow.mode==="auto"?18:12,fontWeight:800,padding:"5px 6px"}}>{activeRow.mode==="auto"?"×":"Delete item"}</button>
+              </div>
+            </>);
+          })():<div style={{color:C.inkFaint,fontSize:12}}>Select an item to manage uploads.</div>}
+        </div>
+
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:12,minHeight:mob?260:460,display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center"}}>
+            <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Preview</div>
+            {activeRow?.id==="sales-invoices"&&activeInvoice&&<button className="bs" style={{fontSize:10,padding:"4px 8px",minHeight:0}} onClick={()=>openInvoice(activeInvoice)}>Open</button>}
+            {activeRow?.id!=="sales-invoices"&&activeFile?.url&&<button className="bs" style={{fontSize:10,padding:"4px 8px",minHeight:0}} onClick={()=>viewFile(activeFile)}>Open</button>}
+          </div>
+          <div style={{flex:1,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",minHeight:220}}>
+            {activeRow?.id==="sales-invoices"&&activeInvoice?(
+              <iframe title={activeInvoice.invNo||"Invoice preview"} srcDoc={activeInvoiceHTML} style={{width:"100%",height:"100%",minHeight:mob?360:620,border:"none",background:"#fff"}}/>
+            ):activeFile?.url?(
+              isImageFile(activeFile)?<img src={activeFile.url} alt={activeFile.name||"Preview"} style={{maxWidth:"100%",maxHeight:"100%",width:"100%",height:"100%",objectFit:"contain",display:"block"}}/>:
+              <div style={{textAlign:"center",padding:20}}>
+                <div style={{fontSize:28,marginBottom:8}}>📄</div>
+                <div style={{fontSize:13,fontWeight:900,color:C.ink,wordBreak:"break-word"}}>{activeFile.name||"Attached file"}</div>
+                <div style={{fontSize:11,color:C.inkFaint,marginTop:5}}>Use Open to view this file.</div>
+              </div>
+            ):activeRow?.id==="sales-invoices"?(
+              <div style={{textAlign:"center",padding:20}}>
+                <div style={{fontSize:28,marginBottom:8}}>🧾</div>
+                <div style={{fontSize:13,fontWeight:900,color:C.ink}}>{monthInvoices.length} sales invoices</div>
+                <div style={{fontSize:11,color:C.inkFaint,marginTop:5}}>Download to export the invoice summary.</div>
+              </div>
+            ):(
+              <div style={{textAlign:"center",padding:20}}>
+                <div style={{fontSize:28,marginBottom:8}}>＋</div>
+                <div style={{fontSize:13,fontWeight:900,color:C.inkMid}}>No file selected</div>
+                <div style={{fontSize:11,color:C.inkFaint,marginTop:5}}>Select or upload a file to preview it here.</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:12}}>
+        <Field label="Overall notes">
+          <textarea value={notes} onChange={e=>updateNotes(e.target.value)} rows={3} placeholder="Anything the accountant should know for this month..." style={{...FI,fontSize:12,resize:"vertical",borderRadius:8}}/>
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+function AccountingTxnClassifyModal({txn,company,keys,accounts=[],vendors=[],purchases=[],invoices=[],buyers=[],expenses=[],onSave,onClose}){
+  const isDebit=txn.type!=="credit";
+  const txnAmt=+txn.amount||0;
+  const cur=txn.currency||"INR";
+  const sym={INR:"₹",USD:"$",EUR:"€",JPY:"¥",GBP:"£",AUD:"A$"}[cur]||cur+" ";
+  const fxRates={INR:1,USD:85,EUR:92,JPY:.57,GBP:107,AUD:55};
+  const toInr=(amt,currency)=>(+amt||0)*(fxRates[currency||"INR"]||1);
+  const fromInr=(amt,currency)=>(+amt||0)/(fxRates[currency||"INR"]||1);
+  const convertMoney=(amt,from,to)=>from===to?(+amt||0):fromInr(toInr(amt,from),to);
+  const moneyText=(amt,currency)=>`${currency||"INR"} ${(+amt||0).toLocaleString("en-IN",{minimumFractionDigits:currency==="JPY"?0:2,maximumFractionDigits:currency==="JPY"?0:2})}`;
+  const [classType,setClassType]=useState(()=>{
+    if(txn.classifiedAs)return txn.classifiedAs;
+    if(!isDebit)return"customer_receipt";
+    const c=(txn.category||"").toLowerCase();
+    if(c.includes("purchase")||c.includes("vendor")||c.includes("goods"))return"vendor_bill";
+    if(c.includes("advance"))return"vendor_po";
+    if(c.includes("credit card"))return"cc_payment";
+    return"expense";
+  });
+  const guessVendor=()=>{
+    const p=(txn.payee||"").toLowerCase();
+    return vendors.find(v=>{const n=(v.name||"").toLowerCase();return n&&p&&(n.includes(p)||p.includes(n)||p.split(/\s+/).some(w=>w.length>3&&n.includes(w)));})?.id||"";
+  };
+  const [vendorId,setVendorId]=useState(txn.classifiedRef?.vendorId||guessVendor());
+  const [selectedBillIds,setSelectedBillIds]=useState(()=>new Set(txn.classifiedRef?.billIds||(txn.classifiedRef?.billId?[txn.classifiedRef.billId]:[])));
+  const [selectedPoId,setSelectedPoId]=useState(txn.classifiedRef?.poId||"");
+  const [selectedInvIds,setSelectedInvIds]=useState(()=>new Set(txn.classifiedRef?.invoiceIds||(txn.classifiedRef?.invoiceId?[txn.classifiedRef.invoiceId]:[])));
+  const [linkedInvId,setLinkedInvId]=useState(txn.classifiedRef?.linkedInvoiceId||"");
+  const [expCat,setExpCat]=useState(()=>{
+    const cat=normalizeAccountingExpenseCat(txn.classifiedRef?.cat||txn.category||"Other");
+    return ACCOUNTING_LEDGER_CATS.includes(cat)?cat:"Other";
+  });
+  const [catOpen,setCatOpen]=useState(false);
+  const [expParty,setExpParty]=useState(txn.classifiedRef?.party||txn.payee||"");
+  const [expNotes,setExpNotes]=useState(txn.notes||"");
+  const cardAccounts=accounts.filter(a=>a.type==="credit_card"&&a.active!==false);
+  const cardSpendAccount=cardAccounts.find(a=>a.id===txn.accountFrom);
+  const guessCard=()=>{
+    const p=`${txn.payee||""} ${txn.notes||""}`.toLowerCase();
+    return cardAccounts.find(a=>{const n=(a.name||"").toLowerCase();return n&&p&&(p.includes(n)||n.includes(p)||n.split(/\s+/).filter(w=>w.length>3).some(w=>p.includes(w)));})?.id||cardAccounts[0]?.id||"";
+  };
+  const [ccAccountId,setCcAccountId]=useState(txn.classifiedRef?.cardAccountId||guessCard());
+  const vendor=vendors.find(v=>v.id===vendorId);
+  const vendorNameOf=p=>p.supplier||p.vendorName||p.vendor||"";
+  const matchesVendor=p=>{
+    if(!vendorId)return true;
+    if(p.vendorId===vendorId)return true;
+    const s=vendorNameOf(p).toLowerCase(),v=(vendor?.name||"").toLowerCase();
+    return s&&v&&(s.includes(v)||v.includes(s)||v.split(/\s+/).filter(w=>w.length>2).some(w=>s.includes(w)));
+  };
+  const allOpenBills=purchases.filter(p=>p.type==="bill"&&p.status!=="paid");
+  const vendorBills=allOpenBills.filter(matchesVendor);
+  const vendorPOs=purchases.filter(p=>p.type==="po"&&!["paid","closed","cancelled"].includes(p.status||"open")).filter(matchesVendor);
+  const openInvoices=(invoices||[]).filter(inv=>!["paid","cancelled","draft"].includes(inv.status||"draft")).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  const selectedBills=vendorBills.filter(b=>selectedBillIds.has(b.id));
+  const selectedInvs=openInvoices.filter(i=>selectedInvIds.has(i.id));
+  const billDue=b=>Math.max(0,(+b.totalAmount||0)-(+b.paidAmount||0));
+  const invTotal=inv=>+inv.totalAmt||(inv.items||[]).reduce((s,i)=>s+(+i.amt||0),0);
+  const invPaid=inv=>(+inv.paidAmount||0)+(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0);
+  const invDue=inv=>Math.max(0,invTotal(inv)-invPaid(inv));
+  const totalBillsDue=selectedBills.reduce((s,b)=>s+billDue(b),0);
+  const totalInvDue=selectedInvs.reduce((s,i)=>s+invDue(i),0);
+  const selectedInvDueByCurrency=selectedInvs.reduce((acc,inv)=>{
+    const invCur=inv.currency||"USD";
+    acc[invCur]=(acc[invCur]||0)+invDue(inv);
+    return acc;
+  },{});
+  const totalInvDueInTxnCurrency=selectedInvs.reduce((s,inv)=>s+convertMoney(invDue(inv),inv.currency||"USD",cur),0);
+  const toggleBill=id=>setSelectedBillIds(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
+  const toggleInv=id=>setSelectedInvIds(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
+  const types=isDebit?[
+    ["expense","Expense","Rent, freight, salary, etc.",C.amber],
+    ["vendor_bill","Vendor Bill Payment","Apply against an existing bill",C.blue],
+    ["vendor_po","Advance against PO","Advance payment on a Purchase Order",C.purple],
+    ["cc_payment","Credit Card Payment","Payment made to credit card company",C.teal],
+  ]:[
+    ["customer_receipt","Sales Receipt","Apply against an open invoice",C.green],
+    ["cc_payment","Credit Card Payment","Payment received against credit card bill",C.teal],
+    ["expense","Other Credit","Loan, refund, misc. income, etc.",C.amber],
+  ];
+  const canSave=classType==="expense"?!!expCat:classType==="vendor_bill"?(selectedBillIds.size>0||!!vendorId):classType==="vendor_po"?!!selectedPoId:classType==="customer_receipt"?selectedInvIds.size>0:classType==="cc_payment"?!!ccAccountId:true;
+  const SI={...FI,fontSize:13,padding:"8px 10px",borderRadius:7};
+  const save=async()=>{
+    let classifiedRef={},sideEffects={};
+    if(classType==="expense"){
+      classifiedRef={cat:expCat,party:expParty,...(linkedInvId&&{linkedInvoiceId:linkedInvId})};
+      sideEffects.newExpense={id:"exp-"+uid(),date:txn.date,cat:expCat,party:expParty,amount:txnAmt,currency:cur,notes:expNotes,payFromAccount:txn.accountFrom,createdAt:new Date().toISOString(),ledgerTxnId:txn.id};
+    }else if(classType==="vendor_bill"){
+      let remaining=txnAmt;
+      const billUpdates=[];
+      for(const bill of selectedBills){
+        const due=billDue(bill),paying=Math.min(due,remaining),newPaid=(+bill.paidAmount||0)+paying,total=+bill.totalAmount||0;
+        billUpdates.push({id:bill.id,paidAmount:newPaid,paymentDate:txn.date,status:newPaid>=total&&total>0?"paid":"partial"});
+        remaining-=paying;
+      }
+      const credit=Math.max(0,remaining);
+      classifiedRef={vendorId,vendorName:vendor?.name||txn.payee||"",billIds:[...selectedBillIds],billNumbers:selectedBills.map(b=>b.billNumber).filter(Boolean),...(selectedBillIds.size===0&&{paymentOnAccount:true}),...(credit>0&&{creditApplied:credit}),...(linkedInvId&&{linkedInvoiceId:linkedInvId})};
+      sideEffects.billUpdates=billUpdates;
+      sideEffects.attachments=selectedBills
+        .filter(b=>b.docUrl||b.docData)
+        .map(b=>{
+          const ext=b.docExt||(b.docData?.startsWith("data:image/png")?"png":b.docData?.startsWith("data:image")?"jpg":"pdf");
+          const name=b.billName||`${b.billNumber||"Purchase bill"}.${ext}`;
+          return{id:`bill-doc-${b.id}`,url:b.docUrl||b.docData,name,type:ext==="pdf"?"application/pdf":`image/${ext==="jpg"?"jpeg":ext}`,ext,source:"purchase-bill",sourceBillId:b.id,sourceBillNumber:b.billNumber||"",uploadedAt:new Date().toISOString()};
+        });
+      if(credit>0&&vendorId)sideEffects.vendorCredit={vendorId,amount:credit};
+    }else if(classType==="vendor_po"){
+      const po=purchases.find(p=>p.id===selectedPoId);
+      classifiedRef={vendorId,vendorName:vendor?.name,poId:selectedPoId,poNumber:po?.poNumber};
+      sideEffects.poUpdate={id:selectedPoId,paidAmount:(+po?.paidAmount||0)+txnAmt};
+    }else if(classType==="customer_receipt"){
+      let remainingInr=toInr(txnAmt,cur);
+      const invoiceUpdates=[];
+      for(const inv of selectedInvs){
+        const invCur=inv.currency||"USD";
+        const total=invTotal(inv),already=invPaid(inv),due=Math.max(0,total-already);
+        const applyingInr=Math.min(toInr(due,invCur),remainingInr);
+        const applying=convertMoney(applyingInr,"INR",invCur);
+        const newPaid=already+applying,newStatus=newPaid>=total&&total>0?"paid":"partial";
+        invoiceUpdates.push({id:inv.id,paidAmount:newPaid,status:newStatus,paidDate:newStatus==="paid"?txn.date:undefined});
+        remainingInr-=applyingInr;
+      }
+      const buyerNames=[...new Set(selectedInvs.map(inv=>buyers.find(b=>b.id===inv.buyerId)?.name||inv.buyerName||"").filter(Boolean))];
+      classifiedRef={invoiceIds:[...selectedInvIds],invoiceId:[...selectedInvIds][0],invNumbers:selectedInvs.map(i=>i.invNo||i.invNumber||i.number).filter(Boolean),invNumber:selectedInvs[0]?.invNo||selectedInvs[0]?.invNumber||selectedInvs[0]?.number,buyer:buyerNames.join(", "),paymentAmount:txnAmt,paymentCurrency:cur,invoiceDueByCurrency:selectedInvDueByCurrency};
+      sideEffects.invoiceUpdates=invoiceUpdates;
+    }else if(classType==="cc_payment"){
+      const card=cardAccounts.find(a=>a.id===ccAccountId);
+      classifiedRef={cardAccountId:ccAccountId,cardAccountName:card?.name||"",note:expNotes||"Credit card payment"};
+    }
+    await onSave({classifiedAs:classType,classifiedRef,sideEffects});
+  };
+  const optionBtn=(id,label,desc,color)=>(
+    <button key={id} onClick={()=>setClassType(id)} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:classType===id?C.card:C.surface,border:`1.5px solid ${classType===id?color:C.border}`,borderRadius:8,cursor:"pointer",textAlign:"left",width:"100%"}}>
+      <div style={{width:10,height:10,borderRadius:"50%",background:classType===id?color:C.border,flexShrink:0}}/>
+      <div><div style={{fontSize:13,fontWeight:800,color:C.ink}}>{label}</div><div style={{fontSize:11,color:C.inkFaint}}>{desc}</div></div>
+    </button>
+  );
+  const CategoryPicker=()=>(
+    <div style={{position:"relative"}}>
+      <button type="button" onClick={()=>setCatOpen(v=>!v)} style={{...SI,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,textAlign:"left",background:C.surface,cursor:"pointer"}}>
+        <span style={{fontWeight:expCat?800:500,color:expCat?C.ink:C.inkFaint}}>{expCat||"Select category"}</span>
+        <span style={{fontSize:12,color:C.inkFaint}}>{catOpen?"▲":"▼"}</span>
+      </button>
+      {catOpen&&(
+        <div style={{position:"absolute",left:0,right:0,top:"calc(100% + 6px)",zIndex:5,background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,boxShadow:"0 18px 44px rgba(26,19,8,.18)",padding:10,maxHeight:300,overflowY:"auto"}}>
+          {ACCOUNTING_LEDGER_GROUPS.map(group=>(
+            <div key={group.label} style={{marginBottom:10}}>
+              <div style={{fontSize:9,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65,margin:"0 0 6px 2px"}}>{group.label}</div>
+              <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:6}}>
+                {group.cats.map(cat=>(
+                  <button key={cat} type="button" onClick={()=>{setExpCat(cat);setCatOpen(false);}} style={{border:`1px solid ${expCat===cat?C.gold:C.border}`,background:expCat===cat?C.goldLight:C.card,borderRadius:8,padding:"8px 9px",fontSize:12,fontWeight:850,color:expCat===cat?C.ink:C.inkMid,cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+  return(
+    <div onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}} style={{position:"fixed",inset:0,zIndex:95,background:"rgba(26,19,8,.48)",display:"flex",alignItems:mob?"stretch":"center",justifyContent:"center",padding:mob?0:16}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{width:mob?"100%":500,maxWidth:"100%",height:mob?"100%":"auto",maxHeight:mob?"100%":"90vh",overflowY:"auto",background:C.bg,border:mob?"none":`1.5px solid ${C.border}`,borderRadius:mob?0:12,padding:mob?"20px 16px":"24px 26px",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+          <div><div style={{fontWeight:800,fontSize:15,color:C.ink}}>Classify Transaction</div><div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>{sym}{txnAmt.toLocaleString("en-IN",{minimumFractionDigits:2})} · {txn.payee||"No payee"} · {fmtDate(txn.date)}</div></div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:18,lineHeight:1,padding:"0 4px"}}>x</button>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:7,marginBottom:20}}>{types.map(t=>optionBtn(...t))}</div>
+        {classType==="expense"&&<div style={{display:"grid",gap:12}}>
+          {cardSpendAccount&&<div style={{padding:"9px 11px",background:C.tealBg,border:`1px solid ${C.teal}55`,borderRadius:8,fontSize:12,color:C.inkMid}}>Paid using <strong>{cardSpendAccount.name}</strong>. This expense will increase that card's amount due.</div>}
+          <Field label="Category"><CategoryPicker/></Field>
+          <Field label="Party / Vendor"><input value={expParty} onChange={e=>setExpParty(e.target.value)} list="acct-class-vendors" style={SI} placeholder="Type or pick a vendor"/></Field>
+          <Field label="Details"><input value={expNotes} onChange={e=>setExpNotes(e.target.value)} style={SI} placeholder="Line item / reference / note"/></Field>
+        </div>}
+        {classType==="cc_payment"&&<div style={{padding:"12px 14px",background:C.tealBg,border:`1px solid ${C.teal}`,borderRadius:8,fontSize:12,color:C.ink,display:"grid",gap:10}}>
+          <div><div style={{fontWeight:800,marginBottom:4}}>Credit Card Payment</div><div style={{color:C.inkFaint}}>This keeps the bank payment and reduces the selected card's amount due.</div></div>
+          <Field label="Credit card account">
+            <select value={ccAccountId} onChange={e=>setCcAccountId(e.target.value)} style={SI}>
+              <option value="">- Select credit card -</option>
+              {cardAccounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.creditLimit?` · limit ₹${(+a.creditLimit||0).toLocaleString("en-IN")}`:""}</option>)}
+            </select>
+            {cardAccounts.length===0&&<div style={{fontSize:11,color:C.red,marginTop:5}}>Add a credit card account in Finance settings first.</div>}
+          </Field>
+          <Field label="Notes"><input value={expNotes} onChange={e=>setExpNotes(e.target.value)} placeholder="Statement month, card ending, reference..." style={SI}/></Field>
+        </div>}
+        {(classType==="vendor_bill"||classType==="vendor_po")&&<div style={{display:"grid",gap:12}}>
+          <Field label="Filter by Vendor (optional)"><select value={vendorId} onChange={e=>{setVendorId(e.target.value);setSelectedBillIds(new Set());setSelectedPoId("");}} style={SI}><option value="">All vendors</option>{vendors.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
+          {classType==="vendor_bill"&&<div><div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65,marginBottom:6}}>Select bills to pay {vendorId?`- ${vendor?.name}`:"(all vendors)"} <span style={{fontWeight:500}}>(tap to select multiple)</span></div>
+            {vendorBills.length===0?<div style={{fontSize:12,color:C.inkFaint,padding:"8px 0"}}>No open bills found.</div>:<div style={{maxHeight:240,overflowY:"auto",display:"grid",gap:6}}>
+              {vendorBills.map(b=>{const sel=selectedBillIds.has(b.id),due=billDue(b);return <button key={b.id} onClick={()=>toggleBill(b.id)} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 12px",background:sel?C.card:C.surface,border:`1.5px solid ${sel?C.blue:C.border}`,borderRadius:7,cursor:"pointer",textAlign:"left"}}>
+                <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${sel?C.blue:C.border}`,background:sel?C.blue:"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:11,fontWeight:900}}>{sel?"✓":""}</div>
+                <div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:800,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.billNumber||"Bill"}</div><div style={{fontSize:11,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{b.supplier} · {fmtDate(b.billDate)} · {b.status}</div></div>
+                <div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:12,fontWeight:800,color:C.red}}>₹{due.toLocaleString("en-IN",{minimumFractionDigits:2})} due</div><div style={{fontSize:10,color:C.inkFaint}}>of ₹{(+b.totalAmount||0).toLocaleString("en-IN")}</div></div>
+              </button>;})}
+            </div>}
+            {selectedBillIds.size>0&&<div style={{marginTop:10,padding:"10px 13px",background:C.card,borderRadius:8,border:`1px solid ${C.border}`,fontSize:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{color:C.inkFaint}}>Selected due</span><b>₹{totalBillsDue.toLocaleString("en-IN",{minimumFractionDigits:2})}</b></div>
+              <div style={{display:"flex",justifyContent:"space-between"}}><span style={{color:C.inkFaint}}>Payment amount</span><b>₹{txnAmt.toLocaleString("en-IN",{minimumFractionDigits:2})}</b></div>
+            </div>}
+            {selectedBillIds.size===0&&vendorId&&<div style={{marginTop:10,padding:"10px 13px",background:C.blueBg,border:`1px solid ${C.blue}55`,borderRadius:8,fontSize:12,color:C.inkMid}}>
+              No purchase bill selected. This will still be saved in <strong>{vendor?.name||"the vendor"}'s ledger</strong> as a payment on account / advance.
+            </div>}
+          </div>}
+          {classType==="vendor_po"&&<div><div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65,marginBottom:6}}>Open POs {vendorId?`- ${vendor?.name}`:"(all vendors)"}</div>
+            {vendorPOs.length===0?<div style={{fontSize:12,color:C.inkFaint,padding:"8px 0"}}>No open POs found.</div>:<div style={{maxHeight:220,overflowY:"auto",display:"grid",gap:6}}>{vendorPOs.map(po=><button key={po.id} onClick={()=>setSelectedPoId(po.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",padding:"9px 12px",background:selectedPoId===po.id?C.card:C.surface,border:`1.5px solid ${selectedPoId===po.id?C.purple:C.border}`,borderRadius:7,cursor:"pointer",textAlign:"left"}}><div><div style={{fontSize:12,fontWeight:800,color:C.ink}}>{po.poNumber||"PO"}</div><div style={{fontSize:11,color:C.inkFaint}}>{po.supplier} · {fmtDate(po.date)} · {po.status}</div></div><div style={{fontSize:12,fontWeight:800,color:C.ink}}>{po.currency||"INR"}</div></button>)}</div>}
+          </div>}
+        </div>}
+        {classType==="customer_receipt"&&<div><div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65,marginBottom:6}}>Apply against invoice(s)</div>
+          {openInvoices.length===0?<div style={{fontSize:12,color:C.inkFaint,padding:"8px 0"}}>No open invoices found.</div>:openInvoices.map(inv=>{const checked=selectedInvIds.has(inv.id),due=invDue(inv),buyerName=buyers.find(b=>b.id===inv.buyerId)?.name||inv.buyerName||"Buyer";return <button key={inv.id} onClick={()=>toggleInv(inv.id)} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 12px",marginBottom:6,background:checked?C.card:C.surface,border:`1.5px solid ${checked?C.green:C.border}`,borderRadius:7,cursor:"pointer",textAlign:"left"}}><div style={{width:16,height:16,borderRadius:4,border:`2px solid ${checked?C.green:C.border}`,background:checked?C.green:"transparent",color:"#fff",fontSize:10,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{checked?"✓":""}</div><div style={{flex:1,minWidth:0}}><div style={{fontSize:12,fontWeight:800,color:C.ink}}>{inv.invNo||inv.invNumber||inv.number||"(no number)"}</div><div style={{fontSize:11,color:C.inkFaint}}>{buyerName} · {fmtDate(inv.date)} · {inv.status||"-"}</div></div><div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:12,fontWeight:800,color:C.red}}>{inv.currency||"USD"} {due.toLocaleString(undefined,{minimumFractionDigits:2})} due</div><div style={{fontSize:10,color:C.inkFaint}}>of {inv.currency||"USD"} {invTotal(inv).toLocaleString(undefined,{minimumFractionDigits:2})}</div></div></button>;})}
+          {selectedInvIds.size>0&&<div style={{marginTop:10,padding:"10px 13px",background:C.card,borderRadius:8,border:`1px solid ${C.border}`,fontSize:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,gap:10}}><span style={{color:C.inkFaint}}>Payment received</span><b>{moneyText(txnAmt,cur)}</b></div>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,gap:10}}><span style={{color:C.inkFaint}}>Selected invoice due</span><b style={{color:C.red}}>{Object.entries(selectedInvDueByCurrency).map(([c,a])=>moneyText(a,c)).join(" + ")}</b></div>
+            {Object.keys(selectedInvDueByCurrency).some(c=>c!==cur)&&<div style={{display:"flex",justifyContent:"space-between",gap:10,paddingTop:6,borderTop:`1px solid ${C.border}`,color:C.inkFaint}}><span>Approx in payment currency</span><b>{moneyText(totalInvDueInTxnCurrency,cur)}</b></div>}
+          </div>}
+        </div>}
+        {(classType==="expense"||classType==="vendor_bill")&&invoices.length>0&&<div style={{marginTop:16,borderTop:`1px solid ${C.border}`,paddingTop:14}}><Field label="Link to Invoice (optional)"><select value={linkedInvId} onChange={e=>setLinkedInvId(e.target.value)} style={SI}><option value="">- Not linked to an invoice -</option>{invoices.map(inv=><option key={inv.id} value={inv.id}>{inv.invNo||inv.number||"Invoice"} · {fmtDate(inv.date)}{inv.totalAmt?` · ${inv.currency||"$"} ${(+inv.totalAmt).toLocaleString()}`:""}</option>)}</select></Field></div>}
+        <datalist id="acct-class-vendors">{vendors.map(v=><option key={v.id} value={v.name}/>)}</datalist>
+        <div style={{display:"flex",gap:10,marginTop:22}}><button onClick={save} disabled={!canSave} style={{flex:1,background:C.gold,border:"none",color:"#fff",borderRadius:7,padding:"10px 0",fontWeight:800,fontSize:13,cursor:canSave?"pointer":"not-allowed",opacity:canSave?1:.5,fontFamily:"inherit"}}>Save Classification</button><button onClick={onClose} style={{padding:"10px 16px",background:C.surface,border:`1.5px solid ${C.border}`,color:C.ink,borderRadius:7,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button></div>
+      </div>
+    </div>
+  );
+}
+
+function AccountingTxnAttachmentModal({txn,company,onSave,onClose,showToast,onViewBill}){
+  const [uploading,setUploading]=useState(false);
+  const [removing,setRemoving]=useState(false);
+  const fileRef=useRef(null);
+  const attachments=txn.attachments||(txn.attachmentUrl?[{url:txn.attachmentUrl,name:txn.attachmentName||"Attachment"}]:[]);
+  const isImg=att=>/^image\//i.test(att.type||"")||/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(att.name||att.url||"");
+  const handleFiles=async files=>{
+    const picked=[...(files||[])];
+    if(!picked.length)return;
+    setUploading(true);
+    try{
+      const uploaded=[];
+      for(const file of picked){
+        const ext=(file.name||"file").split(".").pop().toLowerCase()||"bin";
+        const url=await supabaseUpload(`finance-attachments/${company}/${txn.id}-${uid()}.${ext}`,file);
+        uploaded.push({id:uid(),url,name:file.name||`attachment.${ext}`,type:file.type||"",size:file.size||0,ext,uploadedAt:new Date().toISOString()});
+      }
+      const next=[...attachments,...uploaded];
+      await onSave(txn.id,{attachments:next,attachmentUrl:next[0]?.url||null,attachmentName:next[0]?.name||null});
+      showToast?.(`${uploaded.length} attachment${uploaded.length===1?"":"s"} uploaded`);
+    }catch(e){showToast?.("Attachment upload failed: "+e.message);}
+    setUploading(false);
+  };
+  const remove=async idx=>{
+    setRemoving(true);
+    const next=attachments.filter((_,i)=>i!==idx);
+    await onSave(txn.id,{attachments:next,attachmentUrl:next[0]?.url||null,attachmentName:next[0]?.name||null});
+    setRemoving(false);
+  };
+  return(
+    <div onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}} style={{position:"fixed",inset:0,zIndex:100,background:"rgba(26,19,8,.48)",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div onMouseDown={e=>e.stopPropagation()} style={{width:"min(560px,96vw)",maxHeight:"90vh",overflow:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 24px 70px rgba(26,19,8,.28)"}}>
+        <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,padding:"14px 18px",display:"flex",justifyContent:"space-between",gap:12,alignItems:"start"}}>
+          <div><div style={{fontWeight:900,fontSize:14,color:C.ink}}>Attachments</div><div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>{txn.payee||txn.category||"Transaction"} · {fmtDate(txn.date)}</div></div>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:C.inkFaint,lineHeight:1}}>x</button>
+        </div>
+        <div style={{padding:18}}>
+          {attachments.length>0&&(
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(2, minmax(0,1fr))",gap:10,marginBottom:14}}>
+              {attachments.map((att,i)=>(
+                <div key={att.id||att.url||i} style={{position:"relative",border:`1px solid ${C.border}`,borderRadius:9,background:C.card,overflow:"hidden"}}>
+                  <button onClick={()=>window.open(att.url,"_blank","noreferrer")} style={{width:"100%",height:118,border:"none",background:C.surface,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+                    {isImg(att)?<img src={att.url} alt={att.name||"Attachment"} style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<div style={{textAlign:"center",padding:12}}><div style={{fontSize:28,marginBottom:5}}>📄</div><div style={{fontSize:11,color:C.inkFaint,wordBreak:"break-word"}}>{att.name||"Attachment"}</div></div>}
+                  </button>
+                  <div style={{display:"flex",alignItems:"center",gap:6,padding:"7px 8px",borderTop:`1px solid ${C.border}`}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div title={att.name} style={{fontSize:11,fontWeight:750,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{att.name||"Attachment"}</div>
+                      {att.sourceBillId&&<div style={{fontSize:9,color:C.blue,fontWeight:850,marginTop:2}}>Image from bill {att.sourceBillNumber||""}</div>}
+                    </div>
+                    {att.sourceBillId&&onViewBill
+                      ?<button onClick={()=>{onClose();onViewBill(att.sourceBillId);}} style={{border:"none",background:"transparent",color:C.blue,cursor:"pointer",fontSize:11,fontWeight:850}}>Go to bill</button>
+                      :<button disabled={removing} onClick={()=>remove(i)} style={{border:"none",background:"transparent",color:C.red,cursor:"pointer",fontSize:11,fontWeight:850}}>Delete</button>
+                    }
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <input ref={fileRef} type="file" multiple accept="image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx" hidden onChange={e=>{handleFiles(e.target.files);e.target.value="";}}/>
+          <div onClick={()=>!uploading&&fileRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();handleFiles(e.dataTransfer.files);}} style={{border:`2px dashed ${C.border}`,borderRadius:10,padding:"24px 20px",textAlign:"center",cursor:uploading?"default":"pointer",background:uploading?C.card:"transparent"}}>
+            {uploading?<div style={{fontSize:13,color:C.inkFaint}}>Uploading...</div>:<><div style={{fontSize:28,marginBottom:6}}>📎</div><div style={{fontSize:13,fontWeight:850,color:C.inkMid}}>Click or drag files here</div><div style={{fontSize:11,color:C.inkFaint,marginTop:4}}>Images, PDF, Excel, Word. Multiple files supported.</div></>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AccountingFinanceLedger({showToast,onViewBill}){
+  const [company,setCompany]=useState(()=>localStorage.getItem("ng-accounting-ledger-company")||"ng");
+  const [accounts,setAccounts]=useState([]);
+  const [txns,setTxns]=useState([]);
+  const [vendors,setVendors]=useState([]);
+  const [purchases,setPurchases]=useState([]);
+  const [invoices,setInvoices]=useState([]);
+  const [buyers,setBuyers]=useState([]);
+  const [expenses,setExpenses]=useState([]);
+  const [loaded,setLoaded]=useState(false);
+  const [selectedId,setSelectedId]=useState("");
+  const [classifyOpen,setClassifyOpen]=useState(false);
+  const [attachOpen,setAttachOpen]=useState(false);
+  const [tab,setTab]=useState("all");
+  const [filterOpen,setFilterOpen]=useState(false);
+  const [month,setMonth]=useState(accountantMonth());
+  const [accountFilter,setAccountFilter]=useState("");
+  const [search,setSearch]=useState("");
+  const [customCat,setCustomCat]=useState("");
+  const [customCats,setCustomCats]=useState([]);
+  const blankManual=()=>({date:today(),type:"debit",accountId:"",accountToId:"",amount:"",receivedAmount:"",rate:"",currency:"INR",payee:"",notes:""});
+  const [manualOpen,setManualOpen]=useState(false);
+  const [manual,setManual]=useState(blankManual);
+  const keys=accountingCompanyKeys(company);
+  useEffect(()=>{
+    localStorage.setItem("ng-accounting-ledger-company",company);
+    setLoaded(false);setSelectedId("");
+    Promise.all([loadK(keys.accounts),loadK(keys.transactions)]).then(([a,t])=>{
+      const acc=Array.isArray(a)&&a.length?a:(company==="ng"?ACCOUNTING_DEFAULT_ACCOUNTS_NG:ACCOUNTING_DEFAULT_ACCOUNTS_AT);
+      const arr=Array.isArray(t)?t:[];
+      const defaultAccount=company==="ng"?acc.find(x=>String(x.name||"").trim().toLowerCase()==="bank of india 0451"):null;
+      setAccountFilter(defaultAccount?.id||"");
+      setAccounts(acc);
+      setTxns(arr);
+      const first=[...arr].sort((x,y)=>(y.date||"").localeCompare(x.date||"")).find(x=>x.type!=="conversion"&&(x.date||"").startsWith(month));
+      setSelectedId(first?.id||"");
+      setLoaded(true);
+    }).catch(e=>{setLoaded(true);showToast?.("Ledger load failed: "+e.message);});
+    Promise.allSettled([loadK(keys.vendors),loadK(keys.purchases),loadK(keys.invoices),loadK(keys.buyers),loadK(keys.expenses)]).then(results=>{
+      const [v,p,i,b,e]=results.map(r=>r.status==="fulfilled"?r.value:[]);
+      setVendors(Array.isArray(v)?v:[]);
+      setPurchases(Array.isArray(p)?p:[]);
+      setInvoices(Array.isArray(i)?i:[]);
+      setBuyers(Array.isArray(b)?b:[]);
+      setExpenses(Array.isArray(e)?e:[]);
+    });
+  },[company]);
+  useEffect(()=>{loadK(ACCOUNTING_CUSTOM_CATS_KEY).then(v=>setCustomCats(Array.isArray(v)?v:[]));},[]);
+  const ACCOUNTING_STRUCTURED_CLASSIFICATIONS=new Set(["vendor_bill","vendor_po","customer_receipt","cc_payment"]);
+  const ACCOUNTING_VALID_CLASSIFICATIONS=new Set([...ACCOUNTING_LEDGER_CATS,"expense",...ACCOUNTING_STRUCTURED_CLASSIFICATIONS]);
+  const isUnclassified=t=>{
+    if(!t||t.type==="conversion")return false;
+    const kind=t.classifiedAs||t.category||"";
+    if(ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(kind))return false;
+    if(kind==="expense")return normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)==="Other";
+    if(!t.category||ACCOUNTING_METHOD_CATS.has(t.category))return true;
+    if(ACCOUNTING_LEDGER_CATS.includes(t.category))return t.category==="Other";
+    return !ACCOUNTING_VALID_CLASSIFICATIONS.has(t.category);
+  };
+  const displayClassification=t=>{
+    if(!t)return"";
+    if(t.type==="conversion")return"Transfer / conversion";
+    if(isUnclassified(t))return"Not classified yet";
+    if(t.classifiedAs==="cc_payment")return `Credit Card Payment${t.classifiedRef?.cardAccountName?` · ${t.classifiedRef.cardAccountName}`:""}`;
+    if((t.classifiedAs||t.category)==="vendor_bill")return"Vendor Bill Payment";
+    if((t.classifiedAs||t.category)==="vendor_po")return"Advance against PO";
+    if((t.classifiedAs||t.category)==="customer_receipt")return"Sales Receipt";
+    return normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)||t.classifiedAs||"Classified";
+  };
+  const suggestClassification=t=>{
+    if(!t||t.type==="conversion"||!isUnclassified(t))return null;
+    const text=`${t.payee||""} ${t.notes||""} ${t.category||""}`.toLowerCase();
+    const hit=words=>words.some(w=>text.includes(w));
+    const expense=(cat,why,confidence="high")=>({classifiedAs:"expense",cat,label:`Expense · ${cat}`,why,confidence});
+    if(t.type==="credit"){
+      if(hit(["invoice","inv ","sales","buyer","receipt","payment received"]))return{classifiedAs:"customer_receipt",label:"Sales Receipt",why:"Looks like money received from a customer or invoice.",confidence:"medium"};
+      if(hit(["refund","reversal","cashback"]))return expense("Other","Looks like a refund or reversal coming in.","medium");
+      return{classifiedAs:"customer_receipt",label:"Sales Receipt",why:"Money-in entries usually need invoice matching if this came from a buyer.",confidence:"low"};
+    }
+    if(hit(["car loan","loan no","loan number","loan repayment","emi"]))return expense("Car Loan","Payee/notes mention a loan or EMI.");
+    if(hit(["credit card","card payment","cc payment"]))return{classifiedAs:"cc_payment",label:"Credit Card Payment",why:"Looks like a payment to a credit card account.",confidence:"high"};
+    if(hit(["rent"]))return expense("Rent","Payee/notes mention rent.");
+    if(hit(["salary","staff","labour","labor","wage"]))return expense("Salary","Payee/notes mention salary/staff payment.");
+    if(hit(["flight","hotel","airbnb","booking.com","travel"]))return expense("Flights / Hotels","Payee/notes mention travel, flights, or hotel.");
+    if(hit(["packaging","packing","box","carton","supplies"]))return expense("Packaging & Supplies","Payee/notes mention packaging or supplies.");
+    if(hit(["tax","gst","tds","duty","duties","customs"]))return expense("Taxes & Duties","Payee/notes mention tax, GST, duty, or customs.");
+    if(hit(["sea freight","container","maersk","shipping line"]))return expense("Sea Freight","Payee/notes mention sea freight or shipping line.");
+    if(hit(["air freight","air cargo"]))return expense("Air Freight","Payee/notes mention air freight.");
+    if(hit(["courier","dhl","fedex","ups","shipglobal","freight","delivery","transport"]))return expense("Land Freight","Payee/notes mention courier, delivery, or freight.");
+    if(hit(["electricity","power bill"]))return expense("Electricity","Payee/notes mention electricity.");
+    if(hit(["internet","broadband","wifi"]))return expense("Internet","Payee/notes mention internet.");
+    if(hit(["gas cylinder","gas bill"]))return expense("Gas","Payee/notes mention gas.");
+    const vendor=vendors.find(v=>{
+      const name=(v.name||"").toLowerCase();
+      return name&&text&&(text.includes(name)||name.includes((t.payee||"").toLowerCase()));
+    });
+    if(vendor)return{classifiedAs:"vendor_bill",label:"Vendor Bill Payment",why:`Payee matches vendor ${vendor.name}.`,confidence:"medium"};
+    return expense("Other","No strong match found. Use Other only if this is a real expense with details in notes.","low");
+  };
+  const hiddenCashAccountIds=new Set(accounts.filter(a=>a.type==="cash"||["inr cash","usd cash","eur cash","jpy cash"].includes(String(a.name||"").trim().toLowerCase())).map(a=>a.id));
+  const isHiddenCashTxn=t=>hiddenCashAccountIds.has(t.accountFrom)||hiddenCashAccountIds.has(t.accountTo);
+  const visibleAccounts=accounts.filter(a=>!hiddenCashAccountIds.has(a.id));
+  const isFutureTxn=t=>(t.date||"")>today();
+  const visibleTxns=txns.filter(t=>!isHiddenCashTxn(t));
+  const filtered=[...txns].filter(t=>{
+    if(isHiddenCashTxn(t))return false;
+    if(tab==="unclassified"&&!isUnclassified(t))return false;
+    if(tab==="debit"&&t.type!=="debit")return false;
+    if(tab==="credit"&&t.type!=="credit")return false;
+    if(!(t.date||"").startsWith(month))return false;
+    if(accountFilter&&t.accountFrom!==accountFilter&&t.accountTo!==accountFilter)return false;
+    if(search){
+      const q=search.toLowerCase();
+      if(!`${t.payee||""} ${t.category||""} ${t.notes||""}`.toLowerCase().includes(q))return false;
+    }
+    return true;
+  }).sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.createdAt||"").localeCompare(a.createdAt||""));
+  const selected=filtered.find(t=>t.id===selectedId)||filtered[0]||null;
+  const accountName=t=>{
+    const id=t?.type==="credit"?t?.accountTo:t?.accountFrom;
+    return accounts.find(a=>a.id===id)?.name||"Account";
+  };
+  const txnCur=t=>t?.currency||accounts.find(a=>a.id===(t?.accountTo||t?.accountFrom))?.currency||"INR";
+  const money=t=>{
+    const cur=txnCur(t);
+    const sym={INR:"₹",USD:"$",EUR:"€",JPY:"¥",GBP:"£",AUD:"A$"}[cur]||cur+" ";
+    const amt=Math.abs(+t?.amount||0).toLocaleString("en-IN",{minimumFractionDigits:cur==="JPY"?0:2,maximumFractionDigits:cur==="JPY"?0:2});
+    return `${sym}${amt}`;
+  };
+  const statementRows=(()=>{
+    const asc=[...filtered].sort((a,b)=>(a.date||"").localeCompare(b.date||"")||(a.createdAt||"").localeCompare(b.createdAt||""));
+    let bal=0;
+    const acc=accounts.find(a=>a.id===accountFilter);
+    if(acc)bal=+acc.openingBal||0;
+    const byId={};
+    asc.forEach(t=>{
+      if(acc){
+        if(t.type==="credit"&&t.accountTo===acc.id)bal+=(+t.amount||0);
+        if(t.type==="debit"&&t.accountFrom===acc.id)bal-=(+t.amount||0);
+        if(t.type==="conversion"&&t.accountFrom===acc.id)bal-=(+t.amount||0);
+        if(t.type==="conversion"&&t.accountTo===acc.id)bal+=(+t.receivedAmount||+t.amount||0);
+      }
+      byId[t.id]=acc?bal:null;
+    });
+    const groups=[];
+    filtered.forEach(t=>{
+      const key=isFutureTxn(t)?"future":((t.date||"").slice(0,7)||"No date");
+      let g=groups.find(x=>x.key===key);
+      if(!g){g={key,label:key==="future"?"Needs date review":key==="No date"?"No date":new Date(`${key}-01T12:00:00`).toLocaleDateString("en-IN",{month:"long",year:"numeric"}),rows:[],debit:0,credit:0};groups.push(g);}
+      g.rows.push(t);
+      if(t.type==="credit")g.credit+=(+t.amount||0);
+      if(t.type==="debit")g.debit+=(+t.amount||0);
+    });
+    return {groups,balanceById:byId};
+  })();
+  const saveTxns=async next=>{setTxns(next);await saveK(keys.transactions,next);};
+  const saveManual=async()=>{
+    if(manual.type==="conversion"){
+      if(!manual.amount||!manual.accountId||!manual.accountToId){showToast?.("Add amount, from account and to account");return;}
+      if(manual.accountId===manual.accountToId){showToast?.("Choose two different accounts");return;}
+      const fromAcc=accounts.find(a=>a.id===manual.accountId);
+      const toAcc=accounts.find(a=>a.id===manual.accountToId);
+      const received=+manual.receivedAmount||((+manual.amount||0)*(+manual.rate||0));
+      const txn={
+        id:uid(),
+        type:"conversion",
+        date:manual.date||today(),
+        amount:+manual.amount||0,
+        receivedAmount:received||0,
+        rate:+manual.rate||0,
+        currency:fromAcc?.currency||manual.currency||"INR",
+        toCurrency:toAcc?.currency||manual.currency||"INR",
+        payee:String(manual.payee||"").trim()||"Conversion / Transfer",
+        category:"Transfer",
+        notes:String(manual.notes||"").trim(),
+        accountFrom:manual.accountId,
+        accountTo:manual.accountToId,
+        createdAt:new Date().toISOString(),
+        updatedAt:new Date().toISOString(),
+        source:"accounting-journal-manual",
+      };
+      const next=[txn,...txns];
+      await saveTxns(next);
+      setManual(blankManual());
+      setManualOpen(false);
+      showToast?.("Conversion / transfer added");
+      return;
+    }
+    if(!manual.amount||!manual.accountId){showToast?.("Add amount and account");return;}
+    const acc=accounts.find(a=>a.id===manual.accountId);
+    const txn={
+      id:uid(),
+      type:manual.type,
+      date:manual.date||today(),
+      amount:+manual.amount||0,
+      currency:manual.currency||acc?.currency||"INR",
+      payee:String(manual.payee||"").trim(),
+      category:"",
+      notes:String(manual.notes||"").trim(),
+      accountFrom:manual.type==="debit"?manual.accountId:"",
+      accountTo:manual.type==="credit"?manual.accountId:"",
+      createdAt:new Date().toISOString(),
+      updatedAt:new Date().toISOString(),
+      source:"accounting-journal-manual",
+    };
+    const next=[txn,...txns];
+    await saveTxns(next);
+    setSelectedId(txn.id);
+    setManual(blankManual());
+    setManualOpen(false);
+    setClassifyOpen(true);
+    showToast?.("Manual ledger entry added - classify it now");
+  };
+  const patchTxn=async(id,patch)=>{
+    const next=txns.map(t=>t.id===id?{...t,...patch,updatedAt:new Date().toISOString()}:t);
+    await saveTxns(next);
+  };
+  const deleteTxn=async id=>{
+    const txn=txns.find(t=>t.id===id);
+    if(!txn)return;
+    const label=txn.payee||txn.category||"this transaction";
+    if(!window.confirm(`Delete ${label}? This removes it from the Finance ledger too.`))return;
+    const next=txns.filter(t=>t.id!==id);
+    await saveTxns(next);
+    const nextVisible=next.filter(t=>!isHiddenCashTxn(t)).sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.createdAt||"").localeCompare(a.createdAt||""))[0];
+    setSelectedId(nextVisible?.id||"");
+    showToast?.("Transaction deleted");
+  };
+	  const handleStructuredClassify=async({classifiedAs,classifiedRef,sideEffects={}})=>{
+	    if(!selected)return;
+    const now=new Date().toISOString();
+    const normalizedRef=classifiedAs==="expense"?{...classifiedRef,cat:normalizeAccountingExpenseCat(classifiedRef.cat||selected.category||"Other")}:classifiedRef;
+    const billAttachments=Array.isArray(sideEffects.attachments)?sideEffects.attachments.filter(a=>a?.url):[];
+    const currentAttachments=selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName||"Attachment"}]:[]);
+    const mergedAttachments=[
+      ...currentAttachments,
+      ...billAttachments.filter(att=>!currentAttachments.some(cur=>(cur.sourceBillId&&cur.sourceBillId===att.sourceBillId)||cur.url===att.url))
+    ];
+    const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now}:t);
+    await saveTxns(nextTxns);
+    if(sideEffects.newExpense){
+      const newExpense=classifiedAs==="expense"?{...sideEffects.newExpense,cat:normalizedRef.cat}:sideEffects.newExpense;
+      const next=[newExpense,...expenses.filter(e=>e.ledgerTxnId!==selected.id&&e.id!==newExpense.id)];
+      setExpenses(next);await saveK(keys.expenses,next);
+    }else if(selected.classifiedAs==="expense"&&classifiedAs!=="expense"){
+      const next=expenses.filter(e=>e.ledgerTxnId!==selected.id);
+      setExpenses(next);await saveK(keys.expenses,next);
+    }
+    if(sideEffects.billUpdates?.length){
+      const map=Object.fromEntries(sideEffects.billUpdates.map(u=>[u.id,u]));
+      const next=purchases.map(p=>map[p.id]?{...p,...map[p.id]}:p);
+      setPurchases(next);await saveK(keys.purchases,next);
+    }
+    if(sideEffects.vendorCredit){
+      const {vendorId,amount}=sideEffects.vendorCredit;
+      const next=vendors.map(v=>v.id===vendorId?{...v,creditBalance:(+v.creditBalance||0)+(+amount||0)}:v);
+      setVendors(next);await saveK(keys.vendors,next);
+    }
+    if(sideEffects.poUpdate){
+      const next=purchases.map(p=>p.id===sideEffects.poUpdate.id?{...p,...sideEffects.poUpdate}:p);
+      setPurchases(next);await saveK(keys.purchases,next);
+    }
+    if(sideEffects.invoiceUpdates?.length){
+      const map=Object.fromEntries(sideEffects.invoiceUpdates.map(u=>[u.id,u]));
+      const fresh=await loadKFresh(keys.invoices);
+      const base=Array.isArray(fresh)?fresh:invoices;
+      const next=base.map(inv=>map[inv.id]?{...inv,...map[inv.id]}:inv);
+      setInvoices(next);await saveK(keys.invoices,next);
+    }
+	    setClassifyOpen(false);
+	    showToast?.("✓ Classified");
+	  };
+	  const applySuggestion=async suggestion=>{
+	    if(!selected||!suggestion)return;
+	    if(suggestion.classifiedAs==="expense"){
+	      const now=new Date().toISOString();
+	      await handleStructuredClassify({
+	        classifiedAs:"expense",
+	        classifiedRef:{cat:suggestion.cat||"Other",party:selected.payee||""},
+	        sideEffects:{newExpense:{id:"exp-"+uid(),date:selected.date,cat:suggestion.cat||"Other",party:selected.payee||"",amount:+selected.amount||0,currency:txnCur(selected),notes:selected.notes||"",payFromAccount:selected.accountFrom,createdAt:now,ledgerTxnId:selected.id}}
+	      });
+	    }else{
+	      setClassifyOpen(true);
+	    }
+	  };
+  const classify=async cat=>{
+    if(!selected||!cat)return;
+    await patchTxn(selected.id,{category:cat,classifiedBy:"accounting-journal",classifiedAt:new Date().toISOString()});
+    showToast?.("Payment classified");
+    const next=filtered.find(t=>t.id!==selected.id&&isUnclassified(t));
+    if(next)setSelectedId(next.id);
+  };
+  const saveCustomCategory=async cat=>{
+    const clean=String(cat||"").trim();
+    if(!clean)return "";
+    const next=[clean,...customCats.filter(c=>c.toLowerCase()!==clean.toLowerCase())].slice(0,40);
+    setCustomCats(next);
+    await saveK(ACCOUNTING_CUSTOM_CATS_KEY,next);
+    return clean;
+  };
+  const classifyCustom=async()=>{
+    const clean=await saveCustomCategory(customCat);
+    if(clean){await classify(clean);setCustomCat("");}
+  };
+  const updatePayee=async v=>selected&&patchTxn(selected.id,{payee:v});
+  const updateNotes=async v=>selected&&patchTxn(selected.id,{notes:v});
+  useEffect(()=>{
+    if(!loaded)return;
+    if(filtered.length&&!filtered.some(t=>t.id===selectedId))setSelectedId(filtered[0].id);
+    if(!filtered.length&&selectedId)setSelectedId("");
+  },[loaded,month,tab,accountFilter,search,txns.length]);
+  const monthVisibleTxns=visibleTxns.filter(t=>(t.date||"").startsWith(month));
+  const unclassifiedCount=monthVisibleTxns.filter(isUnclassified).length;
+  const ledgerFilters=[["all",`All ${monthVisibleTxns.length}`],["unclassified",`Unclassified ${unclassifiedCount}`],["debit","Payments Out"],["credit","Money In"]];
+  const activeFilterLabel=ledgerFilters.find(([id])=>id===tab)?.[1]||"All";
+  const totalIn=filtered.filter(t=>t.type==="credit").reduce((s,t)=>s+(+t.amount||0),0);
+  const totalOut=filtered.filter(t=>t.type==="debit").reduce((s,t)=>s+(+t.amount||0),0);
+  const inputS={...FI,fontSize:12,padding:"7px 9px",borderRadius:7};
+  const ledgerCols=mob?"56px minmax(0,1fr) 76px 76px":"64px minmax(0,1fr) 88px 88px 74px";
+  const monthLabel=month?new Date(`${month}-01T12:00:00`).toLocaleDateString("en-IN",{month:"long",year:"numeric"}):"Select month";
+  return(
+    <div style={{display:"grid",gap:12}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <div>
+            <div style={{fontSize:11,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Finance Ledger</div>
+            <div style={{fontSize:16,fontWeight:900,color:C.ink,marginTop:2}}>{monthLabel}</div>
+          </div>
+          <div style={{display:"flex",gap:3,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:3}}>
+            {[["ng","Nikhil Gems"],["at","Atyahara"]].map(([id,label])=>(
+              <button key={id} onClick={()=>setCompany(id)} style={{border:"none",borderRadius:6,padding:"5px 11px",cursor:"pointer",fontSize:11,fontWeight:company===id?850:700,background:company===id?(id==="at"?C.purple:C.ink):"transparent",color:company===id?"#fff":C.inkMid}}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <button className="bp" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setManualOpen(true)}>+ Manual entry</button>
+          <label style={{display:"flex",alignItems:"center",gap:6,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 7px"}}>
+            <span style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55}}>Month</span>
+            <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} style={{...inputS,width:145,border:"none",background:"transparent",padding:"3px 4px"}}/>
+          </label>
+          <select value={accountFilter} onChange={e=>setAccountFilter(e.target.value)} style={{...inputS,width:mob?"100%":180,cursor:"pointer"}}>
+            <option value="">All accounts</option>
+            {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search payee, category..." style={{...inputS,width:mob?"100%":220}}/>
+        </div>
+      </div>
+
+      {manualOpen&&(
+        <div onMouseDown={e=>{if(e.target===e.currentTarget)setManualOpen(false);}} style={{position:"fixed",inset:0,zIndex:80,background:"rgba(26,19,8,.32)",display:"flex",alignItems:mob?"stretch":"center",justifyContent:"center",padding:mob?0:18}}>
+          <div onMouseDown={e=>e.stopPropagation()} style={{width:mob?"100%":680,maxWidth:"100%",maxHeight:mob?"100%":"calc(100vh - 36px)",overflow:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:mob?0:12,boxShadow:"0 22px 70px rgba(26,19,8,.22)",padding:mob?18:22}}>
+            <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start",marginBottom:18}}>
+              <div>
+                <div style={{fontSize:20,fontWeight:900,color:C.ink,lineHeight:1.15}}>New Transaction</div>
+                <div style={{fontSize:12,color:C.inkFaint,marginTop:4}}>{company==="at"?"Atyahara":"Nikhil Gems"} finance ledger</div>
+              </div>
+              <button onClick={()=>setManualOpen(false)} style={{width:32,height:32,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,cursor:"pointer",fontSize:18,lineHeight:1,color:C.inkMid}}>x</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr 1fr",gap:8,marginBottom:16}}>
+              {[["credit","Credit (Money In)",C.green,C.greenBg],["debit","Debit (Money Out)",C.red,C.redBg],["conversion","Conversion / Transfer",C.blue,C.blueBg]].map(([id,label,color,bg])=>(
+                <button key={id} onClick={()=>setManual(m=>({...m,type:id}))} style={{border:`1px solid ${manual.type===id?C.ink:C.border}`,background:manual.type===id?C.ink:C.surface,color:manual.type===id?"#fff":C.ink,borderRadius:8,padding:"12px 10px",fontSize:12,fontWeight:900,cursor:"pointer",textAlign:"center"}}>
+                  <span style={{display:"inline-block",width:10,height:10,borderRadius:999,background:manual.type===id?color:bg,border:`1px solid ${color}`,marginRight:7,verticalAlign:-1}}/>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+              <Field label="Date"><input type="date" value={manual.date} onChange={e=>setManual(m=>({...m,date:e.target.value}))} style={{...inputS,padding:"10px 11px",fontSize:13}}/></Field>
+              <Field label="Amount"><input type="number" value={manual.amount} onChange={e=>setManual(m=>({...m,amount:e.target.value}))} style={{...inputS,padding:"10px 11px",fontSize:13}} placeholder="0.00"/></Field>
+              <Field label={manual.type==="credit"?"Into account":"From account"}>
+                <select value={manual.accountId} onChange={e=>{const acc=accounts.find(a=>a.id===e.target.value);setManual(m=>({...m,accountId:e.target.value,currency:acc?.currency||m.currency||"INR"}));}} style={{...inputS,padding:"10px 11px",fontSize:13,cursor:"pointer"}}>
+                  <option value="">- Select account -</option>
+                  {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </Field>
+              {manual.type==="conversion"?(
+                <>
+                  <Field label="To account">
+                    <select value={manual.accountToId} onChange={e=>setManual(m=>({...m,accountToId:e.target.value}))} style={{...inputS,padding:"10px 11px",fontSize:13,cursor:"pointer"}}>
+                      <option value="">- Select account -</option>
+                      {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Rate"><input type="number" value={manual.rate||""} onChange={e=>setManual(m=>({...m,rate:e.target.value,receivedAmount:e.target.value&&m.amount?String((+m.amount||0)*(+e.target.value||0)):m.receivedAmount}))} style={{...inputS,padding:"10px 11px",fontSize:13}} placeholder="e.g. 85"/></Field>
+                  <Field label="You receive"><input type="number" value={manual.receivedAmount||""} onChange={e=>setManual(m=>({...m,receivedAmount:e.target.value}))} style={{...inputS,padding:"10px 11px",fontSize:13}} placeholder="Calculated or enter amount"/></Field>
+                </>
+              ):(
+                <>
+                  <Field label="Payee / source"><input value={manual.payee} onChange={e=>setManual(m=>({...m,payee:e.target.value}))} style={{...inputS,padding:"10px 11px",fontSize:13}} placeholder={manual.type==="credit"?"Buyer, bank, show...":"Vendor, bank, show..."}/></Field>
+                  <Field label="Currency">
+                    <select value={manual.currency} onChange={e=>setManual(m=>({...m,currency:e.target.value}))} style={{...inputS,padding:"10px 11px",fontSize:13,cursor:"pointer"}}>{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select>
+                  </Field>
+                </>
+              )}
+              <div style={{gridColumn:mob?"auto":"1 / -1"}}>
+                <Field label="Notes"><textarea value={manual.notes} onChange={e=>setManual(m=>({...m,notes:e.target.value}))} rows={4} style={{...inputS,padding:"10px 11px",fontSize:13,resize:"vertical"}} placeholder={manual.type==="conversion"?"Rate note, FIRC number, reference...":"Reference, invoice/bill link, accountant note..."}/></Field>
+              </div>
+            </div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginTop:18}}>
+              <div style={{fontSize:12,color:C.inkFaint}}>{manual.type==="conversion"?"Conversion / transfer saves directly and does not need classification.":"Entry will save, then open the same classify form used by the ledger."}</div>
+              <div style={{display:"flex",gap:8}}>
+                <button className="bs" onClick={()=>setManualOpen(false)}>Cancel</button>
+                <button className="bp" onClick={saveManual}>{manual.type==="conversion"?"Save transfer":"Save & classify"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"340px minmax(380px,1fr) 360px",gap:10,alignItems:"start"}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+          <div style={{display:"flex",gap:10,alignItems:"center",justifyContent:"space-between",padding:"9px 12px",borderBottom:`1px solid ${C.border}`,fontSize:11,color:C.inkFaint,flexWrap:"wrap",position:"relative"}}>
+            <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
+              <span style={{fontWeight:900,color:C.ink}}>{activeFilterLabel}</span>
+              <span>{filtered.length} rows</span>
+              <span style={{color:C.green}}>In {fmtNum(totalIn)}</span>
+              <span style={{color:C.red}}>Out {fmtNum(totalOut)}</span>
+            </div>
+            <button title="Filter ledger" onClick={()=>setFilterOpen(v=>!v)} style={{width:32,height:30,border:`1px solid ${filterOpen?C.gold:C.border}`,borderRadius:8,background:filterOpen?C.goldLight:C.surface,cursor:"pointer",fontSize:14,fontWeight:900,color:C.ink,lineHeight:1}}>≡</button>
+            {filterOpen&&(
+              <div style={{position:"absolute",right:12,top:42,zIndex:4,width:190,background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,boxShadow:"0 12px 30px rgba(26,19,8,.14)",padding:5}}>
+                {ledgerFilters.map(([id,label])=>(
+                  <button key={id} onClick={()=>{setTab(id);setFilterOpen(false);}} style={{width:"100%",display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",border:"none",borderRadius:7,background:tab===id?C.goldLight:"transparent",padding:"8px 9px",fontSize:12,fontWeight:tab===id?900:750,color:tab===id?C.ink:C.inkMid,cursor:"pointer",textAlign:"left"}}>
+                    <span>{label}</span>
+                    {tab===id&&<span style={{color:C.gold,fontWeight:900}}>✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {!loaded?<div style={{padding:"42px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>Loading ledger...</div>:filtered.length===0?<div style={{padding:"42px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>No ledger entries for {monthLabel}</div>:(
+            <div style={{maxHeight:mob?420:680,overflowY:"auto",overflowX:"hidden"}}>
+              {statementRows.groups.map(group=>(
+                <div key={group.key}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",background:group.key==="future"?C.redBg:C.card,borderBottom:`1px solid ${group.key==="future"?C.red+"44":C.border}`,padding:"8px 12px"}}>
+                    <div style={{fontSize:11,fontWeight:900,color:group.key==="future"?C.red:C.ink,textTransform:"uppercase",letterSpacing:.55}}>{group.key==="future"?"! ":""}{group.label}</div>
+                    <div style={{display:"flex",gap:12,fontSize:10,color:C.inkFaint,whiteSpace:"nowrap"}}>
+                      <span>{group.rows.length} rows</span>
+                      <span style={{color:C.red}}>Dr {fmtNum(group.debit)}</span>
+                      <span style={{color:C.green}}>Cr {fmtNum(group.credit)}</span>
+                    </div>
+                  </div>
+	                  {group.rows.map(t=>{
+	                    const active=selected?.id===t.id;
+	                    const catOk=!isUnclassified(t);
+	                    const debit=t.type==="debit"?money(t):"";
+	                    const credit=t.type==="credit"?money(t):"";
+	                    const transfer=t.type==="conversion";
+	                    const rowAttachments=(t.attachments||(t.attachmentUrl?[{url:t.attachmentUrl,name:t.attachmentName||"Attachment"}]:[]));
+	                    const statusColor=catOk?C.green:C.red;
+	                    const statusBg=catOk?C.greenBg:C.redBg;
+	                    return(
+	                      <button key={t.id} onClick={()=>setSelectedId(t.id)} style={{width:"100%",display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"start",textAlign:"left",padding:"11px 12px",border:"none",borderBottom:`1px solid ${C.border}`,borderLeft:`5px solid ${statusColor}`,background:active?C.goldLight:statusBg,cursor:"pointer",fontFamily:"inherit"}}>
+	                        <div style={{minWidth:0}}>
+	                          <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+	                            <div style={{fontSize:13,fontWeight:900,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.payee||t.category||"Payment"}</div>
+	                            {rowAttachments.length>0&&(
+	                              <span title={`${rowAttachments.length} document${rowAttachments.length===1?"":"s"} attached`} style={{flexShrink:0,display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:900,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}33`,borderRadius:999,padding:"1px 6px",lineHeight:1.35}}>
+	                                📎 {rowAttachments.length}
+	                              </span>
+	                            )}
+	                          </div>
+	                          <div style={{fontSize:11,color:isFutureTxn(t)?C.red:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{fmtDate(t.date).replace(",", "")} · {accountName(t)}{isFutureTxn(t)?" · Future date - fix date":""}</div>
+	                          {t.notes&&<div style={{fontSize:10,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.notes}</div>}
+                          <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:5}}>
+                            <span style={{fontSize:9,fontWeight:850,color:transfer?C.blue:t.type==="credit"?C.green:C.red,background:transfer?C.blueBg:t.type==="credit"?C.greenBg:C.redBg,borderRadius:999,padding:"2px 7px",textTransform:"capitalize"}}>{transfer?"transfer":t.type}</span>
+                            <span style={{fontSize:9,fontWeight:850,color:statusColor,background:C.surface,border:`1px solid ${statusColor}33`,borderRadius:999,padding:"2px 7px"}}>{transfer?"Done":catOk?displayClassification(t):"Not classified"}</span>
+                          </div>
+                        </div>
+                        <div style={{fontSize:12,fontWeight:950,color:transfer?C.blue:t.type==="credit"?C.green:C.red,textAlign:"right",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{transfer?money(t):credit||debit}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:14,minHeight:430}}>
+          {!selected?<div style={{padding:"48px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>Select a payment to classify</div>:(()=>{
+            const transfer=selected.type==="conversion";
+            const done=transfer||!isUnclassified(selected);
+            const attachments=(selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName||"Attachment"}]:[]));
+            const suggestion=suggestClassification(selected);
+            return(
+              <div style={{display:"grid",gap:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start"}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Selected payment</div>
+                    <div style={{fontSize:18,fontWeight:900,color:C.ink,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{selected.payee||"Payment"}</div>
+                    <div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>{fmtDate(selected.date)} · {accountName(selected)} · {company==="at"?"Atyahara":"Nikhil Gems"}</div>
+                  </div>
+                  <div style={{fontSize:18,fontWeight:900,color:selected.type==="credit"?C.green:C.red,whiteSpace:"nowrap"}}>{money(selected)}</div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:8}}>
+                  <Field label="Date"><input type="date" value={selected.date||""} onChange={e=>patchTxn(selected.id,{date:e.target.value})} style={inputS}/></Field>
+                  <Field label="Account">
+                    <select value={selected.type==="credit"?selected.accountTo||"":selected.accountFrom||""} onChange={e=>patchTxn(selected.id,selected.type==="credit"?{accountTo:e.target.value}:{accountFrom:e.target.value})} style={{...inputS,cursor:"pointer"}}>
+                      <option value="">- Select account -</option>
+                      {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.type==="credit_card"?" · card":""}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Payee / source"><input value={selected.payee||""} onChange={e=>updatePayee(e.target.value)} style={inputS} placeholder="Who paid / who was paid"/></Field>
+                  <Field label="Classification"><input value={displayClassification(selected)} readOnly style={{...inputS,color:transfer?C.blue:isUnclassified(selected)?C.red:C.green,fontWeight:850}}/></Field>
+                </div>
+                <Field label="Notes"><textarea value={selected.notes||""} onChange={e=>updateNotes(e.target.value)} rows={3} style={{...inputS,resize:"vertical"}} placeholder="Accountant notes, invoice ref, bill ref..."/></Field>
+                {!done&&suggestion&&(
+                  <div style={{border:`1.5px solid ${suggestion.confidence==="low"?C.border:C.gold}`,background:suggestion.confidence==="low"?C.card:C.goldLight,borderRadius:10,padding:"11px 13px",display:"grid",gap:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"start"}}>
+                      <div>
+                        <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Suggested classification</div>
+                        <div style={{fontSize:15,fontWeight:950,color:C.ink,marginTop:3}}>{suggestion.label}</div>
+                        <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>{suggestion.why}</div>
+                      </div>
+                      <span style={{fontSize:9,fontWeight:900,color:suggestion.confidence==="high"?C.green:suggestion.confidence==="medium"?C.amber:C.inkFaint,background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:"3px 7px",whiteSpace:"nowrap"}}>{suggestion.confidence}</span>
+                    </div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+	                      <button className="bs" onClick={()=>applySuggestion(suggestion)} style={{fontSize:12,padding:"7px 10px"}}>{suggestion.classifiedAs==="expense"?"Use suggestion":"Review match"}</button>
+                      <button onClick={()=>setClassifyOpen(true)} style={{background:"transparent",border:"none",color:C.inkFaint,fontSize:12,fontWeight:800,cursor:"pointer",padding:"7px 2px"}}>Choose manually</button>
+                    </div>
+                  </div>
+                )}
+                <div style={{display:"grid",gap:10,marginTop:2}}>
+                  <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Classification</div>
+                  <div style={{padding:"12px 13px",borderRadius:10,border:`1.5px solid ${done?C.green:C.red}`,background:done?C.greenBg:C.redBg}}>
+                    <div style={{fontSize:15,fontWeight:950,color:transfer?C.blue:done?C.green:C.red}}>{transfer?"Transfer saved":done?"Classified":"Needs classification"}</div>
+                    <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>{transfer?"No classification needed for conversion / transfer.":done?displayClassification(selected):"Choose what this payment is."}</div>
+                  </div>
+                  {!transfer&&<button className="bp" onClick={()=>setClassifyOpen(true)} style={{width:"100%",fontSize:13,padding:"11px 12px"}}>{done?"Review classification":"Classify now"}</button>}
+                </div>
+                <div style={{height:1,background:C.border,margin:"4px 0"}}/>
+                <button onClick={()=>deleteTxn(selected.id)} style={{justifySelf:"start",background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:12,fontWeight:900,padding:"4px 0"}}>Delete transaction</button>
+              </div>
+            );
+          })()}
+        </div>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:14,minHeight:430}}>
+          {!selected?<div style={{padding:"48px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>Select a transaction to view attachments</div>:(()=>{
+            const attachments=(selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName||"Attachment"}]:[]));
+            const activeAtt=attachments[0]||null;
+            const isImg=att=>/^image\//i.test(att?.type||"")||/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(att?.name||att?.url||"");
+            const isPdf=att=>/pdf/i.test(att?.type||"")||/\.pdf($|\?)/i.test(att?.name||att?.url||"");
+            return(
+              <div style={{display:"flex",flexDirection:"column",gap:12,minHeight:400}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                  <div>
+                    <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Attachment preview</div>
+                    <div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>{attachments.length?`${attachments.length} file${attachments.length===1?"":"s"} attached`:"No document attached"}</div>
+                    {activeAtt?.sourceBillId&&<div style={{fontSize:11,color:C.blue,fontWeight:850,marginTop:3}}>{isImg(activeAtt)?"Image":"Document"} from bill {activeAtt.sourceBillNumber||""}</div>}
+                  </div>
+                  <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+                    {activeAtt?.sourceBillId&&onViewBill&&<button className="bs" onClick={()=>onViewBill(activeAtt.sourceBillId)} style={{fontSize:12,padding:"8px 11px",whiteSpace:"nowrap",color:C.blue}}>Go to bill</button>}
+                    <button className="bs" onClick={()=>setAttachOpen(true)} style={{fontSize:12,padding:"8px 11px",whiteSpace:"nowrap"}}>{attachments.length?"Manage":"Attach"}</button>
+                  </div>
+                </div>
+                <div style={{flex:1,minHeight:300,border:`1px solid ${C.border}`,borderRadius:10,background:C.card,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {!activeAtt?(
+                    <button onClick={()=>setAttachOpen(true)} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+                      <div style={{textAlign:"center"}}>
+                        <div style={{fontSize:28,fontWeight:300,color:C.ink,marginBottom:10}}>+</div>
+                        <div style={{fontSize:14,fontWeight:900,color:C.ink}}>Attach document</div>
+                        <div style={{fontSize:11,color:C.inkFaint,marginTop:4}}>Receipt, bill, screenshot, PDF, or bank proof.</div>
+                      </div>
+                    </button>
+                  ):isImg(activeAtt)?(
+                    <button onClick={()=>window.open(activeAtt.url,"_blank","noreferrer")} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:C.card,cursor:"zoom-in",padding:0}}>
+                      <img src={activeAtt.url} alt={activeAtt.name||"Attachment"} style={{width:"100%",height:"100%",maxHeight:520,objectFit:"contain",display:"block"}}/>
+                    </button>
+                  ):isPdf(activeAtt)?(
+                    <iframe title={activeAtt.name||"Attachment PDF"} src={activeAtt.url} style={{width:"100%",height:520,border:0,background:C.surface}}/>
+                  ):(
+                    <button onClick={()=>window.open(activeAtt.url,"_blank","noreferrer")} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",padding:24}}>
+                      <div style={{textAlign:"center"}}>
+                        <div style={{fontSize:34,marginBottom:8}}>□</div>
+                        <div style={{fontSize:13,fontWeight:900,color:C.ink,wordBreak:"break-word"}}>{activeAtt.name||"Attachment"}</div>
+                        <div style={{fontSize:11,color:C.inkFaint,marginTop:4}}>Open file</div>
+                      </div>
+                    </button>
+                  )}
+                </div>
+                {attachments.length>0&&(
+                  <div style={{display:"grid",gap:6}}>
+                    {attachments.slice(0,4).map((att,i)=>(
+                      <button key={att.id||att.url||i} onClick={()=>window.open(att.url,"_blank","noreferrer")} style={{border:`1px solid ${C.border}`,background:i===0?C.goldLight:C.surface,borderRadius:8,padding:"7px 8px",fontSize:11,color:C.inkMid,cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"left"}}>
+                        {att.sourceBillId?"Image from bill: ":""}{att.name||"Attachment"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+        {classifyOpen&&selected&&(
+          <AccountingTxnClassifyModal
+	            txn={selected}
+	            company={company}
+	            keys={keys}
+	            accounts={accounts}
+	            vendors={vendors}
+            purchases={purchases}
+            invoices={invoices}
+            buyers={buyers}
+            expenses={expenses}
+            onSave={handleStructuredClassify}
+            onClose={()=>setClassifyOpen(false)}
+          />
+        )}
+        {attachOpen&&selected&&(
+          <AccountingTxnAttachmentModal
+            txn={selected}
+            company={company}
+            onSave={patchTxn}
+            onClose={()=>setAttachOpen(false)}
+            showToast={showToast}
+            onViewBill={onViewBill}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StockJournalApp({onHome,onViewBill}){
   const t=useT();
   const allShapes=useShapes();
   const [moduleTab,setModuleTab]=useState("stock");
   const [entries,setEntries]=useState([]);
   const [customerOrders,setCustomerOrders]=useState([]);
   const [purchases,setPurchases]=useState([]);
+  const [invoices,setInvoices]=useState([]);
+  const [packetMonth,setPacketMonth]=useState(accountantMonth());
+  const [packetRows,setPacketRows]=useState(accountantPacketRows());
+  const [packetNotes,setPacketNotes]=useState("");
+  const [packetStore,setPacketStore]=useState([]);
   const [vendors,setVendors]=useState([]);
   const [buyers,setBuyers]=useState([]);
   const [loaded,setLoaded]=useState(false);
@@ -3115,23 +4401,47 @@ function StockJournalApp({onHome}){
   const [poDetail,setPoDetail]=useState(null);
 
   useEffect(()=>{
-    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors),loadK(INV_KEYS.buyers),loadK(CUSTOMER_ORDERS_KEY),loadK(KEYS.purchases)]).then(([j,v,b,co,p])=>{
+    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors),loadK(INV_KEYS.buyers),loadK(CUSTOMER_ORDERS_KEY),loadK(KEYS.purchases),loadK(INV_KEYS.invoices),loadK(ACCOUNTANT_PACKET_KEY)]).then(([j,v,b,co,p,inv,packets])=>{
       setEntries(Array.isArray(j)?j:[]);
       setVendors(Array.isArray(v)?v:[]);
       setBuyers(Array.isArray(b)?b:[]);
       setCustomerOrders(Array.isArray(co)?co:[]);
       setPurchases(Array.isArray(p)?p:[]);
+      setInvoices(Array.isArray(inv)?inv:[]);
+      const store=Array.isArray(packets)?packets:[];
+      setPacketStore(store);
+      const current=store.find(x=>x.month===packetMonth);
+      if(current){
+        setPacketRows(Array.isArray(current.rows)&&current.rows.length?current.rows:accountantPacketRows());
+        setPacketNotes(current.notes||"");
+      }
       setLoaded(true);
     });
   },[]);
 
+  useEffect(()=>{
+    if(!loaded)return;
+    const current=packetStore.find(x=>x.month===packetMonth);
+    setPacketRows(Array.isArray(current?.rows)&&current.rows.length?current.rows:accountantPacketRows());
+    setPacketNotes(current?.notes||"");
+  },[packetMonth]);
+
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
-  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
+  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",boxWeight:"",boxWeightUnit:"kg",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
   const blankCustomerOrder=()=>({id:uid(),date:today(),customerId:"",customerName:"",status:"Open",items:[customerOrderLine()],notes:"",createdAt:new Date().toISOString(),updatedAt:""});
   const nextAccountingPO=()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;};
   const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
   const saveCustomerOrders=async(next)=>{setCustomerOrders(next);await saveK(CUSTOMER_ORDERS_KEY,next);};
   const savePurchases=async(next)=>{setPurchases(next);await savePurchasesK(next);};
+  const savePacket=async(rows=packetRows,notes=packetNotes)=>{
+    const record={month:packetMonth,rows,notes,updatedAt:new Date().toISOString()};
+    let next=[record,...packetStore.filter(x=>x.month!==packetMonth)].sort((a,b)=>(b.month||"").localeCompare(a.month||""));
+    setPacketStore(prev=>{
+      next=[record,...prev.filter(x=>x.month!==packetMonth)].sort((a,b)=>(b.month||"").localeCompare(a.month||""));
+      return next;
+    });
+    await saveK(ACCOUNTANT_PACKET_KEY,next);
+  };
 
   const handleSave=async()=>{
     if(!form)return;
@@ -3151,6 +4461,8 @@ function StockJournalApp({onHome}){
       vendorId:form.type==="entry"?(firstVendor?.vendorId||""):"",
       vendorName:form.type==="entry"?(firstVendor?.vendorName||""):"",
       customerId:form.type==="exit"?(buyer?.id||form.customerId||""):"",
+      boxWeight:form.type==="entry"?String(form.boxWeight||"").trim():"",
+      boxWeightUnit:form.type==="entry"?(form.boxWeightUnit||"kg"):"",
       items:normalizedItems,
       updatedAt:new Date().toISOString(),
       createdAt:form.createdAt||new Date().toISOString()
@@ -3317,7 +4629,7 @@ Known shapes: Sphere, Palmstone, Tower, Heart, Tumbled, Freeform, Rough, Pendant
         <td>${fmtDate(e.date)}</td>
         <td class="${e.type==="entry"?"entry-t":"exit-t"}">${e.type==="entry"?"In":"Out"}</td>
         <td>${journalLines(e).map(it=>`${e.type==="entry"&&it.vendorName?`${it.vendorName} · `:""}${it.material||"—"}${it.shape?` · ${it.shape}`:""}`).join("<br/>")}</td>
-        <td>${journalLines(e).map(it=>`${journalQtyText(it)||"—"}${it.notes?` · ${it.notes}`:""}`).join("<br/>")}</td>
+        <td>${journalLines(e).map(it=>`${journalQtyText(it)||"—"}${it.notes?` · ${it.notes}`:""}`).join("<br/>")}${e.type==="entry"&&e.boxWeight?`<br/><strong>Box weight:</strong> ${e.boxWeight} ${e.boxWeightUnit||"kg"}`:""}</td>
         <td>${journalParty(e)||"—"}</td>
         <td>${e.reason||e.exitReason||"—"}</td>
         <td style="max-width:180px;word-break:break-word">${e.notes||"—"}</td>
@@ -3328,7 +4640,7 @@ Known shapes: Sphere, Palmstone, Tower, Heart, Tumbled, Freeform, Rough, Pendant
     }).join("");
     const dateRange=(printDateFrom||printDateTo)?`${printDateFrom?fmtDate(printDateFrom):"Start"} – ${printDateTo?fmtDate(printDateTo):"Today"}`:"All Dates";
     const vendorName=printVendorId==="all"?"All Vendors":(vendors.find(v=>v.id===printVendorId)?.name||printVendorId||"");
-    const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Stock Journal</title>
+    const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Accounting Journal</title>
 <style>*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;padding:24px;color:#1a1308;background:#fff}.no-print{margin-bottom:16px}.btn{background:#b8922a;color:#fff;border:none;padding:9px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-family:inherit}.hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #e5dcc8;padding-bottom:12px;margin-bottom:8px}.co{font-family:Georgia,serif;font-size:22px;font-weight:700}.cosub{font-size:11px;color:#888;letter-spacing:1px;text-transform:uppercase}.rtitle{font-family:Georgia,serif;font-size:18px;font-weight:600;margin:16px 0 4px}.rsub{font-size:12px;color:#888;margin-bottom:20px}.vblock{margin-bottom:28px}.vblock h2{font-family:Georgia,serif;font-size:16px;font-weight:700;border-bottom:1px solid #e5dcc8;padding-bottom:6px;margin-bottom:8px;color:#4a3200}table{width:100%;border-collapse:collapse;font-size:12px}th{background:#f8f6f1;padding:7px 10px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#888;border-bottom:2px solid #e5dcc8}td{padding:7px 10px;border-bottom:1px solid #efe8d8;vertical-align:top}tr:last-child td{border-bottom:none}.entry-t{color:#1a6a2a;font-weight:600}.exit-t{color:#8a1a1a;font-weight:600}@media print{.no-print{display:none}body{padding:10px}@page{margin:1.2cm;size:A4}}
 </style></head><body>
 <div class="no-print"><button class="btn" onclick="window.print()">🖨 Print / Save PDF</button></div>
@@ -3409,12 +4721,14 @@ ${vendorBlocks}
     const removeItem=idx=>setForm(f=>({...f,items:journalLines(f).filter((_,i)=>i!==idx)}));
     const linkedEntry=entries.find(e=>e.id===form.linkedEntryId);
     const glass={background:"rgba(255,255,255,.86)",border:"1px solid rgba(0,0,0,.08)",borderRadius:8,boxShadow:"0 18px 50px rgba(15,23,42,.08)"};
-    const inputS={...FI,borderRadius:8,border:"1px solid rgba(0,0,0,.12)",background:"#fff",boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",boxSizing:"border-box"};
+    const inputS={...FI,width:"100%",minWidth:0,borderRadius:8,border:"1px solid rgba(0,0,0,.12)",background:"#fff",boxShadow:"inset 0 1px 0 rgba(255,255,255,.7)",boxSizing:"border-box"};
+    const qtyInputS={...inputS,fontSize:14,padding:"8px 10px",textAlign:"right"};
+    const qtyUnitS={...inputS,padding:"8px 8px",cursor:"pointer"};
     const sectionTitle={fontSize:11,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:.8,marginBottom:12};
     return(
-      <Shell title="Accounting Journal" crumb={isEdit?"Stock Journal · Edit Entry":"Stock Journal · New Entry"} onHome={onHome} onBack={()=>setView("list")}>
+      <Shell title="Accounting Journal" crumb={isEdit?"Journal Entry · Edit":"Journal Entry · New"} onHome={onHome} onBack={()=>setView("list")}>
         <Toast msg={toast}/>
-        <div style={{maxWidth:880,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{maxWidth:1180,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
           {/* Section 1: Type + Date + Vendor */}
           <div style={{...glass,padding:"18px 20px"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
@@ -3443,7 +4757,7 @@ ${vendorBlocks}
           <div style={{...glass,padding:"18px 20px"}}>
             <div style={sectionTitle}>Items</div>
             {items.map((it,idx)=>(
-              <div key={it.id||idx} style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"1.1fr 1.2fr 1fr .85fr .85fr 1.1fr 30px":"1.3fr 1fr .9fr .9fr 1.3fr 30px",gap:8,alignItems:"end",padding:"10px 0",borderTop:idx?`1px solid ${C.border}`:"none"}}>
+              <div key={it.id||idx} style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"minmax(150px,1.05fr) minmax(170px,1.2fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(170px,1.05fr) 30px":"minmax(190px,1.3fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(190px,1.3fr) 30px",gap:10,alignItems:"end",padding:"10px 0",borderTop:idx?`1px solid ${C.border}`:"none"}}>
                 {form.type==="entry"&&(
                   <Field label={idx===0?"Vendor":""}>
                     <input value={it.vendorName||""} onChange={e=>setItem(idx,"vendorName",e.target.value)} list="jnl-vendors" style={inputS} placeholder="Select or type vendor"/>
@@ -3456,15 +4770,15 @@ ${vendorBlocks}
                   <input value={it.shape||""} onChange={e=>setItem(idx,"shape",e.target.value)} list="jnl-shapes" style={inputS} placeholder="Select or type shape"/>
                 </Field>
                 <Field label={idx===0?"Primary qty":""}>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 64px",gap:4}}>
-                    <input type="number" value={it.qty||""} onChange={e=>setItem(idx,"qty",e.target.value)} style={inputS} placeholder="50"/>
-                    <select value={it.unit||"pcs"} onChange={e=>setItem(idx,"unit",e.target.value)} style={{...inputS,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(105px,1fr) 82px",gap:8}}>
+                    <input type="number" inputMode="decimal" value={it.qty||""} onChange={e=>setItem(idx,"qty",e.target.value)} style={qtyInputS} placeholder="Qty"/>
+                    <select value={it.unit||"pcs"} onChange={e=>setItem(idx,"unit",e.target.value)} style={qtyUnitS}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
                   </div>
                 </Field>
                 <Field label={idx===0?"Secondary":""}>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 64px",gap:4}}>
-                    <input type="number" value={it.qty2||""} onChange={e=>setItem(idx,"qty2",e.target.value)} style={inputS} placeholder="kg"/>
-                    <select value={it.unit2||"kg"} onChange={e=>setItem(idx,"unit2",e.target.value)} style={{...inputS,padding:"6px 4px",cursor:"pointer"}}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(105px,1fr) 82px",gap:8}}>
+                    <input type="number" inputMode="decimal" value={it.qty2||""} onChange={e=>setItem(idx,"qty2",e.target.value)} style={qtyInputS} placeholder="Qty"/>
+                    <select value={it.unit2||"kg"} onChange={e=>setItem(idx,"unit2",e.target.value)} style={qtyUnitS}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
                   </div>
                 </Field>
                 <Field label={idx===0?"Notes":""}>
@@ -3497,6 +4811,16 @@ ${vendorBlocks}
                     <option value="">Not linked</option>
                     {entries.filter(e=>e.type==="entry"&&e.id!==form.id).map(e=><option key={e.id} value={e.id}>{fmtDate(e.date)} · {journalParty(e)||"Vendor"} · {journalSummary(e)}</option>)}
                   </select>
+                </Field>
+              )}
+              {form.type==="entry"&&(
+                <Field label="Box weight">
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 86px",gap:8}}>
+                    <input type="number" inputMode="decimal" min="0" step="0.01" value={form.boxWeight||""} onChange={e=>setF("boxWeight")(e.target.value)} style={{...inputS,fontSize:14,textAlign:"right"}} placeholder="Courier weight"/>
+                    <select value={form.boxWeightUnit||"kg"} onChange={e=>setF("boxWeightUnit")(e.target.value)} style={{...inputS,cursor:"pointer"}}>
+                      {["kg","g","lb"].map(u=><option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
                 </Field>
               )}
               <Field label="Record notes">
@@ -3551,12 +4875,14 @@ ${vendorBlocks}
       <Toast msg={toast}/>
       <div style={{display:"flex",gap:3,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:3,marginBottom:14,overflowX:"auto"}}>
         {[
-          ["stock","Stock Journal",entries.length],
+          ["stock","Journal Entries",entries.length],
           ["customer","Customer Orders",openCustomerOrders],
           ["po","Purchase Orders",openPOs],
+          ["packet","Monthly Packet",packetRows.filter(r=>r.included).length],
+          ["ledger","Finance Ledger",null],
         ].map(([id,label,count])=>(
           <button key={id} onClick={()=>setModuleTab(id)} style={{background:moduleTab===id?C.surface:"transparent",border:moduleTab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:7,padding:"7px 13px",cursor:"pointer",fontSize:12,fontWeight:moduleTab===id?850:700,color:moduleTab===id?C.ink:C.inkMid,whiteSpace:"nowrap"}}>
-            {label} <span style={{marginLeft:5,color:moduleTab===id?C.green:C.inkFaint}}>{count}</span>
+            {label}{count!=null&&<span style={{marginLeft:5,color:moduleTab===id?C.green:C.inkFaint}}>{count}</span>}
           </button>
         ))}
       </div>
@@ -3581,7 +4907,7 @@ ${vendorBlocks}
       {!loaded&&<div style={{textAlign:"center",padding:"52px 0",color:C.inkFaint,fontSize:13}}>{t("Loading…")}</div>}
       {loaded&&filtered.length===0&&(
         <div style={{textAlign:"center",padding:"72px 0",color:C.inkFaint}}>
-          <div style={{fontSize:40,marginBottom:12,opacity:.18}}>📒</div>
+          <div style={{fontSize:40,marginBottom:12,opacity:.18}}>🧾</div>
           <p style={{fontSize:14,fontWeight:500,color:C.inkMid}}>{anyFilter?"No entries match the filter":t("No journal entries yet")}</p>
           {!anyFilter&&<p style={{fontSize:12,marginTop:6,color:C.inkFaint}}>Tap + to record your first parcel</p>}
         </div>
@@ -3605,6 +4931,7 @@ ${vendorBlocks}
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:borderCol,background:isIn?"#F0FFF4":"#FFF5F5",borderRadius:8,padding:"3px 8px"}}>{isIn?"Stock In":"Stock Out"}</span>
                       {entry.reason&&<span style={{fontSize:11,color:"#6B7280"}}>{entry.reason}</span>}
+                      {isIn&&entry.boxWeight&&<span style={{fontSize:11,color:C.amber,background:C.amberBg,borderRadius:8,padding:"3px 8px",fontWeight:700}}>Box {entry.boxWeight} {entry.boxWeightUnit||"kg"}</span>}
                     </div>
                     <span style={{fontSize:11,color:C.inkFaint,flexShrink:0}}>{journalParty(entry)||"—"}</span>
                   </div>
@@ -3640,6 +4967,25 @@ ${vendorBlocks}
 
       {moduleTab==="po"&&(
         <AccountingPOList purchaseOrders={purchaseOrders} onOpen={po=>setPoDetail(po)} onNew={()=>setPoDraft({type:"po",id:uid(),poNumber:nextAccountingPO(),supplier:"",date:today(),currency:"INR",advance:"",paidAmount:0,items:[newItem()],notes:"",followUpDate:"",status:"open",createdAt:new Date().toISOString()})} onQuickPaid={async po=>{const val=window.prompt("Paid amount",String(+po.paidAmount||+po.advance||0));if(val==null)return;await updateAccountingPO({...po,paidAmount:+val||0});}} onQuickClose={async po=>{if(window.confirm("Close this purchase order?"))await updateAccountingPO({...po,status:"closed"});}}/>
+      )}
+
+      {moduleTab==="packet"&&(
+        <MonthlyPacket
+          month={packetMonth}
+          setMonth={setPacketMonth}
+          rows={packetRows}
+          setRows={setPacketRows}
+          notes={packetNotes}
+          setNotes={setPacketNotes}
+          invoices={invoices}
+          buyers={buyers}
+          onPersist={savePacket}
+          showToast={showToast}
+        />
+      )}
+
+      {moduleTab==="ledger"&&(
+        <AccountingFinanceLedger showToast={showToast} onViewBill={onViewBill}/>
       )}
 
       {/* Print Modal */}
@@ -4052,6 +5398,8 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const initBinRef=useRef(startLocationFilter||null);
   const allShapes=useShapes();
   const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);const [accStock,setAccStock]=useState(()=>readCache(KEYS.accStock)||[]);const [glossary,setGlossary]=useState(()=>readCache(KEYS.glossary)||[]);const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);const [invoices,setInvoices]=useState(()=>readCache(INV_KEYS.invoices)||[]);const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);const [buyers,setBuyers]=useState([]);const [form,setForm]=useState(null);const [formType,setFormType]=useState("physical");const [tab,setTab]=useState("physical");const [searchRaw,setSearchRaw]=useState("");
+  const [ulLocs,setUlLocs]=useState({});
+  const [ulSaved,setUlSaved]=useState(new Set());
   const search=useDebounce(searchRaw,300);
   // Multi-select filter sets (empty = show all)
   const [fsStones,setFsStones]=useState(new Set());
@@ -5654,8 +7002,6 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           {tab==="bins"&&<StockBinsView stock={stock} initialActiveBin={initBinRef.current} onEdit={s=>{openEditForm(s);}} onSelect={setSelected} onDelete={del} onDeleteBulk={delBulk} onRenameBin={async(oldName,newName)=>{const upd=stock.map(s=>s.location===oldName?{...s,location:newName,updatedAt:new Date().toISOString()}:s);setStock(upd);try{await saveStockK(upd);showToast(`Renamed "${oldName}" → "${newName}"`);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}}}/>}
           {tab==="unlocated"&&(()=>{
             const unlocated=stock.filter(s=>!s.location||s.location==="");
-            const [ulLocs,setUlLocs]=useState({});
-            const [ulSaved,setUlSaved]=useState(new Set());
             const existingLocs=[...new Set(stock.map(s=>s.location).filter(Boolean))].sort();
             const saveOneLoc=async(item)=>{
               const loc=ulLocs[item.id];if(!loc)return;
@@ -6318,6 +7664,24 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
     try{await savePurchasesK(upd);}catch(e){showToast("⚠ Saved locally — sync failed: "+e.message);}
   },[purchases]);
 
+  const attachBillDocument=useCallback(async(id,dataUrl,fileName)=>{
+    const fileExt=(fileName||"").split(".").pop()?.toLowerCase()||"pdf";
+    let patch={billName:fileName||"Bill document",docExt:fileExt};
+    try{
+      const {url,ext}=await uploadBillDoc(id,dataUrl);
+      patch={...patch,docUrl:url,docExt:ext,docData:undefined};
+    }catch(e){
+      showToast("Upload failed — "+(e.message||"try again"));
+      return;
+    }
+    const upd=purchases.map(p=>p.id===id?{...p,...patch}:p);
+    setPurchases(upd);
+    const updated=upd.find(p=>p.id===id);
+    setDetail(updated);
+    await savePurchasesK(upd);
+    showToast("Bill PDF attached");
+  },[purchases]);
+
   const compressImage=async(fd)=>{
     if(!fd.mediaType.startsWith("image"))return fd;
     return new Promise(res=>{
@@ -6446,7 +7810,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
       )}
       {loaded&&view==="list"&&detail&&(detail.type==="po"
         ?<PODetail po={detail} onBack={()=>setDetail(null)} onEdit={()=>{setDraft({...detail});setDetail(null);setView("po");}} onUpdate={handleUpdatePO} onConvertToBill={handleConvertToBill} onDelete={async()=>{const upd=purchases.filter(p=>p.id!==detail.id);setPurchases(upd);await savePurchasesK(upd);setDetail(null);showToast("Order deleted");}}/>
-        :<BillDetail bill={detail} onBack={()=>setDetail(null)} onUpdatePayment={updatePayment} onExpand={()=>{setExpandBill(detail);setDetail(null);setView("expand");}} onEdit={()=>{setDraft({...detail});setDetail(null);setView("verify");}} onGoToVendor={onGoToVendor} onDelete={async()=>{
+        :<BillDetail bill={detail} onBack={()=>setDetail(null)} onUpdatePayment={updatePayment} onAttachBill={attachBillDocument} onExpand={()=>{setExpandBill(detail);setDetail(null);setView("expand");}} onEdit={()=>{setDraft({...detail});setDetail(null);setView("verify");}} onGoToVendor={onGoToVendor} onDelete={async()=>{
           const upd=purchases.filter(p=>p.id!==detail.id);
           setPurchases(upd);await savePurchasesK(upd);
           // Cascade: remove physical stock items created from this bill
@@ -6534,10 +7898,22 @@ function PurchaseList({purchases,filtered,tab,totalBilled,totalPaid,unpaidBills,
 }
 
 // ── BILL DETAIL ───────────────────────────────────────────────────
-function BillDetail({bill,onBack,onUpdatePayment,onExpand,onEdit,onGoToVendor,onDelete}){
-  const [paid,setPaid]=useState(String(bill.paidAmount||""));const [payDate,setPayDate]=useState(bill.paymentDate||today());const [payNote,setPayNote]=useState(bill.paymentNote||"");const [showDoc,setShowDoc]=useState(false);const [confirmDelete,setConfirmDelete]=useState(false);const [downloading,setDownloading]=useState(false);
+function BillDetail({bill,onBack,onUpdatePayment,onAttachBill,onExpand,onEdit,onGoToVendor,onDelete}){
+  const [paid,setPaid]=useState(String(bill.paidAmount||""));const [payDate,setPayDate]=useState(bill.paymentDate||today());const [payNote,setPayNote]=useState(bill.paymentNote||"");const [showDoc,setShowDoc]=useState(false);const [confirmDelete,setConfirmDelete]=useState(false);const [downloading,setDownloading]=useState(false);const [attaching,setAttaching]=useState(false);const billDocRef=useRef(null);
   const sub=billSubtotal(bill.items||[]);const gstAmt=billGST(bill.items||[]);const outstanding=(bill.totalAmount||0)-(bill.paidAmount||0);const prog=pct(bill.paidAmount||0,bill.totalAmount||1);
   const needsExpand=["confirmed","pending"].includes(bill.status);
+  const hasBillDoc=!!(bill.docData||bill.docUrl);
+  const attachBillFile=file=>{
+    if(!file||!onAttachBill)return;
+    setAttaching(true);
+    const r=new FileReader();
+    r.onload=async e=>{
+      try{await onAttachBill(bill.id,e.target.result,file.name);setShowDoc(true);}
+      finally{setAttaching(false);if(billDocRef.current)billDocRef.current.value="";}
+    };
+    r.onerror=()=>{setAttaching(false);if(billDocRef.current)billDocRef.current.value="";};
+    r.readAsDataURL(file);
+  };
 
   const downloadBill=async()=>{
     setDownloading(true);
@@ -6678,7 +8054,9 @@ ${panSection}
         <button className="bs" style={{padding:"5px 10px",fontSize:12,flexShrink:0}} onClick={onBack}>← Back</button>
         <div style={{flex:1,minWidth:0}}><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600}}>{bill.billNumber||"Bill"}</div><div style={{fontSize:12,color:C.inkFaint}}>{onGoToVendor&&bill.supplier?<button onClick={()=>onGoToVendor(bill.supplier)} style={{background:"none",border:"none",cursor:"pointer",color:C.blue,fontSize:12,padding:0,textDecoration:"underline",fontFamily:"inherit"}}>{bill.supplier}</button>:bill.supplier} · {fmtDate(bill.date||bill.billDate)}</div></div>
         <div style={{marginLeft:mob?0:"auto",display:"flex",flexDirection:mob?"column":"row",gap:8,alignItems:mob?"stretch":"center",flexWrap:"wrap",width:mob?"100%":"auto",marginTop:mob?8:0}}>
-          {(bill.docData||bill.docUrl)&&<button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto"}} onClick={()=>setShowDoc(s=>!s)}>📄 {showDoc?"Hide":"View"} Bill</button>}
+          <input ref={billDocRef} type="file" accept="image/*,.pdf,application/pdf" style={{display:"none"}} onChange={e=>attachBillFile(e.target.files?.[0])}/>
+          {hasBillDoc&&<button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto"}} onClick={()=>setShowDoc(s=>!s)}>📄 {showDoc?"Hide":"View"} Bill</button>}
+          <button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto",color:hasBillDoc?C.blue:C.ink}} disabled={attaching} onClick={()=>billDocRef.current?.click()}>{attaching?"Attaching…":hasBillDoc?"📎 Replace Bill PDF":"📎 Attach Bill PDF"}</button>
           <button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto",opacity:downloading?.6:1}} onClick={downloadBill} disabled={downloading}>{downloading?"Generating…":"📥 Download Bill"}</button>
           <button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto"}} onClick={onEdit}>✏ Edit</button>
           {needsExpand&&<button className="bp" style={{background:C.teal,fontSize:12,minHeight:mob?44:36,width:mob?"100%":"auto"}} onClick={onExpand}>→ Expand to Stock</button>}
@@ -6693,7 +8071,7 @@ ${panSection}
           }
         </div>
       </div>
-      {showDoc&&(bill.docData||bill.docUrl)&&(()=>{const src=bill.docData||bill.docUrl;const isImg=bill.docData?bill.docData.startsWith("data:image"):(bill.docExt!=="pdf");return(<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:12,marginBottom:13,maxHeight:380,overflowY:"auto"}}>{isImg?<img src={src} style={{maxWidth:"100%",borderRadius:4}} alt=""/>:<div style={{textAlign:"center",padding:22,color:C.inkFaint}}><div style={{fontSize:30}}>📄</div><div style={{marginTop:5,fontSize:11}}><a href={src} target="_blank" rel="noreferrer" style={{color:C.blue}}>Open PDF</a></div></div>}</div>);})()}
+      {showDoc&&hasBillDoc&&(()=>{const src=bill.docData||bill.docUrl;const isImg=bill.docData?bill.docData.startsWith("data:image"):(bill.docExt!=="pdf");return(<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:12,marginBottom:13,maxHeight:380,overflowY:"auto"}}>{isImg?<img src={src} style={{maxWidth:"100%",borderRadius:4}} alt=""/>:<div style={{textAlign:"center",padding:22,color:C.inkFaint}}><div style={{fontSize:30}}>📄</div><div style={{fontSize:12,color:C.inkMid,marginTop:4}}>{bill.billName||"Bill PDF attached"}</div><div style={{marginTop:5,fontSize:11}}><a href={src} target="_blank" rel="noreferrer" style={{color:C.blue}}>Open PDF</a></div></div>}</div>);})()}
       <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 300px",gap:14}}>
         <div>
           <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",overflow:"hidden",marginBottom:12}}>
@@ -7436,6 +8814,12 @@ function BulkView({queue,idx,setIdx,vendors,accStock=[],purchases=[],extractOne,
 // EXPENSES MODULE
 // ══════════════════════════════════════════════════════════════════
 const newExp=()=>({id:uid(),date:today(),cat:"",party:"",vendorId:"",amount:"",gst:"0",notes:"",receipt:"",receiptName:"",payFromAccount:"",createdAt:new Date().toISOString()});
+const currentFinancialYear=()=>{
+  const d=new Date();
+  const y=d.getFullYear();
+  const startYear=d.getMonth()>=3?y:y-1;
+  return{start:`${startYear}-04-01`,startMonth:`${startYear}-04`,label:`FY ${String(startYear).slice(2)}-${String(startYear+1).slice(2)}`};
+};
 // Defined at module scope so React never sees it as a "new" component type on re-renders
 function ExpFLD({label,children}){return <div><div style={{fontSize:9,fontWeight:700,letterSpacing:.7,color:C.inkFaint,textTransform:"uppercase",marginBottom:3}}>{label}</div>{children}</div>;};
 
@@ -7547,6 +8931,8 @@ function ExpensesApp({onHome}){
   const [newCatVal,setNewCatVal]=useState("");
   const [showExpTypeChoice,setShowExpTypeChoice]=useState(false);
   const [finAccounts,setFinAccounts]=useState([]);
+  const [periodMode,setPeriodMode]=useState("fy");
+  const [monthFilter,setMonthFilter]=useState(()=>today().slice(0,7));
   const photoRef=useRef();
   const bulkRef=useRef();
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
@@ -7653,13 +9039,22 @@ notes = brief description of what the expense is for.`}
   };
 
   // computed stats
-  const totalSpend=expenses.reduce((a,e)=>a+(+e.amount||0),0);
+  const fy=currentFinancialYear();
+  const periodExpenses=expenses.filter(e=>{
+    const d=e.date||"";
+    if(periodMode==="month")return d.startsWith(monthFilter);
+    return d>=fy.start&&d<=today();
+  });
+  const periodLabel=periodMode==="month"
+    ?new Date(`${monthFilter}-01T12:00:00`).toLocaleDateString("en-IN",{month:"long",year:"numeric"})
+    :`${fy.label} · Apr ${fy.start.slice(0,4)} to present`;
+  const totalSpend=periodExpenses.reduce((a,e)=>a+(+e.amount||0),0);
   const thisMonth=new Date().toISOString().slice(0,7);
   const monthSpend=expenses.filter(e=>e.date?.slice(0,7)===thisMonth).reduce((a,e)=>a+(+e.amount||0),0);
-  const byCat={};expenses.forEach(e=>{if(e.cat)byCat[e.cat]=(byCat[e.cat]||0)+(+e.amount||0);});
+  const byCat={};periodExpenses.forEach(e=>{if(e.cat)byCat[e.cat]=(byCat[e.cat]||0)+(+e.amount||0);});
   const topCat=Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
   const maxCat=topCat[0]?.[1]||1;
-  const filtered=filterCat==="All"?expenses:expenses.filter(e=>e.cat===filterCat);
+  const filtered=filterCat==="All"?periodExpenses:periodExpenses.filter(e=>e.cat===filterCat);
   const sorted=[...filtered].sort((a,b)=>b.date?.localeCompare(a.date||"")||0);
 
   if(form){
@@ -7758,9 +9153,11 @@ notes = brief description of what the expense is for.`}
     );
   }
 
-  // Combined list for "All Expenses" tab — regular + recurring (as upcoming/templates)
-  const recurringAsExpenses=recurring.map(r=>({...r,_isRecurring:true,date:r.nextDue,cat:r.cat||"",amount:r.amount||""}));
-  const allCombined=[...expenses,...recurringAsExpenses].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+	  // Combined list for "All Expenses" tab — regular + recurring (as upcoming/templates)
+	  const recurringAsExpenses=recurring
+	    .map(r=>({...r,_isRecurring:true,date:r.nextDue,cat:r.cat||"",amount:r.amount||""}))
+	    .filter(e=>periodMode==="month"?(e.date||"").startsWith(monthFilter):((e.date||"")>=fy.start&&(e.date||"")<=today()));
+	  const allCombined=[...periodExpenses,...recurringAsExpenses].sort((a,b)=>(b.date||"").localeCompare(a.date||""));
 
   return(
     <Shell title="Expenses" onHome={onHome} onBack={onHome} actions={
@@ -7789,16 +9186,29 @@ notes = brief description of what the expense is for.`}
     }>
       <Toast msg={toast}/>
       {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
-      {loaded&&(
-        <div>
-          {/* Stats */}
-          <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:11,marginBottom:18}}>
-            {[
-              [inr(totalSpend),"Total Spend",C.red,C.redBg],
-              [inr(monthSpend),"This Month",C.amber,C.amberBg],
-              [expenses.length,"Entries",C.blue,C.blueBg],
-              [Object.keys(byCat).length,"Categories",C.purple,C.purpleBg],
-            ].map(([v,l,col,bg])=>(
+	      {loaded&&(
+	        <div>
+	          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:14,background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+	            <div>
+	              <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>View period</div>
+	              <div style={{fontSize:13,fontWeight:850,color:C.ink,marginTop:2}}>{periodLabel}</div>
+	            </div>
+	            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+	              <button onClick={()=>setPeriodMode("fy")} style={{border:`1px solid ${periodMode==="fy"?C.gold:C.border}`,background:periodMode==="fy"?C.goldLight:C.card,borderRadius:7,padding:"8px 11px",fontSize:12,fontWeight:850,color:C.ink,cursor:"pointer",fontFamily:"inherit"}}>{fy.label}</button>
+	              <label style={{display:"flex",alignItems:"center",gap:7,border:`1px solid ${periodMode==="month"?C.gold:C.border}`,background:periodMode==="month"?C.goldLight:C.card,borderRadius:7,padding:"7px 9px",cursor:"pointer"}}>
+	                <span style={{fontSize:14,lineHeight:1}}>📅</span>
+	                <input aria-label="Select expense month" type="month" value={monthFilter} min={fy.startMonth} max={today().slice(0,7)} onChange={e=>{setMonthFilter(e.target.value||today().slice(0,7));setPeriodMode("month");}} style={{border:"none",background:"transparent",outline:"none",fontSize:12,color:C.ink,fontFamily:"inherit",cursor:"pointer",width:122}}/>
+	              </label>
+	            </div>
+	          </div>
+	          {/* Stats */}
+	          <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:11,marginBottom:18}}>
+	            {[
+	              [inr(totalSpend),periodMode==="month"?"Month Spend":"FY Spend",C.red,C.redBg],
+	              [inr(monthSpend),"This Month",C.amber,C.amberBg],
+	              [periodExpenses.length,"Entries",C.blue,C.blueBg],
+	              [Object.keys(byCat).length,"Categories",C.purple,C.purpleBg],
+	            ].map(([v,l,col,bg])=>(
               <div key={l} style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"13px 16px"}}>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>{l}</div>
                 <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:col}}>{v}</div>
@@ -7813,7 +9223,7 @@ notes = brief description of what the expense is for.`}
             ))}
           </div>
 
-          {tab==="breakdown"&&<ExpenseCharts expenses={expenses} topCat={topCat} totalSpend={totalSpend}/>}
+	          {tab==="breakdown"&&<ExpenseCharts expenses={periodExpenses} topCat={topCat} totalSpend={totalSpend}/>}
           {tab==="recurring"&&(
             <div>
               {dueRecurring.length>0&&(
@@ -9964,7 +11374,7 @@ function ShowsApp({onHome}){
   },[]);
 
   const save=async(list)=>{setShows(list);await saveK(SHOWS_KEY,list);};
-  const createPOFromBuyingPlan=async (sid,vendorFilter="all")=>{
+  const createPOFromBuyingPlan=async (sid,vendorFilter="all",lineIds=null)=>{
     const show=shows.find(s=>s.id===sid);
     if(!show)return;
     const plan=show.buyingPlan||[];
@@ -9972,9 +11382,10 @@ function ShowsApp({onHome}){
     // (from deleted POs) are treated as open so they can be re-ordered.
     const livePoIds=new Set(purchases.map(p=>p.id));
     const isOrdered=r=>!!r.poId&&livePoIds.has(r.poId);
-    const rows=plan.filter(r=>!isOrdered(r)&&String(r.stone||"").trim()&&(vendorFilter==="all"||r.vendor===vendorFilter));
+    const idScope=lineIds?new Set(lineIds):null;
+    const rows=plan.filter(r=>!isOrdered(r)&&String(r.stone||"").trim()&&(!idScope||idScope.has(r.id))&&(vendorFilter==="all"||r.vendor===vendorFilter));
     if(!rows.length){
-      const allOpen=plan.filter(r=>!isOrdered(r)&&String(r.stone||"").trim());
+      const allOpen=plan.filter(r=>!isOrdered(r)&&String(r.stone||"").trim()&&(!idScope||idScope.has(r.id)));
       if(vendorFilter!=="all"&&allOpen.length>0)showToast(`All ${vendorFilter} lines are already in POs`);
       else showToast("All lines are already in purchase orders");
       return;
@@ -10172,7 +11583,7 @@ function SheetMultiSelect({allLabel,options,selected,onChange}){
 // focus leaves the whole row (or Enter). Tabbing/clicking between cells in the
 // same row does NOT commit — so an active filter can't drop the row while you're
 // still editing it.
-function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN}){
+function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN,issue}){
   const make=()=>({
     stone:row.stone||"",shape:row.shape||"",vendor:row.vendor||"",qty:row.qty||"",
     unit:(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":(row.unit||"kg"),
@@ -10198,7 +11609,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     if(rawAmt(d.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(d.usd);
     if(Object.keys(patch).length)onCommit(row.id,patch);
   };
-  const td={border:`1px solid ${C.border}`,padding:0,background:bandBg||C.surface,verticalAlign:"middle"};
+  const td={border:`1px solid ${issue?C.red+"66":C.border}`,padding:0,background:issue?C.redBg:(bandBg||C.surface),verticalAlign:"middle"};
   const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
   const num={...ci,textAlign:"right"};
   const cp=+rawAmt(d.cp)||0,sp=+rawAmt(d.sp)||0;
@@ -10211,6 +11622,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       onBlur={e=>{ if(e.currentTarget.contains(e.relatedTarget))return; editing.current=false; commit(); }}
       onKeyDown={e=>{ if(e.key==="Enter"){ commit(); if(e.target&&e.target.blur)e.target.blur(); } }}
       onContextMenu={e=>{ if(onContext){ e.preventDefault(); onContext(e.clientX,e.clientY,row.id); } }}
+      title={issue?`Complete before PO: ${issue.join(", ")}`:undefined}
       onMouseEnter={()=>setHover(row.id)} onMouseLeave={()=>setHover(s=>s===row.id?null:s)}>
       <td style={{...td,minWidth:130,position:"relative"}}>
         <input value={d.stone} list={`${datalistId}-stones`} placeholder="—" onChange={e=>set("stone",e.target.value)} style={{...ci,fontWeight:700,paddingRight:row.notes?20:8}}/>
@@ -10281,8 +11693,10 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [buyingUndoFlash,setBuyingUndoFlash]=useState(false);
   const [sheetCopyFlash,setSheetCopyFlash]=useState(false);
   const [sheetNoteEdit,setSheetNoteEdit]=useState(null);
+  const [poFix,setPoFix]=useState(null);
   const [whatsappSummaryOpen,setWhatsappSummaryOpen]=useState(false);
   const [whatsappMode,setWhatsappMode]=useState("prices");
+  const [whatsappIncludeComments,setWhatsappIncludeComments]=useState(false);
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
   const [compactStoneKey,setCompactStoneKey]=useState("");
   const allShapes=useShapes();
@@ -10562,6 +11976,60 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const livePoIds=React.useMemo(()=>new Set((purchases||[]).map(p=>p.id)),[purchases]);
   const lineOrdered=row=>!!row.poId&&livePoIds.has(row.poId);
   const planOpen=viewBuyingPlan.filter(row=>!lineOrdered(row)).length;
+  const poMissingFields=row=>[
+    !String(row.vendor||"").trim()?"vendor":"",
+    !(+row.qty>0)?"qty":"",
+    !(+row.costPerKg>0)?"CP":""
+  ].filter(Boolean);
+  const poCreateRows=()=>{
+    const base=buyingPlan.filter(r=>!lineOrdered(r)&&String(r.stone||"").trim());
+    if(buyingPlanView==="sheet"){
+      return base.filter(r=>
+        (sheetVendors.length===0||sheetVendors.includes(r.vendor))&&
+        (sheetStones.length===0||sheetStones.includes(normPlanText(r.stone)))&&
+        (sheetShapes.length===0||sheetShapes.includes(normPlanText(r.shape)))
+      );
+    }
+    return base.filter(r=>planVendorFilter==="all"||r.vendor===planVendorFilter);
+  };
+  const handleCreateBuyingPO=e=>{
+    e?.stopPropagation?.();
+    const rows=poCreateRows();
+    if(!rows.length){
+      setPoFix(null);
+      onCreatePOFromBuyingPlan?.(show.id,"all",[]);
+      return;
+    }
+    const incomplete=rows.map(r=>({row:r,missing:poMissingFields(r)})).filter(x=>x.missing.length);
+    if(incomplete.length){
+      const ids=new Set(incomplete.map(x=>x.row.id));
+      const counts=incomplete.reduce((m,x)=>{x.missing.forEach(k=>m[k]=(m[k]||0)+1);return m;},{});
+      const bits=Object.entries(counts).map(([k,n])=>`${n} ${k}`).join(", ");
+      setPoFix({ids,missing:Object.fromEntries(incomplete.map(x=>[x.row.id,x.missing])),msg:`${incomplete.length} row${incomplete.length===1?"":"s"} need ${bits} before PO`});
+      if(buyingPlanView!=="sheet"){
+        setSheetStones([]);
+        setSheetShapes([]);
+        setSheetVendors(planVendorFilter!=="all"?[planVendorFilter]:[]);
+      }
+      setBuyingPlanView("sheet");
+      try{localStorage.setItem("ng-buying-plan-view","sheet");}catch{}
+      setTimeout(()=>document.querySelector('[data-po-fix="1"]')?.scrollIntoView({behavior:"smooth",block:"center"}),60);
+      return;
+    }
+    setPoFix(null);
+    onCreatePOFromBuyingPlan?.(show.id,"all",rows.map(r=>r.id));
+  };
+  React.useEffect(()=>{
+    if(!poFix?.ids)return;
+    const incomplete=buyingPlan
+      .filter(r=>poFix.ids.has(r.id))
+      .map(r=>({row:r,missing:poMissingFields(r)}))
+      .filter(x=>x.missing.length);
+    if(!incomplete.length){setPoFix(null);return;}
+    const counts=incomplete.reduce((m,x)=>{x.missing.forEach(k=>m[k]=(m[k]||0)+1);return m;},{});
+    const bits=Object.entries(counts).map(([k,n])=>`${n} ${k}`).join(", ");
+    setPoFix(p=>p?{...p,ids:new Set(incomplete.map(x=>x.row.id)),missing:Object.fromEntries(incomplete.map(x=>[x.row.id,x.missing])),msg:`${incomplete.length} row${incomplete.length===1?"":"s"} need ${bits} before PO`}:p);
+  },[buyingPlan]);
   const buyingLineKg=row=>{
     const qty=+row.qty||0;
     const unit=String(row.unit||"kg").toLowerCase();
@@ -10881,7 +12349,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                       </button>
                     ))}
                   </div>
-                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id,planVendorFilter);}}>Create PO</button>
+                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={handleCreateBuyingPO}>Create PO</button>
                   <button className="bp" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Item</button>
                 </div>
               </div>
@@ -10944,6 +12412,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 };
                 const bandMap={};{let bi=0,pk=null;rows.forEach(r=>{const k=bandKeyFor(r);if(pk!==null&&k!==pk)bi^=1;pk=k;bandMap[r.id]=bi;});}
                 const anyFilter=sheetVendors.length>0||sheetStones.length>0||sheetShapes.length>0;
+                const visiblePoFixIds=poFix?.ids?rows.filter(r=>poFix.ids.has(r.id)):[];
                 const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
                 const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
                 const tUsd=rows.reduce((s,r)=>s+(+r.qty||0)*(+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0),0);
@@ -10965,38 +12434,70 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 // Print the exact rows currently shown (after filters + sort) as an A4 PDF.
                 const printSheet=()=>{
                   const esc=v=>String(v==null?"":v).replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+                  const includeVendorCol=sheetVendors.length!==1;
+                  const tableCols=includeVendorCol?8:7;
+                  const totalLabelColspan=includeVendorCol?2:1;
                   const fbits=[
                     sheetStones.length?`${sheetStones.map(k=>stoneMap.get(k)||k).join(", ")}`:"",
                     sheetShapes.length?`${sheetShapes.map(k=>shapeMap.get(k)||k).join(", ")}`:"",
                     sheetVendors.length?sheetVendors.join(", "):"",
                   ].filter(Boolean).join("  ·  ")||"All stones · All shapes · All vendors";
-                  const body=rows.map(r=>{
-                    const cp=+r.costPerKg||0,sp=+r.targetSellPrice||0;
-                    const m=sp>0&&cp>0?((sp-cp)/sp)*100:null;
-                    const su=r.targetSellPriceUsd||usdFromInr(r.targetSellPrice);
-                    const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");
-                    return`<tr><td class=b>${esc(r.stone)||"—"}</td><td>${esc(r.shape)||"—"}</td><td>${esc(r.vendor)||"—"}</td><td class=r>${esc(r.qty)||"0"}</td><td>${esc(u)}</td><td class=r>${esc(fmtAmtIN(r.costPerKg))||"0"}</td><td class=r>${esc(fmtAmtIN(r.targetSellPrice))||"0"}</td><td class=r>${esc(fmtAmtIN(su))||"0"}</td><td class="r g">${m==null?"—":m.toFixed(0)+"%"}</td><td>${lineOrdered(r)?esc(r.poNumber):"—"}</td></tr>`;
+                  const qtySummaryFor=list=>{const m=new Map();list.forEach(r=>{const q=+r.qty||0;if(!q)return;const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");m.set(u,(m.get(u)||0)+q);});const order=["kg","pcs","g","lots","boxes"];return [...m.entries()].sort((a,b)=>{const ia=order.indexOf(a[0]),ib=order.indexOf(b[0]);return (ia<0?99:ia)-(ib<0?99:ib)||a[0].localeCompare(b[0]);}).map(([u,q])=>`${fmtAmtIN(q)} ${u}`).join(" + ")||"Qty open";};
+                  const groups=[];const groupByShape=new Map();
+                  rows.forEach(r=>{const k=normPlanText(r.shape)||`__${r.id}`;if(!groupByShape.has(k)){const g={key:k,name:r.shape||"(shape not set)",rows:[]};groupByShape.set(k,g);groups.push(g);}groupByShape.get(k).rows.push(r);});
+                  const body=groups.map(g=>{
+                    const groupCp=g.rows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.costPerKg||0),0);
+                    const groupSp=g.rows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPrice||0),0);
+                    const groupMargin=groupSp>0&&groupCp>0?((groupSp-groupCp)/groupSp)*100:null;
+                    const section=`<tr class="group"><td colspan="${tableCols}"><div class="group-line"><div><span class="stone-name">${esc(g.name)}</span><span class="stone-meta">${g.rows.length} line${g.rows.length===1?"":"s"} · ${esc(qtySummaryFor(g.rows))}</span></div>${groupMargin==null?"":`<span class="group-margin">${groupMargin.toFixed(0)}% margin</span>`}</div></td></tr>`;
+                    const lines=g.rows.map(r=>{
+                      const cp=+r.costPerKg||0,sp=+r.targetSellPrice||0;
+                      const m=sp>0&&cp>0?((sp-cp)/sp)*100:null;
+                      const su=r.targetSellPriceUsd||usdFromInr(r.targetSellPrice);
+                      const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");
+                      const marginClass=m==null?"muted":m>=60?"great":m>=45?"good":"low";
+                      return`<tr><td class="shape">${esc(r.stone)||"—"}</td>${includeVendorCol?`<td>${esc(r.vendor)||"—"}</td>`:""}<td class=r>${esc(r.qty)||"0"}</td><td class=unit>${esc(u)}</td><td class=r>${esc(fmtAmtIN(r.costPerKg))||"0"}</td><td class="r strong">${esc(fmtAmtIN(r.targetSellPrice))||"0"}</td><td class=r>${esc(fmtAmtIN(su))||"0"}</td><td class="r"><span class="pill ${marginClass}">${m==null?"—":m.toFixed(0)+"%"}</span></td></tr>`;
+                    }).join("");
+                    return section+lines;
                   }).join("");
                   const html=`<!doctype html><html><head><meta charset="utf-8"><title>${esc(show.name)} — Buying Plan</title><style>
-                    @page{size:A4 landscape;margin:10mm}
-                    *{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:0;color:#1a1308;background:#fff}
-                    .hd{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px}
-                    .eyebrow{font-size:9px;color:#0f6b42;text-transform:uppercase;letter-spacing:.08em;font-weight:800}
-                    .title{font-size:20px;font-weight:800;line-height:1.1}.sub{font-size:11px;color:#756955;margin-top:3px}
-                    table{width:100%;border-collapse:collapse}
-                    th{background:#faf7f2;text-align:left;font-size:8.5px;color:#756955;text-transform:uppercase;letter-spacing:.04em;padding:6px 7px;border-bottom:1.5px solid #d8cdb8}
-                    td{font-size:10.5px;padding:5px 7px;border-bottom:1px solid #ece3d4}
-                    td.b{font-weight:700}td.r,th.r{text-align:right}td.g{color:#0f6b42;font-weight:700}
-                    tfoot td{border-top:1.5px solid #d8cdb8;font-weight:800;background:#faf7f2}
+                    @page{size:A4 landscape;margin:9mm}
+                    *{box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;margin:0;padding:0;color:#1f1a14;background:#fff}
                     .btn{position:fixed;top:8px;right:8px;background:#0f6b42;color:#fff;border:0;border-radius:7px;padding:8px 14px;font-size:12px;font-weight:800;cursor:pointer}
+                    .hd{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:10px;padding-bottom:10px;border-bottom:2px solid #1f1a14}
+                    .eyebrow{font-size:9px;color:#0f6b42;text-transform:uppercase;letter-spacing:.11em;font-weight:900;margin-bottom:3px}
+                    .title{font-size:24px;font-weight:900;line-height:1.02}.sub{font-size:11px;color:#6f6455;margin-top:5px}
+                    .date{font-size:10px;color:#6f6455;text-align:right;white-space:nowrap}.date b{display:block;color:#1f1a14;font-size:12px;margin-bottom:2px}
+                    .summary{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:10px}
+                    .card{border:1px solid #ded3c2;background:#fbf8f3;border-radius:8px;padding:7px 9px;min-height:44px}
+                    .card span{display:block;font-size:8px;color:#756955;text-transform:uppercase;letter-spacing:.08em;font-weight:900}.card b{display:block;margin-top:3px;font-size:14px;line-height:1.05;color:#1f1a14}
+                    table{width:100%;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
+                    th{background:#fff;text-align:left;font-size:8px;color:#756955;text-transform:uppercase;letter-spacing:.08em;padding:5px 7px;border-bottom:1.5px solid #1f1a14}
+                    th.r{text-align:right}td{font-size:10px;padding:5px 7px;border-bottom:1px solid #e6dccd;vertical-align:middle}
+                    td.r{text-align:right}.shape{font-weight:750;color:#1f1a14}.unit{color:#6f6455}.strong{font-weight:800}
+                    tr.group td{border:0;padding:8px 7px 4px;background:#fff}
+                    .group-line{display:flex;align-items:baseline;justify-content:space-between;gap:12px;border-left:4px solid #0f6b42;background:#eef8f2;border-radius:7px;padding:7px 9px}
+                    .stone-name{font-size:13px;font-weight:900;color:#0f422b;margin-right:10px}.stone-meta{font-size:9.5px;color:#506153;font-weight:750}
+                    .group-margin{font-size:10px;color:#0f6b42;font-weight:900;white-space:nowrap}
+                    .pill{display:inline-block;min-width:42px;text-align:center;border-radius:999px;padding:2px 6px;font-size:9px;font-weight:900}
+                    .pill.great{background:#dcfce7;color:#04703c}.pill.good{background:#eef8f2;color:#0f6b42}.pill.low{background:#fff2d9;color:#9a5b00}.pill.muted{background:#f3eee6;color:#756955}
+                    tfoot td{border-top:2px solid #1f1a14;border-bottom:0;font-weight:900;background:#fbf8f3;font-size:10.5px;padding:7px}
+                    tr{break-inside:avoid}.group{break-after:avoid}
                     @media print{.btn{display:none}}
                   </style></head><body>
                     <button class="btn" onclick="window.print()">Print / Save PDF</button>
-                    <div class="hd"><div><div class="eyebrow">Buying Plan</div><div class="title">${esc(show.name)}</div><div class="sub">${esc(fbits)} · ${rows.length} line${rows.length===1?"":"s"} · ${esc(new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}))}</div></div></div>
+                    <div class="hd"><div><div class="eyebrow">Buying Plan</div><div class="title">${esc(show.name)}</div><div class="sub">${esc(fbits)}</div></div><div class="date"><b>${esc(new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"}))}</b>${esc(show.city||show.country||"")}</div></div>
+                    <div class="summary">
+                      <div class="card"><span>Lines</span><b>${rows.length}</b></div>
+                      <div class="card"><span>Quantity</span><b>${esc(tQty)||"—"}</b></div>
+                      <div class="card"><span>Total CP</span><b>₹${esc(fmtAmtIN(Math.round(tCp)))||"0"}</b></div>
+                      <div class="card"><span>Total SP</span><b>₹${esc(fmtAmtIN(Math.round(tSp)))||"0"}</b></div>
+                      <div class="card"><span>Total USD</span><b>$${esc(fmtAmtIN(Math.round(tUsd)))||"0"}</b></div>
+                    </div>
                     <table>
-                      <thead><tr><th>Stone</th><th>Shape</th><th>Vendor</th><th class=r>Qty</th><th>Unit</th><th class=r>CP ₹</th><th class=r>SP ₹</th><th class=r>SP $</th><th class=r>Margin</th><th>PO</th></tr></thead>
-                      <tbody>${body||'<tr><td colspan=10 style="text-align:center;color:#999;padding:20px">No rows</td></tr>'}</tbody>
-                      <tfoot><tr><td colspan=3>Total · ${rows.length} lines</td><td class=r>${esc(tQty)||""}</td><td></td><td class=r>₹${esc(fmtAmtIN(Math.round(tCp)))||"0"}</td><td class=r>₹${esc(fmtAmtIN(Math.round(tSp)))||"0"}</td><td class=r>$${esc(fmtAmtIN(Math.round(tUsd)))||"0"}</td><td></td><td></td></tr></tfoot>
+                      <thead><tr><th>Stone</th>${includeVendorCol?"<th>Vendor</th>":""}<th class=r>Qty</th><th>Unit</th><th class=r>Cost / unit</th><th class=r>Sell ₹ / unit</th><th class=r>Sell $ / unit</th><th class=r>Margin</th></tr></thead>
+                      <tbody>${body||`<tr><td colspan=${tableCols} style="text-align:center;color:#999;padding:20px">No rows</td></tr>`}</tbody>
+                      <tfoot><tr><td colspan=${totalLabelColspan}>Grand total</td><td class=r>${esc(tQty)||""}</td><td></td><td class=r>₹${esc(fmtAmtIN(Math.round(tCp)))||"0"}</td><td class=r>₹${esc(fmtAmtIN(Math.round(tSp)))||"0"}</td><td class=r>$${esc(fmtAmtIN(Math.round(tUsd)))||"0"}</td><td></td></tr></tfoot>
                     </table>
                   </body></html>`;
                   const w=window.open("","_blank");
@@ -11012,7 +12513,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     return `${i+1}. ${name} — ${r.qty||"?"} ${u}`;
                   });
                   const vlabel=sheetVendors.length?sheetVendors.join(", "):"";
-                  const msg=[`*${show.name} — Order${vlabel?` · ${vlabel}`:""}*`,"",...lines].join("\n");
+                  const msg=[`*Order${vlabel?` · ${vlabel}`:""}*`,"",...lines].join("\n");
                   try{ await navigator.clipboard.writeText(msg); setSheetCopyFlash(true); setTimeout(()=>setSheetCopyFlash(false),1500); }
                   catch{ window.prompt("Copy this message to send your vendor:",msg); }
                 };
@@ -11031,6 +12532,16 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <button onClick={addRow} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:900,cursor:"pointer"}}>+ Add row</button>
                   </div>
                   {/* Spreadsheet */}
+                  {poFix&&visiblePoFixIds.length>0&&(
+                    <div data-po-fix="1" style={{display:"flex",alignItems:"center",gap:9,background:C.redBg,border:`1px solid ${C.red}55`,borderRadius:10,padding:"9px 11px",marginBottom:9}}>
+                      <div style={{fontSize:16,lineHeight:1}}>!</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,fontWeight:900,color:C.red}}>{poFix.msg}</div>
+                        <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>Highlighted rows are blocking Create PO. Fill the red fields, then click Create PO again.</div>
+                      </div>
+                      <button onClick={()=>setPoFix(null)} style={{background:"transparent",border:`1px solid ${C.red}44`,borderRadius:8,padding:"5px 9px",fontSize:11,fontWeight:800,color:C.red,cursor:"pointer"}}>Dismiss</button>
+                    </div>
+                  )}
                   <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
                     <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
                       <thead>
@@ -11045,6 +12556,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             onContext={(x,y,id)=>setSheetCtxMenu({x,y,rowId:id})}
                             onNote={(id,note)=>setSheetNoteEdit({rowId:id,value:note||""})}
                             bandBg={bandMap[r.id]?C.greenBg:C.surface}
+                            issue={poFix?.missing?.[r.id]}
                             lineOrdered={lineOrdered} hovered={sheetHoverRow===r.id} setHover={setSheetHoverRow}
                             rawAmt={rawAmt} usdFromInr={usdFromInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
                         ))}
@@ -11279,7 +12791,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
                 <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
                   <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{viewBuyingPlan.length} lines · {planOpen} open{planVendorFilter!=="all"?` · ${planVendorFilter}`:""}</div>
-                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();onCreatePOFromBuyingPlan?.(show.id,planVendorFilter);}}>Create PO</button>
+                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={handleCreateBuyingPO}>Create PO</button>
                   <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Line</button>
                 </div>
               </div>
@@ -11494,7 +13006,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                 const waTotals=waRows.reduce((m,r)=>{const cq=buyingLineCostQty(r);m.kg+=buyingLineKg(r);m.cp+=cq*(+r.costPerKg||0);m.sp+=cq*(+r.targetSellPrice||0);m.usd+=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);m.lines+=1;return m;},{kg:0,cp:0,sp:0,usd:0,lines:0});
                 const waMargin=waTotals.sp>0&&waTotals.cp>0?((waTotals.sp-waTotals.cp)/waTotals.sp)*100:null;
                 const buildMessage=()=>{
-                  const header=whatsappMode==="prices"?`*${show.name} - Buying Plan*`:`*${show.name} - Order List*`;
+                  const header=whatsappMode==="prices"?`*Buying Plan*`:`*Order List*`;
                   const vendorLine=planVendorFilter!=="all"?`Vendor: ${planVendorFilter}`:`All Vendors`;
                   const lines=[header,vendorLine,""];
                   waGroups.forEach(({rows})=>{
@@ -11513,6 +13025,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         if(sp>0)parts.push(`SP ₹${fmtAmtIN(sp)}`);
                         if(usd>0)parts.push(`$${fmtAmtIN(usd)}`);
                         if(sp>0&&cq>0)parts.push(`Total ₹${fmtAmtIN(cq*sp)}`);
+                        if(whatsappIncludeComments&&r.notes)parts.push(`Comments: ${r.notes}`);
                         lines.push(`• ${parts.join(" | ")}`);
                       });
                     }else if(whatsappMode==="cost"){
@@ -11522,19 +13035,20 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         const cq=buyingLineCostQty(r);
                         const cp=+r.costPerKg||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
+                        const comment=whatsappIncludeComments&&r.notes?` | Comments: ${r.notes}`:"";
                         if(cp>0&&cq>0){
-                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)} = ₹${fmtAmtIN(cq*cp)}`);
+                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)} = ₹${fmtAmtIN(cq*cp)}${comment}`);
                         }else if(cp>0){
-                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)}`);
+                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)}${comment}`);
                         }else{
-                          lines.push(`• ${r.stone||"—"} - ${qtyStr}`);
+                          lines.push(`• ${r.stone||"—"} - ${qtyStr}${comment}`);
                         }
                       });
                     }else{
                       lines.push(`*${shapeName}*`);
                       rows.forEach(r=>{
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
-                        const notePart=r.notes?` - ${r.notes}`:"";
+                        const notePart=whatsappIncludeComments&&r.notes?` - ${r.notes}`:"";
                         lines.push(`• ${r.stone||"—"} - ${qtyStr}${notePart}`);
                       });
                     }
@@ -11578,6 +13092,10 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             </button>
                           ))}
                         </div>
+                        <label style={{display:"flex",alignItems:"center",gap:6,marginLeft:"auto",fontSize:11,fontWeight:850,color:C.inkMid,cursor:"pointer",userSelect:"none"}}>
+                          <input type="checkbox" checked={whatsappIncludeComments} onChange={e=>setWhatsappIncludeComments(e.target.checked)} style={{width:14,height:14,accentColor:"#25D366",cursor:"pointer"}}/>
+                          Include comments
+                        </label>
                       </div>
                       <div style={{flex:1,overflow:"auto",padding:14}}>
                         <textarea readOnly value={msgText} onClick={e=>e.target.select()} style={{width:"100%",minHeight:280,fontFamily:"monospace",fontSize:12,lineHeight:1.55,padding:"10px 12px",background:C.card,border:`1px solid ${C.border}`,borderRadius:9,resize:"vertical",color:C.ink,boxSizing:"border-box",cursor:"text"}}/>
@@ -13905,6 +15423,23 @@ function UsersApp({onHome}){
   );
 }
 
+async function reloadForUpdatePreservingScreen(){
+  try{
+    sessionStorage.setItem("ng-update-scroll",JSON.stringify({x:window.scrollX||0,y:window.scrollY||0}));
+    if("caches" in window){
+      const keys=await caches.keys();
+      await Promise.all(keys.filter(k=>k.startsWith("ng-shell-")).map(k=>caches.delete(k)));
+    }
+    if("serviceWorker" in navigator){
+      const regs=await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(reg=>reg.update().catch(()=>{})));
+    }
+  }catch{}
+  const url=new URL(window.location.href);
+  url.searchParams.set("reload",String(Date.now()));
+  window.location.assign(url.toString());
+}
+
 function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssignedTasks,dismissNewTasks}){
   const tFmt=useTFmt();
   const t=useT();
@@ -13913,7 +15448,7 @@ function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssign
       <div style={{position:"fixed",top:0,left:0,right:0,zIndex:10000,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
         <span style={{fontSize:15,flexShrink:0}}>🚀</span>
         <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff",lineHeight:1.3}}>{t("A new version is available")}</span>
-        <button onClick={()=>window.location.reload()} style={{background:"#fff",border:"none",color:"#1C4A2E",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0,fontFamily:"inherit"}}>{t("Update now")}</button>
+        <button onClick={reloadForUpdatePreservingScreen} style={{background:"#fff",border:"none",color:"#1C4A2E",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0,fontFamily:"inherit"}}>{t("Update now")}</button>
         <button onClick={()=>setUpdateReady(false)} style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.6)",fontSize:18,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
       </div>
     )}
@@ -13950,6 +15485,15 @@ export default function Root({onSignOut}){
   // ── Offline / sync state ──────────────────────────────────────────────────
   const [isOnline,setIsOnline]=useState(navigator.onLine);
   const [syncingCount,setSyncingCount]=useState(0); // >0 while flushing queue
+  useEffect(()=>{
+    try{
+      const raw=sessionStorage.getItem("ng-update-scroll");
+      if(!raw)return;
+      sessionStorage.removeItem("ng-update-scroll");
+      const pos=JSON.parse(raw);
+      setTimeout(()=>window.scrollTo(pos.x||0,pos.y||0),120);
+    }catch{}
+  },[]);
   useEffect(()=>{
     const goOnline=async()=>{
       setIsOnline(true);
@@ -14096,7 +15640,7 @@ export default function Root({onSignOut}){
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;
     else if(mod==="images")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ImageLibraryApp onHome={goHome}/></React.Suspense>;
     else if(mod==="misc")content=<MiscApp onHome={goHome}/>;
-    else if(mod==="journal")content=<StockJournalApp onHome={goHome}/>;
+    else if(mod==="journal")content=<StockJournalApp onHome={goHome} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
   }
   const handleGoToActivity=act=>{
     if(!act?.targetMod)return;

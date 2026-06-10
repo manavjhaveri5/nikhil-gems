@@ -26,6 +26,17 @@ const fmtTs  = ts => ts ? new Date(ts*1000).toLocaleDateString("en-IN",{day:"2-d
 const fmtDate= d  => d  ? new Date(d+"T12:00:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"}) : "—";
 const etsyAmt= p  => p  ? p.amount/p.divisor : 0;
 const FLAG   = iso=> { try { return iso ? String.fromCodePoint(...[...iso.toUpperCase()].map(c=>0x1F1E6-65+c.charCodeAt(0))) : ""; } catch{return "";} };
+const etsyOrderTs = o => o?.create_timestamp || o?.creation_tsz || o?.created_timestamp || o?.update_timestamp || 0;
+const sortEtsyOrders = orders => [...(orders || [])].sort((a,b)=>etsyOrderTs(b)-etsyOrderTs(a));
+const mergeEtsyOrders = (existing = [], fresh = []) => {
+  const byId = new Map();
+  existing.forEach(o => byId.set(String(o.receipt_id), o));
+  fresh.forEach(o => {
+    const key = String(o.receipt_id);
+    byId.set(key, { ...(byId.get(key) || {}), ...o });
+  });
+  return sortEtsyOrders([...byId.values()]);
+};
 
 /* ── storage ─────────────────────────────────────────────────────────────── */
 const ETSY_KEY      = "ng-etsy-v1";
@@ -768,23 +779,23 @@ export default function EtsyApp({ onHome }) {
         ? Math.floor(new Date(settings.lastSyncAt).getTime()/1000) - 86400
         : Math.floor(Date.now()/1000) - 365*86400; // 1 year on first sync
 
-      let allNew = [], off = 0, total = null;
-      const existingIds = new Set(orders.map(o=>o.receipt_id));
+      let freshOrders = [], off = 0, total = null;
+      const existingIds = new Set(orders.map(o=>String(o.receipt_id)));
 
       do {
         setSyncProg(`Fetching orders ${off+1}…${total?` of ${total}`:""}`);
-        const r = await fetch(`/api/etsy?action=orders&shop_id=${sid}&limit=100&offset=${off}&min_created=${minCreated}`);
+        const r = await fetch(`/api/etsy?action=orders&shop_id=${sid}&limit=100&offset=${off}&min_created=${minCreated}&_=${Date.now()}`, { cache: "no-store" });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error||"API error");
         if (total === null) total = d.count;
-        const batch = (d.results||[]).filter(o=>!existingIds.has(o.receipt_id));
-        allNew = [...allNew, ...batch];
+        freshOrders = [...freshOrders, ...(d.results||[])];
         off += 100;
         if (off < total && d.results?.length === 100) await new Promise(r=>setTimeout(r,220)); // respect rate limit
         else break;
       } while (off < total);
 
-      const merged = [...allNew, ...orders];
+      const allNew = freshOrders.filter(o=>!existingIds.has(String(o.receipt_id)));
+      const merged = mergeEtsyOrders(orders, freshOrders);
       const newSettings = {...settings, shopId:sid, lastSyncAt:new Date().toISOString()};
       await persistEtsy(merged, processed, newSettings);
       showToast(allNew.length>0 ? `✓ ${allNew.length} new orders synced (${merged.length} total)` : `✓ Up to date — ${merged.length} orders`);
