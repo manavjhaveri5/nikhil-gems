@@ -4158,12 +4158,22 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             const activeAtt=attachments[0]||null;
             const isImg=att=>/^image\//i.test(att?.type||"")||/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(att?.name||att?.url||"");
             const isPdf=att=>/pdf/i.test(att?.type||"")||/\.pdf($|\?)/i.test(att?.name||att?.url||"");
+            // Sales receipt → auto-show the linked invoice in the preview (invoices are
+            // generated HTML, not stored files, so we render it on the fly).
+            const linkedInv=(()=>{
+              if(selected.classifiedAs!=="customer_receipt")return null;
+              const ids=selected.classifiedRef?.invoiceIds||(selected.classifiedRef?.invoiceId?[selected.classifiedRef.invoiceId]:[]);
+              if(!ids.length)return null;
+              return invoices.find(iv=>ids.includes(iv.id))||null;
+            })();
+            const linkedInvNo=linkedInv?(linkedInv.invNo||linkedInv.invNumber||linkedInv.number||"Invoice"):"";
+            const linkedInvHTML=linkedInv?wrapInvDoc(linkedInvNo,[buildInvBodyHTML(linkedInv,buyers)]):"";
             return(
               <div style={{display:"flex",flexDirection:"column",gap:12,minHeight:400}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
                   <div>
                     <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Attachment preview</div>
-                    <div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>{attachments.length?`${attachments.length} file${attachments.length===1?"":"s"} attached`:"No document attached"}</div>
+                    <div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>{attachments.length?`${attachments.length} file${attachments.length===1?"":"s"} attached`:(!activeAtt&&linkedInv)?`Showing invoice ${linkedInvNo}`:"No document attached"}</div>
                     {activeAtt?.sourceBillId&&<div style={{fontSize:11,color:C.blue,fontWeight:850,marginTop:3}}>{isImg(activeAtt)?"Image":"Document"} from bill {activeAtt.sourceBillNumber||""}</div>}
                   </div>
                   <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
@@ -4172,7 +4182,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                   </div>
                 </div>
                 <div style={{flex:1,minHeight:300,border:`1px solid ${C.border}`,borderRadius:10,background:C.card,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  {!activeAtt?(
+                  {!activeAtt&&linkedInv?(
+                    <iframe title={`Invoice ${linkedInvNo}`} srcDoc={linkedInvHTML} style={{width:"100%",height:520,border:0,background:"#fff"}}/>
+                  ):!activeAtt?(
                     <button onClick={()=>setAttachOpen(true)} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
                       <div style={{textAlign:"center"}}>
                         <div style={{fontSize:28,fontWeight:300,color:C.ink,marginBottom:10}}>+</div>
