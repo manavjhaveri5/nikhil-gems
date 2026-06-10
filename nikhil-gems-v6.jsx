@@ -4113,7 +4113,11 @@ function AccountingFinanceLedger({showToast,onViewBill}){
                       <img src={activeAtt.url} alt={activeAtt.name||"Attachment"} style={{width:"100%",height:"100%",maxHeight:520,objectFit:"contain",display:"block"}}/>
                     </button>
                   ):isPdf(activeAtt)?(
-                    <iframe title={activeAtt.name||"Attachment PDF"} src={activeAtt.url} style={{width:"100%",height:520,border:0,background:C.surface}}/>
+                    <div style={{position:"relative",width:"100%",height:520}}>
+                      <iframe title={activeAtt.name||"Attachment PDF"} src={activeAtt.url} style={{width:"100%",height:520,border:0,background:C.surface,pointerEvents:"none"}}/>
+                      <button onClick={()=>window.open(activeAtt.url,"_blank","noreferrer")} title="Open PDF in new tab" aria-label="Open PDF in new tab" style={{position:"absolute",inset:0,width:"100%",height:"100%",border:"none",background:"transparent",cursor:"pointer",padding:0}}/>
+                      <div style={{position:"absolute",top:8,right:8,background:"rgba(26,19,8,.72)",color:"#fff",fontSize:10,fontWeight:800,letterSpacing:.4,padding:"4px 8px",borderRadius:6,pointerEvents:"none"}}>Click to open ↗</div>
+                    </div>
                   ):(
                     <button onClick={()=>window.open(activeAtt.url,"_blank","noreferrer")} style={{width:"100%",height:"100%",minHeight:300,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit",padding:24}}>
                       <div style={{textAlign:"center"}}>
