@@ -82,8 +82,15 @@ export default function ClassifyTransactionModal({
     const s = vendorNameOf(p).toLowerCase(), v = (vendor?.name || "").toLowerCase();
     return s && v && (s.includes(v) || v.includes(s) || v.split(/\s+/).filter(w => w.length > 2).some(w => s.includes(w)));
   };
-  const allOpenBills = purchases.filter(p => p.type === "bill" && p.status !== "paid");
-  const vendorBills = allOpenBills.filter(matchesVendor);
+  const allBills = purchases.filter(p => p.type === "bill");
+  // Bills already linked to THIS payment stay visible even after they're marked paid.
+  const linkedBillIds = new Set(txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : []));
+  const allOpenBills = allBills.filter(p => p.status !== "paid" || linkedBillIds.has(p.id));
+  // When a vendor is chosen, also surface that vendor's PAID bills so a bank payment
+  // (e.g. one already settled in the Finance module) can still be linked to the bill
+  // and its document attached. Selecting a fully-paid bill adds ₹0 (paying is capped at
+  // the amount due), so it never double-pays.
+  const vendorBills = vendorId ? allBills.filter(matchesVendor) : allOpenBills.filter(matchesVendor);
   const vendorPOs = purchases.filter(p => p.type === "po" && !["paid", "closed", "cancelled"].includes(p.status || "open")).filter(matchesVendor);
   // Invoices already linked to THIS receipt (so a reviewed receipt still shows its
   // invoice even though classifying it flipped the invoice's status to "paid").
@@ -141,11 +148,15 @@ export default function ClassifyTransactionModal({
       const credit = Math.max(0, remaining);
       classifiedRef = { vendorId, vendorName: vendor?.name || txn.payee || "", billIds: [...selectedBillIds], billNumbers: selectedBills.map(b => b.billNumber).filter(Boolean), ...(selectedBillIds.size === 0 && { paymentOnAccount: true }), ...(credit > 0 && { creditApplied: credit }), ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
       sideEffects.billUpdates = billUpdates;
-      sideEffects.attachments = selectedBills.filter(b => b.docUrl || b.docData).map(b => {
-        const ext = b.docExt || (b.docData?.startsWith("data:image/png") ? "png" : b.docData?.startsWith("data:image") ? "jpg" : "pdf");
-        const name = b.billName || `${b.billNumber || "Purchase bill"}.${ext}`;
-        return { id: `bill-doc-${b.id}`, url: b.docUrl || b.docData, name, type: ext === "pdf" ? "application/pdf" : `image/${ext === "jpg" ? "jpeg" : ext}`, ext, source: "purchase-bill", sourceBillId: b.id, sourceBillNumber: b.billNumber || "", uploadedAt: new Date().toISOString() };
-      });
+      // Auto-attach the bill's document. Purchases-module bills store it as docUrl/docData;
+      // misc-module (no-GST) bills store it as attachUrl/attachData — support both.
+      sideEffects.attachments = selectedBills.map(b => {
+        const url = b.docUrl || b.docData || b.attachUrl || b.attachData;
+        if (!url) return null;
+        const ext = b.docExt || b.attachExt || (url.startsWith("data:image/png") ? "png" : url.startsWith("data:image") ? "jpg" : "pdf");
+        const name = b.billName || b.attachName || `${b.billNumber || "Purchase bill"}.${ext}`;
+        return { id: `bill-doc-${b.id}`, url, name, type: ext === "pdf" ? "application/pdf" : `image/${ext === "jpg" ? "jpeg" : ext}`, ext, source: "purchase-bill", sourceBillId: b.id, sourceBillNumber: b.billNumber || "", uploadedAt: new Date().toISOString() };
+      }).filter(Boolean);
       if (credit > 0 && vendorId) sideEffects.vendorCredit = { vendorId, amount: credit };
     } else if (classType === "vendor_po") {
       const po = purchases.find(p => p.id === selectedPoId);
