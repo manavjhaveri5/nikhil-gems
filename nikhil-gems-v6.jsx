@@ -4096,24 +4096,8 @@ function AccountingFinanceLedger({showToast,onViewBill}){
                 </div>
                 <Field label="Notes"><textarea value={selected.notes||""} onChange={e=>updateNotes(e.target.value)} rows={3} style={{...inputS,resize:"vertical"}} placeholder="Accountant notes, invoice ref, bill ref..."/></Field>
                 {!done&&readingAtt&&(
-                  <div style={{border:`1px dashed ${C.border}`,borderRadius:10,padding:"9px 13px",fontSize:12,color:C.inkMid,display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:14}}>📄</span> Reading the attached document to suggest a classification…
-                  </div>
-                )}
-                {!done&&suggestion&&(
-                  <div style={{border:`1.5px solid ${suggestion.confidence==="low"?C.border:C.gold}`,background:suggestion.confidence==="low"?C.card:C.goldLight,borderRadius:10,padding:"11px 13px",display:"grid",gap:8}}>
-                    <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"start"}}>
-                      <div>
-                        <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Suggested classification</div>
-                        <div style={{fontSize:15,fontWeight:950,color:C.ink,marginTop:3}}>{suggestion.label}</div>
-                        <div style={{fontSize:11,color:C.inkMid,marginTop:3}}>{suggestion.why}</div>
-                      </div>
-                      <span style={{fontSize:9,fontWeight:900,color:suggestion.confidence==="high"?C.green:suggestion.confidence==="medium"?C.amber:C.inkFaint,background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:"3px 7px",whiteSpace:"nowrap"}}>{suggestion.confidence}</span>
-                    </div>
-                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-	                      <button className="bs" onClick={()=>applySuggestion(suggestion)} style={{fontSize:12,padding:"7px 10px"}}>{suggestion.classifiedAs==="expense"?"Use suggestion":"Review match"}</button>
-                      <button onClick={()=>setClassifyOpen(true)} style={{background:"transparent",border:"none",color:C.inkFaint,fontSize:12,fontWeight:800,cursor:"pointer",padding:"7px 2px"}}>Choose manually</button>
-                    </div>
+                  <div style={{fontSize:11,color:C.inkFaint,display:"flex",alignItems:"center",gap:7}}>
+                    <span style={{fontSize:13}}>📄</span> Reading the attached document…
                   </div>
                 )}
                 <div style={{display:"grid",gap:10,marginTop:2}}>
@@ -4203,6 +4187,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
             categoryGroups={ACCOUNTING_LEDGER_GROUPS}
             expenseCats={ACCOUNTING_LEDGER_CATS}
             normalizeCat={normalizeAccountingExpenseCat}
+            suggestedType={isUnclassified(selected)?suggestClassification(selected,attTextByTxn[selected.id])?.classifiedAs:undefined}
             onSave={handleStructuredClassify}
             onClose={()=>setClassifyOpen(false)}
           />

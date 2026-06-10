@@ -19,7 +19,7 @@ const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "
 
 export default function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
-  rates, categoryGroups, expenseCats = [], normalizeCat, onSave, onClose,
+  rates, categoryGroups, expenseCats = [], normalizeCat, suggestedType, onSave, onClose,
 }) {
   const R = { ...DEFAULT_RATES, ...(rates || {}) };
   const toInr = (amt, currency) => (+amt || 0) * (R[currency || "INR"] || 1);
@@ -34,8 +34,12 @@ export default function ClassifyTransactionModal({
   const cur = txn.currency || "INR";
   const sym = CUR_SYM[cur] || cur + " ";
 
+  const allowedTypes = isDebit
+    ? ["expense", "vendor_bill", "vendor_po", "cc_payment", "conversion"]
+    : ["customer_receipt", "cc_payment", "conversion", "expense"];
   const [classType, setClassType] = useState(() => {
     if (txn.classifiedAs) return txn.classifiedAs;
+    if (suggestedType && allowedTypes.includes(suggestedType)) return suggestedType; // pre-point to the (implicit) suggestion
     if (!isDebit) return "customer_receipt";
     const c = (txn.category || "").toLowerCase();
     if (c.includes("purchase") || c.includes("vendor") || c.includes("goods")) return "vendor_bill";
@@ -81,7 +85,10 @@ export default function ClassifyTransactionModal({
   const allOpenBills = purchases.filter(p => p.type === "bill" && p.status !== "paid");
   const vendorBills = allOpenBills.filter(matchesVendor);
   const vendorPOs = purchases.filter(p => p.type === "po" && !["paid", "closed", "cancelled"].includes(p.status || "open")).filter(matchesVendor);
-  const openInvoices = (invoices || []).filter(inv => !["paid", "cancelled", "draft"].includes(inv.status || "draft")).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  // Invoices already linked to THIS receipt (so a reviewed receipt still shows its
+  // invoice even though classifying it flipped the invoice's status to "paid").
+  const linkedInvIds = new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : []));
+  const openInvoices = (invoices || []).filter(inv => !["paid", "cancelled", "draft"].includes(inv.status || "draft") || linkedInvIds.has(inv.id)).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const selectedBills = vendorBills.filter(b => selectedBillIds.has(b.id));
   const selectedInvs = openInvoices.filter(i => selectedInvIds.has(i.id));
   const billDue = b => Math.max(0, (+b.totalAmount || 0) - (+b.paidAmount || 0));
