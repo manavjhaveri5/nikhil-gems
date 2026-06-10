@@ -8398,6 +8398,7 @@ function DescAutocomplete({value,onChange,options,style,placeholder,cats=[]}){
   );
 }
 function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],onSave}){
+  const allShapes=useShapes();
   const [step,setStep]=useState(1);
   const catOptions=useMemo(()=>[...new Set(accStock.map(s=>s.desc).filter(Boolean))].sort(),[accStock]);
   const stoneOptions=useMemo(()=>[...new Set([...accStock.map(s=>s.desc),...purchases.flatMap(p=>p.items||[]).map(it=>it.desc)].filter(Boolean))].sort(),[accStock,purchases]);
