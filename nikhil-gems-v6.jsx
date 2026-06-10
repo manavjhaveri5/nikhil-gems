@@ -2984,6 +2984,8 @@ const accountingCompanyKeys=co=>({
   expenses:co==="ng"?"ng-expenses-v1":"at-expenses-v1",
 });
 const ACCOUNTING_CUSTOM_CATS_KEY="ng-accounting-ledger-custom-cats-v1";
+const ACCOUNTING_ATTACH_REQ_KEY="ng-accounting-attach-req-cats-v1";
+const ACCOUNTING_ATTACH_REQ_DEFAULT=["Hotels","Train / Flight"];
 const ACCOUNTING_LEDGER_CATS=[...DEFAULT_EXP_CATS].filter((v,i,a)=>v&&a.indexOf(v)===i);
 const normalizeAccountingExpenseCat=cat=>{
   const raw=String(cat||"").trim();
@@ -3540,7 +3542,7 @@ async function extractPdfText(url){
     return out.trim();
   }catch{return"";}
 }
-function AccountingFinanceLedger({showToast,onViewBill}){
+function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-accounting-ledger-company")||"ng");
   const [accounts,setAccounts]=useState([]);
   const [txns,setTxns]=useState([]);
@@ -3551,6 +3553,8 @@ function AccountingFinanceLedger({showToast,onViewBill}){
   const [expenses,setExpenses]=useState([]);
   const [rates,setRates]=useState({USD:85,EUR:92,JPY:0.57,GBP:107,AUD:55,INR:1});
   const [attTextByTxn,setAttTextByTxn]=useState({});
+  const [attachReqCats,setAttachReqCats]=useState(ACCOUNTING_ATTACH_REQ_DEFAULT);
+  const [attachCfgOpen,setAttachCfgOpen]=useState(false);
   const [loaded,setLoaded]=useState(false);
   const [selectedId,setSelectedId]=useState("");
   const [classifyOpen,setClassifyOpen]=useState(false);
@@ -3590,6 +3594,8 @@ function AccountingFinanceLedger({showToast,onViewBill}){
     });
   },[company]);
   useEffect(()=>{loadK(ACCOUNTING_CUSTOM_CATS_KEY).then(v=>setCustomCats(Array.isArray(v)?v:[]));},[]);
+  useEffect(()=>{loadK(ACCOUNTING_ATTACH_REQ_KEY).then(v=>{if(Array.isArray(v))setAttachReqCats(v);});},[]);
+  const saveAttachReqCats=async next=>{setAttachReqCats(next);await saveK(ACCOUNTING_ATTACH_REQ_KEY,next);};
   // Share the same live/configured FX rates the Finance module uses, so the
   // accountant's journal computes identical numbers (no hardcoded rates).
   useEffect(()=>{loadK("ng-fin-rates-v1").then(v=>{if(v&&typeof v==="object")setRates(r=>({...r,...v,INR:1}));});},[]);
@@ -3605,6 +3611,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
     if(changed.includes(k.buyers))loadKFresh(k.buyers).then(v=>Array.isArray(v)&&setBuyers(v));
     if(changed.includes(k.expenses))loadKFresh(k.expenses).then(v=>Array.isArray(v)&&setExpenses(v));
     if(changed.includes("ng-fin-rates-v1"))loadKFresh("ng-fin-rates-v1").then(v=>v&&typeof v==="object"&&setRates(r=>({...r,...v,INR:1})));
+    if(changed.includes(ACCOUNTING_ATTACH_REQ_KEY))loadKFresh(ACCOUNTING_ATTACH_REQ_KEY).then(v=>Array.isArray(v)&&setAttachReqCats(v));
   }),[company]);
   const ACCOUNTING_STRUCTURED_CLASSIFICATIONS=new Set(["vendor_bill","vendor_po","customer_receipt","cc_payment"]);
   const ACCOUNTING_VALID_CLASSIFICATIONS=new Set([...ACCOUNTING_LEDGER_CATS,"expense",...ACCOUNTING_STRUCTURED_CLASSIFICATIONS]);
@@ -3626,6 +3633,19 @@ function AccountingFinanceLedger({showToast,onViewBill}){
     if((t.classifiedAs||t.category)==="vendor_po")return"Advance against PO";
     if((t.classifiedAs||t.category)==="customer_receipt")return"Sales Receipt";
     return normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)||t.classifiedAs||"Classified";
+  };
+  // The expense category a classified txn maps to (null for receipts/bills/cc/transfers).
+  const txnExpenseCat=t=>{
+    if(!t||t.type==="conversion"||isUnclassified(t))return null;
+    if(["cc_payment","vendor_bill","vendor_po","customer_receipt"].includes(t.classifiedAs))return null;
+    return normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)||null;
+  };
+  // True when this txn's category requires a document but none is attached yet.
+  const needsAttachment=t=>{
+    const cat=txnExpenseCat(t);
+    if(!cat||!attachReqCats.includes(cat))return false;
+    const atts=(t.attachments||(t.attachmentUrl?[1]:[]));
+    return atts.length===0;
   };
   const suggestClassification=(t,extraText="")=>{
     if(!t||t.type==="conversion"||!isUnclassified(t))return null;
@@ -3933,6 +3953,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
           <button className="bp" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setManualOpen(true)}>+ Manual entry</button>
+          {isAdmin&&<button className="bs" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setAttachCfgOpen(true)} title="Choose which categories require an attachment">📎 Rules</button>}
           <label style={{display:"flex",alignItems:"center",gap:6,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 7px"}}>
             <span style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55}}>Month</span>
             <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} style={{...inputS,width:145,border:"none",background:"transparent",padding:"3px 4px"}}/>
@@ -4052,6 +4073,7 @@ function AccountingFinanceLedger({showToast,onViewBill}){
 	                      <button key={t.id} onClick={()=>setSelectedId(t.id)} style={{width:"100%",display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"start",textAlign:"left",padding:"11px 12px",border:"none",borderBottom:`1px solid ${C.border}`,borderLeft:`5px solid ${statusColor}`,background:active?C.goldLight:statusBg,cursor:"pointer",fontFamily:"inherit"}}>
 	                        <div style={{minWidth:0}}>
 	                          <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+	                            {needsAttachment(t)&&(<span title="Attachment required for this category" style={{flexShrink:0,display:"inline-flex",alignItems:"center",justifyContent:"center",width:18,height:18,borderRadius:5,fontSize:11,color:C.amber,background:C.amberBg,border:`1px solid ${C.amber}66`,lineHeight:1}}>📎</span>)}
 	                            <div style={{fontSize:13,fontWeight:900,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.payee||t.category||"Payment"}</div>
 	                            {rowAttachments.length>0&&(
 	                              <span title={`${rowAttachments.length} document${rowAttachments.length===1?"":"s"} attached`} style={{flexShrink:0,display:"inline-flex",alignItems:"center",gap:3,fontSize:10,fontWeight:900,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}33`,borderRadius:999,padding:"1px 6px",lineHeight:1.35}}>
@@ -4218,12 +4240,35 @@ function AccountingFinanceLedger({showToast,onViewBill}){
             onViewBill={onViewBill}
           />
         )}
+        {attachCfgOpen&&(
+          <div onMouseDown={e=>{if(e.target===e.currentTarget)setAttachCfgOpen(false);}} style={{position:"fixed",inset:0,zIndex:96,background:"rgba(26,19,8,.48)",display:"flex",alignItems:mob?"stretch":"center",justifyContent:"center",padding:mob?0:16}}>
+            <div onMouseDown={e=>e.stopPropagation()} style={{width:mob?"100%":440,maxWidth:"100%",maxHeight:mob?"100%":"85vh",overflowY:"auto",background:C.bg,border:mob?"none":`1.5px solid ${C.border}`,borderRadius:mob?0:12,padding:mob?"20px 16px":"22px 24px",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,marginBottom:6}}>
+                <div>
+                  <div style={{fontWeight:850,fontSize:15,color:C.ink}}>Attachment rules</div>
+                  <div style={{fontSize:12,color:C.inkFaint,marginTop:3}}>Pick the expense categories that must have a document. Entries in these categories with no file are flagged with a 📎 in the list.</div>
+                </div>
+                <button onClick={()=>setAttachCfgOpen(false)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:18,lineHeight:1,padding:"0 4px"}}>×</button>
+              </div>
+              <div style={{display:"grid",gap:6,marginTop:14}}>
+                {ACCOUNTING_LEDGER_CATS.filter(c=>c&&c!=="Other").map(cat=>{
+                  const on=attachReqCats.includes(cat);
+                  return <button key={cat} onClick={()=>saveAttachReqCats(on?attachReqCats.filter(c=>c!==cat):[...attachReqCats,cat])} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"10px 12px",borderRadius:8,cursor:"pointer",textAlign:"left",border:`1.5px solid ${on?C.gold:C.border}`,background:on?C.goldLight:C.surface,fontFamily:"inherit"}}>
+                    <span style={{fontSize:13,fontWeight:800,color:C.ink}}>{cat}</span>
+                    <span style={{width:34,height:20,borderRadius:999,background:on?C.green:C.card,border:`1px solid ${on?C.green:C.border}`,position:"relative",flexShrink:0}}><span style={{position:"absolute",top:1,left:on?15:1,width:16,height:16,borderRadius:"50%",background:"#fff",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/></span>
+                  </button>;
+                })}
+              </div>
+              <div style={{display:"flex",justifyContent:"flex-end",marginTop:18}}><button className="bp" onClick={()=>setAttachCfgOpen(false)}>Done</button></div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function StockJournalApp({onHome,onViewBill}){
+function StockJournalApp({onHome,onViewBill,isAdmin=false}){
   const t=useT();
   const allShapes=useShapes();
   const [moduleTab,setModuleTab]=useState("stock");
@@ -4841,7 +4886,7 @@ ${vendorBlocks}
       )}
 
       {moduleTab==="ledger"&&(
-        <AccountingFinanceLedger showToast={showToast} onViewBill={onViewBill}/>
+        <AccountingFinanceLedger showToast={showToast} onViewBill={onViewBill} isAdmin={isAdmin}/>
       )}
 
       {/* Print Modal */}
@@ -15496,7 +15541,7 @@ export default function Root({onSignOut}){
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;
     else if(mod==="images")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ImageLibraryApp onHome={goHome}/></React.Suspense>;
     else if(mod==="misc")content=<MiscApp onHome={goHome}/>;
-    else if(mod==="journal")content=<StockJournalApp onHome={goHome} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
+    else if(mod==="journal")content=<StockJournalApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
   }
   const handleGoToActivity=act=>{
     if(!act?.targetMod)return;
