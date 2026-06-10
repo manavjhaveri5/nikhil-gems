@@ -752,7 +752,7 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
 
 // ─── Ledger View ──────────────────────────────────────────────────────────────
 // ─── Classify Modal ───────────────────────────────────────────────────────────
-const EXP_CATS = ["Sea Freight", "Air Freight", "Courier / Local Delivery", "Rent", "Electricity", "Staff / Labour", "Show — Booth Fee", "Show — Travel", "Show — Hotel", "Packaging", "Bank Charges", "GST / Tax Payment", "Repairs & Maintenance", "Other"];
+const EXP_CATS = ["Sea Freight", "Air Freight", "Courier / Local Delivery", "Rent", "Electricity", "Staff / Labour", "Show — Booth Fee", "Show — Travel", "Show — Hotel", "Packaging", "Bank Charges", "GST / Tax Payment", "Repairs & Maintenance", "Petty Cash", "Other"];
 
 const CLASSIFY_META = {
   expense:          { label: "Expense",       color: "var(--c-amber)"  },

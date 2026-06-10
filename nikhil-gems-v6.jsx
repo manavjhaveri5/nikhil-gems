@@ -3005,7 +3005,7 @@ const normalizeAccountingExpenseCat=cat=>{
   return ACCOUNTING_LEDGER_CATS.includes(raw) ? raw : "Other";
 };
 const ACCOUNTING_LEDGER_GROUPS=[
-  {label:"Main",cats:["Rent","Salary","Flights / Hotels","Packaging & Supplies","Taxes & Duties","Car Loan"]},
+  {label:"Main",cats:["Rent","Salary","Flights / Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Petty Cash"]},
   {label:"Freight",cats:["Sea Freight","Air Freight","Land Freight"]},
   {label:"Utilities",cats:["Electricity","Internet","Gas"]},
   {label:"Other",cats:["Other"]},
