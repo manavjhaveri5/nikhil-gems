@@ -3831,6 +3831,19 @@ function AccountingFinanceLedger({showToast,onViewBill}){
   };
   const updatePayee=async v=>selected&&patchTxn(selected.id,{payee:v});
   const updateNotes=async v=>selected&&patchTxn(selected.id,{notes:v});
+  // Flip an existing entry between Debit (money out) and Credit (money in),
+  // moving the account to the correct side and clearing any now-wrong classification.
+  const flipTxnType=async newType=>{
+    if(!selected||selected.type==="conversion"||selected.type===newType)return;
+    const acct=selected.type==="credit"?selected.accountTo:selected.accountFrom;
+    const patch=newType==="credit"
+      ?{type:"credit",accountTo:acct||"",accountFrom:undefined}
+      :{type:"debit",accountFrom:acct||"",accountTo:undefined};
+    // Direction change invalidates an existing classification — reset to unclassified.
+    if(selected.classifiedAs){Object.assign(patch,{classifiedAs:undefined,classifiedRef:undefined,classifiedAt:undefined,classifiedBy:undefined});}
+    await patchTxn(selected.id,patch);
+    showToast?.(`Changed to ${newType==="credit"?"Credit (money in)":"Debit (money out)"}`);
+  };
   useEffect(()=>{
     if(!loaded)return;
     if(filtered.length&&!filtered.some(t=>t.id===selectedId))setSelectedId(filtered[0].id);
@@ -4030,6 +4043,11 @@ function AccountingFinanceLedger({showToast,onViewBill}){
                   </Field>
                   <Field label="Payee / source"><input value={selected.payee||""} onChange={e=>updatePayee(e.target.value)} style={inputS} placeholder="Who paid / who was paid"/></Field>
                   <Field label="Classification"><input value={displayClassification(selected)} readOnly style={{...inputS,color:transfer?C.blue:isUnclassified(selected)?C.red:C.green,fontWeight:850}}/></Field>
+                  {!transfer&&<Field label="Type"><div style={{display:"flex",gap:6}}>
+                    {[["debit","Debit",C.red,C.redBg],["credit","Credit",C.green,C.greenBg]].map(([id,label,col,bg])=>(
+                      <button key={id} onClick={()=>flipTxnType(id)} style={{flex:1,padding:"9px 10px",borderRadius:7,cursor:selected.type===id?"default":"pointer",fontSize:12,fontWeight:850,fontFamily:"inherit",border:`1.5px solid ${selected.type===id?col:C.border}`,background:selected.type===id?bg:C.surface,color:selected.type===id?col:C.inkMid}}>{label}</button>
+                    ))}
+                  </div></Field>}
                 </div>
                 <Field label="Notes"><textarea value={selected.notes||""} onChange={e=>updateNotes(e.target.value)} rows={3} style={{...inputS,resize:"vertical"}} placeholder="Accountant notes, invoice ref, bill ref..."/></Field>
                 {!done&&suggestion&&(
