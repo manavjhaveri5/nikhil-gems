@@ -234,6 +234,59 @@ function autoMatch(fircs, sbs) {
   return asgn;
 }
 
+/* ══ LEARNER BOT ════════════════════════════════════════════════
+   Silent, always-on session tracker. Module-level singleton so
+   tracking calls never cause React re-renders. Flushes to
+   Supabase via saveK('ng-learner-v1') every FLUSH_EVERY events,
+   on tab hide, and after 30 min idle.                            */
+const learner = (() => {
+  const SESSION_ID    = (typeof crypto!=="undefined"&&crypto.randomUUID)?crypto.randomUUID():Math.random().toString(36).slice(2);
+  const SESSION_START = Date.now();
+  let events   = [];
+  let idleTimer= null;
+  const FLUSH_EVERY = 30;
+  const IDLE_MS     = 30 * 60 * 1000;
+
+  async function flush() {
+    if (!events.length) return;
+    const snapshot = events.splice(0);
+    try {
+      const stored = (await loadK("ng-learner-v1")) || { sessions: [], insights: null };
+      const existing = stored.sessions.find(s => s.id === SESSION_ID);
+      if (existing) {
+        existing.events    = [...existing.events, ...snapshot].slice(-200);
+        existing.eventCount= existing.events.length;
+        existing.end       = Date.now();
+      } else {
+        stored.sessions.unshift({ id: SESSION_ID, start: SESSION_START, end: Date.now(), eventCount: snapshot.length, events: snapshot });
+        stored.sessions = stored.sessions.slice(0, 50);
+      }
+      await saveK("ng-learner-v1", stored);
+    } catch {}
+  }
+
+  function resetIdle() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(flush, IDLE_MS);
+  }
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", () => { if (document.hidden) flush(); });
+  }
+
+  return {
+    track(e, p = {}) {
+      events.push({ t: Date.now(), e, p });
+      resetIdle();
+      if (events.length >= FLUSH_EVERY) flush();
+    },
+    flush,
+    get sessionId()    { return SESSION_ID; },
+    get sessionStart() { return SESSION_START; },
+    get buffered()     { return events.length; },
+  };
+})();
+
 /* ══ APP ════════════════════════════════════════════════════════ */
 export default function App({ company = "atyahara" }) {
   const [data, setData]         = useState({fircs:[],shippingBills:[],invoices:[]});
@@ -241,6 +294,7 @@ export default function App({ company = "atyahara" }) {
   const [loading, setLoading]   = useState(true);
   const [view, setView]         = useState("fircs");
   const [sheet, setSheet]       = useState(null);
+  const openSheet = useCallback(s => { if (s) learner.track("sheet:open",{type:s.type}); setSheet(s); }, []);
   const [hasFema, setHasFema]   = useState(false);
   const [pdfReady, setPdfReady] = useState(false);
   const [pdfErr, setPdfErr]     = useState(null);
@@ -317,13 +371,13 @@ export default function App({ company = "atyahara" }) {
   },[]);
 
   const addFirc    = useCallback(async f   => persist(d=>({...d,fircs:[...d.fircs,f].sort((a,b)=>new Date(a.date)-new Date(b.date))})),[persist]);
-  const deleteFirc = useCallback(async id  => { await persist(d=>({...d,fircs:d.fircs.filter(f=>f.id!==id),shippingBills:d.shippingBills.map(sb=>sb.fircId===id?{...sb,fircId:null}:sb)})); await idb.del(`firc:${id}`); },[persist]);
-  const updateFirc = useCallback(async (id,p)=>persist(d=>({...d,fircs:d.fircs.map(f=>f.id===id?{...f,...p}:f)})),[persist]);
+  const deleteFirc = useCallback(async id  => { learner.track("firc:delete"); await persist(d=>({...d,fircs:d.fircs.filter(f=>f.id!==id),shippingBills:d.shippingBills.map(sb=>sb.fircId===id?{...sb,fircId:null}:sb)})); await idb.del(`firc:${id}`); },[persist]);
+  const updateFirc = useCallback(async (id,p)=>{ learner.track("firc:edit"); return persist(d=>({...d,fircs:d.fircs.map(f=>f.id===id?{...f,...p}:f)})); },[persist]);
   const addSb      = useCallback(async sb  => persist(d=>({...d,shippingBills:[...d.shippingBills,sb].sort((a,b)=>new Date(a.date)-new Date(b.date))})),[persist]);
-  const deleteSb   = useCallback(async id  => { await persist(d=>({...d,shippingBills:d.shippingBills.filter(sb=>sb.id!==id)})); await Promise.all(["sb","inv","hawb","erf","brc"].map(t=>idb.del(`${t}:${id}`))); },[persist]);
+  const deleteSb   = useCallback(async id  => { learner.track("sb:delete"); await persist(d=>({...d,shippingBills:d.shippingBills.filter(sb=>sb.id!==id)})); await Promise.all(["sb","inv","hawb","erf","brc"].map(t=>idb.del(`${t}:${id}`))); },[persist]);
   const patchSb    = useCallback(async (id,p)=>persist(d=>({...d,shippingBills:d.shippingBills.map(sb=>sb.id===id?{...sb,...p}:sb)})),[persist]);
-  const assignSb   = useCallback(async (sbId,fircId)=>persist(d=>({...d,shippingBills:d.shippingBills.map(sb=>sb.id===sbId?{...sb,fircId}:sb)})),[persist]);
-  const cycleStatus= useCallback(async id=>{ const sb=dataRef.current.shippingBills.find(x=>x.id===id); if(sb) await patchSb(id,{status:STATUS_NEXT[sb.status||"pending"]}); },[patchSb]);
+  const assignSb   = useCallback(async (sbId,fircId)=>{ learner.track("match:sb:assign",{hasFirc:!!fircId}); return persist(d=>({...d,shippingBills:d.shippingBills.map(sb=>sb.id===sbId?{...sb,fircId}:sb)})); },[persist]);
+  const cycleStatus= useCallback(async id=>{ const sb=dataRef.current.shippingBills.find(x=>x.id===id); if(sb){ learner.track("sb:status:cycle",{from:sb.status||"pending",to:STATUS_NEXT[sb.status||"pending"]}); await patchSb(id,{status:STATUS_NEXT[sb.status||"pending"]}); } },[patchSb]);
 
   // Invoice queue callbacks
   const addInvoice    = useCallback(async inv => persist(d=>({...d,invoices:[...(d.invoices||[]),inv]})),[persist]);
@@ -331,6 +385,7 @@ export default function App({ company = "atyahara" }) {
   const deleteInvoice = useCallback(async id => { await persist(d=>({...d,invoices:(d.invoices||[]).filter(inv=>inv.id!==id)})); await idb.del(`inv-pending:${id}`); },[persist]);
   // Approve: move PDF from staging key to inv:sbId, patch SB hasInvPdf
   const approveInvoice = useCallback(async (invId, sbId) => {
+    learner.track("invoice:approve");
     const b64 = await idb.get(`inv-pending:${invId}`);
     if (b64) { await idb.set(`inv:${sbId}`, b64); await idb.del(`inv-pending:${invId}`); }
     await patchSb(sbId, {hasInvPdf:true});
@@ -341,6 +396,7 @@ export default function App({ company = "atyahara" }) {
   const [matchSnapshot, setMatchSnapshot] = useState(null);
 
   const applyAuto = useCallback(async () => {
+    learner.track("match:auto");
     // Save snapshot of current matches BEFORE running (for undo)
     const snapshot = {};
     dataRef.current.shippingBills.forEach(sb => { snapshot[sb.id] = sb.fircId || null; });
@@ -351,6 +407,7 @@ export default function App({ company = "atyahara" }) {
 
   const undoAuto = useCallback(async () => {
     if (!matchSnapshot) return;
+    learner.track("match:undo");
     // Restore previous fircId, but SKIP protected statuses (prepared/submitted/cleared/rejected)
     await persist(d => ({
       ...d,
@@ -362,10 +419,11 @@ export default function App({ company = "atyahara" }) {
     setMatchSnapshot(null);
   }, [matchSnapshot, persist]);
 
-  const clearPending = useCallback(async () => persist(d => ({...d, shippingBills: d.shippingBills.map(sb => STATUS_PROTECTED.has(sb.status||"pending") ? sb : {...sb, fircId:null})})), [persist]);
-  const clearAll     = useCallback(async () => persist(d => ({...d, shippingBills: d.shippingBills.map(sb => ({...sb, fircId:null}))})), [persist]);
+  const clearPending = useCallback(async () => { learner.track("match:clear:pending"); return persist(d => ({...d, shippingBills: d.shippingBills.map(sb => STATUS_PROTECTED.has(sb.status||"pending") ? sb : {...sb, fircId:null})})); }, [persist]);
+  const clearAll     = useCallback(async () => { learner.track("match:clear:all"); return persist(d => ({...d, shippingBills: d.shippingBills.map(sb => ({...sb, fircId:null}))})); }, [persist]);
 
   const showPdf = useCallback(async (key,name)=>{
+    learner.track("pdf:view");
     const raw=await idb.get(key);
     if (!raw){alert(`No file stored for "${name}"`);return;}
     const {b64,mime}=unpackDoc(raw);
@@ -376,6 +434,7 @@ export default function App({ company = "atyahara" }) {
   },[]);
 
   const generatePacket = useCallback(async sbOrId=>{
+    learner.track("packet:generate");
     const sbId=typeof sbOrId==="string"?sbOrId:sbOrId?.id;
     const sb=dataRef.current.shippingBills.find(x=>x.id===sbId);
     if (!sb){alert("SB not found");return;}
@@ -434,6 +493,7 @@ export default function App({ company = "atyahara" }) {
   },[pdfReady]);
 
   const exportBackup = useCallback(async ()=>{
+    learner.track("backup:export");
     const meta = dataRef.current;
     const allKeys = await idb.keys();
     const files = {};
@@ -466,6 +526,7 @@ export default function App({ company = "atyahara" }) {
   },[]);
 
   const importBackup = useCallback(async (file)=>{
+    learner.track("backup:import");
     try {
       const text = await file.text();
       const bundle = JSON.parse(text);
@@ -490,6 +551,7 @@ export default function App({ company = "atyahara" }) {
   },[persist]);
 
   const fixAllDates = useCallback(async (onProgress) => {
+    learner.track("date:fix:all");
     const sbs = dataRef.current.shippingBills;
     let fixed = 0, failed = 0, skipped = 0;
     for (let i = 0; i < sbs.length; i++) {
@@ -536,7 +598,7 @@ export default function App({ company = "atyahara" }) {
   const rejectedCount = data.shippingBills.filter(sb=>sb.status==="rejected").length;
 
   const navButtons=NAV.map(n=>(
-    <button key={n.key} className={mob?`er-tab${view===n.key?" active":""}`:`nav-item${view===n.key?" active":""}`} onClick={()=>setView(n.key)}>
+    <button key={n.key} className={mob?`er-tab${view===n.key?" active":""}`:`nav-item${view===n.key?" active":""}`} onClick={()=>{setView(n.key);learner.track("view:change",{to:n.key});}}>
       <span style={{fontSize:mob?14:15,width:mob?"auto":20,textAlign:"center",flexShrink:0}}>{n.icon}</span>
       <span style={{flex:1}}>{n.label}</span>
       {n.badge!=null&&<span style={{background:n.badgeAlert?C.amber:C.ink,color:C.surface,fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:20,minWidth:20,textAlign:"center"}}>{n.badge}</span>}
@@ -594,8 +656,8 @@ export default function App({ company = "atyahara" }) {
       {/* ── Main content ── */}
       <div style={{...S.content, transition:"margin-right .25s var(--ease,ease)", marginRight: docViewer&&!mob ? 500 : 0}}>
         <HowItWorks setView={setView}/>
-        {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={setSheet}/>}
-        {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={setSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
+        {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={openSheet}/>}
+        {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={openSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
         {view==="invoices" && <InvoicesView data={data} onAddInvoice={addInvoice} onPatchInvoice={patchInvoice} onDeleteInvoice={deleteInvoice} onApprove={approveInvoice} showPdf={showPdf}/>}
         {view==="match"    && <MatchView    data={data} fircUsed={fircUsed} onAssign={assignSb} onAuto={applyAuto} onUndo={undoAuto} onClearPending={clearPending} onClearAll={clearAll} showPdf={showPdf} canUndo={!!matchSnapshot}/>}
         {view==="stats"    && <StatsView    data={data} fircUsed={fircUsed} onExport={exportBackup} onImport={importBackup} onFixDates={fixAllDates}/>}
@@ -694,6 +756,7 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
     if (busyRef.current) return;
     busyRef.current=true;
     const arr=Array.from(files);
+    learner.track("firc:upload",{count:arr.length});
     setLog(arr.map(f=>({name:f.name,status:"queued",detail:""})));
     for (let i=0;i<arr.length;i++) {
       const upd=p=>setLog(l=>l.map((r,j)=>j===i?{...r,...p}:r));
@@ -720,6 +783,7 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
   }
 
   async function addManualFirc() {
+    learner.track("firc:manual:save");
     const number=(manualVals.number||"").trim();
     const explicitAmount=+String(manualVals.amount||"").replace(/,/g,"");
     const foreignAmount=+String(manualVals.foreignAmount||"").replace(/,/g,"");
@@ -1181,6 +1245,7 @@ function SBsView({ data, onAdd, onDelete, onPatch, onCycle, setSheet, onGen, gen
     if (busyRef.current) return;
     busyRef.current=true;
     const arr=Array.from(files);
+    learner.track("sb:upload",{count:arr.length});
     setLog(arr.map(f=>({name:f.name,status:"queued",detail:""})));
     for (let i=0;i<arr.length;i++) {
       const file=arr[i], hint=sbNumFromFilename(file.name);
@@ -1425,6 +1490,7 @@ function InvoicesView({ data, onAddInvoice, onPatchInvoice, onDeleteInvoice, onA
     if (busyRef.current) return;
     busyRef.current = true;
     const arr = Array.from(files);
+    learner.track("invoice:upload",{count:arr.length});
     setLog(arr.map(f=>({name:f.name, status:"queued", detail:""})));
     for (let i=0; i<arr.length; i++) {
       const file = arr[i];
@@ -1753,6 +1819,64 @@ function StatsView({ data, fircUsed, onExport, onImport, onFixDates }) {
   const [fixLog,    setFixLog]   = useState([]);
   const [fixing,    setFixing]   = useState(false);
   const [fixDone,   setFixDone]  = useState(null); // {fixed,failed,skipped}
+  const [lrnData,   setLrnData]  = useState(null); // ng-learner-v1
+  const [lrnLoading,setLrnLoading]=useState(false);
+  const [lrnInsight,setLrnInsight]=useState(null); // {patterns, bottlenecks, automation, suggestions, summary}
+  const [lrnOpen,   setLrnOpen]  = useState(true);
+  const [lrnTick,   setLrnTick]  = useState(0);    // forces live counter refresh
+
+  useEffect(()=>{
+    loadK("ng-learner-v1").then(d=>{ if(d) setLrnData(d); }).catch(()=>{});
+    const t=setInterval(()=>setLrnTick(x=>x+1),5000);
+    return ()=>clearInterval(t);
+  },[]);
+
+  async function runLearnerAnalysis() {
+    setLrnLoading(true); setLrnInsight(null);
+    try {
+      const stored=(await loadK("ng-learner-v1"))||{sessions:[]};
+      // Send last 10 sessions, compacted to just event codes for token efficiency
+      const compact=stored.sessions.slice(0,10).map(s=>({
+        id:s.id.slice(0,8), start:s.start, end:s.end,
+        events:s.events.map(e=>e.e+(e.p&&Object.keys(e.p).length?":"+JSON.stringify(e.p):""))
+      }));
+      const res=await fetch("/api/claude",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",max_tokens:1200,
+          messages:[{role:"user",content:`You are a workflow intelligence analyst for an Indian export reconciliation tool (FEMA compliance — matching FIRC receipts with Shipping Bills).
+
+Here are the user's last ${compact.length} work session(s) as compact event logs:
+${JSON.stringify(compact,null,1)}
+
+Event codes: view:change=tab switch, firc:upload=uploaded FIRC PDFs, firc:manual:save=entered FIRC manually, firc:delete/edit=removed or edited FIRC, sb:upload=uploaded Shipping Bills, sb:delete=removed SB, sb:status:cycle=advanced SB status (from→to), match:auto=ran auto-match, match:undo=undid match, match:sb:assign=manually assigned SB to FIRC, match:clear:pending/all=cleared matches, invoice:upload/approve=invoice actions, packet:generate=created submission packet, ai:insights:run=ran AI compliance check, date:fix:all=fixed dates, backup:export/import=backup actions, pdf:view=viewed a document, sheet:open=opened detail panel.
+
+Respond ONLY with valid JSON (no markdown):
+{"patterns":["<3-5 specific behavioural patterns you observe>"],"bottlenecks":["<2-3 places effort is repeated or wasted>"],"automation":["<2-3 things that could be auto-done or pre-filled>"],"suggestions":["<3-5 specific actionable workflow improvements>"],"summary":"<2 sentence plain-English summary of this user's working style>"}`}]
+        })
+      });
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const d=await res.json();
+      const txt=(d.content||[]).map(i=>i.text||"").join("").replace(/```json|```/g,"").trim();
+      const parsed=JSON.parse(txt);
+      setLrnInsight(parsed);
+      // Persist insights back
+      const updated={...stored,insights:{lastRun:Date.now(),...parsed}};
+      await saveK("ng-learner-v1",updated);
+      setLrnData(updated);
+    } catch(e){ setLrnInsight({summary:`Analysis failed: ${e.message}`,patterns:[],bottlenecks:[],automation:[],suggestions:[]}); }
+    setLrnLoading(false);
+  }
+
+  const totalSessions=(lrnData?.sessions?.length)||0;
+  const totalEvents=(lrnData?.sessions||[]).reduce((s,x)=>s+(x.eventCount||0),0);
+  const thisSessionEvents=lrnData?.sessions?.find(s=>s.id===learner.sessionId)?.events?.length||0;
+  const liveBuffer=lrnTick>=0?learner.buffered:0; // lrnTick forces re-read
+  const liveCount=thisSessionEvents+liveBuffer;
+  const lastAnalysisMs=lrnData?.insights?.lastRun;
+  const lastAnalysisStr=lastAnalysisMs
+    ?new Date(lastAnalysisMs).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})
+    :null;
 
   async function runFix() {
     setFixing(true); setFixLog([]); setFixDone(null);
@@ -2020,6 +2144,96 @@ function StatsView({ data, fircUsed, onExport, onImport, onFixDates }) {
           Restores all records and documents from a full backup file. Merges with existing data — does not wipe first.
         </div>
       </div>
+
+      {/* ── Workflow Learner ── */}
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:12,marginTop:16,overflow:"hidden"}}>
+        <button
+          onClick={()=>setLrnOpen(o=>!o)}
+          style={{width:"100%",background:"none",border:"none",cursor:"pointer",padding:"14px 18px",display:"flex",alignItems:"center",gap:10,textAlign:"left"}}>
+          <span style={{fontSize:18}}>🧠</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:14,fontWeight:700,color:C.ink,fontFamily:FONT}}>Workflow Learner</div>
+            <div style={{fontSize:11,color:C.inkMid,marginTop:1}}>
+              Always learning — observing every action silently
+            </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+            <span style={{fontSize:11,color:C.green,fontWeight:600,background:C.greenBg,padding:"2px 9px",borderRadius:20}}>
+              ● Active
+            </span>
+            <span style={{fontSize:11,color:C.inkMid}}>{lrnOpen?"▲":"▼"}</span>
+          </div>
+        </button>
+
+        {lrnOpen&&(
+          <div style={{borderTop:`1px solid ${C.border}`,padding:"16px 18px 20px"}}>
+            {/* Session stats row */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+              {[
+                {v:liveCount,  l:"This session",     c:C.green},
+                {v:totalSessions, l:"Total sessions", c:C.ink},
+                {v:totalEvents,   l:"Total events",   c:C.blue},
+              ].map(({v,l,c})=>(
+                <div key={l} style={{background:C.card,borderRadius:9,padding:"10px 12px",border:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:22,fontWeight:700,color:c,fontFamily:FONT,letterSpacing:"-.02em",lineHeight:1}}>{v}</div>
+                  <div style={{fontSize:10,color:C.inkMid,marginTop:2}}>{l}</div>
+                </div>
+              ))}
+            </div>
+
+            {lastAnalysisStr&&(
+              <div style={{fontSize:11,color:C.inkMid,marginBottom:12}}>
+                Last analysis: <b style={{color:C.ink}}>{lastAnalysisStr}</b>
+              </div>
+            )}
+
+            <button className="pr" onClick={runLearnerAnalysis}
+              disabled={lrnLoading||totalSessions===0}
+              style={{...S.btnDark,width:"100%",marginBottom:16,display:"flex",alignItems:"center",justifyContent:"center",gap:8,padding:"11px 16px",fontSize:13,opacity:(lrnLoading||totalSessions===0)?0.6:1}}>
+              {lrnLoading?<><Spin/>Analysing your workflow…</>:"🔍 Analyse My Workflow"}
+            </button>
+            {totalSessions===0&&(
+              <div style={{fontSize:12,color:C.inkMid,textAlign:"center",marginBottom:12}}>
+                Use the app a bit — the learner will gather data and then analyse your patterns.
+              </div>
+            )}
+
+            {/* Insight cards */}
+            {(lrnInsight||lrnData?.insights)&&(()=>{
+              const ins=lrnInsight||lrnData.insights;
+              return (
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {ins.summary&&(
+                    <div style={{background:C.purpleBg,borderRadius:9,padding:"11px 14px",border:`1px solid ${C.purple}22`,fontSize:13,color:C.ink,lineHeight:1.6}}>
+                      {ins.summary}
+                    </div>
+                  )}
+                  {[
+                    {key:"patterns",    icon:"🔄", title:"Patterns",               color:C.blue,   bg:C.blueBg},
+                    {key:"bottlenecks", icon:"⚠️",  title:"Bottlenecks",            color:C.amber,  bg:C.amberBg},
+                    {key:"automation",  icon:"⚡",  title:"Automation Opportunities",color:C.teal,   bg:C.tealBg},
+                    {key:"suggestions", icon:"💡",  title:"Smart Suggestions",      color:C.green,  bg:C.greenBg},
+                  ].map(({key,icon,title,color,bg})=>{
+                    const items=ins[key];
+                    if (!items||!items.length) return null;
+                    return (
+                      <div key={key} style={{background:bg,borderRadius:9,padding:"11px 14px",border:`1px solid ${color}22`}}>
+                        <div style={{fontSize:12,fontWeight:700,color,marginBottom:8}}>{icon} {title}</div>
+                        {items.map((item,i)=>(
+                          <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:i<items.length-1?6:0}}>
+                            <span style={{color,flexShrink:0,marginTop:1,fontSize:11}}>•</span>
+                            <span style={{fontSize:12,color:C.ink,lineHeight:1.5}}>{item}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2051,6 +2265,7 @@ function AIInsightsView({ data, fircUsed }) {
 
   async function runAnalysis() {
     if (data.fircs.length===0 && data.shippingBills.length===0) { setError("No data yet — upload FIRCs and SBs first."); return; }
+    learner.track("ai:insights:run");
     setLoading(true); setError(null);
 
     // Build a compact but rich data summary for the AI
