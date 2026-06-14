@@ -1941,9 +1941,28 @@ function OrdersView({ orders, listings = [] }) {
         return sess.access_token ? { "X-Etsy-Token": sess.access_token } : {};
       } catch { return {}; }
     })();
-    fetch(`/api/etsy?action=orders&limit=100&enrich=true&_=${Date.now()}`, { headers: authHeaders, cache: "no-store" })
+    // Incremental backfill: a full pull of all paid receipts (~37s and growing) was timing out
+    // intermittently and silently dropping new orders. Default to only re-pulling receipts created
+    // since our newest Etsy order (minus a buffer so recent shipping/status changes stay fresh) —
+    // fast (~3s) and reliable. A full resync runs at most once a day to reconcile older orders.
+    const FULL_MS = 24 * 60 * 60 * 1000, BUFFER_S = 3 * 24 * 60 * 60;
+    let lastFull = 0;
+    try { lastFull = +localStorage.getItem("ng-orders-etsy-fullbackfill-ts") || 0; } catch {}
+    const hasBaseline = lastFull > 0;
+    const newestMs = (orders || [])
+      .filter(o => o.platform === "etsy")
+      .reduce((m, o) => Math.max(m, Date.parse(o.created_at || o.date) || 0), 0);
+    const doFull = newestMs <= 0 || (hasBaseline && (Date.now() - lastFull) >= FULL_MS);
+    let url = `/api/etsy?action=orders&limit=100&enrich=true&_=${Date.now()}`;
+    if (!doFull) url += `&min_created=${Math.max(0, Math.floor(newestMs / 1000) - BUFFER_S)}`;
+    fetch(url, { headers: authHeaders, cache: "no-store" })
       .then(r => r.ok ? r.json() : null)
-      .then(d => mergeEtsyBackfill(d?.results || []))
+      .then(d => {
+        if (!d) return;
+        // Record the full-resync clock on a real full pull, or to bootstrap it on first run.
+        if (doFull || !hasBaseline) { try { localStorage.setItem("ng-orders-etsy-fullbackfill-ts", String(Date.now())); } catch {} }
+        return mergeEtsyBackfill(d?.results || []);
+      })
       .catch(() => {})
       .finally(() => setEtsyBackfilling(false));
   }, [orders, listings]);
