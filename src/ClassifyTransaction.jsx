@@ -60,14 +60,29 @@ export default function ClassifyTransactionModal({
   const [convOtherAcct, setConvOtherAcct] = useState(txn.classifiedRef?.convOtherAccountId || "");
   const [convRateInput, setConvRateInput] = useState(txn.classifiedRef?.rate ? String(txn.classifiedRef.rate) : "");
   const rawCat = txn.classifiedRef?.cat || txn.category || "";
-  const [expCat, setExpCat] = useState(() => {
-    const n = norm(rawCat || "Other");
-    if (expenseCats.includes(n)) return n;
-    return expenseCats.includes("Other") ? "Other" : (expenseCats[0] || "");
-  });
-  // Free-text sub-category typed under "Other" (e.g. "Milk"). Saved as the real
-  // category but kept out of the main picker; remembered for next time.
-  const [otherCat, setOtherCat] = useState(() => (rawCat && !expenseCats.includes(rawCat)) ? rawCat : "");
+  // Recommend a category. If already classified, respect the saved category. Otherwise guess from
+  // the best hint — an explicit category, then the details/notes (e.g. "FOOD") and the payee. When
+  // nothing maps to a main category, surface a tidy sub-category under "Other" (e.g. Specify "Food")
+  // so the user gets a real suggestion instead of a bare "Other".
+  const guessedCat = (() => {
+    const titleCase = s => { const t = String(s || "").trim().replace(/\s+/g, " "); return t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : ""; };
+    const explicit = txn.classifiedRef?.cat;
+    if (explicit) {
+      const n = norm(explicit);
+      return expenseCats.includes(n) ? { cat: n, specify: "" } : { cat: "Other", specify: explicit };
+    }
+    for (const c of [txn.category, txn.notes, txn.payee].map(x => String(x || "").trim()).filter(Boolean)) {
+      const n = norm(c);
+      if (expenseCats.includes(n) && n !== "Other") return { cat: n, specify: "" };
+    }
+    if (txn.category && !expenseCats.includes(norm(txn.category))) return { cat: "Other", specify: txn.category };
+    const hint = String(txn.notes || "").trim();
+    return { cat: expenseCats.includes("Other") ? "Other" : (expenseCats[0] || ""), specify: hint.length <= 24 ? titleCase(hint) : "" };
+  })();
+  const [expCat, setExpCat] = useState(guessedCat.cat);
+  // Free-text sub-category under "Other" (e.g. "Milk"/"Food"). Saved as the real category but kept
+  // out of the main picker; remembered for next time.
+  const [otherCat, setOtherCat] = useState(guessedCat.specify);
   const [catOpen, setCatOpen] = useState(false);
   // Prefill the party from the (cleaned, editable) payee shown in the ledger. A stale
   // classifiedRef.party often holds the raw bank narration from an earlier classify, so
