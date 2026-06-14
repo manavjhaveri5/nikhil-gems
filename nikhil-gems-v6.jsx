@@ -1441,6 +1441,13 @@ productType one of: ${PRODUCT_TYPES.join(",")}. shape one of: ${SHAPES.join(",")
 // ══════════════════════════════════════════════════════════════════
 function VendorsApp({onHome,startVendor}){
   const t=useT();
+  // Company-scoped: Nikhil Gems and Atyahara keep separate vendor lists / bills / ledgers.
+  const [company,setCompany]=useState(()=>localStorage.getItem("ng-vendors-company")||"ng");
+  useEffect(()=>{localStorage.setItem("ng-vendors-company",company);},[company]);
+  const vk=accountingCompanyKeys(company);
+  // Shadow the imported global KEYS so the whole module reads/writes the active company's data.
+  // Stock/accStock are Nikhil-Gems-only (no stock module for Atyahara → empty there).
+  const KEYS={vendors:vk.vendors,purchases:vk.purchases,expenses:vk.expenses,stock:company==="ng"?"ng-stock-v5":"",accStock:company==="ng"?"ng-acc-stock-v1":""};
   const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);
   const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
   const [expenses,setExpenses]=useState(()=>readCache(KEYS.expenses)||[]);
@@ -1451,9 +1458,10 @@ function VendorsApp({onHome,startVendor}){
   const [ledgerSelectMode,setLedgerSelectMode]=useState(false);const [selectedLedgerIds,setSelectedLedgerIds]=useState(new Set());const [editingRow,setEditingRow]=useState(null);const [expandedBillId,setExpandedBillId]=useState(null);
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const [vendorStock,setVendorStock]=useState([]);
-  useEffect(()=>{loadK(KEYS.stock).then(s=>setVendorStock(Array.isArray(s)?s:[]));}, []);
+  useEffect(()=>{if(!KEYS.stock){setVendorStock([]);return;}loadK(KEYS.stock).then(s=>setVendorStock(Array.isArray(s)?s:[]));}, [company]);
   useEffect(()=>{
-    Promise.all([loadK(KEYS.vendors),loadK(KEYS.purchases),loadK(KEYS.expenses),loadK("ng-fin-txns-v1"),loadK(KEYS.accStock)])
+    setSelected(null);setForm(null);
+    Promise.all([loadK(KEYS.vendors),loadK(KEYS.purchases),loadK(KEYS.expenses),loadK(vk.transactions),KEYS.accStock?loadK(KEYS.accStock):Promise.resolve([])])
       .then(([v,p,e,ft,ac])=>{
         const vList=v||[];
         setVendors(vList);setPurchases(p||[]);setExpenses(e||[]);setFinTxns(ft||[]);setAccStock(ac||[]);
@@ -1482,7 +1490,7 @@ function VendorsApp({onHome,startVendor}){
           }
         })();
       });
-  },[]);
+  },[company]);
   const blank={id:uid(),name:"",companyName:"",gstin:"",pan:"",location:"",country:"India",contact:"",email:"",notes:"",files:[]};
   const saveVendor=async v=>{const list=[v,...vendors.filter(x=>x.id!==v.id)];setVendors(list);await saveK(KEYS.vendors,list);showToast("Vendor saved");setForm(null);};
   const deleteVendor=async id=>{const list=vendors.filter(x=>x.id!==id);setVendors(list);await saveK(KEYS.vendors,list);setSelected(null);};
@@ -1890,8 +1898,15 @@ function VendorsApp({onHome,startVendor}){
     );
   }
 
+  const companySwitcher=(
+    <div style={{display:"flex",gap:3,background:C.card,borderRadius:7,padding:3,border:`1px solid ${C.border}`}}>
+      {[["ng","Nikhil Gems"],["at","Atyahara"]].map(([id,label])=>(
+        <button key={id} onClick={()=>setCompany(id)} style={{padding:"5px 11px",borderRadius:5,fontSize:12,fontWeight:company===id?800:600,border:"none",cursor:"pointer",background:company===id?(id==="at"?"#6B3FA0":C.gold):"transparent",color:company===id?"#fff":C.inkMid}}>{label}</button>
+      ))}
+    </div>
+  );
   return(
-    <Shell title="Vendors" crumb={form?"Edit/New":null} onHome={onHome} onBack={form?()=>setForm(null):onHome} actions={!form&&<button className="bp" onClick={()=>setForm({...blank})}>+ Add Vendor</button>}>
+    <Shell title="Vendors" crumb={form?"Edit/New":null} onHome={onHome} onBack={form?()=>setForm(null):onHome} actions={<div style={{display:"flex",gap:8,alignItems:"center"}}>{companySwitcher}{!form&&<button className="bp" onClick={()=>setForm({...blank})}>+ Add Vendor</button>}</div>}>
       <Toast msg={toast}/>
       {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
       {loaded&&!form&&(
