@@ -3892,7 +3892,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),...(sideEffects.txnPatch||{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now,
       // Snapshot the fields the classification was based on, so reclassifying only re-runs
       // the AI when the payee/notes/type/attachments have changed since.
-      classifiedSnapshot:{payee:t.payee||"",notes:t.notes||"",type:(sideEffects.txnPatch?.type)||t.type||"debit",att:attSig(mergedAttachments.length?mergedAttachments:txnAttachments(t))}}:t);
+      classifiedSnapshot:{payee:(sideEffects.txnPatch?.payee)||t.payee||"",notes:(sideEffects.txnPatch?.notes)||t.notes||"",type:(sideEffects.txnPatch?.type)||t.type||"debit",att:attSig(mergedAttachments.length?mergedAttachments:txnAttachments(t))}}:t);
     await saveTxns(nextTxns);
     // Learn from every confirmed classification — the dataset future suggestions train on.
     // Flag corrections (user overruled the AI) as high-signal so retrieval up-weights them.

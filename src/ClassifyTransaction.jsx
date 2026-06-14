@@ -231,6 +231,10 @@ export default function ClassifyTransactionModal({
       }
       classifiedRef = { cat, party: expParty, ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
       sideEffects.newExpense = { id: "exp-" + uid(), date: txn.date, cat, party: expParty, amount: txnAmt, currency: cur, notes: expNotes, payFromAccount: txn.accountFrom, createdAt: new Date().toISOString(), ledgerTxnId: txn.id };
+      // The Party / Vendor you typed also becomes the transaction's payee (keeping the
+      // original bank narration as rawPayee so matching still works).
+      const pNew = (expParty || "").trim();
+      if (pNew && pNew !== (txn.payee || "")) sideEffects.txnPatch = { ...(sideEffects.txnPatch || {}), payee: pNew, ...(txn.rawPayee == null ? { rawPayee: txn.payee || "" } : {}) };
     } else if (classType === "vendor_bill" && interCoInvId && interCo) {
       // Inter-company settlement: this payment to the other company pays down THEIR invoice
       // (the one they issued to us). Mark it paid in their books and attach it on the right.
