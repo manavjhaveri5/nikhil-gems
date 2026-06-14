@@ -3876,6 +3876,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     setSelectedId(nextVisible?.id||"");
     showToast?.("Transaction deleted");
   };
+	  // Signature of a txn's attachments + key fields, to detect changes since classifying.
+	  const attSig=atts=>(atts||[]).map(x=>x?.url||x?.name||"").join("|");
+	  const txnAttachments=t=>t?.attachments||(t?.attachmentUrl?[{url:t.attachmentUrl,name:t.attachmentName}]:[]);
 	  const handleStructuredClassify=async({classifiedAs,classifiedRef,sideEffects={},aiSuggestion=null})=>{
 	    if(!selected)return;
     const now=new Date().toISOString();
@@ -3888,8 +3891,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     ];
     const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),...(sideEffects.txnPatch||{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now,
       // Snapshot the fields the classification was based on, so reclassifying only re-runs
-      // the AI when the payee/notes/type have changed since.
-      classifiedSnapshot:{payee:t.payee||"",notes:t.notes||"",type:(sideEffects.txnPatch?.type)||t.type||"debit"}}:t);
+      // the AI when the payee/notes/type/attachments have changed since.
+      classifiedSnapshot:{payee:t.payee||"",notes:t.notes||"",type:(sideEffects.txnPatch?.type)||t.type||"debit",att:attSig(mergedAttachments.length?mergedAttachments:txnAttachments(t))}}:t);
     await saveTxns(nextTxns);
     // Learn from every confirmed classification — the dataset future suggestions train on.
     // Flag corrections (user overruled the AI) as high-signal so retrieval up-weights them.
@@ -4434,7 +4437,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             company={company}
             enableLearner={true}
             interCo={buildInterCo(selected)}
-            reclassifyDirty={(()=>{const s=selected?.classifiedSnapshot;return !!(selected?.classifiedAs&&s&&((selected.payee||"")!==(s.payee||"")||(selected.notes||"")!==(s.notes||"")||(selected.type||"debit")!==(s.type||"debit")));})()}
+            reclassifyDirty={(()=>{const s=selected?.classifiedSnapshot;return !!(selected?.classifiedAs&&s&&((selected.payee||"")!==(s.payee||"")||(selected.notes||"")!==(s.notes||"")||(selected.type||"debit")!==(s.type||"debit")||attSig(txnAttachments(selected))!==(s.att||"")));})()}
             onSave={handleStructuredClassify}
             onClose={()=>setClassifyOpen(false)}
           />
