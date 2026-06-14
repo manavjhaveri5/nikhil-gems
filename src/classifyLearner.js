@@ -27,11 +27,14 @@ const tokenize = s =>
     .split(/\s+/)
     .filter(t => t.length >= 3 && !STOP.has(t) && !/^\d+$/.test(t));
 
-// A transaction's identity for matching: meaningful tokens from the cleaned payee
-// (primary) plus the details/notes (fallback), and its money direction.
+// A transaction's identity for matching: meaningful tokens from the ORIGINAL bank
+// narration (rawPayee/rawNotes preserved on first edit, else the current payee/notes),
+// so a new raw line matches what the user once cleaned it into. Numeric refs and bank
+// noise are stripped by tokenize(), so different lines from the same merchant collapse
+// to the same fingerprint.
 const txnTokens = txn => {
-  const fromPayee = tokenize(txn?.payee);
-  const toks = fromPayee.length ? fromPayee : tokenize(txn?.notes);
+  const fromPayee = tokenize(txn?.rawPayee || txn?.payee);
+  const toks = fromPayee.length ? fromPayee : tokenize(txn?.rawNotes || txn?.notes);
   return [...new Set(toks)];
 };
 const direction = txn => (txn?.type === "credit" ? "credit" : "debit");
@@ -60,7 +63,10 @@ export const recordClassification = async (company, txn, decision) => {
   const rec = {
     toks: txnTokens(txn),
     dir: direction(txn),
-    payee: txn.payee || "",
+    rawPayee: txn.rawPayee || txn.payee || "",
+    payee: txn.payee || "",            // the cleaned payee the user settled on
+    notes: txn.notes || "",            // the details/notes the user settled on
+    type: txn.type || "debit",
     classifiedAs: decision.classifiedAs,
     cat: decision.cat || "",
     party: decision.party || txn.payee || "",
@@ -84,6 +90,7 @@ export const matchLearned = (memory, txn) => {
   const dir = direction(txn);
   const groups = {}; // outcomeKey -> { weight, count, rec }
   let totalWeight = 0;
+  const matched = []; // all matching records, to vote on payee/notes/type
   for (const r of memory) {
     if (r.dir !== dir) continue;
     const score = jaccard(toks, r.toks || []);
@@ -91,6 +98,7 @@ export const matchLearned = (memory, txn) => {
     // Recent decisions weigh a touch more; exact matches dominate.
     const w = score * score;
     totalWeight += w;
+    matched.push({ r, w });
     const k = outcomeKey(r);
     if (!groups[k]) groups[k] = { weight: 0, count: 0, rec: r };
     groups[k].weight += w;
@@ -102,14 +110,30 @@ export const matchLearned = (memory, txn) => {
   const top = ranked[0];
   const confidence = totalWeight ? top.weight / totalWeight : 0;
   const r = top.rec;
+  // Vote (by match weight) on the cleaned field values across all matched records.
+  const vote = pick => {
+    const tally = {};
+    for (const { r: rec, w } of matched) {
+      const v = (pick(rec) || "").trim();
+      if (!v) continue;
+      tally[v] = (tally[v] || 0) + w;
+    }
+    return Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+  };
+  const learnedPayee = vote(x => x.payee);
+  const learnedNotes = vote(x => x.notes);
+  const learnedType = vote(x => x.type) || dir;
   return {
     classifiedAs: r.classifiedAs,
     cat: r.cat || "",
-    party: r.party || txn.payee || "",
+    party: r.party || learnedPayee || txn.payee || "",
+    payee: learnedPayee,
+    notes: learnedNotes,
+    type: learnedType,
     vendorId: r.vendorId || "",
     cardAccountId: r.cardAccountId || "",
     count: top.count,
-    total: Object.values(groups).reduce((s, g) => s + g.count, 0),
+    total: matched.length,
     confidence,
     source: "learned",
   };
@@ -167,7 +191,7 @@ Classify this transaction:
 - Amount: ${sym} ${(+txn.amount || 0).toLocaleString("en-IN")}
 
 Reply with ONLY a JSON object, no prose:
-{"classifiedAs":"expense|vendor_bill|vendor_po|cc_payment|customer_receipt|conversion","cat":"<category if expense, else empty>","party":"<merchant/vendor name>","why":"<short reason>"}`;
+{"classifiedAs":"expense|vendor_bill|vendor_po|cc_payment|customer_receipt|conversion","cat":"<category if expense, else empty>","payee":"<clean human-readable merchant/party name, e.g. 'Jio', 'Facebook'>","notes":"<short description of what this payment is for>","party":"<same as payee>","why":"<short reason>"}`;
 
     const res = await fetch("/api/claude", {
       method: "POST",
@@ -185,7 +209,9 @@ Reply with ONLY a JSON object, no prose:
     return {
       classifiedAs: parsed.classifiedAs,
       cat: parsed.cat || "",
-      party: parsed.party || txn.payee || "",
+      payee: parsed.payee || parsed.party || "",
+      notes: parsed.notes || "",
+      party: parsed.party || parsed.payee || txn.payee || "",
       vendorId: "",
       cardAccountId: "",
       why: parsed.why || "",

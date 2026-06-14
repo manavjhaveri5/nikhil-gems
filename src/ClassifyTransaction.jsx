@@ -98,7 +98,7 @@ export default function ClassifyTransactionModal({
   // classifiedRef.party often holds the raw bank narration from an earlier classify, so
   // only fall back to it when there's no payee.
   const [expParty, setExpParty] = useState(txn.payee || L?.party || txn.classifiedRef?.party || "");
-  const [expNotes, setExpNotes] = useState(txn.notes || "");
+  const [expNotes, setExpNotes] = useState((L && L.notes) || txn.notes || "");
   const cardAccounts = accounts.filter(a => a.type === "credit_card" && a.active !== false);
   const cardSpendAccount = cardAccounts.find(a => a.id === txn.accountFrom);
   const guessCard = () => {
@@ -117,7 +117,8 @@ export default function ClassifyTransactionModal({
       if (expenseCats.includes(n)) { setExpCat(n); setOtherCat(""); }
       else { setExpCat(expenseCats.includes("Other") ? "Other" : (expenseCats[0] || "")); setOtherCat(s.cat); }
     }
-    if (s.party) setExpParty(s.party);
+    if (s.party || s.payee) setExpParty(s.party || s.payee);
+    if (s.notes) setExpNotes(s.notes);
     if (s.vendorId) setVendorId(s.vendorId);
     if (s.cardAccountId) setCcAccountId(s.cardAccountId);
   };

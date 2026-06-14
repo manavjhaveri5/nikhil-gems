@@ -3905,8 +3905,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     const clean=await saveCustomCategory(customCat);
     if(clean){await classify(clean);setCustomCat("");}
   };
-  const updatePayee=async v=>selected&&patchTxn(selected.id,{payee:v});
-  const updateNotes=async v=>selected&&patchTxn(selected.id,{notes:v});
+  // Preserve the original bank narration the first time the user cleans it up, so the
+  // learner can match future raw lines against what this one was turned into.
+  const updatePayee=async v=>selected&&patchTxn(selected.id,{payee:v,...(selected.rawPayee==null?{rawPayee:selected.payee||""}:{})});
+  const updateNotes=async v=>selected&&patchTxn(selected.id,{notes:v,...(selected.rawNotes==null?{rawNotes:selected.notes||""}:{})});
   // Flip an existing entry between Debit (money out) and Credit (money in),
   // moving the account to the correct side and clearing any now-wrong classification.
   const flipTxnType=async newType=>{
@@ -4106,6 +4108,19 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             const attachments=(selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName||"Attachment"}]:[]));
             const attText=attTextByTxn[selected.id];
             const readingAtt=attText===""&&attachments.some(a=>/pdf/i.test(a?.type||"")||/\.pdf($|\?)/i.test(a?.name||a?.url||""));
+            // Learner: for an unclassified payment, suggest the cleaned payee/notes the user
+            // settled on for similar bank lines before. One patchTxn keeps it race-free.
+            const smart=isUnclassified(selected)?matchLearned(learnMem,selected):null;
+            const smartFills=smart?[
+              smart.payee&&smart.payee!==(selected.payee||"")?["Payee",smart.payee,"payee"]:null,
+              smart.notes&&smart.notes!==(selected.notes||"")?["Notes",smart.notes,"notes"]:null,
+            ].filter(Boolean):[];
+            const applySmart=()=>{
+              const patch={};
+              if(smart.payee&&smart.payee!==(selected.payee||"")){patch.payee=smart.payee;if(selected.rawPayee==null)patch.rawPayee=selected.payee||"";}
+              if(smart.notes&&smart.notes!==(selected.notes||"")){patch.notes=smart.notes;if(selected.rawNotes==null)patch.rawNotes=selected.notes||"";}
+              if(Object.keys(patch).length)patchTxn(selected.id,patch);
+            };
             return(
               <div style={{display:"grid",gap:12}}>
                 <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start"}}>
@@ -4116,6 +4131,16 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                   </div>
                   <div style={{fontSize:18,fontWeight:900,color:selected.type==="credit"?C.green:C.red,whiteSpace:"nowrap"}}>{money(selected)}</div>
                 </div>
+                {smartFills.length>0&&(
+                  <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 12px",background:C.greenBg,border:`1px solid ${C.green}55`,borderRadius:9,fontSize:12,color:C.ink}}>
+                    <span style={{fontSize:14,lineHeight:1.3}}>📚</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,marginBottom:2}}>Suggested from your history (seen {smart.count}×)</div>
+                      {smartFills.map(([label,val])=><div key={label} style={{color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label} → <strong style={{color:C.ink}}>{val}</strong></div>)}
+                    </div>
+                    <button onClick={applySmart} style={{flexShrink:0,background:C.green,color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:750,cursor:"pointer"}}>Apply</button>
+                  </div>
+                )}
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:8}}>
                   <Field label="Date"><input type="date" value={selected.date||""} onChange={e=>patchTxn(selected.id,{date:e.target.value})} style={inputS}/></Field>
                   <Field label="Account">
