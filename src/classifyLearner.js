@@ -47,6 +47,9 @@ const txnTokens = txn => {
 };
 const direction = txn => (txn?.type === "credit" ? "credit" : "debit");
 const embText = r => `${r.rawPayee || r.payee || ""} ${r.payee || ""} ${r.notes || ""}`.trim();
+// Raw bank narration carries per-transaction refs (UPI ids, etc.) that must NOT be copied
+// across transactions. Only clean, human-written notes are safe to learn/suggest.
+const isRawNote = s => { const v = String(s || ""); return !v.trim() || /imported from bank|upi\/|\/dr\/|\/cr\/|neft|imps|rtgs|\d{8,}/i.test(v); };
 
 const jaccard = (a, b) => {
   if (!a.length || !b.length) return 0;
@@ -197,7 +200,7 @@ export const matchLearned = (memory, txn) => {
     return Object.entries(tally).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
   };
   const learnedPayee = vote(x => x.payee);
-  const learnedNotes = vote(x => x.notes);
+  const learnedNotes = vote(x => isRawNote(x.notes) ? "" : x.notes); // never propagate raw narration / unique refs
   const learnedType = vote(x => x.type) || dir;
   const ranked = Object.values(groups).sort((a, b) => b.weight - a.weight);
   const top = ranked[0];

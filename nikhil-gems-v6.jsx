@@ -3992,7 +3992,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(!m||!(m.confidence>=0.6&&m.count>=2))return;
     const patch={};
     if(m.payee&&m.payee!==(t.payee||"")){patch.payee=m.payee;if(t.rawPayee==null)patch.rawPayee=t.payee||"";}
-    if(m.notes&&m.notes!==(t.notes||"")){patch.notes=m.notes;if(t.rawNotes==null)patch.rawNotes=t.notes||"";}
+    // Only fill notes when this txn has none — never clobber its own narration / unique refs.
+    if(m.notes&&!(t.notes||"").trim()){patch.notes=m.notes;if(t.rawNotes==null)patch.rawNotes=t.notes||"";}
     if(!Object.keys(patch).length)return;
     autoFillRef.current.add(t.id);
     setAutoFilled(s=>({...s,[t.id]:{payee:t.payee||"",notes:t.notes||""}}));
@@ -4214,12 +4215,12 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             const smart=isUnclassified(selected)?matchLearned(learnMem,selected):null;
             const smartFills=smart?[
               smart.payee&&smart.payee!==(selected.payee||"")?["Payee",smart.payee,"payee"]:null,
-              smart.notes&&smart.notes!==(selected.notes||"")?["Notes",smart.notes,"notes"]:null,
+              smart.notes&&!(selected.notes||"").trim()?["Notes",smart.notes,"notes"]:null,
             ].filter(Boolean):[];
             const applySmart=()=>{
               const patch={};
               if(smart.payee&&smart.payee!==(selected.payee||"")){patch.payee=smart.payee;if(selected.rawPayee==null)patch.rawPayee=selected.payee||"";}
-              if(smart.notes&&smart.notes!==(selected.notes||"")){patch.notes=smart.notes;if(selected.rawNotes==null)patch.rawNotes=selected.notes||"";}
+              if(smart.notes&&!(selected.notes||"").trim()){patch.notes=smart.notes;if(selected.rawNotes==null)patch.rawNotes=selected.notes||"";}
               if(Object.keys(patch).length)patchTxn(selected.id,patch);
             };
             return(
