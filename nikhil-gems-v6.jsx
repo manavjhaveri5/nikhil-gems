@@ -15644,6 +15644,19 @@ export default function Root({onSignOut}){
   };
   if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
   const FAB_ITEMS=[{icon:"⬆",label:"Upload Bill",action:()=>go("purchases","upload")},{icon:"🧾",label:"New Expense",action:()=>go("expenses")},{icon:"📋",label:"New Invoice",action:()=>go("invoices")},...(isAdmin?[{icon:"💰",label:"Finance",action:()=>go("finance")}]:[])];
+  // Auto-hide the floating action button while scrolling down so it never sits on top of list content; reveal it on scroll-up.
+  const [fabHidden,setFabHidden]=useState(false);
+  useEffect(()=>{
+    let last=window.scrollY;
+    const onScroll=()=>{
+      const y=window.scrollY;
+      if(y>last+6&&y>140)setFabHidden(true);
+      else if(y<last-6)setFabHidden(false);
+      last=y;
+    };
+    window.addEventListener("scroll",onScroll,{passive:true});
+    return()=>window.removeEventListener("scroll",onScroll);
+  },[]);
   const userLang=activeLang;
   const canSwitchLang=!!(userProfile&&userProfile!==false&&userProfile.language==="mr");
   const toggleLang=async()=>{
@@ -15718,7 +15731,7 @@ export default function Root({onSignOut}){
           })}
         </div>
       )}
-      {mod!=="shows"&&<div style={{position:"fixed",bottom:mob?"calc(64px + env(safe-area-inset-bottom))":76,right:mob?16:24,zIndex:800,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10}}>
+      {mod!=="shows"&&<div style={{position:"fixed",bottom:mob?"calc(64px + env(safe-area-inset-bottom))":76,right:mob?16:24,zIndex:800,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10,transform:(fabHidden&&!fab)?"translateY(140px)":"translateY(0)",opacity:(fabHidden&&!fab)?0:1,pointerEvents:(fabHidden&&!fab)?"none":"auto",transition:"transform .26s ease, opacity .26s ease"}}>
         {fab&&FAB_ITEMS.map(o=>(
           <button key={o.label} onClick={()=>{o.action();}} style={{display:"flex",alignItems:"center",gap:8,background:C.surface,border:`1.5px solid ${C.borderHi}`,borderRadius:24,padding:"9px 18px",fontSize:mob?14:13,fontWeight:600,color:C.ink,boxShadow:"0 4px 16px rgba(0,0,0,.14)",cursor:"pointer",whiteSpace:"nowrap",transition:"transform .1s"}}>
             <span style={{fontSize:16}}>{o.icon}</span>{o.label}
