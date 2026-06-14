@@ -2127,7 +2127,7 @@ function OrdersView({ orders, listings = [] }) {
                       </span>
                     </div>
                     <div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {[order.buyer_name, order.buyer_email || "No email", order.listing_sku || order.etsy_transaction_id || order.platform_order_id]
+                      {[order.buyer_name, order.buyer_email, order.listing_sku || order.etsy_transaction_id || order.platform_order_id]
                         .filter(Boolean).join(" · ")}
                     </div>
                   </div>
@@ -2161,16 +2161,17 @@ function OrdersView({ orders, listings = [] }) {
                       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
                           <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint }}>Buyer Contact</div>
-                          <button onClick={() => copyText(`email-${order.id}`, order.buyer_email || "")}
-                            disabled={!order.buyer_email}
-                            style={{ background: copied === `email-${order.id}` ? C.green : C.card, border: `1px solid ${copied === `email-${order.id}` ? C.green : C.border}`, borderRadius: 7, padding: "5px 9px", fontSize: 11, fontWeight: 750, color: copied === `email-${order.id}` ? "#fff" : C.ink, cursor: order.buyer_email ? "pointer" : "not-allowed" }}>
-                            {copied === `email-${order.id}` ? "Copied" : "Copy Email"}
-                          </button>
+                          {order.buyer_email && (
+                            <button onClick={() => copyText(`email-${order.id}`, order.buyer_email || "")}
+                              style={{ background: copied === `email-${order.id}` ? C.green : C.card, border: `1px solid ${copied === `email-${order.id}` ? C.green : C.border}`, borderRadius: 7, padding: "5px 9px", fontSize: 11, fontWeight: 750, color: copied === `email-${order.id}` ? "#fff" : C.ink, cursor: "pointer" }}>
+                              {copied === `email-${order.id}` ? "Copied" : "Copy Email"}
+                            </button>
+                          )}
                         </div>
                         <div style={{ fontSize: 13, color: C.ink, lineHeight: 1.55 }}>
                           <div style={{ fontWeight: 750 }}>{order.buyer_name || "No buyer name"}</div>
-                          <div>{order.buyer_email || "No email stored"}</div>
-                          <div>{order.ship_phone || ""}</div>
+                          {order.buyer_email && <div>{order.buyer_email}</div>}
+                          {order.ship_phone && <div>{order.ship_phone}</div>}
                         </div>
                       </div>
                     </div>

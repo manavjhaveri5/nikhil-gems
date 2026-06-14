@@ -143,24 +143,31 @@ export default async function handler(req, res) {
           .map(String)
       ))];
       const imageByListingId = {};
-      const fetchImage = async listingId => {
+      // Fetch listing images via the BATCH endpoint (up to 100 listings, incl. sold_out, per
+      // request). The old one-request-per-listing approach blew past Etsy's 10 req/sec rate limit,
+      // so most image calls 429'd and orders showed no thumbnail. One batch call per 100 listings
+      // stays well under the limit and is far faster.
+      const fetchImageBatch = async ids => {
         try {
-          const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: authHeaders });
+          const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${ids.join(",")}&includes=Images`, { headers: authHeaders });
           if (!r.ok) return;
           const d = await r.json();
-          const img = (d.results || []).sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
-          if (img) {
-            imageByListingId[listingId] = {
-              url_570xN: img.url_570xN,
-              url_fullxfull: img.url_fullxfull,
-              url_170x135: img.url_170x135,
-              url_75x75: img.url_75x75,
-            };
-          }
+          (d.results || []).forEach(listing => {
+            const imgs = listing?.images || listing?.Images || [];
+            const img = [...imgs].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
+            if (img) {
+              imageByListingId[String(listing.listing_id)] = {
+                url_570xN: img.url_570xN,
+                url_fullxfull: img.url_fullxfull,
+                url_170x135: img.url_170x135,
+                url_75x75: img.url_75x75,
+              };
+            }
+          });
         } catch {}
       };
-      for (let i = 0; i < listingIds.length; i += 8) {
-        await Promise.all(listingIds.slice(i, i + 8).map(fetchImage));
+      for (let i = 0; i < listingIds.length; i += 100) {
+        await fetchImageBatch(listingIds.slice(i, i + 100));
       }
       results.forEach(receipt => {
         (receipt.transactions || []).forEach(txn => {
