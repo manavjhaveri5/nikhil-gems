@@ -13,6 +13,7 @@ import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineT
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
+import { loadLearnMemory, recordClassification, matchLearned } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
@@ -3569,6 +3570,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [search,setSearch]=useState("");
   const [customCat,setCustomCat]=useState("");
   const [customCats,setCustomCats]=useState([]);
+  const [learnMem,setLearnMem]=useState([]); // self-learning classification dataset (per company)
   const blankManual=()=>({date:today(),type:"debit",accountId:"",accountToId:"",amount:"",receivedAmount:"",rate:"",currency:"INR",payee:"",notes:""});
   const [manualOpen,setManualOpen]=useState(false);
   const [manual,setManual]=useState(blankManual);
@@ -3598,6 +3600,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     });
   },[company]);
   useEffect(()=>{loadK(ACCOUNTING_CUSTOM_CATS_KEY).then(v=>setCustomCats(Array.isArray(v)?v:[]));},[]);
+  useEffect(()=>{loadLearnMemory(company).then(setLearnMem).catch(()=>setLearnMem([]));},[company]);
   useEffect(()=>{loadK(ACCOUNTING_ATTACH_REQ_KEY).then(v=>{if(Array.isArray(v))setAttachReqCats(v);});},[]);
   const saveAttachReqCats=async next=>{setAttachReqCats(next);await saveK(ACCOUNTING_ATTACH_REQ_KEY,next);};
   // Share the same live/configured FX rates the Finance module uses, so the
@@ -3848,6 +3851,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     ];
     const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),...(sideEffects.txnPatch||{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now}:t);
     await saveTxns(nextTxns);
+    // Learn from every confirmed classification — this is the dataset future
+    // suggestions (local match + AI) are trained on.
+    recordClassification(company,selected,{classifiedAs,cat:classifiedAs==="expense"?normalizedRef.cat:"",party:normalizedRef.party||normalizedRef.vendorName||selected.payee||"",vendorId:normalizedRef.vendorId||"",cardAccountId:normalizedRef.cardAccountId||""}).then(m=>{if(m)setLearnMem(m);}).catch(()=>{});
     if(sideEffects.newExpense){
       const newExpense=classifiedAs==="expense"?{...sideEffects.newExpense,cat:normalizedRef.cat}:sideEffects.newExpense;
       const next=[newExpense,...expenses.filter(e=>e.ledgerTxnId!==selected.id&&e.id!==newExpense.id)];
@@ -4285,6 +4291,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             onAddCustomCat={saveCustomCategory}
             normalizeCat={normalizeAccountingExpenseCat}
             suggestedType={isUnclassified(selected)?suggestClassification(selected,attTextByTxn[selected.id])?.classifiedAs:undefined}
+            learned={isUnclassified(selected)?matchLearned(learnMem,selected):null}
+            learnMemory={learnMem}
+            company={company}
+            enableLearner={true}
             onSave={handleStructuredClassify}
             onClose={()=>setClassifyOpen(false)}
           />

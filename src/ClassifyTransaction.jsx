@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { C, FI, Field } from "./ui.jsx";
 import { mob, uid, fmtDate } from "./utils.js";
+import { aiSuggest } from "./classifyLearner.js";
 
 // Shared "Classify Transaction" modal used by BOTH finance UIs:
 //   • Finance module        (src/FinanceApp.jsx, admin)
@@ -19,8 +20,11 @@ const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "
 
 export default function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
-  rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType, onSave, onClose,
+  rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
+  learned = null, learnMemory = [], company = "ng", enableLearner = false, onSave, onClose,
 }) {
+  // The learner's local match (if any) pre-fills the form for unclassified txns.
+  const L = (!txn.classifiedAs && learned) ? learned : null;
   const R = { ...DEFAULT_RATES, ...(rates || {}) };
   const toInr = (amt, currency) => (+amt || 0) * (R[currency || "INR"] || 1);
   const fromInr = (amt, currency) => (+amt || 0) / (R[currency || "INR"] || 1);
@@ -39,6 +43,7 @@ export default function ClassifyTransactionModal({
     : ["customer_receipt", "cc_payment", "conversion", "expense"];
   const [classType, setClassType] = useState(() => {
     if (txn.classifiedAs) return txn.classifiedAs;
+    if (L && allowedTypes.includes(L.classifiedAs)) return L.classifiedAs; // learned from your history
     if (suggestedType && allowedTypes.includes(suggestedType)) return suggestedType; // pre-point to the (implicit) suggestion
     if (!isDebit) return "customer_receipt";
     const c = (txn.category || "").toLowerCase();
@@ -51,7 +56,7 @@ export default function ClassifyTransactionModal({
     const p = (txn.payee || "").toLowerCase();
     return vendors.find(v => { const n = (v.name || "").toLowerCase(); return n && p && (n.includes(p) || p.includes(n) || p.split(/\s+/).some(w => w.length > 3 && n.includes(w))); })?.id || "";
   };
-  const [vendorId, setVendorId] = useState(txn.classifiedRef?.vendorId || guessVendor());
+  const [vendorId, setVendorId] = useState(txn.classifiedRef?.vendorId || L?.vendorId || guessVendor());
   const [selectedBillIds, setSelectedBillIds] = useState(() => new Set(txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : [])));
   const [selectedPoId, setSelectedPoId] = useState(txn.classifiedRef?.poId || "");
   const [selectedInvIds, setSelectedInvIds] = useState(() => new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : [])));
@@ -66,6 +71,11 @@ export default function ClassifyTransactionModal({
   // so the user gets a real suggestion instead of a bare "Other".
   const guessedCat = (() => {
     const titleCase = s => { const t = String(s || "").trim().replace(/\s+/g, " "); return t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : ""; };
+    // Learned category from your history wins for unclassified expenses.
+    if (L && L.classifiedAs === "expense" && L.cat) {
+      const n = norm(L.cat);
+      return expenseCats.includes(n) ? { cat: n, specify: "" } : { cat: "Other", specify: L.cat };
+    }
     const explicit = txn.classifiedRef?.cat;
     if (explicit) {
       const n = norm(explicit);
@@ -87,7 +97,7 @@ export default function ClassifyTransactionModal({
   // Prefill the party from the (cleaned, editable) payee shown in the ledger. A stale
   // classifiedRef.party often holds the raw bank narration from an earlier classify, so
   // only fall back to it when there's no payee.
-  const [expParty, setExpParty] = useState(txn.payee || txn.classifiedRef?.party || "");
+  const [expParty, setExpParty] = useState(txn.payee || L?.party || txn.classifiedRef?.party || "");
   const [expNotes, setExpNotes] = useState(txn.notes || "");
   const cardAccounts = accounts.filter(a => a.type === "credit_card" && a.active !== false);
   const cardSpendAccount = cardAccounts.find(a => a.id === txn.accountFrom);
@@ -95,8 +105,39 @@ export default function ClassifyTransactionModal({
     const p = `${txn.payee || ""} ${txn.notes || ""}`.toLowerCase();
     return cardAccounts.find(a => { const n = (a.name || "").toLowerCase(); return n && p && (p.includes(n) || n.includes(p) || n.split(/\s+/).filter(w => w.length > 3).some(w => p.includes(w))); })?.id || cardAccounts[0]?.id || "";
   };
-  const [ccAccountId, setCcAccountId] = useState(txn.classifiedRef?.cardAccountId || guessCard());
+  const [ccAccountId, setCcAccountId] = useState(txn.classifiedRef?.cardAccountId || (L?.classifiedAs === "cc_payment" ? L.cardAccountId : "") || guessCard());
   const vendor = vendors.find(v => v.id === vendorId);
+
+  // ── Learner: pre-fill from local history (L, done above) or, for unseen txns, ask AI ──
+  const applySuggestion = s => {
+    if (!s) return;
+    if (s.classifiedAs && allowedTypes.includes(s.classifiedAs)) setClassType(s.classifiedAs);
+    if (s.classifiedAs === "expense" && s.cat) {
+      const n = norm(s.cat);
+      if (expenseCats.includes(n)) { setExpCat(n); setOtherCat(""); }
+      else { setExpCat(expenseCats.includes("Other") ? "Other" : (expenseCats[0] || "")); setOtherCat(s.cat); }
+    }
+    if (s.party) setExpParty(s.party);
+    if (s.vendorId) setVendorId(s.vendorId);
+    if (s.cardAccountId) setCcAccountId(s.cardAccountId);
+  };
+  const [aiSug, setAiSug] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiApplied, setAiApplied] = useState(false);
+  useEffect(() => {
+    if (!enableLearner || txn.classifiedAs || L) return; // off, already classified, or a confident local match exists
+    let alive = true;
+    setAiLoading(true);
+    aiSuggest({ company, txn, memory: learnMemory, expenseCats })
+      .then(s => { if (alive && s) setAiSug(s); })
+      .finally(() => { if (alive) setAiLoading(false); });
+    return () => { alive = false; };
+  }, []); // run once when the modal opens
+  const labelOf = s => {
+    if (!s) return "";
+    if (s.classifiedAs === "expense") return `Expense · ${(s.classifiedAs === "expense" && s.cat) ? s.cat : "Other"}`;
+    return { vendor_bill: "Vendor Bill Payment", vendor_po: "Advance against PO", cc_payment: "Credit Card Payment", customer_receipt: "Sales Receipt", conversion: "Currency Conversion" }[s.classifiedAs] || s.classifiedAs;
+  };
   const vendorNameOf = p => p.supplier || p.vendorName || p.vendor || "";
   const matchesVendor = p => {
     if (!vendorId) return true;
@@ -271,6 +312,28 @@ export default function ClassifyTransactionModal({
           <div><div style={{ fontWeight: 800, fontSize: 15, color: C.ink }}>Classify Transaction</div><div style={{ fontSize: 12, color: C.inkFaint, marginTop: 3 }}>{sym}{txnAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })} · {txn.payee || "No payee"} · {fmtDate(txn.date)}</div></div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 18, lineHeight: 1, padding: "0 4px" }}>×</button>
         </div>
+        {/* Learner suggestion banner */}
+        {L && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", marginBottom: 14, background: C.greenBg, border: `1px solid ${C.green}55`, borderRadius: 9, fontSize: 12, color: C.ink }}>
+            <span style={{ fontSize: 14 }}>📚</span>
+            <span>Pre-filled from your history — classified this way <strong>{L.count}×</strong> before (<strong>{labelOf(L)}</strong>). Review &amp; Save.</span>
+          </div>
+        )}
+        {!L && aiLoading && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", marginBottom: 14, background: C.card, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: 12, color: C.inkMid }}>
+            <span style={{ fontSize: 14 }}>✨</span><span>Looking at your past classifications…</span>
+          </div>
+        )}
+        {!L && !aiLoading && aiSug && (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", marginBottom: 14, background: C.tealBg, border: `1px solid ${C.teal}66`, borderRadius: 9, fontSize: 12, color: C.ink }}>
+            <span style={{ fontSize: 14 }}>✨</span>
+            <span style={{ flex: 1 }}>AI suggests <strong>{labelOf(aiSug)}</strong>{aiSug.party ? <> · {aiSug.party}</> : null}{aiSug.why ? <div style={{ color: C.inkFaint, marginTop: 2 }}>{aiSug.why}</div> : null}</span>
+            <button onClick={() => { applySuggestion(aiSug); setAiApplied(true); }} disabled={aiApplied}
+              style={{ flexShrink: 0, background: aiApplied ? C.card : C.teal, color: aiApplied ? C.inkMid : "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 750, cursor: aiApplied ? "default" : "pointer" }}>
+              {aiApplied ? "Applied" : "Apply"}
+            </button>
+          </div>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 20 }}>{types.map(t => optionBtn(...t))}</div>
         {classType === "expense" && <div style={{ display: "grid", gap: 12 }}>
           {cardSpendAccount && <div style={{ padding: "9px 11px", background: C.tealBg, border: `1px solid ${C.teal}55`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>Paid using <strong>{cardSpendAccount.name}</strong>. This expense will increase that card's amount due.</div>}
