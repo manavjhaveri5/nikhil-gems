@@ -21,7 +21,7 @@ const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "
 export default function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
   rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
-  learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, onSave, onClose,
+  learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, interCo = null, onSave, onClose,
 }) {
   // The learner's local match (if any) pre-fills the form for unclassified txns.
   const L = (!txn.classifiedAs && learned) ? learned : null;
@@ -43,6 +43,7 @@ export default function ClassifyTransactionModal({
     : ["customer_receipt", "cc_payment", "conversion", "expense"];
   const [classType, setClassType] = useState(() => {
     if (txn.classifiedAs) return txn.classifiedAs;
+    if (interCo?.active && isDebit) return "vendor_bill"; // paying the other company → settle their invoice
     if (L && allowedTypes.includes(L.classifiedAs)) return L.classifiedAs; // learned from your history
     if (suggestedType && allowedTypes.includes(suggestedType)) return suggestedType; // pre-point to the (implicit) suggestion
     if (!isDebit) return "customer_receipt";
@@ -59,6 +60,15 @@ export default function ClassifyTransactionModal({
   const [vendorId, setVendorId] = useState(txn.classifiedRef?.vendorId || L?.vendorId || guessVendor());
   const [selectedBillIds, setSelectedBillIds] = useState(() => new Set(txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : [])));
   const [selectedPoId, setSelectedPoId] = useState(txn.classifiedRef?.poId || "");
+  // Inter-company: pick the OTHER company's invoice this payment settles. Pre-select the
+  // one whose number appears in the notes/payee (e.g. "Payment against NG-04-2026/27").
+  const interInvs = interCo?.invoices || [];
+  const interInvNo = inv => String(inv.invNo || inv.invNumber || inv.number || "");
+  const guessedInterId = (() => {
+    const hay = `${txn.notes || ""} ${txn.payee || ""}`.toLowerCase().replace(/\s+/g, "");
+    return interInvs.find(inv => { const n = interInvNo(inv).toLowerCase().replace(/\s+/g, ""); return n && hay.includes(n); })?.id || "";
+  })();
+  const [interCoInvId, setInterCoInvId] = useState(txn.classifiedRef?.interCoInvoiceId || guessedInterId);
   const [selectedInvIds, setSelectedInvIds] = useState(() => new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : [])));
   const [linkedInvId, setLinkedInvId] = useState(txn.classifiedRef?.linkedInvoiceId || "");
   const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "bank_charges");
@@ -205,7 +215,7 @@ export default function ClassifyTransactionModal({
 
   // Under "Other", the typed sub-category becomes the real category.
   const effectiveExpenseCat = (expCat === "Other" && otherCat.trim()) ? otherCat.trim() : expCat;
-  const canSave = classType === "expense" ? !!effectiveExpenseCat : classType === "vendor_bill" ? (selectedBillIds.size > 0 || !!vendorId) : classType === "vendor_po" ? !!selectedPoId : classType === "customer_receipt" ? (selectedInvIds.size > 0 || openInvoices.length === 0) : classType === "cc_payment" ? !!ccAccountId : classType === "conversion" ? (!!convOtherAcct && convRateNum > 0) : true;
+  const canSave = classType === "expense" ? !!effectiveExpenseCat : classType === "vendor_bill" ? (selectedBillIds.size > 0 || !!vendorId || !!interCoInvId) : classType === "vendor_po" ? !!selectedPoId : classType === "customer_receipt" ? (selectedInvIds.size > 0 || openInvoices.length === 0) : classType === "cc_payment" ? !!ccAccountId : classType === "conversion" ? (!!convOtherAcct && convRateNum > 0) : true;
   const SI = { ...FI, fontSize: 13, padding: "8px 10px", borderRadius: 7 };
 
   const save = async () => {
@@ -218,6 +228,16 @@ export default function ClassifyTransactionModal({
       }
       classifiedRef = { cat, party: expParty, ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
       sideEffects.newExpense = { id: "exp-" + uid(), date: txn.date, cat, party: expParty, amount: txnAmt, currency: cur, notes: expNotes, payFromAccount: txn.accountFrom, createdAt: new Date().toISOString(), ledgerTxnId: txn.id };
+    } else if (classType === "vendor_bill" && interCoInvId && interCo) {
+      // Inter-company settlement: this payment to the other company pays down THEIR invoice
+      // (the one they issued to us). Mark it paid in their books and attach it on the right.
+      const inv = interInvs.find(i => i.id === interCoInvId);
+      const total = invTotal(inv), already = invPaid(inv), due = Math.max(0, total - already);
+      const applied = Math.min(due || txnAmt, txnAmt);
+      const newPaid = already + applied;
+      const newStatus = total > 0 && newPaid >= total - 0.01 ? "paid" : "partial";
+      classifiedRef = { interCo: true, interCoKey: interCo.otherKey, interCoCompany: interCo.otherName, interCoInvoiceId: inv.id, invNumber: interInvNo(inv), vendorName: interCo.otherName, paymentAmount: txnAmt, paymentCurrency: cur };
+      sideEffects.interCoInvoiceUpdates = { invoicesKey: interCo.invoicesKey, updates: [{ id: inv.id, paidAmount: newPaid, status: newStatus, paidDate: txn.date }] };
     } else if (classType === "vendor_bill") {
       let remaining = txnAmt;
       const billUpdates = [];
@@ -372,6 +392,23 @@ export default function ClassifyTransactionModal({
           <Field label="Notes"><input value={expNotes} onChange={e => setExpNotes(e.target.value)} placeholder="Statement month, card ending, reference..." style={SI} /></Field>
         </div>}
         {(classType === "vendor_bill" || classType === "vendor_po") && <div style={{ display: "grid", gap: 12 }}>
+          {classType === "vendor_bill" && interCo?.active && interInvs.length > 0 && (
+            <div style={{ padding: "10px 12px", background: C.tealBg, border: `1px solid ${C.teal}66`, borderRadius: 9 }}>
+              <div style={{ fontSize: 12, fontWeight: 900, color: C.ink }}>✨ Paying {interCo.otherName}</div>
+              <div style={{ fontSize: 11, color: C.inkMid, margin: "2px 0 8px" }}>Settle a {interCo.otherName} invoice billed to {interCo.selfName}. It will be marked paid in {interCo.otherName} and shown on the right.</div>
+              <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 6 }}>
+                {interInvs.map(inv => {
+                  const sel = interCoInvId === inv.id, due = invDue(inv), likely = guessedInterId === inv.id;
+                  const buyerName = interCo.buyers?.find(b => b.id === inv.buyerId)?.name || inv.buyerName || inv.buyer || interCo.selfName;
+                  return <button key={inv.id} onClick={() => setInterCoInvId(sel ? "" : inv.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", background: sel ? C.card : C.surface, border: `1.5px solid ${sel ? C.teal : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}>
+                    <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${sel ? C.teal : C.border}`, background: sel ? C.teal : "transparent", flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{interInvNo(inv) || "(no number)"}{likely && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 900, color: C.teal }}>✨ LIKELY</span>}</div><div style={{ fontSize: 11, color: C.inkFaint }}>{buyerName} · {fmtDate(inv.date)} · {inv.status || "-"}</div></div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.red }}>₹{due.toLocaleString("en-IN", { minimumFractionDigits: 2 })} due</div></div>
+                  </button>;
+                })}
+              </div>
+            </div>
+          )}
           <Field label="Filter by Vendor (optional)"><select value={vendorId} onChange={e => { setVendorId(e.target.value); setSelectedBillIds(new Set()); setSelectedPoId(""); }} style={SI}><option value="">All vendors</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
           {classType === "vendor_bill" && <div><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, marginBottom: 6 }}>Select bills to pay {vendorId ? `- ${vendor?.name}` : "(all vendors)"} <span style={{ fontWeight: 500 }}>(tap to select multiple)</span></div>
             {vendorBills.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>No open bills found.</div> : <div style={{ maxHeight: 240, overflowY: "auto", display: "grid", gap: 6 }}>

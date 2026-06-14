@@ -3555,6 +3555,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [invoices,setInvoices]=useState([]);
   const [buyers,setBuyers]=useState([]);
   const [expenses,setExpenses]=useState([]);
+  const [otherInvoices,setOtherInvoices]=useState([]); // the OTHER company's invoices (for inter-company bill payments)
+  const [otherBuyers,setOtherBuyers]=useState([]);
   const [rates,setRates]=useState({USD:85,EUR:92,JPY:0.57,GBP:107,AUD:55,INR:1});
   const [attTextByTxn,setAttTextByTxn]=useState({});
   const [attachReqCats,setAttachReqCats]=useState(ACCOUNTING_ATTACH_REQ_DEFAULT);
@@ -3599,6 +3601,13 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       setInvoices(Array.isArray(i)?i:[]);
       setBuyers(Array.isArray(b)?b:[]);
       setExpenses(Array.isArray(e)?e:[]);
+    });
+    // Inter-company: load the OTHER company's invoices + buyers, so a payment to that
+    // company can be settled against the invoice it issued to us.
+    const otherKeys=accountingCompanyKeys(company==="ng"?"at":"ng");
+    Promise.allSettled([loadK(otherKeys.invoices),loadK(otherKeys.buyers)]).then(([i,b])=>{
+      setOtherInvoices(Array.isArray(i.value)?i.value:[]);
+      setOtherBuyers(Array.isArray(b.value)?b.value:[]);
     });
   },[company]);
   useEffect(()=>{loadK(ACCOUNTING_CUSTOM_CATS_KEY).then(v=>setCustomCats(Array.isArray(v)?v:[]));},[]);
@@ -3916,6 +3925,15 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       const next=base.map(inv=>map[inv.id]?{...inv,...map[inv.id]}:inv);
       setInvoices(next);await saveK(keys.invoices,next);
     }
+    // Inter-company: mark the OTHER company's invoice paid in THEIR books.
+    if(sideEffects.interCoInvoiceUpdates?.updates?.length){
+      const {invoicesKey,updates}=sideEffects.interCoInvoiceUpdates;
+      const map=Object.fromEntries(updates.map(u=>[u.id,u]));
+      const fresh=await loadKFresh(invoicesKey);
+      const base=Array.isArray(fresh)?fresh:otherInvoices;
+      const next=base.map(inv=>map[inv.id]?{...inv,...map[inv.id]}:inv);
+      setOtherInvoices(next);await saveK(invoicesKey,next);
+    }
 	    setClassifyOpen(false);
 	    showToast?.("✓ Classified");
 	  };
@@ -3976,6 +3994,26 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     const prev=autoFilled[t.id]; if(!prev)return;
     patchTxn(t.id,{payee:prev.payee,notes:prev.notes});
     setAutoFilled(s=>{const n={...s};delete n[t.id];return n;});
+  };
+  // Inter-company: a payment to the OTHER company settles an invoice THAT company issued
+  // to us. Surface those invoices (unpaid, billed to us) so they can be picked as the bill.
+  const otherBuyerNameOf=inv=>inv.buyerName||inv.buyer||(otherBuyers||[]).find(b=>b.id===inv.buyerId)?.name||"";
+  const buildInterCo=txn=>{
+    if(!txn)return null;
+    const otherKey=company==="ng"?"at":"ng";
+    const otherName=company==="ng"?"Atyahara":"Nikhil Gems";
+    const selfName=company==="ng"?"Nikhil Gems":"Atyahara";
+    const otherToks=company==="ng"?["atyahara"]:["nikhil"];
+    const selfToks=company==="ng"?["nikhil"]:["atyahara"];
+    const payeeL=`${txn.payee||""} ${txn.notes||""}`.toLowerCase();
+    const active=txn.type!=="credit"&&otherToks.some(t=>payeeL.includes(t));
+    const invoices=(otherInvoices||[]).filter(inv=>{
+      const bn=otherBuyerNameOf(inv).toLowerCase();
+      if(!selfToks.some(t=>bn.includes(t)))return false;
+      const st=String(inv.status||"").toLowerCase();
+      return st!=="paid"&&st!=="cancelled";
+    });
+    return {active,otherKey,otherName,selfName,invoicesKey:accountingCompanyKeys(otherKey).invoices,invoices,buyers:otherBuyers};
   };
   useEffect(()=>{
     if(!loaded)return;
@@ -4246,14 +4284,22 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             const isPdf=att=>/pdf/i.test(att?.type||"")||/\.pdf($|\?)/i.test(att?.name||att?.url||"");
             // Sales receipt → auto-show the linked invoice in the preview (invoices are
             // generated HTML, not stored files, so we render it on the fly).
-            const linkedInv=(()=>{
-              if(selected.classifiedAs!=="customer_receipt")return null;
-              const ids=selected.classifiedRef?.invoiceIds||(selected.classifiedRef?.invoiceId?[selected.classifiedRef.invoiceId]:[]);
-              if(!ids.length)return null;
-              return invoices.find(iv=>ids.includes(iv.id))||null;
+            const linkedInvInfo=(()=>{
+              if(selected.classifiedAs==="customer_receipt"){
+                const ids=selected.classifiedRef?.invoiceIds||(selected.classifiedRef?.invoiceId?[selected.classifiedRef.invoiceId]:[]);
+                const inv=ids.length?invoices.find(iv=>ids.includes(iv.id)):null;
+                return inv?{inv,bys:buyers}:null;
+              }
+              // Inter-company vendor bill → render the OTHER company's invoice (their buyers).
+              if(selected.classifiedAs==="vendor_bill"&&selected.classifiedRef?.interCo&&selected.classifiedRef.interCoInvoiceId){
+                const inv=otherInvoices.find(iv=>iv.id===selected.classifiedRef.interCoInvoiceId);
+                return inv?{inv,bys:otherBuyers}:null;
+              }
+              return null;
             })();
+            const linkedInv=linkedInvInfo?.inv||null;
             const linkedInvNo=linkedInv?(linkedInv.invNo||linkedInv.invNumber||linkedInv.number||"Invoice"):"";
-            const linkedInvHTML=linkedInv?wrapInvDoc(linkedInvNo,[buildInvBodyHTML(linkedInv,buyers)]):"";
+            const linkedInvHTML=linkedInv?wrapInvDoc(linkedInvNo,[buildInvBodyHTML(linkedInv,linkedInvInfo.bys)]):"";
             // Vendor bill payment with no attachment → find the linked/matched bill's
             // document (by billIds, else bill number appearing in the notes/payee).
             const linkedBillDoc=(()=>{
@@ -4382,6 +4428,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             embMap={embMap}
             company={company}
             enableLearner={true}
+            interCo={buildInterCo(selected)}
             onSave={handleStructuredClassify}
             onClose={()=>setClassifyOpen(false)}
           />
