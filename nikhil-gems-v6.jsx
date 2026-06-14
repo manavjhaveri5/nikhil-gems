@@ -3928,6 +3928,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const inputS={...FI,fontSize:12,padding:"7px 9px",borderRadius:7};
   const ledgerCols=mob?"56px minmax(0,1fr) 76px 76px":"64px minmax(0,1fr) 88px 88px 74px";
   const monthLabel=month?new Date(`${month}-01T12:00:00`).toLocaleDateString("en-IN",{month:"long",year:"numeric"}):"Select month";
+  // Three columns (list · detail · attachment) need ~1100px. Below that, the fixed columns
+  // overflowed and clipped the detail card; fall back to a 2-column layout with the attachment
+  // panel dropped to a full-width row underneath.
+  const wideJournal=!mob&&typeof window!=="undefined"&&window.innerWidth>=1180;
   return(
     <div style={{display:"grid",gap:12}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px"}}>
@@ -4018,7 +4022,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
         </div>
       )}
 
-      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"340px minmax(380px,1fr) 360px",gap:10,alignItems:"start"}}>
+      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":wideJournal?"320px minmax(0,1fr) 340px":"minmax(0,300px) minmax(0,1fr)",gap:10,alignItems:"start"}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
           <div style={{display:"flex",gap:10,alignItems:"center",justifyContent:"space-between",padding:"9px 12px",borderBottom:`1px solid ${C.border}`,fontSize:11,color:C.inkFaint,flexWrap:"wrap",position:"relative"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
@@ -4142,7 +4146,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             );
           })()}
         </div>
-        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:14,minHeight:430}}>
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:14,minHeight:430,gridColumn:(!mob&&!wideJournal)?"1 / -1":"auto"}}>
           {!selected?<div style={{padding:"48px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>Select a transaction to view attachments</div>:(()=>{
             const attachments=(selected.attachments||(selected.attachmentUrl?[{url:selected.attachmentUrl,name:selected.attachmentName||"Attachment"}]:[]));
             const activeAtt=attachments[0]||null;

@@ -69,7 +69,10 @@ export default function ClassifyTransactionModal({
   // category but kept out of the main picker; remembered for next time.
   const [otherCat, setOtherCat] = useState(() => (rawCat && !expenseCats.includes(rawCat)) ? rawCat : "");
   const [catOpen, setCatOpen] = useState(false);
-  const [expParty, setExpParty] = useState(txn.classifiedRef?.party || txn.payee || "");
+  // Prefill the party from the (cleaned, editable) payee shown in the ledger. A stale
+  // classifiedRef.party often holds the raw bank narration from an earlier classify, so
+  // only fall back to it when there's no payee.
+  const [expParty, setExpParty] = useState(txn.payee || txn.classifiedRef?.party || "");
   const [expNotes, setExpNotes] = useState(txn.notes || "");
   const cardAccounts = accounts.filter(a => a.type === "credit_card" && a.active !== false);
   const cardSpendAccount = cardAccounts.find(a => a.id === txn.accountFrom);
