@@ -3661,7 +3661,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(!t||t.type==="conversion")return false;
     const kind=t.classifiedAs||t.category||"";
     if(ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(kind))return false;
-    if(kind==="expense")return normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)==="Other";
+    // A deliberately-classified expense counts as classified even if its category is "Other"
+    // (the user made a decision). Only auto-imported "Other" expenses still need attention.
+    if(kind==="expense")return t.classifiedBy?false:normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)==="Other";
     if(!t.category||ACCOUNTING_METHOD_CATS.has(t.category))return true;
     if(ACCOUNTING_LEDGER_CATS.includes(t.category))return t.category==="Other";
     return !ACCOUNTING_VALID_CLASSIFICATIONS.has(t.category);
