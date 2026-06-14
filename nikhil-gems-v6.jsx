@@ -1178,7 +1178,7 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
         </div>
         <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>{canSwitchLang&&<button onClick={()=>setLang(lang==="en"?"mr":"en")} title={lang==="en"?"Switch to Marathi":"English वर जा"} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:12,cursor:"pointer",lineHeight:1,minHeight:mob?36:32,fontFamily:"inherit",color:C.inkMid,fontWeight:600}}>{lang==="en"?"मराठी":"EN"}</button>}<button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
       </div>
-      <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":undefined,maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
+      <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":132,maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
     </div>
   );
 }
