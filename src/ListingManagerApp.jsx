@@ -2318,8 +2318,19 @@ function EtsyLiveView() {
   };
   const fmtDate = ts => ts ? new Date(ts*1000).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : "—";
 
-  const saveCache = (ls, os) => {
-    try { localStorage.setItem(ETSY_CACHE, JSON.stringify({listings:ls, orders:os, syncedAt:Date.now()})); } catch {}
+  // Incremental-sync tuning. A full sync re-pulls every paid receipt (slow, grows with the shop);
+  // an incremental sync only asks Etsy for receipts created since the newest one we already have.
+  const FULL_RESYNC_MS = 24 * 60 * 60 * 1000;        // force a full resync at most once a day (catches status flips on old orders)
+  const INCREMENTAL_BUFFER_S = 3 * 24 * 60 * 60;     // re-pull the last few days so recent shipping/status changes stay fresh
+
+  const saveCache = (ls, os, fullSynced) => {
+    try {
+      const prev = loadCache();
+      localStorage.setItem(ETSY_CACHE, JSON.stringify({
+        listings: ls, orders: os, syncedAt: Date.now(),
+        lastFullSync: fullSynced ? Date.now() : (prev.lastFullSync || 0),
+      }));
+    } catch {}
   };
 
   const etsyMoney = m => (m?.amount || 0) / (m?.divisor || 100);
@@ -2478,17 +2489,29 @@ function EtsyLiveView() {
     } catch { return null; }
   };
 
-  const fetchAll = async (bg=false) => {
+  const fetchAll = async (bg=false, forceFull=false) => {
     bg ? setSyncing(true) : setLoading(true);
     setError(null); setListingErr(null);
     try {
       const tok = await getToken();
       const authHdr = tok ? { "X-Etsy-Token": tok } : {};
 
+      // Decide incremental vs full sync for orders. Incremental only when we already have
+      // cached orders, this isn't a forced full refresh, and we've done a full resync recently.
+      const cache = loadCache();
+      const haveOrders = (orders?.length || 0) > 0;
+      const fullDue = (Date.now() - (cache.lastFullSync || 0)) >= FULL_RESYNC_MS;
+      const doFullOrders = forceFull || !haveOrders || fullDue;
+      let ordersUrl = `/api/etsy?action=orders&limit=100&enrich=true&_=${Date.now()}`;
+      if (!doFullOrders) {
+        const newestTs = orders.reduce((m, o) => Math.max(m, etsyReceiptTs(o)), 0);
+        if (newestTs > 0) ordersUrl += `&min_created=${Math.max(0, Math.floor(newestTs - INCREMENTAL_BUFFER_S))}`;
+      }
+
       const [pr, lr, or_, sr, dr] = await Promise.all([
         fetch("/api/etsy?action=ping", { headers: authHdr }),
         fetch("/api/etsy?action=listings_all", { headers: authHdr }),
-        fetch(`/api/etsy?action=orders&limit=100&enrich=true&_=${Date.now()}`, { headers: authHdr, cache: "no-store" }),
+        fetch(ordersUrl, { headers: authHdr, cache: "no-store" }),
         fetch("/api/etsy?action=sections", { headers: authHdr }),
         fetch("/api/etsy?action=discounts", { headers: authHdr }),
       ]);
@@ -2516,10 +2539,12 @@ function EtsyLiveView() {
       setListings(newListings);
 
       let newOrders = orders;
+      let ordersFullSynced = false;
       if (oauth && or_.ok) {
         const od = await or_.json();
         newOrders = mergeEtsyReceipts(orders, od.results || []);
         setOrders(newOrders);
+        ordersFullSynced = doFullOrders; // only mark a full resync done when the orders fetch actually succeeded
         syncOrdersToERP(newOrders, newListings).catch(e => console.warn("Etsy order ERP sync failed:", e));
       }
       if (sr.ok) { const sd = await sr.json(); setSections(sd.results||[]); }
@@ -2533,7 +2558,7 @@ function EtsyLiveView() {
         );
         setActiveSales(active);
       }
-      saveCache(newListings, newOrders);
+      saveCache(newListings, newOrders, ordersFullSynced);
     } catch (e) { setError(e.message); }
     bg ? setSyncing(false) : setLoading(false);
   };
@@ -2805,8 +2830,9 @@ function EtsyLiveView() {
             title="Re-authenticate with Etsy (needed after scope changes)">
             🔑 Reconnect Etsy
           </button>
-          <button onClick={()=>fetchAll(false)} style={{background:"none",border:"1px solid #F5640060",color:"#F56400",
-            borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          <button onClick={()=>fetchAll(false, true)} style={{background:"none",border:"1px solid #F5640060",color:"#F56400",
+            borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}
+            title="Full resync — re-pulls every order to catch status changes">
             ↺ Refresh
           </button>
           <button onClick={()=>{localStorage.removeItem(ETSY_CACHE);fetchAll(false);}}

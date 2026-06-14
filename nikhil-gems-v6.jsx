@@ -15605,7 +15605,19 @@ export default function Root({onSignOut}){
   const _savedMod=localStorage.getItem("ng-last-mod");
   const _stockParam=new URLSearchParams(window.location.search).get("stock");
   const _locationParam=new URLSearchParams(window.location.search).get("location");
-  const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [fab,setFab]=useState(false);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);
+  const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [fab,setFab]=useState(false);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);const [fabHidden,setFabHidden]=useState(false);
+  // Auto-hide the floating action button while scrolling down so it never sits on top of list content; reveal it on scroll-up.
+  useEffect(()=>{
+    let last=window.scrollY;
+    const onScroll=()=>{
+      const y=window.scrollY;
+      if(y>last+6&&y>140)setFabHidden(true);
+      else if(y<last-6)setFabHidden(false);
+      last=y;
+    };
+    window.addEventListener("scroll",onScroll,{passive:true});
+    return()=>window.removeEventListener("scroll",onScroll);
+  },[]);
   const go=(id,sv=null)=>{
     // Block access to modules not in allowedMods
     if(userProfile&&userProfile!==false&&!allowedMods.find(m=>m.id===id))return;
@@ -15644,19 +15656,6 @@ export default function Root({onSignOut}){
   };
   if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
   const FAB_ITEMS=[{icon:"⬆",label:"Upload Bill",action:()=>go("purchases","upload")},{icon:"🧾",label:"New Expense",action:()=>go("expenses")},{icon:"📋",label:"New Invoice",action:()=>go("invoices")},...(isAdmin?[{icon:"💰",label:"Finance",action:()=>go("finance")}]:[])];
-  // Auto-hide the floating action button while scrolling down so it never sits on top of list content; reveal it on scroll-up.
-  const [fabHidden,setFabHidden]=useState(false);
-  useEffect(()=>{
-    let last=window.scrollY;
-    const onScroll=()=>{
-      const y=window.scrollY;
-      if(y>last+6&&y>140)setFabHidden(true);
-      else if(y<last-6)setFabHidden(false);
-      last=y;
-    };
-    window.addEventListener("scroll",onScroll,{passive:true});
-    return()=>window.removeEventListener("scroll",onScroll);
-  },[]);
   const userLang=activeLang;
   const canSwitchLang=!!(userProfile&&userProfile!==false&&userProfile.language==="mr");
   const toggleLang=async()=>{
