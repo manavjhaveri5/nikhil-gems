@@ -21,7 +21,7 @@ const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "
 export default function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
   rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
-  learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, interCo = null, onSave, onClose,
+  learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, interCo = null, reclassifyDirty = false, onSave, onClose,
 }) {
   // The learner's local match (if any) pre-fills the form for unclassified txns.
   const L = (!txn.classifiedAs && learned) ? learned : null;
@@ -141,7 +141,10 @@ export default function ClassifyTransactionModal({
   // pre-fills fields above, but we still ask the AI to firm up the classification.
   const localConfident = L && L.classifiedAs && L.confidence >= 0.6 && L.count >= 2;
   useEffect(() => {
-    if (!enableLearner || txn.classifiedAs || localConfident) return;
+    // Run AI for unclassified txns, OR when reclassifying a txn whose payee/notes/type
+    // changed since it was classified. Skip when already classified & unchanged, or a
+    // confident local match exists.
+    if (!enableLearner || (txn.classifiedAs && !reclassifyDirty) || localConfident) return;
     let alive = true;
     setAiLoading(true);
     aiSuggest({ company, txn, memory: learnMemory, embMap, expenseCats })

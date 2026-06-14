@@ -3886,7 +3886,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       ...currentAttachments,
       ...billAttachments.filter(att=>!currentAttachments.some(cur=>(cur.sourceBillId&&cur.sourceBillId===att.sourceBillId)||cur.url===att.url))
     ];
-    const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),...(sideEffects.txnPatch||{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now}:t);
+    const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),...(sideEffects.txnPatch||{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now,
+      // Snapshot the fields the classification was based on, so reclassifying only re-runs
+      // the AI when the payee/notes/type have changed since.
+      classifiedSnapshot:{payee:t.payee||"",notes:t.notes||"",type:(sideEffects.txnPatch?.type)||t.type||"debit"}}:t);
     await saveTxns(nextTxns);
     // Learn from every confirmed classification — the dataset future suggestions train on.
     // Flag corrections (user overruled the AI) as high-signal so retrieval up-weights them.
@@ -4431,6 +4434,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             company={company}
             enableLearner={true}
             interCo={buildInterCo(selected)}
+            reclassifyDirty={(()=>{const s=selected?.classifiedSnapshot;return !!(selected?.classifiedAs&&s&&((selected.payee||"")!==(s.payee||"")||(selected.notes||"")!==(s.notes||"")||(selected.type||"debit")!==(s.type||"debit")));})()}
             onSave={handleStructuredClassify}
             onClose={()=>setClassifyOpen(false)}
           />
