@@ -21,7 +21,7 @@ const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "
 export default function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
   rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
-  learned = null, learnMemory = [], company = "ng", enableLearner = false, onSave, onClose,
+  learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, onSave, onClose,
 }) {
   // The learner's local match (if any) pre-fills the form for unclassified txns.
   const L = (!txn.classifiedAs && learned) ? learned : null;
@@ -125,12 +125,22 @@ export default function ClassifyTransactionModal({
   const [aiSug, setAiSug] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiApplied, setAiApplied] = useState(false);
+  const [aiAutoApplied, setAiAutoApplied] = useState(false);
+  const CONF_HIGH = 0.75;
+  // Confident local match short-circuits AI (instant, free). A weak local match still
+  // pre-fills fields above, but we still ask the AI to firm up the classification.
+  const localConfident = L && L.classifiedAs && L.confidence >= 0.6 && L.count >= 2;
   useEffect(() => {
-    if (!enableLearner || txn.classifiedAs || L) return; // off, already classified, or a confident local match exists
+    if (!enableLearner || txn.classifiedAs || localConfident) return;
     let alive = true;
     setAiLoading(true);
-    aiSuggest({ company, txn, memory: learnMemory, expenseCats })
-      .then(s => { if (alive && s) setAiSug(s); })
+    aiSuggest({ company, txn, memory: learnMemory, embMap, expenseCats })
+      .then(s => {
+        if (!alive || !s) return;
+        setAiSug(s);
+        // High confidence → pre-fill silently (ambient). Low → leave as a soft hint.
+        if (s.confidence >= CONF_HIGH) { applySuggestion(s); setAiAutoApplied(true); }
+      })
       .finally(() => { if (alive) setAiLoading(false); });
     return () => { alive = false; };
   }, []); // run once when the modal opens
@@ -273,7 +283,9 @@ export default function ClassifyTransactionModal({
       classifiedRef = { conversion: true, fromAccountId: fromId, toAccountId: toId, fromAccountName: fromAcc?.name || "", toAccountName: toAcc?.name || "", rate: convRateNum, convOtherAccountId: convOtherAcct, sourceAmount: amount, sourceCurrency: fromAcc?.currency || convSrcCur, targetAmount: received, targetCurrency: toAcc?.currency || convDstCur };
       sideEffects.txnPatch = { type: "conversion", accountFrom: fromId, accountTo: toId, amount, receivedAmount: received, rate: convRateNum, convRate: convRateNum, currency: fromAcc?.currency || convSrcCur, toCurrency: toAcc?.currency || convDstCur, category: "Transfer" };
     }
-    await onSave({ classifiedAs: classType, classifiedRef, sideEffects });
+    // Pass the AI's suggestion (if any) so the journal can flag corrections as
+    // high-signal training data when the saved decision differs from it.
+    await onSave({ classifiedAs: classType, classifiedRef, sideEffects, aiSuggestion: aiSug || null });
   };
 
   const optionBtn = (id, label, desc, color) => (
@@ -328,11 +340,11 @@ export default function ClassifyTransactionModal({
         {!L && !aiLoading && aiSug && (
           <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", marginBottom: 14, background: C.tealBg, border: `1px solid ${C.teal}66`, borderRadius: 9, fontSize: 12, color: C.ink }}>
             <span style={{ fontSize: 14 }}>✨</span>
-            <span style={{ flex: 1 }}>AI suggests <strong>{labelOf(aiSug)}</strong>{aiSug.party ? <> · {aiSug.party}</> : null}{aiSug.why ? <div style={{ color: C.inkFaint, marginTop: 2 }}>{aiSug.why}</div> : null}</span>
-            <button onClick={() => { applySuggestion(aiSug); setAiApplied(true); }} disabled={aiApplied}
+            <span style={{ flex: 1 }}>{aiAutoApplied ? <>AI pre-filled <strong>{labelOf(aiSug)}</strong> — review &amp; Save</> : <>AI suggests <strong>{labelOf(aiSug)}</strong></>}{aiSug.party ? <> · {aiSug.party}</> : null}{aiSug.why ? <div style={{ color: C.inkFaint, marginTop: 2 }}>{aiSug.why}</div> : null}</span>
+            {!aiAutoApplied && <button onClick={() => { applySuggestion(aiSug); setAiApplied(true); }} disabled={aiApplied}
               style={{ flexShrink: 0, background: aiApplied ? C.card : C.teal, color: aiApplied ? C.inkMid : "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 750, cursor: aiApplied ? "default" : "pointer" }}>
               {aiApplied ? "Applied" : "Apply"}
-            </button>
+            </button>}
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 20 }}>{types.map(t => optionBtn(...t))}</div>

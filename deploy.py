@@ -98,7 +98,7 @@ for fi in all_files:
 functions_config = {}
 max_durations = {
     "claude.js": 30, "etsy.js": 60, "raj.js": 60, "shopify.js": 90,
-    "telegram.js": 60, "openai.js": 30,
+    "telegram.js": 60, "openai.js": 30, "embed.js": 30,
     "parse-pdf.js": 60, "etsy-auth.js": 30, "listing-manager.js": 30,
     "blob-upload.js": 30, "admin-create-user.js": 30,
     "ebay.js": 30,

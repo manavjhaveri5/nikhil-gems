@@ -13,7 +13,7 @@ import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineT
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
-import { loadLearnMemory, recordClassification, matchLearned } from "./src/classifyLearner.js";
+import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
@@ -3571,6 +3571,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [customCat,setCustomCat]=useState("");
   const [customCats,setCustomCats]=useState([]);
   const [learnMem,setLearnMem]=useState([]); // self-learning classification dataset (per company)
+  const [embMap,setEmbMap]=useState({});     // {recordId -> embedding vector} for semantic retrieval
+  const [autoFilled,setAutoFilled]=useState({}); // txnId -> {payee,notes} pre-auto-fill, for Undo
   const blankManual=()=>({date:today(),type:"debit",accountId:"",accountToId:"",amount:"",receivedAmount:"",rate:"",currency:"INR",payee:"",notes:""});
   const [manualOpen,setManualOpen]=useState(false);
   const [manual,setManual]=useState(blankManual);
@@ -3600,7 +3602,31 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     });
   },[company]);
   useEffect(()=>{loadK(ACCOUNTING_CUSTOM_CATS_KEY).then(v=>setCustomCats(Array.isArray(v)?v:[]));},[]);
-  useEffect(()=>{loadLearnMemory(company).then(setLearnMem).catch(()=>setLearnMem([]));},[company]);
+  useEffect(()=>{
+    let alive=true;
+    Promise.all([loadLearnMemory(company),loadEmbMap(company)]).then(([mem,em])=>{
+      if(!alive)return;
+      setLearnMem(mem); setEmbMap(em);
+      // Lazily backfill embeddings for any records missing a vector (once per company).
+      backfillEmbeddings(company,mem,em).then(updated=>{if(alive&&updated)setEmbMap(updated);}).catch(()=>{});
+    }).catch(()=>{if(alive){setLearnMem([]);setEmbMap({});}});
+    return ()=>{alive=false;};
+  },[company]);
+  // Keep a live ref to txns so debounced learners read the latest field values.
+  const txnsRef=useRef(txns); useEffect(()=>{txnsRef.current=txns;},[txns]);
+  const learnTimers=useRef({});
+  // Debounced ambient capture: snapshot a txn's current fields as a precedent.
+  const captureDecision=(txnId,decision={})=>{
+    if(!txnId)return;
+    clearTimeout(learnTimers.current[txnId]);
+    learnTimers.current[txnId]=setTimeout(()=>{
+      const t=txnsRef.current.find(x=>x.id===txnId); if(!t)return;
+      recordDecision(company,t,decision).then(r=>{
+        if(r?.memory)setLearnMem(r.memory);
+        if(r?.rec)embedAndStore(company,r.rec).then(e=>{if(e?.vec)setEmbMap(s=>({...s,[e.id]:e.vec}));}).catch(()=>{});
+      }).catch(()=>{});
+    },800);
+  };
   useEffect(()=>{loadK(ACCOUNTING_ATTACH_REQ_KEY).then(v=>{if(Array.isArray(v))setAttachReqCats(v);});},[]);
   const saveAttachReqCats=async next=>{setAttachReqCats(next);await saveK(ACCOUNTING_ATTACH_REQ_KEY,next);};
   // Share the same live/configured FX rates the Finance module uses, so the
@@ -3839,7 +3865,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     setSelectedId(nextVisible?.id||"");
     showToast?.("Transaction deleted");
   };
-	  const handleStructuredClassify=async({classifiedAs,classifiedRef,sideEffects={}})=>{
+	  const handleStructuredClassify=async({classifiedAs,classifiedRef,sideEffects={},aiSuggestion=null})=>{
 	    if(!selected)return;
     const now=new Date().toISOString();
     const normalizedRef=classifiedAs==="expense"?{...classifiedRef,cat:normalizeAccountingExpenseCat(classifiedRef.cat||selected.category||"Other")}:classifiedRef;
@@ -3851,9 +3877,16 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     ];
     const nextTxns=txns.map(t=>t.id===selected.id?{...t,category:classifiedAs==="expense"?(normalizedRef.cat||t.category):classifiedAs,classifiedAs,classifiedRef:normalizedRef,...(mergedAttachments.length?{attachments:mergedAttachments,attachmentUrl:mergedAttachments[0]?.url||null,attachmentName:mergedAttachments[0]?.name||null}:{}),...(sideEffects.txnPatch||{}),classifiedAt:now,classifiedBy:"accounting-journal",updatedAt:now}:t);
     await saveTxns(nextTxns);
-    // Learn from every confirmed classification — this is the dataset future
-    // suggestions (local match + AI) are trained on.
-    recordClassification(company,selected,{classifiedAs,cat:classifiedAs==="expense"?normalizedRef.cat:"",party:normalizedRef.party||normalizedRef.vendorName||selected.payee||"",vendorId:normalizedRef.vendorId||"",cardAccountId:normalizedRef.cardAccountId||""}).then(m=>{if(m)setLearnMem(m);}).catch(()=>{});
+    // Learn from every confirmed classification — the dataset future suggestions train on.
+    // Flag corrections (user overruled the AI) as high-signal so retrieval up-weights them.
+    const finalCat=classifiedAs==="expense"?normalizedRef.cat:"";
+    const corrected=!!(aiSuggestion&&(aiSuggestion.classifiedAs!==classifiedAs||(classifiedAs==="expense"&&normalizeAccountingExpenseCat(aiSuggestion.cat||"")!==normalizeAccountingExpenseCat(finalCat))));
+    const aiWas=aiSuggestion?{classifiedAs:aiSuggestion.classifiedAs,cat:aiSuggestion.cat||"",payee:aiSuggestion.payee||""}:null;
+    const savedTxn=nextTxns.find(t=>t.id===selected.id)||selected;
+    recordDecision(company,savedTxn,{classifiedAs,cat:finalCat,party:normalizedRef.party||normalizedRef.vendorName||selected.payee||"",vendorId:normalizedRef.vendorId||"",cardAccountId:normalizedRef.cardAccountId||"",corrected,aiWas}).then(r=>{
+      if(r?.memory)setLearnMem(r.memory);
+      if(r?.rec)embedAndStore(company,r.rec).then(e=>{if(e?.vec)setEmbMap(s=>({...s,[e.id]:e.vec}));}).catch(()=>{});
+    }).catch(()=>{});
     if(sideEffects.newExpense){
       const newExpense=classifiedAs==="expense"?{...sideEffects.newExpense,cat:normalizedRef.cat}:sideEffects.newExpense;
       const next=[newExpense,...expenses.filter(e=>e.ledgerTxnId!==selected.id&&e.id!==newExpense.id)];
@@ -3907,8 +3940,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   };
   // Preserve the original bank narration the first time the user cleans it up, so the
   // learner can match future raw lines against what this one was turned into.
-  const updatePayee=async v=>selected&&patchTxn(selected.id,{payee:v,...(selected.rawPayee==null?{rawPayee:selected.payee||""}:{})});
-  const updateNotes=async v=>selected&&patchTxn(selected.id,{notes:v,...(selected.rawNotes==null?{rawNotes:selected.notes||""}:{})});
+  const updatePayee=async v=>{if(!selected)return;await patchTxn(selected.id,{payee:v,...(selected.rawPayee==null?{rawPayee:selected.payee||""}:{})});captureDecision(selected.id);};
+  const updateNotes=async v=>{if(!selected)return;await patchTxn(selected.id,{notes:v,...(selected.rawNotes==null?{rawNotes:selected.notes||""}:{})});captureDecision(selected.id);};
   // Flip an existing entry between Debit (money out) and Credit (money in),
   // moving the account to the correct side and clearing any now-wrong classification.
   const flipTxnType=async newType=>{
@@ -3920,7 +3953,29 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     // Direction change invalidates an existing classification — reset to unclassified.
     if(selected.classifiedAs){Object.assign(patch,{classifiedAs:undefined,classifiedRef:undefined,classifiedAt:undefined,classifiedBy:undefined});}
     await patchTxn(selected.id,patch);
+    captureDecision(selected.id);
     showToast?.(`Changed to ${newType==="credit"?"Credit (money in)":"Debit (money out)"}`);
+  };
+  // Silent ambient auto-fill: when a confidently-seen unclassified txn is selected,
+  // quietly apply the learned cleaned payee/notes (with Undo). One patchTxn, run once.
+  const autoFillRef=useRef(new Set());
+  useEffect(()=>{
+    const t=txns.find(x=>x.id===selectedId);
+    if(!t||!isUnclassified(t)||autoFillRef.current.has(t.id))return;
+    const m=matchLearned(learnMem,t);
+    if(!m||!(m.confidence>=0.6&&m.count>=2))return;
+    const patch={};
+    if(m.payee&&m.payee!==(t.payee||"")){patch.payee=m.payee;if(t.rawPayee==null)patch.rawPayee=t.payee||"";}
+    if(m.notes&&m.notes!==(t.notes||"")){patch.notes=m.notes;if(t.rawNotes==null)patch.rawNotes=t.notes||"";}
+    if(!Object.keys(patch).length)return;
+    autoFillRef.current.add(t.id);
+    setAutoFilled(s=>({...s,[t.id]:{payee:t.payee||"",notes:t.notes||""}}));
+    patchTxn(t.id,patch);
+  },[selectedId,learnMem,txns]);
+  const undoAutoFill=t=>{
+    const prev=autoFilled[t.id]; if(!prev)return;
+    patchTxn(t.id,{payee:prev.payee,notes:prev.notes});
+    setAutoFilled(s=>{const n={...s};delete n[t.id];return n;});
   };
   useEffect(()=>{
     if(!loaded)return;
@@ -4131,7 +4186,13 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                   </div>
                   <div style={{fontSize:18,fontWeight:900,color:selected.type==="credit"?C.green:C.red,whiteSpace:"nowrap"}}>{money(selected)}</div>
                 </div>
-                {smartFills.length>0&&(
+                {autoFilled[selected.id]?(
+                  <div style={{display:"flex",gap:10,alignItems:"center",padding:"9px 12px",background:C.greenBg,border:`1px solid ${C.green}55`,borderRadius:9,fontSize:12,color:C.ink}}>
+                    <span style={{fontSize:14}}>✨</span>
+                    <div style={{flex:1,minWidth:0}}>Auto-filled the payee &amp; notes from your history.</div>
+                    <button onClick={()=>undoAutoFill(selected)} style={{flexShrink:0,background:"transparent",border:`1px solid ${C.green}`,color:C.green,borderRadius:7,padding:"5px 11px",fontSize:12,fontWeight:750,cursor:"pointer"}}>Undo</button>
+                  </div>
+                ):smartFills.length>0&&(
                   <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 12px",background:C.greenBg,border:`1px solid ${C.green}55`,borderRadius:9,fontSize:12,color:C.ink}}>
                     <span style={{fontSize:14,lineHeight:1.3}}>📚</span>
                     <div style={{flex:1,minWidth:0}}>
@@ -4318,6 +4379,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             suggestedType={isUnclassified(selected)?suggestClassification(selected,attTextByTxn[selected.id])?.classifiedAs:undefined}
             learned={isUnclassified(selected)?matchLearned(learnMem,selected):null}
             learnMemory={learnMem}
+            embMap={embMap}
             company={company}
             enableLearner={true}
             onSave={handleStructuredClassify}
