@@ -29,6 +29,46 @@ const IMG_KEY    = "ng-image-library-v1";
 const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
 const SHIPGLOBAL_PORTAL_URL = "https://v2.app.shipglobal.in/auth/login";
 
+/* ─── Etsy token (shared) ─────────────────────────────────────────────────────
+   Etsy access tokens expire hourly. Always resolve a FRESH token before calling
+   /api/etsy: use the local token only if still valid, else refresh it, else pull
+   the shared session from Supabase. Uses no React state so any component can call it. */
+const getEtsyToken = async () => {
+  try {
+    const sess = JSON.parse(localStorage.getItem("etsy-session") || "{}");
+    if (sess.access_token && sess.expiry > Date.now() + 60000) return sess.access_token;
+
+    const rt = sess.refresh_token || localStorage.getItem("etsy-refresh");
+    if (rt) {
+      const r = await fetch("/api/etsy-auth?action=refresh", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        if (d.access_token) {
+          const newSess = { access_token: d.access_token, refresh_token: d.refresh_token || rt, expiry: Date.now() + (d.expires_in || 3600) * 1000 - 120000 };
+          localStorage.setItem("etsy-session", JSON.stringify(newSess));
+          if (d.refresh_token) localStorage.setItem("etsy-refresh", d.refresh_token);
+          return d.access_token;
+        }
+      }
+    }
+
+    const sr = await fetch("/api/etsy-auth?action=get-session");
+    if (sr.ok) {
+      const sd = await sr.json();
+      if (sd.access_token) {
+        const newSess = { access_token: sd.access_token, refresh_token: sd.refresh_token, expiry: Date.now() + (sd.expires_in || 3600) * 1000 - 120000 };
+        localStorage.setItem("etsy-session", JSON.stringify(newSess));
+        if (sd.refresh_token) localStorage.setItem("etsy-refresh", sd.refresh_token);
+        return sd.access_token;
+      }
+    }
+    return null;
+  } catch { return null; }
+};
+
 /* ─── platform config ────────────────────────────────────────────────────── */
 const PLATFORMS = [
   { key:"etsy",          label:"Etsy",         icon:"🏷️", color:"#F56400", priceField:"price_etsy",         currency:"INR" },
@@ -1614,12 +1654,6 @@ function OrdersView({ orders, listings = [] }) {
   };
   const isEtsyOrder = o => o.platform === "etsy" || !!o.etsy_receipt_id || String(o.order_number || "").startsWith("ETSY-");
   const etsyReceiptId = o => o.etsy_receipt_id || o.platform_order_id || String(o.order_number || "").replace(/^ETSY-/, "").split("-")[0];
-  const etsyHeaders = () => {
-    try {
-      const sess = JSON.parse(localStorage.getItem("etsy-session") || "{}");
-      return sess.access_token ? { "X-Etsy-Token": sess.access_token } : {};
-    } catch { return {}; }
-  };
   const trackingDraft = o => etsyTracking[o.id] || {
     tracking_code: o.tracking_code || o.tracking_number || "",
     carrier_name: o.carrier_name || o.shipping_carrier || "other",
@@ -1645,9 +1679,10 @@ function OrdersView({ orders, listings = [] }) {
     }
     updateTrackingDraft(o, { loading: true, error: "", success: "" });
     try {
+      const tok = await getEtsyToken(); // fresh token (refresh + Supabase fallback), not the stale localStorage one
       const r = await fetch("/api/etsy?action=add_tracking", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...etsyHeaders() },
+        headers: { "Content-Type": "application/json", ...(tok ? { "X-Etsy-Token": tok } : {}) },
         body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName }),
       });
       const d = await r.json().catch(() => ({}));
@@ -1935,12 +1970,6 @@ function OrdersView({ orders, listings = [] }) {
     if (!needsBackfill || etsyBackfillRef.current) return;
     etsyBackfillRef.current = true;
     setEtsyBackfilling(true);
-    const authHeaders = (() => {
-      try {
-        const sess = JSON.parse(localStorage.getItem("etsy-session") || "{}");
-        return sess.access_token ? { "X-Etsy-Token": sess.access_token } : {};
-      } catch { return {}; }
-    })();
     // Incremental backfill: a full pull of all paid receipts (~37s and growing) was timing out
     // intermittently and silently dropping new orders. Default to only re-pulling receipts created
     // since our newest Etsy order (minus a buffer so recent shipping/status changes stay fresh) —
@@ -1955,7 +1984,11 @@ function OrdersView({ orders, listings = [] }) {
     const doFull = newestMs <= 0 || (hasBaseline && (Date.now() - lastFull) >= FULL_MS);
     let url = `/api/etsy?action=orders&limit=100&enrich=true&_=${Date.now()}`;
     if (!doFull) url += `&min_created=${Math.max(0, Math.floor(newestMs / 1000) - BUFFER_S)}`;
-    fetch(url, { headers: authHeaders, cache: "no-store" })
+    // Resolve a FRESH token (refresh + Supabase fallback). The old code sent the raw localStorage
+    // token, which expires hourly — a stale token 401'd and silently dropped new orders until the
+    // user manually reconnected Etsy.
+    getEtsyToken()
+      .then(tok => fetch(url, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" }))
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) return;
@@ -2468,45 +2501,7 @@ function EtsyLiveView() {
   };
 
   // ── Token management — localStorage first, fall back to shared Supabase session
-  const getToken = async () => {
-    try {
-      // 1. localStorage (fast path — already authenticated on this device)
-      const sess = JSON.parse(localStorage.getItem("etsy-session") || "{}");
-      if (sess.access_token && sess.expiry > Date.now() + 60000) return sess.access_token;
-
-      // 2. Try refresh if we have a refresh token locally
-      const rt = sess.refresh_token || localStorage.getItem("etsy-refresh");
-      if (rt) {
-        const r = await fetch("/api/etsy-auth?action=refresh", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refresh_token: rt }),
-        });
-        if (r.ok) {
-          const d = await r.json();
-          if (d.access_token) {
-            const newSess = { access_token: d.access_token, refresh_token: d.refresh_token || rt, expiry: Date.now() + (d.expires_in || 3600) * 1000 - 120000 };
-            localStorage.setItem("etsy-session", JSON.stringify(newSess));
-            if (d.refresh_token) localStorage.setItem("etsy-refresh", d.refresh_token);
-            return d.access_token;
-          }
-        }
-      }
-
-      // 3. No local token — pull shared session from Supabase (works for any user/device)
-      const sr = await fetch("/api/etsy-auth?action=get-session");
-      if (sr.ok) {
-        const sd = await sr.json();
-        if (sd.access_token) {
-          const newSess = { access_token: sd.access_token, refresh_token: sd.refresh_token, expiry: Date.now() + (sd.expires_in || 3600) * 1000 - 120000 };
-          localStorage.setItem("etsy-session", JSON.stringify(newSess));
-          if (sd.refresh_token) localStorage.setItem("etsy-refresh", sd.refresh_token);
-          return sd.access_token;
-        }
-      }
-
-      return null;
-    } catch { return null; }
-  };
+  const getToken = getEtsyToken; // shared module-level helper (refresh + Supabase fallback)
 
   const fetchAll = async (bg=false, forceFull=false) => {
     bg ? setSyncing(true) : setLoading(true);
