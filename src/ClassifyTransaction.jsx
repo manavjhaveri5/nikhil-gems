@@ -109,6 +109,7 @@ export default function ClassifyTransactionModal({
   // only fall back to it when there's no payee.
   const [expParty, setExpParty] = useState(txn.payee || L?.party || txn.classifiedRef?.party || "");
   const [expNotes, setExpNotes] = useState((L && L.notes) || txn.notes || "");
+  const [notesTouched, setNotesTouched] = useState(false); // true once the user types in Details/Notes
   const cardAccounts = accounts.filter(a => a.type === "credit_card" && a.active !== false);
   const cardSpendAccount = cardAccounts.find(a => a.id === txn.accountFrom);
   const guessCard = () => {
@@ -310,6 +311,12 @@ export default function ClassifyTransactionModal({
       classifiedRef = { conversion: true, fromAccountId: fromId, toAccountId: toId, fromAccountName: fromAcc?.name || "", toAccountName: toAcc?.name || "", rate: convRateNum, convOtherAccountId: convOtherAcct, sourceAmount: amount, sourceCurrency: fromAcc?.currency || convSrcCur, targetAmount: received, targetCurrency: toAcc?.currency || convDstCur };
       sideEffects.txnPatch = { type: "conversion", accountFrom: fromId, accountTo: toId, amount, receivedAmount: received, rate: convRateNum, convRate: convRateNum, currency: fromAcc?.currency || convSrcCur, toCurrency: toAcc?.currency || convDstCur, category: "Transfer" };
     }
+    // If you typed in Details/Notes, keep the transaction's Notes exactly in sync (the
+    // original narration is preserved as rawNotes). Only when you actually edited it — so a
+    // pre-filled value is never forced onto the transaction.
+    if (notesTouched && (expNotes || "") !== (txn.notes || "") && classType !== "conversion") {
+      sideEffects.txnPatch = { ...(sideEffects.txnPatch || {}), notes: expNotes, ...(txn.rawNotes == null ? { rawNotes: txn.notes || "" } : {}) };
+    }
     // Pass the AI's suggestion (if any) so the journal can flag corrections as
     // high-signal training data when the saved decision differs from it.
     await onSave({ classifiedAs: classType, classifiedRef, sideEffects, aiSuggestion: aiSug || null });
@@ -385,7 +392,7 @@ export default function ClassifyTransactionModal({
             </Field>
           )}
           <Field label="Party / Vendor"><input value={expParty} onChange={e => setExpParty(e.target.value)} list="acct-class-vendors" style={SI} placeholder="Type or pick a vendor" /></Field>
-          <Field label="Details"><input value={expNotes} onChange={e => setExpNotes(e.target.value)} style={SI} placeholder="Line item / reference / note" /></Field>
+          <Field label="Details"><input value={expNotes} onChange={e => { setExpNotes(e.target.value); setNotesTouched(true); }} style={SI} placeholder="Line item / reference / note" /></Field>
         </div>}
         {classType === "cc_payment" && <div style={{ padding: "12px 14px", background: C.tealBg, border: `1px solid ${C.teal}`, borderRadius: 8, fontSize: 12, color: C.ink, display: "grid", gap: 10 }}>
           <div><div style={{ fontWeight: 800, marginBottom: 4 }}>Credit Card Payment</div><div style={{ color: C.inkFaint }}>This keeps the bank payment and reduces the selected card's amount due.</div></div>
@@ -396,7 +403,7 @@ export default function ClassifyTransactionModal({
             </select>
             {cardAccounts.length === 0 && <div style={{ fontSize: 11, color: C.red, marginTop: 5 }}>Add a credit card account in Finance settings first.</div>}
           </Field>
-          <Field label="Notes"><input value={expNotes} onChange={e => setExpNotes(e.target.value)} placeholder="Statement month, card ending, reference..." style={SI} /></Field>
+          <Field label="Notes"><input value={expNotes} onChange={e => { setExpNotes(e.target.value); setNotesTouched(true); }} placeholder="Statement month, card ending, reference..." style={SI} /></Field>
         </div>}
         {(classType === "vendor_bill" || classType === "vendor_po") && <div style={{ display: "grid", gap: 12 }}>
           {classType === "vendor_bill" && interCo?.active && interInvs.length > 0 && (
