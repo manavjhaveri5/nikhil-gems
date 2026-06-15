@@ -753,6 +753,26 @@ async function execGetFinanceTransactions({ account_name, days_back = 30, limit 
   }));
 }
 
+// Upload the file the user attached in this message to Supabase Storage and return an
+// attachment object, or null on failure / no file.
+async function storePendingFile(targetId) {
+  if (!_pendingFile) return null;
+  const fileUrl = await tgFileUrl(_pendingFile.fileId);
+  if (!fileUrl) return null;
+  try {
+    const resp = await fetch(fileUrl);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const client = sb();
+    await client.storage.createBucket("ng-media", { public: true }).catch(() => {});
+    const ext = (_pendingFile.name.split(".").pop() || (_pendingFile.mime.includes("pdf") ? "pdf" : _pendingFile.mime.includes("image") ? "jpg" : "bin")).toLowerCase();
+    const path = `telegram/${targetId}-${Date.now()}.${ext}`;
+    const { error: upErr } = await client.storage.from("ng-media").upload(path, buf, { contentType: _pendingFile.mime, upsert: true });
+    if (upErr) return null;
+    const url = client.storage.from("ng-media").getPublicUrl(path).data.publicUrl;
+    return { id: uid(), url, name: _pendingFile.name, type: _pendingFile.mime, uploadedAt: new Date().toISOString() };
+  } catch { return null; }
+}
+
 async function execLogFinanceTransaction({ type, amount, currency = "INR", account, payee, category, date, notes }) {
   const [accounts, transactions] = await Promise.all([
     loadK(_ctx.finAccs), loadK(_ctx.finTxns),
@@ -786,8 +806,20 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
     return py && tp ? (tp === py || tp.includes(py) || py.includes(tp)) : true;
   });
   if (dup) {
-    return { success: true, duplicate: true, txn_id: dup.id, type, amount, currency, payee, date: dup.date,
-      note: "This payment is already in the ledger — skipped to avoid a duplicate. (If it's genuinely a second, separate payment, say so and I'll record it.)" };
+    // Already recorded — but if the user sent a screenshot/receipt, still attach it to the
+    // existing entry so the document isn't lost.
+    let att = null;
+    if (_pendingFile) {
+      att = await storePendingFile(dup.id);
+      if (att) {
+        const existing = dup.attachments || (dup.attachmentUrl ? [{ url: dup.attachmentUrl, name: dup.attachmentName }] : []);
+        const nextAtt = [...existing, att];
+        const updated = txns.map(t => t.id === dup.id ? { ...t, attachments: nextAtt, attachmentUrl: nextAtt[0].url, attachmentName: nextAtt[0].name, updatedAt: new Date().toISOString() } : t);
+        await saveK(_ctx.finTxns, updated);
+      }
+    }
+    return { success: true, duplicate: true, txn_id: dup.id, type, amount, currency, payee, date: dup.date, screenshot_attached: !!att,
+      note: "This payment is already in the ledger — skipped to avoid a duplicate" + (att ? ", and attached the screenshot to the existing entry." : ". (If it's genuinely a second, separate payment, say so and I'll record it.)") };
   }
 
   const txn = {
@@ -804,11 +836,18 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
     createdAt: new Date().toISOString(),
   };
 
+  // Auto-attach the payment screenshot / receipt the user sent in this message.
+  let attached = false;
+  if (_pendingFile) {
+    const att = await storePendingFile(txn.id);
+    if (att) { txn.attachments = [att]; txn.attachmentUrl = att.url; txn.attachmentName = att.name; attached = true; }
+  }
+
   await saveK(_ctx.finTxns, [txn, ...txns]);
   await logActivity({ user: "Telegram", action: "created", module: "finance", label: `Finance ${type}: ${fmtMoney(amount, currency)} · ${payee || category || ""}`, targetId: txn.id, targetMod: "finance" });
 
   const accName = accountId ? accs.find(a => a.id === accountId)?.name : "no account linked";
-  return { success: true, txn_id: txn.id, type, amount, currency, account: accName, payee, date: txn.date };
+  return { success: true, txn_id: txn.id, type, amount, currency, account: accName, payee, date: txn.date, screenshot_attached: attached };
 }
 
 async function execAttachDocument({ payee, amount, days_back = 30 } = {}) {
@@ -829,23 +868,8 @@ async function execAttachDocument({ payee, amount, days_back = 30 } = {}) {
   const target = candidates[0];
   if (!target) return { error: `No recent transaction found${py ? ` for "${payee}"` : ""}. Try giving the payee or amount.` };
 
-  // Pull the file from Telegram and store it in Supabase Storage (persistent, public).
-  const fileUrl = await tgFileUrl(_pendingFile.fileId);
-  if (!fileUrl) return { error: "Couldn't fetch the file from Telegram (it may have expired — resend it)." };
-  let url;
-  try {
-    const resp = await fetch(fileUrl);
-    const buf = Buffer.from(await resp.arrayBuffer());
-    const client = sb();
-    await client.storage.createBucket("ng-media", { public: true }).catch(() => {});
-    const ext = (_pendingFile.name.split(".").pop() || (_pendingFile.mime.includes("pdf") ? "pdf" : "bin")).toLowerCase();
-    const path = `telegram/${target.id}-${Date.now()}.${ext}`;
-    const { error: upErr } = await client.storage.from("ng-media").upload(path, buf, { contentType: _pendingFile.mime, upsert: true });
-    if (upErr) return { error: "Upload failed: " + upErr.message };
-    url = client.storage.from("ng-media").getPublicUrl(path).data.publicUrl;
-  } catch (e) { return { error: "Could not store the file: " + e.message }; }
-
-  const att = { id: uid(), url, name: _pendingFile.name, type: _pendingFile.mime, uploadedAt: new Date().toISOString() };
+  const att = await storePendingFile(target.id);
+  if (!att) return { error: "Couldn't store the file (it may have expired — resend it)." };
   const existing = target.attachments || (target.attachmentUrl ? [{ url: target.attachmentUrl, name: target.attachmentName }] : []);
   const nextAtt = [...existing, att];
   const updated = txns.map(t => t.id === target.id
@@ -1104,7 +1128,7 @@ You have full access to read AND write everything:
 - Expenses: create, view
 - Invoices: view
 - Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (add entry)
-- Documents: when the user sends a PDF/photo (e.g. a tax invoice or receipt) and asks to attach it to a transaction, call attach_document_to_transaction — you CAN attach files to transactions.
+- Documents: you CAN attach files to transactions. When a user sends a payment screenshot/receipt and you log that payment, the image is AUTOMATICALLY attached to that transaction — confirm it ("…and saved the screenshot to it"). To attach a file to an EXISTING/older transaction, call attach_document_to_transaction.
 - Vendors: search, create
 - Memory: save/delete persistent facts
 
@@ -1203,19 +1227,18 @@ export default async function handler(req, res) {
       const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
       const doc = message.document || null;
       const caption  = (message.caption || "").trim();
-      // Vision is enabled for the Atyahara bot only — it can read payment
-      // screenshots / receipts and act on them. Other bots keep the text-only flow.
-      const wantsVision = hasPhoto && _ctx.isAT;
+      // Vision enabled for BOTH bots — they can read payment screenshots / receipts,
+      // log the transaction, and attach the image to it.
+      const wantsVision = hasPhoto;
       let imageUrl = null;
       if (wantsVision) {
         // Largest rendition is last in the photo size array
         imageUrl = await tgFileUrl(message.photo[message.photo.length - 1].file_id);
       }
-      // A file the user can ask to attach to a transaction (Atyahara bot only).
-      if (_ctx.isAT) {
-        if (doc) _pendingFile = { fileId: doc.file_id, name: doc.file_name || "document", mime: doc.mime_type || "application/octet-stream" };
-        else if (hasPhoto) _pendingFile = { fileId: message.photo[message.photo.length - 1].file_id, name: "photo.jpg", mime: "image/jpeg" };
-      }
+      // The file (PDF/photo) sent this message — auto-attached when a payment is logged,
+      // or attachable to an existing transaction on request.
+      if (doc) _pendingFile = { fileId: doc.file_id, name: doc.file_name || "document", mime: doc.mime_type || "application/octet-stream" };
+      else if (hasPhoto) _pendingFile = { fileId: message.photo[message.photo.length - 1].file_id, name: `payment-${Date.now()}.jpg`, mime: "image/jpeg" };
       const text = (message.text || caption || (
         doc ? `[file attached: ${doc.file_name || "document"}]`
         : wantsVision ? (imageUrl ? "[image attached]" : "[image attached but could not be loaded — ask the user to resend or describe it]")
@@ -1279,7 +1302,7 @@ export default async function handler(req, res) {
 
       // Build history with new message
       const history = session.history || [];
-      // For the model this turn: attach the image as a vision part (Atyahara only).
+      // For the model this turn: attach the image as a vision part (both bots).
       const userContent = (wantsVision && imageUrl)
         ? [
             { type: "text", text: caption || "Read this payment screenshot and log the transaction(s) — money received and/or paid." },
