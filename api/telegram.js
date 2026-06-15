@@ -63,6 +63,8 @@ async function tgFileUrl(fileId) {
 
 // Request-scoped bot context (set once per handler invocation — safe in serverless)
 let _ctx = null;
+// Request-scoped: the file (PDF/photo) the user attached in the current message, if any.
+let _pendingFile = null;
 
 // Escape HTML special chars so GPT output never breaks Telegram HTML parse mode
 function esc(s) {
@@ -518,6 +520,22 @@ const TOOLS = [
         required: ["name"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "attach_document_to_transaction",
+      description: "Attach the file the user just sent (PDF/photo, e.g. a tax invoice or receipt) to a recent Finance transaction. Use when the user sends a file and asks to attach/add it to a transaction (e.g. 'attach this to the recent IKEA transaction'). The file must be in the SAME message.",
+      parameters: {
+        type: "object",
+        properties: {
+          payee: { type: "string", description: "Payee/merchant to match the transaction by, e.g. 'IKEA', 'ShipGlobal'." },
+          amount: { type: "number", description: "Optional exact amount to disambiguate." },
+          days_back: { type: "number", description: "How many days back to look (default 30)." }
+        },
+        required: []
+      }
+    }
   }
 ];
 
@@ -793,6 +811,51 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
   return { success: true, txn_id: txn.id, type, amount, currency, account: accName, payee, date: txn.date };
 }
 
+async function execAttachDocument({ payee, amount, days_back = 30 } = {}) {
+  if (!_pendingFile) return { error: "No file is attached. Send the PDF/photo together with the instruction in one message." };
+  const txns = (await loadK(_ctx.finTxns)) || [];
+  const py = String(payee || "").trim().toLowerCase();
+  const amt = amount != null ? +amount : null;
+  const cutoff = Date.now() - (+days_back || 30) * 86400000;
+  const candidates = txns
+    .filter(t => {
+      const tp = String(t.payee || "").toLowerCase();
+      const okPayee = py ? (tp.includes(py) || py.includes(tp)) : true;
+      const okAmt = amt != null ? Math.abs((+t.amount || 0) - amt) < 0.01 : true;
+      const d = new Date(t.date || t.createdAt).getTime();
+      return okPayee && okAmt && (!Number.isFinite(d) || d >= cutoff);
+    })
+    .sort((a, b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt));
+  const target = candidates[0];
+  if (!target) return { error: `No recent transaction found${py ? ` for "${payee}"` : ""}. Try giving the payee or amount.` };
+
+  // Pull the file from Telegram and store it in Supabase Storage (persistent, public).
+  const fileUrl = await tgFileUrl(_pendingFile.fileId);
+  if (!fileUrl) return { error: "Couldn't fetch the file from Telegram (it may have expired — resend it)." };
+  let url;
+  try {
+    const resp = await fetch(fileUrl);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const client = sb();
+    await client.storage.createBucket("ng-media", { public: true }).catch(() => {});
+    const ext = (_pendingFile.name.split(".").pop() || (_pendingFile.mime.includes("pdf") ? "pdf" : "bin")).toLowerCase();
+    const path = `telegram/${target.id}-${Date.now()}.${ext}`;
+    const { error: upErr } = await client.storage.from("ng-media").upload(path, buf, { contentType: _pendingFile.mime, upsert: true });
+    if (upErr) return { error: "Upload failed: " + upErr.message };
+    url = client.storage.from("ng-media").getPublicUrl(path).data.publicUrl;
+  } catch (e) { return { error: "Could not store the file: " + e.message }; }
+
+  const att = { id: uid(), url, name: _pendingFile.name, type: _pendingFile.mime, uploadedAt: new Date().toISOString() };
+  const existing = target.attachments || (target.attachmentUrl ? [{ url: target.attachmentUrl, name: target.attachmentName }] : []);
+  const nextAtt = [...existing, att];
+  const updated = txns.map(t => t.id === target.id
+    ? { ...t, attachments: nextAtt, attachmentUrl: nextAtt[0].url, attachmentName: nextAtt[0].name, updatedAt: new Date().toISOString() }
+    : t);
+  await saveK(_ctx.finTxns, updated);
+  await logActivity({ user: "Telegram", action: "attached", module: "finance", label: `Attached ${_pendingFile.name} to ${target.payee || "transaction"} (${fmtMoney(target.amount, target.currency)})`, targetId: target.id, targetMod: "finance" });
+  return { success: true, attached_to: { payee: target.payee, amount: target.amount, currency: target.currency, date: target.date }, file: _pendingFile.name };
+}
+
 async function execRecordPayment({ id, amount, currency, date, notes }) {
   const purchases = (await loadK(_ctx.purchases)) || [];
   const item = purchases.find(p => p.id === id);
@@ -997,6 +1060,7 @@ async function runTool(name, args) {
       get_finance_accounts: execGetFinanceAccounts,
       get_finance_transactions: execGetFinanceTransactions,
       log_finance_transaction: execLogFinanceTransaction,
+      attach_document_to_transaction: execAttachDocument,
       record_payment: execRecordPayment,
       create_purchase: execCreatePurchase, create_expense: execCreateExpense,
       send_to_show: execSendToShow, mark_sold: execMarkSold,
@@ -1040,6 +1104,7 @@ You have full access to read AND write everything:
 - Expenses: create, view
 - Invoices: view
 - Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (add entry)
+- Documents: when the user sends a PDF/photo (e.g. a tax invoice or receipt) and asks to attach it to a transaction, call attach_document_to_transaction — you CAN attach files to transactions.
 - Vendors: search, create
 - Memory: save/delete persistent facts
 
@@ -1127,6 +1192,7 @@ export default async function handler(req, res) {
     try {
       // Set request-scoped bot context
       _ctx = botCtx(req.query?.bot === "at");
+      _pendingFile = null;
 
       const update = req.body || {};
       const updateId = update.update_id;
@@ -1135,6 +1201,7 @@ export default async function handler(req, res) {
 
       const chatId = message.chat?.id;
       const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
+      const doc = message.document || null;
       const caption  = (message.caption || "").trim();
       // Vision is enabled for the Atyahara bot only — it can read payment
       // screenshots / receipts and act on them. Other bots keep the text-only flow.
@@ -1144,8 +1211,14 @@ export default async function handler(req, res) {
         // Largest rendition is last in the photo size array
         imageUrl = await tgFileUrl(message.photo[message.photo.length - 1].file_id);
       }
+      // A file the user can ask to attach to a transaction (Atyahara bot only).
+      if (_ctx.isAT) {
+        if (doc) _pendingFile = { fileId: doc.file_id, name: doc.file_name || "document", mime: doc.mime_type || "application/octet-stream" };
+        else if (hasPhoto) _pendingFile = { fileId: message.photo[message.photo.length - 1].file_id, name: "photo.jpg", mime: "image/jpeg" };
+      }
       const text = (message.text || caption || (
-        wantsVision ? (imageUrl ? "[image attached]" : "[image attached but could not be loaded — ask the user to resend or describe it]")
+        doc ? `[file attached: ${doc.file_name || "document"}]`
+        : wantsVision ? (imageUrl ? "[image attached]" : "[image attached but could not be loaded — ask the user to resend or describe it]")
         : hasPhoto ? "[image sent — describe what you need]" : ""
       )).trim();
       if (!chatId || !text) return;
