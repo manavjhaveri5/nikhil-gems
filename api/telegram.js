@@ -750,6 +750,28 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
     accountId = match?.id || null;
   }
 
+  const txnDate = date || todayStr();
+
+  // Dedup: a forwarded/batched payment notification can arrive more than once. Skip if an
+  // equivalent transaction already exists — same type + amount + (loose) payee within a
+  // 7-day window — so the ledger isn't double-counted and the alert isn't repeated.
+  const amt = +amount || 0;
+  const py  = String(payee || "").trim().toLowerCase();
+  const refRaw = String(notes || "").match(/\b\d{9,}\b/)?.[0] || null; // UPI/UTR ref if present
+  const within7d = d => { const t = new Date(d).getTime(); return Number.isFinite(t) && Math.abs(t - new Date(txnDate).getTime()) <= 7 * 86400000; };
+  const dup = (txns || []).find(t => {
+    if (refRaw && String(t.notes || "").includes(refRaw)) return true; // exact ref match (any date)
+    if (t.type !== type) return false;
+    if (Math.abs((+t.amount || 0) - amt) >= 0.01) return false;
+    if (!within7d(t.date || t.createdAt)) return false;
+    const tp = String(t.payee || "").trim().toLowerCase();
+    return py && tp ? (tp === py || tp.includes(py) || py.includes(tp)) : true;
+  });
+  if (dup) {
+    return { success: true, duplicate: true, txn_id: dup.id, type, amount, currency, payee, date: dup.date,
+      note: "This payment is already in the ledger — skipped to avoid a duplicate. (If it's genuinely a second, separate payment, say so and I'll record it.)" };
+  }
+
   const txn = {
     id: uid(),
     type,
@@ -759,7 +781,7 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
     accountFrom: type === "debit"  ? accountId : null,
     payee: payee || "",
     category: category || "Other",
-    date: date || todayStr(),
+    date: txnDate,
     notes: notes || "Added via Telegram",
     createdAt: new Date().toISOString(),
   };
