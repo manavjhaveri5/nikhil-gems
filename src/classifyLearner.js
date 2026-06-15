@@ -27,6 +27,11 @@ const STOP = new Set([
   "payment", "pay", "paid", "to", "from", "via", "ref", "no", "bank", "account",
   "ac", "txn", "trf", "transfer", "online", "purchase", "pos", "card", "bil",
   "bill", "india", "limited", "co", "intl", "international",
+  // Bank / PSP codes that show up in Indian UPI narrations (noise, not the merchant).
+  "icic", "icici", "hdfc", "hdfcbank", "sbin", "utib", "yesb", "axis", "axisbank",
+  "axi", "kkbk", "kotak", "pytm", "paytm", "ybl", "phonepe", "apl", "ibl", "idfb",
+  "idfc", "barb", "pnb", "cnrb", "ubin", "fdrl", "rbl", "ratn", "indb", "induslnd",
+  "okhdfcbank", "oksbi", "okaxis", "okicici", "okhdfc", "gpay", "okbizaxis", "jupiteraxis",
 ]);
 
 const tokenize = s =>
@@ -51,11 +56,18 @@ const embText = r => `${r.rawPayee || r.payee || ""} ${r.payee || ""} ${r.notes 
 // across transactions. Only clean, human-written notes are safe to learn/suggest.
 const isRawNote = s => { const v = String(s || ""); return !v.trim() || /imported from bank|upi\/|\/dr\/|\/cr\/|neft|imps|rtgs|\d{8,}/i.test(v); };
 
+// Two tokens match if equal, or one is a prefix of the other (≥4 chars) — so a bank
+// narration abbreviation like "swig" connects to the cleaned name "swiggy".
+const tokenMatch = (x, y) => x === y || (x.length >= 4 && y.length >= 4 && (x.startsWith(y) || y.startsWith(x)));
+// Similarity that still fires when a short cleaned name ("swiggy") appears inside a noisy
+// raw narration ("…/swig/…"): blend Jaccard with how fully the SHORTER token set is covered.
 const jaccard = (a, b) => {
   if (!a.length || !b.length) return 0;
-  const setB = new Set(b);
-  const inter = a.filter(t => setB.has(t)).length;
-  return inter / (a.length + b.length - inter);
+  let inter = 0;
+  for (const t of a) if (b.some(u => tokenMatch(t, u))) inter++;
+  const jac = inter / (a.length + b.length - inter);
+  const cov = inter / Math.min(a.length, b.length); // coverage of the smaller set
+  return Math.max(jac, cov * 0.85);
 };
 const cosine = (a, b) => {
   if (!a || !b || a.length !== b.length) return 0;
