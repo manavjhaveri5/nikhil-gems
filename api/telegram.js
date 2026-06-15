@@ -850,23 +850,33 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
   return { success: true, txn_id: txn.id, type, amount, currency, account: accName, payee, date: txn.date, screenshot_attached: attached };
 }
 
-async function execAttachDocument({ payee, amount, days_back = 30 } = {}) {
+async function execAttachDocument({ payee, amount, days_back = 45 } = {}) {
   if (!_pendingFile) return { error: "No file is attached. Send the PDF/photo together with the instruction in one message." };
   const txns = (await loadK(_ctx.finTxns)) || [];
-  const py = String(payee || "").trim().toLowerCase();
+  const q = String(payee || "").trim().toLowerCase();
+  const stop = new Set(["the", "for", "recent", "transaction", "payment", "this", "that", "attach", "purchase", "paid", "from", "with"]);
+  const qWords = q.split(/\s+/).filter(w => w.length >= 3 && !stop.has(w));
   const amt = amount != null ? +amount : null;
-  const cutoff = Date.now() - (+days_back || 30) * 86400000;
-  const candidates = txns
-    .filter(t => {
-      const tp = String(t.payee || "").toLowerCase();
-      const okPayee = py ? (tp.includes(py) || py.includes(tp)) : true;
-      const okAmt = amt != null ? Math.abs((+t.amount || 0) - amt) < 0.01 : true;
+  const cutoff = Date.now() - (+days_back || 45) * 86400000;
+  // Score across payee + notes + category; amount is a BOOST, not a hard filter (an invoice
+  // often shows several different numbers, so don't reject on amount mismatch).
+  const scored = txns
+    .map(t => {
       const d = new Date(t.date || t.createdAt).getTime();
-      return okPayee && okAmt && (!Number.isFinite(d) || d >= cutoff);
+      if (Number.isFinite(d) && d < cutoff) return null;
+      const hay = `${t.payee || ""} ${t.notes || ""} ${t.category || ""}`.toLowerCase();
+      let score = 0;
+      if (q && hay.includes(q)) score += 4;
+      else if (qWords.some(w => hay.includes(w))) score += 2;
+      if (amt != null && Math.abs((+t.amount || 0) - amt) < 0.01) score += 3;
+      return { t, score, d: Number.isFinite(d) ? d : 0 };
     })
-    .sort((a, b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt));
-  const target = candidates[0];
-  if (!target) return { error: `No recent transaction found${py ? ` for "${payee}"` : ""}. Try giving the payee or amount.` };
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || b.d - a.d);
+  // Prefer a real match; if the user gave no useful hint, fall back to the most recent txn.
+  let target = scored.find(s => s.score > 0)?.t;
+  if (!target && !qWords.length && amt == null) target = scored[0]?.t;
+  if (!target) return { error: `Couldn't find a recent transaction matching ${q ? `"${payee}"` : "that"}. Tell me the merchant or amount (e.g. "the ₹15,502 Manek Emporium one").` };
 
   const att = await storePendingFile(target.id);
   if (!att) return { error: "Couldn't store the file (it may have expired — resend it)." };
