@@ -1315,14 +1315,19 @@ export default async function handler(req, res) {
 
       // Build history with new message
       const history = session.history || [];
+      const isImageTurn = !!(wantsVision && imageUrl);
       // For the model this turn: attach the image as a vision part (both bots).
-      const userContent = (wantsVision && imageUrl)
+      const userContent = isImageTurn
         ? [
             { type: "text", text: (caption ? caption + "\n\n" : "") + "Read THIS payment screenshot and log ONLY the single payment it shows. Do not touch or re-mention any earlier transaction." },
             { type: "image_url", image_url: { url: imageUrl } },
           ]
         : text;
-      const modelHistory = [...history, { role: "user", content: userContent }];
+      // Screenshot/receipt turns are STATELESS — send no prior history so the model can only
+      // act on the current image and never re-logs/re-announces a previous payment.
+      const modelHistory = isImageTurn
+        ? [{ role: "user", content: userContent }]
+        : [...history, { role: "user", content: userContent }];
 
       // Run GPT-4o
       const { reply, newMessages } = await chatWithOpenAI(modelHistory);
