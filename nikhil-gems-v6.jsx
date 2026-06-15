@@ -7660,6 +7660,12 @@ async function loadStockWithPhotos(){
 
 function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor}){
   const t=useT();
+  // Company-scoped bills/vendors. Gem stock/glossary are Nikhil-Gems-only (empty for Atyahara).
+  const [company,setCompany]=useState(()=>localStorage.getItem("ng-vendors-company")||"ng");
+  useEffect(()=>{localStorage.setItem("ng-vendors-company",company);},[company]);
+  const vk=accountingCompanyKeys(company);
+  const isAt=company==="at";
+  const KEYS={vendors:vk.vendors,purchases:vk.purchases,stock:isAt?"":"ng-stock-v5",glossary:isAt?"":"ng-glossary-v5",accStock:isAt?"":"ng-acc-stock-v1"};
   const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
   const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);
   const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);
@@ -7676,7 +7682,8 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
 
   useEffect(()=>{
-    Promise.all([loadK(KEYS.purchases),loadK(KEYS.vendors),loadK(KEYS.stock),loadK(KEYS.glossary),loadK("ng-fin-accounts-v1"),loadK(KEYS.accStock),loadK("ng-custom-markets-v1")])
+    setDraft(null);setDetail(null);
+    Promise.all([loadK(KEYS.purchases),loadK(KEYS.vendors),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),KEYS.glossary?loadK(KEYS.glossary):Promise.resolve([]),loadK(vk.accounts),KEYS.accStock?loadK(KEYS.accStock):Promise.resolve([]),loadK("ng-custom-markets-v1")])
       .then(([p,v,s,g,fa,ac,cm])=>{
         setPurchases(p||[]);setVendors(v||[]);setStock(s||[]);setGlossary(g||[]);
         setFinAccounts((fa||[]).filter(a=>a.active!==false));setAccStock(ac||[]);setCustomMarkets(cm||[]);
@@ -7684,7 +7691,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
         if(startBillId){const bill=(p||[]).find(b=>b.id===startBillId);if(bill){setDetail(bill);}onBillIdConsumed?.();}
       })
       .catch(e=>{console.error("PurchasesApp load error:",e);setLoaded(true);});
-  },[]);
+  },[company]);
 
   const nextPO=useCallback(()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;},[purchases]);
 
@@ -7718,7 +7725,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
         else{newAccStock.push({id:uid(),desc:it.desc,unit,qty:+it.qty||0,hsn:it.hsn||"7103",gst:it.gst||"0",bills:[billEntry]});}
       });
       setAccStock(newAccStock);
-      try{await saveK(KEYS.accStock,newAccStock);}catch(e){showToast("⚠ Acc stock sync failed: "+e.message);}
+      try{if(KEYS.accStock)await saveK(KEYS.accStock,newAccStock);}catch(e){showToast("⚠ Acc stock sync failed: "+e.message);}
     }
     setExpandBill(savedItem);setView("expand");setDraft(null);setFileData(null);
     showToast("Bill confirmed — now expand to physical stock");
@@ -7912,9 +7919,16 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
     </div>
   ):null;
   const purchasesBack=!isListView?()=>{setView("list");setDraft(null);setFileData(null);setDetail(null);setExpandBill(null);}:onHome;
+  const companySwitcher=(
+    <div style={{display:"flex",gap:3,background:C.card,borderRadius:7,padding:3,border:`1px solid ${C.border}`}}>
+      {[["ng","Nikhil Gems"],["at","Atyahara"]].map(([id,label])=>(
+        <button key={id} onClick={()=>setCompany(id)} style={{padding:"5px 11px",borderRadius:5,fontSize:12,fontWeight:company===id?800:600,border:"none",cursor:"pointer",background:company===id?(id==="at"?"#6B3FA0":C.gold):"transparent",color:company===id?"#fff":C.inkMid}}>{label}</button>
+      ))}
+    </div>
+  );
 
   return(
-    <Shell title="Purchases" crumb={crumb||(detail?`${detail.billNumber||detail.poNumber||"Bill"}`:null)} onHome={onHome} onBack={purchasesBack} actions={Actions}>
+    <Shell title="Purchases" crumb={crumb||(detail?`${detail.billNumber||detail.poNumber||"Bill"}`:null)} onHome={onHome} onBack={purchasesBack} actions={<div style={{display:"flex",gap:8,alignItems:"center"}}>{isListView&&companySwitcher}{Actions}</div>}>
       <Toast msg={toast}/>
       {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
       {loaded&&view==="list"&&!detail&&(
@@ -7955,7 +7969,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
       {loaded&&view==="verify"&&draft&&<VerifyView draft={draft} setDraft={setDraft} fileData={fileData} vendors={vendors} accStock={accStock} purchases={purchases} onSave={handleSaveBill}/>}
       {loaded&&view==="expand"&&expandBill&&<ExpandView bill={expandBill} glossary={glossary} setGlossary={setGlossary} customMarkets={customMarkets} onAddMarket={addCustomMarket} onDone={handleExpandDone} onBack={()=>{setView("list");setExpandBill(null);}}/>}
       {loaded&&view==="bulk"&&<BulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} vendors={vendors} accStock={accStock} purchases={purchases} extractOne={extractOne} onSave={async item=>{await handleSaveBill(item);setView("list");setExpandBill(null);if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);setView("bulk");}else{showToast(`${bulkQueue.length} bills processed`);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
-      {advDialog&&<AdvancePayDialog dialog={advDialog} accounts={finAccounts} onSave={async txn=>{const list=await loadK("ng-fin-txns-v1")||[];await saveK("ng-fin-txns-v1",[txn,...list]);showToast("Advance recorded in Finance");setAdvDialog(null);}} onSkip={()=>setAdvDialog(null)}/>}
+      {advDialog&&<AdvancePayDialog dialog={advDialog} accounts={finAccounts} onSave={async txn=>{const list=await loadK(vk.transactions)||[];await saveK(vk.transactions,[txn,...list]);showToast("Advance recorded in Finance");setAdvDialog(null);}} onSkip={()=>setAdvDialog(null)}/>}
     </Shell>
   );
 }
