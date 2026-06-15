@@ -1447,7 +1447,7 @@ function VendorsApp({onHome,startVendor}){
   const vk=accountingCompanyKeys(company);
   // Shadow the imported global KEYS so the whole module reads/writes the active company's data.
   // Stock/accStock are Nikhil-Gems-only (no stock module for Atyahara → empty there).
-  const KEYS={vendors:vk.vendors,purchases:vk.purchases,expenses:vk.expenses,stock:company==="ng"?"ng-stock-v5":"",accStock:company==="ng"?"ng-acc-stock-v1":""};
+  const KEYS={vendors:vk.vendors,purchases:vk.purchases,expenses:vk.expenses,stock:company==="ng"?"ng-stock-v5":"",accStock:vk.accStock};
   const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);
   const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
   const [expenses,setExpenses]=useState(()=>readCache(KEYS.expenses)||[]);
@@ -2998,6 +2998,7 @@ const accountingCompanyKeys=co=>({
   purchases:co==="ng"?"ng-purch-v5":"at-purch-v1",
   vendors:co==="ng"?"ng-vendors-v5":"at-vendors-v1",
   expenses:co==="ng"?"ng-expenses-v1":"at-expenses-v1",
+  accStock:co==="ng"?"ng-acc-stock-v1":"at-acc-stock-v1",
 });
 const ACCOUNTING_CUSTOM_CATS_KEY="ng-accounting-ledger-custom-cats-v1";
 const ACCOUNTING_ATTACH_REQ_KEY="ng-accounting-attach-req-cats-v1";
@@ -7665,7 +7666,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
   useEffect(()=>{localStorage.setItem("ng-vendors-company",company);},[company]);
   const vk=accountingCompanyKeys(company);
   const isAt=company==="at";
-  const KEYS={vendors:vk.vendors,purchases:vk.purchases,stock:isAt?"":"ng-stock-v5",glossary:isAt?"":"ng-glossary-v5",accStock:isAt?"":"ng-acc-stock-v1"};
+  const KEYS={vendors:vk.vendors,purchases:vk.purchases,stock:isAt?"":"ng-stock-v5",glossary:isAt?"":"ng-glossary-v5",accStock:vk.accStock};
   const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
   const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);
   const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);
@@ -9806,6 +9807,14 @@ function InvBulkView({queue,idx,setIdx,buyers,extractInvoice,onSave,onBack}){
 
 function InvoicesApp({onHome,startDraft}){
   const t=useT();
+  // Company-scoped: Nikhil Gems and Atyahara keep separate invoices / buyers / acc-stock.
+  const [company,setCompany]=useState(()=>localStorage.getItem("ng-vendors-company")||"ng");
+  useEffect(()=>{localStorage.setItem("ng-vendors-company",company);},[company]);
+  const vk=accountingCompanyKeys(company);
+  const isAt=company==="at";
+  const INV_KEYS={invoices:vk.invoices,buyers:vk.buyers};
+  const KEYS={accStock:vk.accStock,purchases:vk.purchases,stock:isAt?"":"ng-stock-v5"};
+  const invPrefix=isAt?"AT":"NG";
   const [invoices,setInvoices]=useState(()=>readCache(INV_KEYS.invoices)||[]);
   const [buyers,setBuyers]=useState(()=>readCache(INV_KEYS.buyers)||[]);
   const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);
@@ -9869,21 +9878,21 @@ function InvoicesApp({onHome,startDraft}){
     const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());
     return hit?hit.hsn||"71031029":"71031029";
   },[customsDescs]);
-  useEffect(()=>{Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),loadK(KEYS.stock),loadK(KEYS.purchases),loadK("ng-fin-txns-v1"),loadK("ng-customs-descs-v1")]).then(([i,b,a,s,p,ft,cd])=>{setInvoices(i||[]);setBuyers(b||[]);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(/^NG-0*(\d+)[-\/]/);return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`NG-${String(maxNum+1).padStart(2,"0")}/${fy}`;setDraft({...startDraft,invNo:nextNo});setView("form");}});},[]);
+  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(([i,b,a,s,p,ft,cd])=>{setInvoices(i||[]);setBuyers(b||[]);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;setDraft({...startDraft,invNo:nextNo});setView("form");}});},[company]);
 
   const nextInvNo=useCallback(()=>{
     const y1=new Date().getFullYear(), y2=y1+1;
     const yr=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;
     // Match all formats: NG-05/26-27, NG-57-2025/26, NG-044/2025-26, NG-57-2025/2026
     const extractNum=invNo=>{
-      const m=(invNo||"").match(/^NG-0*(\d+)[-\/]/);
+      const m=(invNo||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));
       return m?+m[1]:0;
     };
     // Only count invoices from current FY — match /26-27, -2026/xx, or /2026-xx formats
     const isCurrFY=n=>{const s=n||"";return s.includes(`/${yr}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};
     const maxNo=invoices.filter(i=>i.type!=="proforma"&&isCurrFY(i.invNo)).reduce((mx,inv)=>Math.max(mx,extractNum(inv.invNo)),0);
-    return `NG-${String(maxNo+1).padStart(2,"0")}/${yr}`;
-  },[invoices]);
+    return `${invPrefix}-${String(maxNo+1).padStart(2,"0")}/${yr}`;
+  },[invoices,company]);
 
   const saveInvoice=async (inv,{navigateAway=true}={})=>{
     // Diff-based stock update: restore old links then deduct new links.
@@ -10089,9 +10098,16 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
     </div>
   );
   const invBack=view!=="list"?()=>{setView("list");setDraft(null);}:onHome;
+  const companySwitcher=(
+    <div style={{display:"flex",gap:3,background:C.card,borderRadius:7,padding:3,border:`1px solid ${C.border}`}}>
+      {[["ng","Nikhil Gems"],["at","Atyahara"]].map(([id,label])=>(
+        <button key={id} onClick={()=>setCompany(id)} style={{padding:"5px 11px",borderRadius:5,fontSize:12,fontWeight:company===id?800:600,border:"none",cursor:"pointer",background:company===id?(id==="at"?"#6B3FA0":C.gold):"transparent",color:company===id?"#fff":C.inkMid}}>{label}</button>
+      ))}
+    </div>
+  );
 
   return(
-    <Shell title={t("Invoicing")} onHome={onHome} onBack={invBack} actions={Actions}>
+    <Shell title={t("Invoicing")} onHome={onHome} onBack={invBack} actions={<div style={{display:"flex",gap:8,alignItems:"center"}}>{view==="list"&&companySwitcher}{Actions}</div>}>
       <Toast msg={toast}/>
       {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
       {loaded&&view==="list"&&(
@@ -10263,7 +10279,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                 })}
               </div>
           )}
-          {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} invoices={invoices} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
+          {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
       {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")}/>}
@@ -10273,12 +10289,12 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   );
 }
 
-function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice}){
+function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,buyersKey=INV_KEYS.buyers}){
   const [form,setForm]=useState(null);
   const [selected,setSelected]=useState(null);
   const [search,setSearch]=useState("");
-  const save=async b=>{const list=[b,...buyers.filter(x=>x.id!==b.id)];setBuyers(list);await saveK(INV_KEYS.buyers,list);setForm(null);};
-  const del=async id=>{if(selected?.id===id)setSelected(null);const list=buyers.filter(x=>x.id!==id);setBuyers(list);await saveK(INV_KEYS.buyers,list);};
+  const save=async b=>{const list=[b,...buyers.filter(x=>x.id!==b.id)];setBuyers(list);await saveK(buyersKey,list);setForm(null);};
+  const del=async id=>{if(selected?.id===id)setSelected(null);const list=buyers.filter(x=>x.id!==id);setBuyers(list);await saveK(buyersKey,list);};
 
   // ── Edit form ──
   if(form)return(
