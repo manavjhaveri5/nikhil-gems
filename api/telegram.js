@@ -1139,6 +1139,7 @@ IMPORTANT RULES:
 4. "What did I spend / what transactions" → use get_finance_transactions
 5. For any write action, confirm what you're saving in one short line, then do it immediately — don't ask "shall I proceed?"
 6. NEVER ask clarifying questions about a payment/receipt unless both the amount AND account are missing. If there's only one bank account in INR, use it automatically. Just log and confirm.
+7. CRITICAL — act ONLY on the CURRENT message. Log/announce ONLY the payment(s) explicitly in this message or its screenshot. NEVER re-log, re-process, or re-mention a transaction from an earlier message — those are already saved and done. A new screenshot = exactly one new payment to log (unless the screenshot itself clearly shows more than one).
 </tools>
 
 <personality>
@@ -1164,7 +1165,9 @@ function sanitizeHistory(history) {
 
 async function chatWithOpenAI(history) {
   const systemContent = await buildSystemPrompt();
-  const messages = [{ role: "system", content: systemContent }, ...sanitizeHistory(history)];
+  // Only the most recent turns go to the model — long history full of past payments was
+  // making it re-log/re-announce earlier transactions. The current turn is last, so kept.
+  const messages = [{ role: "system", content: systemContent }, ...sanitizeHistory(history).slice(-10)];
 
   const callOpenAI = async (msgs) => {
     const r = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -1305,7 +1308,7 @@ export default async function handler(req, res) {
       // For the model this turn: attach the image as a vision part (both bots).
       const userContent = (wantsVision && imageUrl)
         ? [
-            { type: "text", text: caption || "Read this payment screenshot and log the transaction(s) — money received and/or paid." },
+            { type: "text", text: (caption ? caption + "\n\n" : "") + "Read THIS payment screenshot and log ONLY the single payment it shows. Do not touch or re-mention any earlier transaction." },
             { type: "image_url", image_url: { url: imageUrl } },
           ]
         : text;
