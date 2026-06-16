@@ -14009,7 +14009,7 @@ function ReconApp({onHome}){
   );
 }
 
-function ExportReconShell({onHome}){
+function ExportReconShell({onHome,onCreateInvoiceFromSb}){
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-export-recon-company")||"atyahara");
   const setScopedCompany=key=>{
     setCompany(key);
@@ -14030,7 +14030,7 @@ function ExportReconShell({onHome}){
   return(
     <Shell title="Export Recon" crumb={company==="nikhil"?"Nikhil Gems":"Atyahara"} onHome={onHome} onBack={onHome} actions={companySwitcher}>
       <React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"50vh",color:C.inkFaint,fontSize:13}}>Loading Export Recon…</div>}>
-        <ExportReconciliationApp company={company}/>
+        <ExportReconciliationApp company={company} onCreateInvoiceFromSb={onCreateInvoiceFromSb?draft=>onCreateInvoiceFromSb(draft,company):undefined}/>
       </React.Suspense>
     </Shell>
   );
@@ -15836,7 +15836,7 @@ export default function Root({onSignOut}){
     else if(mod==="expenses")content=<ExpensesApp onHome={goHome}/>;
     else if(mod==="shows")content=<ShowsApp onHome={goHome}/>;
     else if(mod==="calendar")content=<CalendarApp onHome={goHome}/>;
-    else if(mod==="recon")content=<ExportReconShell onHome={goHome}/>;
+    else if(mod==="recon")content=<ExportReconShell onHome={goHome} onCreateInvoiceFromSb={(draft,coKey)=>{localStorage.setItem("ng-vendors-company",(coKey==="nikhil"||coKey==="ng")?"ng":"at");setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}}/>;
     else if(mod==="invoices")content=<InvoicesApp onHome={()=>{goHome();setStartInvoiceDraft(null);}} startDraft={startInvoiceDraft}/>;
     else if(mod==="finance"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><FinanceApp onHome={goHome}/></React.Suspense>;
     else if(mod==="jobwork")content=<JobWorkApp onHome={goHome}/>;
