@@ -919,8 +919,21 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
   const [showFilters, setShowFilters]=useState(false);
   const [manualOpen,  setManualOpen]= useState(false);
   const [manualVals,  setManualVals]= useState(()=>emptyManualFirc());
+  const [attachId,    setAttachId]  = useState(null);   // FIRC id currently uploading a PDF
   const busyRef = useRef(false);
   const fileRef = useRef();
+
+  // Attach / replace the PDF for an individual FIRC (cloud-backed)
+  async function attachFircPdf(fircId, files){
+    const file=files[0]; if(!file)return;
+    setAttachId(fircId);
+    try{
+      const {b64,mime}=await readB64WithMime(file);
+      await docs.set(`firc:${fircId}`, b64, mime);
+      await onUpdate(fircId,{hasPdf:true});
+    }catch(e){ alert("FIRC upload failed: "+e.message); }
+    setAttachId(null);
+  }
 
   async function handleFiles(files) {
     if (busyRef.current) return;
@@ -1219,7 +1232,8 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
                       {f.notes&&<div style={{fontSize:10.5,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.notes}</div>}
                     </div>
                     <div style={{display:"flex",gap:5,flexShrink:0,marginLeft:8}} onClick={e=>e.stopPropagation()}>
-                      {f.hasPdf&&<Btn ghost small onClick={()=>showPdf(`firc:${f.id}`,f.number||"FIRC")}>👁</Btn>}
+                      {(f.hasPdf||docs.hasCloud(`firc:${f.id}`))&&<Btn ghost small onClick={()=>showPdf(`firc:${f.id}`,f.number||"FIRC")}>👁</Btn>}
+                      <InlineUpload label={(f.hasPdf||docs.hasCloud(`firc:${f.id}`))?"":"Attach PDF"} uploading={attachId===f.id} onFiles={files=>attachFircPdf(f.id,files)} imagesOk/>
                       <Btn ghost small onClick={()=>{setEditId(f.id);setEditVals({...emptyManualFirc(),...f});}}>✏</Btn>
                       <Btn danger small onClick={()=>onDelete(f.id)}>🗑</Btn>
                     </div>
