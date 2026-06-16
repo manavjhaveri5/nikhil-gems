@@ -10295,8 +10295,17 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
   const [search,setSearch]=useState("");
   const [saving,setSaving]=useState(false);
   const mergeBuyer=(list,b)=>[b,...(Array.isArray(list)?list:[]).filter(x=>x.id!==b.id)];
-  const save=async b=>{
+  const normalizeBuyer=b=>{
+    const company=(b.name||"").trim();
+    const contact=(b.contactName||"").trim();
+    const email=(b.email||"").trim();
+    const displayName=company||contact||email;
+    return displayName?{...b,name:displayName,companyName:company||b.companyName||""}:null;
+  };
+  const save=async raw=>{
     if(saving)return;
+    const b=normalizeBuyer(raw);
+    if(!b){onToast("Add a company, contact person, or email to save buyer");return;}
     const prev=buyers;
     const optimistic=mergeBuyer(prev,b);
     setBuyers(optimistic);
@@ -10324,7 +10333,7 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600}}>{buyers.find(b=>b.id===form.id)?"Edit Buyer":"New Buyer"}</div>
       </div>
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"18px 20px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:11,marginBottom:14}}>
-        <div style={{gridColumn:"1/-1"}}><Field label="Company Name"><input value={form.name||""} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={FI} placeholder="WAKOU BUSSAN CO.,LTD" autoFocus/></Field></div>
+        <div style={{gridColumn:"1/-1"}}><Field label="Company Name (optional)"><input value={form.name||""} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={FI} placeholder="WAKOU BUSSAN CO.,LTD" autoFocus/></Field></div>
         <div style={{gridColumn:"1/-1"}}><Field label="Contact Person"><input value={form.contactName||""} onChange={e=>setForm(f=>({...f,contactName:e.target.value}))} style={FI} placeholder="Mr. Tanaka Hiroshi"/></Field></div>
         <div style={{gridColumn:"1/-1"}}><Field label="Billing Address"><textarea value={form.billingAddress||form.address||""} onChange={e=>setForm(f=>({...f,billingAddress:e.target.value}))} rows={3} style={{...FI,resize:"vertical",fontSize:12}} placeholder="Street, City, Zip"/></Field></div>
         <div style={{gridColumn:"1/-1"}}>
@@ -10342,7 +10351,7 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:9}}>
         <button className="bs" onClick={()=>setForm(null)}>Cancel</button>
-        <button className="bp" disabled={saving} onClick={()=>{if(!form.name?.trim())return;save(form);}}>{saving?"Saving...":"Save Buyer"}</button>
+        <button className="bp" disabled={saving} onClick={()=>save(form)}>{saving?"Saving...":"Save Buyer"}</button>
       </div>
     </div>
   );
