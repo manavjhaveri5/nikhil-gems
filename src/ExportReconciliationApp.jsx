@@ -168,6 +168,117 @@ async function aiExtract(b64, docType, mime="application/pdf") {
   } catch { throw new Error(`Parse failed. Raw: ${t.slice(0,120)}`); }
 }
 
+// ── Build a commercial-invoice draft from a Shipping Bill PDF/image (AI) ──
+// The SB itself carries exporter, buyer/consignee, goods and FOB value, so we
+// can derive a full commercial invoice straight from it.
+async function aiInvoiceFromSb(b64, mime="application/pdf") {
+  const prompt = `This is an Indian customs export Shipping Bill / CSB / PBE. Build a COMMERCIAL INVOICE from it: pull every field an export commercial invoice needs. Return ONLY valid JSON, no markdown:
+{"exporterName":"exporter/seller name as printed","exporterAddress":"exporter full address one line","exporterIEC":"IEC code if present else empty","exporterGSTIN":"exporter GSTIN if present else empty","buyerName":"consignee/buyer name","buyerAddress":"consignee full address one line","buyerCountry":"destination country","invoiceNumber":"invoice number if one is referenced on the SB else empty","dateRaw":"shipping bill / LEO / filing date exactly as printed DD/MM/YYYY","currency":"currency code e.g. INR USD GBP","sbNumber":"shipping bill / document number","items":[{"description":"goods description","hsn":"HSN code if present else empty","qty":"quantity digits only","unit":"unit e.g. PCS KG CTN","unitPrice":"unit price digits only","amount":"line total digits only"}],"totalAmount":"total FOB / invoice value digits only","terms":"delivery or payment terms if present else empty"}
+If goods are not itemised, return ONE item summarising the goods with the full FOB value as its amount.`;
+  const res = await fetch("/api/claude",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1200,
+      messages:[{role:"user",content:[
+        IMG_MIMES.has(mime)
+          ? {type:"image",  source:{type:"base64",media_type:mime,data:b64}}
+          : {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
+        {type:"text",text:prompt}
+      ]}]
+    })
+  });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  const d = await res.json();
+  if (d.error) throw new Error(d.error.message||JSON.stringify(d.error));
+  const t = (d.content||[]).map(i=>i.text||"").join("").replace(/```json|```/g,"").trim();
+  let parsed;
+  try { parsed = JSON.parse(t); }
+  catch { throw new Error(`Parse failed. Raw: ${t.slice(0,120)}`); }
+  if (parsed.dateRaw) parsed.date = parseDDMMYYYY(parsed.dateRaw);
+  const csbDate = dateFromCsbNumber(parsed.sbNumber); if (csbDate) parsed.date = csbDate;
+  if (!Array.isArray(parsed.items) || !parsed.items.length) {
+    parsed.items = [{description:parsed.description||"Exported goods", hsn:"", qty:"1", unit:"", unitPrice:String(parsed.totalAmount||""), amount:String(parsed.totalAmount||"")}];
+  }
+  return parsed;
+}
+
+// ── Render a clean commercial-invoice PDF (returns {b64,mime}) ──
+async function buildInvoicePdf(f) {
+  const PDFLib = window.PDFLib;
+  if (!PDFLib) throw new Error("PDF engine not ready");
+  const { PDFDocument, StandardFonts, rgb } = PDFLib;
+  const doc  = await PDFDocument.create();
+  const page = doc.addPage([595,842]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const ink=rgb(0.1,0.1,0.1), mid=rgb(0.42,0.4,0.36), faint=rgb(0.62,0.6,0.55), lineCol=rgb(0.8,0.78,0.74);
+  const M=40, R=555;
+  const T=(s,x,yy,sz=9,fn=font,col=ink)=>page.drawText(s==null?"":String(s),{x,y:yy,size:sz,font:fn,color:col});
+  const wrap=(s,x,yy,sz,fn,col,maxChars,lh)=>{ const ws=String(s||"").split(/\s+/); const lines=[]; let cur=""; ws.forEach(w=>{ if((cur+" "+w).trim().length>maxChars){ if(cur)lines.push(cur.trim()); cur=w; } else cur=(cur+" "+w).trim(); }); if(cur)lines.push(cur); lines.forEach((ln,i)=>T(ln,x,yy-i*lh,sz,fn,col)); return Math.max(1,lines.length)*lh; };
+  const money=n=>{ const v=parseFloat(String(n).replace(/[^\d.]/g,""))||0; return v.toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2}); };
+  const cur=(f.currency||"INR").toUpperCase();
+  let y=802;
+  // Title
+  T("COMMERCIAL INVOICE",M,y,20,bold); y-=10;
+  page.drawLine({start:{x:M,y},end:{x:R,y},thickness:1.6,color:ink}); y-=22;
+  // Meta (right side) + Exporter (left)
+  const metaX=370, valX=455;
+  T("Invoice No.",metaX,y,8,bold,mid); T(f.invoiceNumber||"—",valX,y,9,bold);
+  T("EXPORTER",M,y,8,bold,mid);
+  let ly=y-13;
+  ly-=wrap(f.exporterName||"—",M,ly,10,bold,ink,40,12);
+  if(f.exporterAddress) ly-=wrap(f.exporterAddress,M,ly,8.5,font,mid,52,11);
+  if(f.exporterIEC)   { T(`IEC: ${f.exporterIEC}`,M,ly,8.5,font,mid); ly-=11; }
+  if(f.exporterGSTIN) { T(`GSTIN: ${f.exporterGSTIN}`,M,ly,8.5,font,mid); ly-=11; }
+  // Meta rows
+  let my=y-14;
+  const metaRow=(k,v)=>{ T(k,metaX,my,8,bold,mid); T(v||"—",valX,my,9,font,ink); my-=14; };
+  metaRow("Date", f.date||"—");
+  metaRow("Currency", cur);
+  metaRow("SB / Ref", f.sbNumber||"—");
+  // Buyer block
+  y = Math.min(ly, my) - 10;
+  T("BUYER / CONSIGNEE",M,y,8,bold,mid); y-=13;
+  y-=wrap(f.buyerName||"—",M,y,10,bold,ink,46,12);
+  if(f.buyerAddress) y-=wrap(f.buyerAddress,M,y,8.5,font,mid,60,11);
+  if(f.buyerCountry) { T(f.buyerCountry,M,y,8.5,font,mid); y-=11; }
+  y-=14;
+  // Items table
+  const cDesc=M, cHsn=300, cQty=350, cUnit=400, cRate=450, cAmt=R;
+  page.drawRectangle({x:M,y:y-4,width:R-M,height:18,color:rgb(0.95,0.93,0.89)});
+  T("Description",cDesc+4,y,8,bold,mid);
+  T("HSN",cHsn,y,8,bold,mid);
+  T("Qty",cQty,y,8,bold,mid);
+  T("Unit",cUnit,y,8,bold,mid);
+  T("Rate",cRate,y,8,bold,mid);
+  page.drawText("Amount",{x:cAmt-44,y,size:8,font:bold,color:mid});
+  y-=20;
+  let total=0;
+  (f.items||[]).forEach(it=>{
+    const amt=parseFloat(String(it.amount).replace(/[^\d.]/g,""))||0; total+=amt;
+    const dh=wrap(it.description||"—",cDesc+4,y,8.5,font,ink,46,11);
+    T(it.hsn||"",cHsn,y,8.5,font,ink);
+    T(it.qty||"",cQty,y,8.5,font,ink);
+    T(it.unit||"",cUnit,y,8.5,font,ink);
+    T(it.unitPrice?money(it.unitPrice):"",cRate,y,8.5,font,ink);
+    const amtStr=money(amt); page.drawText(amtStr,{x:cAmt-font.widthOfTextAtSize(amtStr,8.5),y,size:8.5,font,color:ink});
+    y-=Math.max(dh,14);
+    page.drawLine({start:{x:M,y:y+3},end:{x:R,y:y+3},thickness:0.5,color:lineCol});
+    y-=4;
+  });
+  const grand = parseFloat(String(f.totalAmount).replace(/[^\d.]/g,""))||total;
+  y-=6;
+  T("TOTAL",cRate-30,y,10,bold,ink);
+  const gStr=`${cur} ${money(grand)}`; page.drawText(gStr,{x:cAmt-bold.widthOfTextAtSize(gStr,10),y,size:10,font:bold,color:ink});
+  y-=22;
+  if(f.terms){ T("Terms",M,y,8,bold,mid); y-=12; y-=wrap(f.terms,M,y,8.5,font,mid,90,11); y-=8; }
+  // Footer note
+  T(`Draft generated from Shipping Bill ${f.sbNumber||""} — verify all details before issuing.`,M,40,7.5,font,faint);
+  const bytes = await doc.save();
+  let bin=""; const chunk=0x8000;
+  for(let i=0;i<bytes.length;i+=chunk) bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunk));
+  return { b64: btoa(bin), mime:"application/pdf" };
+}
+
 // Always treat incoming date strings as DD/MM/YYYY (Indian format)
 function parseDDMMYYYY(raw) {
   if (!raw) return "";
@@ -682,7 +793,7 @@ export default function App({ company = "atyahara" }) {
               <button onClick={()=>setSheet(null)} style={{background:C.fill,border:"none",borderRadius:8,padding:"6px 12px",fontSize:13,cursor:"pointer",color:C.inkMid}}>✕ Close</button>
             </div>
             <div style={{padding:"20px 24px 32px",overflowY:"auto"}}>
-              {sheet.type==="sbDetail"   && <SbDetailSheet   sbId={sheet.payload}   getData={()=>dataRef.current} onPatch={patchSb} onGen={id=>{setSheet(null);generatePacket(id);}} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
+              {sheet.type==="sbDetail"   && <SbDetailSheet   sbId={sheet.payload}   getData={()=>dataRef.current} onPatch={patchSb} onGen={id=>{setSheet(null);generatePacket(id);}} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf} onAddInvoice={addInvoice} onGotoInvoices={()=>{setSheet(null);setView("invoices");}}/>}
               {sheet.type==="fircDetail" && <FircDetailSheet fircId={sheet.payload} getData={()=>dataRef.current} fircUsed={fircUsed} showPdf={showPdf} onGen={id=>{setSheet(null);generatePacket(id);}} genId={genId} pdfReady={pdfReady} pdfErr={pdfErr} onUnlink={id=>assignSb(id,null)} onDeleteSb={deleteSb}/>}
             </div>
           </div>
@@ -2521,13 +2632,16 @@ function FemaView({ hasFema, setHasFema }) {
 }
 
 /* ══ SB DETAIL SHEET ═════════════════════════════════════════════ */
-function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady, pdfErr, showPdf }) {
+function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady, pdfErr, showPdf, onAddInvoice, onGotoInvoices }) {
   const [localHas, setLocalHas]=useState({});
   const [uploading,setUploading]=useState({});
   const [errors,   setErrors]  =useState({});
   const [editMode, setEditMode]=useState(false);
   const [editVals, setEditVals]=useState({});
+  const [genInv,   setGenInv]  =useState(false);   // creating invoice from SB
+  const [genInvMsg,setGenInvMsg]=useState(null);   // {ok, text}
 
+  const FLAGS={sb:"hasSbPdf",inv:"hasInvPdf",hawb:"hasHawbPdf",erf:"hasErfPdf",brc:"hasBrcPdf"};
   const d=getData(), sb=d.shippingBills.find(s=>s.id===sbId), firc=sb?d.fircs.find(f=>f.id===sb.fircId):null;
   if (!sb) return <div style={{padding:20,color:C.inkMid}}>SB not found.</div>;
   const has=flag=>localHas[flag]!==undefined?localHas[flag]:sb[flag];
@@ -2537,21 +2651,55 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
 
   async function handleDoc(type,files){
     const file=files[0]; if(!file)return;
-    const flagMap={inv:"hasInvPdf",hawb:"hasHawbPdf",erf:"hasErfPdf",brc:"hasBrcPdf"};
     setUploading(u=>({...u,[type]:true})); setErrors(e=>({...e,[type]:null}));
     try{
       const {b64,mime}=await readB64WithMime(file);
       await idb.set(`${type}:${sbId}`,packDoc(b64,mime));
-      await onPatch(sbId,{[flagMap[type]]:true});
-      setLocalHas(h=>({...h,[flagMap[type]]:true}));
+      await onPatch(sbId,{[FLAGS[type]]:true});
+      setLocalHas(h=>({...h,[FLAGS[type]]:true}));
     }catch(e){setErrors(er=>({...er,[type]:e.message}));}
     setUploading(u=>({...u,[type]:false}));
   }
   async function removeDoc(type){
-    const flagMap={inv:"hasInvPdf",hawb:"hasHawbPdf",erf:"hasErfPdf",brc:"hasBrcPdf"};
     await idb.del(`${type}:${sbId}`);
-    await onPatch(sbId,{[flagMap[type]]:false});
-    setLocalHas(h=>({...h,[flagMap[type]]:false}));
+    await onPatch(sbId,{[FLAGS[type]]:false});
+    setLocalHas(h=>({...h,[FLAGS[type]]:false}));
+  }
+
+  // Generate a commercial-invoice draft from the uploaded Shipping Bill (AI)
+  async function createInvoiceFromSb(){
+    setGenInvMsg(null);
+    if(!has("hasSbPdf")){ setGenInvMsg({ok:false,text:"Upload the Shipping Bill PDF first (Source document above)."}); return; }
+    if(!pdfReady&&!window.PDFLib){ setGenInvMsg({ok:false,text:"PDF engine still loading — try again in a moment."}); return; }
+    setGenInv(true);
+    try{
+      const raw=await idb.get(`sb:${sbId}`);
+      if(!raw) throw new Error("Shipping Bill file not found.");
+      const {b64,mime}=unpackDoc(raw);
+      const ex=await aiInvoiceFromSb(b64,mime);
+      const pdf=await buildInvoicePdf(ex);
+      const invId=uid();
+      await idb.set(`inv-pending:${invId}`, packDoc(pdf.b64,pdf.mime));
+      const desc=(ex.items||[]).map(i=>i.description).filter(Boolean).join(", ").slice(0,120);
+      await onAddInvoice({
+        id:invId,
+        filename:`Invoice (from SB ${sb.sbNumber||""}).pdf`,
+        invoiceNumber: ex.invoiceNumber||"",
+        date: ex.date||sb.date||"",
+        amount: String(ex.totalAmount||sb.amount||""),
+        currency: ex.currency||"INR",
+        buyerName: ex.buyerName||"",
+        description: desc,
+        suggestedSbId: sbId,
+        suggestedSbNumber: sb.sbNumber||ex.sbNumber||"",
+        confidence:"high",
+        source:"ai-from-sb",
+        status:"pending",
+      });
+      learner.track("invoice:create-from-sb");
+      setGenInvMsg({ok:true,text:`Draft invoice created${ex.invoiceNumber?` (${ex.invoiceNumber})`:""} — review & approve in the Invoices tab to attach it here.`});
+    }catch(e){ setGenInvMsg({ok:false,text:`Couldn't build invoice: ${e.message.slice(0,90)}`}); }
+    setGenInv(false);
   }
 
   const docs=[
@@ -2619,6 +2767,27 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
         ))}
       </div>
 
+      {/* Source document — the Shipping Bill itself (re-upload / replace) */}
+      {(()=>{
+        const hasDoc=has("hasSbPdf"), isUp=uploading.sb, err=errors.sb;
+        return (
+          <div className="ri" style={{marginBottom:8,border:`1px solid ${hasDoc?C.border:C.amber}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:C.inkMid}}>Shipping Bill <span style={{fontSize:10,color:C.inkFaint}}>· source document</span></div>
+                <div style={{fontSize:11,color:hasDoc?C.inkMid:C.amber}}>{hasDoc?"PDF on file · re-upload to replace":"No file stored — upload the SB PDF"}</div>
+              </div>
+              {hasDoc&&<span style={{fontSize:11,color:C.green,background:C.greenBg,padding:"2px 8px",borderRadius:12}}>✓</span>}
+            </div>
+            {err&&<div style={{fontSize:11,color:C.red,background:C.redBg,borderRadius:6,padding:"4px 8px",marginBottom:6,wordBreak:"break-all"}}>Error: {err}</div>}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <InlineUpload label={hasDoc?"Replace SB":"Upload SB"} uploading={isUp} onFiles={f=>handleDoc("sb",f)} imagesOk={true}/>
+              {hasDoc&&<button className="pr" onClick={()=>showPdf(`sb:${sbId}`,`SB ${sb.sbNumber}`)} style={{...S.btnGhost,padding:"7px 10px",fontSize:11}}>View</button>}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Doc slots */}
       {docs.map(({type,label,flag,note})=>{
         const hasDoc=has(flag), isUp=uploading[type], err=errors[type];
@@ -2634,11 +2803,24 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
             {err&&<div style={{fontSize:11,color:C.red,background:C.redBg,borderRadius:6,padding:"4px 8px",marginBottom:6,wordBreak:"break-all"}}>Error: {err}</div>}
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               <InlineUpload label={hasDoc?"Replace":"Upload"} uploading={isUp} onFiles={f=>handleDoc(type,f)} imagesOk={true}/>
+              {type==="inv"&&!hasDoc&&(
+                <button className="pr" onClick={createInvoiceFromSb} disabled={genInv}
+                  style={{...S.btnGhost,padding:"7px 10px",fontSize:11,borderColor:C.gold,color:C.gold,display:"flex",alignItems:"center",gap:5}}>
+                  {genInv?<><Spin/> Building…</>:"✨ Create from SB"}
+                </button>
+              )}
               {hasDoc&&<>
                 <button className="pr" onClick={()=>showPdf(`${type}:${sbId}`,label)} style={{...S.btnGhost,padding:"7px 10px",fontSize:11}}>View</button>
                 <button className="pr" onClick={()=>removeDoc(type)} style={{...S.btnDanger,padding:"7px 10px",fontSize:11}}>Remove</button>
               </>}
             </div>
+            {type==="inv"&&genInvMsg&&(
+              <div style={{fontSize:11,marginTop:7,padding:"7px 9px",borderRadius:7,lineHeight:1.45,
+                background:genInvMsg.ok?C.greenBg:C.redBg, color:genInvMsg.ok?C.green:C.red}}>
+                {genInvMsg.ok?"✓ ":"⚠ "}{genInvMsg.text}
+                {genInvMsg.ok&&onGotoInvoices&&<> <button className="pr" onClick={onGotoInvoices} style={{...S.btnGhost,padding:"3px 9px",fontSize:11,marginLeft:6}}>Open Invoices →</button></>}
+              </div>
+            )}
           </div>
         );
       })}
