@@ -10279,7 +10279,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                 })}
               </div>
           )}
-          {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
+          {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
       {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")}/>}
@@ -10289,11 +10289,31 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   );
 }
 
-function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,buyersKey=INV_KEYS.buyers}){
+function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,buyersKey=INV_KEYS.buyers,onToast=()=>{}}){
   const [form,setForm]=useState(null);
   const [selected,setSelected]=useState(null);
   const [search,setSearch]=useState("");
-  const save=async b=>{const list=[b,...buyers.filter(x=>x.id!==b.id)];setBuyers(list);await saveK(buyersKey,list);setForm(null);};
+  const [saving,setSaving]=useState(false);
+  const mergeBuyer=(list,b)=>[b,...(Array.isArray(list)?list:[]).filter(x=>x.id!==b.id)];
+  const save=async b=>{
+    if(saving)return;
+    const prev=buyers;
+    const optimistic=mergeBuyer(prev,b);
+    setBuyers(optimistic);
+    setSaving(true);
+    try{
+      const fresh=await loadKFresh(buyersKey);
+      const list=mergeBuyer(fresh,b);
+      setBuyers(list);
+      await saveK(buyersKey,list);
+      setSelected(s=>s?.id===b.id?b:s);
+      setForm(null);
+      onToast("Buyer saved");
+    }catch(e){
+      setBuyers(prev);
+      onToast("Buyer save failed: "+(e?.message||"check internet and reload"));
+    }finally{setSaving(false);}
+  };
   const del=async id=>{if(selected?.id===id)setSelected(null);const list=buyers.filter(x=>x.id!==id);setBuyers(list);await saveK(buyersKey,list);};
 
   // ── Edit form ──
@@ -10322,7 +10342,7 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",gap:9}}>
         <button className="bs" onClick={()=>setForm(null)}>Cancel</button>
-        <button className="bp" onClick={()=>{if(!form.name?.trim())return;save(form);}}>Save Buyer</button>
+        <button className="bp" disabled={saving} onClick={()=>{if(!form.name?.trim())return;save(form);}}>{saving?"Saving...":"Save Buyer"}</button>
       </div>
     </div>
   );
