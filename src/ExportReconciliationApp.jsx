@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { loadK, saveK, mob } from "./utils.js";
+import { uploadToStorage } from "./storageUtils.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
 
 /* ══ ERP THEME TOKENS ═══════════════════════════════════════════
@@ -119,6 +120,71 @@ const ACCEPT_DOCS= "application/pdf,image/jpeg,image/jpg,image/png";
 // Store as JSON envelope {b64, mime} so we can handle both PDFs and images
 const packDoc    = (b64,mime) => mime&&mime!=="application/pdf" ? JSON.stringify({b64,mime}) : b64;
 const unpackDoc  = raw => { if(!raw) return null; try{ const p=JSON.parse(raw); if(p.b64&&p.mime) return p; }catch{} return {b64:raw,mime:"application/pdf"}; };
+
+/* ══ CLOUD DOCUMENT STORE ════════════════════════════════════════
+   Documents were previously only in this browser's IndexedDB, so
+   they couldn't be seen on another laptop/profile. Now the source of
+   truth is Supabase Storage (public ng-media bucket); IndexedDB stays
+   as a fast local cache. A per-company map {docKey: publicUrl} is
+   synced via Supabase (er-docurls-v1:<company>) so ANY device resolves
+   any document.                                                    */
+const DOCURL_KEY = "er-docurls-v1";
+let _docUrls = {};          // {docKey -> publicUrl} for the active company
+const _b64ToBytes = b64 => { const bin=atob(b64), a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i); return a; };
+async function loadDocUrls(){ try{ _docUrls=(await loadK(scopedKey(DOCURL_KEY)))||{}; }catch{ _docUrls={}; } return _docUrls; }
+async function saveDocUrls(){ try{ await saveK(scopedKey(DOCURL_KEY), _docUrls); }catch(e){ console.warn("docUrls save",e&&e.message); } }
+const _storagePath = (company,key,mime) => { const ext = mime==="application/pdf"?"pdf":((mime||"").split("/")[1]||"bin"); return `export-recon/${company}/${String(key).replace(/[^a-zA-Z0-9._-]/g,"_")}.${ext}`; };
+async function _uploadDoc(company,key,b64,mime){
+  const bytes=_b64ToBytes(b64);
+  const file=new File([bytes], _storagePath(company,key,mime).split("/").pop(), {type:mime||"application/pdf"});
+  return await uploadToStorage(_storagePath(company,key,mime), file);
+}
+async function _fetchDocUrl(url){
+  const r=await fetch(url); if(!r.ok) throw new Error(`fetch ${r.status}`);
+  const blob=await r.blob();
+  const mime=blob.type||"application/pdf";
+  const b64=await new Promise((res,rej)=>{ const fr=new FileReader(); fr.onload=()=>res(String(fr.result).split(",")[1]); fr.onerror=rej; fr.readAsDataURL(blob); });
+  return {b64,mime};
+}
+const docs = {
+  // raw value compatible with unpackDoc() — local cache first, then cloud
+  async get(key){
+    let raw=null;
+    try{ raw=await idb.get(key); }catch{}
+    if (raw) return raw;
+    const url=_docUrls[key];
+    if (url){ try{ const {b64,mime}=await _fetchDocUrl(url); raw=packDoc(b64,mime); try{ await idb.set(key,raw); }catch{} return raw; }catch(e){ console.warn("cloud fetch",key,e&&e.message); } }
+    return null;
+  },
+  // write to local cache + cloud; records the public URL in the synced map.
+  // Cloud failures don't throw: the file stays local and the sync banner picks
+  // it up later, so uploads never hard-fail (e.g. offline / transient errors).
+  async set(key,b64,mime){
+    try{ await idb.set(key, packDoc(b64,mime)); }catch{}
+    try{ const url=await _uploadDoc(idb.ns,key,b64,mime); _docUrls[key]=url; await saveDocUrls(); return url; }
+    catch(e){ console.warn("cloud upload",key,e&&e.message); return null; }
+  },
+  async del(key){ try{ await idb.del(key); }catch{} if(_docUrls[key]){ delete _docUrls[key]; await saveDocUrls(); } },
+  hasCloud(key){ return !!_docUrls[key]; },
+};
+// Backfill: upload any local-only docs to the cloud so other devices can see them
+async function syncLocalDocsToCloud(onProgress){
+  let keys=[]; try{ keys=await idb.keys(); }catch{}
+  const todo=keys.filter(k=>!_docUrls[k]);
+  let done=0, ok=0;
+  for(const k of todo){
+    try{
+      const raw=await idb.get(k); if(!raw){ done++; onProgress&&onProgress(done,todo.length,k); continue; }
+      const {b64,mime}=unpackDoc(raw);
+      const url=await _uploadDoc(idb.ns,k,b64,mime);
+      _docUrls[k]=url; ok++;
+      if(ok%5===0) await saveDocUrls();
+    }catch(e){ console.warn("sync",k,e&&e.message); }
+    done++; onProgress&&onProgress(done,todo.length,k);
+  }
+  await saveDocUrls();
+  return {attempted:todo.length, uploaded:ok, totalLocal:keys.length};
+}
 
 // SB status flow: pending → prepared → submitted → cleared → rejected → pending
 const STATUS_NEXT  = { pending:"prepared", prepared:"submitted", submitted:"cleared", cleared:"rejected", rejected:"pending" };
@@ -415,8 +481,22 @@ export default function App({ company = "atyahara" }) {
   const [pdfModal, setPdfModal]     = useState(null);  // kept for packet download
   const [docViewer, setDocViewer]   = useState(null);  // {url, name, mime} for inline view
   const [exportModal, setExportModal] = useState(null); // raw JSON string fallback for blocked downloads
+  const [cloudSync, setCloudSync] = useState({unsynced:0, running:false, done:0, total:0, lastMsg:null});
 
   useEffect(()=>{ dataRef.current=data; },[data]);
+
+  // Count docs that live only in THIS browser (not yet pushed to the cloud)
+  const refreshUnsynced = useCallback(async()=>{
+    try{ const keys=await idb.keys(); setCloudSync(s=>({...s,unsynced:keys.filter(k=>!docs.hasCloud(k)).length})); }catch{}
+  },[]);
+  const runCloudSync = useCallback(async()=>{
+    setCloudSync(s=>({...s,running:true,done:0,total:0,lastMsg:null}));
+    try{
+      const res=await syncLocalDocsToCloud((done,total)=>setCloudSync(s=>({...s,done,total})));
+      await refreshUnsynced();
+      setCloudSync(s=>({...s,running:false,lastMsg:`✓ ${res.uploaded} document${res.uploaded!==1?"s":""} synced to the cloud — now visible on every device.`}));
+    }catch(e){ setCloudSync(s=>({...s,running:false,lastMsg:`Sync error: ${(e&&e.message||"").slice(0,80)}`})); }
+  },[refreshUnsynced]);
 
   useEffect(()=>{
     activeReconCompany = company || "atyahara";
@@ -469,9 +549,11 @@ export default function App({ company = "atyahara" }) {
     (async()=>{
       activeReconCompany = company || "atyahara";
       idb.setNamespace(activeReconCompany);
+      await loadDocUrls();
       const d=await metaStore.load(); setData(d); dataRef.current=d;
-      setHasFema(!!(await idb.get("fema")));
+      setHasFema(!!(await idb.get("fema")) || docs.hasCloud("fema"));
       setLoading(false);
+      refreshUnsynced();
     })();
   },[company]);
 
@@ -482,10 +564,10 @@ export default function App({ company = "atyahara" }) {
   },[]);
 
   const addFirc    = useCallback(async f   => persist(d=>({...d,fircs:[...d.fircs,f].sort((a,b)=>new Date(a.date)-new Date(b.date))})),[persist]);
-  const deleteFirc = useCallback(async id  => { learner.track("firc:delete"); await persist(d=>({...d,fircs:d.fircs.filter(f=>f.id!==id),shippingBills:d.shippingBills.map(sb=>sb.fircId===id?{...sb,fircId:null}:sb)})); await idb.del(`firc:${id}`); },[persist]);
+  const deleteFirc = useCallback(async id  => { learner.track("firc:delete"); await persist(d=>({...d,fircs:d.fircs.filter(f=>f.id!==id),shippingBills:d.shippingBills.map(sb=>sb.fircId===id?{...sb,fircId:null}:sb)})); await docs.del(`firc:${id}`); },[persist]);
   const updateFirc = useCallback(async (id,p)=>{ learner.track("firc:edit"); return persist(d=>({...d,fircs:d.fircs.map(f=>f.id===id?{...f,...p}:f)})); },[persist]);
   const addSb      = useCallback(async sb  => persist(d=>({...d,shippingBills:[...d.shippingBills,sb].sort((a,b)=>new Date(a.date)-new Date(b.date))})),[persist]);
-  const deleteSb   = useCallback(async id  => { learner.track("sb:delete"); await persist(d=>({...d,shippingBills:d.shippingBills.filter(sb=>sb.id!==id)})); await Promise.all(["sb","inv","hawb","erf","brc"].map(t=>idb.del(`${t}:${id}`))); },[persist]);
+  const deleteSb   = useCallback(async id  => { learner.track("sb:delete"); await persist(d=>({...d,shippingBills:d.shippingBills.filter(sb=>sb.id!==id)})); await Promise.all(["sb","inv","hawb","erf","brc"].map(t=>docs.del(`${t}:${id}`))); },[persist]);
   const patchSb    = useCallback(async (id,p)=>persist(d=>({...d,shippingBills:d.shippingBills.map(sb=>sb.id===id?{...sb,...p}:sb)})),[persist]);
   const assignSb   = useCallback(async (sbId,fircId)=>{ learner.track("match:sb:assign",{hasFirc:!!fircId}); return persist(d=>({...d,shippingBills:d.shippingBills.map(sb=>sb.id===sbId?{...sb,fircId}:sb)})); },[persist]);
   const cycleStatus= useCallback(async id=>{ const sb=dataRef.current.shippingBills.find(x=>x.id===id); if(sb){ learner.track("sb:status:cycle",{from:sb.status||"pending",to:STATUS_NEXT[sb.status||"pending"]}); await patchSb(id,{status:STATUS_NEXT[sb.status||"pending"]}); } },[patchSb]);
@@ -493,12 +575,12 @@ export default function App({ company = "atyahara" }) {
   // Invoice queue callbacks
   const addInvoice    = useCallback(async inv => persist(d=>({...d,invoices:[...(d.invoices||[]),inv]})),[persist]);
   const patchInvoice  = useCallback(async (id,p)=>persist(d=>({...d,invoices:(d.invoices||[]).map(inv=>inv.id===id?{...inv,...p}:inv)})),[persist]);
-  const deleteInvoice = useCallback(async id => { await persist(d=>({...d,invoices:(d.invoices||[]).filter(inv=>inv.id!==id)})); await idb.del(`inv-pending:${id}`); },[persist]);
+  const deleteInvoice = useCallback(async id => { await persist(d=>({...d,invoices:(d.invoices||[]).filter(inv=>inv.id!==id)})); await docs.del(`inv-pending:${id}`); },[persist]);
   // Approve: move PDF from staging key to inv:sbId, patch SB hasInvPdf
   const approveInvoice = useCallback(async (invId, sbId) => {
     learner.track("invoice:approve");
-    const b64 = await idb.get(`inv-pending:${invId}`);
-    if (b64) { await idb.set(`inv:${sbId}`, b64); await idb.del(`inv-pending:${invId}`); }
+    const raw = await docs.get(`inv-pending:${invId}`);
+    if (raw) { const {b64,mime}=unpackDoc(raw); await docs.set(`inv:${sbId}`, b64, mime); await docs.del(`inv-pending:${invId}`); }
     await patchSb(sbId, {hasInvPdf:true});
     await patchInvoice(invId, {status:"approved", linkedSbId:sbId});
   },[patchSb, patchInvoice]);
@@ -535,7 +617,7 @@ export default function App({ company = "atyahara" }) {
 
   const showPdf = useCallback(async (key,name)=>{
     learner.track("pdf:view");
-    const raw=await idb.get(key);
+    const raw=await docs.get(key);
     if (!raw){alert(`No file stored for "${name}"`);return;}
     const {b64,mime}=unpackDoc(raw);
     const bin=atob(b64),arr=new Uint8Array(bin.length);
@@ -556,8 +638,8 @@ export default function App({ company = "atyahara" }) {
     try {
       const {PDFDocument,StandardFonts,rgb}=pdfLib.current||window.PDFLib;
       const [sbB,invB,fircB,hawbB,femaB,erfB,brcB]=await Promise.all([
-        idb.get(`sb:${sb.id}`),idb.get(`inv:${sb.id}`),idb.get(`firc:${firc.id}`),
-        idb.get(`hawb:${sb.id}`),idb.get("fema"),idb.get(`erf:${sb.id}`),idb.get(`brc:${sb.id}`),
+        docs.get(`sb:${sb.id}`),docs.get(`inv:${sb.id}`),docs.get(`firc:${firc.id}`),
+        docs.get(`hawb:${sb.id}`),docs.get("fema"),docs.get(`erf:${sb.id}`),docs.get(`brc:${sb.id}`),
       ]);
       const merged=await PDFDocument.create();
       const font=await merged.embedFont(StandardFonts.Helvetica);
@@ -669,10 +751,11 @@ export default function App({ company = "atyahara" }) {
       const sb = sbs[i];
       onProgress({i, total: sbs.length, sb: sb.sbNumber, status: "reading"});
       try {
-        const b64 = await idb.get(`sb:${sb.id}`);
-        if (!b64) { skipped++; onProgress({i, total: sbs.length, sb: sb.sbNumber, status: "no-pdf"}); continue; }
+        const raw = await docs.get(`sb:${sb.id}`);
+        if (!raw) { skipped++; onProgress({i, total: sbs.length, sb: sb.sbNumber, status: "no-pdf"}); continue; }
+        const {b64,mime} = unpackDoc(raw);
         onProgress({i, total: sbs.length, sb: sb.sbNumber, status: "extracting"});
-        const ex = await aiExtract(b64, "sb");
+        const ex = await aiExtract(b64, "sb", mime);
         if (ex.date && ex.date !== sb.date) {
           await patchSb(sb.id, {date: ex.date});
           fixed++;
@@ -766,6 +849,27 @@ export default function App({ company = "atyahara" }) {
 
       {/* ── Main content ── */}
       <div style={{...S.content, transition:"margin-right .25s var(--ease,ease)", marginRight: docViewer&&!mob ? 500 : 0}}>
+        {(cloudSync.running || cloudSync.unsynced>0 || cloudSync.lastMsg) && (
+          <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",
+            background:cloudSync.running?C.blueBg:cloudSync.unsynced>0?C.amberBg:C.greenBg,
+            border:`1px solid ${cloudSync.running?C.blue:cloudSync.unsynced>0?C.amber:C.green}`,
+            borderRadius:12,padding:"11px 15px",marginBottom:14}}>
+            <span style={{fontSize:18}}>{cloudSync.running?"☁️":cloudSync.unsynced>0?"⚠️":"✅"}</span>
+            <div style={{flex:1,minWidth:180,fontSize:13,color:cloudSync.running?C.blue:cloudSync.unsynced>0?C.amber:C.green,lineHeight:1.45}}>
+              {cloudSync.running
+                ? <>Uploading documents to the cloud… <b>{cloudSync.done}/{cloudSync.total}</b></>
+                : cloudSync.unsynced>0
+                  ? <><b>{cloudSync.unsynced}</b> document{cloudSync.unsynced!==1?"s are":" is"} stored only on this device — other laptops can’t open {cloudSync.unsynced!==1?"them":"it"}. Sync to the cloud so everyone can view &amp; download.</>
+                  : cloudSync.lastMsg}
+            </div>
+            {!cloudSync.running && cloudSync.unsynced>0 && (
+              <button className="pr" onClick={runCloudSync} style={{...S.btnDark,padding:"8px 14px",fontSize:12,whiteSpace:"nowrap"}}>☁️ Sync to cloud</button>
+            )}
+            {!cloudSync.running && cloudSync.unsynced===0 && cloudSync.lastMsg && (
+              <button className="pr" onClick={()=>setCloudSync(s=>({...s,lastMsg:null}))} style={{...S.btnGhost,padding:"6px 10px",fontSize:12}}>Dismiss</button>
+            )}
+          </div>
+        )}
         <HowItWorks setView={setView}/>
         {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={openSheet}/>}
         {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={openSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
@@ -884,7 +988,7 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
         }
         upd({status:"saving",detail:"saving…"});
         const id=uid();
-        await idb.set(`firc:${id}`,b64);
+        await docs.set(`firc:${id}`,b64,"application/pdf");
         await onAdd({id,number:fircNumber,date:ex.date||"",amount:String(ex.amount||""),hasPdf:true});
         upd({status:"done",detail:fircNumber||"saved"});
       } catch(e){upd({status:"error",detail:e.message});}
@@ -1373,7 +1477,7 @@ function SBsView({ data, onAdd, onDelete, onPatch, onCycle, setSheet, onGen, gen
         if (existing){upd({status:"skipped",detail:`Duplicate of SB ${existing.sbNumber} (normalised match) — skipped`});continue;}
         upd({status:"saving",detail:"saving…"});
         const id=uid();
-        await idb.set(`sb:${id}`,b64);
+        await docs.set(`sb:${id}`,b64,"application/pdf");
         // Use AI-detected docType; fall back to filename heuristic
         const rawType = (ex.docType||"").toLowerCase();
         const sbType = rawType==="pbe" ? "pbe" : rawType==="csb" ? "csb" : "commercial";
@@ -1640,7 +1744,7 @@ function InvoicesView({ data, onAddInvoice, onPatchInvoice, onDeleteInvoice, onA
 
         upd({status:"saving", detail:"saving…"});
         const id = uid();
-        await idb.set(`inv-pending:${id}`, packDoc(b64,mime));
+        await docs.set(`inv-pending:${id}`, b64, mime);
         await onAddInvoice({
           id, filename:file.name,
           invoiceNumber: ex.invoiceNumber||"",
@@ -2604,7 +2708,7 @@ function FemaView({ hasFema, setHasFema }) {
   async function handle(files){
     const f=files[0]; if(!f)return;
     setUploading(true);
-    try{await idb.set("fema",await readB64(f));setHasFema(true);}
+    try{const {b64,mime}=await readB64WithMime(f);await docs.set("fema",b64,mime);setHasFema(true);}
     catch(e){alert("Upload failed: "+e.message);}
     setUploading(false);
     if(fileRef.current)fileRef.current.value="";
@@ -2625,7 +2729,7 @@ function FemaView({ hasFema, setHasFema }) {
           </div>
         }
         <DropZone label={hasFema?"Replace FEMA PDF":"Upload FEMA PDF"} multi={false} fileRef={fileRef} onFiles={handle} uploading={uploading}/>
-        {hasFema&&<button className="pr" onClick={async()=>{await idb.del("fema");setHasFema(false);}} style={{...S.btnDanger,width:"100%",marginTop:8}}>Remove FEMA PDF</button>}
+        {hasFema&&<button className="pr" onClick={async()=>{await docs.del("fema");setHasFema(false);}} style={{...S.btnDanger,width:"100%",marginTop:8}}>Remove FEMA PDF</button>}
       </div>
     </div>
   );
@@ -2654,14 +2758,14 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
     setUploading(u=>({...u,[type]:true})); setErrors(e=>({...e,[type]:null}));
     try{
       const {b64,mime}=await readB64WithMime(file);
-      await idb.set(`${type}:${sbId}`,packDoc(b64,mime));
+      await docs.set(`${type}:${sbId}`,b64,mime);
       await onPatch(sbId,{[FLAGS[type]]:true});
       setLocalHas(h=>({...h,[FLAGS[type]]:true}));
     }catch(e){setErrors(er=>({...er,[type]:e.message}));}
     setUploading(u=>({...u,[type]:false}));
   }
   async function removeDoc(type){
-    await idb.del(`${type}:${sbId}`);
+    await docs.del(`${type}:${sbId}`);
     await onPatch(sbId,{[FLAGS[type]]:false});
     setLocalHas(h=>({...h,[FLAGS[type]]:false}));
   }
@@ -2673,13 +2777,13 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
     if(!pdfReady&&!window.PDFLib){ setGenInvMsg({ok:false,text:"PDF engine still loading — try again in a moment."}); return; }
     setGenInv(true);
     try{
-      const raw=await idb.get(`sb:${sbId}`);
+      const raw=await docs.get(`sb:${sbId}`);
       if(!raw) throw new Error("Shipping Bill file not found.");
       const {b64,mime}=unpackDoc(raw);
       const ex=await aiInvoiceFromSb(b64,mime);
       const pdf=await buildInvoicePdf(ex);
       const invId=uid();
-      await idb.set(`inv-pending:${invId}`, packDoc(pdf.b64,pdf.mime));
+      await docs.set(`inv-pending:${invId}`, pdf.b64, pdf.mime);
       const desc=(ex.items||[]).map(i=>i.description).filter(Boolean).join(", ").slice(0,120);
       await onAddInvoice({
         id:invId,
