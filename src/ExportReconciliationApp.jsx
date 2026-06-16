@@ -287,6 +287,7 @@ function sbToInvoiceDraft(ex, sb){
     portLading:"Mumbai, India", portDischarge:"",
     consigneeSameAsBuyer:true,
     consigneeName: ex.buyerName||"", consigneeAddress: ex.buyerAddress||"", consigneeCountry: ex.buyerCountry||"",
+    sourceBuyerName: ex.buyerName||"", sourceBuyerAddress: ex.buyerAddress||"", sourceBuyerCountry: ex.buyerCountry||"",
     totalAmt, createdAt:new Date().toISOString(),
     sourceSbId: sb&&sb.id||"", sourceSbNumber: sb&&sb.sbNumber||(ex.sbNumber||""),
   };

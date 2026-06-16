@@ -9878,7 +9878,33 @@ function InvoicesApp({onHome,startDraft}){
     const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());
     return hit?hit.hsn||"71031029":"71031029";
   },[customsDescs]);
-  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(([i,b,a,s,p,ft,cd])=>{setInvoices(i||[]);setBuyers(b||[]);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;setDraft({...startDraft,invNo:nextNo});setView("form");}});},[company]);
+  const ensureBuyerForSbDraft=async(rawDraft,loadedBuyers)=>{
+    const buyerName=(rawDraft.sourceBuyerName||rawDraft.consigneeName||"").trim();
+    const buyerAddress=(rawDraft.sourceBuyerAddress||rawDraft.consigneeAddress||"").trim();
+    const buyerCountry=(rawDraft.sourceBuyerCountry||rawDraft.consigneeCountry||"").trim();
+    if(!rawDraft.sourceSbId||!buyerName)return{draft:rawDraft,buyers:loadedBuyers||[]};
+    const norm=s=>String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+    const fresh=await loadKFresh(INV_KEYS.buyers).catch(()=>loadedBuyers||[]);
+    const base=Array.isArray(fresh)?fresh:(loadedBuyers||[]);
+    const existing=base.find(b=>norm(b.name)===norm(buyerName)||norm(b.contactName)===norm(buyerName));
+    if(existing){
+      const patched={...existing};
+      let changed=false;
+      if(buyerAddress&&!patched.billingAddress&&!patched.address){patched.billingAddress=buyerAddress;patched.address=buyerAddress;changed=true;}
+      if(buyerCountry&&!patched.country){patched.country=buyerCountry;changed=true;}
+      if(changed){
+        const list=[patched,...base.filter(b=>b.id!==patched.id)];
+        await saveK(INV_KEYS.buyers,list);
+        return{draft:{...rawDraft,buyerId:patched.id,consigneeSameAsBuyer:true},buyers:list};
+      }
+      return{draft:{...rawDraft,buyerId:existing.id,consigneeSameAsBuyer:true},buyers:base};
+    }
+    const buyer={...newBuyer(),id:uid(),name:buyerName,contactName:"",billingAddress:buyerAddress,address:buyerAddress,shippingAddress:"",shippingSameAsBilling:true,country:buyerCountry,port:rawDraft.portDischarge||""};
+    const list=[buyer,...base];
+    await saveK(INV_KEYS.buyers,list);
+    return{draft:{...rawDraft,buyerId:buyer.id,consigneeSameAsBuyer:true},buyers:list};
+  };
+  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");}});},[company]);
 
   const nextInvNo=useCallback(()=>{
     const y1=new Date().getFullYear(), y2=y1+1;
@@ -9938,6 +9964,11 @@ function InvoicesApp({onHome,startDraft}){
     const freshInvs=await loadKFresh(INV_KEYS.invoices);
     const list=[inv,...(Array.isArray(freshInvs)?freshInvs:invoices).filter(i=>i.id!==inv.id)];
     setInvoices(list);await saveK(INV_KEYS.invoices,list);
+    let packetAttachOk=false, packetAttachErr="";
+    if(inv.sourceSbId){
+      try{await attachInvoiceToExportReconPacket(inv,buyers,company);packetAttachOk=true;}
+      catch(e){packetAttachErr=e?.message||"check connection";}
+    }
     // Sync readyDates to Calendar
     const calData=await loadK(CAL_KEY);
     let calList=calData.filter(e=>!inv.items.some(item=>e.id===`inv-ready-${item.id}`));
@@ -9948,7 +9979,7 @@ function InvoicesApp({onHome,startDraft}){
     });
     await saveK(CAL_KEY,calList);
     logActivity({user:"Admin",action:"created",module:"invoices",label:`Invoice ${inv.invNo||inv.id.slice(0,6)} · ${inv.buyer||"buyer"}`,targetId:inv.id,targetMod:"invoices"});
-    showToast("Invoice saved");if(navigateAway){setView("list");setDraft(null);}
+    showToast(inv.sourceSbId?(packetAttachOk?"Invoice saved and attached to SB packet":`Invoice saved, but packet attach failed: ${packetAttachErr}`):"Invoice saved");if(navigateAway){setView("list");setDraft(null);}
   };
   const delInvoice=async id=>{
     const inv=invoices.find(i=>i.id===id);
@@ -11355,6 +11386,121 @@ const INV_DOC_STYLES=`<style>
 </style>`;
 function wrapInvDoc(title,sections){
   return`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>${INV_DOC_STYLES}</head><body>${sections.map(s=>`<div class="inv-page">${s}</div>`).join("\n")}</body></html>`;
+}
+
+let invoicePdfLibPromise=null;
+async function loadInvoicePdfLib(){
+  if(window.PDFLib)return window.PDFLib;
+  if(invoicePdfLibPromise)return invoicePdfLibPromise;
+  invoicePdfLibPromise=(async()=>{
+    for(const url of ["https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js","https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"]){
+      try{
+        const r=await fetch(url);
+        if(!r.ok)continue;
+        new Function(await r.text())();
+        if(window.PDFLib)return window.PDFLib;
+      }catch(e){console.warn("pdf-lib invoice:",url,e&&e.message);}
+    }
+    throw new Error("PDF engine failed to load");
+  })();
+  return invoicePdfLibPromise;
+}
+const reconCompanyFromInvoiceCompany=co=>co==="at"?"atyahara":"nikhil";
+const b64FromBytes=bytes=>{
+  let s="";
+  for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode(...bytes.slice(i,i+0x8000));
+  return btoa(s);
+};
+const wrapPdfText=(text,max=78)=>{
+  const words=String(text||"").replace(/\s+/g," ").trim().split(" ").filter(Boolean);
+  const lines=[];let line="";
+  words.forEach(w=>{if((line+" "+w).trim().length>max){if(line)lines.push(line);line=w;}else line=(line+" "+w).trim();});
+  if(line)lines.push(line);
+  return lines.length?lines:[""];
+};
+async function renderInvoicePacketPdf(inv,buyers,company){
+  const {PDFDocument,StandardFonts,rgb}=await loadInvoicePdfLib();
+  const pdf=await PDFDocument.create();
+  const font=await pdf.embedFont(StandardFonts.Helvetica);
+  const bold=await pdf.embedFont(StandardFonts.HelveticaBold);
+  const co=company==="at"?CO_ATYAHARA:CO;
+  const buyer=buyers.find(b=>b.id===inv.buyerId)||{};
+  const buyerAddr=buyer.billingAddress||buyer.address||inv.consigneeAddress||"";
+  const consignee=inv.consigneeSameAsBuyer
+    ? {name:buyer.name||inv.consigneeName,address:buyerAddr,country:buyer.country||inv.consigneeCountry}
+    : {name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
+  const subTotal=(inv.items||[]).reduce((s,i)=>s+(+i.amt||0),0);
+  const total=inv.totalAmt||subTotal;
+  let page=pdf.addPage([595,842]);
+  let y=800;
+  const pdfSafe=txt=>String(txt||"").replace(/[^\x09\x0A\x0D\x20-\x7E]/g," ");
+  const draw=(txt,x,y0,size=9,f=font,color=rgb(0,0,0))=>page.drawText(pdfSafe(txt),{x,y:y0,size,font:f,color});
+  const nextPage=()=>{page=pdf.addPage([595,842]);y=800;};
+  const line=(txt,x=40,size=9,f=font)=>{if(y<50)nextPage();draw(txt,x,y,size,f);y-=size+6;};
+  draw(co.name,40,y,18,bold);draw(inv.type==="proforma"?"PROFORMA INVOICE":"COMMERCIAL INVOICE",360,y,16,bold);y-=22;
+  co.address.split("\n").forEach(t=>line(t,40,9));
+  line(`TEL: ${co.tel}   Email: ${co.email}`,40,9);
+  y-=8;
+  line(`Invoice #: ${inv.invNo||""}`,40,10,bold);
+  line(`Date: ${fmtDate(inv.date)}    Terms: ${inv.terms||""}    Currency: ${inv.currency||""}`,40,9);
+  line(`Port of Lading: ${inv.portLading||""}    Port of Discharge: ${inv.portDischarge||""}`,40,9);
+  y-=8;
+  line("Buyer",40,10,bold);
+  line(buyer.name||"",40,9,bold);
+  (buyerAddr||"").split("\n").forEach(t=>line(t,40,9));
+  line(buyer.country||"",40,9);
+  y-=4;
+  line("Consignee",310,10,bold);
+  const cy=y;
+  draw(consignee.name||"",310,cy,9,bold);
+  let yy=cy-15;
+  (consignee.address||"").split("\n").forEach(t=>{draw(t,310,yy,9);yy-=15;});
+  draw(consignee.country||"",310,yy,9);
+  y=Math.min(y,yy)-14;
+  line("Items",40,10,bold);
+  line("#  Description                                      HSN        Qty       Rate        Amount",40,8,bold);
+  line("--------------------------------------------------------------------------------",40,8);
+  (inv.items||[]).forEach((it,idx)=>{
+    const desc=it.acctDesc||it.desc||it.customDesc||"Item";
+    const descLines=wrapPdfText(desc,42);
+    const first=`${String(idx+1).padEnd(3)}${descLines[0].padEnd(45).slice(0,45)} ${(it.hsn||"").padEnd(9).slice(0,9)} ${String(it.qty||"").padStart(7)} ${String(it.rate||"").padStart(10)} ${(+it.amt||0).toFixed(2).padStart(12)}`;
+    line(first,40,8);
+    descLines.slice(1).forEach(d=>line(`   ${d}`,40,8));
+  });
+  line("--------------------------------------------------------------------------------",40,8);
+  line(`Sub Total: ${inv.currency||""} ${subTotal.toFixed(2)}`,360,10,bold);
+  if(+inv.shippingCost>0)line(`Shipping/Freight: ${inv.currency||""} ${(+inv.shippingCost).toFixed(2)}`,360,9);
+  if(+inv.discountAmt>0)line(`Discount: ${inv.currency||""} ${(+inv.discountAmt).toFixed(2)}`,360,9);
+  line(`Total: ${inv.currency||""} ${(+total||0).toFixed(2)}`,360,12,bold);
+  y-=10;
+  line(`Total in words: ${(inv.currency||"")} ${numToWords(Math.round((+total||0)*100)/100)}`,40,9);
+  if(inv.notes){y-=4;line("Notes",40,10,bold);wrapPdfText(inv.notes,92).forEach(t=>line(t,40,9));}
+  y-=4;
+  line(`IEC: ${co.iec}   GSTIN: ${co.gstin}   LUT ARN: ${inv.lutArn||co.lutArn}`,40,9);
+  line(`Bank: ${co.bank}   A/C: ${co.bankAcc}   Swift: ${co.swift}   IFSC: ${co.ifsc}`,40,9);
+  line(`For ${co.name}`,420,10,bold);
+  line("AUTHORIZED SIGNATORY",420,9,bold);
+  return await pdf.save();
+}
+async function attachInvoiceToExportReconPacket(inv,buyers,company){
+  if(!inv?.sourceSbId)return;
+  const reconCompany=reconCompanyFromInvoiceCompany(company);
+  const bytes=await renderInvoicePacketPdf(inv,buyers,company);
+  const b64=b64FromBytes(bytes);
+  const docKey=`inv:${inv.sourceSbId}`;
+  const path=`export-recon/${reconCompany}/${docKey.replace(/[^a-zA-Z0-9._-]/g,"_")}.pdf`;
+  const file=new File([bytes],`${(inv.invNo||inv.sourceSbNumber||"invoice").replace(/[\\/]/g,"-")}.pdf`,{type:"application/pdf"});
+  const url=await supabaseUpload(path,file);
+  const docUrlKey=`er-docurls-v1:${reconCompany}`;
+  const docUrls=(await loadK(docUrlKey))||{};
+  await saveK(docUrlKey,{...docUrls,[docKey]:url});
+  const metaKey=`er-meta-v5:${reconCompany}`;
+  const meta=(await loadK(metaKey))||{fircs:[],shippingBills:[],invoices:[]};
+  const shippingBills=Array.isArray(meta.shippingBills)?meta.shippingBills:[];
+  await saveK(metaKey,{
+    ...meta,
+    shippingBills:shippingBills.map(sb=>sb.id===inv.sourceSbId?{...sb,hasInvPdf:true,invoiceId:inv.id,invoiceNo:inv.invNo,invoiceAttachedAt:new Date().toISOString()}:sb),
+  });
 }
 
 function InvoicePreview({inv,buyers,onBack,onSave,onEdit}){
