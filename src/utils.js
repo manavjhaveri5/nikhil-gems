@@ -122,14 +122,19 @@ export const warmCache=()=>{
   return Promise.resolve();
 };
 
-// Re-fetch on tab return — but throttled: only if cache is stale (>10 min)
+// Re-fetch on tab return — but throttled: only if cache is stale (>10 min).
+// A device that was closed/backgrounded while another device saved misses the live
+// invalidate broadcast, so on focus we mark cached keys stale and tell every mounted
+// screen to refetch from Supabase — otherwise it keeps showing an old copy forever.
 if(typeof document!=="undefined"&&!DEMO_MODE){
   document.addEventListener("visibilitychange",()=>{
-    if(document.visibilityState==="visible"){
-      if((Date.now()-_lastFetchAt)>=CACHE_TTL){
-        _lastFetchAt=Date.now();
-      }
-    }
+    if(document.visibilityState!=="visible")return;
+    if((Date.now()-_lastFetchAt)<CACHE_TTL)return;
+    _lastFetchAt=Date.now();
+    const keys=[..._cache.keys()].filter(k=>!DEPRECATED_KEYS.includes(k));
+    if(!keys.length)return;
+    keys.forEach(k=>_keyFetchedAt.delete(k)); // force next loadK/loadKFresh to hit the network
+    _refreshCallbacks.forEach(cb=>{try{cb(keys);}catch(e){}});
   });
 }
 

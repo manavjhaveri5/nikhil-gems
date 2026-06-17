@@ -11961,7 +11961,19 @@ function ShowsApp({onHome}){
       setShows(s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""})));
       setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);setLoaded(true);
     });
+    // Always reconcile with Supabase on open so a device that missed a live update
+    // (was closed/backgrounded) doesn't keep showing a stale buying plan.
+    loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)setShows(s);}).catch(()=>{});
   },[]);
+
+  // Stay in sync across devices: when another device saves (or we refocus the tab),
+  // utils fires a refresh for the changed keys — reload them fresh from Supabase.
+  useEffect(()=>onCacheRefresh(keys=>{
+    if(keys.includes(SHOWS_KEY))loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)setShows(s);}).catch(()=>{});
+    if(keys.includes(KEYS.stock))loadKFresh(KEYS.stock).then(st=>{if(Array.isArray(st))setStock(st);}).catch(()=>{});
+    if(keys.includes(KEYS.purchases))loadKFresh(KEYS.purchases).then(p=>{if(Array.isArray(p))setPurchases(p);}).catch(()=>{});
+    if(keys.includes(CAL_KEY))loadKFresh(CAL_KEY).then(e=>{if(Array.isArray(e))setCalEvents(e);}).catch(()=>{});
+  }),[]);
 
   const save=async(list)=>{setShows(list);await saveK(SHOWS_KEY,list);};
   const createPOFromBuyingPlan=async (sid,vendorFilter="all",lineIds=null)=>{
