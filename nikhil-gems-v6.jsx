@@ -5103,6 +5103,7 @@ ${vendorBlocks}
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:5,gap:8}}>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:borderCol,background:isIn?"#F0FFF4":"#FFF5F5",borderRadius:8,padding:"3px 8px"}}>{isIn?"Stock In":"Stock Out"}</span>
+                      {entry.auto&&<span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:"#2563EB",background:"#EFF6FF",borderRadius:8,padding:"3px 8px"}} title={entry.sourceInvNo?`Auto-created from invoice ${entry.sourceInvNo}`:"Auto-created from an invoice"}>⚡ Auto{entry.sourceInvNo?` · ${entry.sourceInvNo}`:""}</span>}
                       {entry.reason&&<span style={{fontSize:11,color:"#6B7280"}}>{entry.reason}</span>}
                       {isIn&&entry.boxWeight&&<span style={{fontSize:11,color:C.amber,background:C.amberBg,borderRadius:8,padding:"3px 8px",fontWeight:700}}>Box {entry.boxWeight} {entry.boxWeightUnit||"kg"}</span>}
                     </div>
@@ -10085,6 +10086,39 @@ function InvoicesApp({onHome,startDraft}){
     const freshInvs=await loadKFresh(INV_KEYS.invoices);
     const list=[inv,...(Array.isArray(freshInvs)?freshInvs:invoices).filter(i=>i.id!==inv.id)];
     setInvoices(list);await saveK(INV_KEYS.invoices,list);
+    // Auto outward journal movement — synced to this invoice (Nikhil Gems only; the
+    // Accounting Journal is NG-scoped). Any invoice line linked to physical or accounting
+    // stock produces an "exit" entry tagged auto + sourceInvoiceId. Re-saving updates it,
+    // and an invoice that no longer consumes stock removes its auto entry. Still editable.
+    if(company==="ng"){
+      try{
+        const exitItems=[];
+        inv.items.forEach(item=>{
+          const links=item.stockLinks?.length?item.stockLinks:(item.stockId&&item.qty?[{id:item.stockId,qty:+item.qty||0}]:[]);
+          links.forEach(({id,qty,qty2})=>{
+            const s=stock.find(x=>x.id===id);if(!s)return;
+            exitItems.push({id:uid(),vendorId:"",vendorName:"",material:s.material||item.desc||"",shape:s.shape||"",qty:qty?String(qty):"",unit:s.unit||item.unit||"pcs",qty2:qty2?String(qty2):"",unit2:s.unit2||"kg",notes:s.sku?`SKU ${s.sku}`:""});
+          });
+          if(item.acctStockId&&item.qty){
+            const a=accStock.find(x=>x.id===item.acctStockId);
+            // acct desc is freeform and usually already includes the shape — keep shape blank to avoid "Sphere · Sphere"
+            exitItems.push({id:uid(),vendorId:"",vendorName:"",material:a?.desc||item.acctDesc||item.desc||"",shape:"",qty:String(item.qty||""),unit:item.unit||a?.unit||"pcs",qty2:"",unit2:"kg",notes:""});
+          }
+        });
+        const freshJ=await loadKFresh(JOURNAL_KEY);
+        const journal=Array.isArray(freshJ)?freshJ:[];
+        const jIdx=journal.findIndex(e=>e.sourceInvoiceId===inv.id);
+        if(exitItems.length){
+          const prev=jIdx>=0?journal[jIdx]:null;
+          const buyer=buyers.find(b=>b.id===inv.buyerId);
+          const exitEntry={id:prev?.id||uid(),type:"exit",date:inv.date||today(),vendorId:"",vendorName:"",customerId:buyer?.id||prev?.customerId||"",customerName:buyer?.name||inv.buyerName||prev?.customerName||"",items:exitItems,reason:prev?.reason||"Sale of goods",notes:prev?.notes||(inv.invNo?`Auto from invoice ${inv.invNo}`:"Auto from invoice"),boxWeight:"",boxWeightUnit:"kg",photos:prev?.photos||[],linkedEntryId:prev?.linkedEntryId||"",auto:true,sourceInvoiceId:inv.id,sourceInvNo:inv.invNo||"",createdAt:prev?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
+          const nextJ=jIdx>=0?journal.map((e,i)=>i===jIdx?exitEntry:e):[exitEntry,...journal];
+          await saveK(JOURNAL_KEY,nextJ);
+        }else if(jIdx>=0){
+          await saveK(JOURNAL_KEY,journal.filter((_,i)=>i!==jIdx));
+        }
+      }catch(e){/* journal sync is non-fatal — invoice already saved */}
+    }
     let packetAttachOk=false, packetAttachErr="";
     if(inv.sourceSbId){
       try{await attachInvoiceToExportReconPacket(inv,buyers,company);packetAttachOk=true;}
@@ -10125,6 +10159,14 @@ function InvoicesApp({onHome,startDraft}){
       // Remove calendar events
       const calData=await loadK(CAL_KEY);
       await saveK(CAL_KEY,calData.filter(e=>!inv.items.some(item=>e.id===`inv-ready-${item.id}`)));
+      // Remove the auto outward journal movement linked to this invoice
+      if(company==="ng"){
+        try{
+          const freshJ=await loadKFresh(JOURNAL_KEY);
+          const journal=Array.isArray(freshJ)?freshJ:[];
+          if(journal.some(e=>e.sourceInvoiceId===id))await saveK(JOURNAL_KEY,journal.filter(e=>e.sourceInvoiceId!==id));
+        }catch(e){/* non-fatal */}
+      }
     }
     showToast("Invoice deleted · stock restored");setView("list");setDraft(null);
   };
