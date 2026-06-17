@@ -282,7 +282,7 @@ function sbToInvoiceDraft(ex, sb){
     date: ex.date || (sb&&sb.date) || new Date().toISOString().slice(0,10),
     dueDate:"", currency:(ex.currency||"USD").toUpperCase(), buyerId:"",
     items, status:"draft", goodsShipped:false, payments:[], paidAmount:0,
-    notes: [sb&&sb.sbNumber?`From Shipping Bill ${sb.sbNumber}`:"", ex.buyerName?`Buyer (from SB): ${ex.buyerName}`:""].filter(Boolean).join(" · "),
+    notes: "",
     terms: ex.terms || "T/T in advance",
     portLading:"Mumbai, India", portDischarge:"",
     consigneeSameAsBuyer:true,
