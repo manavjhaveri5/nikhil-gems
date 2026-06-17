@@ -8,7 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.99.1",
+    "@supabase/supabase-js": "^2.108.2",
     "@vercel/blob": "^2.3.3",
     "@vercel/functions": "^3.4.4",
     "canvas-confetti": "^1.9.4",
