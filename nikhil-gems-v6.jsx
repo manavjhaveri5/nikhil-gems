@@ -176,6 +176,11 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
     });
   },[todoKey]);
 
+  // Re-fetch when another device saves (realtime invalidate broadcast)
+  useEffect(()=>onCacheRefresh(keys=>{
+    if(keys.includes(todoKey))loadK(todoKey).then(data=>{if(Array.isArray(data))setTodos(data);});
+  }),[todoKey]);
+
   const persist=async(next)=>{
     setTodos(next);
     try{await saveK(todoKey,next);}catch{}
