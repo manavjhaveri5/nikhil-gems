@@ -13708,7 +13708,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         const usd=+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
                         const parts=[r.stone||"—",qtyStr];
-                        if(cp>0)parts.push(`CP ₹${fmtAmtIN(cp)}`);
+                        if(cp>0){const isUsd=r.cpCurrency==="USD"&&r.cpUsd;parts.push(isUsd?`CP $${fmtAmtIN(+r.cpUsd)}`:`CP ₹${fmtAmtIN(cp)}`);}
                         if(sp>0)parts.push(`SP ₹${fmtAmtIN(sp)}`);
                         if(usd>0)parts.push(`$${fmtAmtIN(usd)}`);
                         if(sp>0&&cq>0)parts.push(`Total ₹${fmtAmtIN(cq*sp)}`);
@@ -13723,10 +13723,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         const cp=+r.costPerKg||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
                         const comment=whatsappIncludeComments&&r.notes?` | Comments: ${r.notes}`:"";
+                        const isUsdRow=r.cpCurrency==="USD"&&r.cpUsd;
                         if(cp>0&&cq>0){
-                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)} = ₹${fmtAmtIN(cq*cp)}${comment}`);
+                          lines.push(isUsdRow?`• ${r.stone||"—"} - ${qtyStr} * $${fmtAmtIN(+r.cpUsd)} = $${fmtAmtIN(cq*(+r.cpUsd))} (₹${fmtAmtIN(cq*cp)})${comment}`:`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)} = ₹${fmtAmtIN(cq*cp)}${comment}`);
                         }else if(cp>0){
-                          lines.push(`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)}${comment}`);
+                          lines.push(isUsdRow?`• ${r.stone||"—"} - ${qtyStr} * $${fmtAmtIN(+r.cpUsd)}${comment}`:`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)}${comment}`);
                         }else{
                           lines.push(`• ${r.stone||"—"} - ${qtyStr}${comment}`);
                         }
