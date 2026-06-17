@@ -29,10 +29,53 @@ const newItem=()=>({id:uid(),desc:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pc
 const newPhysEntry=(billLineId,billUnit,autoCost,autoMaterial,autoShape,autoVendor)=>({id:uid(),billLineId,material:autoMaterial||"",shape:autoShape||"",vendor:autoVendor||"",productType:"",origin:"",size:"",grade:"",qty:"",unit:billUnit||"pcs",qty2:"",unit2:"kg",costPrice:autoCost||"",location:"",market:[],photo:"",photos:[],notes:"",addedDate:today(),createdAt:new Date().toISOString()});
 const stockPhotos=item=>{
   const photos=Array.isArray(item?.photos)?item.photos.filter(Boolean):[];
-  return item?.photo&&!photos.includes(item.photo)?[item.photo,...photos]:photos;
+  const aliases=[item?.photo,item?.photoUrl,item?.imageUrl,item?.image,item?.thumbnailUrl].filter(Boolean);
+  return [...aliases,...photos].filter((url,i,arr)=>arr.indexOf(url)===i);
 };
 const stockCover=item=>stockPhotos(item)[0]||"";
 const thumbUrl=(url)=>url||"";
+const pickStockAlias=(item,keys)=>keys.map(k=>item?.[k]).find(v=>v!==undefined&&v!==null&&String(v).trim()!=="");
+const normalizeStockUnit=u=>{
+  const s=String(u||"").trim().toLowerCase();
+  if(["piece","pieces","pc","pcs"].includes(s))return"pcs";
+  if(["gram","grams","g","gm"].includes(s))return"gm";
+  if(["kilogram","kilograms","kgs","kg"].includes(s))return"kg";
+  if(["carat","carats","ct"].includes(s))return"ct";
+  return s||"pcs";
+};
+const splitQtyUnit=v=>{
+  const text=String(v??"").trim();
+  const n=text.match(/-?\d+(?:\.\d+)?/);
+  const u=text.match(/\b(pieces?|pcs?|ct|carats?|g|gm|grams?|kg|kgs|kilograms?|lot|str)\b/i);
+  return{qty:n?n[0]:"",unit:u?normalizeStockUnit(u[1]):""};
+};
+const cleanStockBox=v=>String(v??"").trim().replace(/^box\s*[:#-]?\s*/i,"");
+const normalizeStockRecord=item=>{
+  if(!item||typeof item!=="object")return item;
+  const out={...item};
+  if(!out.material)out.material=pickStockAlias(item,["stone","name","title","productName"])||"";
+  if(!out.productType)out.productType=pickStockAlias(item,["category","type","itemType"])||"";
+  if(!out.shape)out.shape=pickStockAlias(item,["shapeName","form"])||"";
+  const qtyAlias=pickStockAlias(item,["qty","quantity","count","pieces","pcs","qtyText"]);
+  const parsedQty=splitQtyUnit(qtyAlias);
+  if((out.qty===undefined||out.qty===null||out.qty==="")&&parsedQty.qty)out.qty=parsedQty.qty;
+  out.unit=normalizeStockUnit(out.unit||parsedQty.unit||item?.quantityUnit||item?.qtyUnit||"pcs");
+  const locAlias=pickStockAlias(item,["location","box","boxNo","boxNumber","bin","storageBox","storageLocation"]);
+  if((out.location===undefined||out.location===null||out.location==="")&&locAlias)out.location=cleanStockBox(locAlias);
+  const photos=stockPhotos(out);
+  out.photos=photos;
+  out.photo=photos[0]||"";
+  if(photos.length)out.photographed=true;
+  if(!out.addedDate){
+    const dt=pickStockAlias(item,["addedDate","date","createdAt","addedAt","uploadedAt"]);
+    out.addedDate=dt?String(dt).slice(0,10):today();
+  }
+  if(!out.createdAt)out.createdAt=pickStockAlias(item,["createdAt","addedAt","uploadedAt"])||"";
+  if(!out.updatedAt)out.updatedAt=pickStockAlias(item,["updatedAt","modifiedAt","savedAt"])||out.createdAt||"";
+  if(!out.region)out.region="India";
+  return out;
+};
+const stockListSignature=list=>JSON.stringify((list||[]).map(s=>({id:s.id,material:s.material,name:s.name,shape:s.shape,productType:s.productType,qty:s.qty,quantity:s.quantity,unit:s.unit,location:s.location,box:s.box,photo:s.photo,photos:s.photos,updatedAt:s.updatedAt,createdAt:s.createdAt,addedDate:s.addedDate})));
 
 
 async function callClaude(messages,maxTokens=1000){
@@ -5527,7 +5570,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   // Capture on mount so clearing the parent prop doesn't lose the value before StockBinsView mounts
   const initBinRef=useRef(startLocationFilter||null);
   const allShapes=useShapes();
-  const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);const [accStock,setAccStock]=useState(()=>readCache(KEYS.accStock)||[]);const [glossary,setGlossary]=useState(()=>readCache(KEYS.glossary)||[]);const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);const [invoices,setInvoices]=useState(()=>readCache(INV_KEYS.invoices)||[]);const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);const [buyers,setBuyers]=useState([]);const [form,setForm]=useState(null);const [formType,setFormType]=useState("physical");const [tab,setTab]=useState("physical");const [searchRaw,setSearchRaw]=useState("");
+  const [stock,setStock]=useState(()=>((readCache(KEYS.stock)||[]).map(normalizeStockRecord)));const [accStock,setAccStock]=useState(()=>readCache(KEYS.accStock)||[]);const [glossary,setGlossary]=useState(()=>readCache(KEYS.glossary)||[]);const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);const [invoices,setInvoices]=useState(()=>readCache(INV_KEYS.invoices)||[]);const [vendors,setVendors]=useState(()=>readCache(KEYS.vendors)||[]);const [buyers,setBuyers]=useState([]);const [form,setForm]=useState(null);const [formType,setFormType]=useState("physical");const [tab,setTab]=useState("physical");const [searchRaw,setSearchRaw]=useState("");
   const [ulLocs,setUlLocs]=useState({});
   const [ulSaved,setUlSaved]=useState(new Set());
   const search=useDebounce(searchRaw,300);
@@ -5592,7 +5635,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const shapeToHsn=shape=>{if(!shape)return"71031029";const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());return hit?hit.hsn||"71031029":"71031029";};
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]));},[]);
-  useEffect(()=>{Promise.all([loadStockWithPhotos(),loadK(KEYS.glossary),loadK(KEYS.purchases),loadK(KEYS.accStock),loadK("ng-invoices-v2")]).then(([s,g,p,a,inv])=>{
+  useEffect(()=>{Promise.all([loadStockWithPhotos({fresh:true}),loadK(KEYS.glossary),loadK(KEYS.purchases),loadK(KEYS.accStock),loadK("ng-invoices-v2")]).then(([s,g,p,a,inv])=>{
     // ── Migrate existing stock items to new shape + productType fields ──
     const OLD_PT_MAP={"Sphere":"Lapidary","Palmstone":"Lapidary","Heart":"Lapidary","Mineral Specimen":"Mineral","Rough Stone":"Rough","Carving":"Carvings","Cluster":"Mineral","Tower/Point":"Healing/Reiki","Tumbled":"Lapidary","Slab":"Lapidary","Geode":"Mineral","Cabochon":"Lapidary","Faceted":"Lapidary","Other":""};
     const OLD_SHAPE_MAP={"Free Form":"Freeform","Point":"Points","Cluster":"Geodes","Slab":"Slice","Cabochon":"Flatstone","Plate":"Flatstone"};
@@ -5644,10 +5687,23 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   loadK(INV_KEYS.buyers).then(b=>setBuyers(b||[]));
   },[]);
   // Re-sync stock only when the stock key itself is invalidated (not every module save)
+  const refreshStockFromCloud=useCallback(async()=>{
+    try{
+      const s=await loadStockWithPhotos({fresh:true});
+      if(Array.isArray(s))setStock(prev=>stockListSignature(prev)===stockListSignature(s)?prev:s);
+    }catch(e){console.warn("stock refresh failed",e);}
+  },[]);
   useEffect(()=>onCacheRefresh(keys=>{
     if(!keys.includes(KEYS.stock))return;
-    loadStockWithPhotos().then(s=>{if(s&&s.length)setStock(s);});
-  }),[]);
+    refreshStockFromCloud();
+  }),[refreshStockFromCloud]);
+  useEffect(()=>{
+    const onVisible=()=>{if(!document.hidden)refreshStockFromCloud();};
+    const id=setInterval(onVisible,5000);
+    window.addEventListener("focus",onVisible);
+    document.addEventListener("visibilitychange",onVisible);
+    return()=>{clearInterval(id);window.removeEventListener("focus",onVisible);document.removeEventListener("visibilitychange",onVisible);};
+  },[refreshStockFromCloud]);
   useEffect(()=>{if(!openFilter)return;const close=e=>{if(filterBarRef.current&&!filterBarRef.current.contains(e.target))setOpenFilter(null);};document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close);},[openFilter]);
   const blank={id:uid(),material:"",shape:"",origin:"",size:"",grade:"",hsn:"7103",qty:"",unit:"pcs",weightGm:"",costPrice:"",listPrice:"",location:"",market:[],productType:"",photographed:false,postedShopify:false,postedWix:false,postedEtsy:false,photo:"",photos:[],video:"",notes:"",addedDate:today(),source:"manual",sku:"",vendor:"",files:[]};
   const generateSKU=(mat,shp)=>{
@@ -7626,8 +7682,9 @@ async function saveStockK(list,opts={}){
 async function _saveStockKImpl(list,opts={}){
   // Strip base64 blobs and temporary blob: URLs — only persist real https:// Storage URLs.
   const slim=list.map(s=>{
-    const photos=stockPhotos(s).filter(url=>url&&!url.startsWith("data:")&&!url.startsWith("blob:"));
-    return{...s,photos,photo:photos[0]||""};
+    const normalized=normalizeStockRecord(s);
+    const photos=stockPhotos(normalized).filter(url=>url&&!url.startsWith("data:")&&!url.startsWith("blob:"));
+    return{...normalized,photos,photo:photos[0]||"",photographed:photos.length>0?true:!!normalized.photographed};
   });
   // direct=true: caller already has authoritative full state (e.g. dedup/migration).
   // Skip remote fetch+merge — just write the list as-is.
@@ -7655,8 +7712,9 @@ async function _saveStockKImpl(list,opts={}){
   }
   await saveK(KEYS.stock,merged);
 }
-async function loadStockWithPhotos(){
-  return await loadK(KEYS.stock)||[];
+async function loadStockWithPhotos({fresh=false}={}){
+  const rows=fresh?await loadKFresh(KEYS.stock):await loadK(KEYS.stock);
+  return (Array.isArray(rows)?rows:[]).map(normalizeStockRecord);
 }
 
 function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor}){
