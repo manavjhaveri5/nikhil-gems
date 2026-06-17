@@ -357,6 +357,41 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "add_stock_items",
+      description: "Add NEW physical stock items to the Stock module (inventory). Use whenever the user sends a note/list/photo of stones and asks to 'add to stock', 'add to inventory', 'add to stock module', etc. Read the image/text and turn EACH distinct stone + shape line into one item. This is NEW inventory — it is NOT a purchase bill and NOT a payment, so NEVER ask for payment details for this. If a quantity has both a count and a weight (e.g. '19 pcs 1 kg'), put the primary number the user wrote in qty/unit and the other in notes.",
+      parameters: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            description: "One object per stone + shape line.",
+            items: {
+              type: "object",
+              properties: {
+                material: { type: "string", description: "Stone / material name, e.g. 'Malachite Chrysocolla', 'Blue Lace Agate', 'Sunset Sodalite'" },
+                shape: { type: "string", description: "Shape, e.g. Sphere, Heart, Palm, Tower, Freeform" },
+                qty: { type: "string", description: "Quantity as written, e.g. '1', '19', '0.5'" },
+                unit: { type: "string", enum: ["pcs", "kg", "g", "ct"], description: "kg/g for weight, pcs for a count, ct for carats" },
+                size: { type: "string", description: "Size / dimension spec, e.g. '35-43 mm', '50mm'" },
+                weightGm: { type: "string", description: "Specific weight in grams when stated, e.g. note says 0.778 kg → '778'" },
+                grade: { type: "string" },
+                origin: { type: "string" },
+                costPrice: { type: "string", description: "Cost price per unit only if stated; else leave empty" },
+                location: { type: "string", description: "Box / location label if given, e.g. 'STK 89'" },
+                vendor: { type: "string" },
+                notes: { type: "string", description: "Anything that doesn't fit a field, e.g. 'check weight', secondary qty like '0.778 kg'" }
+              },
+              required: ["material"]
+            }
+          }
+        },
+        required: ["items"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "send_to_show",
       description: "Send stock items to a show. ALWAYS call get_stock first to get item IDs, then get_shows for the show ID.",
       parameters: {
@@ -988,6 +1023,45 @@ async function execMarkSold({ item_id, qty, sold_price, sold_currency = "INR" })
   return { success: true, item: `${item.material} ${item.shape || ""}`.trim(), qty_sold: soldQty, remaining_qty: remaining };
 }
 
+async function execAddStockItems({ items }) {
+  if (!Array.isArray(items) || !items.length) return { success: false, error: "No items to add" };
+  const stock = (await loadK(_ctx.stock)) || [];
+  const created = items
+    .filter(i => String(i.material || "").trim() || String(i.shape || "").trim())
+    .map(i => ({
+      id: uid(),
+      material: String(i.material || "").trim(),
+      shape: String(i.shape || "").trim(),
+      origin: String(i.origin || "").trim(),
+      size: String(i.size || "").trim(),
+      grade: String(i.grade || "").trim(),
+      hsn: "7103",
+      qty: String(i.qty ?? "").trim(),
+      unit: i.unit || "pcs",
+      weightGm: String(i.weightGm || "").trim(),
+      costPrice: String(i.costPrice || "").trim(),
+      listPrice: "",
+      location: String(i.location || "").trim(),
+      market: [],
+      productType: "",
+      photographed: false, postedShopify: false, postedWix: false, postedEtsy: false,
+      photo: "", photos: [], video: "",
+      notes: String(i.notes || "").trim(),
+      addedDate: todayStr(),
+      source: "telegram",
+      sku: "",
+      vendor: String(i.vendor || "").trim(),
+      region: "India",
+      files: [],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }));
+  if (!created.length) return { success: false, error: "No valid items (each needs at least a material or shape)" };
+  await saveK(_ctx.stock, [...created, ...stock]);
+  const label = created.map(c => [c.material, c.shape].filter(Boolean).join(" ")).slice(0, 5).join(", ");
+  await logActivity({ user: "Telegram", action: "created", module: "stock", label: `Added ${created.length} stock item(s): ${label}${created.length > 5 ? "…" : ""}`, targetMod: "stock" });
+  return { success: true, added_count: created.length, items: created.map(c => ({ id: c.id, material: c.material, shape: c.shape, qty: c.qty, unit: c.unit, ...(c.size ? { size: c.size } : {}) })) };
+}
+
 async function execUpdateStockItems({ updates }) {
   const stock = (await loadK(_ctx.stock)) || [];
   let changed = 0;
@@ -1097,6 +1171,7 @@ async function runTool(name, args) {
       attach_document_to_transaction: execAttachDocument,
       record_payment: execRecordPayment,
       create_purchase: execCreatePurchase, create_expense: execCreateExpense,
+      add_stock_items: execAddStockItems,
       send_to_show: execSendToShow, mark_sold: execMarkSold,
       update_stock_items: execUpdateStockItems, return_to_india: execReturnToIndia,
       save_memory: execSaveMemory, delete_memory: execDeleteMemory,
@@ -1133,7 +1208,7 @@ Today is ${todayStr()}.${memoryBlock}
 
 <tools>
 You have full access to read AND write everything:
-- Stock: search, update, send to show, return to India, mark sold
+- Stock: search, add new items (add_stock_items), update, send to show, return to India, mark sold
 - Purchases & POs: create, view, record payments (record_payment)
 - Expenses: create, view
 - Invoices: view
@@ -1150,6 +1225,7 @@ IMPORTANT RULES:
 5. For any write action, confirm what you're saving in one short line, then do it immediately — don't ask "shall I proceed?"
 6. NEVER ask clarifying questions about a payment/receipt unless both the amount AND account are missing. If there's only one bank account in INR, use it automatically. Just log and confirm.
 7. CRITICAL — act ONLY on the CURRENT message. Log/announce ONLY the payment(s) explicitly in this message or its screenshot. NEVER re-log, re-process, or re-mention a transaction from an earlier message — those are already saved and done. A new screenshot = exactly one new payment to log (unless the screenshot itself clearly shows more than one).
+8. NOT every screenshot is a payment. A note/list/photo of stones with shapes, sizes and quantities is INVENTORY. If the user says "add to stock"/"add to inventory" (or it's clearly a stock note), call add_stock_items — one item per stone + shape line — and NEVER ask for payment details. Only ask for payment info when the user is actually logging a payment.
 </tools>
 
 <personality>
@@ -1319,7 +1395,9 @@ export default async function handler(req, res) {
       // For the model this turn: attach the image as a vision part (both bots).
       const userContent = isImageTurn
         ? [
-            { type: "text", text: (caption ? caption + "\n\n" : "") + "Read THIS payment screenshot and log ONLY the single payment it shows. Do not touch or re-mention any earlier transaction." },
+            { type: "text", text: caption
+                ? `${caption}\n\nThe image above was sent with that instruction — act on the image according to it. If it's a stones/inventory note to add to stock, call add_stock_items (one item per stone + shape line) — do NOT treat it as a payment. If it's a payment/receipt to log, log ONLY the single payment it shows and don't re-mention any earlier transaction.`
+                : `Read this screenshot and act on it:\n- Payment / receipt → log ONLY the single payment it shows; don't touch or re-mention any earlier transaction.\n- Stones / inventory list → call add_stock_items (one item per stone + shape line).\n- Anything else → say what you see and ask what to do.` },
             { type: "image_url", image_url: { url: imageUrl } },
           ]
         : text;
@@ -1334,7 +1412,7 @@ export default async function handler(req, res) {
 
       // Persist a text-only version of the user turn — the Telegram file URL is
       // temporary and image content would bloat the stored session.
-      const persistedTurn = { role: "user", content: (wantsVision && imageUrl) ? (caption || "[sent a payment screenshot]") : text };
+      const persistedTurn = { role: "user", content: (wantsVision && imageUrl) ? (caption || "[sent an image]") : text };
       const finalHistory = sanitizeHistory([...history, persistedTurn, ...newMessages]).slice(-MAX_HISTORY);
       await saveSession(chatId, { lastUpdateId: updateId, history: finalHistory });
 
