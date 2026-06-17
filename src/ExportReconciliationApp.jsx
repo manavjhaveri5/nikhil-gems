@@ -284,7 +284,7 @@ function sbToInvoiceDraft(ex, sb){
     items, status:"draft", goodsShipped:false, payments:[], paidAmount:0,
     notes: "",
     terms: ex.terms || "T/T in advance",
-    portLading:"Mumbai, India", portDischarge:"",
+    portLading:"Mumbai, India", portDischarge: ex.buyerCountry||"",
     consigneeSameAsBuyer:true,
     consigneeName: ex.buyerName||"", consigneeAddress: ex.buyerAddress||"", consigneeCountry: ex.buyerCountry||"",
     sourceBuyerName: ex.buyerName||"", sourceBuyerAddress: ex.buyerAddress||"", sourceBuyerCountry: ex.buyerCountry||"",
