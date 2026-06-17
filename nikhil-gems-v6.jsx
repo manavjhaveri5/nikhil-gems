@@ -9799,7 +9799,24 @@ function numToWords(n){
   return result+" Only";
 }
 
-const newInvItem=()=>({id:uid(),acctDesc:"",customDesc:"",hsn:"71031029",qty:"",unit:"pcs",rate:"",igst:0,amt:0,stockId:"",acctStockId:"",ready:false,readyDate:""});
+function invoiceDefaultGstRate(hsn,buyer){
+  const cleanHsn=String(hsn||"").replace(/\D/g,"");
+  return cleanHsn==="71031029"&&getGSTMode(buyer)!=="none"?0.25:0;
+}
+const formatInvQty=v=>{
+  const raw=String(v??"").trim();
+  if(!raw)return"0";
+  const n=Number(raw.replace(/,/g,""));
+  if(!Number.isFinite(n))return raw;
+  if((raw.split(".")[1]||"").length>6)return String(+n.toFixed(6));
+  return raw.replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.0+$/,"");
+};
+const newInvItem=(seed={})=>{
+  const {buyer,...rest}=seed;
+  const hsn=rest.hsn||"71031029";
+  const igst=rest.igst??invoiceDefaultGstRate(hsn,buyer);
+  return{id:uid(),acctDesc:"",customDesc:"",qty:"",unit:"pcs",rate:"",amt:0,stockId:"",acctStockId:"",ready:false,readyDate:"",...rest,hsn,igst};
+};
 const newBuyer=()=>({id:uid(),name:"",contactName:"",billingAddress:"",shippingAddress:"",shippingSameAsBilling:true,country:"",state:"",email:"",phone:"",port:""});
 // GST mode: "cgst_sgst" = same state (MH), "igst" = diff state, "none" = international
 function getGSTMode(buyer){
@@ -9946,6 +9963,30 @@ function InvoicesApp({onHome,startDraft}){
 	    showToast(`Currency changed to ${currency} for ${ids.size} invoice${ids.size>1?"s":""}`);
 	  };
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
+  // Export a list of invoices to a one-row-per-invoice summary CSV (UTF-8 BOM for Excel).
+  const exportInvoicesCSV=(list,label="export")=>{
+    if(!list||!list.length){showToast("No invoices to export");return;}
+    const sorted=[...list].sort((a,b)=>(a.date||"").localeCompare(b.date||"")||(a.invNo||"").localeCompare(b.invNo||""));
+    const esc=v=>{const s=String(v??"");return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
+    const r2=n=>(Math.round((+n||0)*100)/100).toFixed(2);
+    const cols=["Invoice No","Date","Due Date","Type","Status","Buyer","Country","Currency","Items","Subtotal","Shipping","Discount","Tax","Total","Notes"];
+    const rows=sorted.map(inv=>{
+      const buyer=buyers.find(b=>b.id===inv.buyerId);
+      const items=inv.items||[];
+      const subTotal=items.reduce((s,i)=>s+(+i.amt||0),0);
+      const freight=+inv.shippingCost||0;
+      const discount=+inv.discountAmt||0;
+      const tax=items.reduce((s,i)=>s+(+i.amt||0)*(+i.igst||0)/100,0);
+      const total=inv.totalAmt||Math.max(0,subTotal+freight-discount);
+      return [inv.invNo||"",inv.date||"",inv.dueDate||"",inv.type==="proforma"?"Proforma":"Commercial",inv.status||"",buyer?.name||inv.buyerName||"",buyer?.country||"",inv.currency||"",items.length,r2(subTotal),r2(freight),r2(discount),r2(tax),r2(total),cleanInvoiceNotes(inv.notes).replace(/[\r\n]+/g," ")];
+    });
+    const csv="﻿"+[cols,...rows].map(r=>r.map(esc).join(",")).join("\r\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download=`${invPrefix}-${label}-${today()}.csv`;a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+    showToast(`Exported ${rows.length} invoice${rows.length>1?"s":""} to CSV`);
+  };
   // Helper: look up customs desc from shape
   const shapeToDesc=useCallback(shape=>{
     if(!shape)return"";
@@ -10191,6 +10232,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                 <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.multiple=true;i.onchange=e=>handleBulkUpload(e.target.files);i.click();}}>📂 Bulk Upload</button>
                 <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.onchange=e=>e.target.files[0]&&handleUpload(e.target.files[0]);i.click();}}>✨ Upload & Extract</button>
                 <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} onClick={()=>{setDraft(newDraft("proforma"));setView("form");}}>{t("+ Proforma")}</button>
+                <button style={{display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"}} onClick={()=>exportInvoicesCSV(filteredInvoices,"export")}>⬇ Export CSV</button>
               </div>
             )}
             <button className="bp" style={{fontSize:13,padding:"7px 14px"}} onClick={()=>{setDraft(newDraft("commercial"));setView("form");}}>{t("+ Invoice")}</button>
@@ -10201,6 +10243,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
             <button className="bs" style={{fontSize:12}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.multiple=true;i.onchange=e=>handleBulkUpload(e.target.files);i.click();}}>📂 Bulk Upload</button>
             <button className="bs" style={{fontSize:12}} disabled={extracting} onClick={()=>{const i=document.createElement("input");i.type="file";i.accept="image/*,.pdf";i.onchange=e=>e.target.files[0]&&handleUpload(e.target.files[0]);i.click();}}>✨ Upload & Extract</button>
             {!csvInvAlreadyImported&&<button className="bs" style={{fontSize:12,color:C.amber,borderColor:C.amber}} onClick={()=>{if(window.confirm(`Import invoices & buyers from Zoho Books?\n\nIncludes all FY2025-26 invoices across Atyahara, AhhhMuse, Celestique, Original Way Crystals and more.`))handleCSVInvImport();}}>📥 Import History</button>}
+            {tab==="invoices"&&<button className="bs" style={{fontSize:12}} disabled={!filteredInvoices.length} onClick={()=>exportInvoicesCSV(filteredInvoices,"export")}>⬇ CSV</button>}
             <button className="bs" style={{fontSize:12}} onClick={()=>{setDraft(newDraft("proforma"));setView("form");}}>{t("+ Proforma")}</button>
             <button className="bp" onClick={()=>{setDraft(newDraft("commercial"));setView("form");}}>{t("+ Invoice")}</button>
           </>
@@ -10272,6 +10315,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
 	            <button onClick={bulkPrintTogether} style={{fontSize:12,padding:"5px 13px",borderRadius:5,cursor:"pointer",border:"none",background:"#3b82f6",color:"#fff",fontWeight:500}}>🖨 Print together</button>
             <button onClick={bulkDownloadSeparate} style={{fontSize:12,padding:"5px 13px",borderRadius:5,cursor:"pointer",border:"none",background:"#10b981",color:"#fff",fontWeight:500}}>⬇ Download separate</button>
             <button onClick={bulkPrintSeparate} style={{fontSize:12,padding:"5px 13px",borderRadius:5,cursor:"pointer",border:"none",background:"#6366f1",color:"#fff",fontWeight:500}}>🖨 Print separate</button>
+            <button onClick={()=>exportInvoicesCSV(invoices.filter(i=>selectedInvIds.has(i.id)),"selected")} style={{fontSize:12,padding:"5px 13px",borderRadius:5,cursor:"pointer",border:"none",background:"#0ea5e9",color:"#fff",fontWeight:500}}>⬇ CSV</button>
             <button onClick={clearSel} style={{fontSize:12,padding:"5px 10px",borderRadius:5,cursor:"pointer",border:"1px solid #475569",background:"transparent",color:"#94a3b8"}}>✕ Clear</button>
           </div>}
           <div style={{display:"flex",gap:2,background:C.card,borderRadius:5,padding:3,border:`1px solid ${C.border}`,marginBottom:13,width:"fit-content"}}>
@@ -10626,12 +10670,16 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   };
   const si=(idx,k,v)=>setDraft(d=>{
     const items=[...d.items];items[idx]={...items[idx],[k]:v};
+    if(k==="hsn"&&(+items[idx].igst||0)===0){
+      const defaultGst=invoiceDefaultGstRate(v,gstBuyer);
+      if(defaultGst)items[idx].igst=defaultGst;
+    }
     const qty=parseFloat(k==="qty"?v:items[idx].qty)||0;
     const rate=parseFloat(k==="rate"?v:items[idx].rate)||0;
     items[idx].amt=qty*rate;
     return{...d,items,totalAmt:calcTotalAmt(items,d.shippingCost,d.discountAmt)};
   });
-  const addItem=()=>setDraft(d=>{const items=[...d.items,newInvItem()];return{...d,items};});
+  const addItem=()=>setDraft(d=>{const items=[...d.items,newInvItem({buyer:gstBuyer})];return{...d,items};});
   const delItem=idx=>setDraft(d=>{const items=d.items.filter((_,i)=>i!==idx);return{...d,items,totalAmt:calcTotalAmt(items,d.shippingCost,d.discountAmt)};});
   // Consolidate: group rows by acctDesc+unit, sum qty & amt, join customDescs
   const consolidateItems=()=>setDraft(d=>{
@@ -10709,6 +10757,18 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     if(!buyer)return;
     const discharge=buyer.port||buyer.country||draft.consigneeCountry||"";
     if(discharge&&!draft.portDischarge)set("portDischarge",discharge);
+  },[draft.buyerId]);
+  useEffect(()=>{
+    if(!buyer)return;
+    setDraft(d=>{
+      let changed=false;
+      const items=(d.items||[]).map(it=>{
+        const defaultGst=invoiceDefaultGstRate(it.hsn,buyer);
+        if(defaultGst&&(+it.igst||0)===0){changed=true;return{...it,igst:defaultGst};}
+        return it;
+      });
+      return changed?{...d,items,totalAmt:calcTotalAmt(items,d.shippingCost,d.discountAmt)}:d;
+    });
   },[draft.buyerId]);
   // Auto-compute dueDate when invoice date changes
   const handleDateChange=v=>{
@@ -11381,7 +11441,7 @@ function buildInvBodyHTML(inv,buyers,company="ng"){
       <td style="text-align:center;border:1px solid #ccc;padding:4px 6px">${i+1}</td>
       <td style="border:1px solid #ccc;padding:4px 6px">${mainDesc}${subDesc}</td>
       <td style="border:1px solid #ccc;padding:4px 6px;text-align:center">${item.hsn}</td>
-      <td style="border:1px solid #ccc;padding:4px 6px;text-align:right">${(+item.qty).toFixed(2)}<br/><small>${item.unit}</small></td>
+      <td style="border:1px solid #ccc;padding:4px 6px;text-align:right">${formatInvQty(item.qty)}<br/><small>${item.unit}</small></td>
       <td style="border:1px solid #ccc;padding:4px 6px;text-align:right">${(+item.rate).toFixed(2)}</td>
       ${taxCols}
       <td style="border:1px solid #ccc;padding:4px 6px;text-align:right;font-weight:600">${(+item.amt).toFixed(2)}</td>
@@ -11766,7 +11826,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
                   {item.customDesc&&<div style={{fontStyle:"italic",fontSize:10,color:"#555",marginTop:2}}>{item.customDesc}</div>}
                 </td>
                 <td style={{border:"1px solid #ccc",padding:"6px 8px",textAlign:"center"}}>{item.hsn}</td>
-                <td style={{border:"1px solid #ccc",padding:"6px 8px",textAlign:"right"}}>{(+item.qty||0).toFixed(2)}<br/><small style={{color:"#888"}}>{item.unit}</small></td>
+                <td style={{border:"1px solid #ccc",padding:"6px 8px",textAlign:"right"}}>{formatInvQty(item.qty)}<br/><small style={{color:"#888"}}>{item.unit}</small></td>
                 <td style={{border:"1px solid #ccc",padding:"6px 8px",textAlign:"right"}}>{(+item.rate||0).toFixed(2)}</td>
                 {gstMode==="cgst_sgst"
                   ?<><td style={{border:"1px solid #ccc",padding:"6px 8px",textAlign:"center"}}>{(item.igst||0)/2}%</td>
