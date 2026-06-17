@@ -11495,6 +11495,24 @@ async function loadInvoicePdfLib(){
   })();
   return invoicePdfLibPromise;
 }
+let invoiceHtmlPdfLibsPromise=null;
+async function loadInvoiceHtmlPdfLibs(){
+  if(window.html2canvas&&window.jspdf?.jsPDF)return {html2canvas:window.html2canvas,jsPDF:window.jspdf.jsPDF};
+  if(invoiceHtmlPdfLibsPromise)return invoiceHtmlPdfLibsPromise;
+  invoiceHtmlPdfLibsPromise=(async()=>{
+    const loadOne=async(url,test)=>{
+      if(test())return;
+      const r=await fetch(url);
+      if(!r.ok)throw new Error(`Failed to load ${url}`);
+      new Function(await r.text())();
+      if(!test())throw new Error(`Library did not initialize: ${url}`);
+    };
+    await loadOne("https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js",()=>!!window.html2canvas);
+    await loadOne("https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js",()=>!!window.jspdf?.jsPDF);
+    return {html2canvas:window.html2canvas,jsPDF:window.jspdf.jsPDF};
+  })();
+  return invoiceHtmlPdfLibsPromise;
+}
 const reconCompanyFromInvoiceCompany=co=>co==="at"?"atyahara":"nikhil";
 const b64FromBytes=bytes=>{
   let s="";
@@ -11508,7 +11526,7 @@ const wrapPdfText=(text,max=78)=>{
   if(line)lines.push(line);
   return lines.length?lines:[""];
 };
-async function renderInvoicePacketPdf(inv,buyers,company){
+async function renderBasicInvoicePacketPdf(inv,buyers,company){
   const {PDFDocument,StandardFonts,rgb}=await loadInvoicePdfLib();
   const pdf=await PDFDocument.create();
   const font=await pdf.embedFont(StandardFonts.Helvetica);
@@ -11574,6 +11592,42 @@ async function renderInvoicePacketPdf(inv,buyers,company){
   line("AUTHORIZED SIGNATORY",420,9,bold);
   return await pdf.save();
 }
+async function renderInvoicePacketPdf(inv,buyers,company){
+  try{
+    const {html2canvas,jsPDF}=await loadInvoiceHtmlPdfLibs();
+    const iframe=document.createElement("iframe");
+    iframe.style.cssText="position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none;";
+    document.body.appendChild(iframe);
+    try{
+      const html=wrapInvDoc(inv.invNo||"Invoice",[buildInvBodyHTML(inv,buyers,company)]);
+      const doc=iframe.contentDocument;
+      doc.open();doc.write(html);doc.close();
+      await new Promise(resolve=>setTimeout(resolve,150));
+      if(doc.fonts?.ready)await doc.fonts.ready.catch(()=>{});
+      await Promise.all([...doc.images].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=resolve;img.onerror=resolve;})));
+      const el=doc.querySelector(".inv-page")||doc.body;
+      const canvas=await html2canvas(el,{scale:2,useCORS:true,backgroundColor:"#ffffff",windowWidth:794});
+      const pdf=new jsPDF({orientation:"p",unit:"pt",format:"a4"});
+      const pageW=595.28,pageH=841.89;
+      const imgW=pageW;
+      const imgH=canvas.height*imgW/canvas.width;
+      const data=canvas.toDataURL("image/jpeg",0.96);
+      let y=0;
+      pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
+      while(imgH+y>pageH){
+        y-=pageH;
+        pdf.addPage();
+        pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
+      }
+      return new Uint8Array(pdf.output("arraybuffer"));
+    }finally{
+      iframe.remove();
+    }
+  }catch(e){
+    console.warn("invoice html pdf fallback:",e?.message||e);
+    return await renderBasicInvoicePacketPdf(inv,buyers,company);
+  }
+}
 async function attachInvoiceToExportReconPacket(inv,buyers,company){
   if(!inv?.sourceSbId)return;
   const reconCompany=reconCompanyFromInvoiceCompany(company);
@@ -11602,6 +11656,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
   const buyerAddr=buyer?.billingAddress||buyer?.address||"";
   const shipAddr=buyer?.shippingSameAsBilling!==false?(buyer?.billingAddress||buyer?.address||""):(buyer?.shippingAddress||buyer?.billingAddress||buyer?.address||"");
   const consignee=inv.consigneeSameAsBuyer?{name:buyer?.name,address:shipAddr,country:buyer?.country}:{name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
+  const portDischarge=invoicePortDischarge(inv,buyer,consignee);
   const subTotal=(inv.items||[]).reduce((s,i)=>s+(+i.amt||0),0);
   const freight=+inv.shippingCost||0;
   const discount=+inv.discountAmt||0;
