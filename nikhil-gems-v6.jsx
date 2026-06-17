@@ -11709,6 +11709,11 @@ function ShowsApp({onHome}){
       setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);setLoaded(true);
     });
   },[]);
+  // Keep shows in sync when another tab/device saves — prevents stale-state overwrites
+  useEffect(()=>onCacheRefresh(changed=>{
+    if(changed.includes(SHOWS_KEY))loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length>0)setShows(s);});
+    if(changed.includes(CAL_KEY))loadKFresh(CAL_KEY).then(e=>{if(Array.isArray(e))setCalEvents(e);});
+  }),[]);
 
   const save=async(list)=>{setShows(list);await saveK(SHOWS_KEY,list);};
   const createPOFromBuyingPlan=async (sid,vendorFilter="all",lineIds=null)=>{
