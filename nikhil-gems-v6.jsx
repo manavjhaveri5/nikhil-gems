@@ -12197,17 +12197,19 @@ function SheetMultiSelect({allLabel,options,selected,onChange}){
 // focus leaves the whole row (or Enter). Tabbing/clicking between cells in the
 // same row does NOT commit — so an active filter can't drop the row while you're
 // still editing it.
-function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,expandPlanShape,fmtAmtIN,issue}){
+function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,inrFromUsd,usdInr,expandPlanShape,fmtAmtIN,issue}){
   const make=()=>({
     stone:row.stone||"",shape:row.shape||"",vendor:row.vendor||"",qty:row.qty||"",
     unit:(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":(row.unit||"kg"),
-    cp:fmtAmtIN(row.costPerKg),sp:fmtAmtIN(row.targetSellPrice),
+    cpCurrency:row.cpCurrency||"INR",
+    cp:row.cpCurrency==="USD"?fmtAmtIN(row.cpUsd):fmtAmtIN(row.costPerKg),
+    sp:fmtAmtIN(row.targetSellPrice),
     usd:fmtAmtIN(row.targetSellPriceUsd||usdFromInr(row.targetSellPrice)),
   });
   const [d,setD]=React.useState(make);
   const editing=React.useRef(false);
   const dirty=React.useRef(false);
-  React.useEffect(()=>{ if(!editing.current) setD(make()); },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.targetSellPrice,row.targetSellPriceUsd]);
+  React.useEffect(()=>{ if(!editing.current) setD(make()); },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.cpUsd,row.cpCurrency,row.targetSellPrice,row.targetSellPriceUsd]);
   const set=(k,v)=>{dirty.current=true;setD(p=>({...p,[k]:v}));};
   const commit=()=>{
     if(!dirty.current)return; dirty.current=false;
@@ -12218,7 +12220,12 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     if(d.vendor!==(row.vendor||""))patch.vendor=d.vendor;
     if(rawAmt(d.qty)!==(row.qty||""))patch.qty=rawAmt(d.qty);
     if(d.unit!==(row.unit||"")){patch.unit=d.unit;patch.unitTouched=true;}
-    if(rawAmt(d.cp)!==(row.costPerKg||"")){patch.costPerKg=rawAmt(d.cp);patch.currency="INR";}
+    const cpRaw=rawAmt(d.cp);
+    if(d.cpCurrency==="USD"){
+      if(cpRaw!==(row.cpUsd||"")){patch.cpUsd=cpRaw;patch.cpCurrency="USD";patch.costPerKg=cpRaw?String(Math.round(+cpRaw*(usdInr||85))):"";}
+    }else{
+      if(cpRaw!==(row.costPerKg||"")){patch.costPerKg=cpRaw;patch.cpUsd="";patch.cpCurrency="INR";patch.currency="INR";}
+    }
     if(rawAmt(d.sp)!==(row.targetSellPrice||""))patch.targetSellPrice=rawAmt(d.sp);
     if(rawAmt(d.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(d.usd);
     if(Object.keys(patch).length)onCommit(row.id,patch);
@@ -12226,7 +12233,9 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
   const td={border:`1px solid ${issue?C.red+"66":C.border}`,padding:0,background:issue?C.redBg:(bandBg||C.surface),verticalAlign:"middle"};
   const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
   const num={...ci,textAlign:"right"};
-  const cp=+rawAmt(d.cp)||0,sp=+rawAmt(d.sp)||0;
+  const cpRaw=+rawAmt(d.cp)||0;
+  const cp=d.cpCurrency==="USD"?cpRaw*(usdInr||85):cpRaw;
+  const sp=+rawAmt(d.sp)||0;
   const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
   const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
   const ordered=lineOrdered(row);
@@ -12273,7 +12282,18 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,minWidth:110}}><input value={d.vendor} list={`${datalistId}-vendors`} placeholder="—" onChange={e=>set("vendor",e.target.value)} style={ci}/></td>
       <td style={{...td,width:64}}><input value={d.qty} inputMode="decimal" placeholder="0" onChange={e=>set("qty",e.target.value)} style={num}/></td>
       <td style={{...td,width:62}}><select value={d.unit} onChange={e=>set("unit",e.target.value)} style={{...ci,cursor:"pointer"}}>{["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}</select></td>
-      <td style={{...td,width:78}}><input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={num}/></td>
+      <td style={{...td,width:90,padding:0}}>
+        <div style={{display:"flex",alignItems:"center",width:"100%"}}>
+          <button title={d.cpCurrency==="USD"?"Switch to ₹ INR":"Switch to $ USD"} onClick={()=>{
+            const toUsd=d.cpCurrency!=="USD";
+            const v=rawAmt(d.cp);
+            const converted=toUsd?(v&&(usdInr||85)?String(Math.round(+v/(usdInr||85)*100)/100):""):(v?String(Math.round(+v*(usdInr||85))):"");
+            dirty.current=true;
+            setD(p=>({...p,cpCurrency:toUsd?"USD":"INR",cp:converted}));
+          }} style={{background:"none",border:"none",cursor:"pointer",fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0}}>{d.cpCurrency==="USD"?"$":"₹"}</button>
+          <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
+        </div>
+      </td>
       <td style={{...td,width:78}}><input value={d.sp} inputMode="decimal" placeholder="0" onChange={e=>set("sp",e.target.value)} style={num}/></td>
       <td style={{...td,width:70}}><input value={d.usd} inputMode="decimal" placeholder="0" onChange={e=>set("usd",e.target.value)} style={num}/></td>
       <td style={{...td,width:62,textAlign:"right",padding:"6px 8px",fontSize:11,fontWeight:800,color:mColor}}>{margin==null?"—":`${margin.toFixed(0)}%`}</td>
@@ -12495,7 +12515,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     return{
       id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||basis?.vendor||"",
       qty:seed.qty||"",unit:seed.unit||"kg",targetRate:seed.targetRate||"",
-      currency:"INR",priority:seed.priority||"Medium",
+      currency:"INR",cpCurrency:seed.cpCurrency||"INR",cpUsd:seed.cpUsd||"",priority:seed.priority||"Medium",
       notes:shapeNote,notesAuto:!!shapeNote&&!seed.notes,
       costPerKg:seed.costPerKg||seed.targetRate||(basis?.costPerKg?String(+basis.costPerKg.toFixed(2)):""),
       targetSellPrice:seed.targetSellPrice||"",
@@ -12572,6 +12592,13 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     if(patch.targetSellPriceUsd!==undefined){
       next.targetSellPriceUsdEdited=!!next.targetSellPriceUsd;
       next.targetSellPrice=inrFromUsd(next.targetSellPriceUsd);
+    }
+    if(patch.cpUsd!==undefined){
+      next.cpCurrency="USD";
+      next.costPerKg=patch.cpUsd?String(Math.round(+patch.cpUsd*usdInr)):"";
+    }
+    if(patch.costPerKg!==undefined&&next.cpCurrency!=="USD"){
+      next.cpUsd=""; next.cpCurrency="INR";
     }
     return next;
   }));
@@ -12972,7 +12999,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:7}}>
                 <div>
                   <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>What to order for {show.name}</div>
-                  <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>CP and SP are INR. USD SP is editable. USD live rate: ₹{fmtAmtIN(usdInr)}</div>
+                  <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>CP and SP editable in ₹ or $. Click ₹/$ to toggle per row. Live rate: ₹{fmtAmtIN(usdInr)}/USD</div>
                 </div>
                 <div style={{display:"flex",gap:7,flexWrap:"wrap",justifyContent:"flex-end"}}>
                   <div style={{display:"flex",gap:2,background:C.card,border:`1px solid ${C.border}`,borderRadius:999,padding:2}}>
@@ -13179,7 +13206,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                   <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
                     <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
                       <thead>
-                        <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right",tQty||null,C.ink)}{th("Unit","unit")}{th("CP ₹","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("Ordered","ordered")}{th("")}</tr>
+                        <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right",tQty||null,C.ink)}{th("Unit","unit")}{th("CP","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("Ordered","ordered")}{th("")}</tr>
                       </thead>
                       <tbody>
                         {rows.length===0?(
@@ -13192,7 +13219,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             bandBg={bandMap[r.id]?C.greenBg:C.surface}
                             issue={poFix?.missing?.[r.id]}
                             lineOrdered={lineOrdered} hovered={sheetHoverRow===r.id} setHover={setSheetHoverRow}
-                            rawAmt={rawAmt} usdFromInr={usdFromInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
+                            rawAmt={rawAmt} usdFromInr={usdFromInr} inrFromUsd={inrFromUsd} usdInr={usdInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
                         ))}
                       </tbody>
                     </table>
