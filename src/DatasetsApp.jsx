@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { loadK, saveK } from "./utils.js";
+import { loadK, saveK, onCacheRefresh } from "./utils.js";
 import { SHAPES, DEFAULT_EXP_CATS, DEFAULT_MARKETS, PRODUCT_TYPES } from "./constants.js";
 
 const mob = window.innerWidth < 700;
@@ -79,6 +79,10 @@ function DatasetPanel({ ds }) {
       setLoaded(true);
     });
   }, [ds.key]);
+  useEffect(() => onCacheRefresh(keys => {
+    if (keys.includes(ds.key)) loadK(ds.key).then(c => { if (Array.isArray(c)) setCustom(c); });
+    if (keys.includes(ds.key + "-removed")) loadK(ds.key + "-removed").then(r => { if (Array.isArray(r)) setRemoved(r); });
+  }), [ds.key]);
 
   const add = () => {
     const v = input.trim();
@@ -164,6 +168,9 @@ function CustomsDescsPanel() {
       setLoaded(true);
     });
   }, []);
+  useEffect(() => onCacheRefresh(keys => {
+    if (keys.includes(CUSTOMS_DESCS_KEY)) loadK(CUSTOMS_DESCS_KEY).then(r => { if (Array.isArray(r) && r.length) setRows(r); });
+  }), []);
 
   const persist = next => { setRows(next); saveK(CUSTOMS_DESCS_KEY, next); };
 
