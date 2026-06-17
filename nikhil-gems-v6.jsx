@@ -103,6 +103,7 @@ function WatchListWidget(){
   const [input,setInput]=useState("");
   const [loaded,setLoaded]=useState(false);
   useEffect(()=>{loadK("ng-watchlist-v1").then(d=>{setItems(Array.isArray(d)?d:[]);setLoaded(true);});},[]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes("ng-watchlist-v1"))loadK("ng-watchlist-v1").then(d=>{if(Array.isArray(d))setItems(d);});}),[]);
   const persist=async next=>{setItems(next);try{await saveK("ng-watchlist-v1",next);}catch{}};
   const add=()=>{const t=input.trim();if(!t)return;persist([{id:uid(),text:t,found:false,addedAt:new Date().toISOString()},...items]);setInput("");};
   const toggle=id=>persist(items.map(x=>x.id===id?{...x,found:!x.found}:x));
@@ -491,6 +492,10 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   // Quick Sell widget state
   const [qsCustomsDescs,setQsCustomsDescs]=useState([]);
   useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setQsCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]));},[]);
+  useEffect(()=>onCacheRefresh(keys=>{
+    if(keys.includes("ng-customs-descs-v1"))loadK("ng-customs-descs-v1").then(cd=>{if(Array.isArray(cd)&&cd.length)setQsCustomsDescs(cd);});
+    if(keys.includes(KEYS.stock))loadK(KEYS.stock).then(st=>{if(Array.isArray(st))setQsFullStock(st);});
+  }),[]);
   const qsShapeToDesc=shape=>{if(!shape)return"";const hit=qsCustomsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());return hit?hit.desc:"";};
   const qsShapeToHsn=shape=>{if(!shape)return"71031029";const hit=qsCustomsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());return hit?hit.hsn||"71031029":"71031029";};
   const [qsFullStock,setQsFullStock]=useState([]);
@@ -2793,6 +2798,7 @@ function JobWorkApp({onHome}){
   const [loaded,setLoaded]=useState(false);
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   useEffect(()=>{loadK(JW_KEY).then(d=>{setJobs(d||[]);setLoaded(true);});},[]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(JW_KEY))loadK(JW_KEY).then(d=>{if(Array.isArray(d))setJobs(d);});}),[]);
   const saveJobs=async list=>{setJobs(list);await saveK(JW_KEY,list);};
 
   // ── Blank form ───────────────────────────────────────────────────
@@ -3718,6 +3724,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(changed.includes(k.expenses))loadKFresh(k.expenses).then(v=>Array.isArray(v)&&setExpenses(v));
     if(changed.includes("ng-fin-rates-v1"))loadKFresh("ng-fin-rates-v1").then(v=>v&&typeof v==="object"&&setRates(r=>({...r,...v,INR:1})));
     if(changed.includes(ACCOUNTING_ATTACH_REQ_KEY))loadKFresh(ACCOUNTING_ATTACH_REQ_KEY).then(v=>Array.isArray(v)&&setAttachReqCats(v));
+    if(changed.includes(ACCOUNTING_CUSTOM_CATS_KEY))loadKFresh(ACCOUNTING_CUSTOM_CATS_KEY).then(v=>Array.isArray(v)&&setCustomCats(v));
   }),[company]);
   const ACCOUNTING_STRUCTURED_CLASSIFICATIONS=new Set(["vendor_bill","vendor_po","customer_receipt","cc_payment"]);
   const ACCOUNTING_VALID_CLASSIFICATIONS=new Set([...ACCOUNTING_LEDGER_CATS,"expense",...ACCOUNTING_STRUCTURED_CLASSIFICATIONS]);
@@ -14041,6 +14048,7 @@ function CalendarApp({onHome}){
   const [toast,setToast]=useState("");
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   useEffect(()=>{loadK(CAL_KEY).then(d=>{setEvents(d||[]);setLoaded(true);});},[]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(CAL_KEY))loadK(CAL_KEY).then(d=>{if(Array.isArray(d))setEvents(d);});}),[]);
 
   const save=async e=>{
     const list=[e,...events.filter(x=>x.id!==e.id)];
@@ -15443,6 +15451,10 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
 
   useEffect(()=>{loadK(KEYS.vendors).then(v=>setVendors(Array.isArray(v)?v:[]));},[]);
   useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setCustomsDescs(Array.isArray(cd)?cd:[]));},[]);
+  useEffect(()=>onCacheRefresh(keys=>{
+    if(keys.includes(KEYS.vendors))loadK(KEYS.vendors).then(v=>{if(Array.isArray(v))setVendors(v);});
+    if(keys.includes("ng-customs-descs-v1"))loadK("ng-customs-descs-v1").then(cd=>{if(Array.isArray(cd))setCustomsDescs(cd);});
+  }),[]);
   // Pick a shape/category from the Customs Descriptions dataset → fill the line's
   // description with that customs bill description and its HSN code.
   const applyCustomsShape=(i,shape)=>{
@@ -15861,6 +15873,7 @@ function UsersApp({onHome}){
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3500);};
 
   useEffect(()=>{loadK("ng-users-v1").then(d=>{setUsers(d||[]);setLoaded(true);});},[]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes("ng-users-v1"))loadK("ng-users-v1").then(d=>{if(Array.isArray(d))setUsers(d);});}),[]);
   useEffect(()=>{
     if(!users.length)return;
     Promise.all(users.map(u=>loadK(TODO_KEY_FOR(u.email)).then(todos=>{

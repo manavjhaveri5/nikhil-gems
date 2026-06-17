@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { uploadToStorage } from "./storageUtils.js";
-import { loadK, saveK, uid } from "./utils.js";
+import { loadK, saveK, uid, onCacheRefresh } from "./utils.js";
 import { SHAPES, KEYS } from "./constants.js";
 
 const mob = window.innerWidth < 700;
@@ -225,6 +225,12 @@ export default function ImageLibraryApp({ onHome }) {
       setLoaded(true);
     });
   }, []);
+  useEffect(() => onCacheRefresh(keys => {
+    if (keys.includes(IMG_KEY)) loadK(IMG_KEY).then(imgs => { if (Array.isArray(imgs)) setImages(imgs); });
+    if (keys.includes(SHAPES_KEY)) loadK(SHAPES_KEY).then(cs => {
+      if (Array.isArray(cs)) setShapes([...new Set([...SHAPES, ...cs])].sort());
+    });
+  }), []);
 
   useEffect(() => { if (shapes.length && !sharedCat) setSharedCat(shapes[0]); }, [shapes]);
   useEffect(() => { if (stones.length && !sharedStone) setSharedStone(stones[0]); }, [stones]);

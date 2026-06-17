@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { loadK, saveK, uid } from "./utils.js";
+import { loadK, saveK, uid, onCacheRefresh } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
@@ -283,6 +283,9 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
       setLibLoaded(true);
     });
   }, []);
+  useEffect(() => onCacheRefresh(keys => {
+    if (keys.includes(IMG_KEY)) loadK(IMG_KEY).then(imgs => { if (Array.isArray(imgs)) setAllLibImages(imgs); });
+  }), []);
 
   // Sync incoming material/shape when they change (e.g. user picks stone in form)
   useEffect(() => { if (material) setLibStone(material); }, [material]);
