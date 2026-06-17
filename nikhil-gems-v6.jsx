@@ -12282,15 +12282,9 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,minWidth:110}}><input value={d.vendor} list={`${datalistId}-vendors`} placeholder="—" onChange={e=>set("vendor",e.target.value)} style={ci}/></td>
       <td style={{...td,width:64}}><input value={d.qty} inputMode="decimal" placeholder="0" onChange={e=>set("qty",e.target.value)} style={num}/></td>
       <td style={{...td,width:62}}><select value={d.unit} onChange={e=>set("unit",e.target.value)} style={{...ci,cursor:"pointer"}}>{["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}</select></td>
-      <td style={{...td,width:90,padding:0}}>
+      <td style={{...td,width:86,padding:0}}>
         <div style={{display:"flex",alignItems:"center",width:"100%"}}>
-          <button title={d.cpCurrency==="USD"?"Switch to ₹ INR":"Switch to $ USD"} onClick={()=>{
-            const toUsd=d.cpCurrency!=="USD";
-            const v=rawAmt(d.cp);
-            const converted=toUsd?(v&&(usdInr||85)?String(Math.round(+v/(usdInr||85)*100)/100):""):(v?String(Math.round(+v*(usdInr||85))):"");
-            dirty.current=true;
-            setD(p=>({...p,cpCurrency:toUsd?"USD":"INR",cp:converted}));
-          }} style={{background:"none",border:"none",cursor:"pointer",fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0}}>{d.cpCurrency==="USD"?"$":"₹"}</button>
+          <span style={{fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0,userSelect:"none"}}>{d.cpCurrency==="USD"?"$":"₹"}</span>
           <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
         </div>
       </td>
@@ -12458,6 +12452,22 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   };
   const buyingPlan=show.buyingPlan||[];
   const vendorQuoteBook=show.buyingPlanVendorQuotes||{};
+  const vendorCurrencies=show.buyingPlanVendorCurrencies||{};
+  const getVendorCurrency=vendor=>(vendor&&vendorCurrencies[vendor])||"INR";
+  const setVendorCurrency=(vendor,currency)=>{
+    if(!vendor)return;
+    const nextCurrencies={...vendorCurrencies,[vendor]:currency};
+    const nextPlan=buyingPlan.map(r=>{
+      if(r.vendor!==vendor)return r;
+      const toUsd=currency==="USD";
+      const cpUsd=toUsd?(r.cpUsd||(r.costPerKg?String(Math.round(+r.costPerKg/(usdInr||85)*100)/100):"")):"";
+      const costPerKg=toUsd?(cpUsd?String(Math.round(+cpUsd*(usdInr||85))):r.costPerKg):(r.cpCurrency==="USD"&&r.cpUsd?String(Math.round(+r.cpUsd*(usdInr||85))):r.costPerKg);
+      return{...r,cpCurrency:currency,cpUsd,costPerKg,updatedAt:new Date().toISOString()};
+    });
+    buyingUndoRef.current=[...buyingUndoRef.current,buyingPlan].slice(-100);
+    onUpdateShow(show.id,"buyingPlan",nextPlan);
+    onUpdateShow(show.id,"buyingPlanVendorCurrencies",nextCurrencies);
+  };
   const shapeNotePresets=show.buyingPlanShapeNotes||{};
   const shapeNoteFor=shape=>shapeNotePresets[normPlanText(shape)]||"";
   const saveShapeNotePresets=next=>onUpdateShow(show.id,"buyingPlanShapeNotes",next);
@@ -12515,7 +12525,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     return{
       id:uid(),stone:seed.stone||"",shape:seed.shape||"",vendor:seed.vendor||basis?.vendor||"",
       qty:seed.qty||"",unit:seed.unit||"kg",targetRate:seed.targetRate||"",
-      currency:"INR",cpCurrency:seed.cpCurrency||"INR",cpUsd:seed.cpUsd||"",priority:seed.priority||"Medium",
+      currency:"INR",cpCurrency:seed.cpCurrency||getVendorCurrency(seed.vendor||basis?.vendor||""),cpUsd:seed.cpUsd||"",priority:seed.priority||"Medium",
       notes:shapeNote,notesAuto:!!shapeNote&&!seed.notes,
       costPerKg:seed.costPerKg||seed.targetRate||(basis?.costPerKg?String(+basis.costPerKg.toFixed(2)):""),
       targetSellPrice:seed.targetSellPrice||"",
@@ -12592,6 +12602,12 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
     if(patch.targetSellPriceUsd!==undefined){
       next.targetSellPriceUsdEdited=!!next.targetSellPriceUsd;
       next.targetSellPrice=inrFromUsd(next.targetSellPriceUsd);
+    }
+    if(patch.vendor!==undefined&&patch.vendor&&patch.cpCurrency===undefined){
+      const vc=getVendorCurrency(patch.vendor);
+      next.cpCurrency=vc;
+      if(vc==="USD"&&next.costPerKg&&!next.cpUsd)next.cpUsd=String(Math.round(+next.costPerKg/(usdInr||85)*100)/100);
+      if(vc==="INR")next.cpUsd="";
     }
     if(patch.cpUsd!==undefined){
       next.cpCurrency="USD";
@@ -13187,6 +13203,16 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                     <SheetMultiSelect allLabel="All shapes" selected={sheetShapes} onChange={setSheetShapes} options={[...shapeMap.entries()].sort((a,b)=>a[1].localeCompare(b[1])).map(([k,v])=>({key:k,label:v}))}/>
                     <SheetMultiSelect allLabel="All vendors" selected={sheetVendors} onChange={setSheetVendors} options={vendorOpts.map(v=>({key:v,label:v}))}/>
                     {anyFilter&&<button onClick={()=>{setSheetStones([]);setSheetShapes([]);setSheetVendors([]);}} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 9px",fontSize:11,color:C.inkMid,cursor:"pointer"}}>Clear</button>}
+                    {vendorOpts.length>0&&<div style={{display:"flex",alignItems:"center",gap:5,marginLeft:4,flexWrap:"wrap"}}>
+                      <span style={{fontSize:9.5,color:C.inkFaint,fontWeight:700,textTransform:"uppercase",letterSpacing:.4,whiteSpace:"nowrap"}}>CP currency:</span>
+                      {vendorOpts.map(v=>(
+                        <div key={v} style={{display:"flex",alignItems:"center",borderRadius:7,border:`1.5px solid ${getVendorCurrency(v)==="USD"?C.blue+"88":C.border}`,overflow:"hidden",fontSize:10,background:C.card}}>
+                          <span style={{padding:"3px 7px",color:C.inkMid,fontSize:10,fontWeight:600,maxWidth:110,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={v}>{v}</span>
+                          <button onClick={()=>setVendorCurrency(v,"INR")} style={{padding:"3px 7px",background:getVendorCurrency(v)==="INR"?C.ink:"transparent",color:getVendorCurrency(v)==="INR"?"#fff":C.inkFaint,border:"none",borderLeft:`1px solid ${C.border}`,cursor:"pointer",fontWeight:800,fontSize:10,lineHeight:1}}>₹</button>
+                          <button onClick={()=>setVendorCurrency(v,"USD")} style={{padding:"3px 7px",background:getVendorCurrency(v)==="USD"?C.blue:"transparent",color:getVendorCurrency(v)==="USD"?"#fff":C.inkFaint,border:"none",borderLeft:`1px solid ${C.border}`,cursor:"pointer",fontWeight:800,fontSize:10,lineHeight:1}}>$</button>
+                        </div>
+                      ))}
+                    </div>}
                     <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{rows.length} row{rows.length===1?"":"s"}</span>
                     <button onClick={copyOrder} title="Copy a vendor message (no prices) to paste into chat" style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:800,color:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>📋 Copy order</button>
                     <button onClick={printSheet} title="Print this view as a PDF (A4)" style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:800,color:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>🖨 Print</button>
