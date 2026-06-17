@@ -12206,11 +12206,31 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
   const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
   const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
   const ordered=lineOrdered(row);
+  // Spreadsheet-style vertical nav: move focus to the same column one row up/down.
+  // Walks the DOM (rows are plain <tr> siblings in <tbody>) so it stays correct after sort/filter.
+  const moveRow=(fromEl,delta)=>{
+    const cell=fromEl.closest("td"), tr=fromEl.closest("tr");
+    if(!cell||!tr)return false;
+    const col=Array.prototype.indexOf.call(tr.children,cell);
+    const target=delta>0?tr.nextElementSibling:tr.previousElementSibling;
+    if(!target||!target.children[col])return false;
+    const f=target.children[col].querySelector("input,select,button");
+    if(!f)return false;
+    f.focus(); if(f.select){try{f.select();}catch{}}
+    return true;
+  };
   return(
     <tr
       onFocus={()=>{editing.current=true;}}
       onBlur={e=>{ if(e.currentTarget.contains(e.relatedTarget))return; editing.current=false; commit(); }}
-      onKeyDown={e=>{ if(e.key==="Enter"){ commit(); if(e.target&&e.target.blur)e.target.blur(); } }}
+      onKeyDown={e=>{
+        const el=e.target;
+        if(e.key==="Enter"){ commit(); if(!moveRow(el,1)&&el.blur)el.blur(); e.preventDefault(); return; }
+        // Skip <select> (Unit) so its native option-cycling with arrows still works.
+        if((e.key==="ArrowDown"||e.key==="ArrowUp")&&el.tagName==="INPUT"){
+          if(moveRow(el,e.key==="ArrowDown"?1:-1)){ commit(); e.preventDefault(); }
+        }
+      }}
       onContextMenu={e=>{ if(onContext){ e.preventDefault(); onContext(e.clientX,e.clientY,row.id); } }}
       title={issue?`Complete before PO: ${issue.join(", ")}`:undefined}
       onMouseEnter={()=>setHover(row.id)} onMouseLeave={()=>setHover(s=>s===row.id?null:s)}>
