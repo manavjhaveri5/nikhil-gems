@@ -12208,19 +12208,22 @@ function SheetMultiSelect({allLabel,options,selected,onChange}){
 // focus leaves the whole row (or Enter). Tabbing/clicking between cells in the
 // same row does NOT commit — so an active filter can't drop the row while you're
 // still editing it.
-function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,bandBg,lineOrdered,hovered,setHover,rawAmt,usdFromInr,inrFromUsd,usdInr,expandPlanShape,fmtAmtIN,issue}){
+function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,bandBg,lineOrdered,hovered,setHover,vendorCur,rawAmt,usdFromInr,inrFromUsd,usdInr,expandPlanShape,fmtAmtIN,issue}){
+  // CP currency is set once per vendor. The vendor's currency is the single source of truth
+  // for how this row's cost price is shown and interpreted — a row's own stored cpCurrency is
+  // ignored for display, so legacy rows stuck in $ follow the vendor toggle immediately.
+  const cur=vendorCur==="USD"?"USD":"INR";
   const make=()=>({
     stone:row.stone||"",shape:row.shape||"",vendor:row.vendor||"",qty:row.qty||"",
     unit:(!row.unitTouched&&row.unit==="pcs"&&!row.stone&&!row.shape)?"kg":(row.unit||"kg"),
-    cpCurrency:row.cpCurrency||"INR",
-    cp:row.cpCurrency==="USD"?fmtAmtIN(row.cpUsd):fmtAmtIN(row.costPerKg),
+    cp:cur==="USD"?fmtAmtIN(row.cpUsd):fmtAmtIN(row.costPerKg),
     sp:fmtAmtIN(row.targetSellPrice),
     usd:fmtAmtIN(row.targetSellPriceUsd||usdFromInr(row.targetSellPrice)),
   });
   const [d,setD]=React.useState(make);
   const editing=React.useRef(false);
   const dirty=React.useRef(false);
-  React.useEffect(()=>{ if(!editing.current) setD(make()); },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.cpUsd,row.cpCurrency,row.targetSellPrice,row.targetSellPriceUsd]);
+  React.useEffect(()=>{ if(!editing.current) setD(make()); },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.cpUsd,cur,row.targetSellPrice,row.targetSellPriceUsd]);
   const set=(k,v)=>{dirty.current=true;setD(p=>({...p,[k]:v}));};
   const commit=()=>{
     if(!dirty.current)return; dirty.current=false;
@@ -12232,7 +12235,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     if(rawAmt(d.qty)!==(row.qty||""))patch.qty=rawAmt(d.qty);
     if(d.unit!==(row.unit||"")){patch.unit=d.unit;patch.unitTouched=true;}
     const cpRaw=rawAmt(d.cp);
-    if(d.cpCurrency==="USD"){
+    if(cur==="USD"){
       if(cpRaw!==(row.cpUsd||"")){patch.cpUsd=cpRaw;patch.cpCurrency="USD";patch.costPerKg=cpRaw?String(Math.round(+cpRaw*(usdInr||85))):"";}
     }else{
       if(cpRaw!==(row.costPerKg||"")){patch.costPerKg=cpRaw;patch.cpUsd="";patch.cpCurrency="INR";patch.currency="INR";}
@@ -12245,7 +12248,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
   const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
   const num={...ci,textAlign:"right"};
   const cpRaw=+rawAmt(d.cp)||0;
-  const cp=d.cpCurrency==="USD"?cpRaw*(usdInr||85):cpRaw;
+  const cp=cur==="USD"?cpRaw*(usdInr||85):cpRaw;
   const sp=+rawAmt(d.sp)||0;
   const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
   const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
@@ -12297,7 +12300,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,width:62}}><select value={d.unit} onChange={e=>set("unit",e.target.value)} style={{...ci,cursor:"pointer"}}>{["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}</select></td>
       <td style={{...td,width:86,padding:0}}>
         <div style={{display:"flex",alignItems:"center",width:"100%"}}>
-          <span title="Currency is set per vendor (top row)" style={{fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0}}>{d.cpCurrency==="USD"?"$":"₹"}</span>
+          <span title="Currency is set per vendor (top row)" style={{fontSize:9.5,color:cur==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0}}>{cur==="USD"?"$":"₹"}</span>
           <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
         </div>
       </td>
@@ -13258,6 +13261,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                             bandBg={bandMap[r.id]?C.greenBg:C.surface}
                             issue={poFix?.missing?.[r.id]}
                             lineOrdered={lineOrdered} hovered={sheetHoverRow===r.id} setHover={setSheetHoverRow}
+                            vendorCur={getVendorCurrency(r.vendor)}
                             rawAmt={rawAmt} usdFromInr={usdFromInr} inrFromUsd={inrFromUsd} usdInr={usdInr} expandPlanShape={expandPlanShape} fmtAmtIN={fmtAmtIN}/>
                         ))}
                       </tbody>
@@ -13721,7 +13725,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         const usd=+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
                         const parts=[r.stone||"—",qtyStr];
-                        if(cp>0){const isUsd=r.cpCurrency==="USD"&&r.cpUsd;parts.push(isUsd?`CP $${fmtAmtIN(+r.cpUsd)}`:`CP ₹${fmtAmtIN(cp)}`);}
+                        if(cp>0){const isUsd=getVendorCurrency(r.vendor)==="USD"&&r.cpUsd;parts.push(isUsd?`CP $${fmtAmtIN(+r.cpUsd)}`:`CP ₹${fmtAmtIN(cp)}`);}
                         if(sp>0)parts.push(`SP ₹${fmtAmtIN(sp)}`);
                         if(usd>0)parts.push(`$${fmtAmtIN(usd)}`);
                         if(sp>0&&cq>0)parts.push(`Total ₹${fmtAmtIN(cq*sp)}`);
@@ -13736,7 +13740,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
                         const cp=+r.costPerKg||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
                         const comment=whatsappIncludeComments&&r.notes?` | Comments: ${r.notes}`:"";
-                        const isUsdRow=r.cpCurrency==="USD"&&r.cpUsd;
+                        const isUsdRow=getVendorCurrency(r.vendor)==="USD"&&r.cpUsd;
                         if(cp>0&&cq>0){
                           lines.push(isUsdRow?`• ${r.stone||"—"} - ${qtyStr} * $${fmtAmtIN(+r.cpUsd)} = $${fmtAmtIN(cq*(+r.cpUsd))} (₹${fmtAmtIN(cq*cp)})${comment}`:`• ${r.stone||"—"} - ${qtyStr} * ₹${fmtAmtIN(cp)} = ₹${fmtAmtIN(cq*cp)}${comment}`);
                         }else if(cp>0){
