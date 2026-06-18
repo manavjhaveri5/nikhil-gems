@@ -2289,7 +2289,7 @@ function StockInsights({stock,purchases}){
   );
 }
 
-function AcctStockTable({rows,onDeleteKeys,onMerge}){
+function AcctStockTable({rows,onDeleteKeys,onMerge,onViewBill}){
   const [selected,setSelected]=useState(null);
   const [billSelectMode,setBillSelectMode]=useState(false);
   const [billSelectedKeys,setBillSelectedKeys]=useState(new Set());
@@ -2303,27 +2303,50 @@ function AcctStockTable({rows,onDeleteKeys,onMerge}){
         <button className="bs" style={{padding:"5px 11px",fontSize:12,marginBottom:16}} onClick={()=>setSelected(null)}>← Back to Accounting Stock</button>
         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,marginBottom:3}}>{row.cat}</div>
         <div style={{fontSize:12,color:C.inkMid,marginBottom:16,display:"flex",gap:16,flexWrap:"wrap"}}>
-          <span style={{fontWeight:600}}>{row.totalQty.toLocaleString("en-IN",{maximumFractionDigits:2})} {row.unit} available</span>
-          <span>{inr(row.totalValue)} total value</span>
-          <span>{row.bills.length} bill{row.bills.length>1?"s":""}</span>
+          <span style={{fontWeight:600}}>Closing {row.closingQty.toLocaleString("en-IN",{maximumFractionDigits:2})} {row.unit}</span>
+          <span style={{color:C.green}}>In {row.inQty.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          <span style={{color:C.red}}>Out {row.outQty.toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
+          <span>Avg rate {inr(Math.round(row.avgRate))}</span>
+          <span>Value {inr(Math.round(row.closingValue))}</span>
+          {row.hsn&&<span style={{color:C.inkFaint}}>HSN {row.hsn}</span>}
+          {row.gst&&<span style={{color:C.inkFaint}}>GST {row.gst}%</span>}
         </div>
-        <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",overflow:"hidden"}}>
-          <div style={{display:"grid",gridTemplateColumns:"100px 1fr 80px 110px 130px",padding:"8px 16px",background:C.card,borderBottom:`1px solid ${C.border}`}}>
-            {["Date","Supplier & Bill","Qty","Amount","Document"].map(h=><div key={h} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>{h}</div>)}
-          </div>
-          {row.bills.map((b,i)=>(
-            <div key={i} style={{display:"grid",gridTemplateColumns:"100px 1fr 80px 110px 130px",padding:"11px 16px",borderBottom:i<row.bills.length-1?`1px solid ${C.border}`:"none",alignItems:"center"}}>
-              <div style={{fontSize:12,color:C.inkMid}}>{fmtDate(b.billDate)}</div>
-              <div><div style={{fontSize:13}}>{b.supplier||"—"}</div><div style={{fontSize:10,color:C.inkFaint,fontFamily:"monospace"}}>{b.billNumber}</div></div>
-              <div style={{fontSize:13}}>{b.qty} {b.unit}</div>
-              <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:500}}>{inr(b.amt)}</div>
-              <div>{(b.docData||b.docUrl)
-                ?<a href={b.docData||b.docUrl} download={b.docData?`${b.billNumber||"bill"}.${b.docData.startsWith("data:image/png")?"png":b.docData.startsWith("data:image")?"jpg":"pdf"}`:`${b.billNumber||"bill"}.${b.docExt||"jpg"}`} target={b.docUrl?"_blank":undefined} rel="noreferrer" style={{fontSize:11,color:C.blue,textDecoration:"none"}}>📄 Download Bill</a>
-                :<span style={{fontSize:11,color:C.inkFaint}}>No document</span>
-              }</div>
+        {(()=>{
+          // Merge inward (bills) + outward (invoice) movements into one date-sorted ledger with running balance.
+          const moves=[
+            ...row.bills.map(b=>({kind:"in",date:b.billDate,party:b.supplier||"—",ref:b.billNumber||"",inQty:+b.qty||0,outQty:0,unit:b.unit||row.unit,rate:b.rate,amt:+b.amt||0,docData:b.docData,docUrl:b.docUrl,docExt:b.docExt,billId:b.billId})),
+            ...row.outs.map(o=>({kind:"out",date:o.date,party:o.buyer||"—",ref:o.invNo||"",inQty:0,outQty:+o.qty||0,unit:o.unit||row.unit,rate:row.avgRate,amt:(+o.qty||0)*row.avgRate})),
+          ].sort((a,b)=>new Date(a.date||0)-new Date(b.date||0));
+          let bal=0;
+          return(
+            <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",overflow:"hidden"}}>
+              <div style={{display:"grid",gridTemplateColumns:"92px 1fr 64px 64px 90px 100px 78px 110px",padding:"8px 14px",background:C.card,borderBottom:`1px solid ${C.border}`}}>
+                {["Date","Particulars","In","Out","Rate","Value","Balance","Document"].map(h=><div key={h} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>{h}</div>)}
+              </div>
+              {moves.length===0&&<div style={{padding:"22px",textAlign:"center",fontSize:12,color:C.inkFaint}}>No movements yet</div>}
+              {moves.map((m,i)=>{
+                bal+=m.inQty-m.outQty;
+                const clickable=m.kind==="in"&&m.billId&&onViewBill;
+                return(
+                  <div key={i} onClick={clickable?()=>onViewBill(m.billId):undefined} title={clickable?"Open bill voucher":undefined} style={{display:"grid",gridTemplateColumns:"92px 1fr 64px 64px 90px 100px 78px 110px",padding:"10px 14px",borderBottom:i<moves.length-1?`1px solid ${C.border}`:"none",alignItems:"center",cursor:clickable?"pointer":"default"}}>
+                    <div style={{fontSize:12,color:C.inkMid}}>{fmtDate(m.date)}</div>
+                    <div><div style={{fontSize:13,display:"flex",alignItems:"center",gap:6}}><span style={{fontSize:9,fontWeight:800,color:m.kind==="in"?C.green:C.red,textTransform:"uppercase"}}>{m.kind}</span>{m.party}</div><div style={{fontSize:10,color:C.inkFaint,fontFamily:"monospace"}}>{m.ref}</div></div>
+                    <div style={{fontSize:13,color:C.green}}>{m.inQty?`${m.inQty.toLocaleString("en-IN",{maximumFractionDigits:2})} ${m.unit||""}`:"—"}</div>
+                    <div style={{fontSize:13,color:C.red}}>{m.outQty?`${m.outQty.toLocaleString("en-IN",{maximumFractionDigits:2})} ${m.unit||""}`:"—"}</div>
+                    <div style={{fontSize:12,color:C.inkMid}}>{m.rate?inr(Math.round(+m.rate)):"—"}</div>
+                    <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:500}}>{m.amt?inr(Math.round(m.amt)):"—"}</div>
+                    <div style={{fontSize:12,fontWeight:600}}>{bal.toLocaleString("en-IN",{maximumFractionDigits:2})}</div>
+                    <div>{m.kind==="in"?((m.docData||m.docUrl)
+                      ?<a onClick={e=>e.stopPropagation()} href={m.docData||m.docUrl} download={m.docData?`${m.ref||"bill"}.${m.docData.startsWith("data:image/png")?"png":m.docData.startsWith("data:image")?"jpg":"pdf"}`:`${m.ref||"bill"}.${m.docExt||"jpg"}`} target={m.docUrl?"_blank":undefined} rel="noreferrer" style={{fontSize:11,color:C.blue,textDecoration:"none"}}>📄 Bill</a>
+                      :<span style={{fontSize:11,color:C.inkFaint}}>No document</span>)
+                      :<span style={{fontSize:11,color:C.inkFaint}}>Invoice {m.ref}</span>
+                    }</div>
+                  </div>
+                );
+              })}
             </div>
-          ))}
-        </div>
+          );
+        })()}
       </div>
     );
   }
@@ -2358,28 +2381,35 @@ function AcctStockTable({rows,onDeleteKeys,onMerge}){
           </div>
         </div>
       )}
-      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",overflow:"hidden"}}>
-        <div style={{display:"grid",gridTemplateColumns:`${billSelectMode?"28px ":""}1fr 90px 70px 130px 40px`,padding:"8px 15px",background:C.card,borderBottom:`1px solid ${C.border}`}}>
+      {(()=>{
+        const gridCols=`${billSelectMode?"28px ":""}1fr 60px 50px 72px 72px 82px 92px 118px 24px`;
+        return(
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",overflow:"auto"}}>
+        <div style={{display:"grid",gridTemplateColumns:gridCols,padding:"8px 15px",background:C.card,borderBottom:`1px solid ${C.border}`,minWidth:760}}>
           {billSelectMode&&<div/>}
-          {["Category (as on GST bill)","Qty","Unit","Total Value",""].map(h=><div key={h} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>{h}</div>)}
+          {[["Item (as on GST bill)","left"],["HSN","left"],["Unit","left"],["In Qty","right"],["Out Qty","right"],["Closing","right"],["Avg Rate","right"],["Value","right"],["",""]].map(([h,al],hi)=><div key={hi} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,textAlign:al==="right"?"right":"left"}}>{h}</div>)}
         </div>
         {rows.map((row,i)=>{
           const key=`${row.cat}||${row.unit}`;
           const isBillSel=billSelectedKeys.has(key);
           return(
-            <div key={key} onClick={e=>{e.stopPropagation();if(billSelectMode){setBillSelectedKeys(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;});}else setSelected(`${row.cat}||${String(row.unit)}`);}} className="rh" style={{display:"grid",gridTemplateColumns:`${billSelectMode?"28px ":""}1fr 90px 70px 130px 40px`,padding:"11px 15px",borderBottom:i<rows.length-1?`1px solid ${C.border}`:"none",alignItems:"center",cursor:"pointer",transition:"background .1s",background:isBillSel?C.amberBg:"transparent"}}>
+            <div key={key} onClick={e=>{e.stopPropagation();if(billSelectMode){setBillSelectedKeys(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);return n;});}else setSelected(`${row.cat}||${String(row.unit)}`);}} className="rh" style={{display:"grid",gridTemplateColumns:gridCols,padding:"11px 15px",borderBottom:i<rows.length-1?`1px solid ${C.border}`:"none",alignItems:"center",cursor:"pointer",transition:"background .1s",background:isBillSel?C.amberBg:"transparent",minWidth:760}}>
               {billSelectMode&&<input type="checkbox" readOnly checked={isBillSel} style={{accentColor:C.amber,width:14,height:14,cursor:"pointer"}}/>}
-              <div>
-                <div style={{fontWeight:500,fontSize:13,color:C.ink}}>{row.cat}<span style={{fontSize:10,color:C.inkFaint,marginLeft:7}}>{row.bills.length} bill{row.bills.length>1?"s":""}</span></div>
-              </div>
-              <div style={{fontSize:13,fontWeight:600,color:C.ink}}>{row.totalQty.toLocaleString("en-IN",{maximumFractionDigits:2})}</div>
-              <div style={{fontSize:12,color:C.inkFaint}}>{row.unit}</div>
-              <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:600}}>{inr(row.totalValue)}</div>
-              <div style={{fontSize:12,color:C.inkFaint}}>{billSelectMode?"":"›"}</div>
+              <div style={{fontWeight:500,fontSize:13,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.cat}<span style={{fontSize:10,color:C.inkFaint,marginLeft:7}}>{row.bills.length} bill{row.bills.length===1?"":"s"}</span></div>
+              <div style={{fontSize:11,color:C.inkFaint}}>{row.hsn||"—"}</div>
+              <div style={{fontSize:12,color:C.inkFaint}}>{row.unit||"—"}</div>
+              <div style={{fontSize:13,color:C.green,textAlign:"right"}}>{row.inQty.toLocaleString("en-IN",{maximumFractionDigits:2})}</div>
+              <div style={{fontSize:13,color:row.outQty?C.red:C.inkFaint,textAlign:"right"}}>{row.outQty?row.outQty.toLocaleString("en-IN",{maximumFractionDigits:2}):"—"}</div>
+              <div style={{fontSize:13,fontWeight:700,color:C.ink,textAlign:"right"}}>{row.closingQty.toLocaleString("en-IN",{maximumFractionDigits:2})}</div>
+              <div style={{fontSize:12,color:C.inkMid,textAlign:"right"}}>{row.avgRate?inr(Math.round(row.avgRate)):"—"}</div>
+              <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:600,textAlign:"right"}}>{inr(Math.round(row.closingValue))}</div>
+              <div style={{fontSize:12,color:C.inkFaint,textAlign:"right"}}>{billSelectMode?"":"›"}</div>
             </div>
           );
         })}
       </div>
+        );
+      })()}
     </div>
   );
 }
@@ -5688,7 +5718,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
           const key=`${item.desc.trim().toLowerCase()}||${item.unit||""}`;
           if(!rows[key])rows[key]={id:uid(),desc:item.desc,unit:item.unit||"",qty:0,hsn:item.hsn||"7103",gst:item.gst||"0",bills:[]};
           rows[key].qty+=(+item.qty||0);
-          rows[key].bills.push({billId:bill.id,billNumber:bill.billNumber||"",supplier:bill.supplier||"",billDate:bill.billDate||"",qty:item.qty,amt:lineTotal(item),docUrl:bill.docUrl,docExt:bill.docExt});
+          rows[key].bills.push({billId:bill.id,billNumber:bill.billNumber||"",supplier:bill.supplier||"",billDate:bill.billDate||"",qty:item.qty,unit:item.unit||"",rate:item.rate||(+item.qty?String(Math.round(lineBase(item)/(+item.qty))):""),amt:lineTotal(item),docUrl:bill.docUrl,docExt:bill.docExt});
         });
       });
       const migrated=Object.values(rows);
@@ -7277,12 +7307,21 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           })()}
           {tab==="accounting"&&(()=>{
             // accStock is the single mutable store — qty changes when bills are confirmed or invoices are saved
-            const acctRows=accStock.map(e=>({
-              id:e.id,cat:e.desc,unit:e.unit,
-              totalQty:+e.qty||0,
-              totalValue:(e.bills||[]).reduce((s,b)=>s+(+b.amt||0),0),
-              bills:e.bills||[],
-            })).sort((a,b)=>a.cat.localeCompare(b.cat));
+            const acctRows=accStock.map(e=>{
+              const bills=e.bills||[],outs=e.outs||[];
+              const inQty=bills.reduce((s,b)=>s+(+b.qty||0),0);
+              const inValue=bills.reduce((s,b)=>s+(+b.amt||0),0);
+              const outQty=outs.reduce((s,o)=>s+(+o.qty||0),0);
+              const closingQty=+e.qty||0;             // running store qty = closing balance
+              const avgRate=inQty>0?inValue/inQty:0;
+              const closingValue=closingQty*avgRate;  // value at average cost (Tally style)
+              return{
+                id:e.id,cat:e.desc,unit:e.unit,hsn:e.hsn||"",gst:e.gst||"",
+                inQty,inValue,outQty,closingQty,avgRate,closingValue,
+                totalQty:closingQty,totalValue:closingValue, // back-compat aliases
+                bills,outs,
+              };
+            }).sort((a,b)=>a.cat.localeCompare(b.cat));
             return(
               <div>
                 <div style={{fontSize:12,color:C.inkMid,marginBottom:11}}>
@@ -7290,7 +7329,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 </div>
                 {acctRows.length===0
                   ?<div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:"48px 0",textAlign:"center"}}><div style={{fontSize:28,opacity:.2,marginBottom:8}}>📦</div><p style={{fontSize:13,color:C.inkMid}}>No accounting stock yet</p><p style={{fontSize:11,color:C.inkFaint,marginTop:4}}>Confirm a purchase bill with "Track accounting stock" ticked to create entries here</p></div>
-                  :<AcctStockTable rows={acctRows} onDeleteKeys={delBillAcctRows} onMerge={mergeBillAcctRows}/>
+                  :<AcctStockTable rows={acctRows} onDeleteKeys={delBillAcctRows} onMerge={mergeBillAcctRows} onViewBill={onViewBill}/>
                 }
               </div>
             );
@@ -7821,7 +7860,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
         const descLower=it.desc.trim().toLowerCase();
         const unit=it.unit||"";
         const idx=newAccStock.findIndex(e=>e.desc.trim().toLowerCase()===descLower&&(e.unit||"")===unit);
-        const billEntry={billId:savedItem.id,billNumber:savedItem.billNumber||"",supplier:savedItem.supplier||"",billDate:savedItem.billDate||"",qty:it.qty,amt:lineTotal(it),docUrl:savedItem.docUrl,docExt:savedItem.docExt};
+        const billEntry={billId:savedItem.id,billNumber:savedItem.billNumber||"",supplier:savedItem.supplier||"",billDate:savedItem.billDate||"",qty:it.qty,unit:it.unit||"",rate:it.rate||(+it.qty?String(Math.round(lineBase(it)/(+it.qty))):""),amt:lineTotal(it),docUrl:savedItem.docUrl,docExt:savedItem.docExt};
         if(idx>=0){newAccStock[idx]={...newAccStock[idx],qty:(+newAccStock[idx].qty||0)+(+it.qty||0),bills:[...(newAccStock[idx].bills||[]),billEntry]};}
         else{newAccStock.push({id:uid(),desc:it.desc,unit,qty:+it.qty||0,hsn:it.hsn||"7103",gst:it.gst||"0",bills:[billEntry]});}
       });
@@ -10050,11 +10089,18 @@ function InvoicesApp({onHome,startDraft}){
         }
       });
     }
-    // Step 2 — deduct for current (new) acct links
+    // Drop any outward movements previously recorded for this invoice, so re-saving re-adds cleanly.
+    newAccStock.forEach((s,i)=>{if((s.outs||[]).some(o=>o.invId===inv.id)){newAccStock[i]={...s,outs:(s.outs||[]).filter(o=>o.invId!==inv.id)};accChanged=true;}});
+    // Step 2 — deduct for current (new) acct links + record outward movement (Tally ledger)
     inv.items.forEach(item=>{
       if(item.acctStockId&&item.qty){
         const idx=newAccStock.findIndex(s=>s.id===item.acctStockId);
-        if(idx>=0){newAccStock[idx]={...newAccStock[idx],qty:Math.max(0,(+newAccStock[idx].qty||0)-(+item.qty||0))};accChanged=true;}
+        if(idx>=0){
+          const e=newAccStock[idx];
+          const out={invId:inv.id,invNo:inv.invNo||"",buyer:inv.buyerName||inv.buyer||"",date:inv.date||today(),qty:item.qty,unit:item.unit||e.unit||""};
+          newAccStock[idx]={...e,qty:Math.max(0,(+e.qty||0)-(+item.qty||0)),outs:[...(e.outs||[]),out]};
+          accChanged=true;
+        }
       }
     });
     if(accChanged){setAccStock(newAccStock);await saveK(KEYS.accStock,newAccStock);}
@@ -10124,11 +10170,13 @@ function InvoicesApp({onHome,startDraft}){
         links.forEach(({id,qty,qty2})=>{const i=newStock.findIndex(s=>s.id===id);if(i>=0){newStock[i]={...newStock[i],qty:(+(newStock[i].qty)||0)+(+qty||0),...(qty2>0?{qty2:String((+newStock[i].qty2||0)+(+qty2||0))}:{}),updatedAt:new Date().toISOString()};physChanged=true;}});
       });
       if(physChanged){setStock(newStock);try{await saveStockK(newStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}}
-      // Restore accounting stock quantities
+      // Restore accounting stock quantities + remove this invoice's outward movements
       const acctLinks=inv.items.filter(it=>it.acctStockId&&it.qty);
-      if(acctLinks.length>0){
-        const newAccStock=[...accStock];
+      const hasOuts=accStock.some(s=>(s.outs||[]).some(o=>o.invId===id));
+      if(acctLinks.length>0||hasOuts){
+        let newAccStock=[...accStock];
         acctLinks.forEach(it=>{const i=newAccStock.findIndex(s=>s.id===it.acctStockId);if(i>=0)newAccStock[i]={...newAccStock[i],qty:(+(newAccStock[i].qty)||0)+(+it.qty||0)};});
+        newAccStock=newAccStock.map(s=>(s.outs||[]).some(o=>o.invId===id)?{...s,outs:s.outs.filter(o=>o.invId!==id)}:s);
         setAccStock(newAccStock);await saveK(KEYS.accStock,newAccStock);
       }
       // Remove calendar events
@@ -12202,6 +12250,17 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
   const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
   const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
   const ordered=lineOrdered(row);
+  // Per-row CP currency toggle (₹/$). Mode switch — converts the stored value so the
+  // displayed number stays meaningful, and lets the user type cleanly in the new currency.
+  const toggleCpCur=()=>{
+    dirty.current=false; // toggle is a deliberate mode switch — drop any half-typed value
+    const toUsd=d.cpCurrency!=="USD";
+    const patch=toUsd
+      ?{cpCurrency:"USD",cpUsd:row.cpUsd||(row.costPerKg?String(Math.round(+row.costPerKg/(usdInr||85)*100)/100):""),costPerKg:row.costPerKg||""}
+      :{cpCurrency:"INR",cpUsd:"",costPerKg:row.cpUsd?String(Math.round(+row.cpUsd*(usdInr||85))):(row.costPerKg||"")};
+    onCommit(row.id,patch);
+    setD(p=>({...p,cpCurrency:patch.cpCurrency,cp:fmtAmtIN(patch.cpCurrency==="USD"?patch.cpUsd:patch.costPerKg)}));
+  };
   // Spreadsheet-style vertical nav: move focus to the same column one row up/down.
   // Walks the DOM (rows are plain <tr> siblings in <tbody>) so it stays correct after sort/filter.
   const moveRow=(fromEl,delta)=>{
@@ -12247,7 +12306,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,width:62}}><select value={d.unit} onChange={e=>set("unit",e.target.value)} style={{...ci,cursor:"pointer"}}>{["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}</select></td>
       <td style={{...td,width:86,padding:0}}>
         <div style={{display:"flex",alignItems:"center",width:"100%"}}>
-          <span style={{fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0,userSelect:"none"}}>{d.cpCurrency==="USD"?"$":"₹"}</span>
+          <button type="button" title="Click to switch ₹ / $" onMouseDown={e=>e.preventDefault()} onClick={toggleCpCur} style={{fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit"}}>{d.cpCurrency==="USD"?"$":"₹"}</button>
           <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
         </div>
       </td>
