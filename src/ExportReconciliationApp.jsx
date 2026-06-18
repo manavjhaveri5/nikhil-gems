@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { loadK, saveK, mob } from "./utils.js";
+import { loadK, loadKFresh, saveK, mob } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
 
@@ -96,6 +96,12 @@ const metaStore = {
     try { const raw = localStorage.getItem(scopedKey(META_KEY)); if (raw) return normalizeMeta(JSON.parse(raw)); } catch {}
     return seededMeta();
   },
+  // Force a network read — used before generating a packet so we pick up an
+  // invoice the module just attached from another screen (updates invoiceAttachedAt).
+  async loadFresh() {
+    try { const saved = await loadKFresh(scopedKey(META_KEY)); if (saved && (saved.shippingBills?.length || saved.fircs?.length)) return normalizeMeta(saved); } catch {}
+    return this.load();
+  },
   async save(d) {
     d = normalizeMeta(d);
     const s = JSON.stringify(d);
@@ -133,6 +139,17 @@ let _docUrls = {};          // {docKey -> publicUrl} for the active company
 const _b64ToBytes = b64 => { const bin=atob(b64), a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i); return a; };
 async function loadDocUrls(){ try{ _docUrls=(await loadK(scopedKey(DOCURL_KEY)))||{}; }catch{ _docUrls={}; } return _docUrls; }
 async function saveDocUrls(){ try{ await saveK(scopedKey(DOCURL_KEY), _docUrls); }catch(e){ console.warn("docUrls save",e&&e.message); } }
+// Device-local record of which content version each cached doc was stored at. The
+// upload path is deterministic (same URL every re-render) and Supabase serves it
+// from CDN, so the binary key/URL never change when the invoice module re-renders
+// an attached invoice. We track the caller-supplied version (e.g. SB.invoiceAttachedAt)
+// per device in localStorage; when it advances, docs.get bypasses the stale local
+// cache and re-fetches from cloud with a cache-buster. Device-local on purpose —
+// it means "what THIS device already cached", which differs per device.
+const DOCVER_KEY = "er-doccache-ver-v1";
+let _localDocVer = {};
+function loadLocalDocVers(){ try{ _localDocVer=JSON.parse(localStorage.getItem(scopedKey(DOCVER_KEY))||"{}")||{}; }catch{ _localDocVer={}; } }
+function saveLocalDocVers(){ try{ localStorage.setItem(scopedKey(DOCVER_KEY), JSON.stringify(_localDocVer)); }catch{} }
 const _storagePath = (company,key,mime) => { const ext = mime==="application/pdf"?"pdf":((mime||"").split("/")[1]||"bin"); return `export-recon/${company}/${String(key).replace(/[^a-zA-Z0-9._-]/g,"_")}.${ext}`; };
 async function _uploadDoc(company,key,b64,mime){
   const bytes=_b64ToBytes(b64);
@@ -147,20 +164,37 @@ async function _fetchDocUrl(url){
   return {b64,mime};
 }
 const docs = {
-  // raw value compatible with unpackDoc() — local cache first, then cloud
-  async get(key){
+  // raw value compatible with unpackDoc() — local cache first, then cloud.
+  // Pass {version} (e.g. SB.invoiceAttachedAt) to force a cloud re-fetch when the
+  // content was updated elsewhere (e.g. the invoice module re-rendered it) even
+  // though the binary key and URL are unchanged.
+  async get(key,{version}={}){
+    const ver=version!=null?String(version):null;
+    const stale=ver!=null && String(_localDocVer[key]??"")!==ver;
     let raw=null;
-    try{ raw=await idb.get(key); }catch{}
-    if (raw) return raw;
+    if (!stale){ try{ raw=await idb.get(key); }catch{} if (raw) return raw; }
     const url=_docUrls[key];
-    if (url){ try{ const {b64,mime}=await _fetchDocUrl(url); raw=packDoc(b64,mime); try{ await idb.set(key,raw); }catch{} return raw; }catch(e){ console.warn("cloud fetch",key,e&&e.message); } }
+    if (url){
+      try{
+        const bust=ver!=null?`${url}${url.includes("?")?"&":"?"}v=${encodeURIComponent(ver)}`:url;
+        const {b64,mime}=await _fetchDocUrl(bust); raw=packDoc(b64,mime);
+        try{ await idb.set(key,raw); }catch{}
+        if (ver!=null){ _localDocVer[key]=ver; saveLocalDocVers(); }
+        return raw;
+      }catch(e){ console.warn("cloud fetch",key,e&&e.message); }
+    }
+    // Cloud unavailable but we skipped local because it looked stale — fall back to it.
+    if (stale){ try{ raw=await idb.get(key); }catch{} if (raw) return raw; }
     return null;
   },
   // write to local cache + cloud; records the public URL in the synced map.
   // Cloud failures don't throw: the file stays local and the sync banner picks
   // it up later, so uploads never hard-fail (e.g. offline / transient errors).
-  async set(key,b64,mime){
+  // Pass {version} to stamp this device's cached version so a write here isn't
+  // immediately treated as stale by a get() carrying the same version.
+  async set(key,b64,mime,{version}={}){
     try{ await idb.set(key, packDoc(b64,mime)); }catch{}
+    if (version!=null){ _localDocVer[key]=String(version); saveLocalDocVers(); }
     try{ const url=await _uploadDoc(idb.ns,key,b64,mime); _docUrls[key]=url; await saveDocUrls(); return url; }
     catch(e){ console.warn("cloud upload",key,e&&e.message); return null; }
   },
@@ -505,6 +539,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
     (async()=>{
       activeReconCompany = company || "atyahara";
       idb.setNamespace(activeReconCompany);
+      loadLocalDocVers();
       await loadDocUrls();
       const d=await metaStore.load(); setData(d); dataRef.current=d;
       setHasFema(!!(await idb.get("fema")) || docs.hasCloud("fema"));
@@ -536,8 +571,10 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
   const approveInvoice = useCallback(async (invId, sbId) => {
     learner.track("invoice:approve");
     const raw = await docs.get(`inv-pending:${invId}`);
-    if (raw) { const {b64,mime}=unpackDoc(raw); await docs.set(`inv:${sbId}`, b64, mime); await docs.del(`inv-pending:${invId}`); }
-    await patchSb(sbId, {hasInvPdf:true});
+    const version = new Date().toISOString();
+    if (raw) { const {b64,mime}=unpackDoc(raw); await docs.set(`inv:${sbId}`, b64, mime, {version}); await docs.del(`inv-pending:${invId}`); }
+    // Stamp invoiceAttachedAt so other devices re-fetch this manual upload instead of a stale copy.
+    await patchSb(sbId, {hasInvPdf:true, invoiceAttachedAt:version});
     await patchInvoice(invId, {status:"approved", linkedSbId:sbId});
   },[patchSb, patchInvoice]);
 
@@ -593,9 +630,21 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
     setGenId(sbId);
     try {
       const {PDFDocument,StandardFonts,rgb}=pdfLib.current||window.PDFLib;
+      // Refresh from cloud first: the invoice module attaches re-rendered invoices
+      // from a different screen, updating both the synced URL map (er-docurls-v1)
+      // and the SB's invoiceAttachedAt in meta — neither of which our in-memory
+      // copy sees until reload. invoiceAttachedAt is the content version: when it
+      // advances, docs.get re-fetches past the (otherwise unchanged) local cache.
+      await loadDocUrls();
+      let freshSb=sb;
+      try{
+        const freshMeta=await metaStore.loadFresh();
+        const m=freshMeta.shippingBills.find(x=>x.id===sbId);
+        if(m){ freshSb=m; setData(freshMeta); dataRef.current=freshMeta; }
+      }catch{}
       const [sbB,invB,fircB,hawbB,femaB,erfB,brcB]=await Promise.all([
-        docs.get(`sb:${sb.id}`),docs.get(`inv:${sb.id}`),docs.get(`firc:${firc.id}`),
-        docs.get(`hawb:${sb.id}`),docs.get("fema"),docs.get(`erf:${sb.id}`),docs.get(`brc:${sb.id}`),
+        docs.get(`sb:${freshSb.id}`),docs.get(`inv:${freshSb.id}`,{version:freshSb.invoiceAttachedAt}),docs.get(`firc:${firc.id}`),
+        docs.get(`hawb:${freshSb.id}`),docs.get("fema"),docs.get(`erf:${freshSb.id}`),docs.get(`brc:${freshSb.id}`),
       ]);
       const merged=await PDFDocument.create();
       const font=await merged.embedFont(StandardFonts.Helvetica);
@@ -607,7 +656,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
           pg.drawRectangle({x:0,y:760,width:595,height:82,color:rgb(0.93,0.91,0.87)});
           pg.drawText(label,{x:30,y:808,size:14,font:bold,color:rgb(0.4,0.35,0.28)});
           pg.drawText("Document not uploaded — insert physical copy here",{x:30,y:786,size:9,font,color:rgb(0.6,0.55,0.48)});
-          pg.drawText(`SB: ${sb.sbNumber}  ·  ${new Date().toLocaleDateString("en-IN")}`,{x:30,y:768,size:8,font,color:rgb(0.7,0.65,0.58)});
+          pg.drawText(`SB: ${freshSb.sbNumber}  ·  ${new Date().toLocaleDateString("en-IN")}`,{x:30,y:768,size:8,font,color:rgb(0.7,0.65,0.58)});
           return;
         }
         try {
@@ -628,15 +677,15 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
         }
         catch(e){ const pg=merged.addPage([595,842]); pg.drawText(`[ ${label} — error: ${e.message.slice(0,70)} ]`,{x:20,y:420,size:9,font:bold,color:rgb(0.8,0.2,0.2)}); }
       };
-      await app(invB, `Invoice — ${sb.sbNumber}`);
-      await app(sbB,  `Shipping Bill — ${sb.sbNumber}`);
+      await app(invB, `Invoice — ${freshSb.sbNumber}`);
+      await app(sbB,  `Shipping Bill — ${freshSb.sbNumber}`);
       await app(fircB,`FIRC — ${firc.number||"—"}`);
       await app(femaB,"FEMA Declaration");
-      await app(hawbB,`HAWB — ${sb.sbNumber}`);
+      await app(hawbB,`HAWB — ${freshSb.sbNumber}`);
       await app(erfB, "Export Reconciliation Form");
-      if(brcB||sb.status==="cleared")await app(brcB, "BRC Certificate");
+      if(brcB||freshSb.status==="cleared")await app(brcB, "BRC Certificate");
       const out=await merged.save();
-      setPdfModal({url:URL.createObjectURL(new Blob([out],{type:"application/pdf"})),name:`Packet_${sb.sbNumber}.pdf`});
+      setPdfModal({url:URL.createObjectURL(new Blob([out],{type:"application/pdf"})),name:`Packet_${freshSb.sbNumber}.pdf`});
     } catch(e){ alert(`Packet error: ${e.message}`); }
     setGenId(null);
   },[pdfReady]);
@@ -2768,8 +2817,11 @@ function SbDetailSheet({ sbId, getData, onPatch, onGen, genId, hasFema, pdfReady
     setUploading(u=>({...u,[type]:true})); setErrors(e=>({...e,[type]:null}));
     try{
       const {b64,mime}=await readB64WithMime(file);
-      await docs.set(`${type}:${sbId}`,b64,mime);
-      await onPatch(sbId,{[FLAGS[type]]:true});
+      // For invoices, carry a content version so re-uploads supersede stale cached
+      // copies on other devices (mirrors how the invoice module attaches re-renders).
+      const version = type==="inv" ? new Date().toISOString() : undefined;
+      await docs.set(`${type}:${sbId}`,b64,mime,{version});
+      await onPatch(sbId,{[FLAGS[type]]:true,...(type==="inv"?{invoiceAttachedAt:version}:{})});
       setLocalHas(h=>({...h,[FLAGS[type]]:true}));
     }catch(e){setErrors(er=>({...er,[type]:e.message}));}
     setUploading(u=>({...u,[type]:false}));
