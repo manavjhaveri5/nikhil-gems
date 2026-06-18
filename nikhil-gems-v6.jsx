@@ -12250,16 +12250,23 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
   const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
   const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
   const ordered=lineOrdered(row);
-  // Per-row CP currency toggle (₹/$). Mode switch — converts the stored value so the
-  // displayed number stays meaningful, and lets the user type cleanly in the new currency.
+  // Per-row CP currency toggle (₹/$). Pure relabel — the number you see stays exactly as
+  // typed; we just flip which currency it means and recompute the hidden counterpart at the
+  // current rate. No surprise ×85/÷85 of the visible value, so a row mistakenly stuck in $
+  // can be flicked to ₹ and the same figure now reads as rupees. (The vendor-level toggle at
+  // the top still does real conversion for vendors who genuinely quote in USD.)
   const toggleCpCur=()=>{
-    dirty.current=false; // toggle is a deliberate mode switch — drop any half-typed value
+    dirty.current=false;
     const toUsd=d.cpCurrency!=="USD";
+    const visible=rawAmt(d.cp); // keep whatever is on screen, including a half-typed value
+    // Note: omit cpUsd on the INR side — passing cpUsd:"" would trip the parent's
+    // `patch.cpUsd!==undefined` branch and snap the row back to USD. The parent clears
+    // cpUsd itself when it sees costPerKg on an INR row.
     const patch=toUsd
-      ?{cpCurrency:"USD",cpUsd:row.cpUsd||(row.costPerKg?String(Math.round(+row.costPerKg/(usdInr||85)*100)/100):""),costPerKg:row.costPerKg||""}
-      :{cpCurrency:"INR",cpUsd:"",costPerKg:row.cpUsd?String(Math.round(+row.cpUsd*(usdInr||85))):(row.costPerKg||"")};
+      ?{cpCurrency:"USD",cpUsd:visible,costPerKg:visible?String(Math.round(+visible*(usdInr||85))):""}
+      :{cpCurrency:"INR",costPerKg:visible};
     onCommit(row.id,patch);
-    setD(p=>({...p,cpCurrency:patch.cpCurrency,cp:fmtAmtIN(patch.cpCurrency==="USD"?patch.cpUsd:patch.costPerKg)}));
+    setD(p=>({...p,cpCurrency:patch.cpCurrency})); // p.cp (the visible number) is untouched
   };
   // Spreadsheet-style vertical nav: move focus to the same column one row up/down.
   // Walks the DOM (rows are plain <tr> siblings in <tbody>) so it stays correct after sort/filter.
