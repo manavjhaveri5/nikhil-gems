@@ -25,7 +25,7 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAYAAADL
 
 
 
-const newItem=()=>({id:uid(),desc:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pcs",rate:"",received:false,rcvDate:today(),location:"",cond:"ok",physicalEntries:[]});
+const newItem=()=>({id:uid(),purchaseDesc:"",desc:"",catDesc:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pcs",rate:"",addToAccountingStock:true,addToPhysicalStock:false,received:false,rcvDate:today(),location:"",cond:"ok",physicalEntries:[]});
 const newPhysEntry=(billLineId,billUnit,autoCost,autoMaterial,autoShape,autoVendor)=>({id:uid(),billLineId,material:autoMaterial||"",shape:autoShape||"",vendor:autoVendor||"",productType:"",origin:"",size:"",grade:"",qty:"",unit:billUnit||"pcs",qty2:"",unit2:"kg",costPrice:autoCost||"",location:"",market:[],photo:"",photos:[],notes:"",addedDate:today(),createdAt:new Date().toISOString()});
 const stockPhotos=item=>{
   const photos=Array.isArray(item?.photos)?item.photos.filter(Boolean):[];
@@ -7751,14 +7751,15 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
   const [advDialog,setAdvDialog]=useState(null);
   const [customMarkets,setCustomMarkets]=useState(()=>readCache("ng-custom-markets-v1")||[]);
   const [finAccounts,setFinAccounts]=useState([]);
+  const [customsDescs,setCustomsDescs]=useState(()=>readCache("ng-customs-descs-v1")||[]);
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
 
   useEffect(()=>{
     setDraft(null);setDetail(null);
-    Promise.all([loadK(KEYS.purchases),loadK(KEYS.vendors),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),KEYS.glossary?loadK(KEYS.glossary):Promise.resolve([]),loadK(vk.accounts),KEYS.accStock?loadK(KEYS.accStock):Promise.resolve([]),loadK("ng-custom-markets-v1")])
-      .then(([p,v,s,g,fa,ac,cm])=>{
+    Promise.all([loadK(KEYS.purchases),loadK(KEYS.vendors),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),KEYS.glossary?loadK(KEYS.glossary):Promise.resolve([]),loadK(vk.accounts),KEYS.accStock?loadK(KEYS.accStock):Promise.resolve([]),loadK("ng-custom-markets-v1"),loadK("ng-customs-descs-v1")])
+      .then(([p,v,s,g,fa,ac,cm,cd])=>{
         setPurchases(p||[]);setVendors(v||[]);setStock(s||[]);setGlossary(g||[]);
-        setFinAccounts((fa||[]).filter(a=>a.active!==false));setAccStock(ac||[]);setCustomMarkets(cm||[]);
+        setFinAccounts((fa||[]).filter(a=>a.active!==false));setAccStock(ac||[]);setCustomMarkets(cm||[]);setCustomsDescs(Array.isArray(cd)?cd:[]);
         setLoaded(true);
         if(startBillId){const bill=(p||[]).find(b=>b.id===startBillId);if(bill){setDetail(bill);}onBillIdConsumed?.();}
       })
@@ -7782,12 +7783,39 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
       try{const{url,ext}=await uploadBillDoc(item.id,item.docData);savedItem={...item,docUrl:url,docExt:ext,docData:undefined};}
       catch(e){/* keep docData in memory if upload fails */}
     }
+    const shouldPostStock=savedItem.status!=="pending";
+    let newPhysicalItems=[];
+    if(shouldPostStock&&KEYS.stock){
+      (savedItem.items||[]).forEach(line=>{
+        if(line.addToPhysicalStock!==true)return;
+        const entries=(line.physicalEntries&&line.physicalEntries.length?line.physicalEntries:[newPhysEntry(line.id,line.unit,line.rate,line.purchaseDesc||line.desc,line.shape,savedItem.supplier)]);
+        entries.filter(e=>e.material).forEach(e=>{
+          const wGm=(()=>{const u=e.unit2||"";const q=+e.qty2||0;if(!q)return undefined;if(u==="kg")return q*1000;if(u==="gm")return q;if(u==="ct")return q*0.2;return undefined;})();
+          const photos=stockPhotos(e);
+          newPhysicalItems.push({id:e.id,material:e.material,shape:e.shape||"",productType:e.productType||"",origin:e.origin||"",size:e.size||"",grade:e.grade||"",hsn:line.hsn,qty:e.qty||"",unit:e.unit||line.unit,qty2:e.qty2||"",unit2:e.unit2||"kg",weightGm:wGm,costPrice:e.costPrice||"",location:e.location||"",market:e.market||"Unassigned",photo:photos[0]||"",photos,addedDate:e.addedDate||today(),updatedAt:new Date().toISOString(),source:"bill",billLineId:line.id,billId:savedItem.id,billNumber:savedItem.billNumber,notes:`${line.purchaseDesc||line.desc||""} · ${savedItem.supplier||""}`});
+        });
+      });
+      if(newPhysicalItems.length){
+        const newIds=new Set(newPhysicalItems.map(s=>s.id));
+        const updStock=[...newPhysicalItems,...stock.filter(s=>!newIds.has(s.id))];
+        setStock(updStock);
+        try{await saveStockK(updStock);}catch(e){showToast("⚠ Stock sync failed: "+e.message);}
+      }
+    }
+    savedItem={...savedItem,items:(savedItem.items||[]).map(it=>({
+      ...it,
+      desc:it.desc||it.catDesc||it.purchaseDesc||"",
+      purchaseDesc:it.purchaseDesc||it.desc||"",
+      addToAccountingStock:it.addToAccountingStock!==false,
+      addToPhysicalStock:!!it.addToPhysicalStock,
+    })),status:shouldPostStock&&newPhysicalItems.length?"expanded":savedItem.status,physicalStockReviewed:shouldPostStock?true:!!savedItem.physicalStockReviewed,physicalStockCreatedCount:newPhysicalItems.length||savedItem.physicalStockCreatedCount||0,docData:undefined};
     const updated=[savedItem,...purchases.filter(p=>p.id!==item.id)];
     setPurchases(updated);
-    // Update accounting stock if checkbox is ticked
-    if(savedItem.trackAccStock!==false){
+    // Update accounting stock if the bill is confirmed and the line checkbox is ticked.
+    if(shouldPostStock&&savedItem.trackAccStock!==false){
       const newAccStock=[...accStock];
       (savedItem.items||[]).forEach(it=>{
+        if(it.addToAccountingStock===false)return;
         if(!it.desc)return;
         const descLower=it.desc.trim().toLowerCase();
         const unit=it.unit||"";
@@ -7799,10 +7827,10 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
       setAccStock(newAccStock);
       try{if(KEYS.accStock)await saveK(KEYS.accStock,newAccStock);}catch(e){showToast("⚠ Acc stock sync failed: "+e.message);}
     }
-    setExpandBill(savedItem);setView("expand");setDraft(null);setFileData(null);
-    showToast("Bill confirmed — now expand to physical stock");
+    setView("list");setExpandBill(null);setDraft(null);setFileData(null);
+    showToast(savedItem.status==="pending"?"Bill saved as pending":`Bill saved${newPhysicalItems.length?` · ${newPhysicalItems.length} physical item${newPhysicalItems.length!==1?"s":""} added`:""}`);
     try{await savePurchasesK(updated);logActivity({user:"Admin",action:"created",module:"purchases",label:`Purchase bill: ${savedItem.supplier||"vendor"} · ${savedItem.billNumber||savedItem.id.slice(0,6)}`,targetId:savedItem.id,targetMod:"purchases"});}catch(e){showToast("⚠ Saved locally — sync failed: "+e.message);}
-  },[purchases,vendors,upsertVendor,accStock]);
+  },[purchases,vendors,upsertVendor,accStock,stock]);
 
   const handleExpandDone=useCallback(async(expandedLines)=>{
     // Create physical stock entries
@@ -7925,7 +7953,9 @@ Return ONLY this exact JSON structure, no markdown, no explanation:
   "currency": "INR",
   "items": [
     {
-      "desc": "item description EXACTLY as written in the Particulars/Description column — do not summarise",
+      "purchaseDesc": "item description EXACTLY as written in the Particulars/Description column — do not summarise",
+      "stone": "main stone/material name if obvious, else empty string",
+      "shape": "shape/form if obvious e.g. Palmstone, Bracelet, Sphere, Tumble, Cluster, else empty string",
       "hsn": "HSN code from bill, default 7103 for gems",
       "gst": "GST percentage as number string e.g. '3' or '0.25', check SGST+CGST columns",
       "qty": numeric quantity,
@@ -7944,7 +7974,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
     const txt=await callOpenAI([{role:"user",content:[fileContent,{type:"text",text:prompt}]}],1500);
     let ex;try{ex=JSON.parse(txt.replace(/```json|```/g,"").trim());}catch{throw new Error("AI returned unreadable response — try again");}
     if(!ex||typeof ex!=="object")throw new Error("AI returned unexpected format");
-    const items=(ex.items||[]).map(i=>({...newItem(),desc:i.desc||"",hsn:i.hsn||"7103",gst:String(i.gst||"3"),qty:String(i.qty||""),unit:i.unit||"pcs",rate:String(i.rate||"")}));
+    const items=(ex.items||[]).map(i=>{const purchaseDesc=i.purchaseDesc||i.desc||"";return{...newItem(),purchaseDesc,desc:purchaseDesc,shape:i.shape||"",material:i.stone||"",hsn:i.hsn||"7103",gst:String(i.gst||"3"),qty:String(i.qty||""),unit:i.unit||"pcs",rate:String(i.rate||""),addToAccountingStock:true,addToPhysicalStock:false};});
     const b={type:"bill",id:uid(),billNumber:ex.invoiceNumber||"",supplier:ex.supplierName||"",supplierGstin:ex.supplierGstin||"",supplierLocation:ex.supplierLocation||"",supplierCountry:ex.supplierCountry||"India",supplierContact:ex.supplierContact||"",billDate:ex.invoiceDate||today(),currency:ex.currency||"INR",items,notes:ex.notes||"",docData:fd.dataUrl,status:"pending",paidAmount:0,createdAt:new Date().toISOString()};
     b.totalAmount=billTotal(b.items);return b;
   },[]);
@@ -7971,7 +8001,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
   const totalBilled=bills.reduce((a,p)=>a+(+p.totalAmount||0),0);
   const totalPaid=bills.reduce((a,p)=>a+(+p.paidAmount||0),0);
   const unpaidBills=bills.filter(p=>["pending","confirmed","partial"].includes(p.status));
-  const unexpanded=bills.filter(p=>["confirmed","pending"].includes(p.status));
+  const unexpanded=bills.filter(p=>["confirmed","pending"].includes(p.status)&&p.physicalStockReviewed!==true);
 
   let filtered=tab==="unpaid"?unpaidBills:tab==="unexpanded"?unexpanded:tab==="all"?purchases:purchases.filter(p=>p.type===tab);
   if(sortBy==="unpaid_amt")filtered=[...filtered].sort((a,b)=>((+b.totalAmount||0)-(+b.paidAmount||0))-((+a.totalAmount||0)-(+a.paidAmount||0)));
@@ -8038,9 +8068,9 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
       )}
       {loaded&&view==="po"&&draft&&<POForm draft={draft} setDraft={setDraft} vendors={vendors} onSave={handleSavePO}/>}
       {loaded&&view==="upload"&&<UploadView fileData={fileData} setFileData={setFileData} extracting={extracting} onExtract={handleExtract} onManual={()=>{setDraft({type:"bill",id:uid(),billNumber:"",supplier:"",supplierGstin:"",supplierLocation:"",supplierCountry:"",supplierContact:"",billDate:today(),currency:"INR",items:[newItem()],notes:"",docData:fileData?.dataUrl||"",billName:fileData?.name||"",status:"pending",paidAmount:0,createdAt:new Date().toISOString()});setView("verify");}}/>}
-      {loaded&&view==="verify"&&draft&&<VerifyView draft={draft} setDraft={setDraft} fileData={fileData} vendors={vendors} accStock={accStock} purchases={purchases} onSave={handleSaveBill}/>}
+      {loaded&&view==="verify"&&draft&&<VerifyView draft={draft} setDraft={setDraft} fileData={fileData} vendors={vendors} accStock={accStock} purchases={purchases} customsDescs={customsDescs} canAddPhysical={!!KEYS.stock} onSave={handleSaveBill}/>}
       {loaded&&view==="expand"&&expandBill&&<ExpandView bill={expandBill} glossary={glossary} setGlossary={setGlossary} customMarkets={customMarkets} onAddMarket={addCustomMarket} onDone={handleExpandDone} onBack={()=>{setView("list");setExpandBill(null);}}/>}
-      {loaded&&view==="bulk"&&<BulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} vendors={vendors} accStock={accStock} purchases={purchases} extractOne={extractOne} onSave={async item=>{await handleSaveBill(item);setView("list");setExpandBill(null);if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);setView("bulk");}else{showToast(`${bulkQueue.length} bills processed`);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
+      {loaded&&view==="bulk"&&<BulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} vendors={vendors} accStock={accStock} purchases={purchases} customsDescs={customsDescs} canAddPhysical={!!KEYS.stock} extractOne={extractOne} onSave={async item=>{await handleSaveBill(item);setView("list");setExpandBill(null);if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);setView("bulk");}else{showToast(`${bulkQueue.length} bills processed`);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
       {advDialog&&<AdvancePayDialog dialog={advDialog} accounts={finAccounts} onSave={async txn=>{const list=await loadK(vk.transactions)||[];await saveK(vk.transactions,[txn,...list]);showToast("Advance recorded in Finance");setAdvDialog(null);}} onSkip={()=>setAdvDialog(null)}/>}
     </Shell>
   );
@@ -8061,7 +8091,7 @@ function PurchaseList({purchases,filtered,tab,totalBilled,totalPaid,unpaidBills,
           {filtered.map((p)=>{
             const outstanding=(+p.totalAmount||0)-(+p.paidAmount||0);
             const age=daysSince(p.billDate||p.date||p.createdAt);
-            const needsExpand=p.type==="bill"&&["confirmed","pending"].includes(p.status);
+            const needsExpand=p.type==="bill"&&["confirmed","pending"].includes(p.status)&&p.physicalStockReviewed!==true;
             const CSYM={"INR":"₹","USD":"$","EUR":"€","GBP":"£","JPY":"¥","AUD":"A$"};
             const sym=CSYM[p.currency]||p.currency||"₹";
             const amtLabel=p.totalAmount?(p.currency&&p.currency!=="INR"?`${sym}${(+p.totalAmount).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:inr(p.totalAmount)):"—";
@@ -8091,7 +8121,7 @@ function PurchaseList({purchases,filtered,tab,totalBilled,totalPaid,unpaidBills,
           {filtered.map((p,i)=>{
             const outstanding=(+p.totalAmount||0)-(+p.paidAmount||0);
             const age=daysSince(p.billDate||p.date||p.createdAt);
-            const needsExpand=p.type==="bill"&&["confirmed","pending"].includes(p.status);
+            const needsExpand=p.type==="bill"&&["confirmed","pending"].includes(p.status)&&p.physicalStockReviewed!==true;
             return(
               <div key={p.id} className="rh" style={{display:"grid",gridTemplateColumns:"78px 120px 1fr 78px 115px 78px 68px 78px 90px",padding:"9px 14px",borderBottom:i<filtered.length-1?`1px solid ${C.border}`:"none",alignItems:"center",background:C.surface}}>
                 <div onClick={()=>onDetail(p)}><TypeBadge type={p.type}/></div>
@@ -8116,7 +8146,7 @@ function PurchaseList({purchases,filtered,tab,totalBilled,totalPaid,unpaidBills,
 function BillDetail({bill,onBack,onUpdatePayment,onAttachBill,onExpand,onEdit,onGoToVendor,onDelete}){
   const [paid,setPaid]=useState(String(bill.paidAmount||""));const [payDate,setPayDate]=useState(bill.paymentDate||today());const [payNote,setPayNote]=useState(bill.paymentNote||"");const [showDoc,setShowDoc]=useState(false);const [confirmDelete,setConfirmDelete]=useState(false);const [downloading,setDownloading]=useState(false);const [attaching,setAttaching]=useState(false);const billDocRef=useRef(null);
   const sub=billSubtotal(bill.items||[]);const gstAmt=billGST(bill.items||[]);const outstanding=(bill.totalAmount||0)-(bill.paidAmount||0);const prog=pct(bill.paidAmount||0,bill.totalAmount||1);
-  const needsExpand=["confirmed","pending"].includes(bill.status);
+  const needsExpand=["confirmed","pending"].includes(bill.status)&&bill.physicalStockReviewed!==true;
   const hasBillDoc=!!(bill.docData||bill.docUrl);
   const attachBillFile=file=>{
     if(!file||!onAttachBill)return;
@@ -8711,304 +8741,214 @@ function DescAutocomplete({value,onChange,options,style,placeholder,cats=[]}){
     </div>
   );
 }
-function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],onSave}){
+function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],customsDescs=[],canAddPhysical=false,onSave}){
   const allShapes=useShapes();
-  const [step,setStep]=useState(1);
-  const catOptions=useMemo(()=>[...new Set(accStock.map(s=>s.desc).filter(Boolean))].sort(),[accStock]);
-  const stoneOptions=useMemo(()=>[...new Set([...accStock.map(s=>s.desc),...purchases.flatMap(p=>p.items||[]).map(it=>it.desc)].filter(Boolean))].sort(),[accStock,purchases]);
   const docRef=useRef();
   const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
-  const si=(idx,k,v)=>setDraft(d=>{const items=[...d.items];items[idx]={...items[idx],[k]:v};items[idx].amt=lineTotal(items[idx]);return{...d,items,totalAmount:billTotal(items)};});
-  const siCat=(idx,val)=>setDraft(d=>{
-    const items=[...d.items];
-    const past=purchases.flatMap(p=>p.items||[]).find(i=>(i.catDesc||i.desc)?.toLowerCase()===val.toLowerCase());
-    items[idx]={...items[idx],catDesc:val,...(past?{hsn:past.hsn||items[idx].hsn,gst:past.gst||items[idx].gst,unit:past.unit||items[idx].unit}:{})};
+  const catOptions=useMemo(()=>[...new Set([...accStock.map(s=>s.desc),...customsDescs.map(d=>d.desc),...purchases.flatMap(p=>p.items||[]).map(it=>it.desc)].filter(Boolean))].sort(),[accStock,customsDescs,purchases]);
+  const shapeOptions=useMemo(()=>[...new Set([...allShapes,...customsDescs.map(d=>d.shape)].filter(Boolean))].sort(),[allShapes,customsDescs]);
+  const stoneOptions=useMemo(()=>[...new Set([...accStock.map(s=>s.desc),...purchases.flatMap(p=>p.items||[]).flatMap(it=>[it.material,it.purchaseDesc,it.desc])].filter(Boolean))].sort(),[accStock,purchases]);
+  const findCustom=val=>customsDescs.find(d=>d.shape&&d.shape.trim().toLowerCase()===String(val||"").trim().toLowerCase());
+  const recalc=items=>({items,totalAmount:billSubtotal(items)+billGST(items)+(+draft.shippingCharge||0)});
+  const prefillEntry=(it,d)=> {
+    const unit=it.unit||"pcs";
+    const isWeight=["kg","gm","g","ct"].includes(String(unit).toLowerCase());
+    return {...newPhysEntry(it.id,unit,it.rate,it.material||it.purchaseDesc||it.desc,it.shape,d.supplier),qty:isWeight?"":(it.qty||""),qty2:isWeight?(it.qty||""):"",unit2:isWeight?unit:"kg",productType:SHAPE_TO_PRODUCT_TYPE[it.shape]||""};
+  };
+  const updateItem=(idx,patch)=>setDraft(d=>{
+    const items=[...(d.items||[])];
+    items[idx]={...items[idx],...patch};
     items[idx].amt=lineTotal(items[idx]);
-    return{...d,items,totalAmount:billTotal(items)};
+    return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
+  });
+  const setShape=(idx,val)=>setDraft(d=>{
+    const items=[...(d.items||[])];
+    const hit=customsDescs.find(x=>x.shape&&x.shape.trim().toLowerCase()===String(val||"").trim().toLowerCase());
+    const cur=items[idx]||{};
+    const phys=(cur.physicalEntries||[]).map(e=>({...e,shape:val,productType:SHAPE_TO_PRODUCT_TYPE[val]||e.productType||""}));
+    items[idx]={...cur,shape:val,...(hit?{desc:hit.desc||cur.desc,catDesc:hit.desc||cur.catDesc,hsn:hit.hsn||cur.hsn}:{})};
+    if(phys.length)items[idx].physicalEntries=phys;
+    items[idx].amt=lineTotal(items[idx]);
+    return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
+  });
+  const setAccountingDesc=(idx,val)=>setDraft(d=>{
+    const items=[...(d.items||[])];const cur=items[idx]||{};const hit=customsDescs.find(x=>x.shape&&x.shape.trim().toLowerCase()===String(val||"").trim().toLowerCase());
+    items[idx]={...cur,desc:hit?hit.desc||val:val,catDesc:hit?hit.desc||val:val,...(hit?{hsn:hit.hsn||cur.hsn}:{}),amt:lineTotal({...cur,desc:hit?hit.desc||val:val})};
+    return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
   });
   const setPhys=(iIdx,eIdx,k,v)=>setDraft(d=>{
-    const items=[...d.items];
-    const ents=[...(items[iIdx].physicalEntries||[])];
+    const items=[...(d.items||[])];const item=items[iIdx]||{};const ents=[...(item.physicalEntries||[])];
     ents[eIdx]={...ents[eIdx],[k]:v};
-    items[iIdx]={...items[iIdx],physicalEntries:ents};
+    if(k==="shape"&&SHAPE_TO_PRODUCT_TYPE[v])ents[eIdx].productType=SHAPE_TO_PRODUCT_TYPE[v];
+    items[iIdx]={...item,physicalEntries:ents};
     return{...d,items};
   });
-  const delItem=idx=>setDraft(d=>{const items=d.items.filter((_,i)=>i!==idx);return{...d,items,totalAmount:billTotal(items)};});
-  const addItem=()=>setDraft(d=>{const items=[...d.items,newItem()];return{...d,items,totalAmount:billTotal(items)};});
+  const toggleAccounting=checked=>setDraft(d=>({...d,trackAccStock:checked,items:(d.items||[]).map(it=>({...it,addToAccountingStock:checked?it.addToAccountingStock!==false:false}))}));
+  const togglePhysical=(idx,checked)=>setDraft(d=>{
+    const items=[...(d.items||[])];const it=items[idx]||{};
+    items[idx]={...it,addToPhysicalStock:checked,physicalEntries:checked?(it.physicalEntries?.length?it.physicalEntries:[prefillEntry(it,d)]):(it.physicalEntries||[])};
+    return{...d,items};
+  });
+  const addItem=()=>setDraft(d=>{const items=[...(d.items||[]),newItem()];return{...d,...recalc(items)};});
+  const delItem=idx=>setDraft(d=>{const items=(d.items||[]).filter((_,i)=>i!==idx);return{...d,...recalc(items)};});
+  const normalizeDraft=status=>{
+    const items=(draft.items||[]).map(it=>{
+      const purchaseDesc=it.purchaseDesc||it.desc||"";
+      const desc=it.desc||it.catDesc||purchaseDesc;
+      return{...it,purchaseDesc,desc,catDesc:it.catDesc||desc,addToAccountingStock:draft.trackAccStock!==false&&it.addToAccountingStock!==false,addToPhysicalStock:canAddPhysical&&it.addToPhysicalStock===true};
+    });
+    return{...draft,items,totalAmount:billSubtotal(items)+billGST(items)+(+draft.shippingCharge||0),status};
+  };
+  const save=status=>{
+    if(!draft.supplier?.trim())return alert("Enter vendor name");
+    if(!(draft.items||[]).some(it=>(it.purchaseDesc||it.desc||"").trim()))return alert("Add at least one item");
+    onSave(normalizeDraft(status));
+  };
   const knownV=draft.supplier?.trim()?vendors.find(v=>v.name.toLowerCase()===draft.supplier.trim().toLowerCase()):null;
   const isNew=draft.supplier?.trim()&&!knownV;
+  const sub=billSubtotal(draft.items||[]);const gst2=billGST(draft.items||[]);const total=sub+gst2+(+draft.shippingCharge||0);
+  const docSrc=draft.docData||fileData?.dataUrl||draft.docUrl;
+  const hasDoc=!!docSrc;
 
-  const mOverlay={position:"fixed",inset:0,background:"rgba(0,0,0,.48)",zIndex:800,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:16,overflowY:"auto"};
-  const mBox={background:C.surface,borderRadius:12,maxWidth:760,width:"100%",margin:"16px auto",boxShadow:"0 8px 48px rgba(0,0,0,.28)",flexShrink:0};
-  const mHead={padding:"14px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:C.surface,zIndex:1,borderRadius:"12px 12px 0 0"};
-  const mBody={padding:"16px 18px",maxHeight:"calc(100vh - 140px)",overflowY:"auto"};
-
-  // ─── STEP 1: What are you buying? (always the base view)
   return(
-    <div style={{maxWidth:780}}>
-      <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,marginBottom:3}}>New Purchase</div>
-      <p style={{fontSize:12,color:C.inkMid,marginBottom:14}}>Enter what you bought. Accounting and stock details follow in the next steps.</p>
-
-      {fileData?.dataUrl&&(
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",marginBottom:12,display:"flex",alignItems:"center",gap:10}}>
-          {fileData.mediaType?.startsWith("image")?<img src={fileData.dataUrl} style={{width:44,height:44,objectFit:"cover",borderRadius:5}} alt=""/>:<span style={{fontSize:22}}>📄</span>}
-          <div style={{fontSize:12,color:C.ink}}>{fileData.name}</div>
-        </div>
-      )}
-
-      {/* Vendor / Date / Currency */}
-      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"14px 18px",marginBottom:12}}>
-        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr 120px",gap:12,alignItems:"end"}}>
-          <div>
-            <Tag>Vendor</Tag>
-            <input value={draft.supplier||""} onChange={e=>set("supplier",e.target.value)} style={FI} placeholder="Vendor name" list="vl-wiz"/>
-            <datalist id="vl-wiz">{vendors.map(v=><option key={v.id} value={v.name}/>)}</datalist>
-            {knownV&&<div style={{marginTop:4,fontSize:11,color:C.green}}>✓ {knownV.name}{knownV.location?` · ${knownV.location}`:""}</div>}
-            {isNew&&<div style={{marginTop:4,fontSize:11,color:C.amber}}>✦ New vendor — will be created</div>}
-          </div>
-          <Field label="Date"><input type="date" value={draft.billDate||""} onChange={e=>set("billDate",e.target.value)} style={FI}/></Field>
-          <Field label="Currency"><select value={draft.currency||"INR"} onChange={e=>set("currency",e.target.value)} style={{...FI,cursor:"pointer"}}>{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select></Field>
-        </div>
-      </div>
-
-      {/* Items table */}
-      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,marginBottom:12}}>
-        <div style={{padding:"9px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>What are you buying?</div>
-          <button className="bs" style={{padding:"3px 9px",fontSize:10}} onClick={addItem}>+ Row</button>
-        </div>
-        {!mob&&<div style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 80px 80px 28px",gap:5,padding:"5px 12px 2px"}}>
-          {["Stone / Item","Shape","Rate","Qty (pcs)","Qty (kg)",""].map(h=><div key={h} style={{fontSize:9,color:C.inkFaint,textTransform:"uppercase",fontWeight:700,letterSpacing:.4}}>{h}</div>)}
-        </div>}
-        <datalist id="sl-wiz">{allShapes.map(s=><option key={s} value={s}/>)}</datalist>
-        <datalist id="stone-wiz">{stoneOptions.map(s=><option key={s} value={s}/>)}</datalist>
-        {draft.items.map((item,idx)=>(
-          <div key={item.id} style={{borderTop:`1px solid ${C.border}`,padding:"8px 12px"}}>
-            {mob?(
-              <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                  <input value={item.desc||""} onChange={e=>si(idx,"desc",e.target.value)} style={{...CI,flex:1}} placeholder="Stone / item name" list="stone-wiz"/>
-                  <button onClick={()=>delItem(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:16,flexShrink:0}}>&times;</button>
-                </div>
-                <input value={item.shape||""} onChange={e=>si(idx,"shape",e.target.value)} style={CI} placeholder="Shape" list="sl-wiz"/>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:5}}>
-                  <input type="number" value={item.rate||""} onChange={e=>si(idx,"rate",e.target.value)} style={CI} placeholder="Rate"/>
-                  <input type="number" value={item.qty||""} onChange={e=>si(idx,"qty",e.target.value)} style={CI} placeholder="Pcs"/>
-                  <input type="number" value={item.qtyKg||""} onChange={e=>si(idx,"qtyKg",e.target.value)} style={CI} placeholder="kg"/>
-                </div>
-              </div>
-            ):(
-              <div style={{display:"grid",gridTemplateColumns:"1fr 90px 90px 80px 80px 28px",gap:5,alignItems:"center"}}>
-                <input value={item.desc||""} onChange={e=>si(idx,"desc",e.target.value)} style={CI} placeholder="e.g. Rose Quartz Ganesha" list="stone-wiz"/>
-                <input value={item.shape||""} onChange={e=>si(idx,"shape",e.target.value)} style={CI} placeholder="Shape" list="sl-wiz"/>
-                <input type="number" value={item.rate||""} onChange={e=>si(idx,"rate",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="Rate"/>
-                <input type="number" value={item.qty||""} onChange={e=>si(idx,"qty",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="Pcs"/>
-                <input type="number" value={item.qtyKg||""} onChange={e=>si(idx,"qtyKg",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="kg"/>
-                <button onClick={()=>delItem(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:14,textAlign:"center"}}>&times;</button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Accounting toggle */}
-      <label style={{display:"flex",alignItems:"center",gap:9,marginBottom:12,cursor:"pointer",userSelect:"none",padding:"9px 13px",background:draft.trackAccStock===false?C.surface:C.amberBg,border:`1.5px solid ${draft.trackAccStock===false?C.border:"#F0C890"}`,borderRadius:8}}>
-        <input type="checkbox" checked={draft.trackAccStock!==false} onChange={e=>set("trackAccStock",e.target.checked)} style={{width:16,height:16,cursor:"pointer",accentColor:C.gold}}/>
+    <div style={{maxWidth:1120}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,marginBottom:14,flexWrap:"wrap"}}>
         <div>
-          <div style={{fontSize:13,fontWeight:600,color:C.ink}}>Add to Accounting Stock</div>
-          <div style={{fontSize:11,color:C.inkFaint,marginTop:1}}>{draft.trackAccStock===false?"Items will NOT appear in accounting stock":"GST, rates and category in next step"}</div>
+          <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:22,fontWeight:600,marginBottom:3}}>Purchase Bill</div>
+          <p style={{fontSize:12,color:C.inkMid}}>Upload, verify, accounting stock and optional physical stock in one form.</p>
         </div>
-      </label>
-
-      <div style={{display:"flex",flexDirection:mob?"column":"row",justifyContent:"flex-end",gap:9}}>
-        <button className="bs" style={{minHeight:mob?46:36}} onClick={()=>onSave({...draft,status:"pending"})}>Save as Pending</button>
-        <button className="bp" style={{minHeight:mob?46:36}} onClick={()=>{
-          if(!draft.supplier?.trim())return alert("Enter vendor name");
-          if(!draft.items.some(it=>it.desc?.trim()))return alert("Add at least one item");
-          setDraft(d=>({...d,items:d.items.map(it=>({...it,purchaseDesc:it.purchaseDesc||it.desc}))}));
-          if(draft.trackAccStock!==false){setStep(2);}
-          else{
-            setDraft(d=>({...d,items:d.items.map(it=>({...it,physicalEntries:it.physicalEntries?.length>0?it.physicalEntries:[newPhysEntry(it.id,it.unit||"pcs",it.rate,it.purchaseDesc||it.desc,it.shape,d.supplier)]}))}));
-            setStep(3);
-          }
-        }}>Next →</button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="bs" onClick={()=>save("pending")}>Save Pending</button>
+          <button className="bp" onClick={()=>save("confirmed")}>Confirm & Save</button>
+        </div>
       </div>
 
-      {/* ─── MODAL: Step 2 — Accounting ──────────────────────── */}
-      {step===2&&(()=>{
-        const sub=billSubtotal(draft.items);const gst2=billGST(draft.items);
-        return(
-          <div style={mOverlay} onClick={e=>{if(e.target===e.currentTarget)setStep(1);}}>
-            <div style={mBox} onClick={e=>e.stopPropagation()}>
-              <div style={mHead}>
-                <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:19,fontWeight:600}}>Layer 1 — Accounting Stock</div>
-                <button onClick={()=>setStep(1)} style={{background:"none",border:"none",cursor:"pointer",fontSize:22,color:C.inkFaint,lineHeight:1,padding:"0 4px"}}>&times;</button>
+      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 260px",gap:14,alignItems:"start"}}>
+        <div>
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"14px 18px",marginBottom:12}}>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.35fr .85fr .75fr .55fr",gap:12,alignItems:"end"}}>
+              <div>
+                <Tag>Vendor</Tag>
+                <input value={draft.supplier||""} onChange={e=>set("supplier",e.target.value)} style={FI} placeholder="Vendor name" list="vl-wiz"/>
+                <datalist id="vl-wiz">{vendors.map(v=><option key={v.id} value={v.name}/>)}</datalist>
+                {knownV&&<div style={{marginTop:4,fontSize:11,color:C.green}}>Linked to {knownV.name}{knownV.location?` · ${knownV.location}`:""}</div>}
+                {isNew&&<div style={{marginTop:4,fontSize:11,color:C.amber}}>New vendor will be created</div>}
               </div>
-              <div style={mBody}>
-                <p style={{fontSize:12,color:C.inkMid,marginBottom:14}}>Map each line to an accounting category and set GST. Categories pull from your existing accounting stock.</p>
-
-                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 14px",marginBottom:12}}>
-                  <Field label="Invoice / Bill Number"><input value={draft.billNumber||""} onChange={e=>set("billNumber",e.target.value)} style={{...FI,maxWidth:240}} placeholder="INV-001"/></Field>
-                </div>
-
-                <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,marginBottom:12}}>
-                  <div style={{padding:"9px 14px",borderBottom:`1px solid ${C.border}`,fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Line Items — Accounting</div>
-                  {draft.items.map((item,idx)=>(
-                    <div key={item.id} style={{borderBottom:`1px solid ${C.border}`,padding:"10px 12px"}}>
-                      <div style={{fontSize:11,fontWeight:600,color:C.amber,marginBottom:7}}>
-                        {item.purchaseDesc||item.desc||`Item ${idx+1}`}{item.shape?` · ${item.shape}`:""}
-                        {item.qty?<span style={{color:C.inkFaint}}> · {item.qty} pcs</span>:""}
-                        {item.qtyKg?<span style={{color:C.inkFaint}}> · {item.qtyKg} kg</span>:""}
-                      </div>
-                      {mob?(
-                        <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                          <CategoryPicker value={item.catDesc||item.desc||""} onChange={v=>siCat(idx,v)} cats={catOptions} style={{...CI,background:"#fff"}}/>
-                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:5}}>
-                            <input value={item.hsn||"7103"} onChange={e=>si(idx,"hsn",e.target.value)} style={CI} placeholder="HSN"/>
-                            <select value={item.gst||"3"} onChange={e=>si(idx,"gst",e.target.value)} style={{...CI,cursor:"pointer"}}>{GSTS.map(g=><option key={g} value={g}>{g}%</option>)}</select>
-                            <select value={item.unit||"pcs"} onChange={e=>si(idx,"unit",e.target.value)} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
-                          </div>
-                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:5}}>
-                            <input type="number" value={item.qty||""} onChange={e=>si(idx,"qty",e.target.value)} style={CI} placeholder="Qty"/>
-                            <input type="number" value={item.rate||""} onChange={e=>si(idx,"rate",e.target.value)} style={CI} placeholder="Rate"/>
-                            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:600,color:item.amt?C.ink:C.inkFaint,paddingTop:6,textAlign:"right"}}>{item.amt?inr(item.amt):"—"}</div>
-                          </div>
-                        </div>
-                      ):(
-                        <div style={{display:"grid",gridTemplateColumns:"1fr 60px 52px 70px 54px 88px 78px",gap:5,alignItems:"center"}}>
-                          <CategoryPicker value={item.catDesc||item.desc||""} onChange={v=>siCat(idx,v)} cats={catOptions} style={{...CI,background:"#fff"}}/>
-                          <input value={item.hsn||"7103"} onChange={e=>si(idx,"hsn",e.target.value)} style={{...CI,textAlign:"center"}} placeholder="HSN"/>
-                          <select value={item.gst||"3"} onChange={e=>si(idx,"gst",e.target.value)} style={{...CI,cursor:"pointer"}}>{GSTS.map(g=><option key={g} value={g}>{g}%</option>)}</select>
-                          <input type="number" value={item.qty||""} onChange={e=>si(idx,"qty",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="Qty"/>
-                          <select value={item.unit||"pcs"} onChange={e=>si(idx,"unit",e.target.value)} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
-                          <input type="number" value={item.rate||""} onChange={e=>si(idx,"rate",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="Rate"/>
-                          <div style={{textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:13,fontWeight:500,color:item.amt?C.ink:C.inkFaint}}>{item.amt?inr(item.amt):"—"}</div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  <div style={{padding:"8px 14px",display:"flex",alignItems:"center",gap:10,justifyContent:"flex-end"}}>
-                    <span style={{fontSize:11,color:C.inkFaint}}>Shipping / Other charges</span>
-                    <input type="number" value={draft.shippingCharge||""} onChange={e=>{const s=+e.target.value||0;setDraft(d=>({...d,shippingCharge:s,totalAmount:billSubtotal(d.items)+billGST(d.items)+s}));}} style={{...CI,width:110,textAlign:"right"}} placeholder="0"/>
-                  </div>
-                  <div style={{padding:"9px 14px",borderTop:`1px solid ${C.border}`,background:C.card}}>
-                    <div style={{display:"flex",justifyContent:"flex-end",gap:16,alignItems:"center"}}>
-                      <span style={{fontSize:11,color:C.inkFaint}}>Subtotal {inr(sub)}</span>
-                      {gst2>0&&<span style={{fontSize:11,color:C.amber}}>+ GST {inr(gst2)}</span>}
-                      <span style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase"}}>Total</span>
-                      <input type="number" value={draft.totalAmount||""} onChange={e=>setDraft(d=>({...d,totalAmount:+e.target.value||0}))} style={{...CI,width:130,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:600,background:"#FFFDF5",borderColor:C.goldBright}} title="Edit total to match actual bill"/>
-                    </div>
-                    <div style={{textAlign:"right",marginTop:3,fontSize:10,color:C.inkFaint}}>Edit total to match the bill exactly</div>
-                  </div>
-                </div>
-
-                <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"11px 15px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
-                  <input ref={docRef} type="file" accept="image/*,.pdf" style={{display:"none"}} onChange={e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>setDraft(d=>({...d,docData:ev.target.result,billName:file.name}));r.readAsDataURL(file);}}/>
-                  {draft.docData
-                    ?<><span style={{fontSize:18}}>{draft.docData.startsWith("data:image")?"🖼️":"📄"}</span><div style={{flex:1}}><div style={{fontSize:12,fontWeight:500,color:C.ink}}>{draft.billName||"Bill attached"}</div><div style={{fontSize:10,color:C.green}}>✓ Attached</div></div><button className="bs" style={{fontSize:11,padding:"3px 10px"}} onClick={()=>docRef.current?.click()}>Replace</button><button style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:11}} onClick={()=>setDraft(d=>({...d,docData:"",billName:""}))}>Remove</button></>
-                    :<><span style={{fontSize:15,color:C.inkFaint}}>📎</span><span style={{fontSize:12,color:C.inkFaint,flex:1}}>No bill document attached</span><button className="bs" style={{fontSize:11,padding:"3px 10px"}} onClick={()=>docRef.current?.click()}>Attach Bill</button></>
-                  }
-                </div>
-
-                <div style={{display:"flex",flexDirection:mob?"column":"row",justifyContent:"flex-end",gap:9}}>
-                  <button className="bs" style={{minHeight:mob?46:36}} onClick={()=>onSave({...draft,status:"pending"})}>Save as Pending</button>
-                  <button className="bp" style={{minHeight:mob?46:36}} onClick={()=>{
-                    setDraft(d=>({...d,items:d.items.map(it=>({...it,desc:it.catDesc||it.desc,physicalEntries:it.physicalEntries?.length>0?it.physicalEntries:[newPhysEntry(it.id,it.unit||"pcs",it.rate,it.purchaseDesc||it.desc,it.shape,d.supplier)]}))}));
-                    setStep(3);
-                  }}>Next: Physical Stock →</button>
-                </div>
-              </div>
+              <Field label="Bill No."><input value={draft.billNumber||""} onChange={e=>set("billNumber",e.target.value)} style={FI} placeholder="Invoice / bill no."/></Field>
+              <Field label="Date"><input type="date" value={draft.billDate||""} onChange={e=>set("billDate",e.target.value)} style={FI}/></Field>
+              <Field label="Currency"><select value={draft.currency||"INR"} onChange={e=>set("currency",e.target.value)} style={{...FI,cursor:"pointer"}}>{CURRENCIES.map(c=><option key={c}>{c}</option>)}</select></Field>
             </div>
           </div>
-        );
-      })()}
 
-      {/* ─── MODAL: Step 3 — Physical Stock ──────────────────── */}
-      {step===3&&(
-        <div style={mOverlay} onClick={e=>{if(e.target===e.currentTarget)setStep(draft.trackAccStock!==false?2:1);}}>
-          <div style={mBox} onClick={e=>e.stopPropagation()}>
-            <div style={mHead}>
-              <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:19,fontWeight:600}}>Layer 2 — Physical Stock</div>
-              <button onClick={()=>setStep(draft.trackAccStock!==false?2:1)} style={{background:"none",border:"none",cursor:"pointer",fontSize:22,color:C.inkFaint,lineHeight:1,padding:"0 4px"}}>&times;</button>
+          <datalist id="purchase-shapes">{shapeOptions.map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="purchase-stones">{stoneOptions.map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="purchase-acct-descs">{[...new Set([...customsDescs.map(d=>d.shape),...catOptions].filter(Boolean))].map(s=><option key={s} value={s}/>)}</datalist>
+
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,overflow:"hidden",marginBottom:12}}>
+            <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+              <div style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Bill lines</div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                <label style={{display:"flex",gap:5,alignItems:"center",fontSize:11,color:C.inkMid,cursor:"pointer"}}>
+                  <input type="checkbox" checked={draft.trackAccStock!==false} onChange={e=>toggleAccounting(e.target.checked)} style={{accentColor:C.gold}}/> Accounting stock
+                </label>
+                <button className="bs" style={{padding:"3px 9px",fontSize:10}} onClick={addItem}>+ Row</button>
+              </div>
             </div>
-            <div style={mBody}>
-              <p style={{fontSize:12,color:C.inkMid,marginBottom:14}}>One entry per purchase line — stone, shape, vendor and cost are pre-filled. Add origin, grade, location etc.</p>
-              {draft.items.map((item,iIdx)=>{
-                const ents=item.physicalEntries||[];
-                return(
-                  <div key={item.id} style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,marginBottom:13,overflow:"hidden"}}>
-                    <div style={{background:"#FFFBF0",borderBottom:`1px solid #F0E4B8`,padding:"9px 14px"}}>
-                      <div style={{fontSize:9,fontWeight:700,color:C.amber,textTransform:"uppercase",letterSpacing:.7,marginBottom:2}}>Line {iIdx+1}</div>
-                      <div style={{fontWeight:600,fontSize:14,color:C.ink}}>{item.purchaseDesc||item.desc||"(no description)"}{item.shape?` · ${item.shape}`:""}</div>
-                      {(item.qty||item.qtyKg)&&<div style={{fontSize:11,color:C.inkMid,marginTop:1}}>{item.qty?`${item.qty} pcs`:""}{item.qty&&item.qtyKg?" · ":""}{item.qtyKg?`${item.qtyKg} kg`:""}{item.rate?` · ₹${(+item.rate).toLocaleString("en-IN")}/unit`:""}</div>}
-                    </div>
-                    <div style={{padding:"12px 14px"}}>
-                      {ents.map((entry,eIdx)=>(
-                        <div key={entry.id} style={{border:`1.5px solid ${entry.material?C.teal:C.border}`,borderRadius:8,padding:"12px 13px",marginBottom:8,background:entry.material?"#F8FFFE":"#FAFAF7"}}>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10,marginBottom:10}}>
-                            <Field label="Stone / Material">
-                              <input value={entry.material||""} onChange={e=>setPhys(iIdx,eIdx,"material",e.target.value)} style={CI} placeholder="Stone name"/>
-                            </Field>
-                            <Field label="Shape">
-                              <input value={entry.shape||""} onChange={e=>{const sh=e.target.value;setPhys(iIdx,eIdx,"shape",sh);if(SHAPE_TO_PRODUCT_TYPE[sh])setPhys(iIdx,eIdx,"productType",SHAPE_TO_PRODUCT_TYPE[sh]);}} style={CI} placeholder="e.g. Round…" list="sl-wiz3"/>
-                              <datalist id="sl-wiz3">{allShapes.map(s=><option key={s} value={s}/>)}</datalist>
-                            </Field>
-                            <Field label="Vendor">
-                              <input value={entry.vendor||draft.supplier||""} onChange={e=>setPhys(iIdx,eIdx,"vendor",e.target.value)} style={CI} placeholder="Vendor"/>
-                            </Field>
-                            <Field label="Cost Price (per unit)">
-                              <input type="number" value={entry.costPrice||""} onChange={e=>setPhys(iIdx,eIdx,"costPrice",e.target.value)} style={CI} placeholder="Cost per unit"/>
-                            </Field>
-                          </div>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:8,marginBottom:8}}>
-                            <Field label="Origin"><input value={entry.origin||""} onChange={e=>setPhys(iIdx,eIdx,"origin",e.target.value)} style={CI} placeholder="India, Brazil…"/></Field>
-                            <Field label="Grade"><input value={entry.grade||""} onChange={e=>setPhys(iIdx,eIdx,"grade",e.target.value)} style={CI} placeholder="A / AA / AAA"/></Field>
-                            <Field label="Size"><input value={entry.size||""} onChange={e=>setPhys(iIdx,eIdx,"size",e.target.value)} style={CI} placeholder="60–80mm"/></Field>
-                          </div>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr 1fr",gap:8}}>
-                            <Field label="Qty (pcs)">
-                              <div style={{display:"grid",gridTemplateColumns:"1fr 52px",gap:4}}>
-                                <input type="number" value={entry.qty||""} onChange={e=>setPhys(iIdx,eIdx,"qty",e.target.value)} style={CI} placeholder="0"/>
-                                <select value={entry.unit||"pcs"} onChange={e=>setPhys(iIdx,eIdx,"unit",e.target.value)} style={{...CI,cursor:"pointer",padding:"4px 3px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
-                              </div>
-                            </Field>
-                            <Field label="Weight">
-                              <div style={{display:"grid",gridTemplateColumns:"1fr 52px",gap:4}}>
-                                <input type="number" value={entry.qty2||""} onChange={e=>setPhys(iIdx,eIdx,"qty2",e.target.value)} style={CI} placeholder="0"/>
-                                <select value={entry.unit2||"kg"} onChange={e=>setPhys(iIdx,eIdx,"unit2",e.target.value)} style={{...CI,cursor:"pointer",padding:"4px 3px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
-                              </div>
-                            </Field>
-                            <Field label="Location"><input value={entry.location||""} onChange={e=>setPhys(iIdx,eIdx,"location",e.target.value)} style={CI} placeholder="Bin A1…"/></Field>
-                            <Field label="Product Type">
-                              <select value={entry.productType||""} onChange={e=>setPhys(iIdx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}>
-                                <option value="">Select…</option>
-                                {PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}
-                              </select>
-                            </Field>
-                          </div>
+            {(draft.items||[]).map((item,idx)=>{
+              const acctOn=draft.trackAccStock!==false&&item.addToAccountingStock!==false;
+              const physOn=canAddPhysical&&item.addToPhysicalStock===true;
+              const customHit=findCustom(item.shape);
+              return(
+                <div key={item.id} style={{borderTop:idx?`1px solid ${C.border}`:"none",padding:14,background:physOn?"#F8FFFE":"transparent"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Line {idx+1}</div>
+                    <button onClick={()=>delItem(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>Remove</button>
+                  </div>
+
+                  <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr 1fr .65fr .65fr .7fr",gap:8,alignItems:"end",marginBottom:10}}>
+                    <Field label="What bought / bill text"><input value={item.purchaseDesc||item.desc||""} onChange={e=>updateItem(idx,{purchaseDesc:e.target.value})} style={CI} placeholder="Exact line from bill"/></Field>
+                    <Field label="Stone / material"><input value={item.material||""} onChange={e=>updateItem(idx,{material:e.target.value})} style={CI} list="purchase-stones" placeholder="Botryoidal Fluorite"/></Field>
+                    <Field label="Shape"><input value={item.shape||""} onChange={e=>setShape(idx,e.target.value)} style={CI} list="purchase-shapes" placeholder="Palmstone"/></Field>
+                    <Field label="Qty"><input type="number" value={item.qty||""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                    <Field label="Unit"><select value={item.unit||"pcs"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
+                    <Field label="Rate"><input type="number" value={item.rate||""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                  </div>
+
+                  {customHit&&<div style={{fontSize:10,color:C.green,margin:"-3px 0 9px"}}>Customs match: {customHit.desc}{customHit.hsn?` · HSN ${customHit.hsn}`:""}</div>}
+
+                  <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:10,marginBottom:10}}>
+                    <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",marginBottom:acctOn?9:0}}>
+                      <input type="checkbox" checked={acctOn} disabled={draft.trackAccStock===false} onChange={e=>updateItem(idx,{addToAccountingStock:e.target.checked})} style={{accentColor:C.gold}}/>
+                      <span style={{fontSize:12,fontWeight:700,color:C.ink}}>Add this line to accounting stock</span>
+                    </label>
+                    {acctOn&&(
+                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.5fr .55fr .5fr .75fr",gap:8,alignItems:"end"}}>
+                        <Field label="Accounting / customs description"><input value={item.desc||item.catDesc||""} onChange={e=>setAccountingDesc(idx,e.target.value)} style={CI} list="purchase-acct-descs" placeholder="Type shape or description"/></Field>
+                        <Field label="HSN"><input value={item.hsn||"7103"} onChange={e=>updateItem(idx,{hsn:e.target.value})} style={CI}/></Field>
+                        <Field label="GST"><select value={item.gst||"3"} onChange={e=>updateItem(idx,{gst:e.target.value})} style={{...CI,cursor:"pointer"}}>{GSTS.map(g=><option key={g} value={g}>{g}%</option>)}</select></Field>
+                        <Field label="Line total"><div style={{...CI,background:C.surface,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700}}>{inr(lineBase(item)+calcGST(lineBase(item),item.gst))}</div></Field>
+                      </div>
+                    )}
+                  </div>
+
+                  {canAddPhysical&&(
+                    <div style={{background:physOn?"#F4FFFC":C.surface,border:`1px solid ${physOn?C.teal:C.border}`,borderRadius:8,padding:10}}>
+                      <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",marginBottom:physOn?10:0}}>
+                        <input type="checkbox" checked={physOn} onChange={e=>togglePhysical(idx,e.target.checked)} style={{accentColor:C.teal}}/>
+                        <span style={{fontSize:12,fontWeight:700,color:C.ink}}>Add this line to physical stock</span>
+                      </label>
+                      {physOn&&(item.physicalEntries||[]).map((entry,eIdx)=>(
+                        <div key={entry.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr .85fr .65fr .65fr .75fr .85fr",gap:8,alignItems:"end",marginTop:eIdx?9:0}}>
+                          <Field label="Material"><input value={entry.material||""} onChange={e=>setPhys(idx,eIdx,"material",e.target.value)} style={CI}/></Field>
+                          <Field label="Shape"><input value={entry.shape||""} onChange={e=>setPhys(idx,eIdx,"shape",e.target.value)} style={CI} list="purchase-shapes"/></Field>
+                          <Field label="Qty"><input type="number" value={entry.qty||""} onChange={e=>setPhys(idx,eIdx,"qty",e.target.value)} style={CI}/></Field>
+                          <Field label="Weight"><div style={{display:"grid",gridTemplateColumns:"1fr 52px",gap:4}}><input type="number" value={entry.qty2||""} onChange={e=>setPhys(idx,eIdx,"qty2",e.target.value)} style={CI}/><select value={entry.unit2||"kg"} onChange={e=>setPhys(idx,eIdx,"unit2",e.target.value)} style={{...CI,padding:"4px 3px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div></Field>
+                          <Field label="Location"><input value={entry.location||""} onChange={e=>setPhys(idx,eIdx,"location",e.target.value)} style={CI} placeholder="Box / shelf"/></Field>
+                          <Field label="Product type"><select value={entry.productType||""} onChange={e=>setPhys(idx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}><option value="">Select</option>{PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}</select></Field>
+                          <Field label="Origin"><input value={entry.origin||""} onChange={e=>setPhys(idx,eIdx,"origin",e.target.value)} style={CI}/></Field>
+                          <Field label="Grade"><input value={entry.grade||""} onChange={e=>setPhys(idx,eIdx,"grade",e.target.value)} style={CI}/></Field>
+                          <Field label="Size"><input value={entry.size||""} onChange={e=>setPhys(idx,eIdx,"size",e.target.value)} style={CI}/></Field>
+                          <Field label="Cost"><input type="number" value={entry.costPrice||""} onChange={e=>setPhys(idx,eIdx,"costPrice",e.target.value)} style={CI}/></Field>
+                          <Field label="Vendor"><input value={entry.vendor||draft.supplier||""} onChange={e=>setPhys(idx,eIdx,"vendor",e.target.value)} style={CI}/></Field>
                         </div>
                       ))}
                     </div>
-                  </div>
-                );
-              })}
-              <div style={{display:"flex",flexDirection:mob?"column":"row",justifyContent:"flex-end",gap:9}}>
-                <button className="bs" style={{minHeight:mob?46:36}} onClick={()=>onSave({...draft,status:"pending"})}>Save as Pending</button>
-                <button className="bp" style={{minHeight:mob?46:36}} onClick={()=>{
-                  if(!draft.supplier?.trim())return alert("Enter vendor name");
-                  onSave({...draft,status:"confirmed",_wizardDone:true});
-                }}>✓ Confirm & Save</button>
-              </div>
-            </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,justifyContent:"flex-end",flexWrap:"wrap"}}>
+            <span style={{fontSize:11,color:C.inkFaint}}>Subtotal {inr(sub)}</span>
+            {gst2>0&&<span style={{fontSize:11,color:C.amber}}>GST {inr(gst2)}</span>}
+            <span style={{fontSize:11,color:C.inkFaint}}>Shipping</span>
+            <input type="number" value={draft.shippingCharge||""} onChange={e=>setDraft(d=>({...d,shippingCharge:e.target.value,totalAmount:billSubtotal(d.items||[])+billGST(d.items||[])+(+e.target.value||0)}))} style={{...CI,width:100,textAlign:"right"}} placeholder="0"/>
+            <span style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase"}}>Total</span>
+            <input type="number" value={draft.totalAmount||total||""} onChange={e=>setDraft(d=>({...d,totalAmount:+e.target.value||0}))} style={{...CI,width:140,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:700,background:"#FFFDF5",borderColor:C.goldBright}}/>
           </div>
         </div>
-      )}
+
+        <div style={{position:mob?"static":"sticky",top:14}}>
+          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:12,marginBottom:12}}>
+            <input ref={docRef} type="file" accept="image/*,.pdf" style={{display:"none"}} onChange={e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>setDraft(d=>({...d,docData:ev.target.result,billName:file.name}));r.readAsDataURL(file);}}/>
+            <div style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Bill document</div>
+            {hasDoc&&docSrc?.startsWith?.("data:image")?<img src={docSrc} style={{width:"100%",maxHeight:260,objectFit:"contain",borderRadius:6,border:`1px solid ${C.border}`,marginBottom:8}} alt="Bill preview"/>:<div style={{background:C.card,border:`1px dashed ${C.border}`,borderRadius:6,padding:"22px 10px",textAlign:"center",fontSize:12,color:C.inkFaint,marginBottom:8}}>{hasDoc?draft.billName||fileData?.name||"PDF attached":"No document attached"}</div>}
+            <button className="bs" style={{width:"100%",fontSize:12}} onClick={()=>docRef.current?.click()}>{hasDoc?"Replace document":"Attach document"}</button>
+          </div>
+          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:12,fontSize:11,color:C.inkMid,lineHeight:1.6}}>
+            <div style={{fontWeight:800,color:C.ink,marginBottom:4}}>Save result</div>
+            <div>Accounting stock: {draft.trackAccStock===false?"off":`${(draft.items||[]).filter(i=>i.addToAccountingStock!==false).length} line(s)`}</div>
+            <div>Physical stock: {canAddPhysical?`${(draft.items||[]).filter(i=>i.addToPhysicalStock).length} line(s)`:"not available for this company"}</div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ── BULK VIEW ─────────────────────────────────────────────────────
-function BulkView({queue,idx,setIdx,vendors,accStock=[],purchases=[],extractOne,onSave,onBack}){
+function BulkView({queue,idx,setIdx,vendors,accStock=[],purchases=[],customsDescs=[],canAddPhysical=false,extractOne,onSave,onBack}){
   const [loading,setLoading]=useState(false);const [draft,setDraft]=useState(null);const fd=queue[idx];
   useEffect(()=>{if(!fd||draft)return;setLoading(true);extractOne(fd).then(d=>{d.totalAmount=billTotal(d.items);setDraft(d);}).catch(()=>{setDraft({type:"bill",id:uid(),billNumber:"",supplier:"",supplierGstin:"",supplierLocation:"",supplierCountry:"",supplierContact:"",billDate:today(),currency:"INR",items:[newItem()],notes:"",status:"pending",paidAmount:0,createdAt:new Date().toISOString()});}).finally(()=>setLoading(false));},[fd,idx]);
   if(!fd)return null;
@@ -9020,7 +8960,7 @@ function BulkView({queue,idx,setIdx,vendors,accStock=[],purchases=[],extractOne,
         <span style={{fontSize:12,color:C.inkFaint,flexShrink:0}}>Bill {idx+1} of {queue.length}</span>
       </div>
       {loading?(<div style={{textAlign:"center",padding:"48px 0",color:C.inkFaint,fontSize:13}}>Extracting bill {idx+1}...</div>)
-      :draft&&<VerifyView draft={draft} setDraft={setDraft} fileData={fd} vendors={vendors} accStock={accStock} purchases={purchases} onSave={async item=>{await onSave(item);setDraft(null);}}/>}
+      :draft&&<VerifyView draft={draft} setDraft={setDraft} fileData={fd} vendors={vendors} accStock={accStock} purchases={purchases} customsDescs={customsDescs} canAddPhysical={canAddPhysical} onSave={async item=>{await onSave(item);setDraft(null);}}/>}
     </div>
   );
 }

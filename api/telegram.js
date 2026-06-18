@@ -13,9 +13,27 @@ async function loadK(key) {
   if (error || !data) return null;
   return data.value ?? null;
 }
+async function broadcastInvalidate(key) {
+  try {
+    const client = sb();
+    const channel = client.channel("ng-appdata-invalidate");
+    await new Promise(resolve => {
+      const timer = setTimeout(resolve, 1200);
+      channel.subscribe(status => {
+        if (status === "SUBSCRIBED") {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    await channel.send({ type: "broadcast", event: "invalidate", payload: { key, ts: Date.now() } });
+    await client.removeChannel(channel);
+  } catch {}
+}
 async function saveK(key, value) {
   const { error } = await sb().from("app_data").upsert({ key, value });
   if (error) throw new Error(error.message);
+  await broadcastInvalidate(key);
 }
 
 // ── Multi-bot context ─────────────────────────────────────────────────────────
@@ -65,6 +83,8 @@ async function tgFileUrl(fileId) {
 let _ctx = null;
 // Request-scoped: the file (PDF/photo) the user attached in the current message, if any.
 let _pendingFile = null;
+let _currentText = "";
+let _currentHasVision = false;
 
 // Escape HTML special chars so GPT output never breaks Telegram HTML parse mode
 function esc(s) {
@@ -83,7 +103,11 @@ async function send(chatId, text) {
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 const uid = () => Math.random().toString(36).substr(2, 9);
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = () => {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const p = Object.fromEntries(parts.map(x => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+};
 const fmtMoney = (n, cur = "INR") => {
   const sym = { INR: "₹", USD: "$", JPY: "¥", EUR: "€", GBP: "£", AUD: "A$" };
   return (sym[cur] || cur + " ") + Number(n || 0).toLocaleString("en-IN");
@@ -823,7 +847,15 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
     accountId = match?.id || null;
   }
 
-  const txnDate = date || todayStr();
+  const hasDateCue = (() => {
+    const s = String(_currentText || "").toLowerCase();
+    return /\b(today|yesterday|tomorrow|aaj|kal)\b/.test(s)
+      || /\b\d{4}-\d{2}-\d{2}\b/.test(s)
+      || /\b\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\b/.test(s)
+      || /\b\d{1,2}(?:st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/.test(s)
+      || /\b(january|february|march|april|june|july|august|september|october|november|december)\b/.test(s);
+  })();
+  const txnDate = (!_currentHasVision && !hasDateCue) ? todayStr() : (date || todayStr());
 
   // Dedup: a forwarded/batched payment notification can arrive more than once. Skip if an
   // equivalent transaction already exists — same type + amount + (loose) payee within a
@@ -1306,6 +1338,8 @@ export default async function handler(req, res) {
       // Set request-scoped bot context
       _ctx = botCtx(req.query?.bot === "at");
       _pendingFile = null;
+      _currentText = "";
+      _currentHasVision = false;
 
       const update = req.body || {};
       const updateId = update.update_id;
@@ -1334,6 +1368,8 @@ export default async function handler(req, res) {
         : hasPhoto ? "[image sent — describe what you need]" : ""
       )).trim();
       if (!chatId || !text) return;
+      _currentText = text;
+      _currentHasVision = !!(wantsVision && imageUrl);
 
       // Auth
       const allowed = _ctx.allowed.split(",").map(s => s.trim()).filter(Boolean);
@@ -1392,6 +1428,9 @@ export default async function handler(req, res) {
       // Build history with new message
       const history = session.history || [];
       const isImageTurn = !!(wantsVision && imageUrl);
+      const looksLikeFinanceWrite = !isImageTurn
+        && /\d/.test(text)
+        && /\b(to|from|paid|pay|payment|received|receive|sent|transfer|debit|credit|cash|bank|upi|bill|salary|rent)\b/i.test(text);
       // For the model this turn: attach the image as a vision part (both bots).
       const userContent = isImageTurn
         ? [
@@ -1401,9 +1440,9 @@ export default async function handler(req, res) {
             { type: "image_url", image_url: { url: imageUrl } },
           ]
         : text;
-      // Screenshot/receipt turns are STATELESS — send no prior history so the model can only
-      // act on the current image and never re-logs/re-announces a previous payment.
-      const modelHistory = isImageTurn
+      // Screenshot/receipt and short payment-log turns are STATELESS — send no prior history so
+      // the model can only act on the current message and never reuses an earlier payment/date.
+      const modelHistory = (isImageTurn || looksLikeFinanceWrite)
         ? [{ role: "user", content: userContent }]
         : [...history, { role: "user", content: userContent }];
 
