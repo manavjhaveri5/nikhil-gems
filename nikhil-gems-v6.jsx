@@ -12250,24 +12250,8 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
   const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
   const mColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
   const ordered=lineOrdered(row);
-  // Per-row CP currency toggle (₹/$). Pure relabel — the number you see stays exactly as
-  // typed; we just flip which currency it means and recompute the hidden counterpart at the
-  // current rate. No surprise ×85/÷85 of the visible value, so a row mistakenly stuck in $
-  // can be flicked to ₹ and the same figure now reads as rupees. (The vendor-level toggle at
-  // the top still does real conversion for vendors who genuinely quote in USD.)
-  const toggleCpCur=()=>{
-    dirty.current=false;
-    const toUsd=d.cpCurrency!=="USD";
-    const visible=rawAmt(d.cp); // keep whatever is on screen, including a half-typed value
-    // Note: omit cpUsd on the INR side — passing cpUsd:"" would trip the parent's
-    // `patch.cpUsd!==undefined` branch and snap the row back to USD. The parent clears
-    // cpUsd itself when it sees costPerKg on an INR row.
-    const patch=toUsd
-      ?{cpCurrency:"USD",cpUsd:visible,costPerKg:visible?String(Math.round(+visible*(usdInr||85))):""}
-      :{cpCurrency:"INR",costPerKg:visible};
-    onCommit(row.id,patch);
-    setD(p=>({...p,cpCurrency:patch.cpCurrency})); // p.cp (the visible number) is untouched
-  };
+  // CP currency is set once per vendor (top-row vendor toggle), not per line — the symbol
+  // shown here is just a read-only label reflecting that vendor's currency.
   // Spreadsheet-style vertical nav: move focus to the same column one row up/down.
   // Walks the DOM (rows are plain <tr> siblings in <tbody>) so it stays correct after sort/filter.
   const moveRow=(fromEl,delta)=>{
@@ -12313,7 +12297,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,width:62}}><select value={d.unit} onChange={e=>set("unit",e.target.value)} style={{...ci,cursor:"pointer"}}>{["pcs","kg","g","lots","boxes"].map(x=><option key={x}>{x}</option>)}</select></td>
       <td style={{...td,width:86,padding:0}}>
         <div style={{display:"flex",alignItems:"center",width:"100%"}}>
-          <button type="button" title="Click to switch ₹ / $" onMouseDown={e=>e.preventDefault()} onClick={toggleCpCur} style={{fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0,border:"none",background:"transparent",cursor:"pointer",fontFamily:"inherit"}}>{d.cpCurrency==="USD"?"$":"₹"}</button>
+          <span title="Currency is set per vendor (top row)" style={{fontSize:9.5,color:d.cpCurrency==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0}}>{d.cpCurrency==="USD"?"$":"₹"}</span>
           <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
         </div>
       </td>
