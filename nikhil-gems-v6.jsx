@@ -7980,7 +7980,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
     b.totalAmount=billTotal(b.items);return b;
   },[]);
 
-  const handleExtract=async()=>{if(!fileData)return;setExtracting(true);try{const d=await extractOne(fileData);setDraft(d);setView("verify");}catch(err){showToast("Extraction failed — "+((err?.message||"").slice(0,60)||"check network"));setDraft({type:"bill",id:uid(),billNumber:"",supplier:"",supplierGstin:"",supplierLocation:"",supplierCountry:"",supplierContact:"",billDate:today(),currency:"INR",items:[newPurchaseBillItem()],notes:"",docData:fileData?.dataUrl||"",billName:fileData?.name||"",status:"pending",paidAmount:0,createdAt:new Date().toISOString()});setView("verify");}setExtracting(false);};
+  const handleExtract=async(fd=fileData)=>{if(!fd)return;setExtracting(true);setView("upload");try{const d=await extractOne(fd);setDraft(d);setView("verify");}catch(err){showToast("Extraction failed — "+((err?.message||"").slice(0,60)||"check network"));setDraft({type:"bill",id:uid(),billNumber:"",supplier:"",supplierGstin:"",supplierLocation:"",supplierCountry:"",supplierContact:"",billDate:today(),currency:"INR",items:[newPurchaseBillItem()],notes:"",docData:fd?.dataUrl||"",billName:fd?.name||"",status:"pending",paidAmount:0,createdAt:new Date().toISOString()});setView("verify");}setExtracting(false);};
 
   const handleBulkFiles=async files=>{const arr=Array.from(files);const fds=await Promise.all(arr.map(f=>new Promise(res=>{const r=new FileReader();r.onload=e=>{const url=e.target.result;res({dataUrl:url,b64:url.split(",")[1],mediaType:url.match(/:(.*?);/)[1],name:f.name});};r.readAsDataURL(f);})));setBulkQueue(fds);setBulkIdx(0);setView("bulk");};
 
@@ -8016,7 +8016,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
   const Actions=isListView?(
     <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
       {!csvAlreadyImported&&<button className="bs" style={{fontSize:12,color:C.amber,borderColor:C.amber}} onClick={()=>{if(window.confirm(`Import historical bills from your Google Sheets tracker?\n\nTotal: ₹86.3L purchased · ₹69.8L paid · ₹16.5L outstanding`))handleCSVImport();}}>📥 Import History</button>}
-      <button className="bs" style={{fontSize:12}} onClick={()=>{const inp=document.createElement("input");inp.type="file";inp.multiple=true;inp.accept="image/*,.pdf";inp.onchange=e=>{const files=Array.from(e.target.files);if(!files.length)return;if(files.length===1){const file=files[0];const reader=new FileReader();reader.onload=ev=>{const url=ev.target.result;setFileData({dataUrl:url,b64:url.split(",")[1],mediaType:url.match(/:(.*?);/)[1],name:file.name});setDraft(null);setView("upload");};reader.readAsDataURL(file);}else{handleBulkFiles(files);}};inp.click();}}>⬆ Upload Bill</button>
+      <button className="bs" style={{fontSize:12}} onClick={()=>{const inp=document.createElement("input");inp.type="file";inp.multiple=true;inp.accept="image/*,.pdf";inp.onchange=e=>{const files=Array.from(e.target.files);if(!files.length)return;if(files.length===1){const file=files[0];const reader=new FileReader();reader.onload=ev=>{const url=ev.target.result;const fd={dataUrl:url,b64:url.split(",")[1],mediaType:url.match(/:(.*?);/)[1],name:file.name};setFileData(fd);setDraft(null);handleExtract(fd);};reader.readAsDataURL(file);}else{handleBulkFiles(files);}};inp.click();}}>⬆ Upload Bill</button>
       <button className="bs" style={{fontSize:12}} onClick={()=>{setFileData(null);setDraft({type:"bill",id:uid(),billNumber:"",supplier:"",supplierGstin:"",supplierLocation:"",supplierCountry:"",supplierContact:"",billDate:today(),currency:"INR",items:[newPurchaseBillItem()],notes:"",status:"pending",paidAmount:0,createdAt:new Date().toISOString()});setView("verify");}}>+ Add Bill</button>
       <button className="bp" style={{fontSize:12}} onClick={()=>{setDraft({type:"po",id:uid(),poNumber:nextPO(),supplier:"",date:today(),currency:"INR",advance:"",items:[newItem()],notes:"",followUpDate:"",status:"open",paidAmount:0,createdAt:new Date().toISOString()});setView("po");}}>+ New Order</button>
     </div>
@@ -8644,7 +8644,7 @@ function POForm({draft,setDraft,vendors,onSave}){
 // ── UPLOAD VIEW ───────────────────────────────────────────────────
 function UploadView({fileData,setFileData,extracting,onExtract,onManual}){
   const ref=useRef();
-  const handle=f=>{if(!f)return;const r=new FileReader();r.onload=e=>{const url=e.target.result;const mt=url.match(/:(.*?);/)[1];setFileData({dataUrl:url,b64:url.split(",")[1],mediaType:mt,name:f.name});};r.readAsDataURL(f);};
+  const handle=f=>{if(!f)return;const r=new FileReader();r.onload=e=>{const url=e.target.result;const fd={dataUrl:url,b64:url.split(",")[1],mediaType:url.match(/:(.*?);/)[1],name:f.name};setFileData(fd);onExtract?.(fd);};r.readAsDataURL(f);};
   return(
     <div style={{maxWidth:500,margin:"0 auto"}}>
       <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,marginBottom:4}}>Upload Purchase Bill</div>
