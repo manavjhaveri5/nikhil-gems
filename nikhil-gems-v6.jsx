@@ -9922,6 +9922,7 @@ function InvoicesApp({onHome,startDraft}){
   const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
   const [view,setView]=useState("list");
   const [draft,setDraft]=useState(null);
+  const [autoAttachId,setAutoAttachId]=useState(null); // SB-sourced draft to auto-save+attach once state is loaded
   const [tab,setTab]=useState("invoices");
   const [toast,setToast]=useState("");
   const [loaded,setLoaded]=useState(()=>readCache(INV_KEYS.invoices)!==null);
@@ -10040,7 +10041,20 @@ function InvoicesApp({onHome,startDraft}){
     await saveK(INV_KEYS.buyers,list);
     return{draft:{...draftWithDischarge,buyerId:buyer.id,consigneeSameAsBuyer:true},buyers:list};
   };
-  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");}});},[company]);
+  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");if(prepared.draft.autoAttach&&prepared.draft.sourceSbId)setAutoAttachId(prepared.draft.id);}});},[company]);
+
+  // "Create invoice from SB" wants the invoice rendered and attached to the SB packet
+  // immediately (not just opened as a draft). Once the module has loaded fresh state we
+  // save the prepared draft once — saveInvoice renders the PDF and attaches it to the
+  // packet — while staying on the form so the user can keep editing. Re-saving from the
+  // form re-renders + re-attaches, so edits flow back to the packet.
+  useEffect(()=>{
+    if(!loaded||!autoAttachId||!draft||draft.id!==autoAttachId)return;
+    setAutoAttachId(null);
+    const {autoAttach,...inv}=draft;
+    setDraft(inv); // drop the flag so later manual saves don't carry it
+    saveInvoice(inv,{navigateAway:false});
+  },[loaded,autoAttachId,draft]);
 
   const nextInvNo=useCallback(()=>{
     const y1=new Date().getFullYear(), y2=y1+1;

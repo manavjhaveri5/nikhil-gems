@@ -173,7 +173,12 @@ const docs = {
     const stale=ver!=null && String(_localDocVer[key]??"")!==ver;
     let raw=null;
     if (!stale){ try{ raw=await idb.get(key); }catch{} if (raw) return raw; }
-    const url=_docUrls[key];
+    let url=_docUrls[key];
+    // The in-memory URL map is loaded once on mount, so it can be stale when a doc was
+    // attached from another screen (e.g. the invoice module just rendered + uploaded the
+    // invoice for this SB) or another device. Reload it once before giving up so a
+    // freshly-attached file is viewable immediately instead of erroring "No file stored".
+    if (!url){ try{ await loadDocUrls(); url=_docUrls[key]; }catch{} }
     if (url){
       try{
         const bust=ver!=null?`${url}${url.includes("?")?"&":"?"}v=${encodeURIComponent(ver)}`:url;
@@ -324,6 +329,7 @@ function sbToInvoiceDraft(ex, sb){
     sourceBuyerName: ex.buyerName||"", sourceBuyerAddress: ex.buyerAddress||"", sourceBuyerCountry: ex.buyerCountry||"",
     totalAmt, createdAt:new Date().toISOString(),
     sourceSbId: sb&&sb.id||"", sourceSbNumber: sb&&sb.sbNumber||(ex.sbNumber||""),
+    autoAttach:true, // save + attach to the SB packet immediately, then open for optional edits
   };
 }
 // A blank draft for "Create invoice" (same shape; user fills it in the module)
