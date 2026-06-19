@@ -10776,7 +10776,15 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         groups[key]._origItems.push(it);
       }
     });
-    const consolidated=order.map(k=>({...groups[k],_origItems:undefined,_preConsolidated:groups[k]._origItems}));
+    const consolidated=order.map(k=>{
+      const g=groups[k];
+      // Rows merged here can have different rates (e.g. 0.133kg@400 + 0.151kg@1500).
+      // amt is the true sum, so derive a blended unit rate from it — otherwise the line
+      // reads qty × (first row's rate) ≠ amt. Keep the original rate when nothing merged.
+      const q=parseFloat(g.qty)||0, amt=+g.amt||0;
+      const rate=(g._origItems.length>1&&q>0)?String(Math.round((amt/q)*100)/100):g.rate;
+      return{...g,rate,_origItems:undefined,_preConsolidated:g._origItems};
+    });
     return{...d,items:consolidated,totalAmt:calcTotalAmt(consolidated,d.shippingCost,d.discountAmt)};
   });
   const expandItems=()=>setDraft(d=>{
