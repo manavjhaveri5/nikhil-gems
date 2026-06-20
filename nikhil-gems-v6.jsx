@@ -11584,9 +11584,7 @@ ${gstMode!=="none"&&totalTax>0?`<table style="width:100%;margin-bottom:3px;font-
       <table style="margin-left:auto">
         <tr><td style="padding:2px 10px">Sub Total</td><td style="text-align:right;padding:2px 0">${inv.currency} ${subTotal.toFixed(2)}</td></tr>
         ${freight>0?`<tr><td style="padding:2px 10px">Shipping &amp; Freight</td><td style="text-align:right;padding:2px 0">${inv.currency} ${freight.toFixed(2)}</td></tr>`:""}
-        ${discount>0?`<tr><td style="padding:2px 10px;color:#c0392b">Discount</td><td style="text-align:right;padding:2px 0;color:#c0392b">− ${inv.currency} ${discount.toFixed(2)}</td></tr>`:""}
         <tr><td style="padding:2px 10px"><b>Total</b></td><td style="text-align:right;padding:2px 0;font-weight:700">${inv.currency} ${total.toFixed(2)}</td></tr>
-        <tr><td style="padding:2px 10px;font-weight:700">Balance Due</td><td style="text-align:right;padding:2px 0;font-weight:700">${inv.currency} ${total.toFixed(2)}</td></tr>
       </table>
     </td>
   </tr>
@@ -11728,7 +11726,6 @@ async function renderBasicInvoicePacketPdf(inv,buyers,company){
   line("--------------------------------------------------------------------------------",40,8);
   line(`Sub Total: ${inv.currency||""} ${subTotal.toFixed(2)}`,360,10,bold);
   if(+inv.shippingCost>0)line(`Shipping/Freight: ${inv.currency||""} ${(+inv.shippingCost).toFixed(2)}`,360,9);
-  if(+inv.discountAmt>0)line(`Discount: ${inv.currency||""} ${(+inv.discountAmt).toFixed(2)}`,360,9);
   line(`Total: ${inv.currency||""} ${(+total||0).toFixed(2)}`,360,12,bold);
   y-=10;
   line(`Total in words: ${(inv.currency||"")} ${numToWords(Math.round((+total||0)*100)/100)}`,40,9);
@@ -11948,9 +11945,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
           <div style={{textAlign:"right",fontSize:12}}>
             <div style={{display:"flex",justifyContent:"space-between",gap:32,marginBottom:3}}><span>Sub Total</span><span>{subTotal.toFixed(2)}</span></div>
             {freight>0&&<div style={{display:"flex",justifyContent:"space-between",gap:32,marginBottom:3}}><span>Shipping &amp; Freight</span><span>{freight.toFixed(2)}</span></div>}
-            {discount>0&&<div style={{display:"flex",justifyContent:"space-between",gap:32,marginBottom:3,color:"#c0392b"}}><span>Discount</span><span>− {inv.currency} {discount.toFixed(2)}</span></div>}
-            <div style={{display:"flex",justifyContent:"space-between",gap:32,marginBottom:3,fontWeight:700}}><span>Total</span><span>{inv.currency} {total.toFixed(2)}</span></div>
-            <div style={{display:"flex",justifyContent:"space-between",gap:32,fontWeight:700,fontSize:14,borderTop:"2px solid #000",paddingTop:4}}><span>Balance Due</span><span>{inv.currency} {total.toFixed(2)}</span></div>
+            <div style={{display:"flex",justifyContent:"space-between",gap:32,fontWeight:700,fontSize:14,borderTop:"2px solid #000",paddingTop:4}}><span>Total</span><span>{inv.currency} {total.toFixed(2)}</span></div>
           </div>
         </div>
 
