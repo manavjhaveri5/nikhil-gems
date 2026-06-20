@@ -95,6 +95,18 @@ async function saveTokens(tokens) {
   } catch {}
 }
 
+const DEBUG_KEY = "ng-canva-debug-v1";
+async function saveDebug(obj) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({ key: DEBUG_KEY, value: obj }),
+    });
+  } catch {}
+}
+
 async function loadTokens() {
   if (!SUPABASE_URL || !SUPABASE_KEY) return null;
   try {
@@ -150,6 +162,13 @@ export default async function handler(req, res) {
     });
   }
 
+  if (action === "debug") {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${DEBUG_KEY}&select=value`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }).catch(() => null);
+    const rows = r && r.ok ? await r.json() : [];
+    return res.json({ last_callback: rows?.[0]?.value || null });
+  }
+
   if (action === "disconnect") {
     await saveTokens({ access_token: null, refresh_token: null, expires_in: 0, updated_at: 0 }).catch(() => {});
     return res.json({ ok: true });
@@ -173,8 +192,16 @@ export default async function handler(req, res) {
     return res.redirect(`${AUTH_URL}?${params}`);
   }
 
+  // Canva redirected back with an error (denied, invalid_scope, etc.) and no code.
+  if (error && !code) {
+    return res.status(400).send(`<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:system-ui,sans-serif;padding:24px;color:#1a1208;text-align:center}</style></head>
+<body><h2 style="color:#9b2c2c">Canva auth error: ${error}</h2>
+<p style="color:#7a6a4a">${req.query.error_description || ""}</p>
+<p><a href="/api/canva-auth?action=start">← Try again</a></p></body></html>`);
+  }
+
   if (code) {
-    if (error) return res.status(400).send(`<h2>Canva auth error: ${error}</h2>`);
     const verifier = state ? decryptState(state) : null;
     if (!verifier) {
       return res.status(400).send(`<h2>State / verifier mismatch</h2>
@@ -182,6 +209,7 @@ export default async function handler(req, res) {
     }
 
     const { status, data } = await exchangeCode(code, verifier);
+    await saveDebug({ at: Date.now(), step: "exchange", status, ok: !!data.access_token, err: data.error || null, errDesc: data.error_description || null });
     if (data.access_token) {
       await saveTokens({
         access_token:  data.access_token,
@@ -201,10 +229,7 @@ export default async function handler(req, res) {
       <p>Check that the Canva integration's redirect URL exactly matches <code>${REDIRECT_URI}</code>.</p>`);
   }
 
-  return res.json({
-    message: "Canva OAuth handler",
-    start: "/api/canva-auth?action=start",
-    status: "/api/canva-auth?action=status",
-    redirect_uri: REDIRECT_URI || "(CANVA_REDIRECT_URI not set)",
-  });
+  // Bare URL (no action, no code, no error): just start the flow so it doesn't
+  // matter whether the user opens this or the ?action=start link.
+  return res.redirect("/api/canva-auth?action=start");
 }
