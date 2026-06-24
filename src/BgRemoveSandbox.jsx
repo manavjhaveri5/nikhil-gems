@@ -11,12 +11,26 @@ const INK = "#1a1208";
 const MUTE = "#7a6a4a";
 const BG = "#FAF7F2";
 
+// Downscale + re-encode before upload. Full-res phone photos as base64 blow past
+// Vercel's ~4.5 MB function request-body limit, which the browser surfaces as a
+// generic "Failed to fetch". Capping the longest edge keeps the payload small while
+// staying more than sharp enough for background removal and product photos.
+const MAX_EDGE = 2000;
 function fileToImage(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => {
       const img = new Image();
-      img.onload = () => resolve({ dataURL: r.result, width: img.naturalWidth, height: img.naturalHeight });
+      img.onload = () => {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        const scale = Math.min(1, MAX_EDGE / Math.max(w, h));
+        if (scale === 1) { resolve({ dataURL: r.result, width: w, height: h }); return; }
+        const tw = Math.round(w * scale), th = Math.round(h * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = tw; canvas.height = th;
+        canvas.getContext("2d").drawImage(img, 0, 0, tw, th);
+        resolve({ dataURL: canvas.toDataURL("image/jpeg", 0.9), width: tw, height: th });
+      };
       img.onerror = reject;
       img.src = r.result;
     };
