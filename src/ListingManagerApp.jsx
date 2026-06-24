@@ -4730,7 +4730,15 @@ export default function ListingManagerApp({ onHome }) {
       else loadK(ORDERS_KEY).then(o => setOrders(o || []));
     };
     window.addEventListener("ng-orders-updated", onOrdersUpdated);
-    return () => window.removeEventListener("ng-orders-updated", onOrdersUpdated);
+    // Live cross-user sync: when another session saves listings/orders/stock, the
+    // shared cache is invalidated and we re-read so this screen reflects their changes
+    // (without this, each user only ever saw their own copy and saves clobbered each other).
+    const offRefresh = onCacheRefresh(keys => {
+      if (keys.includes(LIST_KEY))   loadK(LIST_KEY).then(l => { if (Array.isArray(l)) setListings(l); });
+      if (keys.includes(ORDERS_KEY)) loadK(ORDERS_KEY).then(o => { if (Array.isArray(o)) setOrders(o); });
+      if (keys.includes(STK_KEY))    loadK(STK_KEY).then(s => { if (Array.isArray(s)) setStock(s); });
+    });
+    return () => { window.removeEventListener("ng-orders-updated", onOrdersUpdated); offRefresh(); };
   }, []);
 
   const BACKUP_KEY = "ng-listings-backup-v1";
