@@ -28,6 +28,34 @@ const STK_KEY    = "ng-stock-v5";
 const IMG_KEY    = "ng-image-library-v1";
 const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
 const SHIPGLOBAL_PORTAL_URL = "https://v2.app.shipglobal.in/auth/login";
+const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
+
+async function mediaUrlToFile(url, fallbackName) {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  const mime = blob.type || "application/octet-stream";
+  const ext = (mime.split("/")[1] || "bin").replace(/[^a-z0-9]/gi, "").toLowerCase() || "bin";
+  return new File([blob], `${fallbackName}.${ext}`, { type: mime });
+}
+
+async function persistListingMedia(listing) {
+  const images = Array.isArray(listing.images) ? listing.images : [];
+  const nextImages = await Promise.all(images.map(async (url, i) => {
+    if (!isLocalMediaUrl(url)) return url;
+    const file = await mediaUrlToFile(url, `listing-${listing.id || uid()}-${i}`);
+    const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+    return uploadToStorage(`listing-photos/${listing.id || uid()}-${i}-${Date.now()}.${ext}`, file);
+  }));
+
+  let video = listing.video || "";
+  if (isLocalMediaUrl(video)) {
+    const file = await mediaUrlToFile(video, `listing-${listing.id || uid()}-video`);
+    const ext = (file.name.split(".").pop() || "mp4").toLowerCase();
+    video = await uploadToStorage(`listing-videos/${listing.id || uid()}-${Date.now()}.${ext}`, file);
+  }
+
+  return { ...listing, images: nextImages, video };
+}
 
 /* ─── Etsy token (shared) ─────────────────────────────────────────────────────
    Etsy access tokens expire hourly. Always resolve a FRESH token before calling
@@ -4790,11 +4818,16 @@ export default function ListingManagerApp({ onHome }) {
       } catch {}
     };
     const onVisible = () => { if (document.visibilityState === "visible") refreshFromServer(); };
+    const onOnline = () => refreshFromServer();
     document.addEventListener("visibilitychange", onVisible);
-    const poll = setInterval(refreshFromServer, 30000); // every 30s
+    window.addEventListener("online", onOnline);
+    const poll = setInterval(() => {
+      if (document.visibilityState === "visible") refreshFromServer();
+    }, 3000);
     return () => {
       window.removeEventListener("ng-orders-updated", onOrdersUpdated);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
       clearInterval(poll);
       offRefresh();
     };
@@ -4826,12 +4859,22 @@ export default function ListingManagerApp({ onHome }) {
 
   /* save */
   const handleSave = async (listing, publishTo = {}) => {
+    let savedListing = listing;
+    if ((listing.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(listing.video)) {
+      showToast("Uploading listing media...");
+      try {
+        savedListing = await persistListingMedia(listing);
+      } catch (e) {
+        showToast(`⚠ Media upload failed: ${e.message}`, 8000);
+        return;
+      }
+    }
     const exists = listings.find(l => l.id === listing.id);
     try {
       await commitListings(base =>
-        base.some(l => l.id === listing.id)
-          ? base.map(l => l.id === listing.id ? listing : l)
-          : [listing, ...base]);
+        base.some(l => l.id === savedListing.id)
+          ? base.map(l => l.id === savedListing.id ? savedListing : l)
+          : [savedListing, ...base]);
     } catch (e) {
       showToast(`⚠️ ${e.message}`, 8000);
       return;
@@ -4857,7 +4900,7 @@ export default function ListingManagerApp({ onHome }) {
     showToast(`Syncing to ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…`);
     // Always sync-only on save — never activate. Only the explicit Publish button activates.
     const results = await Promise.allSettled(targets.map(pkey =>
-      handlePublish(listing, pkey, { syncOnly: true })
+      handlePublish(savedListing, pkey, { syncOnly: true })
     ));
     const failed = results.filter(r => r.status === "rejected");
     if (failed.length === 0) {
