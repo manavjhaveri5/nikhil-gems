@@ -4739,17 +4739,22 @@ export default function ListingManagerApp({ onHome }) {
       const r = await fetch("/api/listing-manager?action=sync_etsy_states");
       const d = await r.json();
       if (!d.ok || !d.states) return;
-      let changed = false;
-      const next = current.map(l => {
-        const lid = l.platforms?.etsy?.listing_id;
-        const live = lid && d.states[lid];
-        if (!live) return l;
-        const mapped = live === "active" ? "active" : "draft";
-        if (l.platforms.etsy.status === mapped) return l;
-        changed = true;
-        return { ...l, platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped } } };
+      const states = d.states;
+      // Patch statuses on top of the FRESH server list (via commitListings) — never
+      // write a stale array. Return the same ref when nothing changed so no write fires.
+      await commitListings(base => {
+        let changed = false;
+        const next = base.map(l => {
+          const lid = l.platforms?.etsy?.listing_id;
+          const live = lid && states[lid];
+          if (!live) return l;
+          const mapped = live === "active" ? "active" : "draft";
+          if (l.platforms.etsy.status === mapped) return l;
+          changed = true;
+          return { ...l, platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped } } };
+        });
+        return changed ? next : base;
       });
-      if (changed) { setListings(next); await saveK(LIST_KEY, next); }
     } catch {}
   };
 
@@ -4797,40 +4802,36 @@ export default function ListingManagerApp({ onHome }) {
 
   const BACKUP_KEY = "ng-listings-backup-v1";
 
-  const persistListings = async next => {
-    // ── Safety guard: never silently lose listings ──────────────────────────
-    // Use functional form of setListings to get the authoritative current count
-    await new Promise((resolve, reject) => {
-      setListings(prev => {
-        const prevCount = prev.length;
-        const nextCount = next.length;
-        // Reject if we'd lose more than 2 listings at once (not a normal operation)
-        if (prevCount > 2 && nextCount < prevCount - 2) {
-          reject(new Error(
-            `Safety check: refusing to reduce listings from ${prevCount} → ${nextCount}. Refresh and try again.`
-          ));
-          return prev; // don't update state
-        }
-        // Back up current listings before overwriting
-        if (prevCount > 0) {
-          saveK(BACKUP_KEY, prev).catch(() => {});
-        }
-        resolve();
-        return next;
-      });
-    });
-    await saveK(LIST_KEY, next);
-  };
   const persistOrders   = async next => { setOrders(next);   await saveK(ORDERS_KEY, next); };
+
+  // Safe listings write: re-read the LATEST server copy and apply `mutate` on top of
+  // it, instead of overwriting with this browser's (possibly stale) in-memory array.
+  // This is what stops cross-user clobber — a save can no longer drop listings another
+  // user added/changed that aren't in our local copy. `mutate(base)` returns the new
+  // full array. Used by every listings write path.
+  const commitListings = async (mutate) => {
+    const fresh = await loadKFresh(LIST_KEY).catch(() => null);
+    const base  = Array.isArray(fresh) ? fresh : listings;
+    const next  = mutate(base);
+    if (next === base) { setListings(base); return base; } // no-op: refresh view, skip write
+    // Guard against accidental mass loss (e.g. a bug handing us a tiny array).
+    if (base.length > 2 && next.length < base.length - 2) {
+      throw new Error(`Safety check: refusing to drop ${base.length - next.length} listings. Reload and retry.`);
+    }
+    if (base.length > 0) saveK(BACKUP_KEY, base).catch(() => {});
+    setListings(next);
+    await saveK(LIST_KEY, next);
+    return next;
+  };
 
   /* save */
   const handleSave = async (listing, publishTo = {}) => {
     const exists = listings.find(l => l.id === listing.id);
-    const next = exists
-      ? listings.map(l => l.id === listing.id ? listing : l)
-      : [listing, ...listings];
     try {
-      await persistListings(next);
+      await commitListings(base =>
+        base.some(l => l.id === listing.id)
+          ? base.map(l => l.id === listing.id ? listing : l)
+          : [listing, ...base]);
     } catch (e) {
       showToast(`⚠️ ${e.message}`, 8000);
       return;
@@ -4870,7 +4871,7 @@ export default function ListingManagerApp({ onHome }) {
   /* delete */
   const handleDelete = async id => {
     if (!confirm("Delete this listing from your catalog? Won't remove from platforms.")) return;
-    await persistListings(listings.filter(l => l.id !== id));
+    await commitListings(base => base.filter(l => l.id !== id));
     showToast("Deleted");
   };
 
@@ -4930,13 +4931,10 @@ export default function ListingManagerApp({ onHome }) {
       platforms: { ...listing.platforms, [pkey]: { ...listing.platforms?.[pkey], status: "active", ...result } },
       updated_at: now(),
     };
-    await new Promise(resolve => {
-      setListings(prev => {
-        const next = prev.map(l => l.id === listing.id ? updated : l);
-        saveK(LIST_KEY, next).then(resolve);
-        return next;
-      });
-    });
+    await commitListings(base =>
+      base.some(l => l.id === listing.id)
+        ? base.map(l => l.id === listing.id ? updated : l)
+        : [updated, ...base]);
     return result;
   };
 
@@ -4952,14 +4950,8 @@ export default function ListingManagerApp({ onHome }) {
       const r = await fetch(`/api/ebay?action=end_item&item_id=${itemId}`, { method: "POST" });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "eBay delete failed");
-      await new Promise(resolve => {
-        setListings(prev => {
-          const updated = { ...listing, platforms: { ...listing.platforms, ebay: { status: "deleted" } }, updated_at: now() };
-          const next = prev.map(l => l.id === listing.id ? updated : l);
-          saveK(LIST_KEY, next).then(resolve);
-          return next;
-        });
-      });
+      const updated = { ...listing, platforms: { ...listing.platforms, ebay: { status: "deleted" } }, updated_at: now() };
+      await commitListings(base => base.map(l => l.id === listing.id ? updated : l));
       return;
     }
     else throw new Error("Not supported");
@@ -4971,14 +4963,8 @@ export default function ListingManagerApp({ onHome }) {
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || "Failed");
 
-    await new Promise(resolve => {
-      setListings(prev => {
-        const updated = { ...listing, platforms: { ...listing.platforms, [pkey]: { status: "deleted" } }, updated_at: now() };
-        const next = prev.map(l => l.id === listing.id ? updated : l);
-        saveK(LIST_KEY, next).then(resolve);
-        return next;
-      });
-    });
+    const updated = { ...listing, platforms: { ...listing.platforms, [pkey]: { status: "deleted" } }, updated_at: now() };
+    await commitListings(base => base.map(l => l.id === listing.id ? updated : l));
   };
 
   /* mark sold */
@@ -5031,14 +5017,8 @@ export default function ListingManagerApp({ onHome }) {
       for (const p of livePlatforms) {
         updatedPlatforms[p.key] = { ...updatedPlatforms[p.key], status: "deleted" };
       }
-      await new Promise(resolve => {
-        setListings(prev => {
-          const updated = { ...listing, platforms: updatedPlatforms, updated_at: now() };
-          const next = prev.map(l => l.id === listing.id ? updated : l);
-          saveK(LIST_KEY, next).then(resolve);
-          return next;
-        });
-      });
+      const updated = { ...listing, platforms: updatedPlatforms, updated_at: now() };
+      await commitListings(base => base.map(l => l.id === listing.id ? updated : l));
     }
 
     setSoldModal(null);
