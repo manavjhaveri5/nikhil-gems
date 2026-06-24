@@ -4820,6 +4820,16 @@ export default function ListingManagerApp({ onHome }) {
     showToast("Deleted");
   };
 
+  // Earth Editions Shopify creds are stored in the shared app data (set up via
+  // Image Library / the Earth tab), NOT in Vercel env vars. Attach them to the
+  // listing so the API uses them instead of the (unset) SHOPIFY_EARTH_* env vars.
+  const withShopifyCreds = async (listing, storeKey) => {
+    if (storeKey !== "earth") return listing;
+    const c = await loadK("ng-shopify-creds-v1");
+    if (c?.store && c?.token) return { ...listing, shopify_store: c.store, shopify_token: c.token };
+    return listing;
+  };
+
   /* publish — syncOnly=true means update fields only, never activate */
   const handlePublish = async (listing, pkey, { syncOnly = false } = {}) => {
     let result;
@@ -4854,7 +4864,7 @@ export default function ListingManagerApp({ onHome }) {
 
       const r = await fetch("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, listing, store_key: storeKey, sync_only: syncOnly }),
+        body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey, sync_only: syncOnly }),
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "Publishing failed");
@@ -4902,7 +4912,7 @@ export default function ListingManagerApp({ onHome }) {
 
     const r = await fetch("/api/listing-manager", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, listing, store_key: storeKey }),
+      body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey }),
     });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || "Failed");
@@ -4956,7 +4966,7 @@ export default function ListingManagerApp({ onHome }) {
         else return;
         const r = await fetch("/api/listing-manager", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, listing, store_key: storeKey }),
+          body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey }),
         });
         const d = await r.json();
         if (!d.ok) console.warn(`Auto-unpublish failed for ${p.key}:`, d.error);

@@ -649,8 +649,8 @@ export default async function handler(req, res) {
     if (action === "unpublish_shopify") {
       const storeEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_STORE" : "SHOPIFY_EARTH_STORE";
       const tokenEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_TOKEN" : "SHOPIFY_EARTH_TOKEN";
-      const store = process.env[storeEnvKey] || process.env.SHOPIFY_STORE;
-      const token = process.env[tokenEnvKey] || process.env.SHOPIFY_ACCESS_TOKEN;
+      const store = listing?.shopify_store || process.env[storeEnvKey] || process.env.SHOPIFY_STORE;
+      const token = listing?.shopify_token || process.env[tokenEnvKey] || process.env.SHOPIFY_ACCESS_TOKEN;
       const platformKey = store_key === "atyahara" ? "shopify_aty" : "shopify_earth";
       const productId = listing?.platforms?.[platformKey]?.product_id;
       if (!productId) return res.status(400).json({ error: `No ${platformKey} product_id` });
