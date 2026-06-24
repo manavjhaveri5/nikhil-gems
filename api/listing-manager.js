@@ -354,6 +354,51 @@ async function unpublishEtsy(listingId) {
 }
 
 /* ── Shopify: publish product ──────────────────────────────────────────────── */
+function shopifyImageUrls(images = []) {
+  return [...new Set(images.filter(url => typeof url === "string" && /^https?:\/\//i.test(url)))].slice(0, 10);
+}
+
+async function syncShopifyImages(store, token, productId, images = []) {
+  const urls = shopifyImageUrls(images);
+  if (urls.length === 0) return { uploaded: 0 };
+
+  const headers = { "Content-Type": "application/json", "X-Shopify-Access-Token": token };
+  const existingResp = await fetch(`https://${store}/admin/api/2024-04/products/${productId}/images.json`, {
+    headers,
+  });
+  const existingData = await existingResp.json().catch(() => ({}));
+  if (!existingResp.ok) {
+    throw new Error(`Shopify image lookup failed: ${JSON.stringify(existingData.errors || existingData)}`);
+  }
+
+  for (const image of existingData.images || []) {
+    const deleteResp = await fetch(`https://${store}/admin/api/2024-04/products/${productId}/images/${image.id}.json`, {
+      method: "DELETE",
+      headers: { "X-Shopify-Access-Token": token },
+    });
+    if (!deleteResp.ok && deleteResp.status !== 404) {
+      const deleteData = await deleteResp.json().catch(() => ({}));
+      throw new Error(`Shopify image delete failed: ${JSON.stringify(deleteData.errors || deleteData)}`);
+    }
+  }
+
+  let uploaded = 0;
+  for (const [i, src] of urls.entries()) {
+    const uploadResp = await fetch(`https://${store}/admin/api/2024-04/products/${productId}/images.json`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ image: { src, position: i + 1 } }),
+    });
+    const uploadData = await uploadResp.json().catch(() => ({}));
+    if (!uploadResp.ok) {
+      throw new Error(`Shopify image upload failed (${i + 1}/${urls.length}): ${JSON.stringify(uploadData.errors || uploadData)}`);
+    }
+    uploaded += 1;
+  }
+
+  return { uploaded };
+}
+
 async function publishShopify(store, token, listing, ai) {
   const { title, qty = 0, type = "repeatable", price_shopify, sku, productType, material, images = [] } = listing;
 
@@ -380,7 +425,6 @@ async function publishShopify(store, token, listing, ai) {
           inventory_quantity: quantity,
           price: String(price_shopify || 0),
         }],
-        ...(images.length > 0 ? { images: images.slice(0, 10).map(url => ({ src: url })) } : {}),
       },
     }),
   });
@@ -388,6 +432,7 @@ async function publishShopify(store, token, listing, ai) {
   if (!r.ok) throw new Error(`Shopify create failed: ${JSON.stringify(data.errors || data)}`);
 
   const product = data.product;
+  const imageSync = await syncShopifyImages(store, token, product.id, images);
 
   // SEO
   try {
@@ -408,6 +453,7 @@ async function publishShopify(store, token, listing, ai) {
     url: `https://${store}/admin/products/${product.id}`,
     storefront_url: `https://${store.replace(".myshopify.com", "")}.com/products/${product.handle}`,
     status: "active",
+    images_uploaded: imageSync.uploaded,
   };
 }
 
@@ -663,7 +709,8 @@ export default async function handler(req, res) {
         });
         const d = await r.json();
         if (!r.ok) throw new Error(`Shopify update: ${JSON.stringify(d.errors || d)}`);
-        result = { product_id: existingId, status: "active" };
+        const imageSync = await syncShopifyImages(store, token, existingId, listing.images || []);
+        result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded };
       } else {
         const priceField = store_key === "atyahara" ? "price_shopify_aty" : "price_shopify_earth";
         result = await publishShopify(store, token, { ...listing, price_shopify: listing[priceField] || listing.price_shopify }, ai);

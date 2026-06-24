@@ -13,7 +13,8 @@ grant select on public.app_data_versions to anon, authenticated;
 create or replace function public.bump_app_data_version()
 returns trigger
 language plpgsql
-security invoker
+security definer
+set search_path = public
 as $$
 begin
   insert into public.app_data_versions as v (key, ts, rev)
@@ -52,7 +53,8 @@ create or replace function public.app_data_upsert_item(
 )
 returns jsonb
 language plpgsql
-security invoker
+security definer
+set search_path = public
 as $$
 declare
   v_id text := p_item->>'id';
@@ -107,7 +109,8 @@ create or replace function public.app_data_delete_item(
 )
 returns jsonb
 language plpgsql
-security invoker
+security definer
+set search_path = public
 as $$
 declare
   v_curr jsonb;
