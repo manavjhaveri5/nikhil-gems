@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { loadK, saveK, uid, onCacheRefresh } from "./utils.js";
+import { loadK, loadKFresh, saveK, uid, onCacheRefresh } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
@@ -4771,7 +4771,28 @@ export default function ListingManagerApp({ onHome }) {
       if (keys.includes(ORDERS_KEY)) loadK(ORDERS_KEY).then(o => { if (Array.isArray(o)) setOrders(o); });
       if (keys.includes(STK_KEY))    loadK(STK_KEY).then(s => { if (Array.isArray(s)) setStock(s); });
     });
-    return () => { window.removeEventListener("ng-orders-updated", onOrdersUpdated); offRefresh(); };
+    // Reliable backstop: the onCacheRefresh above only fires when the Supabase
+    // realtime "invalidate" broadcast actually reaches this client — which is
+    // best-effort and can be missed (dropped socket, or our copy still inside the
+    // 10-min freshness TTL so nothing forces a refetch). So one user's new listings
+    // could stay invisible to another for the whole session. Force a fresh network
+    // read on tab focus and on a light interval so every screen converges quickly.
+    const refreshFromServer = async () => {
+      try {
+        const [l, o] = await Promise.all([loadKFresh(LIST_KEY), loadKFresh(ORDERS_KEY)]);
+        if (Array.isArray(l)) setListings(l);
+        if (Array.isArray(o)) setOrders(o);
+      } catch {}
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") refreshFromServer(); };
+    document.addEventListener("visibilitychange", onVisible);
+    const poll = setInterval(refreshFromServer, 30000); // every 30s
+    return () => {
+      window.removeEventListener("ng-orders-updated", onOrdersUpdated);
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(poll);
+      offRefresh();
+    };
   }, []);
 
   const BACKUP_KEY = "ng-listings-backup-v1";
