@@ -189,9 +189,11 @@ function CustomsDescsPanel() {
     showToast("Added");
   };
 
+  const sortedRows = [...rows].sort((a, b) => String(a.shape || "").localeCompare(String(b.shape || ""), undefined, { sensitivity: "base" }));
+
   const printTable = () => {
     const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-    const body = rows.map(r => `<tr><td class="sh">${esc(r.shape)}</td><td class="ds">${esc(r.desc)}</td><td class="hsn">${esc(r.hsn || "")}</td></tr>`).join("");
+    const body = sortedRows.map(r => `<tr><td class="sh">${esc(r.shape)}</td><td class="ds">${esc(r.desc)}</td><td class="hsn">${esc(r.hsn || "")}</td></tr>`).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Customs Descriptions</title><style>*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;padding:28px;color:#1a1308;background:#fff}.btn{background:#b8922a;color:#fff;border:none;padding:9px 20px;border-radius:6px;cursor:pointer;font-size:14px;margin-bottom:20px}h1{font-family:Georgia,serif;font-size:24px;margin:0 0 4px}.sub{font-size:12px;color:#888;margin-bottom:20px}table{width:100%;border-collapse:collapse}th{background:#f8f6f1;padding:8px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#888;border-bottom:2px solid #e5dcc8}td{padding:8px 12px;font-size:13px;border-bottom:1px solid #e5dcc8;vertical-align:top}.sh{font-weight:600;white-space:nowrap}.ds{font-style:italic;color:#444}.hsn{font-family:monospace;color:#777;white-space:nowrap}@media print{.btn{display:none}body{padding:0}}</style></head><body><button class="btn" onclick="window.print()">🖨 Print / Save PDF</button><h1>Customs Descriptions</h1><div class="sub">${rows.length} rows · ${new Date().toLocaleDateString()}</div><table><thead><tr><th>Shape / Category</th><th>Customs / Bill Description</th><th>HSN</th></tr></thead><tbody>${body}</tbody></table></body></html>`;
     const w = window.open("", "_blank");
     if (!w) { showToast("Allow pop-ups to print"); return; }
@@ -231,7 +233,7 @@ function CustomsDescsPanel() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map(row => editing === row.id ? (
+                {sortedRows.map(row => editing === row.id ? (
                   <tr key={row.id} style={{ background: C.amberBg }}>
                     <td style={tdSt}>
                       <input value={editBuf.shape} onChange={e => setEditBuf(b => ({ ...b, shape: e.target.value }))}
