@@ -15,7 +15,7 @@
  */
 import { getCanvaAccessToken } from "./canva-auth.js";
 
-export const config = { api: { bodyParser: { sizeLimit: "25mb" } }, maxDuration: 60 };
+export const config = { api: { bodyParser: { sizeLimit: "25mb" } }, maxDuration: 120 };
 
 const BASE = "https://api.canva.com/rest/v1";
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -25,16 +25,19 @@ const authed = (token, path, opts = {}) =>
   fetch(`${BASE}${path}`, { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) } });
 
 // Poll a Canva job endpoint until it leaves "in_progress". Returns the job object.
-async function pollJob(token, path, { tries = 25, delay = 1500 } = {}) {
+// Budget (~95s) stays under the function maxDuration (120s) with margin.
+async function pollJob(token, path, { tries = 63, delay = 1500 } = {}) {
+  let last = "in_progress";
   for (let i = 0; i < tries; i++) {
     const r = await authed(token, path);
     const data = await r.json();
     const job = data.job || data;
     const status = job?.status;
+    if (status) last = status;
     if (status && status !== "in_progress") return job;
     await sleep(delay);
   }
-  throw new Error("Canva job timed out");
+  throw new Error(`Canva job timed out (last status: ${last})`);
 }
 
 export default async function handler(req, res) {

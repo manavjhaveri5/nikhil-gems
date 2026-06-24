@@ -12,6 +12,9 @@
     "api/shopify.js": {
       "maxDuration": 90
     },
+    "api/canva.js": {
+      "maxDuration": 120
+    },
     "api/telegram.js": {
       "maxDuration": 60
     },
