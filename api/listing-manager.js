@@ -478,6 +478,32 @@ export default async function handler(req, res) {
       }
     }
 
+    /* Lightweight: map every live Etsy listing_id → its state (active|draft|...).
+       Used to reconcile local listing badges without re-importing full objects. */
+    if (action === "sync_etsy_states") {
+      try {
+        const hdrs = await etsyHeaders(false);
+        const states = {};
+        for (const state of ["active", "draft"]) {
+          let offset = 0;
+          while (true) {
+            const r = await fetch(
+              `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}`,
+              { headers: hdrs }
+            );
+            const d = await r.json();
+            const results = d.results || [];
+            results.forEach(l => { states[l.listing_id] = l.state; });
+            if (results.length < 100) break;
+            offset += 100;
+          }
+        }
+        return res.json({ ok: true, states });
+      } catch (e) {
+        return res.status(500).json({ ok: false, error: e.message });
+      }
+    }
+
     /* Import active products from a Shopify store → reconstruct listing objects */
     if (action === "import_shopify_listings") {
       const store_key = url.searchParams.get("store_key") || "earth";

@@ -4722,9 +4722,41 @@ export default function ListingManagerApp({ onHome }) {
 
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
 
+  // Reconcile local Etsy badges with Etsy's live state. The ERP only flips a
+  // listing to "active" when published through its own button; if a draft is
+  // activated (or sold/expired) on Etsy directly, the badge would stay stale.
+  // Patches only platforms.etsy.status — never touches other ERP fields.
+  // Throttled so navigating between tabs doesn't hammer the Etsy API.
+  const ETSY_STATE_SYNC_TS = "ng-etsy-state-sync-ts";
+  const reconcileEtsyStates = async (current) => {
+    if (!current.some(l => l.platforms?.etsy?.listing_id)) return;
+    try {
+      const last = +localStorage.getItem(ETSY_STATE_SYNC_TS) || 0;
+      if (Date.now() - last < 10 * 60 * 1000) return; // at most once per 10 min
+      localStorage.setItem(ETSY_STATE_SYNC_TS, String(Date.now()));
+    } catch {}
+    try {
+      const r = await fetch("/api/listing-manager?action=sync_etsy_states");
+      const d = await r.json();
+      if (!d.ok || !d.states) return;
+      let changed = false;
+      const next = current.map(l => {
+        const lid = l.platforms?.etsy?.listing_id;
+        const live = lid && d.states[lid];
+        if (!live) return l;
+        const mapped = live === "active" ? "active" : "draft";
+        if (l.platforms.etsy.status === mapped) return l;
+        changed = true;
+        return { ...l, platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped } } };
+      });
+      if (changed) { setListings(next); await saveK(LIST_KEY, next); }
+    } catch {}
+  };
+
   useEffect(() => {
     Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(([l, o, s]) => {
       setListings(l || []); setOrders(o || []); setStock(s || []); setLoaded(true);
+      reconcileEtsyStates(l || []);
     });
     const onOrdersUpdated = e => {
       if (Array.isArray(e.detail)) setOrders(e.detail);
