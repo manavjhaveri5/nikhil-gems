@@ -197,7 +197,7 @@ function CustomsDescsPanel() {
     <div>
       <Toast msg={toast} />
       <div style={{ marginBottom: 14, fontSize: 12, color: C.inkFaint }}>
-        Maps each shape/category to its customs bill description and HSN code. Auto-fills the <strong>Customs Desc</strong> column when creating invoices from stock. · {rows.length} rows
+        Maps each shape/category to its customs bill description and HSN code. Auto-fills the <strong>Customs Desc</strong> column when creating invoices from stock. Add several shapes to one description by separating them with commas (e.g. <em>Sphere, Heart, Tumbled</em>). · {rows.length} rows
       </div>
 
       {!loaded && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
@@ -218,7 +218,7 @@ function CustomsDescsPanel() {
                   <tr key={row.id} style={{ background: C.amberBg }}>
                     <td style={tdSt}>
                       <input value={editBuf.shape} onChange={e => setEditBuf(b => ({ ...b, shape: e.target.value }))}
-                        style={inSt} placeholder="Shape…" autoFocus />
+                        style={inSt} placeholder="Shape… (comma-separate for several)" autoFocus />
                     </td>
                     <td style={tdSt}>
                       <input value={editBuf.desc} onChange={e => setEditBuf(b => ({ ...b, desc: e.target.value }))}
@@ -238,7 +238,16 @@ function CustomsDescsPanel() {
                   </tr>
                 ) : (
                   <tr key={row.id} style={{ cursor: "pointer" }} onClick={() => startEdit(row)}>
-                    <td style={{ ...tdSt, fontWeight: 600, fontSize: 13, color: C.ink }}>{row.shape}</td>
+                    <td style={{ ...tdSt, fontWeight: 600, fontSize: 13, color: C.ink }}>
+                      {(() => {
+                        const parts = String(row.shape || "").split(/[,;]/).map(s => s.trim()).filter(Boolean);
+                        return parts.length > 1
+                          ? <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                              {parts.map((p, i) => <span key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 7px", fontSize: 12 }}>{p}</span>)}
+                            </span>
+                          : row.shape;
+                      })()}
+                    </td>
                     <td style={{ ...tdSt, fontSize: 12, color: C.inkMid, fontStyle: "italic" }}>{row.desc}</td>
                     <td style={{ ...tdSt, fontSize: 11, color: C.inkFaint, fontFamily: "monospace" }}>{row.hsn}</td>
                     <td style={{ ...tdSt, textAlign: "center" }}>
@@ -252,7 +261,7 @@ function CustomsDescsPanel() {
                 <tr style={{ background: C.greenBg }}>
                   <td style={tdSt}>
                     <input value={addBuf.shape} onChange={e => setAddBuf(b => ({ ...b, shape: e.target.value }))}
-                      style={inSt} placeholder="Shape…" />
+                      style={inSt} placeholder="Shape… (comma-separate for several)" />
                   </td>
                   <td style={tdSt}>
                     <input value={addBuf.desc} onChange={e => setAddBuf(b => ({ ...b, desc: e.target.value }))}

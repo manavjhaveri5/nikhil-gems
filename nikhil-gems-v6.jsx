@@ -78,6 +78,8 @@ const normalizeStockRecord=item=>{
   return out;
 };
 const stockListSignature=list=>JSON.stringify((list||[]).map(s=>({id:s.id,material:s.material,name:s.name,shape:s.shape,productType:s.productType,qty:s.qty,quantity:s.quantity,unit:s.unit,location:s.location,box:s.box,photo:s.photo,photos:s.photos,updatedAt:s.updatedAt,createdAt:s.createdAt,addedDate:s.addedDate})));
+// A Customs Descriptions row's `shape` may list several shapes/categories (comma or semicolon separated) that all share one description+HSN. Match if `target` equals any of them.
+const customsShapeMatch=(entryShape,target)=>{if(!entryShape||!target)return false;const t=String(target).trim().toLowerCase();return String(entryShape).split(/[,;]/).map(s=>s.trim().toLowerCase()).filter(Boolean).includes(t);};
 
 
 async function callClaude(messages,maxTokens=1000){
@@ -499,8 +501,8 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
     if(keys.includes("ng-customs-descs-v1"))loadK("ng-customs-descs-v1").then(cd=>{if(Array.isArray(cd)&&cd.length)setQsCustomsDescs(cd);});
     if(keys.includes(KEYS.stock))loadK(KEYS.stock).then(st=>{if(Array.isArray(st))setQsFullStock(st);});
   }),[]);
-  const qsShapeToDesc=shape=>{if(!shape)return"";const hit=qsCustomsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());return hit?hit.desc:"";};
-  const qsShapeToHsn=shape=>{if(!shape)return"71031029";const hit=qsCustomsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());return hit?hit.hsn||"71031029":"71031029";};
+  const qsShapeToDesc=shape=>{if(!shape)return"";const hit=qsCustomsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.desc:"";};
+  const qsShapeToHsn=shape=>{if(!shape)return"71031029";const hit=qsCustomsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.hsn||"71031029":"71031029";};
   const [qsFullStock,setQsFullStock]=useState([]);
   const [qsToast,setQsToast]=useState("");
   const [qsSearch,setQsSearch]=useState("");
@@ -5677,8 +5679,8 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedWix:null,postedEbay:null});
   const [formQueue,setFormQueue]=useState([]); // items queued in multi-add mode
   const [customsDescs,setCustomsDescs]=useState([]);
-  const shapeToAcctDesc=shape=>{if(!shape)return"";const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());return hit?hit.desc:"";};
-  const shapeToHsn=shape=>{if(!shape)return"71031029";const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());return hit?hit.hsn||"71031029":"71031029";};
+  const shapeToAcctDesc=shape=>{if(!shape)return"";const hit=customsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.desc:"";};
+  const shapeToHsn=shape=>{if(!shape)return"71031029";const hit=customsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.hsn||"71031029":"71031029";};
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]));},[]);
   useEffect(()=>{Promise.all([loadStockWithPhotos({fresh:true}),loadK(KEYS.glossary),loadK(KEYS.purchases),loadK(KEYS.accStock),loadK("ng-invoices-v2")]).then(([s,g,p,a,inv])=>{
@@ -8787,8 +8789,8 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
   const allShapes=useShapes();
   const docRef=useRef();
   const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
-  const shapeOptions=useMemo(()=>[...new Set((customsDescs.length?customsDescs.map(d=>d.shape):allShapes).filter(Boolean))].sort(),[allShapes,customsDescs]);
-  const findCustom=val=>customsDescs.find(d=>d.shape&&d.shape.trim().toLowerCase()===String(val||"").trim().toLowerCase());
+  const shapeOptions=useMemo(()=>[...new Set((customsDescs.length?customsDescs.flatMap(d=>String(d.shape||"").split(/[,;]/).map(s=>s.trim())):allShapes).filter(Boolean))].sort(),[allShapes,customsDescs]);
+  const findCustom=val=>customsDescs.find(d=>customsShapeMatch(d.shape,val));
   const recalc=items=>({items,totalAmount:billSubtotal(items)+billGST(items)+(+draft.shippingCharge||0)});
   const isLineFilled=it=>String(it?.purchaseDesc||it?.desc||it?.material||it?.shape||"").trim();
   const filledItems=(draft.items||[]).filter(isLineFilled);
@@ -8807,7 +8809,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
   });
   const setShape=(idx,val)=>setDraft(d=>{
     const items=[...(d.items||[])];
-    const hit=customsDescs.find(x=>x.shape&&x.shape.trim().toLowerCase()===String(val||"").trim().toLowerCase());
+    const hit=customsDescs.find(x=>customsShapeMatch(x.shape,val));
     const cur=items[idx]||{};
     const phys=(cur.physicalEntries||[]).map(e=>({...e,shape:val,productType:SHAPE_TO_PRODUCT_TYPE[val]||e.productType||""}));
     items[idx]={...cur,shape:val,...(hit?{desc:hit.desc||cur.desc,catDesc:hit.desc||cur.catDesc,hsn:hit.hsn||cur.hsn}:{})};
@@ -8816,7 +8818,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
     return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
   });
   const setAccountingDesc=(idx,val)=>setDraft(d=>{
-    const items=[...(d.items||[])];const cur=items[idx]||{};const hit=customsDescs.find(x=>x.shape&&x.shape.trim().toLowerCase()===String(val||"").trim().toLowerCase());
+    const items=[...(d.items||[])];const cur=items[idx]||{};const hit=customsDescs.find(x=>customsShapeMatch(x.shape,val));
     items[idx]={...cur,desc:hit?hit.desc||val:val,catDesc:hit?hit.desc||val:val,...(hit?{hsn:hit.hsn||cur.hsn}:{}),amt:lineTotal({...cur,desc:hit?hit.desc||val:val})};
     return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
   });
@@ -10008,12 +10010,12 @@ function InvoicesApp({onHome,startDraft}){
   // Helper: look up customs desc from shape
   const shapeToDesc=useCallback(shape=>{
     if(!shape)return"";
-    const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());
+    const hit=customsDescs.find(d=>customsShapeMatch(d.shape,shape));
     return hit?hit.desc:"";
   },[customsDescs]);
   const shapeToHsn=useCallback(shape=>{
     if(!shape)return"71031029";
-    const hit=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===shape.toLowerCase());
+    const hit=customsDescs.find(d=>customsShapeMatch(d.shape,shape));
     return hit?hit.hsn||"71031029":"71031029";
   },[customsDescs]);
   const ensureBuyerForSbDraft=async(rawDraft,loadedBuyers)=>{
@@ -10867,10 +10869,10 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   // All known accounting descriptions — read directly from the real accStock store
   const allAcctDescs=[...new Set([...accStock.map(s=>s.desc).filter(Boolean),...customsDescs.map(d=>d.desc).filter(Boolean)])].sort();
   // Shape names as quick-trigger shortcuts (e.g. type "Palmstone" → auto-fills description + HSN)
-  const shapeNames=customsDescs.map(d=>d.shape).filter(Boolean);
+  const shapeNames=customsDescs.flatMap(d=>String(d.shape||"").split(/[,;]/).map(s=>s.trim())).filter(Boolean);
   // Handler for acctDesc: if value matches a shape name, auto-fill description + HSN
   const siAcctDesc=(idx,v)=>{
-    const match=customsDescs.find(d=>d.shape&&d.shape.toLowerCase()===v.toLowerCase());
+    const match=customsDescs.find(d=>customsShapeMatch(d.shape,v));
     if(match){
       setDraft(d=>{
         const items=[...d.items];
@@ -15548,7 +15550,7 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
   // Pick a shape/category from the Customs Descriptions dataset → fill the line's
   // description with that customs bill description and its HSN code.
   const applyCustomsShape=(i,shape)=>{
-    const hit=customsDescs.find(d=>d.shape&&d.shape.trim().toLowerCase()===String(shape||"").trim().toLowerCase());
+    const hit=customsDescs.find(d=>customsShapeMatch(d.shape,shape));
     if(!hit)return false;
     setForm(f=>{const items=[...f.items];items[i]={...items[i],desc:hit.desc||shape,hsn:hit.hsn||items[i].hsn};return{...f,items};});
     return true;
