@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { loadK, loadKFresh, saveK } from "./utils.js";
+import { loadK, loadKFresh, saveK, useLiveK } from "./utils.js";
 
 /* ── theme ───────────────────────────────────────────────────────────────── */
 const C = {
@@ -49,9 +49,10 @@ const LISTINGS_KEY  = "ng-etsy-listings-v2";
 
 /* ── image cache ─────────────────────────────────────────────────────────── */
 function useImgCache() {
-  const [cache, setCache] = useState({});
+  const liveCache = useLiveK(IMG_KEY, {});
+  const [cache, setCache] = useState(liveCache || {});
   const inFlight = useRef(new Set());
-  useEffect(() => { loadK(IMG_KEY).then(d => { if(d) setCache(d); }); }, []);
+  useEffect(() => { if (liveCache && typeof liveCache === "object") setCache(liveCache); }, [liveCache]);
 
   const getImg = useCallback(async (lid) => {
     if (!lid) return null;
@@ -108,6 +109,7 @@ function Shell({ title, subtitle, onHome, actions, children }) {
    LISTINGS TAB — loads ALL listings, caches locally, searches across all
 ══════════════════════════════════════════════════════════════════════════ */
 function ListingsTab({ shopId }) {
+  const liveListings = useLiveK(LISTINGS_KEY, null);
   const [allListings, setAllListings] = useState([]);
   const [loading,     setLoading]     = useState(false);
   const [loadProg,    setLoadProg]    = useState("");
@@ -120,15 +122,12 @@ function ListingsTab({ shopId }) {
   const DISPLAY = 24;
   const API_LIMIT = 100;
 
-  // Load from cache on mount only — no auto-fetch
   useEffect(() => {
-    loadK(LISTINGS_KEY).then(d => {
-      if (d?.listings?.length) {
-        setAllListings(d.listings);
-        setLastLoaded(d.loadedAt);
-      }
-    });
-  }, [shopId]);
+    if (liveListings?.listings?.length) {
+      setAllListings(liveListings.listings);
+      setLastLoaded(liveListings.loadedAt);
+    }
+  }, [liveListings, shopId]);
 
   const loadAllListings = async () => {
     setLoading(true); setLoadErr(""); setLoadProg("Connecting…");

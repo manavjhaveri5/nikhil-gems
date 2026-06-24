@@ -12,17 +12,36 @@ let _lastFetchAt=0;
 const CACHE_TTL=10*60*1000; // 10 min — only re-hit Supabase after this long
 const LS_CACHE_KEY="ng-sb-cache-v1";
 const LS_CACHE_TS ="ng-sb-cache-ts-v1";
+const LS_VERSION_TS="ng-appdata-version-ts-v1";
 const _keyFetchedAt=new Map();
 let _batchKeys=new Set();
 let _batchResolvers=new Map();
 let _batchTimer=null;
 let _lastLocalSave=new Map();
+let _lastVersionTs="";
+try{_lastVersionTs=localStorage.getItem(LS_VERSION_TS)||"";}catch{}
 
 let _refreshCallbacks=[];
 export const onCacheRefresh=(cb)=>{_refreshCallbacks.push(cb);return()=>{_refreshCallbacks=_refreshCallbacks.filter(x=>x!==cb);};};
+const _notifyRefresh=keys=>_refreshCallbacks.forEach(cb=>{try{cb(keys);}catch(e){}});
 
 const DEPRECATED_KEYS=["ng-stock-photos-v1"];
 const _isFresh=k=>_cache.has(k)&&(Date.now()-(_keyFetchedAt.get(k)||0))<CACHE_TTL;
+const _invalidateKeys=keys=>{
+  const wanted=[...new Set((keys||[]).filter(k=>k&&!DEPRECATED_KEYS.includes(k)))];
+  if(!wanted.length)return;
+  wanted.forEach(k=>{_cache.delete(k);_keyFetchedAt.delete(k);});
+  _lastFetchAt=0;
+  _persistLS();
+  _notifyRefresh(wanted);
+};
+const _rememberVersionTs=ts=>{
+  if(!ts)return;
+  if(!_lastVersionTs||new Date(ts).getTime()>new Date(_lastVersionTs).getTime()){
+    _lastVersionTs=ts;
+    try{localStorage.setItem(LS_VERSION_TS,ts);}catch{}
+  }
+};
 const _safeForLocalCache=(value)=>{
   const scrub=v=>{
     if(typeof v==="string"&&v.startsWith("data:"))return "";
@@ -91,7 +110,7 @@ const _fetchKeys=async(keys,{silent=false}={})=>{
   _persistLS();
   // silent=true: internal fetch (e.g. pre-merge read in saveStockK) — don't notify
   // UI components, as the cache will be overwritten by the imminent write.
-  if(!silent)_refreshCallbacks.forEach(cb=>{try{cb(wanted);}catch(e){}});
+  if(!silent)_notifyRefresh(wanted);
 };
 
 const _queueKeyFetch=k=>new Promise((resolve,reject)=>{
@@ -129,32 +148,56 @@ export const warmCache=()=>{
 if(typeof document!=="undefined"&&!DEMO_MODE){
   document.addEventListener("visibilitychange",()=>{
     if(document.visibilityState!=="visible")return;
+    _catchUpVersions().catch(()=>{});
     if((Date.now()-_lastFetchAt)<CACHE_TTL)return;
     _lastFetchAt=Date.now();
     const keys=[..._cache.keys()].filter(k=>!DEPRECATED_KEYS.includes(k));
     if(!keys.length)return;
     keys.forEach(k=>_keyFetchedAt.delete(k)); // force next loadK/loadKFresh to hit the network
-    _refreshCallbacks.forEach(cb=>{try{cb(keys);}catch(e){}});
+    _notifyRefresh(keys);
   });
+  window.addEventListener("online",()=>_catchUpVersions().catch(()=>{}));
 }
 
-// Lightweight cross-tab/session invalidation. We deliberately avoid Postgres
-// change payloads here because large JSON rows (stock, images, activity) would
-// be sent over realtime after every save.
+const _catchUpVersions=async()=>{
+  if(DEMO_MODE)return;
+  let q=supabase.from("app_data_versions").select("key,ts,rev").order("ts",{ascending:true});
+  if(_lastVersionTs)q=q.gt("ts",_lastVersionTs);
+  const{data,error}=await q;
+  if(error)return; // migration may not be applied yet; broadcast fallback still works
+  const rows=(data||[]).filter(r=>r?.key&&!DEPRECATED_KEYS.includes(r.key));
+  if(!rows.length)return;
+  rows.forEach(r=>_rememberVersionTs(r.ts));
+  _invalidateKeys(rows.map(r=>r.key));
+};
+
+// Authoritative, low-payload invalidation. The database trigger writes one tiny
+// row per changed key into app_data_versions, so clients never receive the large
+// JSON app_data payload over realtime. Broadcast remains as a fast fallback until
+// every environment has the migration applied.
 if(!DEMO_MODE){
+  const _versionChannel=supabase.channel("ng-appdata-versions");
+  _versionChannel
+    .on("postgres_changes",{event:"*",schema:"public",table:"app_data_versions"},payload=>{
+      const row=payload?.new||payload?.record||{};
+      const k=row.key;
+      if(!k||DEPRECATED_KEYS.includes(k))return;
+      _rememberVersionTs(row.ts);
+      _invalidateKeys([k]);
+    })
+    .subscribe(status=>{
+      if(status==="SUBSCRIBED")_catchUpVersions().catch(()=>{});
+    });
   const _dataChannel=supabase.channel("ng-appdata-invalidate");
   _dataChannel
     .on("broadcast",{event:"invalidate"},({payload})=>{
       const k=payload?.key;
       if(!k||DEPRECATED_KEYS.includes(k))return;
       if(_lastLocalSave.get(k)===payload.ts)return;
-      _cache.delete(k);
-      _keyFetchedAt.delete(k);
-      _lastFetchAt=0;
-      _persistLS();
-      _refreshCallbacks.forEach(cb=>{try{cb([k]);}catch(e){}});
+      _invalidateKeys([k]);
     })
     .subscribe();
+  globalThis.__ngVersionChannel=_versionChannel;
   globalThis.__ngDataChannel=_dataChannel;
 }
 
@@ -164,6 +207,20 @@ export const readCache=k=>{
   if(DEMO_MODE)return null;
   return _cache.has(k)?(_cache.get(k)??[]):null;
 };
+
+export function useLiveK(key,fallback=[]){
+  const [value,setValue]=useState(()=>readCache(key)??fallback);
+  useEffect(()=>{
+    let cancelled=false;
+    loadK(key).then(v=>{if(!cancelled)setValue(v??fallback);}).catch(()=>{});
+    return()=>{cancelled=true;};
+  },[key]);
+  useEffect(()=>onCacheRefresh(keys=>{
+    if(!keys.includes(key))return;
+    loadK(key).then(v=>setValue(v??fallback)).catch(()=>{});
+  }),[key]);
+  return value;
+}
 
 export const loadK=async k=>{
   if(DEMO_MODE){
@@ -239,6 +296,78 @@ export const saveK=async(k,d)=>{
   const ts=Date.now();
   _lastLocalSave.set(k,ts);
   globalThis.__ngDataChannel?.send({type:"broadcast",event:"invalidate",payload:{key:k,ts}}).catch(()=>{});
+};
+
+const _arrayValue=v=>Array.isArray(v)?v:[];
+const _upsertLocalItem=(arr,item,{prepend=true}={})=>{
+  const list=_arrayValue(arr);
+  const id=item?.id;
+  if(!id)return list;
+  if(list.some(x=>x?.id===id))return list.map(x=>x?.id===id?item:x);
+  return prepend?[item,...list]:[...list,item];
+};
+const _deleteLocalItem=(arr,id)=>_arrayValue(arr).filter(x=>x?.id!==id);
+const _setCachedValue=(k,value)=>{
+  _cache.set(k,_safeForLocalCache(value));
+  _keyFetchedAt.set(k,Date.now());
+  _persistLS();
+  _notifyRefresh([k]);
+};
+
+export const upsertItemK=async(k,item,{prepend=true}={})=>{
+  if(DEMO_MODE)return [];
+  if(!item?.id)throw new Error("upsertItemK requires item.id");
+  const curr=_cache.has(k)?_cache.get(k):(await loadK(k).catch(()=>[]));
+  const optimistic=_upsertLocalItem(curr,item,{prepend});
+  _setCachedValue(k,optimistic);
+
+  if(!navigator.onLine){
+    _enqueueWrite(k,optimistic);
+    return optimistic;
+  }
+
+  const{data,error}=await supabase.rpc("app_data_upsert_item",{p_key:k,p_item:item,p_prepend:prepend});
+  if(error){
+    // Migration not applied yet: keep the app functional and still avoid stale
+    // whole-array clobber by merging onto a fresh server copy before saveK.
+    if(/app_data_upsert_item|schema cache|function/i.test(error.message||"")){
+      const fresh=await loadKFresh(k).catch(()=>optimistic);
+      const merged=_upsertLocalItem(fresh,item,{prepend});
+      await saveK(k,merged);
+      return merged;
+    }
+    throw new Error(error.message);
+  }
+  const next=Array.isArray(data)?data:optimistic;
+  _setCachedValue(k,next);
+  return next;
+};
+
+export const deleteItemK=async(k,id)=>{
+  if(DEMO_MODE)return [];
+  if(!id)throw new Error("deleteItemK requires id");
+  const curr=_cache.has(k)?_cache.get(k):(await loadK(k).catch(()=>[]));
+  const optimistic=_deleteLocalItem(curr,id);
+  _setCachedValue(k,optimistic);
+
+  if(!navigator.onLine){
+    _enqueueWrite(k,optimistic);
+    return optimistic;
+  }
+
+  const{data,error}=await supabase.rpc("app_data_delete_item",{p_key:k,p_id:id});
+  if(error){
+    if(/app_data_delete_item|schema cache|function/i.test(error.message||"")){
+      const fresh=await loadKFresh(k).catch(()=>optimistic);
+      const merged=_deleteLocalItem(fresh,id);
+      await saveK(k,merged);
+      return merged;
+    }
+    throw new Error(error.message);
+  }
+  const next=Array.isArray(data)?data:optimistic;
+  _setCachedValue(k,next);
+  return next;
 };
 
 export const uid=()=>Math.random().toString(36).substr(2,9);

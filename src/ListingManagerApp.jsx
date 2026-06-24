@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { loadK, loadKFresh, saveK, uid, onCacheRefresh } from "./utils.js";
+import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, deleteItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
@@ -1731,7 +1731,8 @@ function OrdersView({ orders, listings = [] }) {
         carrier_name: carrierName,
         etsy_completed_at: now,
       } : x);
-      await saveK(ORDERS_KEY, next);
+      const changedOrders = next.filter(x => sameReceipt(x));
+      for (const order of changedOrders) await upsertItemK(ORDERS_KEY, order, { prepend: false });
       window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
       updateTrackingDraft(o, { loading: false, error: "", success: "Completed on Etsy", tracking_code: trackingCode, carrier_name: carrierName });
     } catch (e) {
@@ -1956,6 +1957,7 @@ function OrdersView({ orders, listings = [] }) {
     const current = await loadK(ORDERS_KEY);
     let changed = false;
     const baseOrders = current || orders || [];
+    const changedRows = [];
     const nextExisting = baseOrders.map(order => {
       if (order.platform !== "etsy") return order;
       const receiptId = String(order.etsy_receipt_id || order.platform_order_id || String(order.order_number || "").replace(/^ETSY-/, "").split("-")[0]);
@@ -1974,7 +1976,10 @@ function OrdersView({ orders, listings = [] }) {
           merged[k] = v;
         }
       });
-      if (JSON.stringify(merged) !== JSON.stringify(order)) changed = true;
+      if (JSON.stringify(merged) !== JSON.stringify(order)) {
+        changed = true;
+        changedRows.push(merged);
+      }
       return merged;
     });
     const existingIds = new Set(nextExisting.map(o => o.id));
@@ -1983,7 +1988,7 @@ function OrdersView({ orders, listings = [] }) {
     const next = [...additions, ...nextExisting]
       .sort((a, b) => new Date(b.created_at || b.date || 0) - new Date(a.created_at || a.date || 0));
     if (changed) {
-      await saveK(ORDERS_KEY, next);
+      for (const order of [...additions, ...changedRows]) await upsertItemK(ORDERS_KEY, order, { prepend: true });
       window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
     }
     return changed;
@@ -2529,7 +2534,7 @@ function EtsyLiveView() {
     if (!normalized.length) return;
     const importedIds = new Set(normalized.map(o => o.id));
     const next = [...normalized, ...(erpOrders || []).filter(o => !importedIds.has(o.id))];
-    await saveK(ORDERS_KEY, next);
+    for (const order of normalized) await upsertItemK(ORDERS_KEY, order, { prepend: true });
     window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
   };
 
@@ -4768,21 +4773,22 @@ export default function ListingManagerApp({ onHome }) {
       const d = await r.json();
       if (!d.ok || !d.states) return;
       const states = d.states;
-      // Patch statuses on top of the FRESH server list (via commitListings) — never
-      // write a stale array. Return the same ref when nothing changed so no write fires.
-      await commitListings(base => {
-        let changed = false;
-        const next = base.map(l => {
-          const lid = l.platforms?.etsy?.listing_id;
-          const live = lid && states[lid];
-          if (!live) return l;
-          const mapped = live === "active" ? "active" : "draft";
-          if (l.platforms.etsy.status === mapped) return l;
-          changed = true;
-          return { ...l, platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped } } };
-        });
-        return changed ? next : base;
+      const fresh = await loadKFresh(LIST_KEY).catch(() => null);
+      const base = Array.isArray(fresh) ? fresh : current;
+      const changedRows = [];
+      const next = base.map(l => {
+        const lid = l.platforms?.etsy?.listing_id;
+        const live = lid && states[lid];
+        if (!live) return l;
+        const mapped = live === "active" ? "active" : "draft";
+        if (l.platforms.etsy.status === mapped) return l;
+        const updated = { ...l, platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped } } };
+        changedRows.push(updated);
+        return updated;
       });
+      if (!changedRows.length) return;
+      setListings(next);
+      for (const listing of changedRows) await upsertItemK(LIST_KEY, listing, { prepend: false });
     } catch {}
   };
 
@@ -4835,25 +4841,33 @@ export default function ListingManagerApp({ onHome }) {
 
   const BACKUP_KEY = "ng-listings-backup-v1";
 
-  const persistOrders   = async next => { setOrders(next);   await saveK(ORDERS_KEY, next); };
+  const saveListingItem = async (listing, opts = {}) => {
+    const next = await upsertItemK(LIST_KEY, listing, opts);
+    if (Array.isArray(next)) setListings(next);
+    return next;
+  };
 
-  // Safe listings write: re-read the LATEST server copy and apply `mutate` on top of
-  // it, instead of overwriting with this browser's (possibly stale) in-memory array.
-  // This is what stops cross-user clobber — a save can no longer drop listings another
-  // user added/changed that aren't in our local copy. `mutate(base)` returns the new
-  // full array. Used by every listings write path.
-  const commitListings = async (mutate) => {
+  const removeListingItem = async id => {
+    const next = await deleteItemK(LIST_KEY, id);
+    if (Array.isArray(next)) setListings(next);
+    return next;
+  };
+
+  const latestListing = async listing => {
     const fresh = await loadKFresh(LIST_KEY).catch(() => null);
-    const base  = Array.isArray(fresh) ? fresh : listings;
-    const next  = mutate(base);
-    if (next === base) { setListings(base); return base; } // no-op: refresh view, skip write
-    // Guard against accidental mass loss (e.g. a bug handing us a tiny array).
-    if (base.length > 2 && next.length < base.length - 2) {
-      throw new Error(`Safety check: refusing to drop ${base.length - next.length} listings. Reload and retry.`);
-    }
-    if (base.length > 0) saveK(BACKUP_KEY, base).catch(() => {});
-    setListings(next);
-    await saveK(LIST_KEY, next);
+    return (Array.isArray(fresh) ? fresh.find(l => l.id === listing.id) : null) || listing;
+  };
+
+  const patchListingItem = async (listing, patch) => {
+    const base = await latestListing(listing);
+    const updated = patch(base);
+    await saveListingItem(updated, { prepend: false });
+    return updated;
+  };
+
+  const saveOrderItem = async (order, opts = {}) => {
+    const next = await upsertItemK(ORDERS_KEY, order, opts);
+    if (Array.isArray(next)) setOrders(next);
     return next;
   };
 
@@ -4871,10 +4885,7 @@ export default function ListingManagerApp({ onHome }) {
     }
     const exists = listings.find(l => l.id === listing.id);
     try {
-      await commitListings(base =>
-        base.some(l => l.id === savedListing.id)
-          ? base.map(l => l.id === savedListing.id ? savedListing : l)
-          : [savedListing, ...base]);
+      await saveListingItem(savedListing, { prepend: !exists });
     } catch (e) {
       showToast(`⚠️ ${e.message}`, 8000);
       return;
@@ -4914,7 +4925,7 @@ export default function ListingManagerApp({ onHome }) {
   /* delete */
   const handleDelete = async id => {
     if (!confirm("Delete this listing from your catalog? Won't remove from platforms.")) return;
-    await commitListings(base => base.filter(l => l.id !== id));
+    await removeListingItem(id);
     showToast("Deleted");
   };
 
@@ -4969,15 +4980,11 @@ export default function ListingManagerApp({ onHome }) {
       result = d.result;
     }
 
-    const updated = {
-      ...listing,
-      platforms: { ...listing.platforms, [pkey]: { ...listing.platforms?.[pkey], status: "active", ...result } },
+    await patchListingItem(listing, current => ({
+      ...current,
+      platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], status: "active", ...result } },
       updated_at: now(),
-    };
-    await commitListings(base =>
-      base.some(l => l.id === listing.id)
-        ? base.map(l => l.id === listing.id ? updated : l)
-        : [updated, ...base]);
+    }));
     return result;
   };
 
@@ -4993,8 +5000,7 @@ export default function ListingManagerApp({ onHome }) {
       const r = await fetch(`/api/ebay?action=end_item&item_id=${itemId}`, { method: "POST" });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "eBay delete failed");
-      const updated = { ...listing, platforms: { ...listing.platforms, ebay: { status: "deleted" } }, updated_at: now() };
-      await commitListings(base => base.map(l => l.id === listing.id ? updated : l));
+      await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, ebay: { status: "deleted" } }, updated_at: now() }));
       return;
     }
     else throw new Error("Not supported");
@@ -5006,8 +5012,7 @@ export default function ListingManagerApp({ onHome }) {
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || "Failed");
 
-    const updated = { ...listing, platforms: { ...listing.platforms, [pkey]: { status: "deleted" } }, updated_at: now() };
-    await commitListings(base => base.map(l => l.id === listing.id ? updated : l));
+    await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { status: "deleted" } }, updated_at: now() }));
   };
 
   /* mark sold */
@@ -5035,7 +5040,7 @@ export default function ListingManagerApp({ onHome }) {
       notes:             saleForm.notes,
       created_at:        now(),
     };
-    await persistOrders([order, ...orders]);
+    await saveOrderItem(order, { prepend: true });
 
     // For unique items: remove from ALL live platforms in one state update
     if (listing.type === "unique") {
@@ -5055,13 +5060,14 @@ export default function ListingManagerApp({ onHome }) {
         if (!d.ok) console.warn(`Auto-unpublish failed for ${p.key}:`, d.error);
       }));
 
-      // Mark all live platforms as deleted in one shot
-      const updatedPlatforms = { ...listing.platforms };
-      for (const p of livePlatforms) {
-        updatedPlatforms[p.key] = { ...updatedPlatforms[p.key], status: "deleted" };
-      }
-      const updated = { ...listing, platforms: updatedPlatforms, updated_at: now() };
-      await commitListings(base => base.map(l => l.id === listing.id ? updated : l));
+      // Mark all live platforms as deleted in one shot, merged onto the latest row.
+      await patchListingItem(listing, current => {
+        const updatedPlatforms = { ...current.platforms };
+        for (const p of livePlatforms) {
+          updatedPlatforms[p.key] = { ...updatedPlatforms[p.key], status: "deleted" };
+        }
+        return { ...current, platforms: updatedPlatforms, updated_at: now() };
+      });
     }
 
     setSoldModal(null);

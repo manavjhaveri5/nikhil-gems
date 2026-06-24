@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { loadK, loadKFresh, saveK, mob } from "./utils.js";
+import { loadK, loadKFresh, saveK, mob, onCacheRefresh } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
 
@@ -553,6 +553,17 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
       refreshUnsynced();
     })();
   },[company]);
+
+  useEffect(()=>onCacheRefresh(keys=>{
+    const metaKey = scopedKey(META_KEY);
+    const docUrlKey = scopedKey(DOCURL_KEY);
+    if (keys.includes(metaKey)) {
+      metaStore.loadFresh().then(d => { dataRef.current=d; setData({...d}); }).catch(()=>{});
+    }
+    if (keys.includes(docUrlKey)) {
+      loadDocUrls().then(()=>refreshUnsynced()).catch(()=>{});
+    }
+  }),[company, refreshUnsynced]);
 
   const persist = useCallback(async upd => {
     const base=normalizeMeta(dataRef.current);
@@ -2536,6 +2547,15 @@ function AIInsightsView({ data, fircUsed }) {
       if (s.concerns && s.concerns.length>0) setInsights({summary:s.summary||"",concerns:s.concerns});
     })();
   },[]);
+
+  useEffect(()=>onCacheRefresh(keys=>{
+    if (!keys.includes(scopedKey(INSIGHTS_KEY))) return;
+    insightsStore.load().then(s=>{
+      if (s.reviewed) setReviewed(s.reviewed);
+      if (s.lastRun)  setLastRun(s.lastRun);
+      if (s.concerns && s.concerns.length>0) setInsights({summary:s.summary||"",concerns:s.concerns});
+    }).catch(()=>{});
+  }),[]);
 
   async function persistReviewed(newReviewed) {
     setReviewed(newReviewed);
