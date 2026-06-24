@@ -22,8 +22,13 @@ const REDIRECT_URI  = process.env.CANVA_REDIRECT_URI  || "";
 const SUPABASE_URL  = process.env.VITE_SUPABASE_URL   || "";
 const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
 
-// Be explicit — Canva does not imply :read from :write.
-const SCOPES = "asset:read asset:write design:content:read design:content:write design:meta:read";
+// Minimum scopes the Background Remover flow actually uses:
+//   asset:write          → POST /asset-uploads (upload the photo)
+//   design:content:write → POST /designs       (create the design)
+//   design:content:read  → POST /exports       (export the result)
+// Requesting more than the Canva integration is granted causes invalid_scope,
+// so keep this to exactly what's needed and enabled in the Canva Dev Portal.
+const SCOPES = "asset:write design:content:write design:content:read";
 const AUTH_URL    = "https://www.canva.com/api/oauth/authorize";
 const TOKEN_URL   = "https://api.canva.com/rest/v1/oauth/token";
 const SESSION_KEY = "ng-canva-session-v1";
