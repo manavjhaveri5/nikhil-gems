@@ -16296,19 +16296,26 @@ export default function Root({onSignOut}){
     return()=>{clearInterval(id);document.removeEventListener("visibilitychange",onVisible);};
   },[]);
   useEffect(()=>{
-    supabase.auth.getUser().then(({data:{user}})=>{
-      const email=user?.email||null;
+    let settled=false;
+    const finish=async email=>{
+      if(settled)return; settled=true;
       setCurrentEmail(email);
-      loadK("ng-users-v1").then(users=>{
-        const arr=Array.isArray(users)?users:[];
-        setAllUsers(arr);
-        const profile=arr.find(u=>u.email?.toLowerCase()===email?.toLowerCase());
-        const savedLang=localStorage.getItem("ng-user-lang");
-        if(profile?.language==="mr")setActiveLang(savedLang==="en"||savedLang==="mr"?savedLang:"mr");
-        else{localStorage.setItem("ng-user-lang","en");setActiveLang("en");}
-        setUserProfile(profile||false);
-      });
-    });
+      let arr=[];
+      try{const users=await loadK("ng-users-v1");arr=Array.isArray(users)?users:[];}catch{}
+      setAllUsers(arr);
+      const profile=arr.find(u=>u.email?.toLowerCase()===email?.toLowerCase());
+      const savedLang=localStorage.getItem("ng-user-lang");
+      if(profile?.language==="mr")setActiveLang(savedLang==="en"||savedLang==="mr"?savedLang:"mr");
+      else{localStorage.setItem("ng-user-lang","en");setActiveLang("en");}
+      setUserProfile(profile||false);
+    };
+    // Identity from the local session first (no network → can't hang).
+    supabase.auth.getSession().then(({data:{session}})=>{if(session?.user)finish(session.user.email||null);}).catch(()=>{});
+    // Best-effort network refresh, but never let it block the app shell.
+    supabase.auth.getUser().then(({data:{user}})=>{if(user)finish(user.email||null);}).catch(()=>finish(null));
+    // Safety net: never sit on "Loading…" forever.
+    const t=setTimeout(()=>finish(null),6000);
+    return()=>clearTimeout(t);
   },[]);
   useEffect(()=>{
     if(!currentEmail||userProfile===undefined||userProfile===false)return;
