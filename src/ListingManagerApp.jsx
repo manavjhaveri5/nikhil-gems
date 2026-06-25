@@ -29,7 +29,6 @@ const STK_KEY    = "ng-stock-v5";
 const IMG_KEY    = "ng-image-library-v1";
 const AT_INVOICES_KEY = "at-invoices-v1";
 const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
-const SHIPGLOBAL_PORTAL_URL = "https://v2.app.shipglobal.in/auth/login";
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
 
 const toIsoDate = value => {
@@ -1763,8 +1762,6 @@ function OrdersView({ orders, listings = [] }) {
   const [search,   setSearch]   = useState("");
   const [expanded, setExpanded] = useState(null);
   const [copied, setCopied] = useState("");
-  const [shipGlobalState, setShipGlobalState] = useState({});
-  const [shipGlobalConfig, setShipGlobalConfig] = useState(null);
   const [etsyTracking, setEtsyTracking] = useState({});
   const [invoiceState, setInvoiceState] = useState({});
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
@@ -1896,77 +1893,6 @@ function OrdersView({ orders, listings = [] }) {
       setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: "", success: `${updated ? "Updated" : "Created"} ${invoice.invNo}` } }));
     } catch (e) {
       setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: e.message || "Could not create invoice", success: "" } }));
-    }
-  };
-  const shipGlobalDraft = o => {
-    const parts = String(o.ship_name || o.buyer_name || "").trim().split(/\s+/).filter(Boolean);
-    const first = parts[0] || "";
-    const last = parts.slice(1).join(" ") || "-";
-    return {
-      invoice_no: o.order_number || o.platform_order_id || "",
-      invoice_date: orderDate(o),
-      order_reference: o.platform_order_id || o.order_number || "",
-      service: "DHLECS-CLASSIC",
-      package_weight: 0,
-      package_length: 0,
-      package_breadth: 0,
-      package_height: 0,
-      currency_code: o.currency || "USD",
-      csb5_status: 1,
-      seller_nickname: "",
-      seller_firstname: "",
-      seller_lastname: "",
-      seller_mobile: "",
-      seller_email: "",
-      seller_company: "",
-      seller_address: "",
-      seller_address_2: "",
-      seller_city: "",
-      seller_postcode: "",
-      seller_country_code: "IN",
-      seller_state: "",
-      customer_shipping_firstname: first,
-      customer_shipping_lastname: last,
-      customer_shipping_mobile: o.ship_phone || "",
-      customer_shipping_email: o.buyer_email || "",
-      customer_shipping_company: "",
-      customer_shipping_address: o.ship_address1 || "",
-      customer_shipping_address_2: o.ship_address2 || "",
-      customer_shipping_city: o.ship_city || "",
-      customer_shipping_postcode: o.ship_postcode || "",
-      customer_shipping_country_code: o.ship_country || o.buyer_country || "",
-      customer_shipping_state: o.ship_state || "",
-      vendor_order_items: [{
-        vendor_order_item_name: o.listing_title || "",
-        vendor_order_item_sku: o.listing_sku || o.etsy_transaction_id || o.order_number || "",
-        vendor_order_item_quantity: 1,
-        vendor_order_item_unit_price: +o.sale_price || 0,
-        vendor_order_item_hsn: "",
-        vendor_order_item_tax_rate: 0,
-      }],
-      tracking: "",
-      retry: false,
-    };
-  };
-  const createShipGlobalLabel = async o => {
-    setShipGlobalState(s => ({ ...s, [o.id]: { loading: true, error: "", label: null } }));
-    try {
-      const r = await fetch("/api/shipglobal?action=create_label", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order: shipGlobalDraft(o) }),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || d.success === false) throw new Error(d.error || d.message || "ShipGlobal label failed");
-      const pdf = d.data?.pdf_base64 || d.pdf_base64;
-      if (pdf) {
-        const bytes = Uint8Array.from(atob(pdf), c => c.charCodeAt(0));
-        const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-        window.open(url, "_blank", "noopener,noreferrer");
-      }
-      setShipGlobalState(s => ({ ...s, [o.id]: { loading: false, error: "", label: d.data || d } }));
-    } catch (e) {
-      setShipGlobalState(s => ({ ...s, [o.id]: { loading: false, error: e.message || "ShipGlobal label failed", label: null } }));
     }
   };
   const findOrderImage = o => {
@@ -2152,13 +2078,6 @@ function OrdersView({ orders, listings = [] }) {
     }
     return changed;
   };
-
-  useEffect(() => {
-    fetch("/api/shipglobal?action=status")
-      .then(r => r.ok ? r.json() : null)
-      .then(d => setShipGlobalConfig(d))
-      .catch(() => setShipGlobalConfig(null));
-  }, []);
 
   useEffect(() => {
     const hasEtsyOrders = (orders || []).some(o => o.platform === "etsy");
@@ -2370,48 +2289,6 @@ function OrdersView({ orders, listings = [] }) {
                           {order.ship_phone && <div>{order.ship_phone}</div>}
                         </div>
                       </div>
-                    </div>
-                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                        <div>
-                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint, marginBottom: 3 }}>ShipGlobal</div>
-                          <div style={{ fontSize: 12, color: C.inkMid }}>
-                            {shipGlobalConfig?.configured ? "Create a label from this order, or open your ShipGlobal dashboard." : "Open ShipGlobal to connect/login. One-click labels here need ShipGlobal API credentials saved in Vercel."}
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <a href={SHIPGLOBAL_PORTAL_URL} target="_blank" rel="noreferrer"
-                            style={{ textDecoration: "none", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, color: C.ink }}>
-                            Open Portal
-                          </a>
-                          <button onClick={() => {
-                              if (!shipGlobalConfig?.configured) {
-                                window.open(SHIPGLOBAL_PORTAL_URL, "_blank", "noopener,noreferrer");
-                                return;
-                              }
-                              createShipGlobalLabel(order);
-                            }}
-                            disabled={!!shipGlobalState[order.id]?.loading}
-                            style={{ background: shipGlobalConfig?.configured ? C.ink : C.gold, border: "none", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, color: "#fff", cursor: shipGlobalState[order.id]?.loading ? "wait" : "pointer", opacity: shipGlobalState[order.id]?.loading ? .7 : 1 }}>
-                            {shipGlobalState[order.id]?.loading ? "Creating..." : shipGlobalConfig?.configured ? "Create Label" : "Connect / Login"}
-                          </button>
-                        </div>
-                      </div>
-                      {shipGlobalConfig?.configured && (!shipGlobalConfig?.hasPackageDefaults || !shipGlobalConfig?.hasSellerDefaults) && (
-                        <div style={{ marginTop: 8, fontSize: 12, color: C.amber, background: C.amberBg, border: `1px solid ${C.amber}30`, borderRadius: 8, padding: "7px 9px" }}>
-                          Add ShipGlobal seller and package defaults in Vercel env before creating labels.
-                        </div>
-                      )}
-                      {shipGlobalState[order.id]?.error && (
-                        <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
-                          {shipGlobalState[order.id].error}
-                        </div>
-                      )}
-                      {shipGlobalState[order.id]?.label && (
-                        <div style={{ marginTop: 8, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 8, padding: "7px 9px" }}>
-                          Label ready: {shipGlobalState[order.id].label.waybill_number || shipGlobalState[order.id].label.order_number || "created"}
-                        </div>
-                      )}
                     </div>
                     {isEtsyOrder(order) && (
                       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
