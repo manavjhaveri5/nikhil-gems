@@ -204,6 +204,21 @@ const getEtsyToken = async () => {
   } catch { return null; }
 };
 
+const clearLocalEtsySession = () => {
+  try {
+    localStorage.removeItem("etsy-session");
+    localStorage.removeItem("etsy-refresh");
+  } catch {}
+};
+
+const reconnectEtsy = async () => {
+  clearLocalEtsySession();
+  await fetch("/api/etsy-auth?action=invalidate").catch(() => {});
+  window.open("/api/etsy-auth?action=start", "_blank");
+};
+
+const needsEtsyReconnect = msg => /reconnect|permission|transactions_w|scope|forbidden|re-?authori/i.test(String(msg || ""));
+
 /* ─── platform config ────────────────────────────────────────────────────── */
 const PLATFORMS = [
   { key:"etsy",          label:"Etsy",         icon:"🏷️", color:"#F56400", priceField:"price_etsy",         currency:"INR" },
@@ -1819,12 +1834,21 @@ function OrdersView({ orders, listings = [] }) {
     updateTrackingDraft(o, { loading: true, error: "", success: "" });
     try {
       const tok = await getEtsyToken(); // fresh token (refresh + Supabase fallback), not the stale localStorage one
-      const r = await fetch("/api/etsy?action=add_tracking", {
+      let r = await fetch("/api/etsy?action=add_tracking", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(tok ? { "X-Etsy-Token": tok } : {}) },
         body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName }),
       });
-      const d = await r.json().catch(() => ({}));
+      let d = await r.json().catch(() => ({}));
+      if (!r.ok && tok && needsEtsyReconnect(d.fix || d.error)) {
+        clearLocalEtsySession();
+        r = await fetch("/api/etsy?action=add_tracking", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName }),
+        });
+        d = await r.json().catch(() => ({}));
+      }
       if (!r.ok || d.ok === false) throw new Error(d.fix || d.error || "Could not complete Etsy order");
       const now = new Date().toISOString();
       const current = await loadK(ORDERS_KEY);
@@ -2328,8 +2352,8 @@ function OrdersView({ orders, listings = [] }) {
                             {trackingDraft(order).error && (
                               <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                                 <span style={{ flex: 1, minWidth: 180 }}>{trackingDraft(order).error}</span>
-                                {/reconnect|permission|transactions_w|scope|re-?authori/i.test(String(trackingDraft(order).error)) && (
-                                  <button onClick={async () => { await fetch("/api/etsy-auth?action=invalidate").catch(() => {}); window.open("/api/etsy-auth?action=start", "_blank"); }}
+                                {needsEtsyReconnect(trackingDraft(order).error) && (
+                                  <button onClick={reconnectEtsy}
                                     style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 850, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
                                     🔑 Reconnect Etsy
                                   </button>
@@ -2772,7 +2796,12 @@ function EtsyLiveView() {
   const etsyPost = async (url, body) => {
     const tok = await getToken();
     const hdr = { "Content-Type": "application/json", ...(tok ? { "X-Etsy-Token": tok } : {}) };
-    return fetch(url, { method: "POST", headers: hdr, body: JSON.stringify(body) });
+    const first = await fetch(url, { method: "POST", headers: hdr, body: JSON.stringify(body) });
+    if (first.ok || !tok) return first;
+    const d = await first.clone().json().catch(() => ({}));
+    if (!needsEtsyReconnect(d.fix || d.error)) return first;
+    clearLocalEtsySession();
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   };
 
   const fulfillDraft = o => etsyFulfill[o.receipt_id] || {
@@ -2988,10 +3017,7 @@ function EtsyLiveView() {
           ))}
         </div>
         <div style={{display:"flex",gap:8,flexShrink:0,alignItems:"center"}}>
-          <button onClick={async () => {
-            await fetch("/api/etsy-auth?action=invalidate").catch(() => {});
-            window.open("/api/etsy-auth?action=start", "_blank");
-          }} style={{background:"none",border:"1px solid #F5640060",color:"#F56400",
+          <button onClick={reconnectEtsy} style={{background:"none",border:"1px solid #F5640060",color:"#F56400",
             borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}
             title="Re-authenticate with Etsy (needed after scope changes)">
             🔑 Reconnect Etsy
@@ -3015,10 +3041,7 @@ function EtsyLiveView() {
         <div style={{background:C.amberBg,border:`1.5px solid ${C.amber}`,borderRadius:10,padding:"12px 18px",
           marginBottom:16,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
           <div style={{flex:1,fontSize:13,color:C.amber,fontWeight:600}}>🔑 Etsy OAuth not connected — orders unavailable</div>
-          <button onClick={async () => {
-            await fetch("/api/etsy-auth?action=invalidate").catch(() => {});
-            window.open("/api/etsy-auth?action=start", "_blank");
-          }} style={{background:"#F56400",color:"#fff",borderRadius:7,padding:"7px 16px",fontSize:12,fontWeight:700,border:"none",cursor:"pointer"}}>
+          <button onClick={reconnectEtsy} style={{background:"#F56400",color:"#fff",borderRadius:7,padding:"7px 16px",fontSize:12,fontWeight:700,border:"none",cursor:"pointer"}}>
             Connect Etsy Shop →
           </button>
         </div>
@@ -3171,10 +3194,7 @@ function EtsyLiveView() {
                 <div style={{flex:1,fontSize:12,color:C.amber,fontWeight:600}}>
                   {listingErr.includes("invalid_token") ? "⏱ Token expired" : `⚠ ${listingErr}`}
                 </div>
-                <button onClick={async () => {
-                  await fetch("/api/etsy-auth?action=invalidate").catch(() => {});
-                  window.open("/api/etsy-auth?action=start", "_blank");
-                }} style={{background:"#F56400",color:"#fff",borderRadius:7,padding:"6px 14px",
+                <button onClick={reconnectEtsy} style={{background:"#F56400",color:"#fff",borderRadius:7,padding:"6px 14px",
                   fontSize:11,fontWeight:700,border:"none",cursor:"pointer"}}>
                   Reconnect Etsy →
                 </button>
@@ -3287,9 +3307,9 @@ function EtsyLiveView() {
           ? <div style={{textAlign:"center",padding:"60px 0",color:C.inkFaint}}>
               <div style={{fontSize:36,marginBottom:10}}>🔑</div>
               <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Connect Etsy to view orders</div>
-              <a href="/api/etsy-auth?action=start" target="_blank" rel="noreferrer"
+              <button onClick={reconnectEtsy}
                 style={{background:"#F56400",color:"#fff",borderRadius:8,padding:"10px 24px",
-                  fontSize:13,fontWeight:700,textDecoration:"none"}}>Connect Etsy Shop →</a>
+                  fontSize:13,fontWeight:700,border:"none",cursor:"pointer"}}>Connect Etsy Shop →</button>
             </div>
           : <div>
               {/* filter pills */}
@@ -3442,8 +3462,8 @@ function EtsyLiveView() {
                               {liveDraft.error && (
                                 <div style={{marginTop:8,fontSize:12,color:C.red,background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:8,padding:"7px 9px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                                   <span style={{flex:1,minWidth:180}}>{liveDraft.error}</span>
-                                  {/reconnect|permission|transactions_w|scope|re-?authori/i.test(String(liveDraft.error)) && (
-                                    <button onClick={async()=>{await fetch("/api/etsy-auth?action=invalidate").catch(()=>{});window.open("/api/etsy-auth?action=start","_blank");}}
+                                  {needsEtsyReconnect(liveDraft.error) && (
+                                    <button onClick={reconnectEtsy}
                                       style={{background:"#F56400",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:850,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
                                       🔑 Reconnect Etsy
                                     </button>
@@ -3509,10 +3529,10 @@ function EtsyLiveView() {
           ? <div style={{textAlign:"center",padding:"60px 0",color:C.inkFaint}}>
               <div style={{fontSize:36,marginBottom:10}}>🔑</div>
               <div style={{fontSize:14,fontWeight:600,marginBottom:14}}>Connect Etsy to view customers</div>
-              <a href="/api/etsy-auth?action=start" target="_blank" rel="noreferrer"
-                style={{background:"#F56400",color:"#fff",borderRadius:8,padding:"10px 24px",fontSize:13,fontWeight:700,textDecoration:"none"}}>
+              <button onClick={reconnectEtsy}
+                style={{background:"#F56400",color:"#fff",borderRadius:8,padding:"10px 24px",fontSize:13,fontWeight:700,border:"none",cursor:"pointer"}}>
                 Connect Etsy Shop →
-              </a>
+              </button>
             </div>
           : visCust.length===0
           ? <div style={{textAlign:"center",padding:"50px 0",color:C.inkFaint}}>
