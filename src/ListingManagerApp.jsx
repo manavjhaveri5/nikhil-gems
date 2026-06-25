@@ -4947,12 +4947,10 @@ export default function ListingManagerApp({ onHome }) {
       if (keys.includes(ORDERS_KEY)) loadK(ORDERS_KEY).then(o => { if (Array.isArray(o)) setOrders(o); });
       if (keys.includes(STK_KEY))    loadK(STK_KEY).then(s => { if (Array.isArray(s)) setStock(s); });
     });
-    // Reliable backstop: the onCacheRefresh above only fires when the Supabase
-    // realtime "invalidate" broadcast actually reaches this client — which is
-    // best-effort and can be missed (dropped socket, or our copy still inside the
-    // 10-min freshness TTL so nothing forces a refetch). So one user's new listings
-    // could stay invisible to another for the whole session. Force a fresh network
-    // read on tab focus and on a light interval so every screen converges quickly.
+    // Reliable backstop: realtime/version invalidation handles active tabs. On
+    // focus/online, do one fresh read in case this tab slept through an update.
+    // Avoid interval polling here: listings/orders are large JSON blobs and a
+    // few open tabs can burn Supabase CPU/network on small compute instances.
     const refreshFromServer = async () => {
       try {
         const [l, o] = await Promise.all([loadKFresh(LIST_KEY), loadKFresh(ORDERS_KEY)]);
@@ -4964,14 +4962,10 @@ export default function ListingManagerApp({ onHome }) {
     const onOnline = () => refreshFromServer();
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", onOnline);
-    const poll = setInterval(() => {
-      if (document.visibilityState === "visible") refreshFromServer();
-    }, 3000);
     return () => {
       window.removeEventListener("ng-orders-updated", onOrdersUpdated);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onOnline);
-      clearInterval(poll);
       offRefresh();
     };
   }, []);
