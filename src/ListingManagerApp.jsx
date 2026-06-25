@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, deleteItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
+import { classify } from "./aiClient.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
 const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(u);
@@ -26,9 +27,116 @@ const LIST_KEY   = "ng-listings-v1";
 const ORDERS_KEY = "ng-orders-v1";
 const STK_KEY    = "ng-stock-v5";
 const IMG_KEY    = "ng-image-library-v1";
+const AT_INVOICES_KEY = "at-invoices-v1";
 const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
 const SHIPGLOBAL_PORTAL_URL = "https://v2.app.shipglobal.in/auth/login";
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
+
+const toIsoDate = value => {
+  if (!value) return new Date().toISOString().slice(0, 10);
+  if (typeof value === "number") return new Date(value * 1000).toISOString().slice(0, 10);
+  const d = new Date(String(value).length <= 10 ? `${value}T12:00:00` : value);
+  return Number.isNaN(d.getTime()) ? new Date().toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
+};
+
+const fiscalYearLabel = dateStr => {
+  const d = new Date(`${dateStr || toIsoDate()}T12:00:00`);
+  const y = d.getFullYear();
+  const start = d.getMonth() >= 3 ? y : y - 1;
+  return `${String(start).slice(-2)}-${String(start + 1).slice(-2)}`;
+};
+
+const nextAtyaharaInvoiceNo = (existing = [], dateStr = toIsoDate()) => {
+  const fy = fiscalYearLabel(dateStr);
+  const max = (existing || []).reduce((mx, inv) => {
+    const no = String(inv?.invNo || inv?.number || "");
+    const m = no.match(/(?:ATY?|AT)-?(\d+)/i) || no.match(/(\d+)/);
+    return m ? Math.max(mx, +m[1] || 0) : mx;
+  }, 0);
+  return `AT-${String(max + 1).padStart(3, "0")}/${fy}`;
+};
+
+const moneyAmount = m => (m?.amount || 0) / (m?.divisor || 100);
+const cleanInvoiceText = v => String(v || "").replace(/\s+/g, " ").trim();
+
+async function aiEnhanceInvoiceItems(baseItems, context = {}) {
+  if (!baseItems.length) return baseItems;
+  try {
+    const prompt = `Return only JSON. Clean these Etsy order lines for a commercial invoice for Atyahara.
+For each input item return: desc, hsn, unit. Use concise export-safe descriptions for crystals/gemstones.
+Default HSN should be 71031029 unless the title clearly indicates a different gemstone/mineral code.
+Default unit should be pcs unless quantity/description clearly indicates kg, g, ct, strand, pair, or set.
+Context: ${JSON.stringify(context)}
+Items: ${JSON.stringify(baseItems.map(i => ({ id: i.id, title: i.desc, sku: i.sku, qty: i.qty })))} 
+Schema: {"items":[{"id":"same id","desc":"clean description","hsn":"HSN code","unit":"unit"}]}`;
+    const raw = await classify(prompt, 700);
+    const json = JSON.parse(String(raw || "").replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+    const byId = Object.fromEntries((json.items || []).map(i => [String(i.id), i]));
+    return baseItems.map(item => {
+      const ai = byId[String(item.id)] || {};
+      return {
+        ...item,
+        desc: cleanInvoiceText(ai.desc) || item.desc,
+        hsn: cleanInvoiceText(ai.hsn) || item.hsn,
+        unit: cleanInvoiceText(ai.unit) || item.unit,
+        _aiAutofilled: !!byId[String(item.id)],
+      };
+    });
+  } catch {
+    return baseItems;
+  }
+}
+
+async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "" }) {
+  const sourceReceiptId = String(receiptId || "");
+  if (!sourceReceiptId) throw new Error("Missing Etsy receipt id");
+  const fresh = await loadKFresh(AT_INVOICES_KEY).catch(() => []);
+  const existing = Array.isArray(fresh) ? fresh : [];
+  const existingInv = existing.find(inv =>
+    String(inv._etsyReceiptId || inv.etsy_receipt_id || "") === sourceReceiptId ||
+    (inv.sourceOrderIds || []).some(id => String(id) === sourceReceiptId)
+  );
+
+  const date = toIsoDate(orderDate);
+  const invoiceItems = await aiEnhanceInvoiceItems(items, { receiptId: sourceReceiptId, buyerCountry: buyer.country || address.country || "" });
+  const totalAmt = Number(invoiceItems.reduce((s, item) => s + (+item.qty || 0) * (+item.rate || 0), 0).toFixed(2));
+  const nowIso = new Date().toISOString();
+  const invoice = {
+    ...(existingInv || {}),
+    id: existingInv?.id || `at-etsy-${sourceReceiptId}`,
+    invNo: existingInv?.invNo || nextAtyaharaInvoiceNo(existing, date),
+    type: existingInv?.type || "commercial",
+    date,
+    dueDate: existingInv?.dueDate || date,
+    buyerId: existingInv?.buyerId || "",
+    buyerName: buyer.name || existingInv?.buyerName || "Etsy Buyer",
+    buyerEmail: buyer.email || existingInv?.buyerEmail || "",
+    buyerCountry: buyer.country || address.country || existingInv?.buyerCountry || "",
+    consigneeSameAsBuyer: true,
+    consigneeName: address.name || buyer.name || existingInv?.consigneeName || "",
+    consigneeAddress: [address.line1, address.line2, [address.city, address.state, address.postcode].filter(Boolean).join(", "), address.country].filter(Boolean).join("\n"),
+    consigneeCountry: address.country || buyer.country || existingInv?.consigneeCountry || "",
+    currency,
+    portLading: existingInv?.portLading || "Mumbai, India",
+    portDischarge: existingInv?.portDischarge || "",
+    terms: existingInv?.terms || "Etsy order",
+    items: invoiceItems,
+    totalAmt,
+    shippingCost: existingInv?.shippingCost || 0,
+    notes: notes || `Etsy order #${sourceReceiptId}`,
+    status: existingInv?.status || "draft",
+    paidAmount: existingInv?.paidAmount || 0,
+    payments: existingInv?.payments || [],
+    source: "listing-manager-etsy",
+    sourceOrderIds: [sourceReceiptId],
+    _etsyReceiptId: sourceReceiptId,
+    _aiAutofilled: invoiceItems.some(i => i._aiAutofilled),
+    createdAt: existingInv?.createdAt || nowIso,
+    updatedAt: nowIso,
+  };
+  await upsertItemK(AT_INVOICES_KEY, invoice, { prepend: !existingInv });
+  return { invoice, updated: !!existingInv };
+}
 
 async function mediaUrlToFile(url, fallbackName) {
   const res = await fetch(url);
@@ -1658,6 +1766,7 @@ function OrdersView({ orders, listings = [] }) {
   const [shipGlobalState, setShipGlobalState] = useState({});
   const [shipGlobalConfig, setShipGlobalConfig] = useState(null);
   const [etsyTracking, setEtsyTracking] = useState({});
+  const [invoiceState, setInvoiceState] = useState({});
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   const money = (amount, currency = "INR") => {
@@ -1686,6 +1795,7 @@ function OrdersView({ orders, listings = [] }) {
   };
   const isEtsyOrder = o => o.platform === "etsy" || !!o.etsy_receipt_id || String(o.order_number || "").startsWith("ETSY-");
   const etsyReceiptId = o => o.etsy_receipt_id || o.platform_order_id || String(o.order_number || "").replace(/^ETSY-/, "").split("-")[0];
+  const invoiceDraft = o => invoiceState[etsyReceiptId(o)] || { loading: false, error: "", success: "" };
   const trackingDraft = o => etsyTracking[o.id] || {
     tracking_code: o.tracking_code || o.tracking_number || "",
     carrier_name: o.carrier_name || o.shipping_carrier || "other",
@@ -1737,6 +1847,55 @@ function OrdersView({ orders, listings = [] }) {
       updateTrackingDraft(o, { loading: false, error: "", success: "Completed on Etsy", tracking_code: trackingCode, carrier_name: carrierName });
     } catch (e) {
       updateTrackingDraft(o, { loading: false, error: e.message || "Could not complete Etsy order", success: "" });
+    }
+  };
+  const createAtyaharaInvoiceForOrder = async order => {
+    const receiptId = String(etsyReceiptId(order) || "");
+    if (!receiptId) {
+      setInvoiceState(s => ({ ...s, [receiptId || order.id]: { loading: false, error: "Missing Etsy receipt id.", success: "" } }));
+      return;
+    }
+    setInvoiceState(s => ({ ...s, [receiptId]: { loading: true, error: "", success: "" } }));
+    try {
+      const rows = (orders || []).filter(o => isEtsyOrder(o) && String(etsyReceiptId(o)) === receiptId);
+      const sourceRows = rows.length ? rows : [order];
+      const currency = sourceRows.find(o => o.currency)?.currency || order.currency || "USD";
+      const items = sourceRows.map((row, i) => ({
+        id: `etsy-${receiptId}-${row.etsy_transaction_id || row.listing_sku || i}`,
+        desc: cleanInvoiceText(row.listing_title || `Etsy order #${receiptId}`),
+        sku: row.listing_sku || row.etsy_transaction_id || "",
+        hsn: "71031029",
+        qty: "1",
+        unit: "pcs",
+        rate: String(+row.sale_price || 0),
+        gst: "0",
+        igst: 0,
+        amt: +row.sale_price || 0,
+        _etsyReceiptId: receiptId,
+        _etsyTransactionId: row.etsy_transaction_id || "",
+        _listingId: row.listing_id || "",
+        _listingImage: findOrderImage(row),
+      }));
+      const { invoice, updated } = await upsertAtyaharaInvoiceFromEtsy({
+        receiptId,
+        orderDate: orderDate(order),
+        buyer: { name: order.buyer_name || order.ship_name || "", email: order.buyer_email || "", country: order.buyer_country || order.ship_country || "" },
+        address: {
+          name: order.ship_name || order.buyer_name || "",
+          line1: order.ship_address1 || "",
+          line2: order.ship_address2 || "",
+          city: order.ship_city || "",
+          state: order.ship_state || "",
+          postcode: order.ship_postcode || "",
+          country: order.ship_country || order.buyer_country || "",
+        },
+        currency,
+        items,
+        notes: `Created from Listing Manager Etsy receipt #${receiptId}`,
+      });
+      setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: "", success: `${updated ? "Updated" : "Created"} ${invoice.invNo}` } }));
+    } catch (e) {
+      setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: e.message || "Could not create invoice", success: "" } }));
     }
   };
   const shipGlobalDraft = o => {
@@ -2309,6 +2468,32 @@ function OrdersView({ orders, listings = [] }) {
                         )}
                       </div>
                     )}
+                    {isEtsyOrder(order) && (
+                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                          <div>
+                            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.green, marginBottom: 3 }}>Atyahara Invoice</div>
+                            <div style={{ fontSize: 12, color: C.inkMid }}>Create or refresh a draft invoice in Finance from this Etsy receipt.</div>
+                          </div>
+                          <button
+                            onClick={() => createAtyaharaInvoiceForOrder(order)}
+                            disabled={!!invoiceDraft(order).loading}
+                            style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
+                            {invoiceDraft(order).loading ? "Creating..." : "Create Invoice"}
+                          </button>
+                        </div>
+                        {invoiceDraft(order).error && (
+                          <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
+                            {invoiceDraft(order).error}
+                          </div>
+                        )}
+                        {invoiceDraft(order).success && (
+                          <div style={{ marginTop: 8, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 8, padding: "7px 9px" }}>
+                            {invoiceDraft(order).success}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
                       {[
                         ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
@@ -2373,6 +2558,7 @@ function EtsyLiveView() {
   const [search,    setSearch]    = useState("");
   const [expanded,  setExpanded]  = useState(null);
   const [etsyFulfill, setEtsyFulfill] = useState({});
+  const [etsyInvoice, setEtsyInvoice] = useState({});
 
   const [listingErr,   setListingErr]   = useState(null);
   const [stFilter,     setStFilter]     = useState("active");
@@ -2720,6 +2906,57 @@ function EtsyLiveView() {
   };
   const updateFulfillDraft = (o, patch) => {
     setEtsyFulfill(s => ({ ...s, [o.receipt_id]: { ...fulfillDraft(o), ...patch } }));
+  };
+  const liveInvoiceDraft = o => etsyInvoice[o.receipt_id] || { loading: false, error: "", success: "" };
+  const createAtyaharaInvoiceForReceipt = async o => {
+    const receiptId = String(o.receipt_id || "");
+    if (!receiptId) return;
+    setEtsyInvoice(s => ({ ...s, [receiptId]: { loading: true, error: "", success: "" } }));
+    try {
+      const txns = o.transactions?.length ? o.transactions : [null];
+      const currency = txns.find(t => t?.price?.currency_code)?.price?.currency_code || o.grandtotal?.currency_code || "USD";
+      const items = txns.map((t, i) => {
+        const qty = +(t?.quantity || 1);
+        const rate = t?.price ? moneyAmount(t.price) : moneyAmount(o.grandtotal);
+        return {
+          id: `etsy-${receiptId}-${t?.transaction_id || t?.listing_id || i}`,
+          desc: cleanInvoiceText(t?.title || `Etsy order #${receiptId}`),
+          sku: t?.sku || "",
+          hsn: "71031029",
+          qty: String(qty),
+          unit: "pcs",
+          rate: String(rate),
+          gst: "0",
+          igst: 0,
+          amt: Number((qty * rate).toFixed(2)),
+          _etsyReceiptId: receiptId,
+          _etsyTransactionId: t?.transaction_id || "",
+          _etsyListingId: t?.listing_id || "",
+          _listingImage: t?.image_data?.url_570xN || t?.image_data?.url_fullxfull || t?.image_data?.url_170x135 || t?.image_data?.url_75x75 || "",
+        };
+      });
+      const { invoice, updated } = await upsertAtyaharaInvoiceFromEtsy({
+        receiptId,
+        orderDate: etsyOrderDate(o),
+        buyer: { name: o.name || etsyBuyerEmail(o) || "", email: etsyBuyerEmail(o), country: o.country_iso || "" },
+        address: {
+          name: o.name || "",
+          line1: o.first_line || "",
+          line2: o.second_line || "",
+          city: o.city || "",
+          state: o.state || "",
+          postcode: o.zip || "",
+          country: o.country_iso || "",
+        },
+        currency,
+        items,
+        notes: `Created from live Etsy receipt #${receiptId}${o.message_from_buyer ? `\nBuyer note: ${o.message_from_buyer}` : ""}`,
+      });
+      setEtsyInvoice(s => ({ ...s, [receiptId]: { loading: false, error: "", success: `${updated ? "Updated" : "Created"} ${invoice.invNo}` } }));
+      showToast(`✓ ${updated ? "Updated" : "Created"} invoice ${invoice.invNo}`);
+    } catch (e) {
+      setEtsyInvoice(s => ({ ...s, [receiptId]: { loading: false, error: e.message || "Could not create invoice", success: "" } }));
+    }
   };
   const completeLiveEtsyOrder = async o => {
     const draft = fulfillDraft(o);
@@ -3337,6 +3574,29 @@ function EtsyLiveView() {
                                 </div>
                               )}
                             </>
+                          )}
+                        </div>
+
+                        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px"}}>
+                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+                            <div>
+                              <div style={{fontSize:10,fontWeight:800,textTransform:"uppercase",letterSpacing:.7,color:C.green,marginBottom:3}}>Atyahara Invoice</div>
+                              <div style={{fontSize:12,color:C.inkMid}}>Create or refresh a draft Finance invoice from this Etsy receipt.</div>
+                            </div>
+                            <button onClick={()=>createAtyaharaInvoiceForReceipt(o)} disabled={!!liveInvoiceDraft(o).loading}
+                              style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"8px 13px",fontSize:12,fontWeight:850,cursor:liveInvoiceDraft(o).loading?"wait":"pointer",opacity:liveInvoiceDraft(o).loading ? .7 : 1,whiteSpace:"nowrap"}}>
+                              {liveInvoiceDraft(o).loading ? "Creating..." : "Create Invoice"}
+                            </button>
+                          </div>
+                          {liveInvoiceDraft(o).error && (
+                            <div style={{marginTop:8,fontSize:12,color:C.red,background:C.redBg,border:`1px solid ${C.red}30`,borderRadius:8,padding:"7px 9px"}}>
+                              {liveInvoiceDraft(o).error}
+                            </div>
+                          )}
+                          {liveInvoiceDraft(o).success && (
+                            <div style={{marginTop:8,fontSize:12,color:C.green,background:C.greenBg,border:`1px solid ${C.green}30`,borderRadius:8,padding:"7px 9px"}}>
+                              {liveInvoiceDraft(o).success}
+                            </div>
                           )}
                         </div>
 
