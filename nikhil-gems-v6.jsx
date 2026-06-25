@@ -9836,6 +9836,53 @@ const newInvItem=(seed={})=>{
   const igst=rest.igst??invoiceDefaultGstRate(hsn,buyer);
   return{id:uid(),acctDesc:"",customDesc:"",qty:"",unit:"pcs",rate:"",amt:0,stockId:"",acctStockId:"",ready:false,readyDate:"",...rest,hsn,igst};
 };
+const safeInvoiceDocName=name=>String(name||"document")
+  .replace(/[^a-zA-Z0-9._-]+/g,"-")
+  .replace(/^-+|-+$/g,"")
+  .slice(0,90)||"document";
+const cleanInvoiceAttachment=att=>{
+  const {data,file,...rest}=att||{};
+  return rest;
+};
+const dataUrlToInvoiceFile=async(dataUrl,fileName="attachment")=>{
+  const res=await fetch(dataUrl);
+  const blob=await res.blob();
+  return new File([blob],fileName,{type:blob.type||"application/octet-stream"});
+};
+const uploadInvoiceShipmentAttachment=async(company,invoiceId,file,label="Document")=>{
+  const fileName=file?.name||"document";
+  const safeName=safeInvoiceDocName(fileName);
+  const path=`invoice-shipment-docs/${company||"ng"}/${invoiceId||"draft"}/${Date.now()}-${uid()}-${safeName}`;
+  const url=await supabaseUpload(path,file);
+  return {
+    id:uid(),
+    label:label||fileName,
+    url,
+    path,
+    fileName,
+    name:fileName,
+    type:file?.type||"",
+    size:file?.size||0,
+    uploadedAt:new Date().toISOString()
+  };
+};
+const persistInvoiceShipmentAttachments=async(inv,company)=>{
+  const attachments=Array.isArray(inv?.attachments)?inv.attachments:[];
+  if(!attachments.length)return {...inv,attachments:[]};
+  const next=[];
+  for(const att of attachments){
+    if(att?.url){next.push(cleanInvoiceAttachment(att));continue;}
+    if(typeof File!=="undefined"&&att?.file instanceof File){
+      next.push(await uploadInvoiceShipmentAttachment(company,inv.id,att.file,att.label||att.fileName||att.name));
+      continue;
+    }
+    if(att?.data){
+      const file=await dataUrlToInvoiceFile(att.data,att.fileName||att.name||att.label||"attachment");
+      next.push(await uploadInvoiceShipmentAttachment(company,inv.id,file,att.label||att.fileName||att.name));
+    }
+  }
+  return {...inv,attachments:next,hawbFile:"",hawbName:""};
+};
 const newBuyer=()=>({id:uid(),name:"",contactName:"",billingAddress:"",shippingAddress:"",shippingSameAsBilling:true,country:"",state:"",email:"",phone:"",port:""});
 // GST mode: "cgst_sgst" = same state (MH), "igst" = diff state, "none" = international
 function getGSTMode(buyer){
@@ -10075,6 +10122,8 @@ function InvoicesApp({onHome,startDraft}){
   },[invoices,company]);
 
   const saveInvoice=async (inv,{navigateAway=true}={})=>{
+    inv=await persistInvoiceShipmentAttachments(inv,company);
+    setDraft(d=>d?.id===inv.id?inv:d);
     // Diff-based stock update: restore old links then deduct new links.
     // This handles both new invoices (no old links) and edits (old links must be put back first).
     const newStock=[...stock];
@@ -10222,7 +10271,7 @@ function InvoicesApp({onHome,startDraft}){
     notes:"Certificate of Origin included with shipment.",
     termsText:"Supply Meant For Export Under Bond Or Letter of Undertaking\nWithout Payment Of Intergated Tax(IGST).",
     status:"draft",paidAmount:0,payments:[],
-    goodsShipped:false,hawbFile:"",hawbName:"",
+    goodsShipped:false,hawbFile:"",hawbName:"",attachments:[],
     createdAt:new Date().toISOString()
   });
 
@@ -10524,7 +10573,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
-	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")}/>}
+	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast}/>}
 	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")}/>}
 	      {loaded&&view==="bulk-inv"&&<InvBulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} buyers={buyers} company={company} extractInvoice={extractInvoice} onSave={async inv=>{await saveInvoice(inv,{navigateAway:false});if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);}else{showToast(`${bulkQueue.length} invoice${bulkQueue.length>1?"s":""} processed`);setView("list");setDraft(null);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
     </Shell>
@@ -10740,7 +10789,7 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
   );
 }
 
-function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],onSave,onDelete,onPreview}){
+function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],onSave,onDelete,onPreview,showToast}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
 	  const co=companyProfileFromKey(company);
   const gstBuyer=buyers.find(b=>b.id===draft.buyerId);
@@ -10914,24 +10963,48 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     }
   },[]);
   const [pendingAttachLabel,setPendingAttachLabel]=useState("");
-  const [pendingAttachFile,setPendingAttachFile]=useState(null); // {data,fileName}
-  const attachFileRef=useRef();
-  const handleAttachPick=e=>{
-    const file=e.target.files?.[0];
+  const [pendingAttachFile,setPendingAttachFile]=useState(null); // {file,fileName}
+  const [attachUploading,setAttachUploading]=useState(false);
+  const handleAttachFile=(file,label="")=>{
     if(!file)return;
-    const reader=new FileReader();
-    reader.onload=ev=>{setPendingAttachFile({data:ev.target.result,fileName:file.name});setPendingAttachLabel("");};
-    reader.readAsDataURL(file);
-    e.target.value="";
+    setPendingAttachFile({file,fileName:file.name});
+    setPendingAttachLabel(label);
   };
-  const confirmAttach=()=>{
+  const pickAttachment=(label="")=>{
+    const input=document.createElement("input");
+    input.type="file";
+    input.accept="image/*,application/pdf";
+    input.onchange=e=>handleAttachFile(e.target.files?.[0],label);
+    input.click();
+  };
+  const confirmAttach=async()=>{
     if(!pendingAttachFile)return;
     const label=pendingAttachLabel.trim()||pendingAttachFile.fileName;
-    setDraft(d=>({...d,attachments:[...(d.attachments||[]),{id:uid(),label,data:pendingAttachFile.data,fileName:pendingAttachFile.fileName}]}));
-    setPendingAttachFile(null);setPendingAttachLabel("");
+    setAttachUploading(true);
+    try{
+      const att=await uploadInvoiceShipmentAttachment(company,draft.id,pendingAttachFile.file,label);
+      const nextDraft={...draft,attachments:[...(draft.attachments||[]),att]};
+      setDraft(nextDraft);
+      setPendingAttachFile(null);setPendingAttachLabel("");
+      await onSave?.(nextDraft,{navigateAway:false});
+      showToast?.(`${label} uploaded and saved`);
+    }catch(e){
+      showToast?.(`Upload failed: ${e?.message||"check connection"}`);
+    }finally{
+      setAttachUploading(false);
+    }
   };
-  const removeAttach=id=>setDraft(d=>({...d,attachments:(d.attachments||[]).filter(a=>a.id!==id)}));
-  const ATTACH_SUGGESTIONS=["HAWB","COO","Packing List","Invoice Copy","Bill of Lading","Airway Bill","Insurance","Other"];
+  const removeAttach=async id=>{
+    const nextDraft={...draft,attachments:(draft.attachments||[]).filter(a=>a.id!==id)};
+    setDraft(nextDraft);
+    try{
+      await onSave?.(nextDraft,{navigateAway:false});
+      showToast?.("Document removed");
+    }catch(e){
+      showToast?.(`Remove failed: ${e?.message||"check connection"}`);
+    }
+  };
+  const ATTACH_SUGGESTIONS=["Shipping Bill","HAWB","COO","Packing List","Invoice Copy","Bill of Lading","Airway Bill","Insurance","Other"];
 
   const linkStock=(idx,stockId)=>{
     const s=stock.find(x=>x.id===stockId);
@@ -11167,8 +11240,8 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
               <div key={a.id} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 10px"}}>
                 <span style={{fontSize:13}}>📎</span>
                 <span style={{flex:1,fontSize:12,fontWeight:600,color:C.ink}}>{a.label}</span>
-                <span style={{fontSize:11,color:C.inkFaint,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.fileName}</span>
-                <a href={a.data} download={a.fileName} style={{fontSize:11,color:C.blue,textDecoration:"none",flexShrink:0}}>⬇ Download</a>
+                <span style={{fontSize:11,color:C.inkFaint,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.fileName||a.name||"Document"}</span>
+                {(a.url||a.data)&&<a href={a.url||a.data} target="_blank" rel="noreferrer" download={a.fileName||a.name} style={{fontSize:11,color:C.blue,textDecoration:"none",flexShrink:0}}>⬇ Download</a>}
                 <button onClick={()=>removeAttach(a.id)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:16,lineHeight:1,padding:"0 2px",flexShrink:0}}>&times;</button>
               </div>
             ))}
@@ -11186,15 +11259,22 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             </div>
             <div style={{display:"flex",gap:7,alignItems:"center"}}>
               <input value={pendingAttachLabel} onChange={e=>setPendingAttachLabel(e.target.value)} placeholder="Or type a name…" style={{...FI,flex:1,fontSize:12}} onKeyDown={e=>{if(e.key==="Enter")confirmAttach();}}/>
-              <button className="bp" style={{fontSize:12,padding:"6px 14px"}} onClick={confirmAttach}>Add</button>
-              <button className="bs" style={{fontSize:12,padding:"6px 10px"}} onClick={()=>{setPendingAttachFile(null);setPendingAttachLabel("");}}>Cancel</button>
+              <button className="bp" disabled={attachUploading} style={{fontSize:12,padding:"6px 14px",opacity:attachUploading?0.6:1}} onClick={confirmAttach}>{attachUploading?"Uploading…":"Add"}</button>
+              <button className="bs" disabled={attachUploading} style={{fontSize:12,padding:"6px 10px"}} onClick={()=>{setPendingAttachFile(null);setPendingAttachLabel("");}}>Cancel</button>
             </div>
           </div>
         ):(
-          <label style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,marginBottom:10}}>
-            📎 Upload File
-            <input ref={attachFileRef} type="file" accept="image/*,application/pdf" onChange={handleAttachPick} style={{display:"none"}}/>
-          </label>
+          <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:10}}>
+            <button type="button" onClick={()=>pickAttachment("Shipping Bill")} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.gold}`,borderRadius:5,background:C.goldBg,color:C.ink,fontFamily:"inherit"}}>
+              📎 Upload Shipping Bill
+            </button>
+            <button type="button" onClick={()=>pickAttachment("HAWB")} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
+              📎 Upload HAWB / AWB
+            </button>
+            <button type="button" onClick={()=>pickAttachment("")} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
+              📎 Upload Other File
+            </button>
+          </div>
         )}
 
         {/* Shipped toggle */}
