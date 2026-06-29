@@ -15367,6 +15367,228 @@ ${attachSection}
   setTimeout(()=>w.print(),700);
 }
 
+function BoiRemittanceForm({showToast}){
+  const EEFC_ACC="015020410002514";
+  const INR_ACC=CO.bankAcc;
+  const blankInv=()=>({id:uid(),no:"",date:today()});
+  const [form,setForm]=useState({
+    currency:"USD",amount:"",accType:"eefc",
+    remName:"",remAddr:"",
+    purpose:"a",
+    invoices:[blankInv()],
+    shipWin:"w3",
+    commodity:"Natural mineral specimens",
+    lineAct:"Export of natural stones and mineral specimens",
+    impDet:"",expBill:"",otherCl:"",
+    sigDate:today(),sigPlace:"Mumbai",
+  });
+  const [generating,setGenerating]=useState(false);
+  const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const addInv=()=>setForm(f=>({...f,invoices:[...f.invoices,blankInv()]}));
+  const removeInv=i=>setForm(f=>({...f,invoices:f.invoices.filter((_,j)=>j!==i)}));
+  const setInv=(i,k,v)=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],[k]:v};return{...f,invoices:invs};});
+
+  const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
+
+  const generate=async()=>{
+    if(!form.remName.trim()){showToast("Enter remitter name");return;}
+    if(!form.amount||+form.amount<=0){showToast("Enter amount");return;}
+    setGenerating(true);
+    try{
+      let boiPdfBytes;
+      try{
+        const r=await fetch("/boi/boi_form.pdf");
+        if(!r.ok)throw new Error("HTTP "+r.status);
+        boiPdfBytes=new Uint8Array(await r.arrayBuffer());
+      }catch{
+        showToast("Place boi_form.pdf in public/boi/ first");
+        return;
+      }
+      // Convert embedded SIG_SRC (base64 data URL) to Uint8Array
+      const b64=SIG_SRC.split(",")[1];
+      const bin=atob(b64);
+      const sigJpegBytes=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)sigJpegBytes[i]=bin.charCodeAt(i);
+
+      const {fillBoiRemittance}=await import("./src/fillBoiRemittance.js");
+      const pdfBytes=await fillBoiRemittance({
+        currency:form.currency,amount:+form.amount,
+        accType:form.accType,accountNo,
+        remName:form.remName,remAddr:form.remAddr,
+        purpose:form.purpose,
+        invoices:form.invoices.filter(i=>i.no.trim()),
+        shipWin:form.shipWin,commodity:form.commodity,lineAct:form.lineAct,
+        impDet:form.impDet,expBill:form.expBill,otherCl:form.otherCl,
+        bName:CO.name,
+        bAddr1:"110, 19th Floor, Dariya Mahal A",
+        bAddr2:"Nepean Sea Road, Mumbai 400006",
+        iecCode:CO.iec,
+        sigDate:form.sigDate,sigPlace:form.sigPlace,
+        boiPdfBytes,sigJpegBytes,
+      });
+      const blob=new Blob([pdfBytes],{type:"application/pdf"});
+      const url=URL.createObjectURL(blob);
+      Object.assign(document.createElement("a"),{href:url,download:`BOI_${form.remName.replace(/\s+/g,"_")}_${form.sigDate}.pdf`}).click();
+      setTimeout(()=>URL.revokeObjectURL(url),3000);
+      showToast("✓ BOI remittance form downloaded");
+    }catch(e){showToast("Error: "+e.message);}
+    finally{setGenerating(false);}
+  };
+
+  const secHdr=(color,label)=>(
+    <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}>
+      <span style={{display:"inline-block",width:3,height:13,background:color,borderRadius:2}}/>{label}
+    </div>
+  );
+
+  return(
+    <div style={{maxWidth:680}}>
+      <div style={{background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:8,padding:"10px 14px",marginBottom:20,fontSize:12,color:C.ink,display:"flex",gap:8,alignItems:"flex-start"}}>
+        <span style={{fontSize:16,flexShrink:0}}>ℹ️</span>
+        <span>Fills and downloads the <strong>BOI A2 Remittance form</strong> using pdf-lib. Place <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>boi_form.pdf</code> in <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>public/boi/</code> before generating.</span>
+      </div>
+
+      {/* Remittance Details */}
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:14}}>
+        {secHdr(C.gold,"Remittance Details")}
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+          <Field label="Currency">
+            <select value={form.currency} onChange={e=>setF("currency",e.target.value)} style={{...FI,cursor:"pointer"}}>
+              {["USD","EUR","GBP","AED","AUD","CAD","SGD","CHF"].map(c=><option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="Amount *">
+            <input type="number" value={form.amount} onChange={e=>setF("amount",e.target.value)} style={FI} placeholder="26700" min="0" step="0.01"/>
+          </Field>
+          <Field label="Credit to">
+            <select value={form.accType} onChange={e=>setF("accType",e.target.value)} style={{...FI,cursor:"pointer"}}>
+              <option value="eefc">EEFC — Foreign Currency Account</option>
+              <option value="inr">INR Account</option>
+            </select>
+          </Field>
+          <Field label="Account Number">
+            <input value={accountNo} readOnly style={{...FI,fontFamily:"monospace",letterSpacing:1,background:C.card,color:C.inkMid,cursor:"not-allowed"}}/>
+          </Field>
+        </div>
+      </div>
+
+      {/* Remitter */}
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:14}}>
+        {secHdr(C.blue,"Remitter (Buyer)")}
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+          <Field label="Remitter Name *">
+            <input value={form.remName} onChange={e=>setF("remName",e.target.value)} style={FI} placeholder="Celestique Crystals LLC"/>
+          </Field>
+          <Field label="City / Address (optional)">
+            <input value={form.remAddr} onChange={e=>setF("remAddr",e.target.value)} style={FI} placeholder="Los Angeles, USA"/>
+          </Field>
+        </div>
+      </div>
+
+      {/* Purpose */}
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:14}}>
+        {secHdr(C.green,"Purpose of Remittance")}
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
+          {[["a","A — Bills / Invoices"],["b","B — Advance Payment"],["c","C — Merchant Trade"],["d","D — Other Trade"],["e","E — Other"]].map(([key,label])=>(
+            <button key={key} onClick={()=>setF("purpose",key)} style={{
+              padding:"7px 14px",borderRadius:7,fontFamily:"inherit",fontSize:12,cursor:"pointer",
+              border:`1.5px solid ${form.purpose===key?C.green:C.border}`,
+              background:form.purpose===key?C.greenBg:C.card,
+              color:form.purpose===key?C.green:C.inkMid,
+              fontWeight:form.purpose===key?700:400,
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {form.purpose==="a"&&(
+          <>
+            <Tag>Invoice / Bill Numbers</Tag>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:4,padding:"0 2px"}}>
+              {["Invoice No","Date",""].map((h,i)=><div key={i} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>{h}</div>)}
+            </div>
+            {form.invoices.map((inv,i)=>(
+              <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"center"}}>
+                <input value={inv.no} onChange={e=>setInv(i,"no",e.target.value)} style={FI} placeholder="NG-06-2026/27"/>
+                <input type="date" value={inv.date} onChange={e=>setInv(i,"date",e.target.value)} style={FI}/>
+                {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>:<div/>}
+              </div>
+            ))}
+            <button onClick={addInv} style={{fontSize:12,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>+ Add Invoice</button>
+          </>
+        )}
+
+        {form.purpose==="b"&&(
+          <>
+            <div style={{display:"flex",gap:10,marginBottom:14}}>
+              {[["w3","Within 3/6/12 months"],["a12","Above 12 months"]].map(([key,label])=>(
+                <button key={key} onClick={()=>setF("shipWin",key)} style={{
+                  padding:"6px 14px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontSize:12,
+                  border:`1.5px solid ${form.shipWin===key?C.amber:C.border}`,
+                  background:form.shipWin===key?C.amberBg:C.card,
+                  color:form.shipWin===key?C.amber:C.inkMid,
+                  fontWeight:form.shipWin===key?700:400,
+                }}>{label}</button>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12,marginBottom:14}}>
+              <Field label="Line of Activity">
+                <input value={form.lineAct} onChange={e=>setF("lineAct",e.target.value)} style={FI} placeholder="Export of natural stones…"/>
+              </Field>
+              <Field label="Commodity">
+                <input value={form.commodity} onChange={e=>setF("commodity",e.target.value)} style={FI} placeholder="Natural mineral specimens"/>
+              </Field>
+            </div>
+            <Tag>PO / Reference Numbers</Tag>
+            {form.invoices.map((inv,i)=>(
+              <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 24px",gap:8,marginBottom:8,alignItems:"center"}}>
+                <input value={inv.no} onChange={e=>setInv(i,"no",e.target.value)} style={FI} placeholder="PO number"/>
+                {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0}}>×</button>:<div/>}
+              </div>
+            ))}
+            <button onClick={addInv} style={{fontSize:12,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>+ Add PO</button>
+          </>
+        )}
+
+        {form.purpose==="c"&&(
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+            <Field label="Import Details">
+              <input value={form.impDet} onChange={e=>setF("impDet",e.target.value)} style={FI} placeholder="Import bill details"/>
+            </Field>
+            <Field label="Export Bill No.">
+              <input value={form.expBill} onChange={e=>setF("expBill",e.target.value)} style={FI} placeholder="Export bill reference"/>
+            </Field>
+          </div>
+        )}
+
+        {form.purpose==="e"&&(
+          <Field label="Other Clause / Details">
+            <input value={form.otherCl} onChange={e=>setF("otherCl",e.target.value)} style={FI} placeholder="Describe the purpose"/>
+          </Field>
+        )}
+      </div>
+
+      {/* Signature */}
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:20}}>
+        {secHdr(C.inkMid,"Signature Details")}
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+          <Field label="Date">
+            <input type="date" value={form.sigDate} onChange={e=>setF("sigDate",e.target.value)} style={FI}/>
+          </Field>
+          <Field label="Place">
+            <input value={form.sigPlace} onChange={e=>setF("sigPlace",e.target.value)} style={FI}/>
+          </Field>
+        </div>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"flex-end"}}>
+        <button className="bp" onClick={generate} disabled={generating} style={{opacity:generating?.5:1,minWidth:200,fontFamily:"inherit"}}>
+          {generating?"Generating PDF…":"📥 Generate BOI Form"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MiscApp({onHome}){
   const t=useT();
   const [tab,setTab]=useState("dashboard");
@@ -15381,19 +15603,21 @@ function MiscApp({onHome}){
   return(
     <Shell title="Miscellaneous" onHome={onHome} actions={null}>
       <Toast msg={toast}/>
-      {/* Company switcher — shared across tabs */}
-      <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
-        <span style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Company</span>
-        {[["nikhil","Nikhil Gems","#7A6020"],["atyahara","Atyahara","#6B3FA0"]].map(([key,label,color])=>(
-          <button key={key} onClick={()=>setCompany(key)} style={{
-            padding:"6px 16px",borderRadius:7,border:`1.5px solid ${company===key?color:C.border}`,
-            background:company===key?color+"18":C.card,color:company===key?color:C.inkMid,
-            fontWeight:company===key?700:400,fontSize:12,cursor:"pointer",transition:"all .15s"
-          }}>{label}</button>
-        ))}
-      </div>
+      {/* Company switcher — hidden on BOI tab (always Nikhil Gems) */}
+      {tab!=="boi"&&(
+        <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
+          <span style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Company</span>
+          {[["nikhil","Nikhil Gems","#7A6020"],["atyahara","Atyahara","#6B3FA0"]].map(([key,label,color])=>(
+            <button key={key} onClick={()=>setCompany(key)} style={{
+              padding:"6px 16px",borderRadius:7,border:`1.5px solid ${company===key?color:C.border}`,
+              background:company===key?color+"18":C.card,color:company===key?color:C.inkMid,
+              fontWeight:company===key?700:400,fontSize:12,cursor:"pointer",transition:"all .15s"
+            }}>{label}</button>
+          ))}
+        </div>
+      )}
       <div style={{display:"flex",gap:6,marginBottom:20,borderBottom:`1px solid ${C.border}`,paddingBottom:0}}>
-        {[["dashboard","📋 Bills"],["billmaker",editBill?"✏️ Edit Bill":"🧾 New Bill"]].map(([id,label])=>(
+        {[["dashboard","📋 Bills"],["billmaker",editBill?"✏️ Edit Bill":"🧾 New Bill"],["boi","🏦 BOI Remittance"]].map(([id,label])=>(
           <button key={id} onClick={()=>{setTab(id);if(id==="dashboard")setEditBill(null);}} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?C.gold:"transparent"}`,padding:"8px 16px",fontSize:13,fontWeight:tab===id?600:400,color:tab===id?C.gold:C.inkMid,cursor:"pointer",transition:"all .15s",fontFamily:"inherit",whiteSpace:"nowrap"}}>
             {label}
           </button>
@@ -15401,6 +15625,7 @@ function MiscApp({onHome}){
       </div>
       {tab==="dashboard"&&<MiscBillsDashboard showToast={showToast} company={company} onNewBill={()=>setTab("billmaker")} onEdit={handleEdit}/>}
       {tab==="billmaker"&&<PurchaseBillMaker showToast={showToast} onSaved={handleSaved} editBill={editBill} defaultCompany={company}/>}
+      {tab==="boi"&&<BoiRemittanceForm showToast={showToast}/>}
     </Shell>
   );
 }

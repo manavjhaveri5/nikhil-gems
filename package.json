@@ -13,6 +13,7 @@
     "@vercel/functions": "^3.4.4",
     "canvas-confetti": "^1.9.4",
     "jsbarcode": "^3.12.3",
+    "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^5.7.284",
     "react": "^18.3.1",
