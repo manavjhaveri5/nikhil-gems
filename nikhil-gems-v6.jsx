@@ -15530,19 +15530,33 @@ function BoiRemittanceForm({showToast}){
                       placeholder="Type to search invoices…"
                     />
                     {focusedInvIdx===i&&matches.length>0&&(
-                      <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,boxShadow:"0 4px 12px #0002",maxHeight:200,overflowY:"auto"}}>
-                        {matches.map(ni=>(
-                          <div
-                            key={ni.id}
-                            onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setFocusedInvIdx(null);}}
-                            style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",fontSize:12}}
-                            onMouseEnter={e=>e.currentTarget.style.background=C.goldLight}
-                            onMouseLeave={e=>e.currentTarget.style.background="transparent"}
-                          >
-                            <span style={{fontWeight:600,color:C.ink}}>{ni.invNo}</span>
-                            <span style={{color:C.inkMid,fontSize:11}}>{ni.currency} {(+ni.totalAmt||0).toFixed(2)}{ni.buyer?` · ${ni.buyer}`:""}</span>
-                          </div>
-                        ))}
+                      <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,boxShadow:"0 4px 16px #0003",maxHeight:260,overflowY:"auto"}}>
+                        {matches.map(ni=>{
+                          const st=(ni.status||"").toLowerCase();
+                          const stColor=st==="paid"?C.green:st==="unpaid"?C.amber:C.inkFaint;
+                          const stBg=st==="paid"?C.greenBg:st==="unpaid"?C.amberBg:C.card;
+                          return(
+                            <div
+                              key={ni.id}
+                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setFocusedInvIdx(null);}}
+                              style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s"}}
+                              onMouseEnter={e=>e.currentTarget.style.background=C.goldLight}
+                              onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+                            >
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                                <span style={{fontWeight:700,color:C.ink,fontSize:13}}>{ni.invNo}</span>
+                                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                  {st&&<span style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,padding:"2px 6px",borderRadius:4,background:stBg,color:stColor}}>{st}</span>}
+                                  <span style={{fontWeight:600,color:C.ink,fontSize:12}}>{ni.currency} {(+ni.totalAmt||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                                </div>
+                              </div>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                                <span style={{color:C.inkMid,fontSize:11}}>{ni.buyer||"—"}</span>
+                                <span style={{color:C.inkFaint,fontSize:11}}>{ni.date?fmtDate(ni.date):""}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
