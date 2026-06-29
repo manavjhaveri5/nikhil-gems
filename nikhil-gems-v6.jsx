@@ -692,6 +692,12 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
         <div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:16,fontWeight:600,color:C.ink,letterSpacing:.01}}>Nikhil Gems</div><div style={{fontSize:8,color:C.inkFaint,letterSpacing:1.2,fontWeight:500}}>BUSINESS SUITE</div></div>
         <div style={{flex:1}}/>
         <button onClick={toggleDark} style={{background:"none",border:"1px solid rgba(0,0,0,0.10)",borderRadius:8,padding:"5px 9px",fontSize:14,cursor:"pointer",lineHeight:1}}>{dark?"☀️":"🌙"}</button>
+        {!mob&&!window.electronApp?.isDesktop&&(
+          <a href="https://github.com/manavjhaveri5/nikhil-gems/releases/latest" target="_blank" rel="noopener noreferrer"
+            style={{display:"flex",alignItems:"center",gap:5,background:C.card,color:C.inkMid,border:`1px solid ${C.border}`,borderRadius:8,padding:"4px 10px",fontSize:11,fontWeight:500,textDecoration:"none",lineHeight:1,whiteSpace:"nowrap"}}>
+            💻 <span>Desktop App</span>
+          </a>
+        )}
         {!mob&&<div className="jai-halo" style={{background:C.goldLight,color:C.gold,borderRadius:20,padding:"4px 14px",fontSize:10,fontWeight:600,letterSpacing:.8,border:`1px solid ${C.borderHi}`}}>🕉 JAI SWAMINARAYAN</div>}
         {onSignOut&&<button onClick={onSignOut} style={{background:"none",border:"1px solid rgba(0,0,0,0.10)",borderRadius:8,padding:"5px 9px",fontSize:12,cursor:"pointer",color:C.inkFaint,lineHeight:1}} title="Sign out">⎋</button>}
       </div>
@@ -721,7 +727,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                 );
               })}
             </div>
-            <div style={{padding:"10px 14px",borderTop:"0.5px solid rgba(0,0,0,0.07)",fontSize:9,color:C.inkFaint,textAlign:"center"}}>v0.7</div>
+            <div style={{padding:"10px 14px",borderTop:"0.5px solid rgba(0,0,0,0.07)",fontSize:9,color:C.inkFaint,textAlign:"center"}}>{window.electronApp?.isDesktop?"🖥 ":""}{window.electronApp?.version||"v1.0"}</div>
           </div>
         )}
 

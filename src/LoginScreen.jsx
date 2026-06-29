@@ -9,6 +9,52 @@ const C = {
   red: "#892020", redBg: "#FEEEED",
 };
 
+const RELEASES_URL = "https://github.com/manavjhaveri5/nikhil-gems/releases/latest";
+
+function detectPlatform() {
+  const ua = navigator.userAgent;
+  if (ua.includes("Mac OS X") && !ua.includes("iPhone") && !ua.includes("iPad")) return "mac";
+  if (ua.includes("Windows")) return "win";
+  return "linux";
+}
+
+function DownloadBar() {
+  // Don't show in Electron or on mobile
+  if (window.electronApp?.isDesktop) return null;
+  if (/iPhone|iPad|Android/i.test(navigator.userAgent)) return null;
+
+  const platform = detectPlatform();
+  const labels = { mac: "Download for Mac", win: "Download for Windows", linux: "Download for Linux" };
+  const icons  = { mac: "🍎", win: "🪟", linux: "🐧" };
+
+  return (
+    <div style={{ marginTop: 20, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
+      <a
+        href={RELEASES_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          padding: "10px 14px", borderRadius: 8,
+          border: `1.5px solid ${C.border}`,
+          background: C.bg, color: C.inkMid,
+          textDecoration: "none", fontSize: 13, fontWeight: 500,
+          transition: "border-color .15s, color .15s",
+        }}
+        onMouseEnter={e => { e.currentTarget.style.borderColor = C.gold; e.currentTarget.style.color = C.ink; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.inkMid; }}
+      >
+        <span style={{ fontSize: 16 }}>{icons[platform]}</span>
+        {labels[platform]}
+        <span style={{ fontSize: 10, background: "#E8F5E8", color: "#2A7A2A", borderRadius: 4, padding: "2px 6px", fontWeight: 600, marginLeft: 2 }}>Free</span>
+      </a>
+      <div style={{ textAlign: "center", fontSize: 10, color: C.inkFaint, marginTop: 7 }}>
+        Auto-updates · Works offline · Mac · Windows · Linux
+      </div>
+    </div>
+  );
+}
+
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -64,6 +110,7 @@ export default function LoginScreen() {
         </form>
 
         <div style={{ marginTop: 24, textAlign: "center", fontSize: 10, color: C.inkFaint, letterSpacing: 0.5 }}>JAI SWAMINARAYAN</div>
+        <DownloadBar />
       </div>
     </div>
   );

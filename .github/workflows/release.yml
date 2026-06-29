@@ -1,0 +1,56 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
+          - os: ubuntu-latest
+            label: Linux
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.label }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Linux needs rpmbuild / fakeroot for certain targets
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y rpm fakeroot
+
+      - name: Build & publish Electron app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Set your production Vercel URL here so it's baked into the binary:
+          APP_URL: ${{ vars.APP_URL || 'https://nikhil-gems.vercel.app' }}
+        run: npm run electron:release
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-${{ matrix.label }}
+          path: release/
+          retention-days: 7
