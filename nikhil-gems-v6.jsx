@@ -15396,7 +15396,7 @@ function BoiRemittanceForm({showToast}){
   const [ngInvoices,setNgInvoices]=useState([]);
   const [focusedInvIdx,setFocusedInvIdx]=useState(null);
   const [hoveredInvId,setHoveredInvId]=useState(null);
-  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d)){setNgInvoices(d.filter(inv=>(inv.status||"").toLowerCase()!=="cancelled").sort((a,b)=>{const da=new Date(a.date||0),db=new Date(b.date||0);if(db-da!==0)return db-da;const num=inv=>{const m=(inv.invNo||"").match(/(\d+)/);return m?+m[1]:0;};return num(b)-num(a);}));}});},[]);
+  useEffect(()=>{Promise.all([loadK("ng-invoices-v2"),loadK("ng-buyers-v2")]).then(([d,buyersRaw])=>{if(Array.isArray(d)){const buyers=Array.isArray(buyersRaw)?buyersRaw:[];const sorted=d.filter(inv=>(inv.status||"").toLowerCase()!=="cancelled").sort((a,b)=>{const da=new Date(a.date||0),db=new Date(b.date||0);if(db-da!==0)return db-da;const num=inv=>{const m=(inv.invNo||"").match(/(\d+)/);return m?+m[1]:0;};return num(b)-num(a);}).map(inv=>{const bn=inv.buyerName||inv.buyer||(buyers.find(b=>b.id===inv.buyerId)?.name)||"";return{...inv,_resolvedBuyer:bn};});setNgInvoices(sorted);}});},[]);
 
   const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
 
@@ -15536,11 +15536,11 @@ function BoiRemittanceForm({showToast}){
                           const st=(ni.status||"").toLowerCase();
                           const stColor=st==="paid"?C.green:st==="unpaid"?C.amber:C.inkFaint;
                           const stBg=st==="paid"?C.greenBg:st==="unpaid"?C.amberBg:C.card;
-                          const buyer=ni.buyerName||ni.buyer||"";
+                          const buyer=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";
                           return(
                             <div
                               key={ni.id}
-                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());if(ni.currency)setF("currency",ni.currency);if(ni.totalAmt)setF("amount",String(+ni.totalAmt));const bn=ni.buyerName||ni.buyer||"";if(bn)setF("remName",bn);setFocusedInvIdx(null);setHoveredInvId(null);}}
+                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());if(ni.currency)setF("currency",ni.currency);if(ni.totalAmt)setF("amount",String(parseFloat((+ni.totalAmt).toFixed(2))));const bn=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";if(bn)setF("remName",bn);setFocusedInvIdx(null);setHoveredInvId(null);}}
                               style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:hoveredInvId===ni.id?C.goldLight:"transparent"}}
                               onMouseEnter={()=>setHoveredInvId(ni.id)}
                               onMouseLeave={()=>setHoveredInvId(null)}
@@ -15567,7 +15567,7 @@ function BoiRemittanceForm({showToast}){
                       if(!hov||!items.length)return null;
                       return(
                         <div style={{position:"absolute",top:"calc(100% + 2px)",left:"calc(100% + 8px)",zIndex:102,width:230,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 6px 20px #0004",padding:"10px 12px",pointerEvents:"none"}}>
-                          <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6,letterSpacing:.3}}>{hov.invNo} · {hov.buyerName||hov.buyer||""}</div>
+                          <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6,letterSpacing:.3}}>{hov.invNo} · {hov._resolvedBuyer||hov.buyerName||hov.buyer||""}</div>
                           {items.map((it,j)=>(
                             <div key={j} style={{display:"flex",gap:6,marginBottom:4,alignItems:"flex-start"}}>
                               <span style={{fontSize:10,color:C.inkFaint,flexShrink:0,minWidth:40,textAlign:"right",paddingTop:1}}>{[it.qty,it.unit].filter(Boolean).join(" ")||""}</span>
