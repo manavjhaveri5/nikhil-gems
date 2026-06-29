@@ -15395,7 +15395,8 @@ function BoiRemittanceForm({showToast}){
   const setInv=(i,k,v)=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],[k]:v};return{...f,invoices:invs};});
   const [ngInvoices,setNgInvoices]=useState([]);
   const [focusedInvIdx,setFocusedInvIdx]=useState(null);
-  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d))setNgInvoices(d.filter(inv=>(inv.status||"").toLowerCase()!=="cancelled").sort((a,b)=>(b.date||"").localeCompare(a.date||"")));});},[]);
+  const [hoveredInvId,setHoveredInvId]=useState(null);
+  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d)){const num=inv=>{const m=(inv.invNo||"").match(/(\d+)/);return m?+m[1]:0;};setNgInvoices(d.filter(inv=>(inv.status||"").toLowerCase()!=="cancelled").sort((a,b)=>num(b)-num(a)));}});},[]);
 
   const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
 
@@ -15536,15 +15537,15 @@ function BoiRemittanceForm({showToast}){
                           const stColor=st==="paid"?C.green:st==="unpaid"?C.amber:C.inkFaint;
                           const stBg=st==="paid"?C.greenBg:st==="unpaid"?C.amberBg:C.card;
                           const buyer=ni.buyerName||ni.buyer||"";
-                          const descs=(ni.items||[]).map(it=>it.desc||it.catDesc||"").filter(Boolean);
-                          const descSummary=descs.length?descs.slice(0,3).join(" · ")+(descs.length>3?` +${descs.length-3} more`:""):"";
+                          const invItems=(ni.items||[]).filter(it=>it.desc||it.catDesc);
+                          const isHov=hoveredInvId===ni.id;
                           return(
                             <div
                               key={ni.id}
-                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setFocusedInvIdx(null);}}
-                              style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s"}}
-                              onMouseEnter={e=>e.currentTarget.style.background=C.goldLight}
-                              onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setFocusedInvIdx(null);setHoveredInvId(null);}}
+                              style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:isHov?C.goldLight:"transparent"}}
+                              onMouseEnter={()=>setHoveredInvId(ni.id)}
+                              onMouseLeave={()=>setHoveredInvId(null)}
                             >
                               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
                                 <span style={{fontWeight:700,color:C.ink,fontSize:13}}>{ni.invNo}</span>
@@ -15553,11 +15554,21 @@ function BoiRemittanceForm({showToast}){
                                   <span style={{fontWeight:600,color:C.ink,fontSize:12}}>{ni.currency} {(+ni.totalAmt||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                                 </div>
                               </div>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:descSummary?2:0}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:invItems.length?2:0}}>
                                 <span style={{color:C.inkMid,fontSize:11,fontWeight:500}}>{buyer||"—"}</span>
                                 <span style={{color:C.inkFaint,fontSize:11}}>{ni.date?fmtDate(ni.date):""}</span>
                               </div>
-                              {descSummary&&<div style={{fontSize:10,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{descSummary}</div>}
+                              {invItems.length>0&&(
+                                <div style={{marginTop:3,paddingTop:3,borderTop:`1px dashed ${C.border}`}}>
+                                  {(isHov?invItems:invItems.slice(0,2)).map((it,j)=>(
+                                    <div key={j} style={{fontSize:10,color:C.inkMid,display:"flex",gap:4,marginBottom:1}}>
+                                      {(it.qty||it.unit)&&<span style={{color:C.inkFaint,flexShrink:0}}>{[it.qty,it.unit].filter(Boolean).join(" ")}</span>}
+                                      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.desc||it.catDesc}</span>
+                                    </div>
+                                  ))}
+                                  {!isHov&&invItems.length>2&&<div style={{fontSize:10,color:C.inkFaint}}>+{invItems.length-2} more…</div>}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
