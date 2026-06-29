@@ -15517,7 +15517,7 @@ function BoiRemittanceForm({showToast}){
             </div>
             {form.invoices.map((inv,i)=>{
               const q=(inv.no||"").toLowerCase();
-              const matches=ngInvoices.filter(ni=>!q||(ni.invNo||"").toLowerCase().includes(q)||(ni.buyerName||ni.buyer||"").toLowerCase().includes(q)).slice(0,12);
+              const matches=ngInvoices.filter(ni=>!q||(ni.invNo||"").toLowerCase().includes(q)||(ni.buyerName||ni.buyer||"").toLowerCase().includes(q));
               return(
                 <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"start"}}>
                   <div style={{position:"relative"}}>
