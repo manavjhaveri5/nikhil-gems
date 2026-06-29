@@ -15395,7 +15395,7 @@ function BoiRemittanceForm({showToast}){
   const setInv=(i,k,v)=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],[k]:v};return{...f,invoices:invs};});
   const [ngInvoices,setNgInvoices]=useState([]);
   const [focusedInvIdx,setFocusedInvIdx]=useState(null);
-  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d))setNgInvoices(d.filter(inv=>!["draft","cancelled"].includes((inv.status||"").toLowerCase())).sort((a,b)=>(b.date||"").localeCompare(a.date||"")));});},[]);
+  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d))setNgInvoices(d.filter(inv=>(inv.status||"").toLowerCase()!=="cancelled").sort((a,b)=>(b.date||"").localeCompare(a.date||"")));});},[]);
 
   const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
 
