@@ -15436,11 +15436,28 @@ function BoiRemittanceForm({showToast}){
         sigDate:form.sigDate,sigPlace:form.sigPlace,
         boiPdfBytes,sigJpegBytes,
       });
+      const fileName=`BOI_${form.remName.replace(/\s+/g,"_")}_${form.sigDate}.pdf`;
       const blob=new Blob([pdfBytes],{type:"application/pdf"});
       const url=URL.createObjectURL(blob);
-      Object.assign(document.createElement("a"),{href:url,download:`BOI_${form.remName.replace(/\s+/g,"_")}_${form.sigDate}.pdf`}).click();
+      Object.assign(document.createElement("a"),{href:url,download:fileName}).click();
       setTimeout(()=>URL.revokeObjectURL(url),3000);
       showToast("✓ BOI remittance form downloaded");
+      // Auto-attach to linked invoices
+      const srcIds=form.invoices.filter(i=>i.no.trim()&&i.srcId).map(i=>i.srcId);
+      if(srcIds.length){
+        try{
+          const file=new File([blob],fileName,{type:"application/pdf"});
+          const freshInvs=await loadKFresh("ng-invoices-v2")||[];
+          const uploadedAtt=await uploadInvoiceShipmentAttachment("ng",srcIds[0],file,"BOI Remittance");
+          const patched=freshInvs.map(inv=>{
+            if(!srcIds.includes(inv.id))return inv;
+            const atts=Array.isArray(inv.attachments)?inv.attachments:[];
+            return{...inv,attachments:[...atts,uploadedAtt]};
+          });
+          await saveK("ng-invoices-v2",patched);
+          showToast("✓ BOI form attached to invoice");
+        }catch(e){console.error("BOI attach failed:",e);}
+      }
     }catch(e){showToast("Error: "+e.message);}
     finally{setGenerating(false);}
   };
@@ -15540,7 +15557,7 @@ function BoiRemittanceForm({showToast}){
                           return(
                             <div
                               key={ni.id}
-                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());if(ni.currency)setF("currency",ni.currency);if(ni.totalAmt)setF("amount",String(parseFloat((+ni.totalAmt).toFixed(2))));const bn=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";if(bn)setF("remName",bn);setFocusedInvIdx(null);setHoveredInvId(null);}}
+                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setInv(i,"srcId",ni.id||"");if(ni.currency)setF("currency",ni.currency);if(ni.totalAmt)setF("amount",String(parseFloat((+ni.totalAmt).toFixed(2))));const bn=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";if(bn)setF("remName",bn);setFocusedInvIdx(null);setHoveredInvId(null);}}
                               style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:hoveredInvId===ni.id?C.goldLight:"transparent"}}
                               onMouseEnter={()=>setHoveredInvId(ni.id)}
                               onMouseLeave={()=>setHoveredInvId(null)}
