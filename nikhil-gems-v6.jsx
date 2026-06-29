@@ -15540,7 +15540,7 @@ function BoiRemittanceForm({showToast}){
                           return(
                             <div
                               key={ni.id}
-                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());if(ni.currency)setF("currency",ni.currency);if(ni.totalAmt)setF("amount",String(+ni.totalAmt));setFocusedInvIdx(null);setHoveredInvId(null);}}
+                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());if(ni.currency)setF("currency",ni.currency);if(ni.totalAmt)setF("amount",String(+ni.totalAmt));const bn=ni.buyerName||ni.buyer||"";if(bn)setF("remName",bn);setFocusedInvIdx(null);setHoveredInvId(null);}}
                               style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:hoveredInvId===ni.id?C.goldLight:"transparent"}}
                               onMouseEnter={()=>setHoveredInvId(ni.id)}
                               onMouseLeave={()=>setHoveredInvId(null)}
