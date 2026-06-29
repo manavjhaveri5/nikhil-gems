@@ -15537,13 +15537,11 @@ function BoiRemittanceForm({showToast}){
                           const stColor=st==="paid"?C.green:st==="unpaid"?C.amber:C.inkFaint;
                           const stBg=st==="paid"?C.greenBg:st==="unpaid"?C.amberBg:C.card;
                           const buyer=ni.buyerName||ni.buyer||"";
-                          const invItems=(ni.items||[]).filter(it=>it.desc||it.catDesc);
-                          const isHov=hoveredInvId===ni.id;
                           return(
                             <div
                               key={ni.id}
                               onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setFocusedInvIdx(null);setHoveredInvId(null);}}
-                              style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:isHov?C.goldLight:"transparent"}}
+                              style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:hoveredInvId===ni.id?C.goldLight:"transparent"}}
                               onMouseEnter={()=>setHoveredInvId(ni.id)}
                               onMouseLeave={()=>setHoveredInvId(null)}
                             >
@@ -15554,26 +15552,31 @@ function BoiRemittanceForm({showToast}){
                                   <span style={{fontWeight:600,color:C.ink,fontSize:12}}>{ni.currency} {(+ni.totalAmt||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                                 </div>
                               </div>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:invItems.length?2:0}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                                 <span style={{color:C.inkMid,fontSize:11,fontWeight:500}}>{buyer||"—"}</span>
                                 <span style={{color:C.inkFaint,fontSize:11}}>{ni.date?fmtDate(ni.date):""}</span>
                               </div>
-                              {invItems.length>0&&(
-                                <div style={{marginTop:3,paddingTop:3,borderTop:`1px dashed ${C.border}`}}>
-                                  {(isHov?invItems:invItems.slice(0,2)).map((it,j)=>(
-                                    <div key={j} style={{fontSize:10,color:C.inkMid,display:"flex",gap:4,marginBottom:1}}>
-                                      {(it.qty||it.unit)&&<span style={{color:C.inkFaint,flexShrink:0}}>{[it.qty,it.unit].filter(Boolean).join(" ")}</span>}
-                                      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.desc||it.catDesc}</span>
-                                    </div>
-                                  ))}
-                                  {!isHov&&invItems.length>2&&<div style={{fontSize:10,color:C.inkFaint}}>+{invItems.length-2} more…</div>}
-                                </div>
-                              )}
                             </div>
                           );
                         })}
                       </div>
                     )}
+                    {(()=>{
+                      const hov=focusedInvIdx===i&&hoveredInvId?matches.find(ni=>ni.id===hoveredInvId):null;
+                      const items=(hov?.items||[]).filter(it=>it.desc||it.catDesc);
+                      if(!hov||!items.length)return null;
+                      return(
+                        <div style={{position:"absolute",top:"calc(100% + 2px)",left:"calc(100% + 8px)",zIndex:102,width:230,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 6px 20px #0004",padding:"10px 12px",pointerEvents:"none"}}>
+                          <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6,letterSpacing:.3}}>{hov.invNo} · {hov.buyerName||hov.buyer||""}</div>
+                          {items.map((it,j)=>(
+                            <div key={j} style={{display:"flex",gap:6,marginBottom:4,alignItems:"flex-start"}}>
+                              <span style={{fontSize:10,color:C.inkFaint,flexShrink:0,minWidth:40,textAlign:"right",paddingTop:1}}>{[it.qty,it.unit].filter(Boolean).join(" ")||""}</span>
+                              <span style={{fontSize:11,color:C.ink,lineHeight:1.35}}>{it.desc||it.catDesc}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                   <input type="date" value={inv.date} onChange={e=>setInv(i,"date",e.target.value)} style={FI}/>
                   {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>:<div/>}
