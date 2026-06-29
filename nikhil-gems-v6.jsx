@@ -15395,7 +15395,7 @@ function BoiRemittanceForm({showToast}){
   const setInv=(i,k,v)=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],[k]:v};return{...f,invoices:invs};});
   const [ngInvoices,setNgInvoices]=useState([]);
   const [focusedInvIdx,setFocusedInvIdx]=useState(null);
-  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d))setNgInvoices(d.filter(inv=>!["draft","cancelled"].includes((inv.status||"").toLowerCase())));});},[]);
+  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d))setNgInvoices(d.filter(inv=>!["draft","cancelled"].includes((inv.status||"").toLowerCase())).sort((a,b)=>(b.date||"").localeCompare(a.date||"")));});},[]);
 
   const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
 
@@ -15517,7 +15517,7 @@ function BoiRemittanceForm({showToast}){
             </div>
             {form.invoices.map((inv,i)=>{
               const q=(inv.no||"").toLowerCase();
-              const matches=ngInvoices.filter(ni=>!q||(ni.invNo||"").toLowerCase().includes(q)).slice(0,8);
+              const matches=ngInvoices.filter(ni=>!q||(ni.invNo||"").toLowerCase().includes(q)||(ni.buyerName||ni.buyer||"").toLowerCase().includes(q)).slice(0,12);
               return(
                 <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"start"}}>
                   <div style={{position:"relative"}}>
