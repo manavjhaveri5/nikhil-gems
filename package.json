@@ -4,6 +4,10 @@
   "version": "1.0.0",
   "type": "module",
   "main": "electron/main.cjs",
+  "author": {
+    "name": "Nikhil Gems",
+    "email": "nikhilgems@nikhilgems.com"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
