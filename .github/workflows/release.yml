@@ -16,10 +16,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            label: macOS
-          - os: windows-latest
-            label: Windows
           - os: ubuntu-latest
             label: Linux
 
@@ -29,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: claude/misc-module-integration-iu795l
+          ref: main
 
       - uses: actions/setup-node@v4
         with:
@@ -39,9 +35,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Linux needs rpmbuild / fakeroot for certain targets
       - name: Install Linux build tools
-        if: runner.os == 'Linux'
         run: sudo apt-get install -y rpm fakeroot
 
       - name: Build & publish Electron app
