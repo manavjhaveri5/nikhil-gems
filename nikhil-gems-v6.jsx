@@ -15535,6 +15535,9 @@ function BoiRemittanceForm({showToast}){
                           const st=(ni.status||"").toLowerCase();
                           const stColor=st==="paid"?C.green:st==="unpaid"?C.amber:C.inkFaint;
                           const stBg=st==="paid"?C.greenBg:st==="unpaid"?C.amberBg:C.card;
+                          const buyer=ni.buyerName||ni.buyer||"";
+                          const descs=(ni.items||[]).map(it=>it.desc||it.catDesc||"").filter(Boolean);
+                          const descSummary=descs.length?descs.slice(0,3).join(" · ")+(descs.length>3?` +${descs.length-3} more`:""):"";
                           return(
                             <div
                               key={ni.id}
@@ -15543,17 +15546,18 @@ function BoiRemittanceForm({showToast}){
                               onMouseEnter={e=>e.currentTarget.style.background=C.goldLight}
                               onMouseLeave={e=>e.currentTarget.style.background="transparent"}
                             >
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
                                 <span style={{fontWeight:700,color:C.ink,fontSize:13}}>{ni.invNo}</span>
                                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                                   {st&&<span style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,padding:"2px 6px",borderRadius:4,background:stBg,color:stColor}}>{st}</span>}
                                   <span style={{fontWeight:600,color:C.ink,fontSize:12}}>{ni.currency} {(+ni.totalAmt||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                                 </div>
                               </div>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                                <span style={{color:C.inkMid,fontSize:11}}>{ni.buyer||"—"}</span>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:descSummary?2:0}}>
+                                <span style={{color:C.inkMid,fontSize:11,fontWeight:500}}>{buyer||"—"}</span>
                                 <span style={{color:C.inkFaint,fontSize:11}}>{ni.date?fmtDate(ni.date):""}</span>
                               </div>
+                              {descSummary&&<div style={{fontSize:10,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{descSummary}</div>}
                             </div>
                           );
                         })}
