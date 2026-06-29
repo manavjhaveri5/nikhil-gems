@@ -16,7 +16,6 @@ directories:
 files:
   - electron/**/*
   - package.json
-  - "!node_modules/**"
   - "!src/**"
   - "!public/**"
   - "!dist/**"
@@ -25,14 +24,14 @@ files:
 # Rebuild native modules for Electron
 npmRebuild: true
 
-# ── Auto-update: publish to GitHub Releases ──────────────────────
+# ── Auto-update: publish to GitHub Releases ──────────────────
 publish:
   - provider: github
     owner: manavjhaveri5
     repo: nikhil-gems
     releaseType: release
 
-# ── macOS ────────────────────────────────────────────────────────
+# ── macOS ────────────────────────────────────────────────
 mac:
   category: public.app-category.business
   icon: public/icon-512.png
@@ -55,7 +54,7 @@ dmg:
       type: link
       path: /Applications
 
-# ── Windows ──────────────────────────────────────────────────────
+# ── Windows ────────────────────────────────────────────────
 win:
   icon: public/icon-512.png
   target:
@@ -70,7 +69,7 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: Nikhil Gems
 
-# ── Linux ────────────────────────────────────────────────────────
+# ── Linux ────────────────────────────────────────────────
 linux:
   icon: public/icon-512.png
   category: Office

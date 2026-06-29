@@ -16,29 +16,29 @@
     "electron:release": "electron-builder --config electron-builder.yml --publish always"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
     "@supabase/supabase-js": "^2.99.1",
     "@vercel/blob": "^2.3.3",
     "@vercel/functions": "^3.4.4",
+    "@vitejs/plugin-react": "^4.3.1",
     "canvas-confetti": "^1.9.4",
-    "electron-updater": "^6.8.9",
+    "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
+    "electron": "^42.5.1",
+    "electron-builder": "^26.15.3",
     "jsbarcode": "^3.12.3",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^5.7.284",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "unpdf": "^1.6.2",
-    "xlsx": "^0.18.5"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
-    "concurrently": "^10.0.3",
-    "cross-env": "^10.1.0",
-    "electron": "^42.5.1",
-    "electron-builder": "^26.15.3",
     "supabase": "^2.83.0",
+    "unpdf": "^1.6.2",
     "vite": "^5.4.2",
     "vite-plugin-pwa": "^1.2.0",
-    "wait-on": "^9.0.10"
+    "wait-on": "^9.0.10",
+    "xlsx": "^0.18.5"
   }
 }
