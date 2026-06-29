@@ -28,8 +28,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: claude/misc-module-integration-iu795l
 
       - uses: actions/setup-node@v4
         with:
