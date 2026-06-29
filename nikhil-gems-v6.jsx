@@ -15393,6 +15393,9 @@ function BoiRemittanceForm({showToast}){
   const addInv=()=>setForm(f=>({...f,invoices:[...f.invoices,blankInv()]}));
   const removeInv=i=>setForm(f=>({...f,invoices:f.invoices.filter((_,j)=>j!==i)}));
   const setInv=(i,k,v)=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],[k]:v};return{...f,invoices:invs};});
+  const [ngInvoices,setNgInvoices]=useState([]);
+  const [focusedInvIdx,setFocusedInvIdx]=useState(null);
+  useEffect(()=>{loadK("ng-invoices-v2").then(d=>{if(Array.isArray(d))setNgInvoices(d.filter(inv=>!["draft","cancelled"].includes((inv.status||"").toLowerCase())));});},[]);
 
   const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
 
@@ -15512,13 +15515,42 @@ function BoiRemittanceForm({showToast}){
             <div style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:4,padding:"0 2px"}}>
               {["Invoice No","Date",""].map((h,i)=><div key={i} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>{h}</div>)}
             </div>
-            {form.invoices.map((inv,i)=>(
-              <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"center"}}>
-                <input value={inv.no} onChange={e=>setInv(i,"no",e.target.value)} style={FI} placeholder="NG-06-2026/27"/>
-                <input type="date" value={inv.date} onChange={e=>setInv(i,"date",e.target.value)} style={FI}/>
-                {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>:<div/>}
-              </div>
-            ))}
+            {form.invoices.map((inv,i)=>{
+              const q=(inv.no||"").toLowerCase();
+              const matches=ngInvoices.filter(ni=>!q||(ni.invNo||"").toLowerCase().includes(q)).slice(0,8);
+              return(
+                <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"start"}}>
+                  <div style={{position:"relative"}}>
+                    <input
+                      value={inv.no}
+                      onChange={e=>setInv(i,"no",e.target.value)}
+                      onFocus={()=>setFocusedInvIdx(i)}
+                      onBlur={()=>setTimeout(()=>setFocusedInvIdx(prev=>prev===i?null:prev),150)}
+                      style={FI}
+                      placeholder="Type to search invoices…"
+                    />
+                    {focusedInvIdx===i&&matches.length>0&&(
+                      <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,boxShadow:"0 4px 12px #0002",maxHeight:200,overflowY:"auto"}}>
+                        {matches.map(ni=>(
+                          <div
+                            key={ni.id}
+                            onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setFocusedInvIdx(null);}}
+                            style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",fontSize:12}}
+                            onMouseEnter={e=>e.currentTarget.style.background=C.goldLight}
+                            onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+                          >
+                            <span style={{fontWeight:600,color:C.ink}}>{ni.invNo}</span>
+                            <span style={{color:C.inkMid,fontSize:11}}>{ni.currency} {(+ni.totalAmt||0).toFixed(2)}{ni.buyer?` · ${ni.buyer}`:""}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <input type="date" value={inv.date} onChange={e=>setInv(i,"date",e.target.value)} style={FI}/>
+                  {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>:<div/>}
+                </div>
+              );
+            })}
             <button onClick={addInv} style={{fontSize:12,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>+ Add Invoice</button>
           </>
         )}
