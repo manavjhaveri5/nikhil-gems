@@ -16,6 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - os: macos-latest
+            label: macOS
+          - os: windows-latest
+            label: Windows
           - os: ubuntu-latest
             label: Linux
 
@@ -35,7 +39,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Linux needs rpmbuild / fakeroot for certain targets
       - name: Install Linux build tools
+        if: runner.os == 'Linux'
         run: sudo apt-get install -y rpm fakeroot
 
       - name: Build & publish Electron app
