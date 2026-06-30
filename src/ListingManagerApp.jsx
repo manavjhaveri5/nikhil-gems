@@ -941,6 +941,38 @@ function ListingForm({ initial, stock, onSave, onClose }) {
             </div>
           </Section>
 
+          {/* ── Per-platform title / description overrides ───────────────── */}
+          <Section title="Platform Overrides" action={
+            <span style={{ fontSize: 11, color: C.inkFaint }}>optional — leave blank to use main title/description</span>
+          }>
+            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 16 }}>
+              <div>
+                <Label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 12, background: C.goldLight, color: C.gold, borderRadius: 4, padding: "1px 7px", fontWeight: 700 }}>Etsy</span>
+                  Title override
+                </Label>
+                <input value={form.etsy_title || ""} onChange={e => set("etsy_title", e.target.value)}
+                  placeholder={form.title || "Same as main title"} style={FI()} />
+                <Label style={{ marginTop: 10 }}>Description override</Label>
+                <textarea value={form.etsy_description || ""} onChange={e => set("etsy_description", e.target.value)}
+                  rows={3} placeholder="Same as main description"
+                  style={{ ...FI(), resize: "vertical" }} />
+              </div>
+              <div>
+                <Label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 12, background: C.greenBg, color: C.green, borderRadius: 4, padding: "1px 7px", fontWeight: 700 }}>Shopify</span>
+                  Title override
+                </Label>
+                <input value={form.shopify_title || ""} onChange={e => set("shopify_title", e.target.value)}
+                  placeholder={form.title || "Same as main title"} style={FI()} />
+                <Label style={{ marginTop: 10 }}>Description override</Label>
+                <textarea value={form.shopify_description || ""} onChange={e => set("shopify_description", e.target.value)}
+                  rows={3} placeholder="Same as main description"
+                  style={{ ...FI(), resize: "vertical" }} />
+              </div>
+            </div>
+          </Section>
+
           {/* ── Photos & video ───────────────────────────────────────────── */}
           <Section title="Photos & Video" action={
             <span style={{ fontSize: 11, color: C.inkFaint }}>
@@ -5092,6 +5124,17 @@ export default function ListingManagerApp({ onHome }) {
 
   /* publish — syncOnly=true means update fields only, never activate */
   const handlePublish = async (listing, pkey, { syncOnly = false } = {}) => {
+    // Apply per-platform title/description overrides into _ai so the API picks them up
+    const ai = { ...(listing._ai || {}) };
+    if (pkey === "etsy") {
+      if (listing.etsy_title)       ai.etsy_title       = listing.etsy_title;
+      if (listing.etsy_description) ai.etsy_description = listing.etsy_description;
+    } else if (pkey === "shopify_aty" || pkey === "shopify_earth") {
+      if (listing.shopify_title)       ai.shopify_title       = listing.shopify_title;
+      if (listing.shopify_description) ai.shopify_description = listing.shopify_description;
+    }
+    listing = { ...listing, _ai: ai };
+
     let result;
 
     if (pkey === "ebay") {
