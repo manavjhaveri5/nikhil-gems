@@ -5646,14 +5646,13 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [sortBy,setSortBy]=useState("date");const [aiTagging,setAiTagging]=useState(false);const [toast,setToast]=useState("");const [selected,setSelected]=useState(null);const [loaded,setLoaded]=useState(()=>readCache(KEYS.stock)!==null);const [selectMode,setSelectMode]=useState(false);const [selectedIds,setSelectedIds]=useState(new Set());const [accSelectMode,setAccSelectMode]=useState(false);const [accSelectedIds,setAccSelectedIds]=useState(new Set());
   const PAGE_SIZE=36;
   const [visibleCount,setVisibleCount]=useState(PAGE_SIZE);
-  const sentinelRef=useRef(null);
+  const [sentinelEl,setSentinelEl]=useState(null);
   useEffect(()=>{
-    const el=sentinelRef.current;
-    if(!el)return;
-    const obs=new IntersectionObserver(entries=>{if(entries[0].isIntersecting)setVisibleCount(c=>c+PAGE_SIZE);},{rootMargin:"200px"});
-    obs.observe(el);
+    if(!sentinelEl)return;
+    const obs=new IntersectionObserver(entries=>{if(entries[0].isIntersecting)setVisibleCount(c=>c+PAGE_SIZE);},{rootMargin:"400px"});
+    obs.observe(sentinelEl);
     return()=>obs.disconnect();
-  },[]);
+  },[sentinelEl]);
   const [qtyFilter,setQtyFilter]=useState("in-stock"); // "in-stock" | "all" | "sold"
   const [summaryOpen,setSummaryOpen]=useState(false);
   const [summaryDate,setSummaryDate]=useState(today());
@@ -7078,7 +7077,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     </div>
                   );})}
                   </div>
-                  {visibleCount<filtered.length&&<div ref={sentinelRef} style={{height:1}}/>}
+                  {visibleCount<filtered.length&&<div ref={setSentinelEl} style={{height:1}}/>}
                 </div>
               )}
               {/* Stock item detail panel */}
