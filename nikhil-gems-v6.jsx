@@ -3061,7 +3061,7 @@ function JobWorkApp({onHome}){
 const JOURNAL_KEY="ng-journal-v1";
 const JOURNAL_EXIT_REASONS=["Job work","Sale of goods","Consignment"];
 const JOURNAL_ENTRY_REASONS=["Purchase received","Selection received","Return received","Consignment received"];
-const journalLine=(seed={})=>({id:uid(),vendorId:seed.vendorId||"",vendorName:seed.vendorName||"",material:"",shape:"",qty:"",unit:"pcs",qty2:"",unit2:"kg",notes:""});
+const journalLine=(seed={})=>({id:uid(),vendorId:seed.vendorId||"",vendorName:seed.vendorName||"",material:"",shape:"",qty:"",unit:"kg",qty2:"",unit2:"pcs",notes:""});
 const journalLines=e=>Array.isArray(e?.items)&&e.items.length
   ?e.items.map(it=>({...it,vendorId:it.vendorId||e?.vendorId||"",vendorName:it.vendorName||e?.vendorName||""}))
   :[{id:"legacy",vendorId:e?.vendorId||"",vendorName:e?.vendorName||"",material:e?.material||"",shape:e?.shape||"",qty:e?.qty||"",unit:e?.unit||"pcs",qty2:e?.qty2||"",unit2:e?.unit2||"kg",notes:e?.itemNotes||e?.lineNotes||e?.grade||""}];
@@ -4972,7 +4972,7 @@ ${vendorBlocks}
               </div>
             </div>
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"1fr":"1fr 1fr",gap:12}}>
-              <Field label="Date"><input type="date" value={form.date} onChange={e=>setF("date")(e.target.value)} style={inputS}/></Field>
+              <Field label="Date"><input type="date" value={form.date||today()} onChange={e=>setF("date")(e.target.value)} style={inputS}/></Field>
               {form.type==="exit"&&(
                 <Field label="Customer">
                   <input value={form.customerName||""} onChange={e=>{const val=e.target.value;const b=buyers.find(x=>(x.name||"").toLowerCase()===val.toLowerCase());setForm(f=>({...f,customerName:val,customerId:b?.id||""}));}} style={inputS} placeholder="Select or type customer" list="jnl-buyers"/>
@@ -5026,14 +5026,15 @@ ${vendorBlocks}
           <div style={{...glass,padding:"18px 20px"}}>
             <div style={sectionTitle}>{form.type==="entry"?"Entry details":"Exit details"}</div>
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12}}>
+              {form.type==="exit"&&(
               <Field label="Reason">
                 <div style={{position:"relative"}}>
-                  <input value={form.reason||form.exitReason||""} onChange={e=>setF("reason")(e.target.value)} list={form.type==="entry"?"jnl-entry-reasons":"jnl-exit-reasons"} style={{...inputS,paddingRight:48}} placeholder={form.type==="entry"?"Type reason":"Job work, sale of goods, consignment..."} />
+                  <input value={form.reason||form.exitReason||""} onChange={e=>setF("reason")(e.target.value)} list="jnl-exit-reasons" style={{...inputS,paddingRight:48}} placeholder="Job work, sale of goods, consignment..." />
                   <button onClick={handleAIParse} disabled={aiLoading||!String(form.reason||"").trim()} title="Parse reason into first item" style={{position:"absolute",right:8,top:7,background:aiLoading?"#F3F4F6":"#F5F5F7",border:"1px solid #D1D5DB",borderRadius:6,padding:"3px 8px",cursor:"pointer",fontSize:12,lineHeight:1,opacity:aiLoading||!String(form.reason||"").trim()?.35:1}}>{aiLoading?"...":"AI"}</button>
                 </div>
-                <datalist id="jnl-entry-reasons">{JOURNAL_ENTRY_REASONS.map(r=><option key={r} value={r}/>)}</datalist>
                 <datalist id="jnl-exit-reasons">{JOURNAL_EXIT_REASONS.map(r=><option key={r} value={r}/>)}</datalist>
               </Field>
+              )}
               {form.type==="exit"&&(
                 <Field label={t("Linked stock entry")}>
                   <select value={form.linkedEntryId||""} onChange={e=>setF("linkedEntryId")(e.target.value)} style={{...inputS,cursor:"pointer"}}>
@@ -5056,14 +5057,15 @@ ${vendorBlocks}
               )}
               {form.type==="entry"&&(
                 <Field label="Courier">
-                  <select value={form.courier||"Mukesh Angadia"} onChange={e=>setF("courier")(e.target.value)} style={{...inputS,cursor:"pointer"}}>
-                    {["Mukesh Angadia","Anjali courier"].map(c=><option key={c} value={c}>{c}</option>)}
-                  </select>
+                  <input value={form.courier||"Mukesh Angadia"} onChange={e=>setF("courier")(e.target.value)} list="jnl-couriers" style={inputS} placeholder="Select or type courier"/>
+                  <datalist id="jnl-couriers"><option value="Mukesh Angadia"/><option value="Anjali courier"/></datalist>
                 </Field>
               )}
+              {form.type==="exit"&&(
               <Field label="Record notes">
                 <input value={form.notes||""} onChange={e=>setF("notes")(e.target.value)} style={inputS} placeholder="Optional internal note"/>
               </Field>
+              )}
             </div>
             {linkedEntry&&<div style={{marginTop:12,padding:"10px 12px",borderRadius:8,background:"#F8FAFC",border:"1px solid #E5E7EB",fontSize:12,color:"#4B5563"}}>Linked to {fmtDate(linkedEntry.date)} from <strong>{journalParty(linkedEntry)||"vendor"}</strong>: {journalSummary(linkedEntry)}</div>}
           </div>
