@@ -4606,6 +4606,7 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
   const [packetNotes,setPacketNotes]=useState("");
   const [packetStore,setPacketStore]=useState([]);
   const [vendors,setVendors]=useState([]);
+  const [images,setImages]=useState([]);
   const [buyers,setBuyers]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const [view,setView]=useState("list"); // "list"|"form"
@@ -4627,9 +4628,10 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
   const [poDetail,setPoDetail]=useState(null);
 
   useEffect(()=>{
-    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors),loadK(INV_KEYS.buyers),loadK(CUSTOMER_ORDERS_KEY),loadK(KEYS.purchases),loadK(INV_KEYS.invoices),loadK(ACCOUNTANT_PACKET_KEY)]).then(([j,v,b,co,p,inv,packets])=>{
+    Promise.all([loadK(JOURNAL_KEY),loadK(KEYS.vendors),loadK(INV_KEYS.buyers),loadK(CUSTOMER_ORDERS_KEY),loadK(KEYS.purchases),loadK(INV_KEYS.invoices),loadK(ACCOUNTANT_PACKET_KEY),loadK("ng-image-library-v1")]).then(([j,v,b,co,p,inv,packets,imgs])=>{
       setEntries(Array.isArray(j)?j:[]);
       setVendors(Array.isArray(v)?v:[]);
+      setImages(Array.isArray(imgs)?imgs:[]);
       setBuyers(Array.isArray(b)?b:[]);
       setCustomerOrders(Array.isArray(co)?co:[]);
       setPurchases(Array.isArray(p)?p:[]);
@@ -4654,6 +4656,16 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",courier:"Mukesh Angadia",boxCount:"",boxWeight:"",boxWeightUnit:"kg",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
+  // Pull a reference photo from the Image Library: exact stone+shape, else same stone (any shape), else blank.
+  const stoneImageFor=(material,shape)=>{
+    const m=String(material||"").trim().toLowerCase();
+    if(!m)return"";
+    const sh=String(shape||"").trim().toLowerCase();
+    const pics=images.filter(i=>i&&i.imageUrl&&i.mediaType!=="video");
+    const exact=sh&&pics.find(i=>String(i.name||"").trim().toLowerCase()===m&&String(i.category||"").trim().toLowerCase()===sh);
+    const byStone=pics.find(i=>String(i.name||"").trim().toLowerCase()===m);
+    return (exact||byStone||{}).imageUrl||"";
+  };
   const blankCustomerOrder=()=>({id:uid(),date:today(),customerId:"",customerName:"",status:"Open",items:[customerOrderLine()],notes:"",createdAt:new Date().toISOString(),updatedAt:""});
   const nextAccountingPO=()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;};
   const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
@@ -4986,7 +4998,8 @@ ${vendorBlocks}
           <div style={{...glass,padding:"18px 20px"}}>
             <div style={sectionTitle}>Items</div>
             {items.map((it,idx)=>(
-              <div key={it.id||idx} style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"minmax(150px,1.05fr) minmax(170px,1.2fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(170px,1.05fr) 30px":"minmax(190px,1.3fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(190px,1.3fr) 30px",gap:10,alignItems:"end",padding:"10px 0",borderTop:idx?`1px solid ${C.border}`:"none"}}>
+              <div key={it.id||idx} style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"44px minmax(150px,1.05fr) minmax(170px,1.2fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(170px,1.05fr) 30px":"44px minmax(190px,1.3fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(190px,1.3fr) 30px",gap:10,alignItems:"end",padding:"10px 0",borderTop:idx?`1px solid ${C.border}`:"none"}}>
+                {(()=>{const src=stoneImageFor(it.material,it.shape);return src?<img src={src} alt="" title={[it.material,it.shape].filter(Boolean).join(" · ")} style={{width:40,height:40,borderRadius:8,objectFit:"cover",border:`1px solid ${C.border}`,alignSelf:"end"}}/>:<span/>;})()}
                 {form.type==="entry"&&(
                   <Field label={idx===0?"Vendor":""}>
                     <input value={it.vendorName||""} onChange={e=>setItem(idx,"vendorName",e.target.value)} list="jnl-vendors" style={inputS} placeholder="Select or type vendor"/>
