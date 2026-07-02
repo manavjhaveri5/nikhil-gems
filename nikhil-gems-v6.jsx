@@ -4673,7 +4673,8 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
     if(!form)return;
     if(form.type==="exit"&&!String(form.customerName||"").trim()){showToast("Please enter a customer");return;}
     const validItems=journalLines(form).filter(it=>String(it.material||"").trim()||String(it.shape||"").trim()||String(it.qty||"").trim()||String(it.notes||"").trim());
-    if(!validItems.length){showToast("Add at least one item");return;}
+    const hasBoxInfo=form.type==="entry"&&(String(form.boxWeight||"").trim()||String(form.boxCount||"").trim());
+    if(!validItems.length&&!hasBoxInfo){showToast("Add at least one item, or the box weight to save as a draft");return;}
     if(form.type==="entry"&&validItems.some(it=>!String(it.vendorName||"").trim())){showToast("Please enter vendor for each item");return;}
     setSaving(true);
     const buyer=buyers.find(b=>(b.name||"").toLowerCase()===String(form.customerName||"").toLowerCase());
@@ -5162,11 +5163,13 @@ ${vendorBlocks}
               const borderCol=isIn?"#34C759":"#FF3B30";
               const linked=entries.find(e=>e.id===entry.linkedEntryId);
               const lines=journalLines(entry);
+              const isDraft=isIn&&!lines.some(it=>String(it.material||"").trim()||String(it.shape||"").trim()||String(it.qty||"").trim());
               return(
                 <div key={entry.id} onClick={()=>{setForm(normalizeJournalForm(entry));setView("form");}} style={{background:"rgba(255,255,255,.88)",border:`1px solid ${C.border}`,borderLeft:`4px solid ${borderCol}`,borderRadius:8,padding:"13px 14px",cursor:"pointer",transition:"box-shadow .15s, transform .15s",boxShadow:"0 1px 2px rgba(15,23,42,.04)"}} onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 10px 28px rgba(15,23,42,.10)";e.currentTarget.style.transform="translateY(-1px)";}} onMouseLeave={e=>{e.currentTarget.style.boxShadow="0 1px 2px rgba(15,23,42,.04)";e.currentTarget.style.transform="none";}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:5,gap:8}}>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:borderCol,background:isIn?"#F0FFF4":"#FFF5F5",borderRadius:8,padding:"3px 8px"}}>{isIn?"Stock In":"Stock Out"}</span>
+                      {isDraft&&<span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:"#B45309",background:"#FEF3C7",borderRadius:8,padding:"3px 8px"}}>Draft</span>}
                       {entry.auto&&<span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:"#2563EB",background:"#EFF6FF",borderRadius:8,padding:"3px 8px"}} title={entry.sourceInvNo?`Auto-created from invoice ${entry.sourceInvNo}`:"Auto-created from an invoice"}>⚡ Auto{entry.sourceInvNo?` · ${entry.sourceInvNo}`:""}</span>}
                       {entry.reason&&<span style={{fontSize:11,color:"#6B7280"}}>{entry.reason}</span>}
                       {isIn&&(entry.boxCount||entry.boxWeight)&&<span style={{fontSize:11,color:C.amber,background:C.amberBg,borderRadius:8,padding:"3px 8px",fontWeight:700}}>{[entry.boxCount?`${entry.boxCount} box${+entry.boxCount===1?"":"es"}`:"",entry.boxWeight?`${entry.boxWeight} ${entry.boxWeightUnit||"kg"}`:""].filter(Boolean).join(" · ")}</span>}
