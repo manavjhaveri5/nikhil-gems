@@ -3069,7 +3069,7 @@ const journalParty=e=>e?.type==="exit"?(e.customerName||e.buyerName||e.vendorNam
 const journalQtyText=it=>[it.qty?`${it.qty} ${it.unit||"pcs"}`:"",it.qty2?`${it.qty2} ${it.unit2||"kg"}`:""].filter(Boolean).join(" / ");
 const journalItemText=it=>`${[it.material,it.shape].filter(Boolean).join(" · ")||"Item"}${journalQtyText(it)?` · ${journalQtyText(it)}`:""}`;
 const journalSummary=e=>journalLines(e).map(journalItemText).join(" | ");
-const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||""),boxCount:e.boxCount||"",boxWeight:e.boxWeight||"",boxWeightUnit:e.boxWeightUnit||"kg"});
+const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||""),courier:e.courier||"",boxCount:e.boxCount||"",boxWeight:e.boxWeight||"",boxWeightUnit:e.boxWeightUnit||"kg"});
 const CUSTOMER_ORDERS_KEY="ng-customer-orders-v1";
 const CUSTOMER_ORDER_STATUS=["Open","PO Created","Part Ready","Ready","Fulfilled","Cancelled"];
 const ACCOUNTANT_PACKET_KEY="ng-accountant-packets-v1";
@@ -4653,7 +4653,7 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
   },[packetMonth]);
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
-  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",boxCount:"",boxWeight:"",boxWeightUnit:"kg",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
+  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",courier:"Mukesh Angadia",boxCount:"",boxWeight:"",boxWeightUnit:"kg",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
   const blankCustomerOrder=()=>({id:uid(),date:today(),customerId:"",customerName:"",status:"Open",items:[customerOrderLine()],notes:"",createdAt:new Date().toISOString(),updatedAt:""});
   const nextAccountingPO=()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;};
   const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
@@ -4687,6 +4687,7 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
       vendorId:form.type==="entry"?(firstVendor?.vendorId||""):"",
       vendorName:form.type==="entry"?(firstVendor?.vendorName||""):"",
       customerId:form.type==="exit"?(buyer?.id||form.customerId||""):"",
+      courier:form.type==="entry"?(form.courier||"Mukesh Angadia"):"",
       boxCount:form.type==="entry"?String(form.boxCount||"").trim():"",
       boxWeight:form.type==="entry"?String(form.boxWeight||"").trim():"",
       boxWeightUnit:form.type==="entry"?(form.boxWeightUnit||"kg"):"",
@@ -5052,6 +5053,13 @@ ${vendorBlocks}
                   <div style={{fontSize:10,color:C.inkFaint,marginTop:4}}>Number of boxes · total weight of all boxes</div>
                 </Field>
               )}
+              {form.type==="entry"&&(
+                <Field label="Courier">
+                  <select value={form.courier||"Mukesh Angadia"} onChange={e=>setF("courier")(e.target.value)} style={{...inputS,cursor:"pointer"}}>
+                    {["Mukesh Angadia","Anjali courier"].map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                </Field>
+              )}
               <Field label="Record notes">
                 <input value={form.notes||""} onChange={e=>setF("notes")(e.target.value)} style={inputS} placeholder="Optional internal note"/>
               </Field>
@@ -5162,6 +5170,7 @@ ${vendorBlocks}
                       {entry.auto&&<span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:"#2563EB",background:"#EFF6FF",borderRadius:8,padding:"3px 8px"}} title={entry.sourceInvNo?`Auto-created from invoice ${entry.sourceInvNo}`:"Auto-created from an invoice"}>⚡ Auto{entry.sourceInvNo?` · ${entry.sourceInvNo}`:""}</span>}
                       {entry.reason&&<span style={{fontSize:11,color:"#6B7280"}}>{entry.reason}</span>}
                       {isIn&&(entry.boxCount||entry.boxWeight)&&<span style={{fontSize:11,color:C.amber,background:C.amberBg,borderRadius:8,padding:"3px 8px",fontWeight:700}}>{[entry.boxCount?`${entry.boxCount} box${+entry.boxCount===1?"":"es"}`:"",entry.boxWeight?`${entry.boxWeight} ${entry.boxWeightUnit||"kg"}`:""].filter(Boolean).join(" · ")}</span>}
+                      {isIn&&entry.courier&&<span style={{fontSize:11,color:C.inkMid,background:C.card,borderRadius:8,padding:"3px 8px"}}>🚚 {entry.courier}</span>}
                     </div>
                     <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                       <span style={{fontSize:11,color:C.inkFaint}}>{journalParty(entry)||"—"}</span>
@@ -16346,7 +16355,7 @@ const ALL_STAFF_MODS=[
   {id:"images",label:"Image Library"},
   {id:"bgremove",label:"Background Remover"},
   {id:"misc",label:"Miscellaneous"},
-  {id:"journal",label:"Accounting Journal"},
+  {id:"journal",label:"Stock Journal"},
 ];
 const TODO_KEY_FOR=(email)=>email?`ng-todos-${email.replace(/[^a-z0-9]/gi,"-")}-v1`:"ng-todos-v1";
 
