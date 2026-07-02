@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
-import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount } from "./src/utils.js";
+import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
@@ -4668,7 +4668,21 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
   };
   const blankCustomerOrder=()=>({id:uid(),date:today(),customerId:"",customerName:"",status:"Open",items:[customerOrderLine()],notes:"",createdAt:new Date().toISOString(),updatedAt:""});
   const nextAccountingPO=()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;};
-  const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
+  const saveJournalEntry=async(entry,{prepend=true}={})=>{
+    setEntries(prev=>{
+      const exists=prev.some(e=>e.id===entry.id);
+      return exists?prev.map(e=>e.id===entry.id?entry:e):(prepend?[entry,...prev]:[...prev,entry]);
+    });
+    const next=await upsertItemK(JOURNAL_KEY,entry,{prepend});
+    setEntries(next);
+    return next;
+  };
+  const deleteJournalEntry=async(id)=>{
+    setEntries(prev=>prev.filter(e=>e.id!==id));
+    const next=await deleteItemK(JOURNAL_KEY,id);
+    setEntries(next);
+    return next;
+  };
   const saveCustomerOrders=async(next)=>{setCustomerOrders(next);await saveK(CUSTOMER_ORDERS_KEY,next);};
   const savePurchases=async(next)=>{setPurchases(next);await savePurchasesK(next);};
   const savePacket=async(rows=packetRows,notes=packetNotes)=>{
@@ -4709,8 +4723,7 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
       createdAt:form.createdAt||new Date().toISOString()
     };
     const isEdit=entries.some(e=>e.id===entry.id);
-    const next=isEdit?entries.map(e=>e.id===entry.id?entry:e):[entry,...entries];
-    await saveEntries(next);
+    await saveJournalEntry(entry,{prepend:!isEdit});
     setSaving(false);
     setView("list");
     showToast(t("Entry saved"));
@@ -4718,7 +4731,7 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
 
   const handleDelete=async(id)=>{
     if(!window.confirm("Delete this entry?"))return;
-    await saveEntries(entries.filter(e=>e.id!==id));
+    await deleteJournalEntry(id);
     setView("list");
     showToast(t("Entry deleted"));
   };
@@ -7685,14 +7698,9 @@ async function compressImage(dataUrl,{maxPx=1600,quality=0.82,maxBytes=3.5*1024*
 }
 
 async function uploadToStorage(path,dataUrl){
-  // Route through server-side endpoint so service role key is used — works for all users regardless of Supabase RLS
-  const res=await fetch("/api/blob-upload?action=stock-photo",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path,dataUrl})});
-  let d;
-  try{d=await res.json();}catch{
-    throw new Error(res.status===413?"Image too large — please use a smaller photo":(`Server error ${res.status}`));
-  }
-  if(!res.ok||d.error)throw new Error(d.error||"Upload failed");
-  return d.url;
+  const blob=await (await fetch(dataUrl)).blob();
+  const file=new File([blob],path.split("/").pop()||"upload.jpg",{type:blob.type||"application/octet-stream"});
+  return await supabaseUpload(path,file);
 }
 
 async function uploadStockPhoto(itemId,file){
@@ -7774,6 +7782,13 @@ async function saveStockK(list,opts={}){
   const p=(_stockSaveQ=_stockSaveQ.then(run,run));
   return p;
 }
+const recordVersion=x=>Number.isFinite(+x?._version)?+x._version:0;
+const stockComparable=x=>{
+  if(!x||typeof x!=="object")return x;
+  const {_version,updatedAt,updatedBy,...rest}=x;
+  return rest;
+};
+const stockChanged=(a,b)=>JSON.stringify(stockComparable(a))!==JSON.stringify(stockComparable(b));
 async function _saveStockKImpl(list,opts={}){
   // Strip base64 blobs and temporary blob: URLs — only persist real https:// Storage URLs.
   const slim=list.map(s=>{
@@ -7783,13 +7798,14 @@ async function _saveStockKImpl(list,opts={}){
   });
   // direct=true: caller already has authoritative full state (e.g. dedup/migration).
   // Skip remote fetch+merge — just write the list as-is.
-  if(opts.direct){await saveK(KEYS.stock,slim);return;}
+  if(opts.direct){await saveK(KEYS.stock,slim,{merge:false});return;}
   const deletedIds=new Set(opts.deletedIds||[]);
   const fresh=await loadKFresh(KEYS.stock);
   const remote=Array.isArray(fresh)?fresh:[];
   const remoteById=new Map(remote.map(s=>[s.id,s]));
   const merged=[];
   const seen=new Set();
+  const localWrites=[];
   const newer=(a,b)=>{
     const at=a?.updatedAt?new Date(a.updatedAt).getTime():0;
     const bt=b?.updatedAt?new Date(b.updatedAt).getTime():0;
@@ -7798,14 +7814,25 @@ async function _saveStockKImpl(list,opts={}){
   for(const local of slim){
     if(!local?.id||deletedIds.has(local.id))continue;
     const remoteItem=remoteById.get(local.id);
-    merged.push(remoteItem&&newer(remoteItem,local)?remoteItem:local);
+    if(remoteItem&&recordVersion(remoteItem)!==recordVersion(local)&&newer(local,remoteItem)&&stockChanged(local,remoteItem)){
+      throw Object.assign(new Error("This stock item changed in another tab. Reload latest before saving."),{code:"STALE_RECORD",latest:remoteItem});
+    }
+    const useLocal=!remoteItem||newer(local,remoteItem);
+    const nextItem=useLocal?local:remoteItem;
+    if(useLocal&&(!remoteItem||stockChanged(local,remoteItem)))localWrites.push(local);
+    merged.push(nextItem);
     seen.add(local.id);
   }
   for(const remoteItem of remote){
     if(!remoteItem?.id||seen.has(remoteItem.id)||deletedIds.has(remoteItem.id))continue;
     merged.push(remoteItem);
   }
-  await saveK(KEYS.stock,merged);
+  if(localWrites.length&&deletedIds.size===0){
+    let next=remote;
+    for(const item of localWrites)next=await upsertVersionedItemK(KEYS.stock,item,{prepend:!remoteById.has(item.id),user:"Admin"});
+    return next;
+  }
+  await saveK(KEYS.stock,merged,{merge:false});
 }
 async function loadStockWithPhotos({fresh=false}={}){
   const rows=fresh?await loadKFresh(KEYS.stock):await loadK(KEYS.stock);
@@ -10162,6 +10189,17 @@ function InvoicesApp({onHome,startDraft}){
   const saveInvoice=async (inv,{navigateAway=true}={})=>{
     inv=await persistInvoiceShipmentAttachments(inv,company);
     setDraft(d=>d?.id===inv.id?inv:d);
+    const openedVersion=Number.isFinite(+inv._version)?+inv._version:0;
+    const latestForVersion=await loadKFresh(INV_KEYS.invoices).catch(()=>invoices);
+    const latestInv=Array.isArray(latestForVersion)?latestForVersion.find(i=>i.id===inv.id):null;
+    const latestVersion=Number.isFinite(+latestInv?._version)?+latestInv._version:0;
+    if(latestInv&&latestVersion!==openedVersion){
+      const who=latestInv.updatedBy||"someone else";
+      const when=latestInv.updatedAt?new Date(latestInv.updatedAt).toLocaleString():"recently";
+      const err=new Error(`This invoice was updated by ${who} at ${when}. Reload latest before saving.`);
+      err.code="STALE_RECORD";err.latest=latestInv;
+      throw err;
+    }
     // Diff-based stock update: restore old links then deduct new links.
     // This handles both new invoices (no old links) and edits (old links must be put back first).
     const newStock=[...stock];
@@ -10209,9 +10247,11 @@ function InvoicesApp({onHome,startDraft}){
       }
     });
     if(accChanged){setAccStock(newAccStock);await saveK(KEYS.accStock,newAccStock);}
-    const freshInvs=await loadKFresh(INV_KEYS.invoices);
-    const list=[inv,...(Array.isArray(freshInvs)?freshInvs:invoices).filter(i=>i.id!==inv.id)];
-    setInvoices(list);await saveK(INV_KEYS.invoices,list);
+    const wasExisting=!!latestInv||invoices.some(i=>i.id===inv.id);
+    const list=await upsertVersionedItemK(INV_KEYS.invoices,inv,{prepend:!wasExisting,user:"Admin"});
+    const savedInv=list.find(i=>i.id===inv.id)||inv;
+    setInvoices(list);
+    setDraft(d=>d?.id===inv.id?savedInv:d);
     // Auto outward journal movement — synced to this invoice (Nikhil Gems only; the
     // Accounting Journal is NG-scoped). Any invoice line linked to physical or accounting
     // stock produces an "exit" entry tagged auto + sourceInvoiceId. Re-saving updates it,
@@ -10238,10 +10278,9 @@ function InvoicesApp({onHome,startDraft}){
           const prev=jIdx>=0?journal[jIdx]:null;
           const buyer=buyers.find(b=>b.id===inv.buyerId);
           const exitEntry={id:prev?.id||uid(),type:"exit",date:inv.date||today(),vendorId:"",vendorName:"",customerId:buyer?.id||prev?.customerId||"",customerName:buyer?.name||inv.buyerName||prev?.customerName||"",items:exitItems,reason:prev?.reason||"Sale of goods",notes:prev?.notes||(inv.invNo?`Auto from invoice ${inv.invNo}`:"Auto from invoice"),boxWeight:"",boxWeightUnit:"kg",photos:prev?.photos||[],linkedEntryId:prev?.linkedEntryId||"",auto:true,sourceInvoiceId:inv.id,sourceInvNo:inv.invNo||"",createdAt:prev?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
-          const nextJ=jIdx>=0?journal.map((e,i)=>i===jIdx?exitEntry:e):[exitEntry,...journal];
-          await saveK(JOURNAL_KEY,nextJ);
+          await upsertItemK(JOURNAL_KEY,exitEntry,{prepend:jIdx<0});
         }else if(jIdx>=0){
-          await saveK(JOURNAL_KEY,journal.filter((_,i)=>i!==jIdx));
+          await deleteItemK(JOURNAL_KEY,journal[jIdx].id);
         }
       }catch(e){/* journal sync is non-fatal — invoice already saved */}
     }
@@ -10264,9 +10303,8 @@ function InvoicesApp({onHome,startDraft}){
   };
   const delInvoice=async id=>{
     const inv=invoices.find(i=>i.id===id);
-    const freshInvsDel=await loadKFresh(INV_KEYS.invoices);
-    const list=(Array.isArray(freshInvsDel)?freshInvsDel:invoices).filter(i=>i.id!==id);
-    setInvoices(list);await saveK(INV_KEYS.invoices,list);
+    const list=await deleteVersionedItemK(INV_KEYS.invoices,inv||id,{user:"Admin"});
+    setInvoices(list);
     if(inv){
       // Restore physical stock quantities (supports both stockLinks[] and legacy stockId)
       const newStock=[...stock];let physChanged=false;
@@ -10292,7 +10330,7 @@ function InvoicesApp({onHome,startDraft}){
         try{
           const freshJ=await loadKFresh(JOURNAL_KEY);
           const journal=Array.isArray(freshJ)?freshJ:[];
-          if(journal.some(e=>e.sourceInvoiceId===id))await saveK(JOURNAL_KEY,journal.filter(e=>e.sourceInvoiceId!==id));
+          for(const entry of journal.filter(e=>e.sourceInvoiceId===id))await deleteItemK(JOURNAL_KEY,entry.id);
         }catch(e){/* non-fatal */}
       }
     }
@@ -10354,7 +10392,18 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   };
 
   const unpaid=invoices.filter(i=>["draft","sent","partial"].includes(i.status)).length;
-  const quickSave=async(inv)=>{const freshQS=await loadKFresh(INV_KEYS.invoices);const list=[inv,...(Array.isArray(freshQS)?freshQS:invoices).filter(i=>i.id!==inv.id)];setInvoices(list);await saveK(INV_KEYS.invoices,list);showToast("Saved");};
+  const quickSave=async(inv)=>{
+    try{
+      const list=await upsertVersionedItemK(INV_KEYS.invoices,inv,{prepend:false,user:"Admin"});
+      setInvoices(list);
+      showToast("Saved");
+    }catch(e){
+      if(isConflictError(e)){
+        if(Array.isArray(e.items))setInvoices(e.items);
+        showToast("Invoice changed in another tab. Reload latest before saving.");
+      }else showToast("Save failed: "+(e?.message||"check connection"));
+    }
+  };
   const invCurrencies=[...new Set(invoices.map(i=>i.currency).filter(Boolean))].sort();
   const invBuyerOptions=[...new Set(invoices.map(i=>i.buyerId).filter(Boolean))].map(bid=>buyers.find(x=>x.id===bid)).filter(Boolean).sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const invSortClick=field=>{if(invSortBy===field){setInvSortDir(d=>d==="asc"?"desc":"asc");}else{setInvSortBy(field);setInvSortDir("desc");}};
@@ -11071,7 +11120,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             </div>
           }
           <button className="bs" onClick={onPreview}>👁 Preview</button>
-          <button className="bp" onClick={()=>onSave({...draft})}>Save</button>
+          <button className="bp" onClick={async()=>{try{await onSave({...draft});}catch(e){showToast?.(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>Save</button>
         </div>
       </div>
 
@@ -11794,7 +11843,7 @@ const wrapPdfText=(text,max=78)=>{
   return lines.length?lines:[""];
 };
 async function renderBasicInvoicePacketPdf(inv,buyers,company){
-  const {PDFDocument,StandardFonts,rgb}=await loadInvoicePdfLib();
+  const {PDFDocument,StandardFonts,rgb}=await import("pdf-lib");
   const pdf=await PDFDocument.create();
   const font=await pdf.embedFont(StandardFonts.Helvetica);
   const bold=await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -11947,7 +11996,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
     // Open print window first (non-blocking) so user doesn't wait
     downloadHTML();
     // Then save — this will also navigate to list after saving
-    if(onSave) await onSave(inv);
+    if(onSave)try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}
   };
 
   return(
@@ -11956,8 +12005,8 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
         <button className="bs" style={{fontSize:12}} onClick={onBack}>← Edit</button>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {onEdit&&<button className="bs" onClick={onEdit}>✏ Edit</button>}
-          <button className="bs" onClick={()=>{const html=generateHTML();const w=window.open("","_blank");w.document.write(html);w.document.close();if(onSave)onSave(inv);}}>🔗 Open / Share</button>
-          {onSave&&<button className="bs" style={{color:"#1a7a4a",borderColor:"#1a7a4a",background:"#f0faf4"}} onClick={()=>onSave(inv)}>💾 Save Invoice</button>}
+          <button className="bs" onClick={async()=>{const html=generateHTML();const w=window.open("","_blank");w.document.write(html);w.document.close();if(onSave)try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>🔗 Open / Share</button>
+          {onSave&&<button className="bs" style={{color:"#1a7a4a",borderColor:"#1a7a4a",background:"#f0faf4"}} onClick={async()=>{try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>💾 Save Invoice</button>}
           <button className="bp" onClick={printAndSave}>🖨 Print &amp; Save</button>
         </div>
       </div>
@@ -15093,22 +15142,11 @@ function AIAssistantApp({onHome}){
 
       let answer;
       if(agent.useWebSearch){
-        // Raj uses dedicated agentic endpoint with web search
-        setLoadingStatus("Thinking…");
-        // Build proper message history (user/assistant alternating, string content only)
-        const histMsgs=msgs.slice(-4).filter(m=>m.role==="user"||m.role==="assistant").map(m=>({role:m.role,content:String(m.content).slice(0,800)}));
-        // Ensure last message is from user
-        const finalMsgs=[...histMsgs,{role:"user",content:q}];
-        const res=await fetch("/api/raj",{
-          method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({system:systemContent,messages:finalMsgs,maxTokens:2500}),
-        });
-        const text=await res.text();
-        let d;
-        try{d=JSON.parse(text);}catch{throw new Error("Bad response from Raj: "+text.slice(0,200));}
-        if(!res.ok)throw new Error(d.error||"Raj API error");
-        answer=d.text;
-        if(d.searches>0)setLoadingStatus(`Searched ${d.searches}x`);
+        answer=await callOpenAI([
+          {role:"system",content:`${systemContent}\n\nWeb search is currently disabled on the Hobby deployment, so answer from internal app data and clearly say when live market lookup would be needed.`},
+          ...history,
+          {role:"user",content:q},
+        ],900);
       }else{
         answer=await callOpenAI([
           {role:"system",content:systemContent},
@@ -15426,9 +15464,37 @@ function BoiRemittanceForm({showToast}){
   const removeInv=i=>setForm(f=>({...f,invoices:f.invoices.filter((_,j)=>j!==i)}));
   const setInv=(i,k,v)=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],[k]:v};return{...f,invoices:invs};});
   const [ngInvoices,setNgInvoices]=useState([]);
+  const [ngBuyers,setNgBuyers]=useState([]);
   const [focusedInvIdx,setFocusedInvIdx]=useState(null);
   const [hoveredInvId,setHoveredInvId]=useState(null);
-  useEffect(()=>{Promise.all([loadK("ng-invoices-v2"),loadK("ng-buyers-v2")]).then(([d,buyersRaw])=>{if(Array.isArray(d)){const buyers=Array.isArray(buyersRaw)?buyersRaw:[];const sorted=d.filter(inv=>(inv.status||"").toLowerCase()!=="cancelled").sort((a,b)=>{const da=new Date(a.date||0),db=new Date(b.date||0);if(db-da!==0)return db-da;const num=inv=>{const m=(inv.invNo||"").match(/(\d+)/);return m?+m[1]:0;};return num(b)-num(a);}).map(inv=>{const bn=inv.buyerName||inv.buyer||(buyers.find(b=>b.id===inv.buyerId)?.name)||"";return{...inv,_resolvedBuyer:bn};});setNgInvoices(sorted);}});},[]);
+  useEffect(()=>{Promise.all([loadK("ng-invoices-v2"),loadK("ng-buyers-v2")]).then(([d,buyersRaw])=>{const buyers=Array.isArray(buyersRaw)?buyersRaw:[];setNgBuyers(buyers);if(Array.isArray(d)){const sorted=d.filter(inv=>(inv.status||"").toLowerCase()!=="cancelled").sort((a,b)=>{const da=new Date(a.date||0),db=new Date(b.date||0);if(db-da!==0)return db-da;const num=inv=>{const m=(inv.invNo||"").match(/(\d+)/);return m?+m[1]:0;};return num(b)-num(a);}).map(inv=>{const bn=inv.buyerName||inv.buyer||(buyers.find(b=>b.id===inv.buyerId)?.name)||"";return{...inv,_resolvedBuyer:bn};});setNgInvoices(sorted);}});},[]);
+  const selectBoiInvoice=(idx,ni)=>{
+    const bn=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";
+    setForm(f=>{
+      const invs=[...f.invoices];
+      invs[idx]={...invs[idx],no:ni.invNo||"",date:ni.date||today(),srcId:ni.id||""};
+      return{
+        ...f,
+        invoices:invs,
+        currency:ni.currency||f.currency,
+        amount:ni.totalAmt?String(parseFloat((+ni.totalAmt).toFixed(2))):f.amount,
+        remName:bn||f.remName,
+      };
+    });
+    setFocusedInvIdx(null);
+    setHoveredInvId(null);
+  };
+  const normalizeInvoiceNo=s=>String(s||"").trim().toLowerCase().replace(/\s+/g,"").replace(/[^a-z0-9/-]/g,"");
+  const resolveBoiInvoice=(ref,list)=>{
+    const rows=Array.isArray(list)?list:[];
+    if(ref.srcId){
+      const byId=rows.find(inv=>inv.id===ref.srcId);
+      if(byId)return byId;
+    }
+    const needle=normalizeInvoiceNo(ref.no);
+    if(!needle)return null;
+    return rows.find(inv=>normalizeInvoiceNo(inv.invNo)===needle)||null;
+  };
 
   const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
 
@@ -15453,12 +15519,38 @@ function BoiRemittanceForm({showToast}){
       for(let i=0;i<bin.length;i++)sigJpegBytes[i]=bin.charCodeAt(i);
 
       const {fillBoiRemittance}=await import("./src/fillBoiRemittance.js");
+      const [freshInvoicesRaw,freshBuyersRaw]=await Promise.all([
+        loadKFresh("ng-invoices-v2").catch(()=>ngInvoices),
+        loadKFresh("ng-buyers-v2").catch(()=>ngBuyers),
+      ]);
+      const freshBuyers=Array.isArray(freshBuyersRaw)?freshBuyersRaw:ngBuyers;
+      const freshInvoices=(Array.isArray(freshInvoicesRaw)?freshInvoicesRaw:ngInvoices)
+        .filter(inv=>(inv.status||"").toLowerCase()!=="cancelled")
+        .map(inv=>({...inv,_resolvedBuyer:inv.buyerName||inv.buyer||(freshBuyers.find(b=>b.id===inv.buyerId)?.name)||""}));
+      const appendErrors=[];
+      const invoiceRefs=await Promise.all(form.invoices.filter(i=>i.no.trim()).map(async ref=>{
+        const src=resolveBoiInvoice(ref,freshInvoices);
+        if(!src){
+          appendErrors.push(`Could not find invoice ${ref.no}`);
+          return ref;
+        }
+        try{
+          return {...ref,srcId:src.id,no:src.invNo||ref.no,date:src.date||ref.date,pdfBytes:await renderInvoicePacketPdf(src,freshBuyers,"ng")};
+        }catch(e){
+          console.warn("BOI invoice append failed:",src.invNo||ref.no,e?.message||e);
+          appendErrors.push(`Could not render invoice ${src.invNo||ref.no}: ${e?.message||e}`);
+          return ref;
+        }
+      }));
+      if(invoiceRefs.length&&!invoiceRefs.some(i=>i.pdfBytes)){
+        throw new Error(appendErrors[0]||"Invoice could not be attached");
+      }
       const pdfBytes=await fillBoiRemittance({
         currency:form.currency,amount:+form.amount,
         accType:form.accType,accountNo,
         remName:form.remName,remAddr:form.remAddr,
         purpose:form.purpose,
-        invoices:form.invoices.filter(i=>i.no.trim()),
+        invoices:invoiceRefs,
         shipWin:form.shipWin,commodity:form.commodity,lineAct:form.lineAct,
         impDet:form.impDet,expBill:form.expBill,otherCl:form.otherCl,
         bName:CO.name,
@@ -15473,9 +15565,9 @@ function BoiRemittanceForm({showToast}){
       const url=URL.createObjectURL(blob);
       Object.assign(document.createElement("a"),{href:url,download:fileName}).click();
       setTimeout(()=>URL.revokeObjectURL(url),3000);
-      showToast("✓ BOI remittance form downloaded");
+      showToast(invoiceRefs.some(i=>i.pdfBytes)?"✓ BOI form + invoice downloaded":"✓ BOI remittance form downloaded");
       // Auto-attach to linked invoices
-      const srcIds=form.invoices.filter(i=>i.no.trim()&&i.srcId).map(i=>i.srcId);
+      const srcIds=invoiceRefs.filter(i=>i.no&&i.srcId&&i.pdfBytes).map(i=>i.srcId);
       if(srcIds.length){
         try{
           const file=new File([blob],fileName,{type:"application/pdf"});
@@ -15504,7 +15596,7 @@ function BoiRemittanceForm({showToast}){
     <div style={{maxWidth:680}}>
       <div style={{background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:8,padding:"10px 14px",marginBottom:20,fontSize:12,color:C.ink,display:"flex",gap:8,alignItems:"flex-start"}}>
         <span style={{fontSize:16,flexShrink:0}}>ℹ️</span>
-        <span>Fills and downloads the <strong>BOI A2 Remittance form</strong> using pdf-lib. Place <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>boi_form.pdf</code> in <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>public/boi/</code> before generating.</span>
+        <span>Fills and downloads the <strong>BOI A2 Remittance form</strong> using pdf-lib. Selected invoices are appended to the same PDF. Place <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>boi_form.pdf</code> in <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>public/boi/</code> before generating.</span>
       </div>
 
       {/* Remittance Details */}
@@ -15573,7 +15665,7 @@ function BoiRemittanceForm({showToast}){
                   <div style={{position:"relative"}}>
                     <input
                       value={inv.no}
-                      onChange={e=>setInv(i,"no",e.target.value)}
+                      onChange={e=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],no:e.target.value,srcId:""};return{...f,invoices:invs};})}
                       onFocus={()=>setFocusedInvIdx(i)}
                       onBlur={()=>setTimeout(()=>setFocusedInvIdx(prev=>prev===i?null:prev),150)}
                       style={FI}
@@ -15589,7 +15681,7 @@ function BoiRemittanceForm({showToast}){
                           return(
                             <div
                               key={ni.id}
-                              onMouseDown={()=>{setInv(i,"no",ni.invNo||"");setInv(i,"date",ni.date||today());setInv(i,"srcId",ni.id||"");if(ni.currency)setF("currency",ni.currency);if(ni.totalAmt)setF("amount",String(parseFloat((+ni.totalAmt).toFixed(2))));const bn=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";if(bn)setF("remName",bn);setFocusedInvIdx(null);setHoveredInvId(null);}}
+                              onMouseDown={()=>selectBoiInvoice(i,ni)}
                               style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:hoveredInvId===ni.id?C.goldLight:"transparent"}}
                               onMouseEnter={()=>setHoveredInvId(ni.id)}
                               onMouseLeave={()=>setHoveredInvId(null)}

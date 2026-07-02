@@ -247,12 +247,14 @@ const OQ_KEY="ng-offline-queue-v1";
 const _getOQ=()=>{try{return JSON.parse(localStorage.getItem(OQ_KEY)||"[]");}catch{return[];}};
 const _setOQ=q=>{try{localStorage.setItem(OQ_KEY,JSON.stringify(q));}catch{}};
 
-// Enqueue a key-value pair (dedup: latest value wins)
-const _enqueueWrite=(k,v)=>{
+// Enqueue a key-value pair (dedup: latest value wins). Store the pre-edit base
+// so reconnect sync can merge only the user's offline changes.
+const _enqueueWrite=(k,v,base)=>{
   const q=_getOQ();
   const idx=q.findIndex(x=>x.k===k);
-  if(idx>=0)q[idx]={k,v,ts:Date.now()};
-  else q.push({k,v,ts:Date.now()});
+  const prevBase=idx>=0?q[idx].base:base;
+  if(idx>=0)q[idx]={k,v,base:prevBase,ts:Date.now()};
+  else q.push({k,v,base,ts:Date.now()});
   _setOQ(q);
 };
 
@@ -263,13 +265,11 @@ export const syncOfflineQueue=async()=>{
   const failed=[];
   for(const item of q){
     try{
-      const{error}=await supabase.from("app_data").upsert({key:item.k,value:item.v});
-      if(error)failed.push(item);
-      else{
-        const ts=Date.now();
-        _lastLocalSave.set(item.k,ts);
-        globalThis.__ngDataChannel?.send({type:"broadcast",event:"invalidate",payload:{key:item.k,ts}}).catch(()=>{});
-      }
+      const value=Array.isArray(item.v)?await _mergeArrayAgainstFresh(item.k,item.v,item.base):item.v;
+      _cache.set(item.k,value);
+      _keyFetchedAt.set(item.k,Date.now());
+      _persistLS();
+      await _putValueK(item.k,value);
     }catch{failed.push(item);}
   }
   _setOQ(failed);
@@ -278,8 +278,51 @@ export const syncOfflineQueue=async()=>{
 
 export const getOfflineQueueCount=()=>_getOQ().length;
 
-export const saveK=async(k,d)=>{
+const _jsonStable=v=>{try{return JSON.stringify(v??null);}catch{return String(v);}};
+const _putValueK=async(k,value)=>{
+  const{error}=await supabase.from("app_data").upsert({key:k,value});
+  if(error)throw new Error(error.message);
+  const ts=Date.now();
+  _lastLocalSave.set(k,ts);
+  globalThis.__ngDataChannel?.send({type:"broadcast",event:"invalidate",payload:{key:k,ts}}).catch(()=>{});
+};
+const _mergeArrayAgainstFresh=async(k,next,prev)=>{
+  const nextList=_arrayValue(next);
+  const prevList=_arrayValue(prev);
+  const hasIds=nextList.some(x=>x?.id)||prevList.some(x=>x?.id);
+  if(!hasIds)return nextList;
+
+  const fresh=await loadKFresh(k).catch(()=>prevList);
+  const freshList=_arrayValue(fresh);
+  const prevById=new Map(prevList.filter(x=>x?.id).map(x=>[x.id,x]));
+  const freshById=new Map(freshList.filter(x=>x?.id).map(x=>[x.id,x]));
+  const nextIds=new Set(nextList.filter(x=>x?.id).map(x=>x.id));
+  const deletedIds=new Set(prevList.filter(x=>x?.id&&!nextIds.has(x.id)).map(x=>x.id));
+  const out=[];
+  const seen=new Set();
+
+  for(const item of nextList){
+    if(!item?.id){out.push(item);continue;}
+    if(deletedIds.has(item.id))continue;
+    const prevItem=prevById.get(item.id);
+    const changed=!prevItem||_jsonStable(prevItem)!==_jsonStable(item);
+    const freshItem=freshById.get(item.id);
+    if(changed)out.push(item);
+    else if(freshItem)out.push(freshItem);
+    // If a row was unchanged locally and disappeared remotely, respect the remote delete.
+    seen.add(item.id);
+  }
+
+  for(const item of freshList){
+    if(!item?.id||seen.has(item.id)||deletedIds.has(item.id))continue;
+    out.push(item);
+  }
+  return out;
+};
+
+export const saveK=async(k,d,{merge=true}={})=>{
   if(DEMO_MODE)return; // no-op — demo data is read-only
+  const prev=_cache.has(k)?_cache.get(k):undefined;
   const persisted=_safeForLocalCache(d);
   _cache.set(k,persisted);            // update cache immediately so UI stays snappy
   _keyFetchedAt.set(k,Date.now());
@@ -287,15 +330,15 @@ export const saveK=async(k,d)=>{
 
   // If offline: queue the write and return — UI already has the latest data
   if(!navigator.onLine){
-    _enqueueWrite(k,persisted);
+    _enqueueWrite(k,persisted,prev);
     return;
   }
 
-  const{error}=await supabase.from("app_data").upsert({key:k,value:persisted});
-  if(error)throw new Error(error.message);
-  const ts=Date.now();
-  _lastLocalSave.set(k,ts);
-  globalThis.__ngDataChannel?.send({type:"broadcast",event:"invalidate",payload:{key:k,ts}}).catch(()=>{});
+  const value=merge&&Array.isArray(persisted)?await _mergeArrayAgainstFresh(k,persisted,prev):persisted;
+  _cache.set(k,value);
+  _keyFetchedAt.set(k,Date.now());
+  _persistLS();
+  await _putValueK(k,value);
 };
 
 const _arrayValue=v=>Array.isArray(v)?v:[];
@@ -313,6 +356,20 @@ const _setCachedValue=(k,value)=>{
   _persistLS();
   _notifyRefresh([k]);
 };
+const _versionOf=item=>Number.isFinite(+item?._version)?+item._version:0;
+export const isConflictError=e=>e?.code==="STALE_RECORD"||/changed in another tab|updated by someone else|stale/i.test(e?.message||"");
+const _conflictError=(k,id,result)=>{
+  const latest=result?.latest||null;
+  const who=latest?.updatedBy||"someone else";
+  const when=latest?.updatedAt?new Date(latest.updatedAt).toLocaleString():"recently";
+  const err=new Error(`This record was updated by ${who} at ${when}. Reload latest before saving.`);
+  err.code="STALE_RECORD";
+  err.key=k;
+  err.id=id;
+  err.latest=latest;
+  err.items=Array.isArray(result?.items)?result.items:null;
+  return err;
+};
 
 export const upsertItemK=async(k,item,{prepend=true}={})=>{
   if(DEMO_MODE)return [];
@@ -322,7 +379,7 @@ export const upsertItemK=async(k,item,{prepend=true}={})=>{
   _setCachedValue(k,optimistic);
 
   if(!navigator.onLine){
-    _enqueueWrite(k,optimistic);
+    _enqueueWrite(k,optimistic,curr);
     return optimistic;
   }
 
@@ -351,7 +408,7 @@ export const deleteItemK=async(k,id)=>{
   _setCachedValue(k,optimistic);
 
   if(!navigator.onLine){
-    _enqueueWrite(k,optimistic);
+    _enqueueWrite(k,optimistic,curr);
     return optimistic;
   }
 
@@ -366,6 +423,64 @@ export const deleteItemK=async(k,id)=>{
     throw new Error(error.message);
   }
   const next=Array.isArray(data)?data:optimistic;
+  _setCachedValue(k,next);
+  return next;
+};
+
+export const upsertVersionedItemK=async(k,item,{prepend=true,user="Admin"}={})=>{
+  if(DEMO_MODE)return [];
+  if(!item?.id)throw new Error("upsertVersionedItemK requires item.id");
+  const expectedVersion=_versionOf(item);
+  const optimistic=_upsertLocalItem(_cache.has(k)?_cache.get(k):(await loadK(k).catch(()=>[])),item,{prepend});
+  _setCachedValue(k,optimistic);
+
+  if(!navigator.onLine){
+    throw new Error("You are offline. Reconnect and reload latest before saving this record.");
+  }
+
+  const{data,error}=await supabase.rpc("app_data_upsert_item_versioned",{
+    p_key:k,
+    p_item:item,
+    p_expected_version:expectedVersion,
+    p_prepend:prepend,
+    p_user:user,
+  });
+  if(error)throw new Error(error.message);
+  if(data?.ok===false||data?.status===409){
+    if(Array.isArray(data?.items))_setCachedValue(k,data.items);
+    throw _conflictError(k,item.id,data);
+  }
+  const next=Array.isArray(data?.items)?data.items:optimistic;
+  _setCachedValue(k,next);
+  return next;
+};
+
+export const deleteVersionedItemK=async(k,itemOrId,{user="Admin"}={})=>{
+  if(DEMO_MODE)return [];
+  const id=typeof itemOrId==="string"?itemOrId:itemOrId?.id;
+  if(!id)throw new Error("deleteVersionedItemK requires item id");
+  const curr=_cache.has(k)?_cache.get(k):(await loadK(k).catch(()=>[]));
+  const item=typeof itemOrId==="string"?_arrayValue(curr).find(x=>x?.id===id):itemOrId;
+  const expectedVersion=_versionOf(item);
+  const optimistic=_deleteLocalItem(curr,id);
+  _setCachedValue(k,optimistic);
+
+  if(!navigator.onLine){
+    throw new Error("You are offline. Reconnect and reload latest before deleting this record.");
+  }
+
+  const{data,error}=await supabase.rpc("app_data_delete_item_versioned",{
+    p_key:k,
+    p_id:id,
+    p_expected_version:expectedVersion,
+    p_user:user,
+  });
+  if(error)throw new Error(error.message);
+  if(data?.ok===false||data?.status===409){
+    if(Array.isArray(data?.items))_setCachedValue(k,data.items);
+    throw _conflictError(k,id,data);
+  }
+  const next=Array.isArray(data?.items)?data.items:optimistic;
   _setCachedValue(k,next);
   return next;
 };
