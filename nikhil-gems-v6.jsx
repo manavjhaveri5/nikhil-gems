@@ -3069,7 +3069,7 @@ const journalParty=e=>e?.type==="exit"?(e.customerName||e.buyerName||e.vendorNam
 const journalQtyText=it=>[it.qty?`${it.qty} ${it.unit||"pcs"}`:"",it.qty2?`${it.qty2} ${it.unit2||"kg"}`:""].filter(Boolean).join(" / ");
 const journalItemText=it=>`${[it.material,it.shape].filter(Boolean).join(" · ")||"Item"}${journalQtyText(it)?` · ${journalQtyText(it)}`:""}`;
 const journalSummary=e=>journalLines(e).map(journalItemText).join(" | ");
-const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||""),boxWeight:e.boxWeight||"",boxWeightUnit:e.boxWeightUnit||"kg"});
+const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||""),boxCount:e.boxCount||"",boxWeight:e.boxWeight||"",boxWeightUnit:e.boxWeightUnit||"kg"});
 const CUSTOMER_ORDERS_KEY="ng-customer-orders-v1";
 const CUSTOMER_ORDER_STATUS=["Open","PO Created","Part Ready","Ready","Fulfilled","Cancelled"];
 const ACCOUNTANT_PACKET_KEY="ng-accountant-packets-v1";
@@ -4653,7 +4653,7 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
   },[packetMonth]);
 
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
-  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",boxWeight:"",boxWeightUnit:"kg",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
+  const blankEntry=()=>({id:uid(),type:"entry",date:today(),vendorId:"",vendorName:"",customerId:"",customerName:"",items:[journalLine()],reason:"",notes:"",boxCount:"",boxWeight:"",boxWeightUnit:"kg",photos:[],linkedEntryId:"",createdAt:new Date().toISOString(),updatedAt:""});
   const blankCustomerOrder=()=>({id:uid(),date:today(),customerId:"",customerName:"",status:"Open",items:[customerOrderLine()],notes:"",createdAt:new Date().toISOString(),updatedAt:""});
   const nextAccountingPO=()=>{const n=purchases.filter(p=>p.type==="po").length+1;return `PO/${new Date().getFullYear()}/${String(n).padStart(3,"0")}`;};
   const saveEntries=async(next)=>{setEntries(next);await saveK(JOURNAL_KEY,next);};
@@ -4687,6 +4687,7 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
       vendorId:form.type==="entry"?(firstVendor?.vendorId||""):"",
       vendorName:form.type==="entry"?(firstVendor?.vendorName||""):"",
       customerId:form.type==="exit"?(buyer?.id||form.customerId||""):"",
+      boxCount:form.type==="entry"?String(form.boxCount||"").trim():"",
       boxWeight:form.type==="entry"?String(form.boxWeight||"").trim():"",
       boxWeightUnit:form.type==="entry"?(form.boxWeightUnit||"kg"):"",
       items:normalizedItems,
@@ -4855,7 +4856,7 @@ Known shapes: Sphere, Palmstone, Tower, Heart, Tumbled, Freeform, Rough, Pendant
         <td>${fmtDate(e.date)}</td>
         <td class="${e.type==="entry"?"entry-t":"exit-t"}">${e.type==="entry"?"In":"Out"}</td>
         <td>${journalLines(e).map(it=>`${e.type==="entry"&&it.vendorName?`${it.vendorName} · `:""}${it.material||"—"}${it.shape?` · ${it.shape}`:""}`).join("<br/>")}</td>
-        <td>${journalLines(e).map(it=>`${journalQtyText(it)||"—"}${it.notes?` · ${it.notes}`:""}`).join("<br/>")}${e.type==="entry"&&e.boxWeight?`<br/><strong>Box weight:</strong> ${e.boxWeight} ${e.boxWeightUnit||"kg"}`:""}</td>
+        <td>${journalLines(e).map(it=>`${journalQtyText(it)||"—"}${it.notes?` · ${it.notes}`:""}`).join("<br/>")}${e.type==="entry"&&(e.boxCount||e.boxWeight)?`<br/><strong>Boxes:</strong> ${[e.boxCount?`${e.boxCount} box${+e.boxCount===1?"":"es"}`:"",e.boxWeight?`${e.boxWeight} ${e.boxWeightUnit||"kg"}`:""].filter(Boolean).join(" · ")}`:""}</td>
         <td>${journalParty(e)||"—"}</td>
         <td>${e.reason||e.exitReason||"—"}</td>
         <td style="max-width:180px;word-break:break-word">${e.notes||"—"}</td>
@@ -5040,13 +5041,15 @@ ${vendorBlocks}
                 </Field>
               )}
               {form.type==="entry"&&(
-                <Field label="Box weight">
-                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 86px",gap:8}}>
-                    <input type="number" inputMode="decimal" min="0" step="0.01" value={form.boxWeight||""} onChange={e=>setF("boxWeight")(e.target.value)} style={{...inputS,fontSize:14,textAlign:"right"}} placeholder="Courier weight"/>
+                <Field label="Boxes">
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,0.8fr) minmax(0,1fr) 72px",gap:8}}>
+                    <input type="number" inputMode="numeric" min="0" step="1" value={form.boxCount||""} onChange={e=>setF("boxCount")(e.target.value)} style={{...inputS,fontSize:14,textAlign:"right"}} placeholder="No. of boxes"/>
+                    <input type="number" inputMode="decimal" min="0" step="0.01" value={form.boxWeight||""} onChange={e=>setF("boxWeight")(e.target.value)} style={{...inputS,fontSize:14,textAlign:"right"}} placeholder="Total weight"/>
                     <select value={form.boxWeightUnit||"kg"} onChange={e=>setF("boxWeightUnit")(e.target.value)} style={{...inputS,cursor:"pointer"}}>
                       {["kg","g","lb"].map(u=><option key={u} value={u}>{u}</option>)}
                     </select>
                   </div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:4}}>Number of boxes · total weight of all boxes</div>
                 </Field>
               )}
               <Field label="Record notes">
@@ -5158,9 +5161,12 @@ ${vendorBlocks}
                       <span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:borderCol,background:isIn?"#F0FFF4":"#FFF5F5",borderRadius:8,padding:"3px 8px"}}>{isIn?"Stock In":"Stock Out"}</span>
                       {entry.auto&&<span style={{fontSize:9,fontWeight:800,letterSpacing:.8,textTransform:"uppercase",color:"#2563EB",background:"#EFF6FF",borderRadius:8,padding:"3px 8px"}} title={entry.sourceInvNo?`Auto-created from invoice ${entry.sourceInvNo}`:"Auto-created from an invoice"}>⚡ Auto{entry.sourceInvNo?` · ${entry.sourceInvNo}`:""}</span>}
                       {entry.reason&&<span style={{fontSize:11,color:"#6B7280"}}>{entry.reason}</span>}
-                      {isIn&&entry.boxWeight&&<span style={{fontSize:11,color:C.amber,background:C.amberBg,borderRadius:8,padding:"3px 8px",fontWeight:700}}>Box {entry.boxWeight} {entry.boxWeightUnit||"kg"}</span>}
+                      {isIn&&(entry.boxCount||entry.boxWeight)&&<span style={{fontSize:11,color:C.amber,background:C.amberBg,borderRadius:8,padding:"3px 8px",fontWeight:700}}>{[entry.boxCount?`${entry.boxCount} box${+entry.boxCount===1?"":"es"}`:"",entry.boxWeight?`${entry.boxWeight} ${entry.boxWeightUnit||"kg"}`:""].filter(Boolean).join(" · ")}</span>}
                     </div>
-                    <span style={{fontSize:11,color:C.inkFaint,flexShrink:0}}>{journalParty(entry)||"—"}</span>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                      <span style={{fontSize:11,color:C.inkFaint}}>{journalParty(entry)||"—"}</span>
+                      <button onClick={e=>{e.stopPropagation();setForm(normalizeJournalForm(entry));setView("form");}} className="bs" style={{fontSize:11,padding:"3px 10px"}}>✏ Edit</button>
+                    </div>
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:8}}>
                     {lines.map((it,i)=>(
