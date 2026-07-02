@@ -1542,27 +1542,42 @@ function PdfProgressBar({ step }) {
 }
 
 // ─── PDF Import Modal ─────────────────────────────────────────────────────────
-function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalance = null, closingBalance = null }) {
+function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBalance = null, closingBalance = null }) {
   const CUR = acc?.currency || "INR";
   const sym = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "A$" }[CUR] || CUR;
   const f2 = n => (+n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtAmt = n => sym + f2(Math.abs(n));
 
-  // For each PDF txn, check if it already exists in the ledger (by date ±2 days + amount match)
+  // Bank statement is the source of truth. Match statement rows to ledger
+  // entries one-to-one (date ±2 days, amount ±0.5, same direction) so one
+  // ledger entry can't cover two identical statement rows.
+  const usedLedgerIds = new Set();
   const enriched = txns.map(t => {
     const amt = +t.amount;
     const tDate = new Date(t.date).getTime();
-    const matched = accTxns.some(l => {
+    const hit = accTxns.find(l => {
+      if (usedLedgerIds.has(l.id)) return false;
       const diff = Math.abs(new Date(l.date).getTime() - tDate) / 86400000;
       return diff <= 2 && Math.abs(+l.amount - amt) < 0.5 && l.type === t.type;
     });
-    return { ...t, matched };
+    if (hit) usedLedgerIds.add(hit.id);
+    return { ...t, matched: !!hit };
   });
+  // Ledger entries inside the statement window that no statement row matched —
+  // per bank-as-truth these are suspect (wrong direction, duplicate, typo date).
+  const stmtTimes = txns.map(t => new Date(t.date).getTime()).filter(n => !isNaN(n));
+  const extras = stmtTimes.length ? accTxns.filter(l => {
+    if (usedLedgerIds.has(l.id)) return false;
+    const d = new Date(l.date).getTime();
+    return d >= Math.min(...stmtTimes) - 2 * 86400000 && d <= Math.max(...stmtTimes) + 2 * 86400000;
+  }) : [];
 
   // Default: select only unmatched transactions
   const [sel, setSel] = useState(() => new Set(enriched.map((t, i) => t.matched ? -1 : i).filter(i => i >= 0)));
+  const [selRm, setSelRm] = useState(new Set());
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
+  const toggleRm = id => setSelRm(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const newCount = enriched.filter(t => !t.matched).length;
   const matchedCount = enriched.length - newCount;
@@ -1610,7 +1625,8 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
       date: t.date || today(), notes: "Imported from bank statement PDF",
       createdAt: new Date().toISOString(),
     }));
-    await onAdd(toAdd);
+    const toRemove = extras.filter(x => selRm.has(x.id)).map(x => x.id);
+    await onApply({ add: toAdd, removeIds: toRemove });
     setSaving(false);
     setDone(true);
     setTimeout(onClose, 1400);
@@ -1655,6 +1671,13 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
                   {sub && <div style={{ fontSize: 10, fontWeight: 700, color: subCol, marginTop: 2 }}>{sub}</div>}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* ── Wrong-account guard: a real statement should match at least something ── */}
+          {!done && enriched.length >= 10 && matchedCount === 0 && (
+            <div style={{ background: "#fff8e6", border: "1px solid #f0dfae", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#8a6d1a" }}>
+              ⚠ None of these {enriched.length} rows match anything in <strong>{acc?.name}</strong> — double-check you've selected the right account before importing.
             </div>
           )}
 
@@ -1727,19 +1750,51 @@ function PdfImportModal({ txns, acc, accTxns = [], onAdd, onClose, openingBalanc
               </div>
             );
           })}
+
+          {/* ── Ledger entries the bank statement doesn't have (bank = source of truth) ── */}
+          {!done && extras.length > 0 && (
+            <>
+              <div style={{ padding: "12px 8px 8px", fontSize: 10, fontWeight: 700, color: "#c0392b", textTransform: "uppercase", letterSpacing: .5, background: "#fdf6f5", borderTop: "1px solid #f5e0dc" }}>
+                In ledger but not on bank statement ({extras.length}) — tick to remove
+              </div>
+              {extras.map(l => {
+                const isCredit = l.type === "credit";
+                const checked = selRm.has(l.id);
+                return (
+                  <div key={l.id} onClick={() => toggleRm(l.id)}
+                    style={{ display: "grid", gridTemplateColumns: "28px 1fr 90px 90px 110px 76px", gap: 0, padding: "10px 8px", borderBottom: "1px solid #f5f3f0", background: checked ? "#fdf1ef" : "#fff", cursor: "pointer", transition: "background .12s", alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <input type="checkbox" checked={checked} readOnly style={{ width: 13, height: 13, accentColor: "#c0392b", cursor: "pointer" }} />
+                    </div>
+                    <div style={{ minWidth: 0, paddingRight: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 500, color: "#111", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}>
+                        {l.payee || "—"}
+                        {badge("NOT ON BANK", "#c0392b", "#fdecea")}
+                      </div>
+                      <div style={{ fontSize: 10, color: "#bbb", marginTop: 1 }}>{l.date}{l.category ? ` · ${l.category}` : ""}</div>
+                    </div>
+                    <div style={{ textAlign: "right", fontSize: 12, fontWeight: 600, color: "#c0392b", padding: "0 4px" }}>{!isCredit ? f2(l.amount) : ""}</div>
+                    <div style={{ textAlign: "right", fontSize: 12, fontWeight: 600, color: "#2d7a4f", padding: "0 4px" }}>{isCredit ? f2(l.amount) : ""}</div>
+                    <div />
+                    <div style={{ textAlign: "right", fontSize: 11, fontWeight: 700, color: checked ? "#c0392b" : "#aaa", padding: "0 4px" }}>{checked ? "Remove" : "Keep"}</div>
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
 
         {/* ── Footer ── */}
         {!done && (
           <div style={{ padding: "14px 20px", borderTop: "1px solid #ede9e3", flexShrink: 0, background: "#fff", display: "flex", gap: 10, alignItems: "center" }}>
             <div style={{ flex: 1, fontSize: 12, color: "#888" }}>
-              {sel.size > 0
-                ? <>{sel.size} selected · {matchedCount} already in ledger{importDiff != null ? ` · ${Math.abs(importDiff) < 1 ? "statement closes" : `remaining ${importDiff >= 0 ? "+" : ""}${sym}${f2(importDiff)}`}` : ""}</>
-                : <>{newCount} new · {matchedCount} already matched</>}
+              {sel.size > 0 || selRm.size > 0
+                ? <>{sel.size} selected · {matchedCount} already in ledger{selRm.size > 0 ? <> · <span style={{ color: "#c0392b", fontWeight: 700 }}>{selRm.size} to remove</span></> : null}{importDiff != null ? ` · ${Math.abs(importDiff) < 1 ? "statement closes" : `remaining ${importDiff >= 0 ? "+" : ""}${sym}${f2(importDiff)}`}` : ""}</>
+                : <>{newCount} new · {matchedCount} already matched{extras.length > 0 ? ` · ${extras.length} not on bank` : ""}</>}
             </div>
-            <button onClick={handleAdd} disabled={saving || sel.size === 0}
-              style={{ background: "#1a1a1a", color: "#fff", border: "none", borderRadius: 10, padding: "11px 24px", fontSize: 13, fontWeight: 700, cursor: sel.size === 0 ? "not-allowed" : "pointer", opacity: sel.size === 0 ? .35 : 1, whiteSpace: "nowrap" }}>
-              {saving ? "Adding…" : sel.size === 0 ? "Nothing to add" : `Add ${sel.size} to ledger →`}
+            <button onClick={handleAdd} disabled={saving || (sel.size === 0 && selRm.size === 0)}
+              style={{ background: "#1a1a1a", color: "#fff", border: "none", borderRadius: 10, padding: "11px 24px", fontSize: 13, fontWeight: 700, cursor: (sel.size === 0 && selRm.size === 0) ? "not-allowed" : "pointer", opacity: (sel.size === 0 && selRm.size === 0) ? .35 : 1, whiteSpace: "nowrap" }}>
+              {saving ? "Applying…" : (sel.size === 0 && selRm.size === 0) ? "Nothing to apply" : `${sel.size > 0 ? `Add ${sel.size}` : ""}${sel.size > 0 && selRm.size > 0 ? " · " : ""}${selRm.size > 0 ? `Remove ${selRm.size}` : ""} →`}
             </button>
           </div>
         )}
@@ -2064,7 +2119,7 @@ function parseBankCsv(text, accName = "") {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ReconcileView({ accounts, transactions, onAddTxns, company }) {
+function ReconcileView({ accounts, transactions, onAddTxns, onApplyTxns, company }) {
   const [selectedAcc, setSelectedAcc] = useState(accounts[0]?.id || "");
   const [statement,   setStatement]   = useState("");
   const [analysis,    setAnalysis]    = useState("");
@@ -2255,7 +2310,7 @@ If nothing is missing, output <missing_json>[]</missing_json>.`;
   return (
     <div style={{ maxWidth: 700 }}>
       {pdfLoading && <PdfProgressBar step={pdfStep} />}
-      {pdfModal && <PdfImportModal txns={pdfModal.txns} acc={acc} accTxns={accTxns} onAdd={onAddTxns} openingBalance={pdfModal.openingBalance} closingBalance={pdfModal.closingBalance} onClose={() => { setPdfModal(null); setPdfName(""); }} />}
+      {pdfModal && <PdfImportModal txns={pdfModal.txns} acc={acc} accTxns={accTxns} onApply={onApplyTxns} openingBalance={pdfModal.openingBalance} closingBalance={pdfModal.closingBalance} onClose={() => { setPdfModal(null); setPdfName(""); }} />}
       {pdfError && (
         <div style={{ background: "#fff0f0", border: "1px solid #f5c6c6", borderRadius: 10, padding: "14px 16px", marginBottom: 16, position: "relative" }}>
           <button onClick={() => setPdfError("")} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", fontSize: 16, cursor: "pointer", color: "#999" }}>×</button>
@@ -2528,7 +2583,7 @@ export default function FinanceApp({ onHome }) {
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} vendors={vendors} onSave={saveTxn} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
           {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} onUpdate={updateTxn} />}
-          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} />}
+          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [] }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank"); }} />}
         </>
       }
       {/* Inline classify after manual entry */}
