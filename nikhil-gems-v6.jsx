@@ -11773,7 +11773,11 @@ function buildInvBodyHTML(inv,buyers,company="ng"){
       <td style="border:1px solid #ccc;padding:4px 6px;text-align:right;font-weight:600">${(+item.amt).toFixed(2)}</td>
     </tr>`;
   }).join("");
+  // The whole header block lives in the outer table's <thead> so the browser
+  // repeats it at the top of every printed page when the invoice overflows.
   return `
+<table class="page-table">
+<thead><tr><td>
 <div class="header">
   <div>
 	    <div class="co-name">${co.name}</div>
@@ -11796,6 +11800,8 @@ function buildInvBodyHTML(inv,buyers,company="ng"){
     <td style="padding:4px 7px;line-height:1.5;vertical-align:top"><b>${consignee?.name||""}</b><br/>${(consignee?.address||"").replace(/\n/g,"<br/>")}<br/>${consignee?.country||""}</td>
   </tr>
 </table>
+</td></tr></thead>
+<tbody><tr><td>
 <table style="border:1px solid #ccc;margin-bottom:7px;">
   <thead>
     <tr style="background:#f0f0f0">
@@ -11840,7 +11846,9 @@ ${gstMode!=="none"&&totalTax>0?`<table style="width:100%;margin-bottom:3px;font-
   <div style="font-size:10px;margin-top:3px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>
   <div style="font-size:11px;margin-top:2px">Authorized Signature</div>
 </div>
-</div>`;
+</div>
+</td></tr></tbody>
+</table>`;
 }
 const INV_DOC_STYLES=`<style>
   body{font-family:Arial,sans-serif;font-size:11px;margin:0;padding:12px;color:#000;}
@@ -11856,7 +11864,16 @@ const INV_DOC_STYLES=`<style>
   .inv-page{page-break-after:always;}
   .inv-page:last-child{page-break-after:avoid;}
   p{margin:3px 0;}
-  @media print{body{padding:6px;} @page{margin:0.6cm;size:A4;}}
+  .page-table{width:100%;border-collapse:collapse;}
+  .page-table>thead{display:table-header-group;}
+  .page-table>thead>tr>td,.page-table>tbody>tr>td{padding:0;border:none;}
+  @media print{
+    body{padding:6px;}
+    @page{
+      margin:0.6cm 0.6cm 1.1cm;size:A4;
+      @bottom-right{content:"Page " counter(page) " of " counter(pages);font-family:Arial,sans-serif;font-size:9px;color:#555;}
+    }
+  }
 </style>`;
 function wrapInvDoc(title,sections){
   return`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>${INV_DOC_STYLES}</head><body>${sections.map(s=>`<div class="inv-page">${s}</div>`).join("\n")}</body></html>`;
@@ -12001,6 +12018,13 @@ async function renderInvoicePacketPdf(inv,buyers,company){
         y-=pageH;
         pdf.addPage();
         pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
+      }
+      const pageCount=pdf.getNumberOfPages();
+      if(pageCount>1){
+        for(let p=1;p<=pageCount;p++){
+          pdf.setPage(p);pdf.setFontSize(8);pdf.setTextColor(90);
+          pdf.text(`Page ${p} of ${pageCount}`,pageW-16,pageH-10,{align:"right"});
+        }
       }
       return new Uint8Array(pdf.output("arraybuffer"));
     }finally{
