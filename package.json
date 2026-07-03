@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "db:push": "supabase db push --linked --include-all",
     "electron:dev": "concurrently -k -n \"WEB,ELECTRON\" -c \"cyan,yellow\" \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
     "electron:build": "electron-builder --config electron-builder.yml",
     "electron:release": "electron-builder --config electron-builder.yml --publish always"
