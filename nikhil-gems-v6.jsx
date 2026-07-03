@@ -9905,6 +9905,16 @@ const newInvItem=(seed={})=>{
 // acctQty chosen in the picker (in the acct entry's own unit), falling back to
 // the invoice line qty for invoices saved before acctQty existed.
 const acctLinkQty=it=>+((it?.acctQty??"")!==""?it.acctQty:it?.qty)||0;
+// Conversion factor between two units: weight units (kg/gm/ct) convert via
+// grams, anything else only matches itself (pcs↔pcs, lot↔lot). Returns null
+// when the two units can't be compared (e.g. pcs vs kg).
+const WEIGHT_GM={kg:1000,gm:1,g:1,ct:0.2};
+const unitFactor=(from,to)=>{
+  const f=String(from||"pcs").trim().toLowerCase(),t=String(to||"pcs").trim().toLowerCase();
+  if(f===t)return 1;
+  if(WEIGHT_GM[f]&&WEIGHT_GM[t])return WEIGHT_GM[f]/WEIGHT_GM[t];
+  return null;
+};
 const safeInvoiceDocName=name=>String(name||"document")
   .replace(/[^a-zA-Z0-9._-]+/g,"-")
   .replace(/^-+|-+$/g,"")
@@ -11425,8 +11435,17 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
       {physPicker!==null&&(()=>{
         const item=draft.items[physPicker]||{};
         const invQty=+(item.qty||0);
-        const allocatedTotal=[...physSelected.values()].reduce((s,v)=>s+(+v.qty||0),0);
-        const remaining=invQty>0?invQty-allocatedTotal:null;
+        // Allocated total in the invoice line's unit — each link qty is in its
+        // stock item's own unit, so convert (kg↔gm↔ct). Incomparable units
+        // (e.g. line in gm, a linked item in pcs) disable the tally entirely.
+        let allocatedTotal=0,comparable=true;
+        for(const [id,v] of physSelected){
+          const s=(stock||[]).find(x=>x.id===id);
+          const f=unitFactor(s?.unit,item.unit);
+          if(f==null){comparable=false;break;}
+          allocatedTotal+=(+v.qty||0)*f;
+        }
+        const remaining=comparable&&invQty>0?invQty-allocatedTotal:null;
         const filteredStock=(stock||[]).filter(s=>{
           if((+s.qty||0)<=0&&!physSelected.has(s.id))return false;
           if(physShapeF&&s.shape!==physShapeF)return false;
@@ -11438,9 +11457,15 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             const n=new Map(prev);
             if(n.has(s.id)){n.delete(s.id);}
             else{
-              // default qty = min(stock qty, remaining invoice qty if known)
-              const defQty=remaining!=null&&remaining>0?Math.min(+s.qty||0,remaining):+s.qty||0;
-              n.set(s.id,{qty:String(defQty||""),qty2:s.qty2?String(+s.qty2||""):"" });
+              // default qty = min(stock qty, remaining invoice qty converted to this stock item's unit)
+              const back=unitFactor(item.unit,s.unit);
+              const remInStockUnit=remaining!=null&&back!=null?remaining*back:null;
+              const defQty=remInStockUnit!=null&&remInStockUnit>1e-9?+parseFloat(Math.min(+s.qty||0,remInStockUnit).toFixed(4)):+s.qty||0;
+              // secondary qty defaults proportionally to how much of the primary is taken
+              const frac=(+s.qty||0)>0?defQty/(+s.qty||0):1;
+              const raw2=(+s.qty2||0)*frac;
+              const defQty2=s.qty2?(WEIGHT_GM[String(s.unit2||"kg").trim().toLowerCase()]?+raw2.toFixed(3):Math.round(raw2)):0;
+              n.set(s.id,{qty:String(defQty||""),qty2:defQty2?String(defQty2):""});
             }
             return n;
           });
@@ -11562,8 +11587,9 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                 {physSelected.size>0?(
                   <div>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
-                      <span style={{fontSize:12,color:C.inkMid}}><b>{physSelected.size}</b> item{physSelected.size>1?"s":""} selected · <b>{fmt(allocatedTotal)}</b> {item.unit||"units"} allocated{invQty>0?` of ${invQty}`:""}</span>
-                      {remaining!==null&&<span style={{fontSize:12,color:remaining<0?C.red:remaining===0?C.green:C.amber,fontWeight:600}}>{remaining<0?`⚠ ${fmt(Math.abs(remaining))} over`:remaining===0?"✓ Exact match":`${fmt(remaining)} unallocated`}</span>}
+                      <span style={{fontSize:12,color:C.inkMid}}><b>{physSelected.size}</b> item{physSelected.size>1?"s":""} selected{comparable?<> · <b>{fmt(allocatedTotal)}</b> {item.unit||"units"} allocated{invQty>0?` of ${fmt(invQty)}`:""}</>:null}</span>
+                      {remaining!==null&&<span style={{fontSize:12,color:remaining<-1e-6?C.red:Math.abs(remaining)<=1e-6?C.green:C.amber,fontWeight:600}}>{remaining<-1e-6?`⚠ ${fmt(Math.abs(remaining))} over`:Math.abs(remaining)<=1e-6?"✓ Exact match":`${fmt(remaining)} unallocated`}</span>}
+                      {!comparable&&<span style={{fontSize:11,color:C.inkFaint}}>mixed units — deduct amounts are per stock item</span>}
                     </div>
                     <div style={{display:"flex",gap:8}}>
                       <button onClick={()=>{setDraft(d=>{const items=[...d.items];items[physPicker]={...items[physPicker],stockLinks:[],stockId:""};return{...d,items};});setPhysPicker(null);setPhysSelected(new Map());}} style={{background:"none",border:`1px solid ${C.red}`,borderRadius:6,padding:"7px 14px",cursor:"pointer",fontSize:12,color:C.red,fontWeight:600}}>✕ Clear</button>
