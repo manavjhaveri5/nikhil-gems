@@ -9909,6 +9909,18 @@ const acctLinkQty=it=>+((it?.acctQty??"")!==""?it.acctQty:it?.qty)||0;
 // grams, anything else only matches itself (pcs↔pcs, lot↔lot). Returns null
 // when the two units can't be compared (e.g. pcs vs kg).
 const WEIGHT_GM={kg:1000,gm:1,g:1,ct:0.2};
+// Chip summary of what a line's physical-stock links will deduct, totalled per
+// unit across links — e.g. "−0.3 kg −10 pcs". qty is in each stock item's own
+// unit, qty2 in its unit2.
+const physLinkSummary=(links,stock)=>{
+  const totals={};
+  (links||[]).forEach(l=>{
+    const s=(stock||[]).find(x=>x.id===l.id);
+    if(+l.qty){const u=s?.unit||"pcs";totals[u]=(totals[u]||0)+(+l.qty);}
+    if(+l.qty2){const u2=s?.unit2||"kg";totals[u2]=(totals[u2]||0)+(+l.qty2);}
+  });
+  return Object.entries(totals).map(([u,q])=>`−${formatInvQty(+q.toFixed(4))} ${u}`).join(" ");
+};
 const unitFactor=(from,to)=>{
   const f=String(from||"pcs").trim().toLowerCase(),t=String(to||"pcs").trim().toLowerCase();
   if(f===t)return 1;
@@ -11233,7 +11245,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                           {item.acctStockId?(()=>{const s=accStock.find(x=>x.id===item.acctStockId);const dq=acctLinkQty(item);return`✓ ${s?.desc||"Acct linked"}${dq?` · −${formatInvQty(dq)} ${s?.unit||item.unit||""}`:""}`;})():"⊞ Acct. stock"}
                         </button>
                         <button onClick={()=>openPhysPicker(idx)} style={{fontSize:10,padding:"2px 8px",borderRadius:4,border:`1px solid ${(item.stockLinks?.length||item.stockId)?C.blue:C.border}`,background:(item.stockLinks?.length||item.stockId)?C.blueBg:"transparent",color:(item.stockLinks?.length||item.stockId)?C.blue:C.inkFaint,cursor:"pointer",whiteSpace:"nowrap"}}>
-                          {item.stockLinks?.length>1?`✓ ${item.stockLinks.length} items linked`:item.stockLinks?.length===1?(()=>{const s=(stock||[]).find(x=>x.id===item.stockLinks[0].id);return`✓ ${s?.material||""}${s?.shape?` · ${s.shape}`:""}`;})():item.stockId?(()=>{const s=(stock||[]).find(x=>x.id===item.stockId);return`✓ ${s?.material||""}${s?.shape?` · ${s.shape}`:""}`;})():"⊞ Physical stock"}
+                          {item.stockLinks?.length>1?(()=>{const sum=physLinkSummary(item.stockLinks,stock);return`✓ ${item.stockLinks.length} items${sum?` · ${sum}`:""}`;})():item.stockLinks?.length===1?(()=>{const s=(stock||[]).find(x=>x.id===item.stockLinks[0].id);const sum=physLinkSummary(item.stockLinks,stock);return`✓ ${s?.material||""}${s?.shape?` · ${s.shape}`:""}${sum?` · ${sum}`:""}`;})():item.stockId?(()=>{const s=(stock||[]).find(x=>x.id===item.stockId);const sum=item.qty?`−${formatInvQty(item.qty)} ${s?.unit||item.unit||""}`:"";return`✓ ${s?.material||""}${s?.shape?` · ${s.shape}`:""}${sum?` · ${sum}`:""}`;})():"⊞ Physical stock"}
                         </button>
                       </div>
                     </td>
