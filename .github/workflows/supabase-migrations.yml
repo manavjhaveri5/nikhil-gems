@@ -15,14 +15,28 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
     steps:
+      - name: Check secrets
+        id: secrets
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$SUPABASE_DB_PASSWORD" ]; then
+            echo "::warning::SUPABASE_ACCESS_TOKEN / SUPABASE_DB_PASSWORD repo secrets not set — skipping automatic migration push. Run 'npm run db:push' locally. (The daily AI Ops Check will flag unapplied migrations.)"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.secrets.outputs.available == 'true'
 
       - uses: supabase/setup-cli@v1
+        if: steps.secrets.outputs.available == 'true'
         with:
           version: latest
 
       - name: Link project
+        if: steps.secrets.outputs.available == 'true'
         run: supabase link --project-ref bxnqnbspibvbnxbojrhe
 
       - name: Push migrations
+        if: steps.secrets.outputs.available == 'true'
         run: supabase db push --include-all

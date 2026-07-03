@@ -1,0 +1,137 @@
+name: AI Ops Check
+
+# Daily production health check: deployed build vs main, Supabase migration
+# drift, RPC availability, DB paused detection. Findings are summarized in
+# plain English by the app's own /api/claude proxy (no extra secrets needed);
+# any failure opens/updates a GitHub issue and fails the run.
+
+on:
+  schedule:
+    - cron: '30 3 * * *' # 09:00 IST daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  APP_URL: https://project-nine-tan-22.vercel.app
+  SUPABASE_URL: https://bxnqnbspibvbnxbojrhe.supabase.co
+  # Publishable anon key — same value already shipped in the client JS bundle.
+  SUPABASE_ANON_KEY: sb_publishable_f28nKe2nPEkN0o12ZoFaVw_V2N5J6az
+
+jobs:
+  ops-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run health checks
+        id: checks
+        run: |
+          set -uo pipefail
+          : > findings.txt
+          : > problems.txt
+
+          note()    { echo "OK: $1" >> findings.txt; }
+          problem() { echo "PROBLEM: $1" >> findings.txt; echo "- $1" >> problems.txt; }
+
+          supa_rpc() { # $1=function $2=json-body
+            curl -s --max-time 15 -X POST "$SUPABASE_URL/rest/v1/rpc/$1" \
+              -H "apikey: $SUPABASE_ANON_KEY" \
+              -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+              -H "Content-Type: application/json" -d "$2"
+          }
+
+          # ── 1. Is the deployed build the latest main? ─────────────────────
+          MAIN_SHA="${GITHUB_SHA}"
+          fetch_deployed() {
+            curl -sf --max-time 15 "$APP_URL/version.json" | jq -r '.version // empty' 2>/dev/null || true
+          }
+          DEPLOYED="$(fetch_deployed)"
+          if [ -z "$DEPLOYED" ]; then
+            problem "Could not read $APP_URL/version.json — deployment may be broken (or build script not deployed yet)."
+          elif [ "$DEPLOYED" != "$MAIN_SHA" ]; then
+            # A deploy may be mid-build; give Vercel a chance and re-check once.
+            sleep 120
+            DEPLOYED="$(fetch_deployed)"
+            if [ "$DEPLOYED" != "$MAIN_SHA" ]; then
+              problem "Deployed build ($DEPLOYED) is not the latest main ($MAIN_SHA) — Vercel deploy missing or failed."
+            else
+              note "Deployed build matches latest main ($MAIN_SHA) after redeploy settled."
+            fi
+          else
+            note "Deployed build matches latest main ($MAIN_SHA)."
+          fi
+
+          # ── 2. Is the database awake? ─────────────────────────────────────
+          AUTH_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$SUPABASE_URL/auth/v1/settings" -H "apikey: $SUPABASE_ANON_KEY" || echo 000)
+          if [ "$AUTH_CODE" = "000" ]; then
+            problem "Supabase DB-backed endpoint timed out — project likely PAUSED (free tier). Restore it in the Supabase dashboard; data is not lost."
+          else
+            note "Supabase database is awake (auth settings answered $AUTH_CODE)."
+          fi
+
+          # ── 3. Migration drift: repo vs applied ──────────────────────────
+          APPLIED_JSON="$(supa_rpc applied_migrations '{}')"
+          if echo "$APPLIED_JSON" | jq -e 'type=="array"' >/dev/null 2>&1; then
+            echo "$APPLIED_JSON" | jq -r '.[].version' | sort > applied.txt
+            ls supabase/migrations/*.sql | xargs -n1 basename | grep -oE '^[0-9]+' | sort > local.txt
+            MISSING=$(comm -23 local.txt applied.txt | tr '\n' ' ')
+            if [ -n "${MISSING// /}" ]; then
+              problem "Migrations committed but NOT applied to prod DB: $MISSING — run 'npm run db:push'."
+            else
+              note "All $(wc -l < local.txt | tr -d ' ') repo migrations are applied to the prod database."
+            fi
+          else
+            problem "Could not list applied migrations (applied_migrations RPC failed): $(echo "$APPLIED_JSON" | head -c 200)"
+          fi
+
+          # ── 4. Do the RPCs the app saves through actually exist? ─────────
+          for FN in app_data_upsert_item_versioned app_data_upsert_item; do
+            MSG=$(supa_rpc "$FN" '{"p_key":"","p_item":{}}' | jq -r '.message // empty' 2>/dev/null || true)
+            case "$MSG" in
+              *"p_key is required"*) note "RPC $FN exists and validates input." ;;
+              *"Could not find the function"*) problem "RPC $FN is MISSING from the database — saves will fail. Run 'npm run db:push'." ;;
+              *) problem "RPC $FN returned unexpected response: ${MSG:-<empty>}" ;;
+            esac
+          done
+
+          echo "problem_count=$(wc -l < problems.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          echo "── findings ──"; cat findings.txt
+
+      - name: AI report
+        id: ai
+        run: |
+          set -uo pipefail
+          SYSTEM="You are the ops monitor for the Nikhil Gems ERP (React app on Vercel at $APP_URL, Supabase backend). Below are today's automated health-check results. Write a short plain-English status report for the owner (not a developer): start with one line — either 'All good.' or 'Action needed:' — then briefly explain any problems and exactly what to do about them. No markdown headers."
+          REPORT=$(jq -n --rawfile f findings.txt --arg s "$SYSTEM" \
+            '{max_tokens: 700, messages: [{role:"system",content:$s},{role:"user",content:$f}]}' \
+            | curl -s --max-time 90 -X POST "$APP_URL/api/claude" -H 'Content-Type: application/json' -d @- \
+            | jq -r '.content[0].text // empty' || true)
+          if [ -z "$REPORT" ]; then
+            REPORT="(AI summary unavailable — raw findings below.)"
+          fi
+          { echo "## AI Ops Check"; echo; echo "$REPORT"; echo; echo '```'; cat findings.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "$REPORT"; echo; echo '```'; cat findings.txt; echo '```'; } > report.md
+
+      - name: Open issue on failure
+        if: steps.checks.outputs.problem_count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          gh label create ops-check --color D93F0B --description "Automated ops check findings" --force 2>/dev/null || true
+          EXISTING=$(gh issue list --label ops-check --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file report.md
+          else
+            gh issue create --title "🤖 Ops check: action needed ($(date -u +%F))" --label ops-check --body-file report.md
+          fi
+
+      - name: Fail if problems found
+        if: steps.checks.outputs.problem_count != '0'
+        run: |
+          echo "Ops check found $(wc -l < problems.txt | tr -d ' ') problem(s):"
+          cat problems.txt
+          exit 1

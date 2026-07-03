@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/write-version.mjs && vite build",
     "db:push": "supabase db push --linked --include-all",
     "electron:dev": "concurrently -k -n \"WEB,ELECTRON\" -c \"cyan,yellow\" \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
     "electron:build": "electron-builder --config electron-builder.yml",
