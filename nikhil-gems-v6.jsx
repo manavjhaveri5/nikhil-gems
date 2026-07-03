@@ -16851,7 +16851,7 @@ export default function Root({onSignOut}){
     let baseline=null;
     const check=async()=>{
       try{
-        const r=await fetch("/api/version",{cache:"no-store"});
+        const r=await fetch("/version.json",{cache:"no-store"});
         if(!r.ok)return;
         const{version}=await r.json();
         if(!version||version==="dev")return;       // local / no SHA — stay quiet
