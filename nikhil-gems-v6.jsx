@@ -9899,8 +9899,12 @@ const newInvItem=(seed={})=>{
   const {buyer,...rest}=seed;
   const hsn=rest.hsn||"71031029";
   const igst=rest.igst??invoiceDefaultGstRate(hsn,buyer);
-  return{id:uid(),acctDesc:"",customDesc:"",qty:"",unit:"pcs",rate:"",amt:0,stockId:"",acctStockId:"",ready:false,readyDate:"",...rest,hsn,igst};
+  return{id:uid(),acctDesc:"",customDesc:"",qty:"",unit:"pcs",rate:"",amt:0,stockId:"",acctStockId:"",acctQty:"",ready:false,readyDate:"",...rest,hsn,igst};
 };
+// Qty to move in/out of accounting stock for an invoice line — the explicit
+// acctQty chosen in the picker (in the acct entry's own unit), falling back to
+// the invoice line qty for invoices saved before acctQty existed.
+const acctLinkQty=it=>+((it?.acctQty??"")!==""?it.acctQty:it?.qty)||0;
 const safeInvoiceDocName=name=>String(name||"document")
   .replace(/[^a-zA-Z0-9._-]+/g,"-")
   .replace(/^-+|-+$/g,"")
@@ -10226,9 +10230,10 @@ function InvoicesApp({onHome,startDraft}){
     // Step 1 — restore acct qty for previously saved links (if editing)
     if(existing){
       existing.items.forEach(it=>{
-        if(it.acctStockId&&it.qty){
+        const rq=acctLinkQty(it);
+        if(it.acctStockId&&rq){
           const idx=newAccStock.findIndex(s=>s.id===it.acctStockId);
-          if(idx>=0){newAccStock[idx]={...newAccStock[idx],qty:(+newAccStock[idx].qty||0)+(+it.qty||0)};accChanged=true;}
+          if(idx>=0){newAccStock[idx]={...newAccStock[idx],qty:(+newAccStock[idx].qty||0)+rq};accChanged=true;}
         }
       });
     }
@@ -10236,12 +10241,13 @@ function InvoicesApp({onHome,startDraft}){
     newAccStock.forEach((s,i)=>{if((s.outs||[]).some(o=>o.invId===inv.id)){newAccStock[i]={...s,outs:(s.outs||[]).filter(o=>o.invId!==inv.id)};accChanged=true;}});
     // Step 2 — deduct for current (new) acct links + record outward movement (Tally ledger)
     inv.items.forEach(item=>{
-      if(item.acctStockId&&item.qty){
+      const dq=acctLinkQty(item);
+      if(item.acctStockId&&dq){
         const idx=newAccStock.findIndex(s=>s.id===item.acctStockId);
         if(idx>=0){
           const e=newAccStock[idx];
-          const out={invId:inv.id,invNo:inv.invNo||"",buyer:inv.buyerName||inv.buyer||"",date:inv.date||today(),qty:item.qty,unit:item.unit||e.unit||""};
-          newAccStock[idx]={...e,qty:Math.max(0,(+e.qty||0)-(+item.qty||0)),outs:[...(e.outs||[]),out]};
+          const out={invId:inv.id,invNo:inv.invNo||"",buyer:inv.buyerName||inv.buyer||"",date:inv.date||today(),qty:dq,unit:e.unit||item.unit||""};
+          newAccStock[idx]={...e,qty:Math.max(0,(+e.qty||0)-dq),outs:[...(e.outs||[]),out]};
           accChanged=true;
         }
       }
@@ -10265,10 +10271,10 @@ function InvoicesApp({onHome,startDraft}){
             const s=stock.find(x=>x.id===id);if(!s)return;
             exitItems.push({id:uid(),vendorId:"",vendorName:"",material:s.material||item.desc||"",shape:s.shape||"",qty:qty?String(qty):"",unit:s.unit||item.unit||"pcs",qty2:qty2?String(qty2):"",unit2:s.unit2||"kg",notes:s.sku?`SKU ${s.sku}`:""});
           });
-          if(item.acctStockId&&item.qty){
+          if(item.acctStockId&&acctLinkQty(item)){
             const a=accStock.find(x=>x.id===item.acctStockId);
             // acct desc is freeform and usually already includes the shape — keep shape blank to avoid "Sphere · Sphere"
-            exitItems.push({id:uid(),vendorId:"",vendorName:"",material:a?.desc||item.acctDesc||item.desc||"",shape:"",qty:String(item.qty||""),unit:item.unit||a?.unit||"pcs",qty2:"",unit2:"kg",notes:""});
+            exitItems.push({id:uid(),vendorId:"",vendorName:"",material:a?.desc||item.acctDesc||item.desc||"",shape:"",qty:String(acctLinkQty(item)||""),unit:a?.unit||item.unit||"pcs",qty2:"",unit2:"kg",notes:""});
           }
         });
         const freshJ=await loadKFresh(JOURNAL_KEY);
@@ -10314,11 +10320,11 @@ function InvoicesApp({onHome,startDraft}){
       });
       if(physChanged){setStock(newStock);try{await saveStockK(newStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}}
       // Restore accounting stock quantities + remove this invoice's outward movements
-      const acctLinks=inv.items.filter(it=>it.acctStockId&&it.qty);
+      const acctLinks=inv.items.filter(it=>it.acctStockId&&acctLinkQty(it));
       const hasOuts=accStock.some(s=>(s.outs||[]).some(o=>o.invId===id));
       if(acctLinks.length>0||hasOuts){
         let newAccStock=[...accStock];
-        acctLinks.forEach(it=>{const i=newAccStock.findIndex(s=>s.id===it.acctStockId);if(i>=0)newAccStock[i]={...newAccStock[i],qty:(+(newAccStock[i].qty)||0)+(+it.qty||0)};});
+        acctLinks.forEach(it=>{const i=newAccStock.findIndex(s=>s.id===it.acctStockId);if(i>=0)newAccStock[i]={...newAccStock[i],qty:(+(newAccStock[i].qty)||0)+acctLinkQty(it)};});
         newAccStock=newAccStock.map(s=>(s.outs||[]).some(o=>o.invId===id)?{...s,outs:s.outs.filter(o=>o.invId!==id)}:s);
         setAccStock(newAccStock);await saveK(KEYS.accStock,newAccStock);
       }
@@ -10947,6 +10953,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   // physSelected: Map<stockId, allocatedQty> — supports multi-select
   const [physSelected,setPhysSelected]=useState(new Map());
   const [acctPreview,setAcctPreview]=useState(null); // staging: acct item to confirm
+  const [acctDeduct,setAcctDeduct]=useState(""); // qty to remove from the acct entry, in its own unit
   const physShapes=useMemo(()=>[...new Set((stock||[]).map(s=>s.shape).filter(Boolean))].sort(),[stock]);
   const openPhysPicker=idx=>{
     setPhysSearch("");setPhysShapeF("");
@@ -10958,7 +10965,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     setPhysSelected(pre);
     setPhysPicker(idx);
   };
-  const openAcctPicker=idx=>{setAcctSearch("");setAcctPreview(null);setAcctPicker(idx);};
+  const openAcctPicker=idx=>{setAcctSearch("");setAcctPreview(null);setAcctDeduct("");setAcctPicker(idx);};
   const confirmPhys=()=>{
     if(!physSelected.size)return;
     const links=[...physSelected.entries()].map(([id,v])=>({id,qty:+v.qty||0,...(v.qty2&&+v.qty2>0?{qty2:+v.qty2}:{})}));
@@ -10974,9 +10981,9 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     });
     setPhysPicker(null);setPhysSelected(new Map());
   };
-  const confirmAcct=(idx,s)=>{
-    setDraft(d=>{const items=[...d.items];items[idx]={...items[idx],acctStockId:s.id,acctDesc:items[idx].acctDesc||s.desc||""};return{...d,items};});
-    setAcctPicker(null);setAcctPreview(null);
+  const confirmAcct=(idx,s,deductQty)=>{
+    setDraft(d=>{const items=[...d.items];items[idx]={...items[idx],acctStockId:s.id,acctQty:String(deductQty??""),acctDesc:items[idx].acctDesc||s.desc||""};return{...d,items};});
+    setAcctPicker(null);setAcctPreview(null);setAcctDeduct("");
   };
   const buyer=buyers.find(b=>b.id===draft.buyerId);
   // Auto-fill portDischarge from buyer
@@ -11213,7 +11220,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                       <input value={dispAcct} onChange={e=>siAcctDesc(idx,e.target.value)} style={{...CI,width:"100%",fontWeight:500}} placeholder="Type shape (Palmstone, Sphere…) or description" list="inv-acct-descs"/>
                       <div style={{marginTop:4,display:"flex",gap:4,flexWrap:"wrap"}}>
                         <button onClick={()=>openAcctPicker(idx)} style={{fontSize:10,padding:"2px 8px",borderRadius:4,border:`1px solid ${item.acctStockId?C.teal:C.border}`,background:item.acctStockId?C.tealBg:"transparent",color:item.acctStockId?C.teal:C.inkFaint,cursor:"pointer",whiteSpace:"nowrap"}}>
-                          {item.acctStockId?(()=>{const s=accStock.find(x=>x.id===item.acctStockId);return`✓ ${s?.desc||"Acct linked"}`;})():"⊞ Acct. stock"}
+                          {item.acctStockId?(()=>{const s=accStock.find(x=>x.id===item.acctStockId);const dq=acctLinkQty(item);return`✓ ${s?.desc||"Acct linked"}${dq?` · −${formatInvQty(dq)} ${s?.unit||item.unit||""}`:""}`;})():"⊞ Acct. stock"}
                         </button>
                         <button onClick={()=>openPhysPicker(idx)} style={{fontSize:10,padding:"2px 8px",borderRadius:4,border:`1px solid ${(item.stockLinks?.length||item.stockId)?C.blue:C.border}`,background:(item.stockLinks?.length||item.stockId)?C.blueBg:"transparent",color:(item.stockLinks?.length||item.stockId)?C.blue:C.inkFaint,cursor:"pointer",whiteSpace:"nowrap"}}>
                           {item.stockLinks?.length>1?`✓ ${item.stockLinks.length} items linked`:item.stockLinks?.length===1?(()=>{const s=(stock||[]).find(x=>x.id===item.stockLinks[0].id);return`✓ ${s?.material||""}${s?.shape?` · ${s.shape}`:""}`;})():item.stockId?(()=>{const s=(stock||[]).find(x=>x.id===item.stockId);return`✓ ${s?.material||""}${s?.shape?` · ${s.shape}`:""}`;})():"⊞ Physical stock"}
@@ -11592,12 +11599,13 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
               </div>
               <div style={{overflowY:"auto",flex:1,padding:"10px 16px"}}>
                 {filteredAcct.length>0&&filteredAcct.map(s=>{
-                  const after=Math.max(0,(+s.qty||0)-invQty);
                   const isPreviewed=acctPreview?.id===s.id;
                   const isSelected=item.acctStockId===s.id;
+                  const rowDq=isPreviewed?(+acctDeduct||0):invQty;
+                  const after=Math.max(0,(+s.qty||0)-rowDq);
                   const lastBill=(s.bills||[]).slice(-1)[0];
                   return(
-                    <div key={s.id} onClick={()=>setAcctPreview(isPreviewed?null:s)}
+                    <div key={s.id} onClick={()=>{const next=isPreviewed?null:s;setAcctPreview(next);if(next)setAcctDeduct(isSelected&&(item.acctQty??"")!==""?String(item.acctQty):invQty>0?String(invQty):"");}}
                       style={{border:`1.5px solid ${isPreviewed||isSelected?C.teal:C.border}`,background:isPreviewed?C.tealBg:isSelected?C.tealBg:C.surface,borderRadius:8,padding:"10px 14px",marginBottom:7,cursor:"pointer",transition:"all .12s"}}
                       onMouseEnter={e=>{if(!isPreviewed&&!isSelected){e.currentTarget.style.borderColor=C.teal;e.currentTarget.style.background=C.tealBg+"55";}}}
                       onMouseLeave={e=>{if(!isPreviewed&&!isSelected){e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background=C.surface;}}}>
@@ -11612,7 +11620,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                         </div>
                         <div style={{textAlign:"right",flexShrink:0,marginLeft:14}}>
                           <div style={{fontSize:14,fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,color:C.ink}}>{s.qty} {s.unit}</div>
-                          {invQty>0&&<div style={{fontSize:11,color:after<(+s.qty||0)?C.amber:C.inkFaint,marginTop:1}}>→ {after} after invoice</div>}
+                          {rowDq>0&&<div style={{fontSize:11,color:after<(+s.qty||0)?C.amber:C.inkFaint,marginTop:1}}>→ {after} after invoice</div>}
                         </div>
                       </div>
                     </div>
@@ -11628,8 +11636,10 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
               </div>
               <div style={{padding:"12px 16px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
                 {acctPreview?(()=>{
-                  const after=Math.max(0,(+acctPreview.qty||0)-invQty);
-                  const deficit=invQty>(+acctPreview.qty||0);
+                  const dq=+acctDeduct||0;
+                  const after=Math.max(0,(+acctPreview.qty||0)-dq);
+                  const deficit=dq>(+acctPreview.qty||0);
+                  const unitMismatch=item.unit&&acctPreview.unit&&item.unit!==acctPreview.unit;
                   return(
                     <div>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
@@ -11643,20 +11653,26 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                           <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:600,color:C.ink}}>{acctPreview.qty||0} {acctPreview.unit}</div>
                         </div>
                       </div>
-                      {invQty>0&&<div style={{background:deficit?C.redBg:C.greenBg,borderRadius:6,padding:"8px 12px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                        <div style={{fontSize:12,color:C.inkMid}}>After invoicing <b>{invQty} {acctPreview.unit}</b></div>
-                        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,color:deficit?C.red:C.green}}>{after} {acctPreview.unit} left{deficit?" ⚠":""}</div>
-                      </div>}
+                      <div style={{background:deficit?C.redBg:C.card,border:`1px solid ${deficit?"#F5C0B8":C.border}`,borderRadius:6,padding:"8px 12px",marginBottom:10,display:"flex",flexWrap:"wrap",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <span style={{fontSize:12,color:C.inkMid}}>Remove from stock:</span>
+                          <input type="number" min="0" autoFocus value={acctDeduct} onChange={e=>setAcctDeduct(e.target.value)}
+                            style={{...FI,width:80,textAlign:"right",fontWeight:700,fontSize:14,borderColor:deficit?C.red:C.teal}} placeholder="qty"/>
+                          <span style={{fontSize:12,color:C.inkFaint}}>{acctPreview.unit}</span>
+                        </div>
+                        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:18,fontWeight:700,color:deficit?C.red:after===0&&dq>0?C.green:C.ink}}>{after} {acctPreview.unit} left{deficit?" ⚠":""}</div>
+                      </div>
+                      {unitMismatch&&<div style={{fontSize:11,color:C.amber,marginBottom:10}}>⚠ Invoice line is {invQty||"?"} {item.unit} but this stock is tracked in {acctPreview.unit} — enter how many {acctPreview.unit} to remove.</div>}
                       <div style={{display:"flex",gap:8}}>
                         <button onClick={()=>setAcctPreview(null)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"7px",cursor:"pointer",fontSize:12,color:C.inkMid}}>← Back</button>
-                        <button onClick={()=>confirmAcct(acctPicker,acctPreview)} style={{flex:2,background:C.ink,border:"none",borderRadius:6,padding:"7px",cursor:"pointer",fontSize:12,fontWeight:600,color:"#FAF0DC"}}>✓ Confirm Link</button>
+                        <button onClick={()=>confirmAcct(acctPicker,acctPreview,acctDeduct)} disabled={!dq} style={{flex:2,background:dq?C.ink:C.border,border:"none",borderRadius:6,padding:"7px",cursor:dq?"pointer":"not-allowed",fontSize:12,fontWeight:600,color:dq?"#FAF0DC":C.inkFaint}}>{dq?`✓ Link · remove ${acctDeduct} ${acctPreview.unit||""}`:"Enter qty to remove"}</button>
                       </div>
                     </div>
                   );
                 })():(
                   item.acctStockId?(()=>{
                     const linked=(accStock||[]).find(s=>s.id===item.acctStockId)||{desc:"item"};
-                    return <button onClick={()=>{setDraft(d=>{const items=[...d.items];items[acctPicker]={...items[acctPicker],acctStockId:""};return{...d,items};});setAcctPicker(null);}} style={{color:C.red,background:"none",border:`1px solid ${C.red}`,borderRadius:5,padding:"6px 14px",cursor:"pointer",fontSize:12,width:"100%"}}>Remove link{linked.desc?` from ${linked.desc}`:""}</button>;
+                    return <button onClick={()=>{setDraft(d=>{const items=[...d.items];items[acctPicker]={...items[acctPicker],acctStockId:"",acctQty:""};return{...d,items};});setAcctPicker(null);}} style={{color:C.red,background:"none",border:`1px solid ${C.red}`,borderRadius:5,padding:"6px 14px",cursor:"pointer",fontSize:12,width:"100%"}}>Remove link{linked.desc?` from ${linked.desc}`:""}</button>;
                   })()
                   :<div style={{fontSize:11,color:C.inkFaint,textAlign:"center"}}>← Select an item above to preview</div>
                 )}
