@@ -10060,7 +10060,7 @@ function InvoicesApp({onHome,startDraft}){
 	  const activeCO=companyProfileFromKey(company);
   const [invoices,setInvoices]=useState(()=>readCache(INV_KEYS.invoices)||[]);
   const [buyers,setBuyers]=useState(()=>readCache(INV_KEYS.buyers)||[]);
-  const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);
+  const [stock,setStock]=useState(()=>((readCache(KEYS.stock)||[]).map(normalizeStockRecord)));
   const [purchases,setPurchases]=useState(()=>readCache(KEYS.purchases)||[]);
   const [view,setView]=useState("list");
   const [draft,setDraft]=useState(null);
@@ -10183,7 +10183,20 @@ function InvoicesApp({onHome,startDraft}){
     await saveK(INV_KEYS.buyers,list);
     return{draft:{...draftWithDischarge,buyerId:buyer.id,consigneeSameAsBuyer:true},buyers:list};
   };
-  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock(s||[]);setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");if(prepared.draft.autoAttach&&prepared.draft.sourceSbId)setAutoAttachId(prepared.draft.id);}});},[company]);
+  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock((s||[]).map(normalizeStockRecord));setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");if(prepared.draft.autoAttach&&prepared.draft.sourceSbId)setAutoAttachId(prepared.draft.id);}});},[company]);
+  // Keep stock/acct stock live: realtime invalidations land here (items added in
+  // the Stock module, stock journal, or another device while Invoicing is open).
+  useEffect(()=>onCacheRefresh(keys=>{
+    if(KEYS.stock&&keys.includes(KEYS.stock))loadK(KEYS.stock).then(s=>setStock((s||[]).map(normalizeStockRecord))).catch(()=>{});
+    if(keys.includes(KEYS.accStock))loadK(KEYS.accStock).then(a=>setAccStock(a||[])).catch(()=>{});
+  }),[company]);
+  // Belt-and-braces: pickers re-fetch on open so they never show a stale list.
+  const refreshStock=useCallback(async()=>{
+    try{
+      const [s,a]=await Promise.all([KEYS.stock?loadKFresh(KEYS.stock):Promise.resolve([]),loadKFresh(KEYS.accStock)]);
+      setStock((s||[]).map(normalizeStockRecord));setAccStock(a||[]);
+    }catch{}
+  },[company]);
 
   // "Create invoice from SB" wants the invoice rendered and attached to the SB packet
   // immediately (not just opened as a draft). Once the module has loaded fresh state we
@@ -10688,7 +10701,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
-	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast}/>}
+	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast} onRefreshStock={refreshStock}/>}
 	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")}/>}
 	      {loaded&&view==="bulk-inv"&&<InvBulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} buyers={buyers} company={company} extractInvoice={extractInvoice} onSave={async inv=>{await saveInvoice(inv,{navigateAway:false});if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);}else{showToast(`${bulkQueue.length} invoice${bulkQueue.length>1?"s":""} processed`);setView("list");setDraft(null);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
     </Shell>
@@ -10904,7 +10917,7 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
   );
 }
 
-function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],onSave,onDelete,onPreview,showToast}) {
+function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],onSave,onDelete,onPreview,showToast,onRefreshStock}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
 	  const co=companyProfileFromKey(company);
   const gstBuyer=buyers.find(b=>b.id===draft.buyerId);
@@ -10978,6 +10991,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   const [acctDeduct,setAcctDeduct]=useState(""); // qty to remove from the acct entry, in its own unit
   const physShapes=useMemo(()=>[...new Set((stock||[]).map(s=>s.shape).filter(Boolean))].sort(),[stock]);
   const openPhysPicker=idx=>{
+    onRefreshStock?.(); // async — list updates in place if new items landed
     setPhysSearch("");setPhysShapeF("");
     // Pre-populate selection from existing links on this item
     const it=draft.items[idx]||{};
@@ -10987,7 +11001,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     setPhysSelected(pre);
     setPhysPicker(idx);
   };
-  const openAcctPicker=idx=>{setAcctSearch("");setAcctPreview(null);setAcctDeduct("");setAcctPicker(idx);};
+  const openAcctPicker=idx=>{onRefreshStock?.();setAcctSearch("");setAcctPreview(null);setAcctDeduct("");setAcctPicker(idx);};
   const confirmPhys=()=>{
     if(!physSelected.size)return;
     const links=[...physSelected.entries()].map(([id,v])=>({id,qty:+v.qty||0,...(v.qty2&&+v.qty2>0?{qty2:+v.qty2}:{})}));
