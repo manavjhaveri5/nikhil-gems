@@ -1,7 +1,9 @@
 /**
  * Nikhil Gems Service Worker
  * Strategy:
- *   - index.html: network-first (2 s timeout) → cache fallback   ← always gets updates
+ *   - index.html: network-first (8 s timeout) → cache fallback; the network
+ *     response is cached even when it loses the race, so a slow connection
+ *     can never pin a client to an old build (v12 did exactly that)
  *   - /assets/*:  cache-first → network + recache                ← content-hashed, safe to cache forever
  *   - /api/*:     network-only (pass-through)                     ← handled by app offline queue
  *   - Supabase:   network-only
@@ -9,7 +11,7 @@
  * The cache name uses SELF_URL so every new sw.js deployment busts the old cache.
  */
 
-const CACHE = "ng-shell-2026-06-09-v12";
+const CACHE = "ng-shell-2026-07-04-v13";
 const SHELL  = ["/", "/index.html"];
 const freshRequest = req => new Request(req, { cache: "no-store" });
 const clearShellCaches = () =>
@@ -23,7 +25,7 @@ const reloadModule = () => new Response(
 self.addEventListener("install", e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(SHELL))
+      .then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "no-store" }))))
       .then(() => self.skipWaiting())
   );
 });
@@ -80,18 +82,21 @@ self.addEventListener("fetch", e => {
     return;
   }
 
-  // Navigation (index.html) — network-first with 2 s timeout, fallback to cache
+  // Navigation (index.html) — network-first with 8 s timeout, fallback to cache.
+  // The network fetch keeps running after a timeout and still recaches, so even
+  // a client that got the cached shell this time gets the fresh one next open.
   if (e.request.mode === "navigate") {
+    const network = fetch(freshRequest(e.request)).then(res => {
+      if (!res.ok) throw new Error("navigation failed");
+      caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+      return res;
+    });
+    e.waitUntil(network.then(() => {}, () => {}));
     e.respondWith(
       Promise.race([
-        fetch(freshRequest(e.request)).then(res => {
-          if (!res.ok) throw new Error("navigation failed");
-          // Recache the fresh index.html on every successful network response
-          caches.open(CACHE).then(c => c.put(e.request, res.clone()));
-          return res;
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000)),
-      ]).catch(() => caches.match("/index.html"))
+        network.then(res => res.clone()),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
+      ]).catch(() => caches.match("/index.html").then(cached => cached || network))
     );
     return;
   }
