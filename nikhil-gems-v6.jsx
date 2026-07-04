@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
-import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
+import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
@@ -5716,6 +5716,27 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [returnQtyDialog,setReturnQtyDialog]=useState(null); // {entries:[{item,qtyToReturn,qty2ToReturn}]}
   const [undoSend,setUndoSend]=useState(null); // {prevStock,label}
   const [stockRegion,setStockRegion]=useState("India");
+  // Listing Manager back-link: live listings grouped by the box they reference
+  // (their storage location, or the box of their linked stock item), so stock
+  // entries can show "this box has N Etsy / N eBay listings".
+  const lmListings=useLiveK("ng-listings-v1",[]);
+  const lmByBox=useMemo(()=>{
+    const map=new Map();
+    const byId=new Map(stock.map(x=>[x.id,x]));
+    (Array.isArray(lmListings)?lmListings:[]).forEach(l=>{
+      const plats=Object.entries(l.platforms||{}).filter(([,p])=>p?.status==="active").map(([k])=>k==="shopify_earth"||k==="shopify_aty"?"Shopify":k==="ebay"?"eBay":k.charAt(0).toUpperCase()+k.slice(1));
+      if(!plats.length)return;
+      const box=stripBoxPrefix(normBox(l.officeLocation||byId.get(l.stockId)?.location));
+      if(!box)return;
+      const e=map.get(box)||{counts:{},titles:[]};
+      plats.forEach(p=>{e.counts[p]=(e.counts[p]||0)+1;});
+      e.titles.push(`${(l.title||"Untitled listing").slice(0,60)} — ${plats.join("/")}`);
+      map.set(box,e);
+    });
+    return map;
+  },[lmListings,stock]);
+  const lmForBox=loc=>loc?lmByBox.get(stripBoxPrefix(normBox(loc))):null;
+  const lmSummary=lm=>Object.entries(lm.counts).map(([p,n])=>`${n} ${p}`).join(" · ");
   const [markSoldItem,setMarkSoldItem]=useState(null);
   const [markSoldQty,setMarkSoldQty]=useState("");
   const [markSoldRate,setMarkSoldRate]=useState("");
@@ -7090,6 +7111,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                               {chips.map(c=>(
                                 <span key={c.key} title={c.label} style={c.color?{fontSize:12,lineHeight:1,color:c.color}:{fontSize:12,lineHeight:1,filter:"grayscale(1)",opacity:.5}}>{c.icon}</span>
                               ))}
+                              {(()=>{const lm=lmForBox(s.location);return lm?<span title={`Live listings referencing box ${s.location}:\n${lm.titles.join("\n")}`} style={{background:"#FFF3E0",color:"#BF360C",borderRadius:10,padding:"1px 7px",fontSize:8,fontWeight:700,whiteSpace:"nowrap"}}>🏷 {lmSummary(lm)}</span>:null;})()}
                               {s.showTag&&<span style={{background:"var(--c-fill)",color:C.inkMid,borderRadius:10,padding:"1px 7px",fontSize:8,fontWeight:600,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={s.showTag}>{s.showTag}</span>}
                               {s.productType&&<span style={{background:"var(--c-fill)",color:C.inkMid,borderRadius:10,padding:"1px 7px",fontSize:9,fontWeight:600,marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:5,height:5,borderRadius:"50%",background:C.purple}}/>{s.productType}</span>}
                             </div>
@@ -7185,6 +7207,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         {selected.postedEtsy&&<span style={{fontSize:11,background:"#FFF3E0",color:"#BF360C",borderRadius:4,padding:"3px 9px",fontWeight:600}}>Etsy ✓</span>}
                         {!selected.photographed&&!selected.postedShopify&&!selected.postedWix&&!selected.postedEtsy&&<span style={{fontSize:11,color:C.inkFaint}}>Not photographed · Not listed anywhere</span>}
                       </div>
+                      {(()=>{const lm=lmForBox(selected.location);if(!lm)return null;const total=Object.values(lm.counts).reduce((a,b)=>a+b,0);return(
+                        <div style={{background:"#FFF3E0",border:"1px solid #F0C890",borderRadius:8,padding:"9px 12px",marginBottom:14}}>
+                          <div style={{fontSize:11,fontWeight:700,color:"#BF360C"}}>🏷 {lmSummary(lm)} listing{total>1?"s":""} reference box {selected.location}</div>
+                          <div style={{fontSize:10,color:C.inkMid,marginTop:4,whiteSpace:"pre-line",lineHeight:1.5}}>{lm.titles.slice(0,5).join("\n")}{lm.titles.length>5?`\n…and ${lm.titles.length-5} more`:""}</div>
+                          <div style={{fontSize:9,color:C.inkFaint,marginTop:4}}>If stock from this box is sold or moved, check these listings in Listing Manager.</div>
+                        </div>
+                      );})()}
                       {shopifySetup&&(
                         <div style={{background:"#F6FFF8",border:"1.5px solid #00875A",borderRadius:10,padding:"16px",marginBottom:16}}>
                           <div style={{fontWeight:700,fontSize:13,color:"#00875A",marginBottom:8}}>🛍 Connect Shopify</div>
@@ -9913,12 +9942,17 @@ const acctLinkQty=it=>+((it?.acctQty??"")!==""?it.acctQty:it?.qty)||0;
 // on a sales platform, so the online listing gets checked/deleted in time.
 // Matches Listing Manager entries (by stockId or box) plus the legacy
 // posted-platform flags on the stock records themselves.
+// Box names differ between modules ("NG269" in Listing Manager vs "269" in
+// stock, "STK15" vs "15") — compare with the leading letter prefix stripped too.
+const normBox=v=>String(v||"").trim().toUpperCase().replace(/\s+/g,"");
+const stripBoxPrefix=k=>k.replace(/^[A-Z]+(?=\d)/,"");
+const sameBox=(a,b)=>!!a&&!!b&&(a===b||stripBoxPrefix(a)===stripBoxPrefix(b));
 async function findLiveListingsForStock(affectedItems,allStock){
   const items=(affectedItems||[]).filter(Boolean);
   if(!items.length)return[];
   const ids=new Set(items.map(s=>s.id));
-  const norm=v=>String(v||"").trim().toUpperCase();
-  const boxes=new Set(items.map(s=>norm(s.location)).filter(Boolean));
+  const norm=normBox;
+  const boxes=[...new Set(items.map(s=>norm(s.location)).filter(Boolean))];
   const byId=new Map((allStock||[]).map(s=>[s.id,s]));
   const out=[];
   try{
@@ -9927,7 +9961,7 @@ async function findLiveListingsForStock(affectedItems,allStock){
       const activePlats=Object.entries(l.platforms||{}).filter(([,p])=>p?.status==="active").map(([k])=>k==="shopify_earth"?"Shopify":k==="shopify_aty"?"Shopify (Aty)":k.charAt(0).toUpperCase()+k.slice(1));
       if(!activePlats.length)return;
       const box=norm(l.officeLocation||byId.get(l.stockId)?.location);
-      if((l.stockId&&ids.has(l.stockId))||(box&&boxes.has(box)))
+      if((l.stockId&&ids.has(l.stockId))||boxes.some(b=>sameBox(b,box)))
         out.push({title:l.title||"Untitled listing",plats:activePlats.join("/"),box:l.officeLocation||byId.get(l.stockId)?.location||""});
     });
   }catch{}
@@ -9935,7 +9969,7 @@ async function findLiveListingsForStock(affectedItems,allStock){
   (allStock||[]).forEach(s=>{
     const plats=[s.postedEtsy&&"Etsy",s.postedShopify&&"Shopify",s.postedWix&&"Wix",s.postedEbay&&"eBay"].filter(Boolean);
     if(!plats.length)return;
-    if(!(ids.has(s.id)||(norm(s.location)&&boxes.has(norm(s.location)))))return;
+    if(!(ids.has(s.id)||boxes.some(b=>sameBox(b,norm(s.location)))))return;
     out.push({title:`${s.material||"Stock item"}${s.shape?` · ${s.shape}`:""}`,plats:plats.join("/"),box:s.location||""});
   });
   return out;
