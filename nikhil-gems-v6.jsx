@@ -10537,9 +10537,13 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
     if(searchQ){const b=buyers.find(b=>b.id===inv.buyerId);const s=`${inv.invNo} ${b?.name||""}`.toLowerCase();if(!s.includes(searchQ.toLowerCase()))return false;}
     return true;
   }).sort((a,b)=>{
+    // Numeric-aware invNo compare: NG-9 before NG-10, tolerant of the mixed
+    // formats in older invoices (NG-13-2026/27 vs NG-13/26-27).
+    const invNum=n=>{const m=String(n||"").match(/-0*(\d+)[-\/]/);return m?+m[1]:null;};
+    const cmpInvNo=(x,y)=>{const nx=invNum(x.invNo),ny=invNum(y.invNo);if(nx!=null&&ny!=null&&nx!==ny)return nx-ny;return(x.invNo||"").localeCompare(y.invNo||"");};
     let cmp=0;
-    if(invSortBy==="date"){cmp=(a.date||"").localeCompare(b.date||"");if(cmp===0)cmp=(a.invNo||"").localeCompare(b.invNo||"");}
-    else if(invSortBy==="invNo")cmp=(a.invNo||"").localeCompare(b.invNo||"");
+    if(invSortBy==="date"){cmp=(a.date||"").localeCompare(b.date||"");if(cmp===0)cmp=cmpInvNo(a,b);if(cmp===0)cmp=(a.createdAt||"").localeCompare(b.createdAt||"");}
+    else if(invSortBy==="invNo")cmp=cmpInvNo(a,b);
     else if(invSortBy==="amount")cmp=(+a.totalAmt||0)-(+b.totalAmt||0);
     else if(invSortBy==="buyer"){const bA=buyers.find(x=>x.id===a.buyerId)?.name||"";const bB=buyers.find(x=>x.id===b.buyerId)?.name||"";cmp=bA.localeCompare(bB);}
     return invSortDir==="asc"?cmp:-cmp;
