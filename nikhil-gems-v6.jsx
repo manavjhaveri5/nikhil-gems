@@ -11058,22 +11058,6 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     const expanded=d.items.flatMap(it=>it._preConsolidated||[it]);
     return{...d,items:expanded,totalAmt:calcTotalAmt(expanded,d.shippingCost,d.discountAmt)};
   });
-  // Sort lines A–Z by the product detail (stone name), falling back to the
-  // customs description. Blank-description rows sink to the bottom.
-  const sortItemsAZ=()=>{
-    setDraft(d=>{
-      const key=it=>String(it.customDesc||it.acctDesc||it.desc||"").trim().toLowerCase();
-      const items=[...d.items].sort((a,b)=>{
-        const ka=key(a),kb=key(b);
-        if(!ka&&!kb)return 0;
-        if(!ka)return 1;
-        if(!kb)return -1;
-        return ka.localeCompare(kb);
-      });
-      return{...d,items};
-    });
-    showToast?.("Items sorted A–Z");
-  };
   const isConsolidated=draft?.items?.some(it=>Array.isArray(it._preConsolidated)&&it._preConsolidated.length>1);
   const [confirmDel,setConfirmDel]=useState(false);
   const [showPayment,setShowPayment]=useState(false);
@@ -11328,7 +11312,6 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         <div style={{padding:"10px 15px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Items</div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            <button className="bs" style={{padding:"4px 10px",fontSize:11}} onClick={sortItemsAZ} title="Sort lines alphabetically by product description — affects the editor and the printed invoice">↓ A–Z</button>
             {isConsolidated
               ?<button className="bs" style={{padding:"4px 10px",fontSize:11,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={expandItems}>↕ Expand</button>
               :<button className="bs" style={{padding:"4px 10px",fontSize:11,color:C.teal,borderColor:C.teal,background:C.tealBg}} onClick={consolidateItems} title="Group rows by Customs Desc + unit, sum quantities">⊞ Consolidate</button>
@@ -11840,6 +11823,16 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   );
 }
 
+// Printed/previewed invoices list items A–Z by customs description (the
+// editor keeps entry order). Blank descriptions sink to the bottom; ties
+// break by product detail so identical customs lines group by stone.
+const printOrderInvItems=items=>[...(items||[])].sort((a,b)=>{
+  const ka=String(a.acctDesc||a.desc||"").trim().toLowerCase(),kb=String(b.acctDesc||b.desc||"").trim().toLowerCase();
+  if(!ka&&!kb)return 0;
+  if(!ka)return 1;
+  if(!kb)return -1;
+  return ka.localeCompare(kb)||String(a.customDesc||"").toLowerCase().localeCompare(String(b.customDesc||"").toLowerCase());
+});
 // ── Standalone invoice HTML builder (used by both InvoicePreview and bulk download) ──
 function buildInvBodyHTML(inv,buyers,company="ng"){
   const co=companyProfileFromKey(company);
@@ -11858,7 +11851,7 @@ function buildInvBodyHTML(inv,buyers,company="ng"){
   const gstMode=getGSTMode(buyer);
   const totalTax=(inv.items||[]).reduce((s,i)=>s+(+i.amt||0)*(+i.igst||0)/100,0);
   const printableNotes=cleanInvoiceNotes(inv.notes);
-  const rows=(inv.items||[]).map((item,i)=>{
+  const rows=printOrderInvItems(inv.items).map((item,i)=>{
     const mainDesc=item.acctDesc||item.desc||"—";
     const subDesc=item.customDesc?`<br/><span style="font-style:italic;font-size:10px;color:#555">${item.customDesc}</span>`:"";
     const taxAmt=(+item.amt||0)*(+item.igst||0)/100;
@@ -12266,7 +12259,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
             </tr>
           </thead>
           <tbody>
-            {(inv.items||[]).map((item,i)=>{
+            {printOrderInvItems(inv.items).map((item,i)=>{
               const taxAmt=(+item.amt||0)*(+item.igst||0)/100;
               return(
               <tr key={i}>
