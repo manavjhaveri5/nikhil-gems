@@ -5839,7 +5839,10 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const del=async id=>{const item=stock.find(x=>x.id===id);const list=stock.filter(x=>x.id!==id);setStock(list);try{await saveStockK(list,{deletedIds:[id]});logActivity({user:"Admin",action:"deleted",module:"stock",label:`Deleted: ${item?.material||"item"}${item?.shape?" "+item.shape:""}`,targetMod:"stock"});}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
   const getShowRegion=show=>{const t=((show.city||"")+" "+(show.name||"")).toLowerCase();if(/japan|tokyo|osaka|kyoto|ikebukuro|nagoya/.test(t))return"Japan";if(/usa|america|denver|tucson|arizona/.test(t))return"USA";if(/europe|germany|munich|france|paris|italy|spain/.test(t))return"Europe";return"India";};
   const REGION_CFG={India:{label:"India",flag:"🇮🇳",color:"#9A6200",bg:"#FDF8ED",border:"#E8C878",currency:"INR"},Japan:{label:"Japan",flag:"🇯🇵",color:"#C0392B",bg:"#FFF5F5",border:"#F5C6C6",currency:"JPY"},USA:{label:"USA",flag:"🇺🇸",color:"#1D4ED8",bg:"#EFF6FF",border:"#BFDBFE",currency:"USD"},Europe:{label:"Europe",flag:"🇪🇺",color:"#059669",bg:"#F0FDF4",border:"#A7F3D0",currency:"EUR"}};
-  const sendToShow=async(showId,ids,stockOverride)=>{if(!ids.size||!showId)return;const show=shows.find(s=>s.id===showId);if(!show)return;const region=getShowRegion(show);const showTag=show.name;const base=stockOverride||stock;const prevStock=[...base];const ts=new Date().toISOString();const newStock=base.map(s=>ids.has(s.id)?{...s,region,showTag,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts}:s);setStock(newStock);try{await saveStockK(newStock);setUndoSend({prevStock,label:`${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`});showToast(`✓ ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`);setSelectedIds(new Set());setSelectMode(false);setSendToShowOpen(false);setSendToShowId("");logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`,targetMod:"stock"});}catch(e){showToast("⚠ Save failed: "+e.message);}};
+  const sendToShow=async(showId,ids,stockOverride)=>{if(!ids.size||!showId)return;const show=shows.find(s=>s.id===showId);if(!show)return;const region=getShowRegion(show);const showTag=show.name;const base=stockOverride||stock;
+    const liveMatches=await findLiveListingsForStock(base.filter(s=>ids.has(s.id)),base);
+    if(liveMatches.length&&!window.confirm(liveListingAlertText(liveMatches,`These items are about to go to ${region} (${showTag}). Check and delete/adjust the online listings if needed.\n\nSend anyway?`)))return;
+    const prevStock=[...base];const ts=new Date().toISOString();const newStock=base.map(s=>ids.has(s.id)?{...s,region,showTag,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts}:s);setStock(newStock);try{await saveStockK(newStock);setUndoSend({prevStock,label:`${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`});showToast(`✓ ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`);setSelectedIds(new Set());setSelectMode(false);setSendToShowOpen(false);setSendToShowId("");logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`,targetMod:"stock"});}catch(e){showToast("⚠ Save failed: "+e.message);}};
   const doUndoSend=async()=>{if(!undoSend)return;const{prevStock}=undoSend;setUndoSend(null);setStock(prevStock);try{await saveStockK(prevStock);showToast("↩ Send undone");}catch(e){showToast("⚠ Undo failed: "+e.message);}};;
   const trySendToShow=async(showId,ids,stockOverride)=>{
     if(!ids.size||!showId)return;
@@ -5906,7 +5909,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     }
     await sendToShow(showId,ids,workingStock);
   };
-  const doMarkSold=async()=>{if(!markSoldItem)return;const cfg=REGION_CFG[stockRegion]||REGION_CFG.India;const soldQty=Math.min(+markSoldQty||+markSoldItem.qty||1,+markSoldItem.qty||1);const remaining=(+markSoldItem.qty||0)-soldQty;const patch={qty:String(Math.max(0,remaining)),soldDate:today(),soldPrice:markSoldRate,soldCurrency:cfg.currency,updatedAt:new Date().toISOString()};const newStock=stock.map(s=>s.id!==markSoldItem.id?s:{...s,...patch});setStock(newStock);try{await saveStockK(newStock);showToast("✓ Marked sold");logActivity({user:"Admin",action:"sold",module:"stock",label:`Sold: ${markSoldItem.material||"item"}${markSoldItem.shape?" "+markSoldItem.shape:""} · ${soldQty} ${markSoldItem.unit||"pcs"}${markSoldRate?" @ "+inr(markSoldRate):""}`,targetId:markSoldItem.id,targetMod:"stock"});setMarkSoldItem(null);setMarkSoldQty("");setMarkSoldRate("");}catch(e){showToast("⚠ Save failed: "+e.message);}};
+  const doMarkSold=async()=>{if(!markSoldItem)return;const cfg=REGION_CFG[stockRegion]||REGION_CFG.India;const soldQty=Math.min(+markSoldQty||+markSoldItem.qty||1,+markSoldItem.qty||1);const remaining=(+markSoldItem.qty||0)-soldQty;const patch={qty:String(Math.max(0,remaining)),soldDate:today(),soldPrice:markSoldRate,soldCurrency:cfg.currency,updatedAt:new Date().toISOString()};const newStock=stock.map(s=>s.id!==markSoldItem.id?s:{...s,...patch});setStock(newStock);try{await saveStockK(newStock);showToast("✓ Marked sold");logActivity({user:"Admin",action:"sold",module:"stock",label:`Sold: ${markSoldItem.material||"item"}${markSoldItem.shape?" "+markSoldItem.shape:""} · ${soldQty} ${markSoldItem.unit||"pcs"}${markSoldRate?" @ "+inr(markSoldRate):""}`,targetId:markSoldItem.id,targetMod:"stock"});findLiveListingsForStock([markSoldItem],stock).then(m=>{if(m.length)window.alert(liveListingAlertText(m,"You just deducted sold stock from this box — check and delete/adjust the online listing(s) if needed."));});setMarkSoldItem(null);setMarkSoldQty("");setMarkSoldRate("");}catch(e){showToast("⚠ Save failed: "+e.message);}};
   const quickUpdateItem=async(id,patch)=>{const newStock=stock.map(s=>s.id!==id?s:{...s,...patch,updatedAt:new Date().toISOString()});setStock(newStock);try{await saveStockK(newStock);}catch(e){showToast("⚠ Save failed");}}
   const delBulk=async ids=>{if(!ids.size)return;const list=stock.filter(s=>!ids.has(s.id));setStock(list);try{try{await saveStockK(list,{deletedIds:[...ids]});showToast(ids.size+" items deleted");logActivity({user:"Admin",action:"deleted",module:"stock",label:`Deleted ${ids.size} stock item${ids.size>1?"s":""}`,targetMod:"stock"});}catch(e){showToast("Delete failed: "+e.message);}setSelectedIds(new Set());setSelectMode(false);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
   const fmtQtyVal=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)).replace(/\.?0+$/,""):"";};
@@ -9905,6 +9908,42 @@ const newInvItem=(seed={})=>{
 // acctQty chosen in the picker (in the acct entry's own unit), falling back to
 // the invoice line qty for invoices saved before acctQty existed.
 const acctLinkQty=it=>+((it?.acctQty??"")!==""?it.acctQty:it?.qty)||0;
+// Live-listing guard — when stock leaves a box (invoice deduction, mark sold,
+// send to show), warn if that stock or anything sharing its box is still live
+// on a sales platform, so the online listing gets checked/deleted in time.
+// Matches Listing Manager entries (by stockId or box) plus the legacy
+// posted-platform flags on the stock records themselves.
+async function findLiveListingsForStock(affectedItems,allStock){
+  const items=(affectedItems||[]).filter(Boolean);
+  if(!items.length)return[];
+  const ids=new Set(items.map(s=>s.id));
+  const norm=v=>String(v||"").trim().toUpperCase();
+  const boxes=new Set(items.map(s=>norm(s.location)).filter(Boolean));
+  const byId=new Map((allStock||[]).map(s=>[s.id,s]));
+  const out=[];
+  try{
+    const listings=await loadK("ng-listings-v1");
+    (Array.isArray(listings)?listings:[]).forEach(l=>{
+      const activePlats=Object.entries(l.platforms||{}).filter(([,p])=>p?.status==="active").map(([k])=>k==="shopify_earth"?"Shopify":k==="shopify_aty"?"Shopify (Aty)":k.charAt(0).toUpperCase()+k.slice(1));
+      if(!activePlats.length)return;
+      const box=norm(l.officeLocation||byId.get(l.stockId)?.location);
+      if((l.stockId&&ids.has(l.stockId))||(box&&boxes.has(box)))
+        out.push({title:l.title||"Untitled listing",plats:activePlats.join("/"),box:l.officeLocation||byId.get(l.stockId)?.location||""});
+    });
+  }catch{}
+  // Legacy per-item platform flags (Etsy/Shopify/Wix/eBay apps set these directly)
+  (allStock||[]).forEach(s=>{
+    const plats=[s.postedEtsy&&"Etsy",s.postedShopify&&"Shopify",s.postedWix&&"Wix",s.postedEbay&&"eBay"].filter(Boolean);
+    if(!plats.length)return;
+    if(!(ids.has(s.id)||(norm(s.location)&&boxes.has(norm(s.location)))))return;
+    out.push({title:`${s.material||"Stock item"}${s.shape?` · ${s.shape}`:""}`,plats:plats.join("/"),box:s.location||""});
+  });
+  return out;
+}
+const liveListingAlertText=(matches,action)=>{
+  const lines=matches.slice(0,6).map(m=>`• ${m.title.slice(0,55)} — ${m.plats}${m.box?` · 📦 ${m.box}`:""}`);
+  return`⚠ ${matches.length} live listing${matches.length>1?"s":""} reference${matches.length>1?"":"s"} this stock or its box:\n\n${lines.join("\n")}${matches.length>6?`\n…and ${matches.length-6} more`:""}\n\n${action}`;
+};
 // Conversion factor between two units: weight units (kg/gm/ct) convert via
 // grams, anything else only matches itself (pcs↔pcs, lot↔lot). Returns null
 // when the two units can't be compared (e.g. pcs vs kg).
@@ -10259,6 +10298,14 @@ function InvoicesApp({onHome,startDraft}){
     });
 
     if(newStock.some((_,i)=>newStock[i]!==stock[i])){setStock(newStock);try{await saveStockK(newStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}}
+    // Warn if the deducted stock (or anything in its box) is still live online
+    const deductedIds=new Set();
+    inv.items.forEach(item=>{const links=item.stockLinks?.length?item.stockLinks:(item.stockId?[{id:item.stockId}]:[]);links.forEach(l=>{if(l.id)deductedIds.add(l.id);});});
+    if(deductedIds.size){
+      findLiveListingsForStock(stock.filter(s=>deductedIds.has(s.id)),stock).then(m=>{
+        if(m.length)window.alert(liveListingAlertText(m,"This invoice deducted stock from the box(es) above — check and delete/adjust the online listing(s) if needed."));
+      }).catch(()=>{});
+    }
     // Diff-based accounting stock update: restore old links then deduct new links.
     const newAccStock=[...accStock];
     let accChanged=false;
