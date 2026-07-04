@@ -10972,6 +10972,22 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     const expanded=d.items.flatMap(it=>it._preConsolidated||[it]);
     return{...d,items:expanded,totalAmt:calcTotalAmt(expanded,d.shippingCost,d.discountAmt)};
   });
+  // Sort lines A–Z by the product detail (stone name), falling back to the
+  // customs description. Blank-description rows sink to the bottom.
+  const sortItemsAZ=()=>{
+    setDraft(d=>{
+      const key=it=>String(it.customDesc||it.acctDesc||it.desc||"").trim().toLowerCase();
+      const items=[...d.items].sort((a,b)=>{
+        const ka=key(a),kb=key(b);
+        if(!ka&&!kb)return 0;
+        if(!ka)return 1;
+        if(!kb)return -1;
+        return ka.localeCompare(kb);
+      });
+      return{...d,items};
+    });
+    showToast?.("Items sorted A–Z");
+  };
   const isConsolidated=draft?.items?.some(it=>Array.isArray(it._preConsolidated)&&it._preConsolidated.length>1);
   const [confirmDel,setConfirmDel]=useState(false);
   const [showPayment,setShowPayment]=useState(false);
@@ -11226,6 +11242,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         <div style={{padding:"10px 15px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Items</div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <button className="bs" style={{padding:"4px 10px",fontSize:11}} onClick={sortItemsAZ} title="Sort lines alphabetically by product description — affects the editor and the printed invoice">↓ A–Z</button>
             {isConsolidated
               ?<button className="bs" style={{padding:"4px 10px",fontSize:11,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={expandItems}>↕ Expand</button>
               :<button className="bs" style={{padding:"4px 10px",fontSize:11,color:C.teal,borderColor:C.teal,background:C.tealBg}} onClick={consolidateItems} title="Group rows by Customs Desc + unit, sum quantities">⊞ Consolidate</button>
