@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { loadK, loadKFresh, saveK, mob, onCacheRefresh } from "./utils.js";
+import { loadK, loadKFresh, saveK, mob, onCacheRefresh, upsertVersionedItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
 
@@ -461,11 +461,208 @@ const learner = (() => {
 })();
 
 /* ══ APP ════════════════════════════════════════════════════════ */
+/* ══ NG INVOICE SETS — sheet view ═══════════════════════════════
+   Nikhil Gems reconciles per-invoice (payments land against invoices, not
+   FIRC→SB like Atyahara). One row per commercial invoice, pulled live from
+   the Invoices module. Each row is an "NG set": payment received + shipping
+   bill + HAWB/AWB + shipping label + BOI declaration (+ other forms).
+   Document slots read/write invoice.attachments, so a file uploaded here
+   shows up on the invoice inside the Invoices module and vice-versa. */
+const NG_INV_KEY = "ng-invoices-v2";
+const NG_BUYERS_KEY = "ng-buyers-v2";
+const NG_DOC_SLOTS = [
+  { key: "sbill", label: "Shipping Bill",   match: /shipping\s*bill|\bsb\b/i },
+  { key: "hawb",  label: "HAWB / AWB",      match: /hawb|awb|airway|air\s*way|bill\s*of\s*lading/i },
+  { key: "lbl",   label: "Shipping Label",  match: /label/i },
+  { key: "decl",  label: "BOI Declaration", match: /declaration|\bboi\b/i },
+];
+const ngSlotOf = att => {
+  const hay = `${att?.label || ""} ${att?.fileName || att?.name || ""}`;
+  return (NG_DOC_SLOTS.find(s => s.match.test(hay)) || { key: "other" }).key;
+};
+const ngUid = () => Math.random().toString(36).slice(2, 10);
+
+function NgInvoiceSheet() {
+  const [invoices, setInvoices] = useState([]);
+  const [buyers, setBuyers] = useState([]);
+  const [q, setQ] = useState("");
+  const [missingOnly, setMissingOnly] = useState(false);
+  const [busy, setBusy] = useState(null);   // `${invoiceId}:${slotKey}` while uploading
+  const [msg, setMsg] = useState(null);     // {ok, text}
+  const fileRef = useRef(null);
+  const pendingSlot = useRef(null);         // {inv, slot}
+
+  const reload = useCallback(() => {
+    Promise.all([loadK(NG_INV_KEY), loadK(NG_BUYERS_KEY)]).then(([i, b]) => {
+      setInvoices(Array.isArray(i) ? i : []);
+      setBuyers(Array.isArray(b) ? b : []);
+    });
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => onCacheRefresh(keys => { if (keys.includes(NG_INV_KEY) || keys.includes(NG_BUYERS_KEY)) reload(); }), [reload]);
+
+  const buyerName = inv => buyers.find(b => b.id === inv.buyerId)?.name || inv.buyerName || inv.buyer || "—";
+  const fmtAmt = n => (+n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  const payInfo = inv => {
+    const total = +inv.totalAmt || 0;
+    const paid = (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0) || (+inv.paidAmount || 0);
+    if (inv.status === "paid" || (total > 0 && paid >= total - 0.01)) return { c: C.green, bg: C.greenBg, t: "✓ Received" };
+    if (paid > 0) return { c: C.amber, bg: C.amberBg, t: `Partial · ${fmtAmt(paid)} / ${fmtAmt(total)}` };
+    return { c: C.red, bg: C.redBg, t: "✗ Pending" };
+  };
+
+  // All writes go through the versioned invoice store — the same record the
+  // Invoices module edits, which is what makes uploads appear both ways.
+  const saveInvoicePatch = async (invId, patch) => {
+    const fresh = await loadKFresh(NG_INV_KEY);
+    const latest = (Array.isArray(fresh) ? fresh : []).find(x => x.id === invId);
+    if (!latest) throw new Error("Invoice not found — it may have been deleted");
+    const list = await upsertVersionedItemK(NG_INV_KEY, patch(latest), { user: "Admin" });
+    setInvoices(list);
+  };
+
+  const pickFile = (inv, slot) => { pendingSlot.current = { inv, slot }; fileRef.current?.click(); };
+  const onFile = async e => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    const ctx = pendingSlot.current; pendingSlot.current = null;
+    if (!file || !ctx) return;
+    const { inv, slot } = ctx;
+    setBusy(`${inv.id}:${slot.key}`); setMsg(null);
+    try {
+      const safe = (file.name || "document").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 90) || "document";
+      const url = await uploadToStorage(`invoice-shipment-docs/ng/${inv.id}/${Date.now()}-${ngUid()}-${safe}`, file);
+      const att = { id: ngUid(), label: slot.key === "other" ? (file.name || "Document") : slot.label, url, fileName: file.name, name: file.name, type: file.type || "", size: file.size || 0, uploadedAt: new Date().toISOString() };
+      await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: [...(latest.attachments || []), att] }));
+      setMsg({ ok: true, text: `${att.label} uploaded to ${inv.invNo} — it's on the invoice in the Invoices module too.` });
+    } catch (err) {
+      setMsg({ ok: false, text: `Upload failed: ${err?.message || "check connection"}` });
+    } finally { setBusy(null); }
+  };
+  const removeAtt = async (inv, att) => {
+    if (!window.confirm(`Remove "${att.label || att.fileName}" from ${inv.invNo}?\n\nIt is removed from the invoice everywhere (Invoices module too).`)) return;
+    try { await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: (latest.attachments || []).filter(a => a.id !== att.id) })); }
+    catch (err) { setMsg({ ok: false, text: `Remove failed: ${err?.message || "check connection"}` }); }
+  };
+
+  const rows = invoices
+    .filter(i => i.type !== "proforma")
+    .filter(i => { if (!q) return true; return `${i.invNo} ${buyerName(i)}`.toLowerCase().includes(q.toLowerCase()); })
+    .map(i => {
+      const bySlot = {};
+      (i.attachments || []).forEach(a => { const k = ngSlotOf(a); (bySlot[k] = bySlot[k] || []).push(a); });
+      const missing = NG_DOC_SLOTS.filter(s => !(bySlot[s.key] || []).length);
+      return { inv: i, bySlot, missing };
+    })
+    .filter(r => !missingOnly || r.missing.length > 0)
+    .sort((a, b) => (b.inv.date || "").localeCompare(a.inv.date || "") || (b.inv.invNo || "").localeCompare(a.inv.invNo || ""));
+
+  const completeCount = rows.filter(r => r.missing.length === 0).length;
+  const paidCount = rows.filter(r => payInfo(r.inv).t === "✓ Received").length;
+
+  const th = { padding: "9px 10px", fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}`, background: C.card, position: "sticky", top: 0, zIndex: 1 };
+  const td = { padding: "9px 10px", fontSize: 12.5, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "top" };
+
+  const DocCell = ({ inv, slot, atts }) => {
+    const uploading = busy === `${inv.id}:${slot.key}`;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 118 }}>
+        {(atts || []).map(a => (
+          <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.greenBg, border: `1px solid ${C.green}`, borderRadius: 6, padding: "2px 7px", fontSize: 11, maxWidth: 175 }}>
+            <a href={a.url} target="_blank" rel="noreferrer" title={a.fileName || a.label}
+              style={{ color: C.green, fontWeight: 600, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+              📄 {a.fileName || a.label}
+            </a>
+            <button onClick={() => removeAtt(inv, a)} title="Remove document"
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+          </span>
+        ))}
+        <button onClick={() => pickFile(inv, slot)} disabled={uploading}
+          style={{ background: "none", border: `1px dashed ${(atts || []).length ? C.border : C.amber}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: uploading ? "default" : "pointer", color: (atts || []).length ? C.inkFaint : C.amber, textAlign: "left", whiteSpace: "nowrap" }}>
+          {uploading ? "⟳ Uploading…" : (atts || []).length ? "+ add" : "⬆ Upload"}
+        </button>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <input ref={fileRef} type="file" accept="application/pdf,image/*" style={{ display: "none" }} onChange={onFile} />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 19, fontWeight: 700, color: C.ink, letterSpacing: "-.01em" }}>Invoice Sets</div>
+          <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
+            One row per invoice — auto-synced from the Invoices module. {rows.length} invoice{rows.length !== 1 ? "s" : ""} · {completeCount} fully documented · {paidCount} paid
+          </div>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search invoice / buyer…"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12.5, color: C.ink, outline: "none", minWidth: 170 }} />
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.inkMid, cursor: "pointer", whiteSpace: "nowrap" }}>
+            <input type="checkbox" checked={missingOnly} onChange={e => setMissingOnly(e.target.checked)} />
+            Missing docs only
+          </label>
+        </div>
+      </div>
+      {msg && (
+        <div style={{ background: msg.ok ? C.greenBg : C.redBg, border: `1px solid ${msg.ok ? C.green : C.red}`, borderRadius: 10, padding: "9px 13px", fontSize: 12.5, color: msg.ok ? C.green : C.red, marginBottom: 12, display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ flex: 1 }}>{msg.text}</span>
+          <button onClick={() => setMsg(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", fontSize: 14 }}>×</button>
+        </div>
+      )}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "auto", maxHeight: "72vh" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+          <thead>
+            <tr>
+              <th style={th}>Invoice</th>
+              <th style={th}>Buyer</th>
+              <th style={th}>Amount</th>
+              <th style={th}>Payment</th>
+              {NG_DOC_SLOTS.map(s => <th key={s.key} style={th}>{s.label}</th>)}
+              <th style={th}>Other Docs</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+                {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
+              </td></tr>
+            )}
+            {rows.map(({ inv, bySlot, missing }) => {
+              const pay = payInfo(inv);
+              return (
+                <tr key={inv.id} style={{ background: missing.length === 0 && pay.t === "✓ Received" ? C.greenBg : "transparent" }}>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <div style={{ fontWeight: 700 }}>{inv.invNo || "—"}</div>
+                    <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>{inv.date || ""}</div>
+                  </td>
+                  <td style={{ ...td, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={buyerName(inv)}>{buyerName(inv)}</td>
+                  <td style={{ ...td, whiteSpace: "nowrap", fontWeight: 600 }}>{inv.currency || ""} {fmtAmt(inv.totalAmt)}</td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <span style={{ background: pay.bg, color: pay.c, borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{pay.t}</span>
+                  </td>
+                  {NG_DOC_SLOTS.map(s => (
+                    <td key={s.key} style={td}><DocCell inv={inv} slot={s} atts={bySlot[s.key]} /></td>
+                  ))}
+                  <td style={td}><DocCell inv={inv} slot={{ key: "other", label: "Other" }} atts={bySlot.other} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
   const [data, setData]         = useState({fircs:[],shippingBills:[],invoices:[]});
   const dataRef                  = useRef(data);
   const [loading, setLoading]   = useState(true);
-  const [view, setView]         = useState("fircs");
+  const [view, setView]         = useState(company === "nikhil" ? "ngsheet" : "fircs");
+  // NG defaults to the per-invoice sheet; Atyahara has no such tab.
+  useEffect(() => {
+    setView(v => company === "nikhil" ? "ngsheet" : (v === "ngsheet" ? "fircs" : v));
+  }, [company]);
   const [sheet, setSheet]       = useState(null);
   const openSheet = useCallback(s => { if (s) learner.track("sheet:open",{type:s.type}); setSheet(s); }, []);
   const [hasFema, setHasFema]   = useState(false);
@@ -801,6 +998,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
 
   const pendingInvoices = (data.invoices||[]).filter(inv=>inv.status==="pending").length;
   const NAV=[
+    ...(company==="nikhil"?[{key:"ngsheet", icon:"🗂", label:"Invoice Sets"}]:[]),
     {key:"fircs",    icon:"💵", label:"FIRCs",            badge:data.fircs.length},
     {key:"sbs",      icon:"📦", label:"Shipping Bills",   badge:data.shippingBills.length},
     {key:"invoices", icon:"🧾", label:"Invoices",         badge:pendingInvoices||null, badgeAlert:!!pendingInvoices},
@@ -892,7 +1090,8 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
             )}
           </div>
         )}
-        <HowItWorks setView={setView}/>
+        {view!=="ngsheet"&&<HowItWorks setView={setView}/>}
+        {view==="ngsheet"  && company==="nikhil" && <NgInvoiceSheet/>}
         {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={openSheet}/>}
         {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={openSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
         {view==="invoices" && <InvoicesView data={data} onAddInvoice={addInvoice} onPatchInvoice={patchInvoice} onDeleteInvoice={deleteInvoice} onApprove={approveInvoice} showPdf={showPdf} onCreateInvoiceFromSb={onCreateInvoiceFromSb}/>}
