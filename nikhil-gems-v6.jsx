@@ -9965,11 +9965,12 @@ async function findLiveListingsForStock(affectedItems,allStock){
         out.push({title:l.title||"Untitled listing",plats:activePlats.join("/"),box:l.officeLocation||byId.get(l.stockId)?.location||""});
     });
   }catch{}
-  // Legacy per-item platform flags (Etsy/Shopify/Wix/eBay apps set these directly)
-  (allStock||[]).forEach(s=>{
+  // Legacy per-item platform flags (Etsy/Shopify/Wix/eBay apps set these
+  // directly). Only the items actually being deducted/moved — flagging every
+  // listed item that merely shares a box drowns the alert in noise.
+  items.forEach(s=>{
     const plats=[s.postedEtsy&&"Etsy",s.postedShopify&&"Shopify",s.postedWix&&"Wix",s.postedEbay&&"eBay"].filter(Boolean);
     if(!plats.length)return;
-    if(!(ids.has(s.id)||boxes.some(b=>sameBox(b,norm(s.location)))))return;
     out.push({title:`${s.material||"Stock item"}${s.shape?` · ${s.shape}`:""}`,plats:plats.join("/"),box:s.location||""});
   });
   return out;
