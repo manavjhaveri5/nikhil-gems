@@ -483,6 +483,45 @@ const ngSlotOf = att => {
 };
 const ngUid = () => Math.random().toString(36).slice(2, 10);
 
+/* Bank "SB Outstanding" report (EDPMS export from the bank portal).
+   Kept deliberately thin: we only need the SB numbers still open at the
+   bank, to tick off the ones we already hold documents for. */
+const NG_BANK_SB_KEY = "er-ng-bank-sbs-v1";
+const sbKey = v => String(v ?? "").replace(/\D/g, "").replace(/^0+/, "");
+async function loadSheetJs() {
+  if (window.XLSX) return window.XLSX;
+  for (const url of [
+    "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+    "https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js",
+  ]) {
+    try {
+      const r = await fetch(url); if (!r.ok) continue;
+      new Function(await r.text())();
+      if (window.XLSX) return window.XLSX;
+    } catch (e) { console.warn("sheetjs:", url, e.message); }
+  }
+  throw new Error("Spreadsheet reader failed to load — check connection");
+}
+function parseBankSbReport(XLSX, buf) {
+  const wb = XLSX.read(buf, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+  const norm = c => String(c || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const hi = grid.findIndex(r => r.some(c => norm(c).includes("shipping bill no")));
+  if (hi < 0) throw new Error('No "Shipping Bill No" column found — is this the bank SB Outstanding report?');
+  const col = name => grid[hi].findIndex(c => norm(c).includes(name));
+  const cSb = col("shipping bill no"), cDate = col("shipping bill date"), cDue = col("expected payment"), cStatus = col("status");
+  const seen = new Set(); const list = [];
+  for (const r of grid.slice(hi + 1)) {
+    const sbNo = String(r[cSb] || "").trim();
+    const k = sbKey(sbNo);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    list.push({ sbNo, date: cDate >= 0 ? String(r[cDate] || "").trim() : "", due: cDue >= 0 ? String(r[cDue] || "").trim() : "", status: cStatus >= 0 ? String(r[cStatus] || "").trim() : "" });
+  }
+  return list;
+}
+
 function NgInvoiceSheet() {
   const [invoices, setInvoices] = useState([]);
   const [buyers, setBuyers] = useState([]);
@@ -490,17 +529,22 @@ function NgInvoiceSheet() {
   const [missingOnly, setMissingOnly] = useState(false);
   const [busy, setBusy] = useState(null);   // `${invoiceId}:${slotKey}` while uploading
   const [msg, setMsg] = useState(null);     // {ok, text}
+  const [bankRep, setBankRep] = useState(null); // {list:[{sbNo,date,due,status}], importedAt, fileName}
+  const [bankBusy, setBankBusy] = useState(false);
+  const [scan, setScan] = useState(null);   // {done, total} while AI-scanning uploaded SBs
   const fileRef = useRef(null);
+  const bankFileRef = useRef(null);
   const pendingSlot = useRef(null);         // {inv, slot}
 
   const reload = useCallback(() => {
-    Promise.all([loadK(NG_INV_KEY), loadK(NG_BUYERS_KEY)]).then(([i, b]) => {
+    Promise.all([loadK(NG_INV_KEY), loadK(NG_BUYERS_KEY), loadK(NG_BANK_SB_KEY)]).then(([i, b, r]) => {
       setInvoices(Array.isArray(i) ? i : []);
       setBuyers(Array.isArray(b) ? b : []);
+      setBankRep(r && !Array.isArray(r) && Array.isArray(r.list) && r.list.length ? r : null);
     });
   }, []);
   useEffect(() => { reload(); }, [reload]);
-  useEffect(() => onCacheRefresh(keys => { if (keys.includes(NG_INV_KEY) || keys.includes(NG_BUYERS_KEY)) reload(); }), [reload]);
+  useEffect(() => onCacheRefresh(keys => { if (keys.includes(NG_INV_KEY) || keys.includes(NG_BUYERS_KEY) || keys.includes(NG_BANK_SB_KEY)) reload(); }), [reload]);
 
   const buyerName = inv => buyers.find(b => b.id === inv.buyerId)?.name || inv.buyerName || inv.buyer || "—";
   const fmtAmt = n => (+n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
@@ -534,7 +578,16 @@ function NgInvoiceSheet() {
       const url = await uploadToStorage(`invoice-shipment-docs/ng/${inv.id}/${Date.now()}-${ngUid()}-${safe}`, file);
       const att = { id: ngUid(), label: slot.key === "other" ? (file.name || "Document") : slot.label, url, fileName: file.name, name: file.name, type: file.type || "", size: file.size || 0, uploadedAt: new Date().toISOString() };
       await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: [...(latest.attachments || []), att] }));
-      setMsg({ ok: true, text: `${att.label} uploaded to ${inv.invNo} — it's on the invoice in the Invoices module too.` });
+      let sbNote = "";
+      if (slot.key === "sbill" && !inv.sbNo) {
+        // Read the SB number off the fresh upload so it can be ticked against the bank report.
+        try {
+          const { b64, mime } = await readB64WithMime(file);
+          const ex = await aiExtract(b64, "sb", mime);
+          if (ex?.sbNumber) { await saveInvoicePatch(inv.id, latest => ({ ...latest, sbNo: String(ex.sbNumber) })); sbNote = ` SB number read: ${ex.sbNumber}.`; }
+        } catch { /* extraction is best-effort — upload already succeeded */ }
+      }
+      setMsg({ ok: true, text: `${att.label} uploaded to ${inv.invNo} — it's on the invoice in the Invoices module too.${sbNote}` });
     } catch (err) {
       setMsg({ ok: false, text: `Upload failed: ${err?.message || "check connection"}` });
     } finally { setBusy(null); }
@@ -548,6 +601,52 @@ function NgInvoiceSheet() {
     const next = !inv.reconDone;
     try { await saveInvoicePatch(inv.id, latest => ({ ...latest, reconDone: next, reconDoneAt: next ? new Date().toISOString() : null })); }
     catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
+  };
+
+  const onBankFile = async e => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file) return;
+    setBankBusy(true); setMsg(null);
+    try {
+      const XLSX = await loadSheetJs();
+      const list = parseBankSbReport(XLSX, await file.arrayBuffer());
+      if (!list.length) throw new Error("No shipping bill rows found in the file");
+      const rep = { list, importedAt: new Date().toISOString(), fileName: file.name };
+      await saveK(NG_BANK_SB_KEY, rep);
+      setBankRep(rep);
+      setMsg({ ok: true, text: `Bank report imported — ${list.length} shipping bill${list.length !== 1 ? "s" : ""} still outstanding at the bank. Green = we already hold that SB.` });
+    } catch (err) {
+      setMsg({ ok: false, text: `Import failed: ${err?.message || "unreadable file"}` });
+    } finally { setBankBusy(false); }
+  };
+  const clearBankRep = async () => {
+    if (!window.confirm("Remove the imported bank SB report? (You can re-import it any time.)")) return;
+    await saveK(NG_BANK_SB_KEY, null);
+    setBankRep(null);
+  };
+
+  // AI-read the SB number off already-uploaded shipping bill documents.
+  const scanUploadedSbs = async () => {
+    const targets = invoices
+      .filter(i => i.type !== "proforma" && !i.sbNo)
+      .map(i => ({ inv: i, att: (i.attachments || []).find(a => ngSlotOf(a) === "sbill") }))
+      .filter(t => t.att);
+    if (!targets.length) { setMsg({ ok: true, text: "Nothing to scan — every uploaded shipping bill already has its SB number." }); return; }
+    setScan({ done: 0, total: targets.length }); setMsg(null);
+    let ok = 0, fail = 0;
+    for (const { inv, att } of targets) {
+      try {
+        const blob = await (await fetch(att.url)).blob();
+        const { b64, mime } = await readB64WithMime(blob);
+        const ex = await aiExtract(b64, "sb", mime);
+        if (!ex?.sbNumber) throw new Error("no number found");
+        await saveInvoicePatch(inv.id, latest => ({ ...latest, sbNo: String(ex.sbNumber) }));
+        ok++;
+      } catch { fail++; }
+      setScan(s => s ? { ...s, done: s.done + 1 } : s);
+    }
+    setScan(null);
+    setMsg({ ok: fail === 0, text: `Scan finished — SB number read on ${ok} of ${targets.length} document${targets.length !== 1 ? "s" : ""}${fail ? ` (${fail} unreadable — you can retype the file name to include the SB number instead)` : ""}.` });
   };
 
   const rows = invoices
@@ -565,6 +664,21 @@ function NgInvoiceSheet() {
   const completeCount = rows.filter(r => r.missing.length === 0).length;
   const paidCount = rows.filter(r => payInfo(r.inv).t === "✓ Received").length;
   const doneCount = rows.filter(r => r.inv.reconDone).length;
+
+  // Which of the bank's outstanding SBs do we already hold? Matched on the
+  // AI-read SB number, or on digit runs in shipping-bill file names (no AI).
+  const haveSb = new Map(); // normalized SB number → our invoice number
+  invoices.filter(i => i.type !== "proforma").forEach(i => {
+    const add = k => { if (k && !haveSb.has(k)) haveSb.set(k, i.invNo || ""); };
+    add(sbKey(i.sbNo));
+    (i.attachments || []).forEach(a => {
+      if (ngSlotOf(a) !== "sbill") return;
+      (`${a.fileName || a.name || ""}`.match(/\d{5,8}/g) || []).forEach(d => add(sbKey(d)));
+    });
+  });
+  const bankDue = new Set((bankRep?.list || []).map(x => sbKey(x.sbNo)));
+  const bankMatched = (bankRep?.list || []).filter(x => haveSb.has(sbKey(x.sbNo))).length;
+  const scanPending = invoices.filter(i => i.type !== "proforma" && !i.sbNo && (i.attachments || []).some(a => ngSlotOf(a) === "sbill")).length;
 
   const th = { padding: "9px 10px", fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}`, background: C.card, position: "sticky", top: 0, zIndex: 1 };
   const td = { padding: "9px 10px", fontSize: 12.5, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "top" };
@@ -594,6 +708,7 @@ function NgInvoiceSheet() {
   return (
     <div>
       <input ref={fileRef} type="file" accept="application/pdf,image/*" style={{ display: "none" }} onChange={onFile} />
+      <input ref={bankFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={onBankFile} />
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, color: C.ink, letterSpacing: "-.01em" }}>Invoice Sets</div>
@@ -608,8 +723,46 @@ function NgInvoiceSheet() {
             <input type="checkbox" checked={missingOnly} onChange={e => setMissingOnly(e.target.checked)} />
             Missing docs only
           </label>
+          <button onClick={() => bankFileRef.current?.click()} disabled={bankBusy}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12, fontWeight: 600, color: C.inkMid, cursor: bankBusy ? "default" : "pointer", whiteSpace: "nowrap" }}>
+            {bankBusy ? "⟳ Reading…" : bankRep ? "⬆ Re-import bank report" : "⬆ Import bank SB report"}
+          </button>
         </div>
       </div>
+      {bankRep && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 9 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Bank portal — outstanding shipping bills</div>
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 1 }}>
+                {bankRep.fileName || "report"} · imported {String(bankRep.importedAt || "").slice(0, 10)} · {bankRep.list.length} outstanding · <span style={{ color: C.green, fontWeight: 700 }}>{bankMatched} we hold</span> · <span style={{ color: C.amber, fontWeight: 700 }}>{bankRep.list.length - bankMatched} not on file</span>
+              </div>
+            </div>
+            <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+              {scanPending > 0 && (
+                <button onClick={scanUploadedSbs} disabled={!!scan}
+                  style={{ background: C.goldLight, border: `1px solid ${C.amber}`, borderRadius: 8, padding: "6px 11px", fontSize: 12, fontWeight: 600, color: C.amber, cursor: scan ? "default" : "pointer", whiteSpace: "nowrap" }}>
+                  {scan ? `⟳ Reading ${scan.done + 1} / ${scan.total}…` : `🔍 Read SB numbers off ${scanPending} uploaded doc${scanPending !== 1 ? "s" : ""} (AI)`}
+                </button>
+              )}
+              <button onClick={clearBankRep} title="Remove imported report"
+                style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", fontSize: 12, color: C.inkFaint, cursor: "pointer" }}>×</button>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {[...bankRep.list].sort((a, b) => (haveSb.has(sbKey(a.sbNo)) ? 1 : 0) - (haveSb.has(sbKey(b.sbNo)) ? 1 : 0)).map(x => {
+              const inv = haveSb.get(sbKey(x.sbNo));
+              const have = inv !== undefined;
+              return (
+                <span key={x.sbNo} title={`${x.status || "outstanding"}${x.due ? " · payment was due " + x.due : ""}${have ? ` · matched to ${inv || "an uploaded doc"}` : " · no matching document uploaded here"}`}
+                  style={{ background: have ? C.greenBg : C.amberBg, border: `1px solid ${have ? C.green : C.amber}`, color: have ? C.green : C.amber, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+                  {have ? "✓ " : ""}{x.sbNo}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {msg && (
         <div style={{ background: msg.ok ? C.greenBg : C.redBg, border: `1px solid ${msg.ok ? C.green : C.red}`, borderRadius: 10, padding: "9px 13px", fontSize: 12.5, color: msg.ok ? C.green : C.red, marginBottom: 12, display: "flex", gap: 10, alignItems: "center" }}>
           <span style={{ flex: 1 }}>{msg.text}</span>
@@ -658,7 +811,15 @@ function NgInvoiceSheet() {
                     </button>
                   </td>
                   {NG_DOC_SLOTS.map(s => (
-                    <td key={s.key} style={td}><DocCell inv={inv} slot={s} atts={bySlot[s.key]} /></td>
+                    <td key={s.key} style={td}>
+                      <DocCell inv={inv} slot={s} atts={bySlot[s.key]} />
+                      {s.key === "sbill" && inv.sbNo && (
+                        <div title={bankRep ? (bankDue.has(sbKey(inv.sbNo)) ? "This SB is still outstanding on the bank report" : "Not on the bank outstanding report (as of import) — cleared") : "SB number read from the uploaded document"}
+                          style={{ marginTop: 4, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", color: !bankRep ? C.inkFaint : bankDue.has(sbKey(inv.sbNo)) ? C.amber : C.green }}>
+                          SB {inv.sbNo}{bankRep ? (bankDue.has(sbKey(inv.sbNo)) ? " · ⚠ due in bank" : " · ✓ bank cleared") : ""}
+                        </div>
+                      )}
+                    </td>
                   ))}
                   <td style={td}><DocCell inv={inv} slot={{ key: "other", label: "Other" }} atts={bySlot.other} /></td>
                 </tr>
