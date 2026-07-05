@@ -797,6 +797,8 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* Greeting + daily-tasks prompt */}
           {(()=>{
             const firstName=(currentUser?.name||"").trim().split(/\s+/)[0];
+            // The admin login has no staff profile (name "Admin") — that's Manav.
+            const displayName=(!firstName||firstName==="Admin")?"Manav":firstName;
             const hr=new Date().getHours();
             const hello=hr<12?"Good morning":hr<17?"Good afternoon":"Good evening";
             const focusTodos=()=>{
@@ -808,7 +810,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
             return(
               <div style={{marginBottom:12,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .06s both":"none"}}>
                 <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?22:26,fontWeight:600,color:C.ink,lineHeight:1.2}}>
-                  Hi{firstName&&firstName!=="Admin"?` ${firstName}`:""} 👋 <span style={{fontSize:mob?15:17,fontWeight:400,color:C.inkMid}}>{hello}!</span>
+                  Hi {displayName} 👋 <span style={{fontSize:mob?15:17,fontWeight:400,color:C.inkMid}}>{hello}!</span>
                 </div>
                 <button onClick={focusTodos} style={{background:"none",border:"none",cursor:"pointer",padding:0,marginTop:3,fontSize:12.5,color:C.gold,fontWeight:600,fontFamily:"inherit"}}>
                   📝 Set your tasks for the day →
