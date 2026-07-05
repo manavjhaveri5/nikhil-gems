@@ -12343,7 +12343,7 @@ const DEFAULT_SHOWS=[
 ];
 const DEFAULT_CHECKLIST=["Booth confirmed","Flights booked","Hotel booked","Shipping arranged","Stock packed","Invoices ready","Business cards","Display materials"];
 
-function ShowsApp({onHome}){
+function ShowsApp({onHome,isAdmin=true}){
   const t=useT();
   const [shows,setShows]=useState([]);
   const [stock,setStock]=useState([]);
@@ -12474,6 +12474,7 @@ function ShowsApp({onHome}){
 
   // Helper: all handler props for ShowCard (avoids repeating twice)
   const mkCardProps=(show)=>({
+    isAdmin,
     onToggleCheck:toggleCheck,onEditCheckTask:editCheckTask,
     onAddCheckItem:addCheckItem,onDelCheckItem:delCheckItem,
     onUpdateShipment:updateShipment,onAddShipment:addShipment,onDelShipment:delShipment,
@@ -12689,7 +12690,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -12708,7 +12709,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const [sellPrice,setSellPrice]=useState("");
   const [sellCurrency,setSellCurrency]=useState("USD");
   const [sellBuyer,setSellBuyer]=useState("");
-  const [showTab,setShowTab]=useState(isNow?"sales":"prep");
+  const [showTab,setShowTab]=useState(isNow&&isAdmin?"sales":"prep");
   const [saleDate,setSaleDate]=useState(todayStr);
   const [saleAmt,setSaleAmt]=useState("");
   const [saleCur,setSaleCur]=useState("USD");
@@ -13228,7 +13229,8 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
   const expByCur=sumByCur(showExpenses,"amount","currency");
   const totalItemsSold=ssSold.length+showSoldItems.length;
   const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`).join(" · ")||"—";
-  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}];
+  // Employees don't see show earnings — no Sales tab, no revenue figures
+  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}].filter(t=>isAdmin||t.id!=="sales");
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
   const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
 
@@ -13256,7 +13258,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
             <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:17,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{show.name}</div>
             <div style={{fontSize:11.5,color:C.inkMid,marginTop:3}}>📍 {show.city}</div>
             <div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>{fmtDate(show.startDate)} – {fmtDate(show.endDate)}</div>
-            {hasRev&&<div style={{fontSize:11,color:C.green,fontWeight:600,marginTop:6}}>💰 {fmtCurObj(allRevByCur)}</div>}
+            {isAdmin&&hasRev&&<div style={{fontSize:11,color:C.green,fontWeight:600,marginTop:6}}>💰 {fmtCurObj(allRevByCur)}</div>}
             {total>0&&(
               <div style={{marginTop:11}}>
                 <div style={{background:C.card,borderRadius:3,height:4,overflow:"hidden"}}>
@@ -13287,11 +13289,11 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
       <div onClick={e=>e.stopPropagation()}>
 
           {/* P&L Strip */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",borderBottom:`1px solid ${C.border}`,background:C.card}}>
-            <div style={{padding:"8px 12px",borderRight:`1px solid ${C.border}`}}>
+          <div style={{display:"grid",gridTemplateColumns:isAdmin?"1fr 1fr 1fr":"1fr 1fr",borderBottom:`1px solid ${C.border}`,background:C.card}}>
+            {isAdmin&&<div style={{padding:"8px 12px",borderRight:`1px solid ${C.border}`}}>
               <div style={{fontSize:8,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3}}>Revenue</div>
               <div style={{fontSize:11,fontWeight:700,color:C.green}}>{fmtCurObj(allRevByCur)}</div>
-            </div>
+            </div>}
             <div style={{padding:"8px 12px",borderRight:`1px solid ${C.border}`}}>
               <div style={{fontSize:8,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3}}>Show Costs</div>
               <div style={{fontSize:11,fontWeight:700,color:C.red}}>{fmtCurObj(expByCur)}</div>
@@ -14349,7 +14351,7 @@ function ShowCard({show,isDetail=false,onOpen=()=>{},onToggleCheck,onEditCheckTa
           )}
 
           {/* ── SALES ── */}
-          {showTab==="sales"&&(
+          {showTab==="sales"&&isAdmin&&(
             <div style={{padding:"14px 16px"}}>
               <div style={{background:C.card,borderRadius:7,padding:"11px 12px",marginBottom:14,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Log Sale</div>
@@ -17116,7 +17118,7 @@ export default function Root({onSignOut}){
     else if(mod==="vendors")content=<VendorsApp onHome={()=>{goHome();setStartVendor(null);}} startVendor={startVendor}/>;
     else if(mod==="stock")content=<StockApp onHome={goHome} startStockId={startStockId} onStockIdConsumed={()=>{setStartStockId(null);window.history.replaceState(null,"",window.location.pathname);}} startLocationFilter={startLocationFilter} onLocationConsumed={()=>{setStartLocationFilter(null);window.history.replaceState(null,"",window.location.pathname);}} onCreateInvoiceFromStock={draft=>{setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
     else if(mod==="expenses")content=<ExpensesApp onHome={goHome}/>;
-    else if(mod==="shows")content=<ShowsApp onHome={goHome}/>;
+    else if(mod==="shows")content=<ShowsApp onHome={goHome} isAdmin={isAdmin}/>;
     else if(mod==="calendar")content=<CalendarApp onHome={goHome}/>;
     else if(mod==="recon")content=<ExportReconShell onHome={goHome} onCreateInvoiceFromSb={(draft,coKey)=>{localStorage.setItem("ng-vendors-company",(coKey==="nikhil"||coKey==="ng")?"ng":"at");setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}}/>;
     else if(mod==="invoices")content=<InvoicesApp onHome={()=>{goHome();setStartInvoiceDraft(null);}} startDraft={startInvoiceDraft}/>;
