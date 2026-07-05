@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 import Root from "../nikhil-gems-v6.jsx";
 import { supabase } from "./supabase.js";
 import LoginScreen from "./LoginScreen.jsx";
-import { warmCache, DEMO_MODE, syncOfflineQueue, getOfflineQueueCount } from "./utils.js";
+import { warmCache, DEMO_MODE, syncOfflineQueue, getOfflineQueueCount, logActivity } from "./utils.js";
+import { inject as injectAnalytics } from "@vercel/analytics";
 
 const clearAppShellAndReload = async () => {
   try {
@@ -34,6 +35,29 @@ window.addEventListener("unhandledrejection", e => {
     clearAppShellAndReload();
   }
 });
+
+// ── Client crash reporting → Activity feed ───────────────────────────────────
+// Crashes land in the admin-visible activity log with user/device context.
+// Deduped per message and capped per session so a crash loop can't flood it.
+if (!DEMO_MODE) {
+  const reported = new Set();
+  let errBudget = 5;
+  const reportClientError = async (kind, err) => {
+    try {
+      if (isStaleChunkError(err)) return; // handled by the reload flow above
+      const msg = String(err?.message || err || "unknown").slice(0, 160);
+      if (!msg || msg === "unknown" || reported.has(msg) || errBudget <= 0) return;
+      reported.add(msg); errBudget--;
+      let email = "";
+      try { const { data: { session } } = await supabase.auth.getSession(); email = session?.user?.email || ""; } catch {}
+      const device = /Mobi|Android/i.test(navigator.userAgent) ? "mobile" : "desktop";
+      logActivity({ user: email || "unknown", action: "error", module: "system", label: `💥 ${kind}: ${msg} · ${device}` });
+    } catch {}
+  };
+  window.addEventListener("error", e => reportClientError("crash", e.error || e.message));
+  window.addEventListener("unhandledrejection", e => reportClientError("promise", e.reason));
+  injectAnalytics(); // Vercel Web Analytics (no-op locally; needs the dashboard toggle once)
+}
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { err: null }; }

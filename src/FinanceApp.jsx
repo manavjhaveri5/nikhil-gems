@@ -70,12 +70,25 @@ const DEFAULT_ACCOUNTS_AT = [
 
 const DEFAULT_RATES = { USD: 85, EUR: 92, JPY: 0.57, GBP: 107, AUD: 55 };
 const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "A$" };
+const PERSONAL_ASSETS_KEY = "personal-fin-assets-v1";
 
 const TXN_CATS = {
   credit: ["FIRC / Inward Remittance", "Show Income – USD", "Show Income – EUR", "Show Income – JPY", "Show Income – INR", "Cash Received", "Advance Received", "Loan Received", "Other Income"],
   debit:  ["Bill Payment", "Expense Payment", "Show Expense", "Bank Charges", "Loan Repayment", "Personal Withdrawal", "Advance Paid", "Other Payment"],
   conversion: ["JPY Cash → INR Cash", "USD Cash → INR Cash", "EUR Cash → INR Cash", "EEFC → BOI (INR)", "USD Cash → EEFC", "Bank Transfer (Internal)", "Other Conversion"],
 };
+
+const ASSET_TYPES = [
+  { id: "mutual_fund", label: "Mutual Fund", tone: C.green, bg: C.greenBg },
+  { id: "sip", label: "SIP", tone: C.teal, bg: C.tealBg },
+  { id: "fixed_deposit", label: "FD", tone: C.blue, bg: C.blueBg },
+  { id: "ppf", label: "PPF", tone: C.amber, bg: C.amberBg },
+  { id: "epf_nps", label: "EPF / NPS", tone: C.purple, bg: C.purpleBg },
+  { id: "stocks", label: "Stocks", tone: C.ink, bg: C.card },
+  { id: "gold", label: "Gold", tone: C.gold, bg: C.goldLight },
+  { id: "real_estate", label: "Real Estate", tone: C.red, bg: C.redBg },
+  { id: "other", label: "Other", tone: C.inkMid, bg: C.card },
+];
 
 // ─── Core calculations ────────────────────────────────────────────────────────
 function computeBalances(accounts, transactions) {
@@ -142,6 +155,7 @@ function FShell({ title, view, setView, onHome, masked, toggleMask, company, set
 
   const VIEWS = [
     { id: "dashboard", label: mob ? "📊" : "Dashboard", title: "Dashboard" },
+    { id: "assets",    label: mob ? "🧾" : "Assets",    title: "Personal Assets" },
     { id: "ledger",    label: mob ? "📋" : "Ledger",    title: "Ledger" },
     { id: "classify",  label: mob ? "🏷" : "Classify",  title: "Classify Expenses" },
     { id: "add",       label: mob ? "+" : "+ Entry",    title: "New Entry" },
@@ -445,6 +459,208 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
           })
         }
       </div>
+    </div>
+  );
+}
+
+// ─── Personal Assets ─────────────────────────────────────────────────────────
+function AssetDashboard({ assets, rates, onSave, onDelete }) {
+  const masked = useMasked();
+  const m = makeMask(masked);
+  const [form, setForm] = useState(null);
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("value");
+  const FI = { width: "100%", border: `1.5px solid ${C.border}`, borderRadius: 7, padding: "9px 11px", fontSize: 13, background: C.surface, color: C.ink };
+
+  const typeMeta = id => ASSET_TYPES.find(t => t.id === id) || ASSET_TYPES[ASSET_TYPES.length - 1];
+  const valueOf = a => toINR(+a.currentValue || +a.investedAmount || 0, a.currency || "INR", rates);
+  const investedOf = a => toINR(+a.investedAmount || 0, a.currency || "INR", rates);
+  const totalValue = assets.reduce((s, a) => s + valueOf(a), 0);
+  const totalInvested = assets.reduce((s, a) => s + investedOf(a), 0);
+  const gain = totalValue - totalInvested;
+  const monthlySip = assets.filter(a => a.active !== false).reduce((s, a) => s + toINR(+a.sipAmount || 0, a.currency || "INR", rates), 0);
+  const owners = [...new Set(assets.map(a => a.owner).filter(Boolean))].sort();
+  const allocation = ASSET_TYPES.map(t => {
+    const value = assets.filter(a => a.type === t.id).reduce((s, a) => s + valueOf(a), 0);
+    return { ...t, value, pct: totalValue ? Math.round(value / totalValue * 100) : 0 };
+  }).filter(x => x.value > 0);
+  const riskSplit = ["Low", "Medium", "High"].map(risk => ({
+    risk,
+    value: assets.filter(a => (a.risk || "Medium") === risk).reduce((s, a) => s + valueOf(a), 0),
+  })).filter(x => x.value > 0);
+  const upcoming = assets
+    .filter(a => a.maturityDate)
+    .map(a => ({ ...a, days: Math.ceil((new Date(a.maturityDate) - new Date(today())) / 86400000) }))
+    .filter(a => a.days >= 0 && a.days <= 180)
+    .sort((a, b) => a.days - b.days);
+  const filtered = assets
+    .filter(a => typeFilter === "all" || a.type === typeFilter)
+    .filter(a => ownerFilter === "all" || a.owner === ownerFilter)
+    .sort((a, b) => sortBy === "maturity"
+      ? String(a.maturityDate || "9999").localeCompare(String(b.maturityDate || "9999"))
+      : sortBy === "gain"
+        ? ((valueOf(b) - investedOf(b)) - (valueOf(a) - investedOf(a)))
+        : valueOf(b) - valueOf(a));
+
+  const blank = () => ({ id: uid(), type: "mutual_fund", name: "", owner: "Personal", institution: "", folio: "", currency: "INR", investedAmount: "", currentValue: "", sipAmount: "", sipDay: "", interestRate: "", startDate: today(), maturityDate: "", risk: "Medium", liquidity: "T+3", goal: "", nominee: "", notes: "", active: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const save = async () => {
+    if (!form.name?.trim()) return;
+    const rec = { ...form, updatedAt: new Date().toISOString() };
+    await onSave(rec);
+    setForm(null);
+  };
+  const existingForm = !!(form && assets.some(a => a.id === form.id));
+  const removeAsset = async id => {
+    const hit = assets.find(a => a.id === id);
+    if (!window.confirm(`Delete ${hit?.name || "this asset"}?`)) return;
+    await onDelete(id);
+    if (form?.id === id) setForm(null);
+  };
+
+  const Stat = ({ label, value, sub, color, bg }) => (
+    <div style={{ background: bg || C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "15px 17px" }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color: color || C.inkFaint, textTransform: "uppercase", letterSpacing: .8, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: mob ? 22 : 28, fontWeight: 650, color: color || C.ink, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 5 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 26, fontWeight: 650 }}>Personal Assets</div>
+          <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>MFs, SIPs, FDs, PPFs, stocks, gold, property and long-term personal holdings.</div>
+        </div>
+        <button className="fbp" onClick={() => setForm(blank())}>+ Add Asset</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+        <Stat label="Net Worth Tracked" value={m(inrFmt(totalValue))} sub={`${assets.length} asset${assets.length !== 1 ? "s" : ""}`} color={C.ink} bg={C.card} />
+        <Stat label="Invested" value={m(inrFmt(totalInvested))} sub="Original capital" color={C.blue} bg={C.blueBg} />
+        <Stat label="Gain / Loss" value={m(`${gain >= 0 ? "+" : "-"}${inrFmt(gain)}`)} sub={totalInvested ? `${gain >= 0 ? "+" : ""}${Math.round(gain / totalInvested * 100)}% overall` : "Add invested amount"} color={gain >= 0 ? C.green : C.red} bg={gain >= 0 ? C.greenBg : C.redBg} />
+        <Stat label="Monthly SIP" value={m(inrFmt(monthlySip))} sub="Active recurring investments" color={C.teal} bg={C.tealBg} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1.35fr .95fr", gap: 14, marginBottom: 16 }}>
+        <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "16px 18px" }}>
+          <FTag c={C.gold}>Allocation</FTag>
+          {allocation.length ? allocation.map(a => (
+            <div key={a.id} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+                <span style={{ color: C.ink, fontWeight: 650 }}>{a.label}</span>
+                <span style={{ color: C.inkMid }}>{m(inrFmt(a.value))} · {a.pct}%</span>
+              </div>
+              <div style={{ height: 7, borderRadius: 4, background: C.card, overflow: "hidden" }}><div style={{ width: `${a.pct}%`, height: "100%", background: a.tone, borderRadius: 4 }} /></div>
+            </div>
+          )) : <div style={{ fontSize: 13, color: C.inkFaint, padding: "18px 0" }}>Add assets to see allocation.</div>}
+          {riskSplit.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+            {riskSplit.map(r => <span key={r.risk} style={{ fontSize: 11, color: C.inkMid, border: `1px solid ${C.border}`, borderRadius: 999, padding: "5px 9px", background: C.card }}>{r.risk}: {m(inrFmt(r.value))}</span>)}
+          </div>}
+        </div>
+
+        <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "16px 18px" }}>
+          <FTag c={C.amber}>Upcoming Maturities</FTag>
+          {upcoming.length ? upcoming.slice(0, 6).map(a => (
+            <div key={a.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 0", borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ width: 42, textAlign: "center", color: a.days <= 30 ? C.red : C.amber, fontWeight: 800, fontSize: 13 }}>{a.days}d</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 650, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</div>
+                <div style={{ fontSize: 10, color: C.inkFaint }}>{typeMeta(a.type).label} · {fmtDate(a.maturityDate)}</div>
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{m(inrFmt(valueOf(a)))}</div>
+            </div>
+          )) : <div style={{ fontSize: 13, color: C.inkFaint, padding: "18px 0" }}>No maturity dates in the next 180 days.</div>}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)} style={{ ...FI, width: 180 }}>
+          <option value="all">All asset types</option>
+          {ASSET_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        <select value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} style={{ ...FI, width: 170 }}>
+          <option value="all">All owners</option>
+          {owners.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...FI, width: 150 }}>
+          <option value="value">Value</option>
+          <option value="gain">Gain</option>
+          <option value="maturity">Maturity</option>
+        </select>
+      </div>
+
+      <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 96px" : "1.3fr 120px 120px 120px 110px 90px", gap: 10, padding: "9px 14px", background: C.card, borderBottom: `1px solid ${C.border}` }}>
+          {["Asset", "Type", "Invested", "Value", "Maturity", ""].slice(0, mob ? 2 : 6).map(h => <div key={h} style={{ fontSize: 9, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .7 }}>{h}</div>)}
+        </div>
+        {filtered.length ? filtered.map(a => {
+          const meta = typeMeta(a.type);
+          const val = valueOf(a);
+          const inv = investedOf(a);
+          const pnl = val - inv;
+          return (
+            <div key={a.id} onClick={() => setForm(a)} style={{ display: "grid", gridTemplateColumns: mob ? "1fr 96px" : "1.3fr 120px 120px 120px 110px 90px", gap: 10, padding: "12px 14px", borderBottom: `1px solid ${C.border}`, alignItems: "center", cursor: "pointer" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{a.name}</div>
+                <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 2 }}>{[a.institution, a.owner, a.goal].filter(Boolean).join(" · ") || "Personal"}</div>
+                {mob && <div style={{ fontSize: 11, color: pnl >= 0 ? C.green : C.red, marginTop: 4 }}>{m(inrFmt(val))} {inv ? `(${pnl >= 0 ? "+" : "-"}${m(inrFmt(pnl))})` : ""}</div>}
+              </div>
+              <div><span style={{ fontSize: 10, fontWeight: 750, color: meta.tone, background: meta.bg, borderRadius: 4, padding: "3px 7px" }}>{meta.label}</span></div>
+              {!mob && <div style={{ fontSize: 12, color: C.inkMid }}>{m(inrFmt(inv))}</div>}
+              {!mob && <div><div style={{ fontSize: 13, fontWeight: 750, color: C.ink }}>{m(inrFmt(val))}</div><div style={{ fontSize: 10, color: pnl >= 0 ? C.green : C.red }}>{inv ? `${pnl >= 0 ? "+" : "-"}${m(inrFmt(pnl))}` : "—"}</div></div>}
+              {!mob && <div style={{ fontSize: 12, color: a.maturityDate ? C.inkMid : C.inkFaint }}>{a.maturityDate ? fmtDate(a.maturityDate) : "—"}</div>}
+              {!mob && <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }} onClick={e => e.stopPropagation()}>
+                <button className="fbs" style={{ fontSize: 11, padding: "4px 8px" }} onClick={() => setForm(a)}>Edit</button>
+                <button className="fbs" style={{ fontSize: 11, padding: "4px 8px", color: C.red }} onClick={() => removeAsset(a.id)}>Delete</button>
+              </div>}
+            </div>
+          );
+        }) : <div style={{ textAlign: "center", padding: "52px 20px", color: C.inkFaint, fontSize: 13 }}>No personal assets yet.</div>}
+      </div>
+
+      {form && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.28)", zIndex: 1000, display: "flex", alignItems: mob ? "stretch" : "center", justifyContent: "center", padding: mob ? 0 : 20 }}>
+          <div style={{ background: C.bg, width: mob ? "100%" : 760, maxHeight: mob ? "100%" : "88vh", overflowY: "auto", borderRadius: mob ? 0 : 12, border: `1px solid ${C.border}`, boxShadow: "0 18px 60px rgba(0,0,0,.22)" }}>
+            <div style={{ position: "sticky", top: 0, background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", zIndex: 2 }}>
+              <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, fontWeight: 650 }}>{existingForm ? "Edit Asset" : "New Asset"}</div>
+              <button className="fbs" onClick={() => setForm(null)}>Close</button>
+            </div>
+            <div style={{ padding: "18px", display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12 }}>
+              <label><FTag>Asset Type</FTag><select value={form.type} onChange={e => set("type", e.target.value)} style={FI}>{ASSET_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
+              <label><FTag>Owner</FTag><input value={form.owner || ""} onChange={e => set("owner", e.target.value)} style={FI} placeholder="Personal / Manav / Family" /></label>
+              <label style={{ gridColumn: mob ? "auto" : "1/-1" }}><FTag>Name</FTag><input value={form.name || ""} onChange={e => set("name", e.target.value)} style={FI} placeholder="Parag Parikh Flexi Cap / SBI FD / PPF" autoFocus /></label>
+              <label><FTag>Institution</FTag><input value={form.institution || ""} onChange={e => set("institution", e.target.value)} style={FI} placeholder="AMC, bank, broker" /></label>
+              <label><FTag>Folio / Account</FTag><input value={form.folio || ""} onChange={e => set("folio", e.target.value)} style={FI} placeholder="Optional" /></label>
+              <label><FTag>Invested Amount</FTag><input type="number" value={form.investedAmount || ""} onChange={e => set("investedAmount", e.target.value)} style={FI} /></label>
+              <label><FTag>Current Value</FTag><input type="number" value={form.currentValue || ""} onChange={e => set("currentValue", e.target.value)} style={FI} /></label>
+              <label><FTag>Monthly SIP / Deposit</FTag><input type="number" value={form.sipAmount || ""} onChange={e => set("sipAmount", e.target.value)} style={FI} placeholder="0" /></label>
+              <label><FTag>SIP Day</FTag><input type="number" min="1" max="31" value={form.sipDay || ""} onChange={e => set("sipDay", e.target.value)} style={FI} placeholder="5" /></label>
+              <label><FTag>Rate %</FTag><input type="number" value={form.interestRate || ""} onChange={e => set("interestRate", e.target.value)} style={FI} placeholder="FD/PPF expected rate" /></label>
+              <label><FTag>Currency</FTag><select value={form.currency || "INR"} onChange={e => set("currency", e.target.value)} style={FI}>{Object.keys(CUR_SYM).map(c => <option key={c} value={c}>{c}</option>)}</select></label>
+              <label><FTag>Start Date</FTag><input type="date" value={form.startDate || ""} onChange={e => set("startDate", e.target.value)} style={FI} /></label>
+              <label><FTag>Maturity / Review Date</FTag><input type="date" value={form.maturityDate || ""} onChange={e => set("maturityDate", e.target.value)} style={FI} /></label>
+              <label><FTag>Risk</FTag><select value={form.risk || "Medium"} onChange={e => set("risk", e.target.value)} style={FI}>{["Low", "Medium", "High"].map(x => <option key={x}>{x}</option>)}</select></label>
+              <label><FTag>Liquidity</FTag><input value={form.liquidity || ""} onChange={e => set("liquidity", e.target.value)} style={FI} placeholder="Instant / T+3 / locked till maturity" /></label>
+              <label><FTag>Goal</FTag><input value={form.goal || ""} onChange={e => set("goal", e.target.value)} style={FI} placeholder="Emergency / Retirement / House / Travel" /></label>
+              <label><FTag>Nominee</FTag><input value={form.nominee || ""} onChange={e => set("nominee", e.target.value)} style={FI} /></label>
+              <label style={{ gridColumn: mob ? "auto" : "1/-1" }}><FTag>Notes</FTag><textarea value={form.notes || ""} onChange={e => set("notes", e.target.value)} style={{ ...FI, minHeight: 80, resize: "vertical" }} placeholder="Lock-in, tax notes, renewal instruction, exit rule..." /></label>
+            </div>
+            <div style={{ padding: "14px 18px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", gap: 10, background: C.surface, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                {existingForm && <button className="fbs" style={{ color: C.red }} onClick={() => removeAsset(form.id)}>Delete</button>}
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid }}><input type="checkbox" checked={form.active !== false} onChange={e => set("active", e.target.checked)} /> Active</label>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="fbs" onClick={() => setForm(null)}>Cancel</button>
+                <button className="fbp" onClick={save}>Save Asset</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2407,6 +2623,7 @@ export default function FinanceApp({ onHome }) {
   const [purchases,     setPurchases]     = useState([]);
   const [vendors,       setVendors]       = useState([]);
   const [expenses,      setExpenses]      = useState([]);
+  const [assets,        setAssets]        = useState([]);
   const [loaded,        setLoaded]        = useState(false);
   const [toast,         setToast]         = useState("");
   const [masked,        setMasked]        = useState(false);
@@ -2458,7 +2675,8 @@ export default function FinanceApp({ onHome }) {
       loadK(keys.purchases),
       loadK(keys.vendors),
       loadK(keys.expenses),
-    ]).then(([accs, t, r, invs, buys, purch, vends, exps]) => {
+      loadK(PERSONAL_ASSETS_KEY),
+    ]).then(([accs, t, r, invs, buys, purch, vends, exps, personalAssets]) => {
       setAccounts(accs?.length ? accs : (company === "ng" ? DEFAULT_ACCOUNTS : DEFAULT_ACCOUNTS_AT));
       setTxns(t  || []);
       const savedRates = r && Object.keys(r || {}).length ? r : DEFAULT_RATES;
@@ -2468,6 +2686,7 @@ export default function FinanceApp({ onHome }) {
       setPurchases(purch || []);
       setVendors(vends  || []);
       setExpenses(exps  || []);
+      setAssets(Array.isArray(personalAssets) ? personalAssets : []);
       setLoaded(true);
       // Auto-refresh if rates are older than 24 hours or never fetched
       const fetchedAt = savedRates._fetchedAt ? new Date(savedRates._fetchedAt) : null;
@@ -2487,10 +2706,23 @@ export default function FinanceApp({ onHome }) {
     if (changed.includes(keys.purchases))    loadKFresh(keys.purchases).then(v => Array.isArray(v) && setPurchases(v));
     if (changed.includes(keys.vendors))      loadKFresh(keys.vendors).then(v => Array.isArray(v) && setVendors(v));
     if (changed.includes(keys.expenses))     loadKFresh(keys.expenses).then(v => Array.isArray(v) && setExpenses(v));
+    if (changed.includes(PERSONAL_ASSETS_KEY)) loadKFresh(PERSONAL_ASSETS_KEY).then(v => Array.isArray(v) && setAssets(v));
   }), [company]);
 
   const saveAccounts = async accs => { setAccounts(accs); await saveK(companyKeys(company).accounts, accs); showToast("Accounts saved"); };
   const saveRates    = async r    => { setRates(r);        await saveK(companyKeys(company).rates, r);    showToast("Rates updated"); };
+  const saveAsset = async asset => {
+    const list = [asset, ...assets.filter(a => a.id !== asset.id)];
+    setAssets(list);
+    await saveK(PERSONAL_ASSETS_KEY, list);
+    showToast("Asset saved");
+  };
+  const deleteAsset = async id => {
+    const list = assets.filter(a => a.id !== id);
+    setAssets(list);
+    await saveK(PERSONAL_ASSETS_KEY, list);
+    showToast("Asset deleted");
+  };
   const saveTxn = async (txn, classifyNow = false) => {
     const list = [txn, ...txns];
     setTxns(list);
@@ -2579,6 +2811,7 @@ export default function FinanceApp({ onHome }) {
         ? <div style={{ textAlign: "center", padding: "60px 20px", color: C.inkFaint, fontSize: 14 }}>Loading financial data…</div>
         : <>
           {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} />}
+          {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} vendors={vendors} onSave={saveTxn} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
