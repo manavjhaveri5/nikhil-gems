@@ -479,7 +479,14 @@ const NG_DOC_SLOTS = [
 ];
 const ngSlotOf = att => {
   const hay = `${att?.label || ""} ${att?.fileName || att?.name || ""}`;
+  if (/\bbrc\b|realisation|realization/i.test(hay)) return "brc";
   return (NG_DOC_SLOTS.find(s => s.match.test(hay)) || { key: "other" }).key;
+};
+// Per-invoice bank submission tag, same idea as the Atyahara SB status cycle.
+const NG_BANK_STATUS = {
+  pending:   { label: "Pending",           next: "submitted" },
+  submitted: { label: "Submitted to Bank", next: "cleared" },
+  cleared:   { label: "✓ Cleared",         next: "pending" },
 };
 const ngUid = () => Math.random().toString(36).slice(2, 10);
 
@@ -600,6 +607,12 @@ function NgInvoiceSheet() {
   const toggleDone = async inv => {
     const next = !inv.reconDone;
     try { await saveInvoicePatch(inv.id, latest => ({ ...latest, reconDone: next, reconDoneAt: next ? new Date().toISOString() : null })); }
+    catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
+  };
+
+  const cycleBankStatus = async inv => {
+    const cur = NG_BANK_STATUS[inv.bankStatus] ? inv.bankStatus : "pending";
+    try { await saveInvoicePatch(inv.id, latest => ({ ...latest, bankStatus: NG_BANK_STATUS[cur].next })); }
     catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
   };
 
@@ -777,13 +790,14 @@ function NgInvoiceSheet() {
               <th style={th}>Buyer</th>
               <th style={th}>Amount</th>
               <th style={th}>Done</th>
+              <th style={th}>Bank Status</th>
               {NG_DOC_SLOTS.map(s => <th key={s.key} style={th}>{s.label}</th>)}
               <th style={th}>Other Docs</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+              <tr><td colSpan={6 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
                 {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
               </td></tr>
             )}
@@ -805,6 +819,21 @@ function NgInvoiceSheet() {
                         : { background: "none", border: `1px solid ${C.border}`, color: C.inkMid, borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
                       {done ? "✓ Done" : "Mark done"}
                     </button>
+                  </td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    {(() => {
+                      const st = NG_BANK_STATUS[inv.bankStatus] ? inv.bankStatus : "pending";
+                      const tone = st === "cleared" ? { bg: C.greenBg, c: C.green } : st === "submitted" ? { bg: C.blueBg, c: C.blue } : { bg: C.amberBg, c: C.amber };
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
+                          <button onClick={() => cycleBankStatus(inv)} title="Click to change: Pending → Submitted to Bank → Cleared"
+                            style={{ background: tone.bg, border: `1px solid ${tone.c}`, color: tone.c, borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                            {NG_BANK_STATUS[st].label}
+                          </button>
+                          {st === "cleared" && <DocCell inv={inv} slot={{ key: "brc", label: "BRC" }} atts={bySlot.brc} />}
+                        </div>
+                      );
+                    })()}
                   </td>
                   {NG_DOC_SLOTS.map(s => (
                     <td key={s.key} style={td}>
