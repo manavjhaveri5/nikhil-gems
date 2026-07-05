@@ -776,7 +776,6 @@ function NgInvoiceSheet() {
               <th style={th}>Invoice</th>
               <th style={th}>Buyer</th>
               <th style={th}>Amount</th>
-              <th style={th}>Payment</th>
               <th style={th}>Done</th>
               {NG_DOC_SLOTS.map(s => <th key={s.key} style={th}>{s.label}</th>)}
               <th style={th}>Other Docs</th>
@@ -784,7 +783,7 @@ function NgInvoiceSheet() {
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={6 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
                 {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
               </td></tr>
             )}
@@ -799,9 +798,6 @@ function NgInvoiceSheet() {
                   </td>
                   <td style={{ ...td, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={buyerName(inv)}>{buyerName(inv)}</td>
                   <td style={{ ...td, whiteSpace: "nowrap", fontWeight: 600 }}>{inv.currency || ""} {fmtAmt(inv.totalAmt)}</td>
-                  <td style={{ ...td, whiteSpace: "nowrap" }}>
-                    <span style={{ background: pay.bg, color: pay.c, borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{pay.t}</span>
-                  </td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <button onClick={() => toggleDone(inv)} title={done ? `Marked done${inv.reconDoneAt ? " on " + inv.reconDoneAt.slice(0, 10) : ""} — click to undo` : "Mark this set as cleared (e.g. handled before this module)"}
                       style={done
