@@ -17116,23 +17116,29 @@ export default function Root({onSignOut}){
   const _savedMod=localStorage.getItem("ng-last-mod");
   const _stockParam=new URLSearchParams(window.location.search).get("stock");
   const _locationParam=new URLSearchParams(window.location.search).get("location");
-  const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [fab,setFab]=useState(false);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);const [fabHidden,setFabHidden]=useState(false);
-  // Auto-hide the floating action button while scrolling down so it never sits on top of list content; reveal it on scroll-up.
-  useEffect(()=>{
-    let last=window.scrollY;
-    const onScroll=()=>{
-      const y=window.scrollY;
-      if(y>last+6&&y>140)setFabHidden(true);
-      else if(y<last-6)setFabHidden(false);
-      last=y;
-    };
-    window.addEventListener("scroll",onScroll,{passive:true});
-    return()=>window.removeEventListener("scroll",onScroll);
-  },[]);
+  const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);
   const go=(id,sv=null)=>{
     // Block access to modules not in allowedMods
     if(userProfile&&userProfile!==false&&!allowedMods.find(m=>m.id===id))return;
-    setMod(id);setStartView(sv);setScreen("app");setFab(false);localStorage.setItem("ng-last-mod",id);
+    setMod(id);setStartView(sv);setScreen("app");localStorage.setItem("ng-last-mod",id);
+    logModuleOpen(id);
+  };
+  // Usage counters (ng-usage-v1): one row per day+user+module, incremented at
+  // most once per module per hour per tab. Data feeds roadmap prioritisation.
+  const usageLogged=useRef(new Map());
+  const logModuleOpen=id=>{
+    try{
+      const who=currentEmail||"admin";
+      const hourKey=`${id}:${new Date().getHours()}`;
+      if(usageLogged.current.get(hourKey))return;
+      usageLogged.current.set(hourKey,true);
+      const day=today();
+      const rowId=`${day}:${who}:${id}`;
+      loadK("ng-usage-v1").then(list=>{
+        const prev=(Array.isArray(list)?list:[]).find(x=>x.id===rowId);
+        upsertItemK("ng-usage-v1",{id:rowId,date:day,user:who,mod:id,count:(+prev?.count||0)+1},{prepend:false}).catch(()=>{});
+      }).catch(()=>{});
+    }catch{}
   };
   if(userProfile===undefined){const _ll=localStorage.getItem("ng-user-lang")||"en";return<LanguageProvider language={_ll}><div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--c-bg)",color:"#8C7E66",fontSize:13,fontFamily:"system-ui,sans-serif"}}>{_ll==="mr"?"लोड होत आहे…":"Loading…"}</div></LanguageProvider>;}
   let content;
@@ -17167,7 +17173,6 @@ export default function Root({onSignOut}){
     else{go(act.targetMod);}
   };
   if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
-  const FAB_ITEMS=[{icon:"⬆",label:"Upload Bill",action:()=>go("purchases","upload")},{icon:"🧾",label:"New Expense",action:()=>go("expenses")},{icon:"📋",label:"New Invoice",action:()=>go("invoices")},...(isAdmin?[{icon:"💰",label:"Finance",action:()=>go("finance")}]:[])];
   const userLang=activeLang;
   const canSwitchLang=!!(userProfile&&userProfile!==false&&userProfile.language==="mr");
   const toggleLang=async()=>{
@@ -17242,16 +17247,6 @@ export default function Root({onSignOut}){
           })}
         </div>
       )}
-      {mod!=="shows"&&<div style={{position:"fixed",bottom:mob?"calc(64px + env(safe-area-inset-bottom))":76,right:mob?16:24,zIndex:800,display:"flex",flexDirection:"column",alignItems:"flex-end",gap:10,transform:(fabHidden&&!fab)?"translateY(140px)":"translateY(0)",opacity:(fabHidden&&!fab)?0:1,pointerEvents:(fabHidden&&!fab)?"none":"auto",transition:"transform .26s ease, opacity .26s ease"}}>
-        {fab&&FAB_ITEMS.map(o=>(
-          <button key={o.label} onClick={()=>{o.action();}} style={{display:"flex",alignItems:"center",gap:8,background:C.surface,border:`1.5px solid ${C.borderHi}`,borderRadius:24,padding:"9px 18px",fontSize:mob?14:13,fontWeight:600,color:C.ink,boxShadow:"0 4px 16px rgba(0,0,0,.14)",cursor:"pointer",whiteSpace:"nowrap",transition:"transform .1s"}}>
-            <span style={{fontSize:16}}>{o.icon}</span>{o.label}
-          </button>
-        ))}
-        <button onClick={()=>setFab(f=>!f)} style={{width:mob?52:48,height:mob?52:48,borderRadius:mob?26:24,background:fab?C.inkMid:C.gold,border:"none",color:"#fff",fontSize:28,lineHeight:1,cursor:"pointer",boxShadow:"0 4px 20px rgba(0,0,0,.24)",display:"flex",alignItems:"center",justifyContent:"center",transition:"background .2s, transform .2s",transform:fab?"rotate(45deg)":"rotate(0deg)"}}>
-          +
-        </button>
-      </div>}
     </>
     </LanguageProvider>
   );
