@@ -354,7 +354,7 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
         {doneCount>0&&<button onClick={()=>setShowDone(v=>!v)} style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:C.inkFaint,padding:0}}>{showDone?`Hide completed`:`${doneCount} completed`}</button>}
       </div>
       <div style={{display:"flex",gap:6,marginBottom:activeTodos.length>0||showDone?10:0,flexWrap:"wrap"}}>
-        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addTodo();}}
+        <input id="ng-todo-input" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")addTodo();}}
           placeholder="Add a task..." style={{...FI,flex:"1 1 140px",boxSizing:"border-box",fontSize:mob?16:13,padding:"7px 10px"}}/>
         <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
           style={{...FI,fontSize:mob?16:12,padding:"7px 8px",flex:"0 0 auto",colorScheme:"light"}}/>
@@ -794,6 +794,28 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           })()}
 
           {dashTab==="overview"&&<>
+          {/* Greeting + daily-tasks prompt */}
+          {(()=>{
+            const firstName=(currentUser?.name||"").trim().split(/\s+/)[0];
+            const hr=new Date().getHours();
+            const hello=hr<12?"Good morning":hr<17?"Good afternoon":"Good evening";
+            const focusTodos=()=>{
+              const el=document.getElementById("ng-todo-input");
+              if(!el)return;
+              el.scrollIntoView({behavior:"smooth",block:"center"});
+              setTimeout(()=>el.focus(),450);
+            };
+            return(
+              <div style={{marginBottom:12,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .06s both":"none"}}>
+                <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?22:26,fontWeight:600,color:C.ink,lineHeight:1.2}}>
+                  Hi{firstName&&firstName!=="Admin"?` ${firstName}`:""} 👋 <span style={{fontSize:mob?15:17,fontWeight:400,color:C.inkMid}}>{hello}!</span>
+                </div>
+                <button onClick={focusTodos} style={{background:"none",border:"none",cursor:"pointer",padding:0,marginTop:3,fontSize:12.5,color:C.gold,fontWeight:600,fontFamily:"inherit"}}>
+                  📝 Set your tasks for the day →
+                </button>
+              </div>
+            );
+          })()}
           {/* Mobile: icon grid for all modules — 4-col with colored tiles */}
           {mob&&(
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none"}}>
