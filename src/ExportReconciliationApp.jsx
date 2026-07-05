@@ -472,8 +472,9 @@ const NG_INV_KEY = "ng-invoices-v2";
 const NG_BUYERS_KEY = "ng-buyers-v2";
 const NG_DOC_SLOTS = [
   { key: "sbill", label: "Shipping Bill",   match: /shipping\s*bill|\bsb\b/i },
-  { key: "hawb",  label: "HAWB / AWB",      match: /hawb|awb|airway|air\s*way|bill\s*of\s*lading/i },
-  { key: "lbl",   label: "Shipping Label",  match: /label/i },
+  // HAWB and the shipping label are the same document for NG, so label
+  // uploads land in this slot too (incl. rows uploaded before the merge).
+  { key: "hawb",  label: "HAWB / AWB",      match: /hawb|awb|airway|air\s*way|bill\s*of\s*lading|label/i },
   { key: "decl",  label: "BOI Declaration", match: /declaration|\bboi\b/i },
 ];
 const ngSlotOf = att => {
@@ -543,6 +544,11 @@ function NgInvoiceSheet() {
     try { await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: (latest.attachments || []).filter(a => a.id !== att.id) })); }
     catch (err) { setMsg({ ok: false, text: `Remove failed: ${err?.message || "check connection"}` }); }
   };
+  const toggleDone = async inv => {
+    const next = !inv.reconDone;
+    try { await saveInvoicePatch(inv.id, latest => ({ ...latest, reconDone: next, reconDoneAt: next ? new Date().toISOString() : null })); }
+    catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
+  };
 
   const rows = invoices
     .filter(i => i.type !== "proforma")
@@ -553,11 +559,12 @@ function NgInvoiceSheet() {
       const missing = NG_DOC_SLOTS.filter(s => !(bySlot[s.key] || []).length);
       return { inv: i, bySlot, missing };
     })
-    .filter(r => !missingOnly || r.missing.length > 0)
+    .filter(r => !missingOnly || (r.missing.length > 0 && !r.inv.reconDone))
     .sort((a, b) => (b.inv.date || "").localeCompare(a.inv.date || "") || (b.inv.invNo || "").localeCompare(a.inv.invNo || ""));
 
   const completeCount = rows.filter(r => r.missing.length === 0).length;
   const paidCount = rows.filter(r => payInfo(r.inv).t === "✓ Received").length;
+  const doneCount = rows.filter(r => r.inv.reconDone).length;
 
   const th = { padding: "9px 10px", fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}`, background: C.card, position: "sticky", top: 0, zIndex: 1 };
   const td = { padding: "9px 10px", fontSize: 12.5, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "top" };
@@ -591,7 +598,7 @@ function NgInvoiceSheet() {
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, color: C.ink, letterSpacing: "-.01em" }}>Invoice Sets</div>
           <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-            One row per invoice — auto-synced from the Invoices module. {rows.length} invoice{rows.length !== 1 ? "s" : ""} · {completeCount} fully documented · {paidCount} paid
+            One row per invoice — auto-synced from the Invoices module. {rows.length} invoice{rows.length !== 1 ? "s" : ""} · {completeCount} fully documented · {paidCount} paid · {doneCount} marked done
           </div>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -617,20 +624,22 @@ function NgInvoiceSheet() {
               <th style={th}>Buyer</th>
               <th style={th}>Amount</th>
               <th style={th}>Payment</th>
+              <th style={th}>Done</th>
               {NG_DOC_SLOTS.map(s => <th key={s.key} style={th}>{s.label}</th>)}
               <th style={th}>Other Docs</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+              <tr><td colSpan={6 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
                 {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
               </td></tr>
             )}
             {rows.map(({ inv, bySlot, missing }) => {
               const pay = payInfo(inv);
+              const done = !!inv.reconDone;
               return (
-                <tr key={inv.id} style={{ background: missing.length === 0 && pay.t === "✓ Received" ? C.greenBg : "transparent" }}>
+                <tr key={inv.id} style={{ background: done || (missing.length === 0 && pay.t === "✓ Received") ? C.greenBg : "transparent", opacity: done ? .72 : 1 }}>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <div style={{ fontWeight: 700 }}>{inv.invNo || "—"}</div>
                     <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>{inv.date || ""}</div>
@@ -639,6 +648,14 @@ function NgInvoiceSheet() {
                   <td style={{ ...td, whiteSpace: "nowrap", fontWeight: 600 }}>{inv.currency || ""} {fmtAmt(inv.totalAmt)}</td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <span style={{ background: pay.bg, color: pay.c, borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>{pay.t}</span>
+                  </td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <button onClick={() => toggleDone(inv)} title={done ? `Marked done${inv.reconDoneAt ? " on " + inv.reconDoneAt.slice(0, 10) : ""} — click to undo` : "Mark this set as cleared (e.g. handled before this module)"}
+                      style={done
+                        ? { background: C.green, border: `1px solid ${C.green}`, color: "#fff", borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }
+                        : { background: "none", border: `1px solid ${C.border}`, color: C.inkMid, borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                      {done ? "✓ Done" : "Mark done"}
+                    </button>
                   </td>
                   {NG_DOC_SLOTS.map(s => (
                     <td key={s.key} style={td}><DocCell inv={inv} slot={s} atts={bySlot[s.key]} /></td>
