@@ -73,8 +73,8 @@ const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "
 const PERSONAL_ASSETS_KEY = "personal-fin-assets-v1";
 
 const TXN_CATS = {
-  credit: ["FIRC / Inward Remittance", "Show Income – USD", "Show Income – EUR", "Show Income – JPY", "Show Income – INR", "Cash Received", "Advance Received", "Loan Received", "Other Income"],
-  debit:  ["Bill Payment", "Expense Payment", "Show Expense", "Bank Charges", "Loan Repayment", "Personal Withdrawal", "Advance Paid", "Other Payment"],
+  credit: ["FIRC / Inward Remittance", "Show Income – USD", "Show Income – EUR", "Show Income – JPY", "Show Income – INR", "Cash Received", "Advance Received", "Loan Received", "Other Income", "Balance Adjustment"],
+  debit:  ["Bill Payment", "Expense Payment", "Show Expense", "Bank Charges", "Loan Repayment", "Personal Withdrawal", "Advance Paid", "Other Payment", "Balance Adjustment"],
   conversion: ["JPY Cash → INR Cash", "USD Cash → INR Cash", "EUR Cash → INR Cash", "EEFC → BOI (INR)", "USD Cash → EEFC", "Bank Transfer (Internal)", "Other Conversion"],
 };
 
@@ -1504,7 +1504,7 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
 }
 
 // ─── Accounts & Rates Settings ────────────────────────────────────────────────
-function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, onFetchRates, fetchingRates, onReassignTxns }) {
+function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, onFetchRates, fetchingRates, onAdjustBalance, onReassignTxns }) {
   const masked = useMasked();
   const m = makeMask(masked);
   const [editRates,  setEditRates]  = useState(false);
@@ -1513,6 +1513,8 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
   const [newAcc, setNewAcc] = useState({ name: "", type: "bank", currency: "INR", openingBal: 0, active: true, creditLimit: 0, billingDueDay: 0 });
   const [deleteModal, setDeleteModal] = useState(null); // { acc, moveTo }
   const [moveToId, setMoveToId] = useState("");
+  const [correctingId, setCorrectingId] = useState(null); // account id being reconciled
+  const [correctVal, setCorrectVal] = useState("");
 
   const FI = { background: C.surface, border: `1.5px solid ${C.border}`, color: C.ink, borderRadius: 6, padding: mob ? "10px 11px" : "7px 10px", fontSize: mob ? 16 : 13, fontFamily: "inherit" };
 
@@ -1604,6 +1606,18 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
                   <div style={{ textAlign: "right", minWidth: 120, flexShrink: 0 }}>
                     <div style={{ fontSize: 9, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>Current Balance</div>
                     <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 17, fontWeight: 600, color: bal < 0 ? C.red : C.green }}>{m(sym + Math.abs(bal).toLocaleString("en-IN", { minimumFractionDigits: acc.currency === "JPY" ? 0 : 2, maximumFractionDigits: acc.currency === "JPY" ? 0 : 2 }))}</div>
+                    {onAdjustBalance && (correctingId === acc.id
+                      ? <div style={{ display: "flex", gap: 5, marginTop: 5, alignItems: "center" }}>
+                          <input
+                            autoFocus type="number" step="0.01" value={correctVal} placeholder="Correct bal."
+                            onChange={e => setCorrectVal(e.target.value)}
+                            onKeyDown={e => { if (e.key === "Enter" && correctVal !== "") { onAdjustBalance(acc.id, +correctVal); setCorrectingId(null); } if (e.key === "Escape") setCorrectingId(null); }}
+                            style={{ ...FI, width: 92, padding: "4px 7px", fontSize: 12 }} />
+                          <button onClick={() => { if (correctVal !== "") onAdjustBalance(acc.id, +correctVal); setCorrectingId(null); }} className="fbp" style={{ fontSize: 11, padding: "4px 9px" }}>Set</button>
+                          <button onClick={() => setCorrectingId(null)} className="fbs" style={{ fontSize: 11, padding: "4px 9px" }}>✕</button>
+                        </div>
+                      : <div onClick={() => { setCorrectingId(acc.id); setCorrectVal(""); }} title="Reconcile to today's real balance without finding the missing transaction" style={{ fontSize: 10, color: C.gold, cursor: "pointer", marginTop: 3, textDecoration: "underline dotted" }}>Correct balance…</div>
+                    )}
                   </div>
                   <div style={{ minWidth: mob ? "100%" : 180, flexShrink: 0 }}>
                     <div style={{ fontSize: 9, color: C.inkFaint, marginBottom: 3, textTransform: "uppercase", letterSpacing: .5 }}>Opening Balance</div>
@@ -2749,6 +2763,33 @@ export default function FinanceApp({ onHome }) {
     showToast("Saved");
   };
 
+  // Reconcile an account to a known-correct balance without hunting for the missing
+  // transaction(s) — plugs the gap with a single dated "Balance Adjustment" entry
+  // so the ledger stays accurate instead of silently offsetting the opening balance.
+  const adjustBalance = async (accId, targetBalance) => {
+    const acc = accounts.find(a => a.id === accId);
+    if (!acc) return;
+    const current = computeBalances(accounts, txns)[accId] || 0;
+    const delta = +targetBalance - current;
+    if (!delta) { showToast("Already matches"); return; }
+    const isCredit = delta > 0;
+    const txn = {
+      id: uid(), date: today(), type: isCredit ? "credit" : "debit",
+      accountTo:   isCredit ? accId : undefined,
+      accountFrom: isCredit ? undefined : accId,
+      amount: Math.abs(delta),
+      currency: acc.currency,
+      payee: "Balance Adjustment",
+      category: "Balance Adjustment",
+      notes: `Reconciled: ${fmtAmt(current, acc.currency)} → ${fmtAmt(+targetBalance, acc.currency)}`,
+      createdAt: new Date().toISOString(),
+    };
+    const list = [txn, ...txns];
+    setTxns(list);
+    await saveK(companyKeys(company).transactions, list);
+    showToast(`✓ ${acc.name} corrected to ${fmtAmt(+targetBalance, acc.currency)}`);
+  };
+
   const handleClassify = async (txnId, { classifiedAs, classifiedRef, sideEffects = {} }) => {
     const _accountPatch = sideEffects.txnPatch;
     const keys = companyKeys(company);
@@ -2814,7 +2855,7 @@ export default function FinanceApp({ onHome }) {
           {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} vendors={vendors} onSave={saveTxn} onCancel={() => setView("dashboard")} />}
-          {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
+          {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onAdjustBalance={adjustBalance} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
           {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} onUpdate={updateTxn} />}
           {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [] }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank"); }} />}
         </>
