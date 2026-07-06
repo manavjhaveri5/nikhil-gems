@@ -828,10 +828,10 @@ function NgInvoiceSheet() {
                       const tone = done ? { bg: C.greenBg, c: C.green } : st === "submitted" ? { bg: C.blueBg, c: C.blue } : { bg: C.amberBg, c: C.amber };
                       return (
                         <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
-                          <button onClick={() => cycleStatus(inv)}
+                          <button className="er-status" onClick={() => cycleStatus(inv)}
                             title={`Click to change: Pending → Submitted to Bank → Done${done && inv.reconDoneAt ? ` (done on ${inv.reconDoneAt.slice(0, 10)})` : ""}`}
-                            style={{ background: tone.bg, border: `1px solid ${tone.c}`, color: tone.c, borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-                            {NG_BANK_STATUS[st].label}
+                            style={{ background: tone.bg, border: `1px solid ${tone.c}`, color: tone.c, borderRadius: 999, padding: "3px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                            <span key={st}>{NG_BANK_STATUS[st].label}</span>
                           </button>
                           {done && <DocCell inv={inv} slot={{ key: "brc", label: "BRC" }} atts={bySlot.brc} />}
                         </div>
@@ -857,21 +857,26 @@ function NgInvoiceSheet() {
         </table>
       </div>
       {brcPrompt && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(20,15,10,.4)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={() => setBrcPrompt(null)}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 22px", width: 380, maxWidth: "90vw", boxShadow: "0 16px 48px rgba(0,0,0,.22)" }}>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink }}>✓ {brcPrompt.invNo} marked done</div>
-            <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 7, lineHeight: 1.55 }}>
-              If the bank has issued the BRC (Bank Realisation Certificate) for this invoice, upload it now to complete the set. You can also add it later from the Status column.
+        <div className="er-modal-ov" onClick={() => setBrcPrompt(null)}>
+          <div className="er-modal-card" onClick={e => e.stopPropagation()}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: "22px 24px", width: 390, maxWidth: "90vw", boxShadow: "0 20px 60px rgba(0,0,0,.28)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span className="er-check">✓</span>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.ink, letterSpacing: "-.01em" }}>{brcPrompt.invNo} marked done</div>
+                <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 1 }}>Bank Realisation Certificate</div>
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-              <button onClick={() => setBrcPrompt(null)}
-                style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 13px", fontSize: 12.5, fontWeight: 600, color: C.inkMid, cursor: "pointer" }}>
+            <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 13, lineHeight: 1.6 }}>
+              If the bank has issued the BRC for this invoice, upload it now to complete the set. You can always add it later from the Status column.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "flex-end" }}>
+              <button className="er-btn-lift" onClick={() => setBrcPrompt(null)}
+                style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 9, padding: "8px 15px", fontSize: 12.5, fontWeight: 600, color: C.inkMid, cursor: "pointer" }}>
                 No BRC yet
               </button>
-              <button onClick={() => { const inv = brcPrompt; setBrcPrompt(null); pickFile(inv, { key: "brc", label: "BRC" }); }}
-                style={{ background: C.green, border: `1px solid ${C.green}`, borderRadius: 8, padding: "7px 13px", fontSize: 12.5, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+              <button className="er-btn-lift" onClick={() => { const inv = brcPrompt; setBrcPrompt(null); pickFile(inv, { key: "brc", label: "BRC" }); }}
+                style={{ background: C.green, border: `1px solid ${C.green}`, borderRadius: 9, padding: "8px 15px", fontSize: 12.5, fontWeight: 700, color: "#fff", cursor: "pointer", boxShadow: "0 3px 12px rgba(0,0,0,.12)" }}>
                 ⬆ Upload BRC
               </button>
             </div>
@@ -3703,6 +3708,21 @@ const CSS=`
   .spin{animation:spin .9s linear infinite;display:inline-block;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   .pulse{animation:pulse 1s ease-in-out infinite;}
+  /* Rotating Status tag — smooth colour morph + tactile press */
+  .er-status{position:relative;overflow:hidden;transition:background .28s var(--ease,ease),border-color .28s var(--ease,ease),color .28s var(--ease,ease),transform .14s var(--ease-spring,cubic-bezier(.34,1.56,.64,1)),box-shadow .18s var(--ease,ease);will-change:transform;}
+  .er-status:hover{transform:translateY(-1px);box-shadow:0 3px 10px rgba(0,0,0,.10);}
+  .er-status:active{transform:translateY(0) scale(.94);}
+  .er-status>span{display:inline-block;animation:erTagIn .32s var(--ease-spring,cubic-bezier(.34,1.56,.64,1));}
+  @keyframes erTagIn{from{opacity:0;transform:translateY(4px) scale(.9)}to{opacity:1;transform:none}}
+  /* BRC prompt modal */
+  .er-modal-ov{position:fixed;inset:0;background:rgba(20,15,10,.42);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);z-index:60;display:flex;align-items:center;justify-content:center;animation:erFade .2s var(--ease,ease);}
+  .er-modal-card{animation:erPop .34s var(--ease-spring,cubic-bezier(.34,1.56,.64,1));transform-origin:center;}
+  @keyframes erPop{0%{opacity:0;transform:translateY(12px) scale(.94)}100%{opacity:1;transform:none}}
+  @keyframes erCheckPop{0%{transform:scale(0) rotate(-20deg)}60%{transform:scale(1.15) rotate(4deg)}100%{transform:none}}
+  .er-check{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:50%;background:${C.greenBg};color:${C.green};font-size:19px;animation:erCheckPop .42s var(--ease-spring,cubic-bezier(.34,1.56,.64,1));}
+  .er-btn-lift{transition:transform .14s var(--ease-spring,cubic-bezier(.34,1.56,.64,1)),box-shadow .16s var(--ease,ease),opacity .14s var(--ease,ease);}
+  .er-btn-lift:hover{transform:translateY(-1px);}
+  .er-btn-lift:active{transform:translateY(0) scale(.96);}
   /* Segmented tab bar (Apple-style) */
   .er-tabs{display:flex;gap:4px;overflow-x:auto;padding:4px;background:var(--c-card);border:1px solid var(--c-border);border-radius:12px;scrollbar-width:none;}
   .er-tabs::-webkit-scrollbar{display:none;}
