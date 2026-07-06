@@ -3888,6 +3888,19 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     return true;
   }).sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.createdAt||"").localeCompare(a.createdAt||""));
   const selected=filtered.find(t=>t.id===selectedId)||filtered[0]||null;
+  // Payee/Notes fields below are typed into on every keystroke, but persisting via
+  // patchTxn is a network round-trip (saveK merges against a fresh server read). Binding
+  // the textarea straight to `selected.notes` meant a live-sync refresh landing mid-type
+  // (onCacheRefresh reloading txns) could stomp the in-progress edit with a stale value,
+  // making it look like typing "stopped working" after the first couple characters.
+  // Local draft state + debounced persist keeps keystrokes independent of that race.
+  const [payeeDraft,setPayeeDraft]=useState("");
+  const [notesDraft,setNotesDraft]=useState("");
+  useEffect(()=>{setPayeeDraft(selected?.payee||"");setNotesDraft(selected?.notes||"");},[selected?.id]);
+  const payeeDraftDebounced=useDebounce(payeeDraft,500);
+  const notesDraftDebounced=useDebounce(notesDraft,500);
+  useEffect(()=>{if(selected&&payeeDraftDebounced!==(selected.payee||""))updatePayee(payeeDraftDebounced);},[payeeDraftDebounced]);
+  useEffect(()=>{if(selected&&notesDraftDebounced!==(selected.notes||""))updateNotes(notesDraftDebounced);},[notesDraftDebounced]);
   // Read text from an attached PDF for the selected (unclassified) entry, so the
   // suggester can use the document (e.g. a foreign inward remittance advice).
   useEffect(()=>{
@@ -4134,11 +4147,16 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     autoFillRef.current.add(t.id);
     setAutoFilled(s=>({...s,[t.id]:{payee:t.payee||"",notes:t.notes||""}}));
     patchTxn(t.id,patch);
+    if(t.id===selectedId){
+      if(patch.payee!=null)setPayeeDraft(patch.payee);
+      if(patch.notes!=null)setNotesDraft(patch.notes);
+    }
   },[selectedId,learnMem,txns]);
   const undoAutoFill=t=>{
     const prev=autoFilled[t.id]; if(!prev)return;
     patchTxn(t.id,{payee:prev.payee,notes:prev.notes});
     setAutoFilled(s=>{const n={...s};delete n[t.id];return n;});
+    if(t.id===selectedId){setPayeeDraft(prev.payee||"");setNotesDraft(prev.notes||"");}
   };
   // Inter-company: a payment to the OTHER company settles an invoice THAT company issued
   // to us. Surface those invoices (unpaid, billed to us) so they can be picked as the bill.
@@ -4357,7 +4375,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
               const patch={};
               if(smart.payee&&smart.payee!==(selected.payee||"")){patch.payee=smart.payee;if(selected.rawPayee==null)patch.rawPayee=selected.payee||"";}
               if(smart.notes&&!(selected.notes||"").trim()){patch.notes=smart.notes;if(selected.rawNotes==null)patch.rawNotes=selected.notes||"";}
-              if(Object.keys(patch).length)patchTxn(selected.id,patch);
+              if(!Object.keys(patch).length)return;
+              patchTxn(selected.id,patch);
+              if(patch.payee!=null)setPayeeDraft(patch.payee);
+              if(patch.notes!=null)setNotesDraft(patch.notes);
             };
             return(
               <div style={{display:"grid",gap:12}}>
@@ -4393,7 +4414,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                       {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.type==="credit_card"?" · card":""}</option>)}
                     </select>
                   </Field>
-                  <Field label="Payee / source"><input value={selected.payee||""} onChange={e=>updatePayee(e.target.value)} style={inputS} placeholder="Who paid / who was paid"/></Field>
+                  <Field label="Payee / source"><input value={payeeDraft} onChange={e=>setPayeeDraft(e.target.value)} style={inputS} placeholder="Who paid / who was paid"/></Field>
                   <Field label="Classification"><input value={displayClassification(selected)} readOnly style={{...inputS,color:transfer?C.blue:isUnclassified(selected)?C.red:C.green,fontWeight:850}}/></Field>
                   {!transfer&&<Field label="Type"><div style={{display:"flex",gap:6}}>
                     {[["debit","Debit",C.red,C.redBg],["credit","Credit",C.green,C.greenBg]].map(([id,label,col,bg])=>(
@@ -4401,7 +4422,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                     ))}
                   </div></Field>}
                 </div>
-                <Field label="Notes"><textarea value={selected.notes||""} onChange={e=>updateNotes(e.target.value)} rows={3} style={{...inputS,resize:"vertical"}} placeholder="Accountant notes, invoice ref, bill ref..."/></Field>
+                <Field label="Notes"><textarea value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} rows={3} style={{...inputS,resize:"vertical"}} placeholder="Accountant notes, invoice ref, bill ref..."/></Field>
                 {!done&&readingAtt&&(
                   <div style={{fontSize:11,color:C.inkFaint,display:"flex",alignItems:"center",gap:7}}>
                     <span style={{fontSize:13}}>📄</span> Reading the attached document…
