@@ -538,6 +538,7 @@ function NgInvoiceSheet() {
   const [msg, setMsg] = useState(null);     // {ok, text}
   const [bankRep, setBankRep] = useState(null); // {list:[{sbNo,date,due,status}], importedAt, fileName}
   const [bankBusy, setBankBusy] = useState(false);
+  const [bankPanelOpen, setBankPanelOpen] = useState(false); // panel shows once after an import, hidden on reload
   const [scan, setScan] = useState(null);   // {done, total} while AI-scanning uploaded SBs
   const fileRef = useRef(null);
   const bankFileRef = useRef(null);
@@ -632,15 +633,11 @@ function NgInvoiceSheet() {
       const rep = { list, importedAt: new Date().toISOString(), fileName: file.name };
       await saveK(NG_BANK_SB_KEY, rep);
       setBankRep(rep);
+      setBankPanelOpen(true);
       setMsg({ ok: true, text: `Bank report imported — ${list.length} shipping bill${list.length !== 1 ? "s" : ""} still outstanding at the bank. Green = we already hold that SB.` });
     } catch (err) {
       setMsg({ ok: false, text: `Import failed: ${err?.message || "unreadable file"}` });
     } finally { setBankBusy(false); }
-  };
-  const clearBankRep = async () => {
-    if (!window.confirm("Remove the imported bank SB report? (You can re-import it any time.)")) return;
-    await saveK(NG_BANK_SB_KEY, null);
-    setBankRep(null);
   };
 
   // AI-read the SB number off already-uploaded shipping bill documents.
@@ -741,13 +738,19 @@ function NgInvoiceSheet() {
             <input type="checkbox" checked={missingOnly} onChange={e => setMissingOnly(e.target.checked)} />
             Missing docs only
           </label>
+          {bankRep && !bankPanelOpen && (
+            <button onClick={() => setBankPanelOpen(true)}
+              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12, fontWeight: 600, color: C.inkFaint, cursor: "pointer", whiteSpace: "nowrap" }}>
+              Bank report
+            </button>
+          )}
           <button onClick={() => bankFileRef.current?.click()} disabled={bankBusy}
             style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12, fontWeight: 600, color: C.inkMid, cursor: bankBusy ? "default" : "pointer", whiteSpace: "nowrap" }}>
             {bankBusy ? "⟳ Reading…" : bankRep ? "⬆ Re-import bank report" : "⬆ Import bank SB report"}
           </button>
         </div>
       </div>
-      {bankRep && (
+      {bankRep && bankPanelOpen && (
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 9 }}>
             <div>
@@ -763,7 +766,7 @@ function NgInvoiceSheet() {
                   {scan ? `⟳ Reading ${scan.done + 1} / ${scan.total}…` : `🔍 Read SB numbers off ${scanPending} uploaded doc${scanPending !== 1 ? "s" : ""} (AI)`}
                 </button>
               )}
-              <button onClick={clearBankRep} title="Remove imported report"
+              <button onClick={() => setBankPanelOpen(false)} title="Hide — reopen via the Bank report button"
                 style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", fontSize: 12, color: C.inkFaint, cursor: "pointer" }}>×</button>
             </div>
           </div>
