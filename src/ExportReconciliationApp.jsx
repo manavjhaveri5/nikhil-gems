@@ -552,6 +552,11 @@ function NgInvoiceSheet() {
   }, []);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => onCacheRefresh(keys => { if (keys.includes(NG_INV_KEY) || keys.includes(NG_BUYERS_KEY) || keys.includes(NG_BANK_SB_KEY)) reload(); }), [reload]);
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(null), 6000);
+    return () => clearTimeout(t);
+  }, [msg]);
 
   const buyerName = inv => buyers.find(b => b.id === inv.buyerId)?.name || inv.buyerName || inv.buyer || "—";
   const fmtAmt = n => (+n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
