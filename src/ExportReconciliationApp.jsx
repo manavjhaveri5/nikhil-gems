@@ -482,12 +482,18 @@ const ngSlotOf = att => {
   if (/\bbrc\b|realisation|realization/i.test(hay)) return "brc";
   return (NG_DOC_SLOTS.find(s => s.match.test(hay)) || { key: "other" }).key;
 };
-// Per-invoice bank submission tag, same idea as the Atyahara SB status cycle.
+// Per-invoice status tag, same idea as the Atyahara SB status cycle.
+// New invoices start on Pending automatically; clicking rotates the tag.
 const NG_BANK_STATUS = {
   pending:   { label: "Pending",           next: "submitted" },
-  submitted: { label: "Submitted to Bank", next: "cleared" },
-  cleared:   { label: "✓ Cleared",         next: "pending" },
+  submitted: { label: "Submitted to Bank", next: "done" },
+  done:      { label: "✓ Done",            next: "pending" },
 };
+// Legacy records may carry reconDone (old Mark-done button) or bankStatus
+// "cleared" (old third state) — both count as done.
+const ngStatusOf = inv =>
+  (inv.reconDone || inv.bankStatus === "cleared" || inv.bankStatus === "done") ? "done"
+  : inv.bankStatus === "submitted" ? "submitted" : "pending";
 const ngUid = () => Math.random().toString(36).slice(2, 10);
 
 /* Bank "SB Outstanding" report (EDPMS export from the bank portal).
@@ -540,6 +546,7 @@ function NgInvoiceSheet() {
   const [bankBusy, setBankBusy] = useState(false);
   const [bankPanelOpen, setBankPanelOpen] = useState(false); // panel shows once after an import, hidden on reload
   const [scan, setScan] = useState(null);   // {done, total} while AI-scanning uploaded SBs
+  const [brcPrompt, setBrcPrompt] = useState(null); // invoice just marked done, missing its BRC
   const fileRef = useRef(null);
   const bankFileRef = useRef(null);
   const pendingSlot = useRef(null);         // {inv, slot}
@@ -610,16 +617,12 @@ function NgInvoiceSheet() {
     try { await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: (latest.attachments || []).filter(a => a.id !== att.id) })); }
     catch (err) { setMsg({ ok: false, text: `Remove failed: ${err?.message || "check connection"}` }); }
   };
-  const toggleDone = async inv => {
-    const next = !inv.reconDone;
-    try { await saveInvoicePatch(inv.id, latest => ({ ...latest, reconDone: next, reconDoneAt: next ? new Date().toISOString() : null })); }
-    catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
-  };
-
-  const cycleBankStatus = async inv => {
-    const cur = NG_BANK_STATUS[inv.bankStatus] ? inv.bankStatus : "pending";
-    try { await saveInvoicePatch(inv.id, latest => ({ ...latest, bankStatus: NG_BANK_STATUS[cur].next })); }
-    catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
+  const cycleStatus = async inv => {
+    const next = NG_BANK_STATUS[ngStatusOf(inv)].next;
+    try {
+      await saveInvoicePatch(inv.id, latest => ({ ...latest, bankStatus: next, reconDone: next === "done", reconDoneAt: next === "done" ? new Date().toISOString() : null }));
+      if (next === "done" && !(inv.attachments || []).some(a => ngSlotOf(a) === "brc")) setBrcPrompt(inv);
+    } catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
   };
 
   const onBankFile = async e => {
@@ -673,12 +676,12 @@ function NgInvoiceSheet() {
       const missing = NG_DOC_SLOTS.filter(s => !(bySlot[s.key] || []).length);
       return { inv: i, bySlot, missing };
     })
-    .filter(r => !missingOnly || (r.missing.length > 0 && !r.inv.reconDone))
+    .filter(r => !missingOnly || (r.missing.length > 0 && ngStatusOf(r.inv) !== "done"))
     .sort((a, b) => (b.inv.date || "").localeCompare(a.inv.date || "") || (b.inv.invNo || "").localeCompare(a.inv.invNo || ""));
 
   const completeCount = rows.filter(r => r.missing.length === 0).length;
   const paidCount = rows.filter(r => payInfo(r.inv).t === "✓ Received").length;
-  const doneCount = rows.filter(r => r.inv.reconDone).length;
+  const doneCount = rows.filter(r => ngStatusOf(r.inv) === "done").length;
 
   // Which of the bank's outstanding SBs do we already hold? Matched on the
   // AI-read SB number, or on digit runs in shipping-bill file names (no AI).
@@ -797,21 +800,21 @@ function NgInvoiceSheet() {
               <th style={th}>Invoice</th>
               <th style={th}>Buyer</th>
               <th style={th}>Amount</th>
-              <th style={th}>Done</th>
-              <th style={th}>Bank Status</th>
+              <th style={th}>Status</th>
               {NG_DOC_SLOTS.map(s => <th key={s.key} style={th}>{s.label}</th>)}
               <th style={th}>Other Docs</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={6 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
                 {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
               </td></tr>
             )}
             {rows.map(({ inv, bySlot, missing }) => {
               const pay = payInfo(inv);
-              const done = !!inv.reconDone;
+              const st = ngStatusOf(inv);
+              const done = st === "done";
               return (
                 <tr key={inv.id} style={{ background: done || (missing.length === 0 && pay.t === "✓ Received") ? C.greenBg : "transparent", opacity: done ? .72 : 1 }}>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
@@ -821,24 +824,16 @@ function NgInvoiceSheet() {
                   <td style={{ ...td, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={buyerName(inv)}>{buyerName(inv)}</td>
                   <td style={{ ...td, whiteSpace: "nowrap", fontWeight: 600 }}>{inv.currency || ""} {fmtAmt(inv.totalAmt)}</td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
-                    <button onClick={() => toggleDone(inv)} title={done ? `Marked done${inv.reconDoneAt ? " on " + inv.reconDoneAt.slice(0, 10) : ""} — click to undo` : "Mark this set as cleared (e.g. handled before this module)"}
-                      style={done
-                        ? { background: C.green, border: `1px solid ${C.green}`, color: "#fff", borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }
-                        : { background: "none", border: `1px solid ${C.border}`, color: C.inkMid, borderRadius: 6, padding: "3px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                      {done ? "✓ Done" : "Mark done"}
-                    </button>
-                  </td>
-                  <td style={{ ...td, whiteSpace: "nowrap" }}>
                     {(() => {
-                      const st = NG_BANK_STATUS[inv.bankStatus] ? inv.bankStatus : "pending";
-                      const tone = st === "cleared" ? { bg: C.greenBg, c: C.green } : st === "submitted" ? { bg: C.blueBg, c: C.blue } : { bg: C.amberBg, c: C.amber };
+                      const tone = done ? { bg: C.greenBg, c: C.green } : st === "submitted" ? { bg: C.blueBg, c: C.blue } : { bg: C.amberBg, c: C.amber };
                       return (
                         <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
-                          <button onClick={() => cycleBankStatus(inv)} title="Click to change: Pending → Submitted to Bank → Cleared"
+                          <button onClick={() => cycleStatus(inv)}
+                            title={`Click to change: Pending → Submitted to Bank → Done${done && inv.reconDoneAt ? ` (done on ${inv.reconDoneAt.slice(0, 10)})` : ""}`}
                             style={{ background: tone.bg, border: `1px solid ${tone.c}`, color: tone.c, borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                             {NG_BANK_STATUS[st].label}
                           </button>
-                          {st === "cleared" && <DocCell inv={inv} slot={{ key: "brc", label: "BRC" }} atts={bySlot.brc} />}
+                          {done && <DocCell inv={inv} slot={{ key: "brc", label: "BRC" }} atts={bySlot.brc} />}
                         </div>
                       );
                     })()}
@@ -861,6 +856,28 @@ function NgInvoiceSheet() {
           </tbody>
         </table>
       </div>
+      {brcPrompt && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,15,10,.4)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setBrcPrompt(null)}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: "20px 22px", width: 380, maxWidth: "90vw", boxShadow: "0 16px 48px rgba(0,0,0,.22)" }}>
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink }}>✓ {brcPrompt.invNo} marked done</div>
+            <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 7, lineHeight: 1.55 }}>
+              If the bank has issued the BRC (Bank Realisation Certificate) for this invoice, upload it now to complete the set. You can also add it later from the Status column.
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+              <button onClick={() => setBrcPrompt(null)}
+                style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 13px", fontSize: 12.5, fontWeight: 600, color: C.inkMid, cursor: "pointer" }}>
+                No BRC yet
+              </button>
+              <button onClick={() => { const inv = brcPrompt; setBrcPrompt(null); pickFile(inv, { key: "brc", label: "BRC" }); }}
+                style={{ background: C.green, border: `1px solid ${C.green}`, borderRadius: 8, padding: "7px 13px", fontSize: 12.5, fontWeight: 700, color: "#fff", cursor: "pointer" }}>
+                ⬆ Upload BRC
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
