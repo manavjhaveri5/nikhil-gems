@@ -1256,7 +1256,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
     <div className="er-app" style={S.root}>
       <style>{CSS}</style>
 
-      {!mob&&(
+      {!mob&&company!=="nikhil"&&(
         <div style={S.sidebar}>
           <div style={S.sideHead}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
@@ -1284,7 +1284,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
         </div>
       )}
 
-      {mob&&(
+      {mob&&company!=="nikhil"&&(
         <div style={{position:"sticky",top:0,zIndex:90,background:C.bg,paddingBottom:12,marginBottom:6}}>
         <div className="er-tabs">
           {navButtons}
