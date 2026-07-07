@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import { loadK, loadKFresh, saveK, mob, onCacheRefresh, upsertVersionedItemK, deleteVersionedItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { fillExportBillForm } from "./fillExportBillForm.js";
@@ -793,6 +794,73 @@ function NgInvoiceSheet() {
       setMsg({ ok: false, text: `Could not generate BOI form: ${err?.message || "check connection"}` });
     } finally { setBusy(null); }
   };
+
+  const packetDocsFor = bySlot => ([
+    { key: "invoice", label: "Invoice", att: bySlot.invoice?.[0] },
+    { key: "hawb", label: "Shipping Label / HAWB / HBL", att: bySlot.hawb?.[0] },
+    { key: "sbill", label: "Shipping Bill", att: bySlot.sbill?.[0] },
+    { key: "decl", label: "BOI Declaration", att: bySlot.decl?.[0] },
+  ]);
+  const missingPacketDocs = bySlot => packetDocsFor(bySlot).filter(d => !d.att).map(d => d.label);
+
+  const appendAttToPacket = async (merged, att, label) => {
+    const res = await fetch(att.url);
+    if (!res.ok) throw new Error(`${label} fetch failed`);
+    const blob = await res.blob();
+    const mime = blob.type || att.type || "";
+    const bytes = await blob.arrayBuffer();
+    if (/pdf/i.test(mime) || /\.pdf$/i.test(att.fileName || att.name || "")) {
+      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+      const pages = await merged.copyPages(doc, doc.getPageIndices());
+      pages.forEach(p => merged.addPage(p));
+      return;
+    }
+    if (/png/i.test(mime) || /\.png$/i.test(att.fileName || att.name || "")) {
+      const img = await merged.embedPng(bytes);
+      const page = merged.addPage([595, 842]);
+      const fit = img.scale(Math.min(555 / img.width, 802 / img.height));
+      page.drawImage(img, { x: (595 - fit.width) / 2, y: (842 - fit.height) / 2, width: fit.width, height: fit.height });
+      return;
+    }
+    if (/jpe?g/i.test(mime) || /\.jpe?g$/i.test(att.fileName || att.name || "")) {
+      const img = await merged.embedJpg(bytes);
+      const page = merged.addPage([595, 842]);
+      const fit = img.scale(Math.min(555 / img.width, 802 / img.height));
+      page.drawImage(img, { x: (595 - fit.width) / 2, y: (842 - fit.height) / 2, width: fit.width, height: fit.height });
+      return;
+    }
+    const font = await merged.embedFont(StandardFonts.HelveticaBold);
+    const page = merged.addPage([595, 842]);
+    page.drawText(`${label}: unsupported file type`, { x: 40, y: 420, size: 12, font, color: rgb(0.75, 0.12, 0.12) });
+  };
+
+  const downloadPacket = async (inv, bySlot) => {
+    const missing = missingPacketDocs(bySlot);
+    if (missing.length) {
+      setMsg({ ok: false, text: `Packet is missing: ${missing.join(", ")}.` });
+      return;
+    }
+    setBusy(`${inv.id}:packet`); setMsg(null);
+    try {
+      const merged = await PDFDocument.create();
+      for (const d of packetDocsFor(bySlot)) await appendAttToPacket(merged, d.att, d.label);
+      const bytes = await merged.save();
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const safeInv = (inv.invNo || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "-");
+      a.href = url;
+      a.download = `NG_Packet_${safeInv}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setMsg({ ok: true, text: `Packet downloaded for ${inv.invNo}.` });
+    } catch (err) {
+      setMsg({ ok: false, text: `Packet download failed: ${err?.message || "check documents"}` });
+    } finally { setBusy(null); }
+  };
+
   const cycleStatus = async inv => {
     const next = NG_BANK_STATUS[ngStatusOf(inv)].next;
     try {
@@ -1053,11 +1121,12 @@ function NgInvoiceSheet() {
               <th style={th}>Amount</th>
               <th style={th}>Status</th>
               {NG_DOC_SLOTS.map(s => <th key={s.key} style={th}>{s.label}</th>)}
+              <th style={th}>Packet</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={4 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
                 {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
               </td></tr>
             )}
@@ -1065,6 +1134,8 @@ function NgInvoiceSheet() {
               const pay = payInfo(inv);
               const st = ngStatusOf(inv);
               const done = st === "done";
+              const packetMissing = missingPacketDocs(bySlot);
+              const packetBusy = busy === `${inv.id}:packet`;
               return (
                 <tr key={inv.id} style={{ background: done || (missing.length === 0 && pay.t === "✓ Received") ? C.greenBg : "transparent", opacity: done ? .72 : 1 }}>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
@@ -1124,6 +1195,18 @@ function NgInvoiceSheet() {
                       )}
                     </td>
                   ))}
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <button onClick={() => downloadPacket(inv, bySlot)} disabled={packetBusy || packetMissing.length > 0}
+                      title={packetMissing.length ? `Missing: ${packetMissing.join(", ")}` : "Download invoice + shipping label + shipping bill + BOI declaration"}
+                      style={{ background: packetMissing.length ? C.card : C.ink, border: `1px solid ${packetMissing.length ? C.border : C.ink}`, borderRadius: 7, padding: "4px 9px", fontSize: 10.5, fontWeight: 800, color: packetMissing.length ? C.inkFaint : "#fff", cursor: packetBusy || packetMissing.length ? "default" : "pointer", whiteSpace: "nowrap", opacity: packetBusy ? .65 : 1 }}>
+                      {packetBusy ? "Building..." : "Download packet"}
+                    </button>
+                    {packetMissing.length > 0 && (
+                      <div style={{ marginTop: 4, color: C.inkFaint, fontSize: 10, maxWidth: 130, whiteSpace: "normal", lineHeight: 1.25 }}>
+                        Missing {packetMissing.length}
+                      </div>
+                    )}
+                  </td>
                 </tr>
               );
             })}
