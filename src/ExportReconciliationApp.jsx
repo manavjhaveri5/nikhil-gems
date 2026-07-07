@@ -511,6 +511,10 @@ const ngUid = () => Math.random().toString(36).slice(2, 10);
    bank, to tick off the ones we already hold documents for. */
 const NG_BANK_SB_KEY = "er-ng-bank-sbs-v1";
 const sbKey = v => String(v ?? "").replace(/\D/g, "").replace(/^0+/, "");
+const displaySbNumber = v => {
+  const nums = String(v ?? "").match(/\d+/g);
+  return nums?.length ? nums[nums.length - 1] : String(v ?? "");
+};
 const blankManualNgInvoiceSet = () => ({
   invNo: "",
   date: new Date().toISOString().slice(0, 10),
@@ -1032,7 +1036,7 @@ function NgInvoiceSheet() {
                       {s.key === "sbill" && inv.sbNo && (
                         <div title={bankRep ? (bankDue.has(sbKey(inv.sbNo)) ? "This SB is still outstanding on the bank report" : "Not on the bank outstanding report (as of import) — cleared") : "SB number read from the uploaded document"}
                           style={{ marginTop: 4, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", color: !bankRep ? C.inkFaint : bankDue.has(sbKey(inv.sbNo)) ? C.amber : C.green }}>
-                          Shipping Bill number : {inv.sbNo}
+                          Shipping Bill number : {displaySbNumber(inv.sbNo)}
                         </div>
                       )}
                     </td>
