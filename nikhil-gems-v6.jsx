@@ -11530,7 +11530,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
               📎 Upload Shipping Bill
             </button>
             <button type="button" onClick={()=>pickAttachment("HAWB")} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
-              📎 Upload HAWB / AWB
+              📎 Upload HAWB / HBL
             </button>
             <button type="button" onClick={()=>pickAttachment("")} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
               📎 Upload Other File
@@ -14914,7 +14914,7 @@ function ReconApp({onHome}){
                             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                               <Field label="SB Number"><input value={r.sbNumber||""} onChange={e=>patchInv(inv.id,{sbNumber:e.target.value})} style={{...FI,fontSize:12}} placeholder="e.g. 1234567"/></Field>
                               <Field label="SB Date"><input type="date" value={r.sbDate||""} onChange={e=>patchInv(inv.id,{sbDate:e.target.value})} style={{...FI,fontSize:12}}/></Field>
-                              <Field label="HAWB / AWB / BL"><input value={r.hawb||""} onChange={e=>patchInv(inv.id,{hawb:e.target.value})} style={{...FI,fontSize:12}} placeholder="Airway bill no."/></Field>
+                              <Field label="HAWB / HBL / BL"><input value={r.hawb||""} onChange={e=>patchInv(inv.id,{hawb:e.target.value})} style={{...FI,fontSize:12}} placeholder="Airway bill no."/></Field>
                               <Field label="FOB Value"><input type="number" value={r.fobValue||""} onChange={e=>patchInv(inv.id,{fobValue:e.target.value})} style={{...FI,fontSize:12}} placeholder={`${inv.currency} amount`}/></Field>
                             </div>
                           </div>
@@ -14945,7 +14945,7 @@ function ReconApp({onHome}){
                             <DocSlot label="1. Shipping Bill" docKey="sb" invId={inv.id}/>
                             <DocSlot label="2. Commercial Invoice" docKey="invoice" invId={inv.id}/>
                             <DocSlot label="3. Packing List" docKey="packingList" invId={inv.id}/>
-                            <DocSlot label="4. B/L or AWB" docKey="bl" invId={inv.id}/>
+                            <DocSlot label="4. B/L or HBL" docKey="bl" invId={inv.id}/>
                             <DocSlot label="5. GR Form / SDF" docKey="grForm" invId={inv.id}/>
                             <DocSlot label="6. IEC Copy" docKey="iec" invId={inv.id}/>
                             <DocSlot label="7. FIRC" docKey="firc" invId={inv.id}/>

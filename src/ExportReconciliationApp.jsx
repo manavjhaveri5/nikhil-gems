@@ -466,7 +466,7 @@ const learner = (() => {
    Nikhil Gems reconciles per-invoice (payments land against invoices, not
    FIRC→SB like Atyahara). One row per commercial invoice, pulled live from
    the Invoices module. Each row is an "NG set": payment received + shipping
-   bill + HAWB/AWB + shipping label + BOI declaration (+ other forms).
+   bill + HAWB/HBL + shipping label + BOI declaration (+ other forms).
    Document slots read/write invoice.attachments, so a file uploaded here
    shows up on the invoice inside the Invoices module and vice-versa. */
 const NG_INV_KEY = "ng-invoices-v2";
@@ -484,7 +484,7 @@ const NG_DOC_SLOTS = [
   { key: "sbill", label: "Shipping Bill",   match: /shipping\s*bill|\bsb\b/i },
   // HAWB and the shipping label are the same document for NG, so label
   // uploads land in this slot too (incl. rows uploaded before the merge).
-  { key: "hawb",  label: "HAWB / AWB",      match: /hawb|awb|airway|air\s*way|bill\s*of\s*lading|label/i },
+  { key: "hawb",  label: "HAWB / HBL",      match: /hawb|awb|hbl|airway|air\s*way|bill\s*of\s*lading|label/i },
   { key: "decl",  label: "BOI Declaration", match: /declaration|\bboi\b/i },
 ];
 const ngSlotOf = att => {
