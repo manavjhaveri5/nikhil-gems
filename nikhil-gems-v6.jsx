@@ -9095,7 +9095,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
           </div>
 
           <datalist id="purchase-shapes">{shapeOptions.map(s=><option key={s} value={s}/>)}</datalist>
-          <datalist id="purchase-acct-descs">{shapeOptions.map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="purchase-acct-descs">{[...new Set([...customsDescs.map(d=>d.desc).filter(Boolean),...shapeOptions])].map(s=><option key={s} value={s}/>)}</datalist>
 
           <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"12px 16px",marginBottom:12,display:"flex",gap:18,flexWrap:"wrap",alignItems:"center"}}>
             <div style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Add this bill to</div>
@@ -9145,56 +9145,67 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
             </div>
             {(draft.items||[]).length===0
               ? <div style={{padding:"16px 14px",fontSize:12,color:C.inkFaint}}>No lines yet — click “+ Add line”, or upload a bill to auto-fill.</div>
-              : (draft.items||[]).map((item,idx)=>{
-                  const physOn=canAddPhysical&&physEnabled;
-                  const tot=lineBase(item)+calcGST(lineBase(item),item.gst);
+              : (()=>{
+                  // Spreadsheet view: one header row, then a compact row per line.
+                  const GT="minmax(190px,2.4fr) 96px 88px 74px 74px 108px 80px 26px";
+                  const HCELL={fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5};
+                  const SCI={...CI,padding:"6px 8px"};
                   return(
-                    <div key={item.id} style={{borderTop:idx?`1px solid ${C.border}`:"none",padding:"12px 14px"}}>
-                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr .95fr .8fr .6fr .55fr .75fr .6fr 24px",gap:8,alignItems:"end"}}>
-                        <Field label="Stone / material"><input value={item.material||""} onChange={e=>updateItem(idx,{material:e.target.value})} style={CI} placeholder="agate"/></Field>
-                        <Field label="Shape"><input value={item.shape||""} onChange={e=>setShape(idx,e.target.value)} style={CI} placeholder="Sphere" list="purchase-shapes"/></Field>
-                        <Field label="Total"><div style={{...CI,background:C.card,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700}}>{inr(tot)}</div></Field>
-                        <Field label="HSN"><input value={item.hsn||"7103"} onChange={e=>updateItem(idx,{hsn:e.target.value})} style={CI}/></Field>
-                        <Field label="GST"><select value={item.gst||"0.25"} onChange={e=>updateItem(idx,{gst:e.target.value})} style={{...CI,cursor:"pointer"}}>{GSTS.map(g=><option key={g} value={g}>{g}%</option>)}</select></Field>
-                        <Field label="Unit"><select value={item.unit||"kg"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
-                        <Field label="Price"><input type="number" value={item.rate??""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
-                        <Field label="Qty"><input type="number" value={item.qty??""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
-                        <button onClick={()=>delItem(idx)} title="Delete line" style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1,paddingBottom:6}}>×</button>
+                  <div style={{overflowX:"auto"}}>
+                    <div style={{minWidth:mob?820:"auto"}}>
+                      <div style={{display:"grid",gridTemplateColumns:GT,gap:8,padding:"8px 14px",borderBottom:`1px solid ${C.border}`,background:C.card,alignItems:"center"}}>
+                        <div style={HCELL}>Description</div><div style={HCELL}>HSN</div><div style={{...HCELL,textAlign:"right"}}>Rate</div><div style={HCELL}>Unit</div><div style={{...HCELL,textAlign:"right"}}>Qty</div><div style={{...HCELL,textAlign:"right"}}>Total</div><div style={HCELL}>GST</div><div/>
                       </div>
-                      <div style={{marginTop:8}}>
-                        <Field label="Accounting / customs description"><input value={item.desc||item.catDesc||""} onChange={e=>setAccountingDesc(idx,e.target.value)} style={CI} placeholder="Auto-fills from shape · matched to your customs list" list="purchase-acct-descs"/></Field>
-                      </div>
-
-                      {physOn&&(
-                        <div style={{background:"#F4FFFC",border:`1px solid ${C.teal}`,borderRadius:8,padding:10,marginTop:10}}>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10}}>
-                            <div style={{fontSize:11,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5}}>Physical stock</div>
-                            <button className="bs" style={{fontSize:11,padding:"4px 9px"}} onClick={()=>addPhysEntry(idx)}>+ Entry</button>
-                          </div>
-                          {(item.physicalEntries||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint,marginBottom:6}}>No physical entry yet — click “+ Entry” to add one.</div>}
-                          {(item.physicalEntries||[]).map((entry,eIdx)=>(
-                            <div key={entry.id} style={{borderTop:eIdx?`1px dashed ${C.border}`:"none",paddingTop:eIdx?9:0,marginTop:eIdx?9:0}}>
-                              <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}><button onClick={()=>delPhysEntry(idx,eIdx)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:11}}>Remove entry</button></div>
-                              <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr .85fr .65fr .65fr .75fr .85fr",gap:8,alignItems:"end"}}>
-                                <Field label="Material"><input value={entry.material||""} onChange={e=>setPhys(idx,eIdx,"material",e.target.value)} style={CI}/></Field>
-                                <Field label="Shape"><input value={entry.shape||""} onChange={e=>setPhys(idx,eIdx,"shape",e.target.value)} style={CI}/></Field>
-                                <Field label="Qty"><input type="number" value={entry.qty||""} onChange={e=>setPhys(idx,eIdx,"qty",e.target.value)} style={CI}/></Field>
-                                <Field label="Weight"><div style={{display:"grid",gridTemplateColumns:"1fr 52px",gap:4}}><input type="number" value={entry.qty2||""} onChange={e=>setPhys(idx,eIdx,"qty2",e.target.value)} style={CI}/><select value={entry.unit2||"kg"} onChange={e=>setPhys(idx,eIdx,"unit2",e.target.value)} style={{...CI,padding:"4px 3px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div></Field>
-                                <Field label="Location"><input value={entry.location||""} onChange={e=>setPhys(idx,eIdx,"location",e.target.value)} style={CI} placeholder="Box / shelf"/></Field>
-                                <Field label="Product type"><select value={entry.productType||""} onChange={e=>setPhys(idx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}><option value="">Select</option>{PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}</select></Field>
-                                <Field label="Origin"><input value={entry.origin||""} onChange={e=>setPhys(idx,eIdx,"origin",e.target.value)} style={CI}/></Field>
-                                <Field label="Grade"><input value={entry.grade||""} onChange={e=>setPhys(idx,eIdx,"grade",e.target.value)} style={CI}/></Field>
-                                <Field label="Size"><input value={entry.size||""} onChange={e=>setPhys(idx,eIdx,"size",e.target.value)} style={CI}/></Field>
-                                <Field label="Cost"><input type="number" value={entry.costPrice||""} onChange={e=>setPhys(idx,eIdx,"costPrice",e.target.value)} style={CI}/></Field>
-                                <Field label="Vendor"><input value={entry.vendor||draft.supplier||""} onChange={e=>setPhys(idx,eIdx,"vendor",e.target.value)} style={CI}/></Field>
-                              </div>
+                      {(draft.items||[]).map((item,idx)=>{
+                        const physOn=canAddPhysical&&physEnabled;
+                        const tot=lineBase(item)+calcGST(lineBase(item),item.gst);
+                        return(
+                          <div key={item.id} style={{borderBottom:`1px solid ${C.border}`,padding:"8px 14px"}}>
+                            <div style={{display:"grid",gridTemplateColumns:GT,gap:8,alignItems:"center"}}>
+                              <input value={item.desc||item.catDesc||""} onChange={e=>setAccountingDesc(idx,e.target.value)} style={SCI} placeholder="Customs description" list="purchase-acct-descs"/>
+                              <input value={item.hsn||"7103"} onChange={e=>updateItem(idx,{hsn:e.target.value})} style={SCI}/>
+                              <input type="number" value={item.rate??""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...SCI,textAlign:"right"}} placeholder="0"/>
+                              <select value={item.unit||"kg"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...SCI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
+                              <input type="number" value={item.qty??""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...SCI,textAlign:"right"}} placeholder="0"/>
+                              <div style={{...SCI,background:C.card,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{inr(tot)}</div>
+                              <select value={item.gst||"0.25"} onChange={e=>updateItem(idx,{gst:e.target.value})} style={{...SCI,cursor:"pointer"}}>{GSTS.map(g=><option key={g} value={g}>{g}%</option>)}</select>
+                              <button onClick={()=>delItem(idx)} title="Delete line" style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
                             </div>
-                          ))}
-                        </div>
-                      )}
+
+                            {physOn&&(
+                              <div style={{background:"#F4FFFC",border:`1px solid ${C.teal}`,borderRadius:8,padding:10,marginTop:10}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10}}>
+                                  <div style={{fontSize:11,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5}}>Physical stock</div>
+                                  <button className="bs" style={{fontSize:11,padding:"4px 9px"}} onClick={()=>addPhysEntry(idx)}>+ Entry</button>
+                                </div>
+                                {(item.physicalEntries||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint,marginBottom:6}}>No physical entry yet — click “+ Entry” to add one.</div>}
+                                {(item.physicalEntries||[]).map((entry,eIdx)=>(
+                                  <div key={entry.id} style={{borderTop:eIdx?`1px dashed ${C.border}`:"none",paddingTop:eIdx?9:0,marginTop:eIdx?9:0}}>
+                                    <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}><button onClick={()=>delPhysEntry(idx,eIdx)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:11}}>Remove entry</button></div>
+                                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr .85fr .65fr .65fr .75fr .85fr",gap:8,alignItems:"end"}}>
+                                      <Field label="Material"><input value={entry.material||""} onChange={e=>setPhys(idx,eIdx,"material",e.target.value)} style={CI}/></Field>
+                                      <Field label="Shape"><input value={entry.shape||""} onChange={e=>setPhys(idx,eIdx,"shape",e.target.value)} style={CI}/></Field>
+                                      <Field label="Qty"><input type="number" value={entry.qty||""} onChange={e=>setPhys(idx,eIdx,"qty",e.target.value)} style={CI}/></Field>
+                                      <Field label="Weight"><div style={{display:"grid",gridTemplateColumns:"1fr 52px",gap:4}}><input type="number" value={entry.qty2||""} onChange={e=>setPhys(idx,eIdx,"qty2",e.target.value)} style={CI}/><select value={entry.unit2||"kg"} onChange={e=>setPhys(idx,eIdx,"unit2",e.target.value)} style={{...CI,padding:"4px 3px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div></Field>
+                                      <Field label="Location"><input value={entry.location||""} onChange={e=>setPhys(idx,eIdx,"location",e.target.value)} style={CI} placeholder="Box / shelf"/></Field>
+                                      <Field label="Product type"><select value={entry.productType||""} onChange={e=>setPhys(idx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}><option value="">Select</option>{PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}</select></Field>
+                                      <Field label="Origin"><input value={entry.origin||""} onChange={e=>setPhys(idx,eIdx,"origin",e.target.value)} style={CI}/></Field>
+                                      <Field label="Grade"><input value={entry.grade||""} onChange={e=>setPhys(idx,eIdx,"grade",e.target.value)} style={CI}/></Field>
+                                      <Field label="Size"><input value={entry.size||""} onChange={e=>setPhys(idx,eIdx,"size",e.target.value)} style={CI}/></Field>
+                                      <Field label="Cost"><input type="number" value={entry.costPrice||""} onChange={e=>setPhys(idx,eIdx,"costPrice",e.target.value)} style={CI}/></Field>
+                                      <Field label="Vendor"><input value={entry.vendor||draft.supplier||""} onChange={e=>setPhys(idx,eIdx,"vendor",e.target.value)} style={CI}/></Field>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
+                  </div>
                   );
-                })}
+                })()}
           </div>
 
           <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,justifyContent:"flex-end",flexWrap:"wrap"}}>
