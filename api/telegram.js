@@ -1499,17 +1499,28 @@ async function chatWithOpenAI(history) {
   // making it re-log/re-announce earlier transactions. The current turn is last, so kept.
   const messages = [{ role: "system", content: systemContent }, ...sanitizeHistory(history).slice(-10)];
 
+  // gpt-4o has low org rate limits and the agentic tool-loop makes several calls
+  // per message, so it 429s easily. Default to a mini model (much higher limits,
+  // cheaper, fine for this chat/logging use) and retry transient 429/5xx with backoff.
+  const MODEL = process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
   const callOpenAI = async (msgs) => {
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.OPENAI_KEY}` },
-      body: JSON.stringify({ model: "gpt-4o", messages: msgs, tools: TOOLS, tool_choice: "auto", max_tokens: 2000, temperature: 0.2 })
-    });
-    if (!r.ok) {
+    let lastErr;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.OPENAI_KEY}` },
+        body: JSON.stringify({ model: MODEL, messages: msgs, tools: TOOLS, tool_choice: "auto", max_tokens: 2000, temperature: 0.2 })
+      });
+      if (r.ok) return r.json();
       const err = await r.text();
-      throw new Error(`OpenAI error ${r.status}: ${err.slice(0, 200)}`);
+      lastErr = new Error(`OpenAI error ${r.status}: ${err.slice(0, 200)}`);
+      if ((r.status === 429 || r.status >= 500) && attempt < 3) {
+        await new Promise(res => setTimeout(res, 800 * 2 ** attempt + Math.random() * 400));
+        continue;
+      }
+      throw lastErr;
     }
-    return r.json();
+    throw lastErr || new Error("OpenAI request failed");
   };
 
   let data = await callOpenAI(messages);
