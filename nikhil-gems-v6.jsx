@@ -9126,31 +9126,34 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
               const physOn=canAddPhysical&&physEnabled;
               const customHit=findCustom(item.shape);
               return(
-                <div key={item.id} style={{borderTop:idx?`1px solid ${C.border}`:"none",padding:14,background:physOn?"#F8FFFE":"transparent"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:10}}>
-                    <div style={{fontSize:11,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Line {idx+1}</div>
+                <div key={item.id} style={{borderTop:idx?`1px solid ${C.border}`:"none",padding:14,background:C.card}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:12}}>
+                    <div style={{fontSize:12,fontWeight:800,color:C.ink,textTransform:"uppercase",letterSpacing:.5}}>Line {idx+1}</div>
                     <button onClick={()=>delItem(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>Remove</button>
                   </div>
 
-                  <div style={{fontSize:10,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>What we actually bought</div>
-                  <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr 1fr .65fr .65fr .7fr",gap:8,alignItems:"end",marginBottom:10}}>
-                    <Field label="Bill text"><input value={item.purchaseDesc||item.desc||""} onChange={e=>updateItem(idx,{purchaseDesc:e.target.value})} style={CI} placeholder="Exact line from bill"/></Field>
-                    <Field label="Stone / material"><input value={item.material||""} onChange={e=>updateItem(idx,{material:e.target.value})} style={CI} placeholder="Botryoidal Fluorite"/></Field>
-                    <Field label="Shape"><input value={item.shape||""} onChange={e=>setShape(idx,e.target.value)} style={CI} placeholder="Palmstone" list="purchase-shapes"/></Field>
-                    <Field label="Qty"><input type="number" value={item.boughtQty??item.qty??""} onChange={e=>updateBought(idx,"boughtQty",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
-                    <Field label="Unit"><select value={item.boughtUnit||item.unit||"pcs"} onChange={e=>updateBought(idx,"boughtUnit",e.target.value)} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
-                    <Field label="Rate"><input type="number" value={item.boughtRate??item.rate??""} onChange={e=>updateBought(idx,"boughtRate",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                  {/* Box 1 — the real purchase, exactly as it reads on the vendor's bill */}
+                  <div style={{background:C.surface,border:`1.5px solid ${C.teal}`,borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5,marginBottom:9}}>1 · What we actually bought</div>
+                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr 1fr .65fr .65fr .7fr",gap:8,alignItems:"end"}}>
+                      <Field label="Bill text"><input value={item.purchaseDesc||item.desc||""} onChange={e=>updateItem(idx,{purchaseDesc:e.target.value})} style={CI} placeholder="Exact line from bill"/></Field>
+                      <Field label="Stone / material"><input value={item.material||""} onChange={e=>updateItem(idx,{material:e.target.value})} style={CI} placeholder="Botryoidal Fluorite"/></Field>
+                      <Field label="Shape"><input value={item.shape||""} onChange={e=>setShape(idx,e.target.value)} style={CI} placeholder="Palmstone" list="purchase-shapes"/></Field>
+                      <Field label="Qty"><input type="number" value={item.boughtQty??item.qty??""} onChange={e=>updateBought(idx,"boughtQty",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                      <Field label="Unit"><select value={item.boughtUnit||item.unit||"pcs"} onChange={e=>updateBought(idx,"boughtUnit",e.target.value)} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
+                      <Field label="Rate"><input type="number" value={item.boughtRate??item.rate??""} onChange={e=>updateBought(idx,"boughtRate",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                    </div>
+                    {customHit&&<div style={{fontSize:10,color:C.green,marginTop:8}}>✓ Customs match: {customHit.desc}{customHit.hsn?` · HSN ${customHit.hsn}`:""}</div>}
                   </div>
 
-                  {customHit&&<div style={{fontSize:10,color:C.green,margin:"-3px 0 9px"}}>Customs match: {customHit.desc}{customHit.hsn?` · HSN ${customHit.hsn}`:""}</div>}
-
+                  {/* Box 2 — what actually posts to the books / customs (prefilled, editable) */}
                   {acctEnabled&&(()=>{
                     const bq=item.boughtQty??item.qty??"";const br=item.boughtRate??item.rate??"";const bu=item.boughtUnit||item.unit||"pcs";
                     const diverged=(String(item.qty??"")!==String(bq))||(String(item.rate??"")!==String(br))||((item.unit||"pcs")!==bu);
                     return(
                     <div style={{background:C.card,border:`1px solid ${C.goldBright}`,borderRadius:8,padding:10,marginBottom:10}}>
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:9,flexWrap:"wrap"}}>
-                        <div style={{fontSize:11,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:.5}}>Accounting stock — what goes on the books</div>
+                        <div style={{fontSize:11,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:.5}}>2 · Accounting stock — what goes on the books</div>
                         {diverged
                           ?<button onClick={()=>updateItem(idx,{qty:bq,rate:br,unit:bu})} style={{background:"none",border:`1px solid ${C.goldBright}`,color:C.gold,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700,cursor:"pointer"}} title="Reset accounting qty/unit/rate to match what you bought">↺ Match bill</button>
                           :<span style={{fontSize:10,color:C.inkFaint}}>prefilled from the bill · edit if customs differs</span>}
