@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { loadK, loadKFresh, saveK, mob, onCacheRefresh, upsertVersionedItemK } from "./utils.js";
+import { loadK, loadKFresh, saveK, mob, onCacheRefresh, upsertVersionedItemK, deleteVersionedItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { fillExportBillForm } from "./fillExportBillForm.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
@@ -511,6 +511,15 @@ const ngUid = () => Math.random().toString(36).slice(2, 10);
    bank, to tick off the ones we already hold documents for. */
 const NG_BANK_SB_KEY = "er-ng-bank-sbs-v1";
 const sbKey = v => String(v ?? "").replace(/\D/g, "").replace(/^0+/, "");
+const blankManualNgInvoiceSet = () => ({
+  invNo: "",
+  date: new Date().toISOString().slice(0, 10),
+  buyerName: "",
+  currency: "USD",
+  totalAmt: "",
+  paidAmount: "",
+  notes: "",
+});
 async function loadSheetJs() {
   if (window.XLSX) return window.XLSX;
   for (const url of [
@@ -557,6 +566,9 @@ function NgInvoiceSheet() {
   const [bankPanelOpen, setBankPanelOpen] = useState(false); // panel shows once after an import, hidden on reload
   const [scan, setScan] = useState(null);   // {done, total} while AI-scanning uploaded SBs
   const [brcPrompt, setBrcPrompt] = useState(null); // invoice just marked done, missing its BRC
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manual, setManual] = useState(blankManualNgInvoiceSet);
+  const [manualBusy, setManualBusy] = useState(false);
   const fileRef = useRef(null);
   const bankFileRef = useRef(null);
   const pendingSlot = useRef(null);         // {inv, slot}
@@ -594,6 +606,58 @@ function NgInvoiceSheet() {
     if (!latest) throw new Error("Invoice not found — it may have been deleted");
     const list = await upsertVersionedItemK(NG_INV_KEY, patch(latest), { user: "Admin" });
     setInvoices(list);
+  };
+
+  const addManualSet = async () => {
+    const invNo = manual.invNo.trim();
+    const buyer = manual.buyerName.trim();
+    const total = +String(manual.totalAmt || "").replace(/,/g, "");
+    const paid = +String(manual.paidAmount || "").replace(/,/g, "");
+    if (!invNo || !buyer || !(total > 0)) {
+      setMsg({ ok: false, text: "Enter invoice number, buyer, and amount." });
+      return;
+    }
+    const curr = await loadKFresh(NG_INV_KEY);
+    if ((Array.isArray(curr) ? curr : []).some(i => String(i.invNo || "").trim().toLowerCase() === invNo.toLowerCase())) {
+      setMsg({ ok: false, text: `${invNo} already exists. Search it and upload documents on that row.` });
+      return;
+    }
+    setManualBusy(true); setMsg(null);
+    try {
+      const paidAmt = paid > 0 ? paid : 0;
+      const id = `manual-ng-${Date.now()}-${ngUid()}`;
+      const itemAmt = Math.max(total, 0);
+      const inv = {
+        id, invNo, type: "commercial", date: manual.date || new Date().toISOString().slice(0, 10),
+        dueDate: "", buyerId: "", buyerName: buyer, buyer,
+        currency: manual.currency || "USD", portLading: "Mumbai, India", portDischarge: "",
+        terms: "", items: [{ id: ngUid(), desc: "Manual export reconciliation entry", hsn: "71031029", qty: "1", unit: "lot", rate: String(itemAmt), amt: itemAmt, igst: 0 }],
+        totalAmt: itemAmt, paidAmount: paidAmt, payments: [],
+        status: paidAmt >= itemAmt - 0.01 ? "paid" : paidAmt > 0 ? "partial" : "sent",
+        goodsShipped: false, attachments: [], manualExportRecon: true, source: "export-recon-manual",
+        notes: manual.notes || "Added manually from Export Reconciliation invoice sets",
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      const list = await upsertVersionedItemK(NG_INV_KEY, inv, { user: "Admin" });
+      setInvoices(list);
+      setManual(blankManualNgInvoiceSet());
+      setManualOpen(false);
+      setMsg({ ok: true, text: `${invNo} added. You can upload Shipping Bill, HAWB / HBL, and BOI Declaration on its row now.` });
+    } catch (err) {
+      setMsg({ ok: false, text: `Manual entry failed: ${err?.message || "check connection"}` });
+    } finally { setManualBusy(false); }
+  };
+
+  const deleteManualSet = async inv => {
+    if (!inv.manualExportRecon) return;
+    if (!window.confirm(`Remove manual invoice set ${inv.invNo}? Documents attached to this manual row will no longer be linked.`)) return;
+    try {
+      const list = await deleteVersionedItemK(NG_INV_KEY, inv, { user: "Admin" });
+      setInvoices(list);
+      setMsg({ ok: true, text: `${inv.invNo} removed.` });
+    } catch (err) {
+      setMsg({ ok: false, text: `Remove failed: ${err?.message || "check connection"}` });
+    }
   };
 
   const pickFile = (inv, slot) => { pendingSlot.current = { inv, slot }; fileRef.current?.click(); };
@@ -809,6 +873,10 @@ function NgInvoiceSheet() {
             <input type="checkbox" checked={missingOnly} onChange={e => setMissingOnly(e.target.checked)} />
             Missing docs only
           </label>
+          <button onClick={() => setManualOpen(o => !o)}
+            style={{ background: manualOpen ? C.goldLight : C.surface, border: `1px solid ${manualOpen ? C.gold : C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12, fontWeight: 700, color: manualOpen ? C.amber : C.inkMid, cursor: "pointer", whiteSpace: "nowrap" }}>
+            + Manual entry
+          </button>
           {bankRep && !bankPanelOpen && (
             <button onClick={() => setBankPanelOpen(true)}
               style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12, fontWeight: 600, color: C.inkFaint, cursor: "pointer", whiteSpace: "nowrap" }}>
@@ -821,6 +889,52 @@ function NgInvoiceSheet() {
           </button>
         </div>
       </div>
+      {manualOpen && (
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1.05fr 1.4fr .85fr .75fr .9fr .9fr", gap: 8, alignItems: "end" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".35px" }}>Invoice No.</span>
+              <input value={manual.invNo} onChange={e => setManual(v => ({ ...v, invNo: e.target.value }))} placeholder="NG-29/26-27"
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 9px", fontSize: 12.5, color: C.ink, outline: "none" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".35px" }}>Buyer</span>
+              <input value={manual.buyerName} onChange={e => setManual(v => ({ ...v, buyerName: e.target.value }))} placeholder="Buyer name"
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 9px", fontSize: 12.5, color: C.ink, outline: "none" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".35px" }}>Date</span>
+              <input type="date" value={manual.date} onChange={e => setManual(v => ({ ...v, date: e.target.value }))}
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 9px", fontSize: 12.5, color: C.ink, outline: "none" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".35px" }}>Currency</span>
+              <select value={manual.currency} onChange={e => setManual(v => ({ ...v, currency: e.target.value }))}
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 9px", fontSize: 12.5, color: C.ink, outline: "none" }}>
+                {["USD", "JPY", "EUR", "GBP", "AUD"].map(c => <option key={c}>{c}</option>)}
+              </select>
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".35px" }}>Invoice Amount</span>
+              <input type="number" inputMode="decimal" value={manual.totalAmt} onChange={e => setManual(v => ({ ...v, totalAmt: e.target.value }))} placeholder="0.00"
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 9px", fontSize: 12.5, color: C.ink, outline: "none" }} />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".35px" }}>Received</span>
+              <input type="number" inputMode="decimal" value={manual.paidAmount} onChange={e => setManual(v => ({ ...v, paidAmount: e.target.value }))} placeholder="optional"
+                style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 9px", fontSize: 12.5, color: C.ink, outline: "none" }} />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 9, alignItems: "center" }}>
+            <input value={manual.notes} onChange={e => setManual(v => ({ ...v, notes: e.target.value }))} placeholder="Optional notes"
+              style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 9px", fontSize: 12.5, color: C.ink, outline: "none", minWidth: 0 }} />
+            <button onClick={addManualSet} disabled={manualBusy}
+              style={{ background: C.ink, border: `1px solid ${C.ink}`, color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 12.5, fontWeight: 800, cursor: manualBusy ? "default" : "pointer", whiteSpace: "nowrap", opacity: manualBusy ? .6 : 1 }}>
+              {manualBusy ? "Saving..." : "Add row"}
+            </button>
+          </div>
+        </div>
+      )}
       {bankRep && bankPanelOpen && (
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 12 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 9 }}>
@@ -887,6 +1001,13 @@ function NgInvoiceSheet() {
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <div style={{ fontWeight: 700 }}>{inv.invNo || "—"}</div>
                     <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>{inv.date || ""}</div>
+                    {inv.manualExportRecon && (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
+                        <span style={{ background: C.blueBg, color: C.blue, border: `1px solid ${C.blue}`, borderRadius: 999, padding: "1px 6px", fontSize: 9.5, fontWeight: 800 }}>Manual</span>
+                        <button onClick={() => deleteManualSet(inv)} title="Remove manual row"
+                          style={{ background: "none", border: "none", color: C.red, cursor: "pointer", padding: 0, fontSize: 10.5, fontWeight: 700 }}>Remove</button>
+                      </div>
+                    )}
                   </td>
                   <td style={{ ...td, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={buyerName(inv)}>{buyerName(inv)}</td>
                   <td style={{ ...td, whiteSpace: "nowrap", fontWeight: 600 }}>{inv.currency || ""} {fmtAmt(inv.totalAmt)}</td>
