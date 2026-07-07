@@ -16,7 +16,7 @@ const C1 = {
   invNo:     { x: 150, y: 548 },                      // right of "1. Bill Details :"
   currency:  { x: 150, y: 533 },                      // right of "Bill Currency"
   amtFigure: { x: 150, y: 517 },                      // right of "Bill amount (In figure)"
-  amtWords:  { x: 300, y: 519, size: 7, wrap: 42 },   // right column "(In words)"
+  amtWords:  { x: 355, y: 518, size: 8, maxW: 219 },  // value cell right of "(In words)" (x350–578)
   portLoad:  { x: 150, y: 469 },                      // right of "Port of loading"
   portDest:  { x: 410, y: 469 },                      // right of "Port of Destination"
   origin:    { x: 150, y: 407 },                      // right of "Country of Origin of goods"
@@ -66,20 +66,6 @@ function amountInWords(currency, amount) {
   return s + ' Only';
 }
 
-// Greedy word-wrap into lines of at most `max` chars.
-function wrapText(text, max) {
-  const words = String(text).split(/\s+/);
-  const lines = [];
-  let line = '';
-  for (const w of words) {
-    if (!line) { line = w; }
-    else if ((line + ' ' + w).length <= max) { line += ' ' + w; }
-    else { lines.push(line); line = w; }
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-
 /**
  * @param {Object}     data
  * @param {Uint8Array|ArrayBuffer} data.templateBytes  the export_bill_form.pdf bytes
@@ -122,10 +108,11 @@ export async function fillExportBillForm(data) {
   });
   dt(C1.amtFigure.x, C1.amtFigure.y, `${currency} ${amtStr}`, true);
 
-  // amount in words (may wrap onto a second line)
-  wrapText(amountInWords(currency, amount), C1.amtWords.wrap).slice(0, 2).forEach((ln, i) => {
-    dt(C1.amtWords.x, C1.amtWords.y - i * 9, ln, false, C1.amtWords.size);
-  });
+  // amount in words — single line, auto-shrunk to fit its cell width
+  const wordsStr = amountInWords(currency, amount);
+  let ws = C1.amtWords.size;
+  while (ws > 5 && hv.widthOfTextAtSize(wordsStr, ws) > C1.amtWords.maxW) ws -= 0.5;
+  dt(C1.amtWords.x, C1.amtWords.y, wordsStr, false, ws);
 
   dt(C1.portLoad.x, C1.portLoad.y, portLoading, false);
   dt(C1.portDest.x, C1.portDest.y, portDestination, false);
