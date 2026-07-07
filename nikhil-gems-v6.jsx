@@ -8133,6 +8133,23 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
     const compressed=await compressImage(fd);
     const isImg=compressed.mediaType.startsWith("image");
     fd=compressed;
+    // Feed our Customs Descriptions dataset to the model so it maps each raw bill line to the
+    // canonical customs wording + HSN (semantic match + spelling cleanup) instead of us doing a
+    // brittle exact shape-token match afterwards. Each row may list several shapes for one desc.
+    const customsList=(customsDescs||[]).filter(d=>d.desc).map(d=>`- shapes [${String(d.shape||"").trim()}] => "${d.desc}" (HSN ${d.hsn||"7103"})`).join("\n");
+    const customsBlock=customsList?`
+
+CUSTOMS DESCRIPTIONS (our approved list — the canonical wording used on our export/customs paperwork):
+${customsList}
+
+For each line item you MUST also choose the single best-matching entry from this list, based on the
+material and the form/finish of the goods (e.g. sawn, polished, roughly shaped, heart, sphere,
+palmstone, tumbled, bracelet, geode/rough, etc.). Read the vendor's description even if it is
+misspelled or abbreviated, understand what the item actually is, then:
+- set "acctDesc" to the chosen entry's description copied EXACTLY (this is the corrected, canonical text)
+- set "acctHsn" to that entry's HSN
+If genuinely nothing in the list fits, set "acctDesc" to a cleaned-up version of the bill description
+(fix spelling, expand abbreviations, proper capitalisation) and "acctHsn" to the bill's HSN or 7103.`:"";
     const prompt=`You are extracting data from an Indian GST purchase invoice. Read carefully and extract ALL visible text.
 
 Return ONLY this exact JSON structure, no markdown, no explanation:
@@ -8147,9 +8164,11 @@ Return ONLY this exact JSON structure, no markdown, no explanation:
   "currency": "INR",
   "items": [
     {
-      "purchaseDesc": "item description EXACTLY as written in the Particulars/Description column — do not summarise",
+      "purchaseDesc": "item description EXACTLY as written in the Particulars/Description column — do not summarise or fix spelling here, keep it verbatim",
       "stone": "main stone/material name if obvious, else empty string",
       "shape": "shape/form if obvious e.g. Palmstone, Bracelet, Sphere, Tumble, Cluster, else empty string",
+      "acctDesc": "canonical customs description for this item (see CUSTOMS DESCRIPTIONS instructions below)",
+      "acctHsn": "HSN for the chosen customs description, default 7103",
       "hsn": "HSN code from bill, default 7103 for gems",
       "gst": "GST percentage as number string e.g. '0.25' or '3', check SGST+CGST columns. Default 0.25 if unclear",
       "qty": numeric quantity,
@@ -8160,7 +8179,7 @@ Return ONLY this exact JSON structure, no markdown, no explanation:
   "notes": ""
 }
 
-IMPORTANT: supplierName must be the FULL business name. Extract every line item row separately. If GST columns show SGST 0.125% + CGST 0.125%, the gst value is '0.25'. If GST columns show SGST 1.5% + CGST 1.5%, the gst value is '3'.`;
+IMPORTANT: supplierName must be the FULL business name. Extract every line item row separately. If GST columns show SGST 0.125% + CGST 0.125%, the gst value is '0.25'. If GST columns show SGST 1.5% + CGST 1.5%, the gst value is '3'.${customsBlock}`;
     // GPT-4o handles both images and PDFs natively
     const fileContent=isImg
       ?{type:"image_url",image_url:{url:`data:${fd.mediaType};base64,${fd.b64}`,detail:"high"}}
@@ -8172,13 +8191,19 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
       const purchaseDesc=i.purchaseDesc||i.desc||"";
       const shape=i.shape||"";
       const qty=String(i.qty||"");const unit=i.unit||"pcs";const rate=String(i.rate||"");
-      // Accounting/customs description: match the AI-read shape/text to our customs dataset and
-      // use the canonical entry (avoids the vendor's spelling/wording). Fall back to raw bill text.
-      const hit=customsDescs.find(x=>customsShapeMatch(x.shape,shape))||(purchaseDesc?customsDescs.find(x=>customsShapeMatch(x.shape,purchaseDesc)):null);
+      // Accounting/customs description: prefer the canonical entry the AI matched from our
+      // Customs Descriptions dataset (semantic match + spelling fixed). If the AI's acctDesc
+      // is itself an exact dataset entry, snap its HSN to that entry. Fall back to a local
+      // shape-token match, then to the raw bill text.
+      const aiDesc=String(i.acctDesc||"").trim();
+      const exact=aiDesc?customsDescs.find(x=>String(x.desc||"").trim().toLowerCase()===aiDesc.toLowerCase()):null;
+      const tokenHit=customsDescs.find(x=>customsShapeMatch(x.shape,shape))||(purchaseDesc?customsDescs.find(x=>customsShapeMatch(x.shape,purchaseDesc)):null);
+      const acctDesc=aiDesc||tokenHit?.desc||purchaseDesc;
+      const acctHsn=exact?.hsn||i.acctHsn||tokenHit?.hsn||i.hsn||"7103";
       return{...newPurchaseBillItem(),
         purchaseDesc,material:i.stone||"",shape,
-        desc:hit?.desc||purchaseDesc,catDesc:hit?.desc||purchaseDesc,
-        hsn:hit?.hsn||i.hsn||"7103",gst:String(i.gst||"0.25"),
+        desc:acctDesc,catDesc:acctDesc,
+        hsn:acctHsn,gst:String(i.gst||"0.25"),
         // Accounting side (drives the bill total) + what-we-bought side, both seeded from the bill.
         qty,unit,rate,boughtQty:qty,boughtUnit:unit,boughtRate:rate,
         addToAccountingStock:false,addToPhysicalStock:false};
