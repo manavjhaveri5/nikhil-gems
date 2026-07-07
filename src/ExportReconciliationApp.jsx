@@ -648,14 +648,18 @@ function NgInvoiceSheet() {
         exporterTel: NG_EXPORTER.tel,
         exporterEmail: NG_EXPORTER.email,
       });
-      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `BOI_Export_Bill_${(inv.invNo || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "-")}.pdf`;
-      document.body.appendChild(a); a.click(); a.remove();
-      window.open(url, "_blank");
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setMsg({ ok: true, text: `BOI Export Bill form for ${inv.invNo} generated (3 pages, page 1 pre-filled) — print, sign & seal for submission.` });
+      const fileName = `BOI_Export_Bill_${(inv.invNo || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "-")}.pdf`;
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      // open it for viewing
+      const viewUrl = URL.createObjectURL(blob);
+      window.open(viewUrl, "_blank");
+      setTimeout(() => URL.revokeObjectURL(viewUrl), 60000);
+      // store it against the invoice — shows as a chip; the Generate button
+      // hides until the chip is deleted (then it can be regenerated).
+      const url = await uploadToStorage(`invoice-shipment-docs/ng/${inv.id}/${Date.now()}-${ngUid()}-${fileName}`, blob);
+      const att = { id: ngUid(), label: "BOI Declaration", url, fileName, name: fileName, type: "application/pdf", size: blob.size, uploadedAt: new Date().toISOString() };
+      await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: [...(latest.attachments || []), att] }));
+      setMsg({ ok: true, text: `BOI Export Bill form for ${inv.invNo} generated & saved — print, sign & seal for submission. Delete it to regenerate.` });
     } catch (err) {
       setMsg({ ok: false, text: `Could not generate BOI form: ${err?.message || "check connection"}` });
     } finally { setBusy(null); }
@@ -751,7 +755,7 @@ function NgInvoiceSheet() {
     const genBusy = busy === `${inv.id}:decl-gen`;
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 118 }}>
-        {slot.key === "decl" && (
+        {slot.key === "decl" && !(atts || []).length && (
           <button onClick={() => generateBoiDecl(inv)} disabled={genBusy}
             title="Auto-fill page 1 of the BOI Export Bill form and download it for printing & signing"
             style={{ background: genBusy ? "none" : C.greenBg, border: `1px solid ${C.green}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: genBusy ? "default" : "pointer", color: C.green, fontWeight: 600, textAlign: "left", whiteSpace: "nowrap" }}>
