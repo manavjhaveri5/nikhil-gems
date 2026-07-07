@@ -83,7 +83,6 @@ async function tgFileUrl(fileId) {
 let _ctx = null;
 // Request-scoped: the file (PDF/photo) the user attached in the current message, if any.
 let _pendingFile = null;
-let _pendingFileBuffer = null;
 let _currentText = "";
 let _currentHasVision = false;
 
@@ -112,19 +111,6 @@ const todayStr = () => {
 const fmtMoney = (n, cur = "INR") => {
   const sym = { INR: "₹", USD: "$", JPY: "¥", EUR: "€", GBP: "£", AUD: "A$" };
   return (sym[cur] || cur + " ") + Number(n || 0).toLocaleString("en-IN");
-};
-const parseDateLoose = s => {
-  const v = String(s || "").trim();
-  let m = v.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
-  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
-  m = v.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/);
-  if (!m) return "";
-  const yyyy = m[3].length === 2 ? `20${m[3]}` : m[3];
-  return `${yyyy}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-};
-const parseNum = s => {
-  const n = Number(String(s || "").replace(/,/g, ""));
-  return Number.isFinite(n) ? n : null;
 };
 
 // ── Activity log ──────────────────────────────────────────────────────────────
@@ -320,28 +306,6 @@ const TOOLS = [
           notes: { type: "string", description: "Optional additional context" }
         },
         required: ["type", "amount", "currency", "account"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "log_finance_transfer",
-      description: "Add an internal transfer/conversion between two own Finance accounts, such as EEFC to current account/BOI, USD cash to EEFC, or bank-to-bank transfer. Use this instead of log_finance_transaction for transfers between Nikhil's own accounts.",
-      parameters: {
-        type: "object",
-        properties: {
-          from_account: { type: "string", description: "Source account name/keyword, e.g. EEFC, USD Cash" },
-          to_account: { type: "string", description: "Destination account name/keyword, e.g. current, BOI, Bank of India 0451" },
-          amount_from: { type: "number", description: "Amount leaving the source account" },
-          currency_from: { type: "string", description: "Currency leaving the source account, e.g. USD" },
-          amount_to: { type: "number", description: "Amount credited to the destination account, if known" },
-          currency_to: { type: "string", description: "Currency credited to the destination account, e.g. INR" },
-          rate: { type: "number", description: "Conversion rate from source to destination. If amount_to is known this can be omitted." },
-          date: { type: "string", description: "YYYY-MM-DD, defaults to today" },
-          notes: { type: "string", description: "Reference/remittance details and charges" }
-        },
-        required: ["from_account", "to_account", "amount_from"]
       }
     }
   },
@@ -798,32 +762,6 @@ function computeBalances(accs, txns) {
   return bals;
 }
 
-function accountSearchText(a) {
-  const bits = [a?.name, a?.id, a?.type, a?.currency].filter(Boolean).join(" ").toLowerCase();
-  const aliases = [];
-  if (/bank of india|boi|0451/.test(bits)) aliases.push("boi bank of india current current account operative 006420110000451 0451 inr");
-  if (/eefc/.test(bits)) aliases.push("eefc foreign currency usd dollar export");
-  return `${bits} ${aliases.join(" ")}`;
-}
-function findFinanceAccount(accs, query, currency = "") {
-  const q = String(query || "").toLowerCase().trim();
-  const cur = String(currency || "").toUpperCase();
-  if (!q && !cur) return null;
-  const words = q.split(/[^a-z0-9]+/).filter(Boolean);
-  const active = (accs || []).filter(a => a.active !== false);
-  const scored = active.map(a => {
-    const hay = accountSearchText(a);
-    let score = 0;
-    if (cur && String(a.currency || "").toUpperCase() === cur) score += 2;
-    if (q && hay.includes(q)) score += 8;
-    for (const w of words) if (hay.includes(w)) score += w.length >= 4 ? 2 : 1;
-    if (/\bcurrent\b/.test(q) && /bank of india|boi|0451/.test(hay)) score += 10;
-    if (/\beefc\b/.test(q) && /eefc/.test(hay)) score += 10;
-    return { a, score };
-  }).sort((x, y) => y.score - x.score);
-  return scored[0]?.score > 0 ? scored[0].a : null;
-}
-
 async function execGetFinanceAccounts({ account_name } = {}) {
   const [accounts, transactions, rates] = await Promise.all([
     loadK(_ctx.finAccs), loadK(_ctx.finTxns), loadK(_ctx.rates),
@@ -881,11 +819,8 @@ async function storePendingFile(targetId) {
   const fileUrl = await tgFileUrl(_pendingFile.fileId);
   if (!fileUrl) return null;
   try {
-    const buf = _pendingFileBuffer || await (async () => {
-      const resp = await fetch(fileUrl);
-      return Buffer.from(await resp.arrayBuffer());
-    })();
-    _pendingFileBuffer = buf;
+    const resp = await fetch(fileUrl);
+    const buf = Buffer.from(await resp.arrayBuffer());
     const client = sb();
     await client.storage.createBucket("ng-media", { public: true }).catch(() => {});
     const ext = (_pendingFile.name.split(".").pop() || (_pendingFile.mime.includes("pdf") ? "pdf" : _pendingFile.mime.includes("image") ? "jpg" : "bin")).toLowerCase();
@@ -897,85 +832,6 @@ async function storePendingFile(targetId) {
   } catch { return null; }
 }
 
-async function pendingFileBuffer() {
-  if (!_pendingFile) return null;
-  if (_pendingFileBuffer) return _pendingFileBuffer;
-  const fileUrl = await tgFileUrl(_pendingFile.fileId);
-  if (!fileUrl) return null;
-  const resp = await fetch(fileUrl);
-  if (!resp.ok) throw new Error(`Telegram file download failed: ${resp.status}`);
-  _pendingFileBuffer = Buffer.from(await resp.arrayBuffer());
-  return _pendingFileBuffer;
-}
-
-async function extractPendingPdfText() {
-  if (!_pendingFile || !/pdf/i.test(`${_pendingFile.mime} ${_pendingFile.name}`)) return "";
-  const buf = await pendingFileBuffer();
-  if (!buf) return "";
-  const { PDFParse } = await import("pdf-parse");
-  const parser = new PDFParse({ data: buf });
-  try {
-    const result = await parser.getText();
-    return result.text || "";
-  } finally {
-    await parser.destroy().catch(() => {});
-  }
-}
-
-function parseBoiRemittanceAdvice(text) {
-  const s = String(text || "");
-  if (!/FOREIGN\s+INWARD\s+REMITTANCE\s+ADVICE/i.test(s)) return null;
-  if (!/Currency\s+Conversion\s+Details/i.test(s)) return null;
-  const purchase = s.match(/Purchase\s*:\s*([A-Z]{3})\s*([0-9,.]+)\s+([0-9,.]+)\s+([A-Z]{3})\s*([0-9,.]+)/i);
-  if (!purchase) return null;
-  const srcCur = purchase[1].toUpperCase();
-  const srcAmt = parseNum(purchase[2]);
-  const shownRate = parseNum(purchase[3]);
-  const dstCur = purchase[4].toUpperCase();
-  const grossDst = parseNum(purchase[5]);
-  if (!srcAmt || !grossDst) return null;
-  const operative = s.match(/Operative\s+([0-9]{6,})\s+[\s\S]*?\b([A-Z]{3})\s+Cr\s+([0-9,.]+)/i);
-  const credited = operative ? parseNum(operative[3]) : grossDst;
-  const accountNo = operative?.[1] || (s.match(/Account\s+Number\s+([0-9]{6,})/i)?.[1] || "");
-  const remittanceNo = s.match(/Remittance\s+No\.\s*([A-Z0-9]+)/i)?.[1] || "";
-  const transactionId = s.match(/Transaction\s+Id\s*:\s*([A-Z0-9]+)/i)?.[1] || "";
-  const txnDate = parseDateLoose(s.match(/Transaction\s+Date\s*:\s*([0-9./-]+)/i)?.[1]) || todayStr();
-  const charges = credited != null ? Math.max(0, Math.round((grossDst - credited) * 100) / 100) : 0;
-  return {
-    from_account: "EEFC",
-    to_account: accountNo ? `Bank of India ${accountNo} current` : "Bank of India current",
-    amount_from: srcAmt,
-    currency_from: srcCur,
-    amount_to: credited || grossDst,
-    currency_to: dstCur,
-    rate: credited ? credited / srcAmt : shownRate,
-    shownRate,
-    grossDst,
-    charges,
-    date: txnDate,
-    notes: [
-      "BOI foreign inward remittance advice",
-      remittanceNo && `Remittance ${remittanceNo}`,
-      transactionId && `Transaction ${transactionId}`,
-      shownRate && `shown FX ${shownRate}`,
-      grossDst && credited && grossDst !== credited && `gross ${dstCur} ${grossDst}, charges/tax ${dstCur} ${charges}`,
-    ].filter(Boolean).join(" · "),
-  };
-}
-
-async function maybeHandleRemittancePdf(chatId, updateId, session) {
-  if (!_pendingFile || !/pdf/i.test(`${_pendingFile.mime} ${_pendingFile.name}`)) return false;
-  const text = await extractPendingPdfText();
-  const transfer = parseBoiRemittanceAdvice(text);
-  if (!transfer) return false;
-  const result = await execLogFinanceTransfer(transfer);
-  const suffix = result.duplicate ? "Already had it, so I skipped the duplicate" : "Saved";
-  const amountTo = transfer.amount_to != null ? ` → ${fmtMoney(transfer.amount_to, transfer.currency_to)}` : "";
-  await send(chatId, `${suffix}: EEFC ${fmtMoney(transfer.amount_from, transfer.currency_from)}${amountTo} into BOI current. PDF attached.`);
-  await saveSession(chatId, { ...session, lastUpdateId: updateId });
-  return true;
-}
-
 async function execLogFinanceTransaction({ type, amount, currency = "INR", account, payee, category, date, notes }) {
   const [accounts, transactions] = await Promise.all([
     loadK(_ctx.finAccs), loadK(_ctx.finTxns),
@@ -984,8 +840,12 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
   const txns = transactions || [];
 
   // Match account by name keyword
-  const matchedAccount = findFinanceAccount(accs, account, currency);
-  const accountId = matchedAccount?.id || null;
+  let accountId = null;
+  if (account) {
+    const q = account.toLowerCase();
+    const match = accs.find(a => a.name.toLowerCase().includes(q));
+    accountId = match?.id || null;
+  }
 
   const hasDateCue = (() => {
     const s = String(_currentText || "").toLowerCase();
@@ -1055,76 +915,6 @@ async function execLogFinanceTransaction({ type, amount, currency = "INR", accou
 
   const accName = accountId ? accs.find(a => a.id === accountId)?.name : "no account linked";
   return { success: true, txn_id: txn.id, type, amount, currency, account: accName, payee, date: txn.date, screenshot_attached: attached };
-}
-
-async function execLogFinanceTransfer({ from_account, to_account, amount_from, currency_from, amount_to, currency_to, rate, date, notes }) {
-  const [accounts, transactions] = await Promise.all([
-    loadK(_ctx.finAccs), loadK(_ctx.finTxns),
-  ]);
-  const accs = (accounts || []).filter(a => a.active !== false);
-  const txns = transactions || [];
-  const from = findFinanceAccount(accs, from_account, currency_from);
-  const to = findFinanceAccount(accs, to_account, currency_to);
-  if (!from || !to) {
-    return { error: `Couldn't match ${!from ? `source account "${from_account}"` : ""}${!from && !to ? " and " : ""}${!to ? `destination account "${to_account}"` : ""}. Call get_finance_accounts and try again.` };
-  }
-  if (from.id === to.id) return { error: "Source and destination accounts matched the same account." };
-
-  const srcAmt = +amount_from || 0;
-  if (srcAmt <= 0) return { error: "amount_from must be greater than zero." };
-  const dstAmt = +amount_to || 0;
-  const convRate = +(rate || (dstAmt ? dstAmt / srcAmt : 1)) || 1;
-  const txnDate = date || todayStr();
-  const refRaw = String(notes || "").match(/\b[A-Z]?\d{8,}\b/i)?.[0] || null;
-  const within7d = d => { const t = new Date(d).getTime(); return Number.isFinite(t) && Math.abs(t - new Date(txnDate).getTime()) <= 7 * 86400000; };
-  const dup = txns.find(t => {
-    if (refRaw && String(t.notes || "").includes(refRaw)) return true;
-    if (t.type !== "conversion") return false;
-    if (t.accountFrom !== from.id || t.accountTo !== to.id) return false;
-    if (Math.abs((+t.amount || 0) - srcAmt) >= 0.01) return false;
-    return within7d(t.date || t.createdAt);
-  });
-  if (dup) {
-    let att = null;
-    if (_pendingFile) {
-      att = await storePendingFile(dup.id);
-      if (att) {
-        const existing = dup.attachments || (dup.attachmentUrl ? [{ url: dup.attachmentUrl, name: dup.attachmentName }] : []);
-        const nextAtt = [...existing, att];
-        const updated = txns.map(t => t.id === dup.id ? { ...t, attachments: nextAtt, attachmentUrl: nextAtt[0].url, attachmentName: nextAtt[0].name, updatedAt: new Date().toISOString() } : t);
-        await saveK(_ctx.finTxns, updated);
-      }
-    }
-    return { success: true, duplicate: true, txn_id: dup.id, note: "This transfer is already in the ledger — skipped to avoid a duplicate" + (att ? ", and attached the file to the existing entry." : ".") };
-  }
-
-  const txn = {
-    id: uid(),
-    type: "conversion",
-    amount: String(srcAmt),
-    currency: currency_from || from.currency || "INR",
-    convRate: String(convRate),
-    accountFrom: from.id,
-    accountTo: to.id,
-    payee: `${from.name} → ${to.name}`,
-    category: "EEFC → BOI (INR)",
-    date: txnDate,
-    notes: notes || "Internal transfer added via Telegram",
-    classifiedAs: "conversion",
-    classifiedRef: { convOtherAccountId: to.id, rate: convRate },
-    createdAt: new Date().toISOString(),
-  };
-
-  let attached = false;
-  if (_pendingFile) {
-    const att = await storePendingFile(txn.id);
-    if (att) { txn.attachments = [att]; txn.attachmentUrl = att.url; txn.attachmentName = att.name; attached = true; }
-  }
-
-  await saveK(_ctx.finTxns, [txn, ...txns]);
-  await logActivity({ user: "Telegram", action: "created", module: "finance", label: `Transfer: ${fmtMoney(srcAmt, txn.currency)} ${from.name} → ${to.name}`, targetId: txn.id, targetMod: "finance" });
-
-  return { success: true, txn_id: txn.id, type: "conversion", from: from.name, to: to.name, amount_from: srcAmt, currency_from: txn.currency, amount_to: Math.round(srcAmt * convRate * 100) / 100, currency_to: to.currency || currency_to || "INR", rate: convRate, date: txn.date, file_attached: attached };
 }
 
 async function execAttachDocument({ payee, amount, days_back = 45 } = {}) {
@@ -1410,7 +1200,6 @@ async function runTool(name, args) {
       get_finance_accounts: execGetFinanceAccounts,
       get_finance_transactions: execGetFinanceTransactions,
       log_finance_transaction: execLogFinanceTransaction,
-      log_finance_transfer: execLogFinanceTransfer,
       attach_document_to_transaction: execAttachDocument,
       record_payment: execRecordPayment,
       create_purchase: execCreatePurchase, create_expense: execCreateExpense,
@@ -1455,7 +1244,7 @@ You have full access to read AND write everything:
 - Purchases & POs: create, view, record payments (record_payment)
 - Expenses: create, view
 - Invoices: view
-- Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (one-sided income/expense), log_finance_transfer (internal transfer/conversion)
+- Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (add entry)
 - Documents: you CAN attach files to transactions. When a user sends a payment screenshot/receipt and you log that payment, the image is AUTOMATICALLY attached to that transaction — confirm it ("…and saved the screenshot to it"). To attach a file to an EXISTING/older transaction, call attach_document_to_transaction.
 - Vendors: search, create
 - Memory: save/delete persistent facts
@@ -1464,7 +1253,6 @@ IMPORTANT RULES:
 1. ALWAYS fetch real data with tools — never guess or make up numbers
 2. "How much in [bank]" → use get_finance_accounts
 3. "I paid X to Y" or "received X from Y" → call get_finance_accounts first (to know which accounts exist), then IMMEDIATELY call log_finance_transaction with the correct account. Do NOT ask if it's against a bill/PO — just log it. If the user mentioned a bill or PO explicitly, also call record_payment.
-3a. If money moves between Nikhil's own accounts (especially EEFC → current account / BOI, USD cash → EEFC, or bank-to-bank), use log_finance_transfer, not log_finance_transaction. For BOI foreign inward remittance advice PDFs, treat them as EEFC → BOI/current conversions.
 4. "What did I spend / what transactions" → use get_finance_transactions
 5. For any write action, confirm what you're saving in one short line, then do it immediately — don't ask "shall I proceed?"
 6. NEVER ask clarifying questions about a payment/receipt unless both the amount AND account are missing. If there's only one bank account in INR, use it automatically. Just log and confirm.
@@ -1550,7 +1338,6 @@ export default async function handler(req, res) {
       // Set request-scoped bot context
       _ctx = botCtx(req.query?.bot === "at");
       _pendingFile = null;
-      _pendingFileBuffer = null;
       _currentText = "";
       _currentHasVision = false;
 
@@ -1634,10 +1421,6 @@ export default async function handler(req, res) {
         await send(chatId, `<b>Memory (${facts.length} facts)</b>\n\n` + facts.map(f => `• <b>${f.key}</b>: ${f.value}`).join("\n"));
         return;
       }
-
-      // Bank of India foreign inward remittance advice PDFs are structured enough to
-      // process deterministically: this is an EEFC → BOI/current conversion, not income.
-      if (await maybeHandleRemittancePdf(chatId, updateId, session)) return;
 
       // Typing indicator (fire and forget)
       tg("sendChatAction", { chat_id: chatId, action: "typing" }, _ctx.token).catch(() => {});
