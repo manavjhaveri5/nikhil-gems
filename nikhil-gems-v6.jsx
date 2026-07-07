@@ -3946,7 +3946,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       byId[t.id]=acc?bal:null;
     });
     const groups=[];
-    filtered.forEach(t=>{
+    // While searching we span every month, so list oldest → newest (May, June, July…) — the
+    // ascending order reads like a statement. The normal single-month view stays newest-first.
+    (search?asc:filtered).forEach(t=>{
       const key=isFutureTxn(t)?"future":((t.date||"").slice(0,7)||"No date");
       let g=groups.find(x=>x.key===key);
       if(!g){g={key,label:key==="future"?"Needs date review":key==="No date"?"No date":new Date(`${key}-01T12:00:00`).toLocaleDateString("en-IN",{month:"long",year:"numeric"}),rows:[],debit:0,credit:0};groups.push(g);}
@@ -4219,13 +4221,13 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
           <button className="bp" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setManualOpen(true)}>+ Manual entry</button>
           {isAdmin&&<button className="bs" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setAttachCfgOpen(true)} title="Choose which categories require an attachment">📎 Rules</button>}
           {/* Calendar-icon month picker: shows a 📅 + friendly month label, and a transparent
-              native <input type="month"> overlaid on top so tapping opens the OS month wheel
-              (the native picker users get on their phone). Dimmed while searching, since search
-              spans every month and ignores this filter. */}
+              native <input type="month"> overlaid on top. Clicking calls showPicker() so the OS
+              month picker opens on desktop too (a bare month input only opens via its tiny — here
+              hidden — calendar affordance). Dimmed while searching, since search ignores it. */}
           <label title={search?"Search spans all months — clear search to filter by month":"Pick month"} style={{position:"relative",display:"flex",alignItems:"center",gap:7,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 12px",cursor:"pointer",opacity:search?.45:1}}>
             <span style={{fontSize:15,lineHeight:1}}>📅</span>
             <span style={{fontSize:12,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>{monthLabel}</span>
-            <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} aria-label="Pick month" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",border:"none"}}/>
+            <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} onClick={e=>{try{e.currentTarget.showPicker&&e.currentTarget.showPicker();}catch{}}} aria-label="Pick month" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",border:"none",margin:0,padding:0}}/>
           </label>
           <select value={accountFilter} onChange={e=>setAccountFilter(e.target.value)} style={{...inputS,width:mob?"100%":180,cursor:"pointer"}}>
             <option value="">All accounts</option>
