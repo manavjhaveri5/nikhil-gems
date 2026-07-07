@@ -26,7 +26,7 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAYAAADL
 
 
 
-const newItem=()=>({id:uid(),purchaseDesc:"",desc:"",catDesc:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pcs",rate:"",addToAccountingStock:true,addToPhysicalStock:false,received:false,rcvDate:today(),location:"",cond:"ok",physicalEntries:[]});
+const newItem=()=>({id:uid(),purchaseDesc:"",desc:"",catDesc:"",material:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pcs",rate:"",boughtQty:"",boughtUnit:"pcs",boughtRate:"",addToAccountingStock:true,addToPhysicalStock:false,received:false,rcvDate:today(),location:"",cond:"ok",physicalEntries:[]});
 const newPurchaseBillItem=()=>({...newItem(),gst:"0.25",addToAccountingStock:false,addToPhysicalStock:false});
 const newPhysEntry=(billLineId,billUnit,autoCost,autoMaterial,autoShape,autoVendor)=>({id:uid(),billLineId,material:autoMaterial||"",shape:autoShape||"",vendor:autoVendor||"",productType:"",origin:"",size:"",grade:"",qty:"",unit:billUnit||"pcs",qty2:"",unit2:"kg",costPrice:autoCost||"",location:"",market:[],photo:"",photos:[],notes:"",addedDate:today(),createdAt:new Date().toISOString()});
 const stockPhotos=item=>{
@@ -8168,10 +8168,24 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
     const txt=await callOpenAI([{role:"user",content:[fileContent,{type:"text",text:prompt}]}],1500);
     let ex;try{ex=JSON.parse(txt.replace(/```json|```/g,"").trim());}catch{throw new Error("AI returned unreadable response — try again");}
     if(!ex||typeof ex!=="object")throw new Error("AI returned unexpected format");
-    const items=(ex.items||[]).map(i=>{const purchaseDesc=i.purchaseDesc||i.desc||"";return{...newPurchaseBillItem(),purchaseDesc,desc:purchaseDesc,shape:i.shape||"",material:i.stone||"",hsn:i.hsn||"7103",gst:String(i.gst||"0.25"),qty:String(i.qty||""),unit:i.unit||"pcs",rate:String(i.rate||""),addToAccountingStock:false,addToPhysicalStock:false};});
+    const items=(ex.items||[]).map(i=>{
+      const purchaseDesc=i.purchaseDesc||i.desc||"";
+      const shape=i.shape||"";
+      const qty=String(i.qty||"");const unit=i.unit||"pcs";const rate=String(i.rate||"");
+      // Accounting/customs description: match the AI-read shape/text to our customs dataset and
+      // use the canonical entry (avoids the vendor's spelling/wording). Fall back to raw bill text.
+      const hit=customsDescs.find(x=>customsShapeMatch(x.shape,shape))||(purchaseDesc?customsDescs.find(x=>customsShapeMatch(x.shape,purchaseDesc)):null);
+      return{...newPurchaseBillItem(),
+        purchaseDesc,material:i.stone||"",shape,
+        desc:hit?.desc||purchaseDesc,catDesc:hit?.desc||purchaseDesc,
+        hsn:hit?.hsn||i.hsn||"7103",gst:String(i.gst||"0.25"),
+        // Accounting side (drives the bill total) + what-we-bought side, both seeded from the bill.
+        qty,unit,rate,boughtQty:qty,boughtUnit:unit,boughtRate:rate,
+        addToAccountingStock:false,addToPhysicalStock:false};
+    });
     const b={type:"bill",id:uid(),billNumber:ex.invoiceNumber||"",supplier:ex.supplierName||"",supplierGstin:ex.supplierGstin||"",supplierLocation:ex.supplierLocation||"",supplierCountry:ex.supplierCountry||"India",supplierContact:ex.supplierContact||"",billDate:ex.invoiceDate||today(),currency:ex.currency||"INR",items,notes:ex.notes||"",docData:fd.dataUrl,status:"pending",paidAmount:0,createdAt:new Date().toISOString()};
     b.totalAmount=billTotal(b.items);return b;
-  },[]);
+  },[customsDescs]);
 
   const handleExtract=async(fd=fileData)=>{if(!fd)return;setExtracting(true);setView("upload");try{const d=await extractOne(fd);setDraft(d);setView("verify");}catch(err){showToast("Extraction failed — "+((err?.message||"").slice(0,60)||"check network"));setDraft({type:"bill",id:uid(),billNumber:"",supplier:"",supplierGstin:"",supplierLocation:"",supplierCountry:"",supplierContact:"",billDate:today(),currency:"INR",items:[newPurchaseBillItem()],notes:"",docData:fd?.dataUrl||"",billName:fd?.name||"",status:"pending",paidAmount:0,createdAt:new Date().toISOString()});setView("verify");}setExtracting(false);};
 
@@ -8957,6 +8971,19 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
     items[idx].amt=lineTotal(items[idx]);
     return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
   });
+  // Edit a "what we actually bought" field (boughtQty/boughtUnit/boughtRate). The accounting
+  // side is seeded from the bill and mirrors these until the user overrides it — so a plain
+  // bill just needs one number, while a customs value that differs can still be typed separately.
+  const updateBought=(idx,key,val)=>setDraft(d=>{
+    const items=[...(d.items||[])];const cur=items[idx]||{};
+    const acctKey={boughtQty:"qty",boughtUnit:"unit",boughtRate:"rate"}[key];
+    const inSync=cur[acctKey]===undefined||cur[acctKey]===""||String(cur[acctKey])===String(cur[key]??"")||(acctKey==="unit"&&(cur.unit==="pcs"&&!cur[key]));
+    const next={...cur,[key]:val};
+    if(inSync)next[acctKey]=val; // keep the accounting side in lockstep until it's been diverged
+    next.amt=lineTotal(next);
+    items[idx]=next;
+    return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
+  });
   const setShape=(idx,val)=>setDraft(d=>{
     const items=[...(d.items||[])];
     const hit=customsDescs.find(x=>customsShapeMatch(x.shape,val));
@@ -9080,28 +9107,41 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
                     <button onClick={()=>delItem(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>Remove</button>
                   </div>
 
+                  <div style={{fontSize:10,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5,marginBottom:7}}>What we actually bought</div>
                   <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr 1fr .65fr .65fr .7fr",gap:8,alignItems:"end",marginBottom:10}}>
-                    <Field label="What bought / bill text"><input value={item.purchaseDesc||item.desc||""} onChange={e=>updateItem(idx,{purchaseDesc:e.target.value})} style={CI} placeholder="Exact line from bill"/></Field>
+                    <Field label="Bill text"><input value={item.purchaseDesc||item.desc||""} onChange={e=>updateItem(idx,{purchaseDesc:e.target.value})} style={CI} placeholder="Exact line from bill"/></Field>
                     <Field label="Stone / material"><input value={item.material||""} onChange={e=>updateItem(idx,{material:e.target.value})} style={CI} placeholder="Botryoidal Fluorite"/></Field>
                     <Field label="Shape"><input value={item.shape||""} onChange={e=>setShape(idx,e.target.value)} style={CI} placeholder="Palmstone" list="purchase-shapes"/></Field>
-                    <Field label="Qty"><input type="number" value={item.qty||""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
-                    <Field label="Unit"><select value={item.unit||"pcs"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
-                    <Field label="Rate"><input type="number" value={item.rate||""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                    <Field label="Qty"><input type="number" value={item.boughtQty??item.qty??""} onChange={e=>updateBought(idx,"boughtQty",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                    <Field label="Unit"><select value={item.boughtUnit||item.unit||"pcs"} onChange={e=>updateBought(idx,"boughtUnit",e.target.value)} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
+                    <Field label="Rate"><input type="number" value={item.boughtRate??item.rate??""} onChange={e=>updateBought(idx,"boughtRate",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
                   </div>
 
                   {customHit&&<div style={{fontSize:10,color:C.green,margin:"-3px 0 9px"}}>Customs match: {customHit.desc}{customHit.hsn?` · HSN ${customHit.hsn}`:""}</div>}
 
-                  {acctEnabled&&(
+                  {acctEnabled&&(()=>{
+                    const bq=item.boughtQty??item.qty??"";const br=item.boughtRate??item.rate??"";const bu=item.boughtUnit||item.unit||"pcs";
+                    const diverged=(String(item.qty??"")!==String(bq))||(String(item.rate??"")!==String(br))||((item.unit||"pcs")!==bu);
+                    return(
                     <div style={{background:C.card,border:`1px solid ${C.goldBright}`,borderRadius:8,padding:10,marginBottom:10}}>
-                      <div style={{fontSize:11,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:.5,marginBottom:9}}>Accounting stock</div>
-                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.5fr .55fr .5fr .75fr",gap:8,alignItems:"end"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:9,flexWrap:"wrap"}}>
+                        <div style={{fontSize:11,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:.5}}>Accounting stock — what goes on the books</div>
+                        {diverged
+                          ?<button onClick={()=>updateItem(idx,{qty:bq,rate:br,unit:bu})} style={{background:"none",border:`1px solid ${C.goldBright}`,color:C.gold,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700,cursor:"pointer"}} title="Reset accounting qty/unit/rate to match what you bought">↺ Match bill</button>
+                          :<span style={{fontSize:10,color:C.inkFaint}}>prefilled from the bill · edit if customs differs</span>}
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.5fr .55fr .55fr .5fr .55fr .7fr",gap:8,alignItems:"end"}}>
                         <Field label="Accounting / customs description"><input value={item.desc||item.catDesc||""} onChange={e=>setAccountingDesc(idx,e.target.value)} style={CI} placeholder="Type shape or description" list="purchase-acct-descs"/></Field>
                         <Field label="HSN"><input value={item.hsn||"7103"} onChange={e=>updateItem(idx,{hsn:e.target.value})} style={CI}/></Field>
+                        <Field label="Qty"><input type="number" value={item.qty??""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                        <Field label="Unit"><select value={item.unit||"pcs"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
+                        <Field label="Rate"><input type="number" value={item.rate??""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
                         <Field label="GST"><select value={item.gst||"0.25"} onChange={e=>updateItem(idx,{gst:e.target.value})} style={{...CI,cursor:"pointer"}}>{GSTS.map(g=><option key={g} value={g}>{g}%</option>)}</select></Field>
-                        <Field label="Line total"><div style={{...CI,background:C.surface,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700}}>{inr(lineBase(item)+calcGST(lineBase(item),item.gst))}</div></Field>
                       </div>
+                      <div style={{display:"flex",justifyContent:"flex-end",marginTop:8,fontSize:12,color:C.inkMid}}>Line total&nbsp;<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700,color:C.ink,fontSize:14}}>{inr(lineBase(item)+calcGST(lineBase(item),item.gst))}</span></div>
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {physOn&&(
                     <div style={{background:"#F4FFFC",border:`1px solid ${C.teal}`,borderRadius:8,padding:10}}>
