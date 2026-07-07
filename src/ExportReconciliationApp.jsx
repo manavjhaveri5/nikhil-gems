@@ -242,7 +242,7 @@ async function aiExtract(b64, docType, mime="application/pdf") {
   const prompts = {
     firc: 'This is a FIRC from an Indian bank. Return ONLY valid JSON, no markdown: {"number":"FIRC reference number","dateRaw":"date exactly as printed on document e.g. 02/06/2025","amount":"total remittance amount digits only"}',
     sb:   'This is an Indian customs export document. Return ONLY valid JSON, no markdown: {"sbNumber":"document number","dateRaw":"LEO date or filing date exactly as printed e.g. 02/06/2025 or 10/12/2025","amount":"FOB value INR digits only","docType":"pbe if Postal Bill of Export | csb if Courier Shipping Bill CSB-V CSB-IV | commercial if standard Shipping Bill"}',
-    invoice: 'This is a commercial export invoice from an Indian exporter. Return ONLY valid JSON, no markdown: {"invoiceNumber":"invoice number","dateRaw":"invoice date exactly as printed DD/MM/YYYY","amount":"total invoice value digits only","currency":"currency code e.g. INR USD GBP","buyerName":"buyer/consignee name","description":"goods description max 8 words","suggestedSbNumber":"if you see a shipping bill number or reference anywhere on this document put it here else empty string"}',
+    invoice: 'This is a commercial export invoice from an Indian exporter. Return ONLY valid JSON, no markdown: {"invoiceNumber":"invoice number","dateRaw":"invoice date exactly as printed DD/MM/YYYY","amount":"total invoice value digits only","currency":"currency code e.g. INR USD GBP","buyerName":"buyer/consignee name","buyerAddress":"buyer/consignee full address one line","buyerCountry":"buyer/consignee country","buyerEmail":"buyer/consignee email if printed else empty string","description":"goods description max 8 words","portLoading":"port of loading if printed else empty string","portDestination":"port/destination/discharge country or city if printed else empty string","terms":"payment/delivery terms if printed else empty string","suggestedSbNumber":"if you see a shipping bill number or reference anywhere on this document put it here else empty string","items":[{"description":"goods description","hsn":"HSN code if printed else empty string","qty":"quantity digits only","unit":"unit e.g. PCS KG CTN","unitPrice":"unit price digits only","amount":"line total digits only"}]}',
   };
   const res = await fetch("/api/claude",{
     method:"POST", headers:{"Content-Type":"application/json"},
@@ -490,6 +490,7 @@ const NG_DOC_SLOTS = [
 const ngSlotOf = att => {
   const hay = `${att?.label || ""} ${att?.fileName || att?.name || ""}`;
   if (/\bbrc\b|realisation|realization/i.test(hay)) return "brc";
+  if (/\binvoice\b|commercial\s*invoice/i.test(hay)) return "invoice";
   return (NG_DOC_SLOTS.find(s => s.match.test(hay)) || { key: "other" }).key;
 };
 // Per-invoice status tag, same idea as the Atyahara SB status cycle.
@@ -514,6 +515,21 @@ const sbKey = v => String(v ?? "").replace(/\D/g, "").replace(/^0+/, "");
 const displaySbNumber = v => {
   const nums = String(v ?? "").match(/\d+/g);
   return nums?.length ? nums[nums.length - 1] : String(v ?? "");
+};
+const currentNgYear = () => {
+  const d = new Date();
+  const start = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+  return `${start}-${String(start + 1).slice(-2)}`;
+};
+const ngYearOfInvoice = inv => {
+  const rawDate = inv?.date || inv?.invoiceDate || "";
+  const d = rawDate ? new Date(rawDate) : null;
+  if (d && !Number.isNaN(d.getTime())) {
+    const start = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+    return `${start}-${String(start + 1).slice(-2)}`;
+  }
+  const m = String(inv?.invNo || inv?.invoiceNumber || "").match(/\/(\d{2})-(\d{2})\b/);
+  return m ? `20${m[1]}-${m[2]}` : "";
 };
 const blankManualNgInvoiceSet = () => ({
   invNo: "",
@@ -562,6 +578,7 @@ function NgInvoiceSheet() {
   const [invoices, setInvoices] = useState([]);
   const [buyers, setBuyers] = useState([]);
   const [q, setQ] = useState("");
+  const [yearFilter, setYearFilter] = useState(currentNgYear);
   const [missingOnly, setMissingOnly] = useState(false);
   const [busy, setBusy] = useState(null);   // `${invoiceId}:${slotKey}` while uploading
   const [msg, setMsg] = useState(null);     // {ok, text}
@@ -675,7 +692,46 @@ function NgInvoiceSheet() {
       const safe = (file.name || "document").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 90) || "document";
       const url = await uploadToStorage(`invoice-shipment-docs/ng/${inv.id}/${Date.now()}-${ngUid()}-${safe}`, file);
       const att = { id: ngUid(), label: slot.key === "other" ? (file.name || "Document") : slot.label, url, fileName: file.name, name: file.name, type: file.type || "", size: file.size || 0, uploadedAt: new Date().toISOString() };
-      await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: [...(latest.attachments || []), att] }));
+      let invoiceNote = "";
+      let invoicePatch = {};
+      if (slot.key === "invoice") {
+        try {
+          const { b64, mime } = await readB64WithMime(file);
+          const ex = await aiExtract(b64, "invoice", mime);
+          const cleanAmount = +String(ex?.amount || "").replace(/[^\d.]/g, "");
+          const extractedItems = Array.isArray(ex?.items) && ex.items.length
+            ? ex.items.map(it => ({
+                id: ngUid(),
+                desc: it.description || ex.description || "Invoice item",
+                hsn: it.hsn || "",
+                qty: it.qty || "1",
+                unit: it.unit || "pcs",
+                rate: it.unitPrice || it.rate || "",
+                amt: +String(it.amount || "").replace(/[^\d.]/g, "") || 0,
+                igst: 0,
+              }))
+            : null;
+          invoicePatch = {
+            ...(ex?.invoiceNumber ? { invNo: ex.invoiceNumber } : {}),
+            ...(ex?.date ? { date: ex.date } : {}),
+            ...(ex?.currency ? { currency: String(ex.currency).toUpperCase() } : {}),
+            ...(cleanAmount > 0 ? { totalAmt: cleanAmount } : {}),
+            ...(ex?.buyerName ? { buyerName: ex.buyerName, buyer: ex.buyerName } : {}),
+            ...(ex?.buyerAddress ? { buyerAddress: ex.buyerAddress } : {}),
+            ...(ex?.buyerCountry ? { buyerCountry: ex.buyerCountry } : {}),
+            ...(ex?.buyerEmail ? { buyerEmail: ex.buyerEmail } : {}),
+            ...(ex?.portLoading ? { portLading: ex.portLoading } : {}),
+            ...(ex?.portDestination ? { portDischarge: ex.portDestination } : {}),
+            ...(ex?.terms ? { terms: ex.terms } : {}),
+            ...(extractedItems ? { items: extractedItems } : {}),
+            invoiceExtractedAt: new Date().toISOString(),
+          };
+          invoiceNote = " Invoice details read and used to update the manual row for BOI generation.";
+        } catch {
+          invoiceNote = " Invoice uploaded, but details could not be read automatically.";
+        }
+      }
+      await saveInvoicePatch(inv.id, latest => ({ ...latest, ...invoicePatch, attachments: [...(latest.attachments || []), att], updatedAt: new Date().toISOString() }));
       let sbNote = "";
       if (slot.key === "sbill" && !inv.sbNo) {
         // Read the SB number off the fresh upload so it can be ticked against the bank report.
@@ -685,7 +741,7 @@ function NgInvoiceSheet() {
           if (ex?.sbNumber) { await saveInvoicePatch(inv.id, latest => ({ ...latest, sbNo: String(ex.sbNumber) })); sbNote = ` SB number read: ${ex.sbNumber}.`; }
         } catch { /* extraction is best-effort — upload already succeeded */ }
       }
-      setMsg({ ok: true, text: `${att.label} uploaded to ${inv.invNo} — it's on the invoice in the Invoices module too.${sbNote}` });
+      setMsg({ ok: true, text: `${att.label} uploaded to ${inv.invNo} — it's on the invoice in the Invoices module too.${invoiceNote}${sbNote}` });
     } catch (err) {
       setMsg({ ok: false, text: `Upload failed: ${err?.message || "check connection"}` });
     } finally { setBusy(null); }
@@ -701,7 +757,7 @@ function NgInvoiceSheet() {
     setBusy(`${inv.id}:decl-gen`); setMsg(null);
     try {
       const buyer = buyers.find(b => b.id === inv.buyerId);
-      const portDestination = inv.portDischarge || buyer?.port || buyer?.country || "";
+      const portDestination = inv.portDischarge || inv.portDestination || buyer?.port || buyer?.country || inv.buyerCountry || "";
       const templateBytes = await (await fetch("/boi/export_bill_form.pdf")).arrayBuffer();
       const bytes = await fillExportBillForm({
         templateBytes,
@@ -717,9 +773,9 @@ function NgInvoiceSheet() {
         exporterEmail: NG_EXPORTER.email,
         buyerName: buyerName(inv),
         // Buyer address is stored in billingAddress (address is a legacy fallback).
-        buyerAddress: buyer?.billingAddress || buyer?.address || "",
-        buyerCountry: buyer?.country || "",
-        buyerEmail: buyer?.email || "",
+        buyerAddress: buyer?.billingAddress || buyer?.address || inv.buyerAddress || "",
+        buyerCountry: buyer?.country || inv.buyerCountry || "",
+        buyerEmail: buyer?.email || inv.buyerEmail || "",
       });
       const fileName = `BOI_Export_Bill_${(inv.invNo || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "-")}.pdf`;
       const blob = new Blob([bytes], { type: "application/pdf" });
@@ -787,10 +843,14 @@ function NgInvoiceSheet() {
     setMsg({ ok: fail === 0, text: `Scan finished — SB number read on ${ok} of ${targets.length} document${targets.length !== 1 ? "s" : ""}${fail ? ` (${fail} unreadable — you can retype the file name to include the SB number instead)` : ""}.` });
   };
 
-  const rows = invoices
+  const exportInvoices = invoices
     .filter(i => i.type !== "proforma")
     // Export Recon is for exports only — INR invoices are domestic sales.
-    .filter(i => (i.currency || "").toUpperCase() !== "INR")
+    .filter(i => (i.currency || "").toUpperCase() !== "INR");
+  const yearOptions = [...new Set([currentNgYear(), ...exportInvoices.map(ngYearOfInvoice).filter(Boolean)])]
+    .sort((a, b) => b.localeCompare(a));
+  const rows = exportInvoices
+    .filter(i => yearFilter === "all" || ngYearOfInvoice(i) === yearFilter)
     .filter(i => { if (!q) return true; return `${i.invNo} ${buyerName(i)}`.toLowerCase().includes(q.toLowerCase()); })
     .map(i => {
       const bySlot = {};
@@ -867,12 +927,17 @@ function NgInvoiceSheet() {
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, color: C.ink, letterSpacing: "-.01em" }}>Invoice Sets</div>
           <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
-            One row per invoice — auto-synced from the Invoices module. {rows.length} invoice{rows.length !== 1 ? "s" : ""} · {completeCount} fully documented · {paidCount} paid · {doneCount} marked done
+            One row per invoice — auto-synced from the Invoices module. {yearFilter === "all" ? "All years" : yearFilter} · {rows.length} invoice{rows.length !== 1 ? "s" : ""} · {completeCount} fully documented · {paidCount} paid · {doneCount} marked done
           </div>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search invoice / buyer…"
             style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12.5, color: C.ink, outline: "none", minWidth: 170 }} />
+          <select value={yearFilter} onChange={e => setYearFilter(e.target.value)}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 10px", fontSize: 12.5, color: C.inkMid, outline: "none", fontWeight: 700, minWidth: 104 }}>
+            {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+            <option value="all">All years</option>
+          </select>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.inkMid, cursor: "pointer", whiteSpace: "nowrap" }}>
             <input type="checkbox" checked={missingOnly} onChange={e => setMissingOnly(e.target.checked)} />
             Missing docs only
@@ -1006,10 +1071,28 @@ function NgInvoiceSheet() {
                     <div style={{ fontWeight: 700 }}>{inv.invNo || "—"}</div>
                     <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>{inv.date || ""}</div>
                     {inv.manualExportRecon && (
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 4 }}>
-                        <span style={{ background: C.blueBg, color: C.blue, border: `1px solid ${C.blue}`, borderRadius: 999, padding: "1px 6px", fontSize: 9.5, fontWeight: 800 }}>Manual</span>
-                        <button onClick={() => deleteManualSet(inv)} title="Remove manual row"
-                          style={{ background: "none", border: "none", color: C.red, cursor: "pointer", padding: 0, fontSize: 10.5, fontWeight: 700 }}>Remove</button>
+                      <div style={{ display: "flex", gap: 5, alignItems: "flex-start", marginTop: 4, flexDirection: "column" }}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <span style={{ background: C.blueBg, color: C.blue, border: `1px solid ${C.blue}`, borderRadius: 999, padding: "1px 6px", fontSize: 9.5, fontWeight: 800 }}>Manual</span>
+                          <button onClick={() => deleteManualSet(inv)} title="Remove manual row"
+                            style={{ background: "none", border: "none", color: C.red, cursor: "pointer", padding: 0, fontSize: 10.5, fontWeight: 700 }}>Remove</button>
+                        </div>
+                        {(bySlot.invoice || []).map(a => (
+                          <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.blueBg, border: `1px solid ${C.blue}`, borderRadius: 6, padding: "2px 6px", fontSize: 10.5, maxWidth: 155 }}>
+                            <a href={a.url} target="_blank" rel="noreferrer" title={a.fileName || a.label}
+                              style={{ color: C.blue, fontWeight: 700, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                              Invoice
+                            </a>
+                            <button onClick={() => removeAtt(inv, a)} title="Remove invoice"
+                              style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+                          </span>
+                        ))}
+                        {!(bySlot.invoice || []).length && (
+                          <button onClick={() => pickFile(inv, { key: "invoice", label: "Invoice" })} disabled={busy === `${inv.id}:invoice`}
+                            style={{ background: "none", border: `1px dashed ${C.blue}`, borderRadius: 6, padding: "2px 7px", fontSize: 10.5, cursor: busy === `${inv.id}:invoice` ? "default" : "pointer", color: C.blue, fontWeight: 700, whiteSpace: "nowrap" }}>
+                            {busy === `${inv.id}:invoice` ? "Reading..." : "Upload invoice"}
+                          </button>
+                        )}
                       </div>
                     )}
                   </td>
