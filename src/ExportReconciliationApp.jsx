@@ -716,7 +716,9 @@ function NgInvoiceSheet() {
     .map(i => {
       const bySlot = {};
       (i.attachments || []).forEach(a => { const k = ngSlotOf(a); (bySlot[k] = bySlot[k] || []).push(a); });
-      const missing = NG_DOC_SLOTS.filter(s => !(bySlot[s.key] || []).length);
+      // BOI declaration is generated on demand (not uploaded/stored), so it
+      // doesn't count toward "missing docs" / "fully documented".
+      const missing = NG_DOC_SLOTS.filter(s => s.key !== "decl" && !(bySlot[s.key] || []).length);
       return { inv: i, bySlot, missing };
     })
     .filter(r => !missingOnly || (r.missing.length > 0 && ngStatusOf(r.inv) !== "done"))
@@ -766,10 +768,13 @@ function NgInvoiceSheet() {
               style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
           </span>
         ))}
-        <button onClick={() => pickFile(inv, slot)} disabled={uploading}
-          style={{ background: "none", border: `1px dashed ${(atts || []).length ? C.border : C.amber}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: uploading ? "default" : "pointer", color: (atts || []).length ? C.inkFaint : C.amber, textAlign: "left", whiteSpace: "nowrap" }}>
-          {uploading ? "⟳ Uploading…" : (atts || []).length ? "+ add" : "⬆ Upload"}
-        </button>
+        {/* BOI declaration is generate-only — no signed copy is uploaded back. */}
+        {slot.key !== "decl" && (
+          <button onClick={() => pickFile(inv, slot)} disabled={uploading}
+            style={{ background: "none", border: `1px dashed ${(atts || []).length ? C.border : C.amber}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: uploading ? "default" : "pointer", color: (atts || []).length ? C.inkFaint : C.amber, textAlign: "left", whiteSpace: "nowrap" }}>
+            {uploading ? "⟳ Uploading…" : (atts || []).length ? "+ add" : "⬆ Upload"}
+          </button>
+        )}
       </div>
     );
   };
