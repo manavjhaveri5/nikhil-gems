@@ -26,8 +26,10 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAfQAAAH0CAYAAADL
 
 
 
-const newItem=()=>({id:uid(),purchaseDesc:"",desc:"",catDesc:"",material:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pcs",rate:"",boughtQty:"",boughtUnit:"pcs",boughtRate:"",addToAccountingStock:true,addToPhysicalStock:false,received:false,rcvDate:today(),location:"",cond:"ok",physicalEntries:[]});
+const newItem=()=>({id:uid(),purchaseDesc:"",desc:"",catDesc:"",material:"",shape:"",hsn:"7103",gst:"3",qty:"",unit:"pcs",rate:"",addToAccountingStock:true,addToPhysicalStock:false,received:false,rcvDate:today(),location:"",cond:"ok",physicalEntries:[]});
 const newPurchaseBillItem=()=>({...newItem(),gst:"0.25",addToAccountingStock:false,addToPhysicalStock:false});
+// A "what we actually bought" line — the real purchase, kept separate from the accounting/customs entry.
+const newBoughtLine=()=>({id:uid(),material:"",shape:"",unit:"kg",rate:"",qty:""});
 const newPhysEntry=(billLineId,billUnit,autoCost,autoMaterial,autoShape,autoVendor)=>({id:uid(),billLineId,material:autoMaterial||"",shape:autoShape||"",vendor:autoVendor||"",productType:"",origin:"",size:"",grade:"",qty:"",unit:billUnit||"pcs",qty2:"",unit2:"kg",costPrice:autoCost||"",location:"",market:[],photo:"",photos:[],notes:"",addedDate:today(),createdAt:new Date().toISOString()});
 const stockPhotos=item=>{
   const photos=Array.isArray(item?.photos)?item.photos.filter(Boolean):[];
@@ -8204,8 +8206,7 @@ IMPORTANT: supplierName must be the FULL business name. Extract every line item 
         purchaseDesc,material:i.stone||"",shape,
         desc:acctDesc,catDesc:acctDesc,
         hsn:acctHsn,gst:String(i.gst||"0.25"),
-        // Accounting side (drives the bill total) + what-we-bought side, both seeded from the bill.
-        qty,unit,rate,boughtQty:qty,boughtUnit:unit,boughtRate:rate,
+        qty,unit,rate,
         addToAccountingStock:false,addToPhysicalStock:false};
     });
     const b={type:"bill",id:uid(),billNumber:ex.invoiceNumber||"",supplier:ex.supplierName||"",supplierGstin:ex.supplierGstin||"",supplierLocation:ex.supplierLocation||"",supplierCountry:ex.supplierCountry||"India",supplierContact:ex.supplierContact||"",billDate:ex.invoiceDate||today(),currency:ex.currency||"INR",items,notes:ex.notes||"",docData:fd.dataUrl,status:"pending",paidAmount:0,createdAt:new Date().toISOString()};
@@ -8996,19 +8997,12 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
     items[idx].amt=lineTotal(items[idx]);
     return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
   });
-  // Edit a "what we actually bought" field (boughtQty/boughtUnit/boughtRate). The accounting
-  // side is seeded from the bill and mirrors these until the user overrides it — so a plain
-  // bill just needs one number, while a customs value that differs can still be typed separately.
-  const updateBought=(idx,key,val)=>setDraft(d=>{
-    const items=[...(d.items||[])];const cur=items[idx]||{};
-    const acctKey={boughtQty:"qty",boughtUnit:"unit",boughtRate:"rate"}[key];
-    const inSync=cur[acctKey]===undefined||cur[acctKey]===""||String(cur[acctKey])===String(cur[key]??"")||(acctKey==="unit"&&(cur.unit==="pcs"&&!cur[key]));
-    const next={...cur,[key]:val};
-    if(inSync)next[acctKey]=val; // keep the accounting side in lockstep until it's been diverged
-    next.amt=lineTotal(next);
-    items[idx]=next;
-    return{...d,items,totalAmount:billSubtotal(items)+billGST(items)+(+d.shippingCharge||0)};
-  });
+  // "What we actually bought" is its own independent list (draft.boughtItems), separate from the
+  // accounting-stock lines. It records the real purchase and does not affect the bill total.
+  const boughtItems=draft.boughtItems||[];
+  const addBoughtLine=()=>setDraft(d=>({...d,boughtItems:[...(d.boughtItems||[]),newBoughtLine()]}));
+  const delBoughtLine=idx=>setDraft(d=>({...d,boughtItems:(d.boughtItems||[]).filter((_,i)=>i!==idx)}));
+  const updateBoughtLine=(idx,patch)=>setDraft(d=>{const b=[...(d.boughtItems||[])];b[idx]={...b[idx],...patch};return{...d,boughtItems:b};});
   const setShape=(idx,val)=>setDraft(d=>{
     const items=[...(d.items||[])];
     const hit=customsDescs.find(x=>customsShapeMatch(x.shape,val));
@@ -9061,7 +9055,7 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
   };
   const save=status=>{
     if(!draft.supplier?.trim())return alert("Enter vendor name");
-    if(!(draft.items||[]).some(it=>(it.purchaseDesc||it.desc||"").trim()))return alert("Add at least one item");
+    if(!(draft.items||[]).some(isLineFilled))return alert("Add at least one accounting stock line");
     onSave(normalizeDraft(status));
   };
   const knownV=draft.supplier?.trim()?vendors.find(v=>v.name.toLowerCase()===draft.supplier.trim().toLowerCase()):null;
@@ -9117,90 +9111,90 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
             ):<span style={{fontSize:11,color:C.inkFaint}}>Physical stock not used for this company</span>}
           </div>
 
-          <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,overflow:"hidden",marginBottom:12}}>
-            <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-              <div style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Bill lines</div>
-              <button className="bs" style={{padding:"5px 11px",fontSize:11,fontWeight:700}} onClick={addItem}>+ Line Item</button>
+          {/* ── SECTION 1 · What we actually bought — its own independent list, empty until you add ── */}
+          <div style={{background:C.surface,border:`1.5px solid ${C.teal}`,borderRadius:9,overflow:"hidden",marginBottom:12}}>
+            <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,background:"#F4FFFC"}}>
+              <div style={{fontSize:11,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.6}}>🧾 What we actually bought</div>
+              <button className="bs" style={{padding:"5px 11px",fontSize:11,fontWeight:700}} onClick={addBoughtLine}>+ Add line</button>
             </div>
-            {(draft.items||[]).map((item,idx)=>{
-              const physOn=canAddPhysical&&physEnabled;
-              const customHit=findCustom(item.shape);
-              return(
-                <div key={item.id} style={{borderTop:idx?`1px solid ${C.border}`:"none",padding:14,background:C.card}}>
-                  <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",marginBottom:12}}>
-                    <div style={{fontSize:12,fontWeight:800,color:C.ink,textTransform:"uppercase",letterSpacing:.5}}>Line {idx+1}</div>
-                    <button onClick={()=>delItem(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:14}}>Remove</button>
-                  </div>
-
-                  {/* Box 1 — the real purchase, exactly as it reads on the vendor's bill */}
-                  <div style={{background:C.surface,border:`1.5px solid ${C.teal}`,borderRadius:8,padding:"10px 12px",marginBottom:10}}>
-                    <div style={{fontSize:11,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5,marginBottom:9}}>1 · What we actually bought</div>
-                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr 1fr .65fr .65fr .7fr",gap:8,alignItems:"end"}}>
-                      <Field label="Bill text"><input value={item.purchaseDesc||item.desc||""} onChange={e=>updateItem(idx,{purchaseDesc:e.target.value})} style={CI} placeholder="Exact line from bill"/></Field>
-                      <Field label="Stone / material"><input value={item.material||""} onChange={e=>updateItem(idx,{material:e.target.value})} style={CI} placeholder="Botryoidal Fluorite"/></Field>
-                      <Field label="Shape"><input value={item.shape||""} onChange={e=>setShape(idx,e.target.value)} style={CI} placeholder="Palmstone" list="purchase-shapes"/></Field>
-                      <Field label="Qty"><input type="number" value={item.boughtQty??item.qty??""} onChange={e=>updateBought(idx,"boughtQty",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
-                      <Field label="Unit"><select value={item.boughtUnit||item.unit||"pcs"} onChange={e=>updateBought(idx,"boughtUnit",e.target.value)} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
-                      <Field label="Rate"><input type="number" value={item.boughtRate??item.rate??""} onChange={e=>updateBought(idx,"boughtRate",e.target.value)} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
-                    </div>
-                    {customHit&&<div style={{fontSize:10,color:C.green,marginTop:8}}>✓ Customs match: {customHit.desc}{customHit.hsn?` · HSN ${customHit.hsn}`:""}</div>}
-                  </div>
-
-                  {/* Box 2 — what actually posts to the books / customs (prefilled, editable) */}
-                  {acctEnabled&&(()=>{
-                    const bq=item.boughtQty??item.qty??"";const br=item.boughtRate??item.rate??"";const bu=item.boughtUnit||item.unit||"pcs";
-                    const diverged=(String(item.qty??"")!==String(bq))||(String(item.rate??"")!==String(br))||((item.unit||"pcs")!==bu);
-                    return(
-                    <div style={{background:C.card,border:`1px solid ${C.goldBright}`,borderRadius:8,padding:10,marginBottom:10}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:9,flexWrap:"wrap"}}>
-                        <div style={{fontSize:11,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:.5}}>2 · Accounting stock — what goes on the books</div>
-                        {diverged
-                          ?<button onClick={()=>updateItem(idx,{qty:bq,rate:br,unit:bu})} style={{background:"none",border:`1px solid ${C.goldBright}`,color:C.gold,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700,cursor:"pointer"}} title="Reset accounting qty/unit/rate to match what you bought">↺ Match bill</button>
-                          :<span style={{fontSize:10,color:C.inkFaint}}>prefilled from the bill · edit if customs differs</span>}
+            {boughtItems.length===0
+              ? <div style={{padding:"16px 14px",fontSize:12,color:C.inkFaint}}>No lines yet — add what you physically bought if it differs from the customs bill. Optional.</div>
+              : boughtItems.map((b,bi)=>{
+                  const tot=(+b.qty||0)*(+b.rate||0);
+                  return(
+                    <div key={b.id} style={{borderTop:bi?`1px solid ${C.border}`:"none",padding:"12px 14px"}}>
+                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr .7fr .8fr .7fr .95fr 24px",gap:8,alignItems:"end"}}>
+                        <Field label="Stone / material"><input value={b.material||""} onChange={e=>updateBoughtLine(bi,{material:e.target.value})} style={CI} placeholder="agate"/></Field>
+                        <Field label="Shape"><input value={b.shape||""} onChange={e=>updateBoughtLine(bi,{shape:e.target.value})} style={CI} placeholder="Sphere" list="purchase-shapes"/></Field>
+                        <Field label="Unit"><select value={b.unit||"kg"} onChange={e=>updateBoughtLine(bi,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
+                        <Field label="Price"><input type="number" value={b.rate||""} onChange={e=>updateBoughtLine(bi,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                        <Field label="Qty"><input type="number" value={b.qty||""} onChange={e=>updateBoughtLine(bi,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                        <Field label="Total"><div style={{...CI,background:C.card,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700}}>{inr(tot)}</div></Field>
+                        <button onClick={()=>delBoughtLine(bi)} title="Delete line" style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1,paddingBottom:6}}>×</button>
                       </div>
-                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.5fr .55fr .55fr .5fr .55fr .7fr",gap:8,alignItems:"end"}}>
-                        <Field label="Accounting / customs description"><input value={item.desc||item.catDesc||""} onChange={e=>setAccountingDesc(idx,e.target.value)} style={CI} placeholder="Type shape or description" list="purchase-acct-descs"/></Field>
+                    </div>
+                  );
+                })}
+          </div>
+
+          {/* ── SECTION 2 · Accounting stock entry — posts to the books, drives the bill total ── */}
+          <div style={{background:C.surface,border:`1.5px solid ${C.goldBright}`,borderRadius:9,overflow:"hidden",marginBottom:12}}>
+            <div style={{padding:"10px 14px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,background:C.goldLight}}>
+              <div style={{fontSize:11,fontWeight:800,color:C.gold,textTransform:"uppercase",letterSpacing:.6}}>📦 Accounting stock entry</div>
+              <button className="bs" style={{padding:"5px 11px",fontSize:11,fontWeight:700}} onClick={addItem}>+ Add line</button>
+            </div>
+            {(draft.items||[]).length===0
+              ? <div style={{padding:"16px 14px",fontSize:12,color:C.inkFaint}}>No lines yet — click “+ Add line”, or upload a bill to auto-fill.</div>
+              : (draft.items||[]).map((item,idx)=>{
+                  const physOn=canAddPhysical&&physEnabled;
+                  const tot=lineBase(item)+calcGST(lineBase(item),item.gst);
+                  return(
+                    <div key={item.id} style={{borderTop:idx?`1px solid ${C.border}`:"none",padding:"12px 14px"}}>
+                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr .95fr .8fr .6fr .55fr .75fr .6fr 24px",gap:8,alignItems:"end"}}>
+                        <Field label="Stone / material"><input value={item.material||""} onChange={e=>updateItem(idx,{material:e.target.value})} style={CI} placeholder="agate"/></Field>
+                        <Field label="Shape"><input value={item.shape||""} onChange={e=>setShape(idx,e.target.value)} style={CI} placeholder="Sphere" list="purchase-shapes"/></Field>
+                        <Field label="Total"><div style={{...CI,background:C.card,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700}}>{inr(tot)}</div></Field>
                         <Field label="HSN"><input value={item.hsn||"7103"} onChange={e=>updateItem(idx,{hsn:e.target.value})} style={CI}/></Field>
-                        <Field label="Qty"><input type="number" value={item.qty??""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
-                        <Field label="Unit"><select value={item.unit||"pcs"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
-                        <Field label="Rate"><input type="number" value={item.rate??""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
                         <Field label="GST"><select value={item.gst||"0.25"} onChange={e=>updateItem(idx,{gst:e.target.value})} style={{...CI,cursor:"pointer"}}>{GSTS.map(g=><option key={g} value={g}>{g}%</option>)}</select></Field>
+                        <Field label="Unit"><select value={item.unit||"kg"} onChange={e=>updateItem(idx,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
+                        <Field label="Price"><input type="number" value={item.rate??""} onChange={e=>updateItem(idx,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                        <Field label="Qty"><input type="number" value={item.qty??""} onChange={e=>updateItem(idx,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
+                        <button onClick={()=>delItem(idx)} title="Delete line" style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1,paddingBottom:6}}>×</button>
                       </div>
-                      <div style={{display:"flex",justifyContent:"flex-end",marginTop:8,fontSize:12,color:C.inkMid}}>Line total&nbsp;<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700,color:C.ink,fontSize:14}}>{inr(lineBase(item)+calcGST(lineBase(item),item.gst))}</span></div>
-                    </div>
-                    );
-                  })()}
+                      <div style={{marginTop:8}}>
+                        <Field label="Accounting / customs description"><input value={item.desc||item.catDesc||""} onChange={e=>setAccountingDesc(idx,e.target.value)} style={CI} placeholder="Auto-fills from shape · matched to your customs list" list="purchase-acct-descs"/></Field>
+                      </div>
 
-                  {physOn&&(
-                    <div style={{background:"#F4FFFC",border:`1px solid ${C.teal}`,borderRadius:8,padding:10}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10}}>
-                        <div style={{fontSize:11,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5}}>Physical stock</div>
-                        <button className="bs" style={{fontSize:11,padding:"4px 9px"}} onClick={()=>addPhysEntry(idx)}>+ Entry</button>
-                      </div>
-                      {(item.physicalEntries||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint,marginBottom:6}}>No physical entry yet — click “+ Entry” to add one.</div>}
-                      {(item.physicalEntries||[]).map((entry,eIdx)=>(
-                        <div key={entry.id} style={{borderTop:eIdx?`1px dashed ${C.border}`:"none",paddingTop:eIdx?9:0,marginTop:eIdx?9:0}}>
-                          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}><button onClick={()=>delPhysEntry(idx,eIdx)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:11}}>Remove entry</button></div>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr .85fr .65fr .65fr .75fr .85fr",gap:8,alignItems:"end"}}>
-                            <Field label="Material"><input value={entry.material||""} onChange={e=>setPhys(idx,eIdx,"material",e.target.value)} style={CI}/></Field>
-                            <Field label="Shape"><input value={entry.shape||""} onChange={e=>setPhys(idx,eIdx,"shape",e.target.value)} style={CI}/></Field>
-                            <Field label="Qty"><input type="number" value={entry.qty||""} onChange={e=>setPhys(idx,eIdx,"qty",e.target.value)} style={CI}/></Field>
-                            <Field label="Weight"><div style={{display:"grid",gridTemplateColumns:"1fr 52px",gap:4}}><input type="number" value={entry.qty2||""} onChange={e=>setPhys(idx,eIdx,"qty2",e.target.value)} style={CI}/><select value={entry.unit2||"kg"} onChange={e=>setPhys(idx,eIdx,"unit2",e.target.value)} style={{...CI,padding:"4px 3px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div></Field>
-                            <Field label="Location"><input value={entry.location||""} onChange={e=>setPhys(idx,eIdx,"location",e.target.value)} style={CI} placeholder="Box / shelf"/></Field>
-                            <Field label="Product type"><select value={entry.productType||""} onChange={e=>setPhys(idx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}><option value="">Select</option>{PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}</select></Field>
-                            <Field label="Origin"><input value={entry.origin||""} onChange={e=>setPhys(idx,eIdx,"origin",e.target.value)} style={CI}/></Field>
-                            <Field label="Grade"><input value={entry.grade||""} onChange={e=>setPhys(idx,eIdx,"grade",e.target.value)} style={CI}/></Field>
-                            <Field label="Size"><input value={entry.size||""} onChange={e=>setPhys(idx,eIdx,"size",e.target.value)} style={CI}/></Field>
-                            <Field label="Cost"><input type="number" value={entry.costPrice||""} onChange={e=>setPhys(idx,eIdx,"costPrice",e.target.value)} style={CI}/></Field>
-                            <Field label="Vendor"><input value={entry.vendor||draft.supplier||""} onChange={e=>setPhys(idx,eIdx,"vendor",e.target.value)} style={CI}/></Field>
+                      {physOn&&(
+                        <div style={{background:"#F4FFFC",border:`1px solid ${C.teal}`,borderRadius:8,padding:10,marginTop:10}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10}}>
+                            <div style={{fontSize:11,fontWeight:800,color:C.teal,textTransform:"uppercase",letterSpacing:.5}}>Physical stock</div>
+                            <button className="bs" style={{fontSize:11,padding:"4px 9px"}} onClick={()=>addPhysEntry(idx)}>+ Entry</button>
                           </div>
+                          {(item.physicalEntries||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint,marginBottom:6}}>No physical entry yet — click “+ Entry” to add one.</div>}
+                          {(item.physicalEntries||[]).map((entry,eIdx)=>(
+                            <div key={entry.id} style={{borderTop:eIdx?`1px dashed ${C.border}`:"none",paddingTop:eIdx?9:0,marginTop:eIdx?9:0}}>
+                              <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}><button onClick={()=>delPhysEntry(idx,eIdx)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:11}}>Remove entry</button></div>
+                              <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr .85fr .65fr .65fr .75fr .85fr",gap:8,alignItems:"end"}}>
+                                <Field label="Material"><input value={entry.material||""} onChange={e=>setPhys(idx,eIdx,"material",e.target.value)} style={CI}/></Field>
+                                <Field label="Shape"><input value={entry.shape||""} onChange={e=>setPhys(idx,eIdx,"shape",e.target.value)} style={CI}/></Field>
+                                <Field label="Qty"><input type="number" value={entry.qty||""} onChange={e=>setPhys(idx,eIdx,"qty",e.target.value)} style={CI}/></Field>
+                                <Field label="Weight"><div style={{display:"grid",gridTemplateColumns:"1fr 52px",gap:4}}><input type="number" value={entry.qty2||""} onChange={e=>setPhys(idx,eIdx,"qty2",e.target.value)} style={CI}/><select value={entry.unit2||"kg"} onChange={e=>setPhys(idx,eIdx,"unit2",e.target.value)} style={{...CI,padding:"4px 3px"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></div></Field>
+                                <Field label="Location"><input value={entry.location||""} onChange={e=>setPhys(idx,eIdx,"location",e.target.value)} style={CI} placeholder="Box / shelf"/></Field>
+                                <Field label="Product type"><select value={entry.productType||""} onChange={e=>setPhys(idx,eIdx,"productType",e.target.value)} style={{...CI,cursor:"pointer"}}><option value="">Select</option>{PRODUCT_TYPES.map(typ=><option key={typ}>{typ}</option>)}</select></Field>
+                                <Field label="Origin"><input value={entry.origin||""} onChange={e=>setPhys(idx,eIdx,"origin",e.target.value)} style={CI}/></Field>
+                                <Field label="Grade"><input value={entry.grade||""} onChange={e=>setPhys(idx,eIdx,"grade",e.target.value)} style={CI}/></Field>
+                                <Field label="Size"><input value={entry.size||""} onChange={e=>setPhys(idx,eIdx,"size",e.target.value)} style={CI}/></Field>
+                                <Field label="Cost"><input type="number" value={entry.costPrice||""} onChange={e=>setPhys(idx,eIdx,"costPrice",e.target.value)} style={CI}/></Field>
+                                <Field label="Vendor"><input value={entry.vendor||draft.supplier||""} onChange={e=>setPhys(idx,eIdx,"vendor",e.target.value)} style={CI}/></Field>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  );
+                })}
           </div>
 
           <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"12px 14px",display:"flex",alignItems:"center",gap:12,justifyContent:"flex-end",flexWrap:"wrap"}}>
