@@ -655,7 +655,7 @@ function NgInvoiceSheet() {
       document.body.appendChild(a); a.click(); a.remove();
       window.open(url, "_blank");
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setMsg({ ok: true, text: `BOI Export Bill form for ${inv.invNo} generated (3 pages, page 1 pre-filled) — print, sign & seal, then upload the scan.` });
+      setMsg({ ok: true, text: `BOI Export Bill form for ${inv.invNo} generated (3 pages, page 1 pre-filled) — print, sign & seal for submission.` });
     } catch (err) {
       setMsg({ ok: false, text: `Could not generate BOI form: ${err?.message || "check connection"}` });
     } finally { setBusy(null); }
@@ -858,12 +858,11 @@ function NgInvoiceSheet() {
               <th style={th}>Amount</th>
               <th style={th}>Status</th>
               {NG_DOC_SLOTS.map(s => <th key={s.key} style={th}>{s.label}</th>)}
-              <th style={th}>Other Docs</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+              <tr><td colSpan={4 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
                 {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
               </td></tr>
             )}
@@ -905,7 +904,6 @@ function NgInvoiceSheet() {
                       )}
                     </td>
                   ))}
-                  <td style={td}><DocCell inv={inv} slot={{ key: "other", label: "Other" }} atts={bySlot.other} /></td>
                 </tr>
               );
             })}
