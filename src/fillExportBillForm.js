@@ -24,6 +24,11 @@ const C1 = {
   expAddr:   { x: 150, y: 351, size: 7, dy: 9 },      // address, wrapped lines downward
   expTel:    { x: 150, y: 301 },                      // "Contact number"
   expEmail:  { x: 150, y: 285, size: 7 },             // "E mail ID"
+  // Buyer's (Drawee) Details — right column, value cell x373.6–578
+  buyName:   { x: 380, y: 360 },                      // Buyer "Name and address" — line 1
+  buyAddr:   { x: 380, y: 351, size: 7, dy: 9 },      // buyer address lines
+  buyCountry:{ x: 380, y: 318 },                      // "Country"
+  buyEmail:  { x: 380, y: 301, size: 7 },             // "E mail Id"
 };
 
 const BLACK = rgb(0, 0, 0);
@@ -79,6 +84,10 @@ function amountInWords(currency, amount) {
  * @param {string}     [data.exporterAddress]   may contain "\n"
  * @param {string}     [data.exporterTel]
  * @param {string}     [data.exporterEmail]
+ * @param {string}     [data.buyerName]
+ * @param {string}     [data.buyerAddress]      may contain "\n"
+ * @param {string}     [data.buyerCountry]
+ * @param {string}     [data.buyerEmail]
  * @returns {Promise<Uint8Array>}   3-page filled form
  */
 export async function fillExportBillForm(data) {
@@ -87,6 +96,7 @@ export async function fillExportBillForm(data) {
     invNo = '', currency = '', amount = 0,
     portLoading = '', portDestination = '', origin = 'India',
     exporterName = '', exporterAddress = '', exporterTel = '', exporterEmail = '',
+    buyerName = '', buyerAddress = '', buyerCountry = '', buyerEmail = '',
   } = data;
 
   const pdfDoc = await PDFDocument.load(templateBytes);
@@ -125,6 +135,14 @@ export async function fillExportBillForm(data) {
   });
   dt(C1.expTel.x, C1.expTel.y, exporterTel, false);
   dt(C1.expEmail.x, C1.expEmail.y, exporterEmail, false, C1.expEmail.size);
+
+  // ── Buyer's (Drawee) Details ──
+  dt(C1.buyName.x, C1.buyName.y, buyerName, true);
+  (buyerAddress ? String(buyerAddress).split('\n') : []).forEach((ln, i) => {
+    dt(C1.buyAddr.x, C1.buyAddr.y - i * C1.buyAddr.dy, ln.trim(), false, C1.buyAddr.size);
+  });
+  dt(C1.buyCountry.x, C1.buyCountry.y, buyerCountry, false);
+  dt(C1.buyEmail.x, C1.buyEmail.y, buyerEmail, false, C1.buyEmail.size);
 
   // ── keep only the 3-page form (drop bank's internal checklists, pages 4-5) ──
   const last = pdfDoc.getPageCount() - 1;

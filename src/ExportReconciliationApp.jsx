@@ -647,6 +647,10 @@ function NgInvoiceSheet() {
         exporterAddress: NG_EXPORTER.address,
         exporterTel: NG_EXPORTER.tel,
         exporterEmail: NG_EXPORTER.email,
+        buyerName: buyerName(inv),
+        buyerAddress: buyer?.address || "",
+        buyerCountry: buyer?.country || "",
+        buyerEmail: buyer?.email || "",
       });
       const fileName = `BOI_Export_Bill_${(inv.invNo || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "-")}.pdf`;
       const blob = new Blob([bytes], { type: "application/pdf" });
