@@ -1032,7 +1032,7 @@ function NgInvoiceSheet() {
                       {s.key === "sbill" && inv.sbNo && (
                         <div title={bankRep ? (bankDue.has(sbKey(inv.sbNo)) ? "This SB is still outstanding on the bank report" : "Not on the bank outstanding report (as of import) — cleared") : "SB number read from the uploaded document"}
                           style={{ marginTop: 4, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", color: !bankRep ? C.inkFaint : bankDue.has(sbKey(inv.sbNo)) ? C.amber : C.green }}>
-                          SB {inv.sbNo}{bankRep ? (bankDue.has(sbKey(inv.sbNo)) ? " · ⚠ due in bank" : " · ✓ bank cleared") : ""}
+                          Shipping Bill number : {inv.sbNo}
                         </div>
                       )}
                     </td>
