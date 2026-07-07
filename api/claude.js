@@ -83,6 +83,53 @@ function outputText(data) {
   return chunks.join("");
 }
 
+// ── Folded-in endpoints (merged to stay under Vercel's 12-function limit) ──
+//  /api/openai → /api/claude?_ai=openai   (OpenAI chat/completions passthrough)
+//  /api/embed  → /api/claude?_ai=embed     (OpenAI embeddings)
+// Both are reached via rewrites in vercel.json; the route is detected below.
+function detectRoute(req) {
+  if (req.query?._ai) return req.query._ai;
+  const u = String(req.url || "");
+  if (/embed/.test(u)) return "embed";
+  if (/openai/.test(u)) return "openai";
+  return "claude";
+}
+
+async function handleOpenaiChat(req, res, key) {
+  try {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify(typeof req.body === "string" ? JSON.parse(req.body) : req.body),
+    });
+    const data = await r.json();
+    return res.status(r.status).json(data);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+}
+
+async function handleEmbed(req, res, key) {
+  try {
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    const input = body.input;
+    if (input == null || (Array.isArray(input) && input.length === 0)) {
+      return res.status(400).json({ error: "input (string or string[]) required" });
+    }
+    const r = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: "text-embedding-3-small", dimensions: 512, input }),
+    });
+    const data = await r.json();
+    if (!r.ok) return res.status(r.status).json({ error: data.error?.message || "embedding failed", details: data });
+    const embeddings = (data.data || []).sort((a, b) => (a.index || 0) - (b.index || 0)).map(d => d.embedding);
+    return res.status(200).json({ embeddings });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -90,6 +137,10 @@ export default async function handler(req, res) {
 
   const key = process.env.OPENAI_KEY || process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: { message: "OPENAI_KEY not set" } });
+
+  const route = detectRoute(req);
+  if (route === "openai") return handleOpenaiChat(req, res, key);
+  if (route === "embed") return handleEmbed(req, res, key);
 
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};

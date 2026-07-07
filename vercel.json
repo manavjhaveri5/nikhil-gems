@@ -11,11 +11,12 @@
     },
     "api/canva.js": {
       "maxDuration": 120
-    },
-    "api/openai.js": {
-      "maxDuration": 30
     }
   },
+  "rewrites": [
+    { "source": "/api/openai", "destination": "/api/claude?_ai=openai" },
+    { "source": "/api/embed", "destination": "/api/claude?_ai=embed" }
+  ],
   "headers": [
     {
       "source": "/sw.js",
