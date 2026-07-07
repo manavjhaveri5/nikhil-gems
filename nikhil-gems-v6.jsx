@@ -3879,7 +3879,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(tab==="unclassified"&&!isUnclassified(t))return false;
     if(tab==="debit"&&t.type!=="debit")return false;
     if(tab==="credit"&&t.type!=="credit")return false;
-    if(!(t.date||"").startsWith(month))return false;
+    // When searching, look across every month — a lone payee/ref shouldn't be hidden
+    // just because it lands outside the month currently in view. The month filter only
+    // constrains the normal (unsearched) statement view.
+    if(!search&&!(t.date||"").startsWith(month))return false;
     if(accountFilter&&t.accountFrom!==accountFilter&&t.accountTo!==accountFilter)return false;
     if(search){
       const q=search.toLowerCase();
@@ -4213,9 +4216,14 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
           <button className="bp" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setManualOpen(true)}>+ Manual entry</button>
           {isAdmin&&<button className="bs" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setAttachCfgOpen(true)} title="Choose which categories require an attachment">📎 Rules</button>}
-          <label style={{display:"flex",alignItems:"center",gap:6,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 7px"}}>
-            <span style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.55}}>Month</span>
-            <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} style={{...inputS,width:145,border:"none",background:"transparent",padding:"3px 4px"}}/>
+          {/* Calendar-icon month picker: shows a 📅 + friendly month label, and a transparent
+              native <input type="month"> overlaid on top so tapping opens the OS month wheel
+              (the native picker users get on their phone). Dimmed while searching, since search
+              spans every month and ignores this filter. */}
+          <label title={search?"Search spans all months — clear search to filter by month":"Pick month"} style={{position:"relative",display:"flex",alignItems:"center",gap:7,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 12px",cursor:"pointer",opacity:search?.45:1}}>
+            <span style={{fontSize:15,lineHeight:1}}>📅</span>
+            <span style={{fontSize:12,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>{monthLabel}</span>
+            <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} aria-label="Pick month" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",border:"none"}}/>
           </label>
           <select value={accountFilter} onChange={e=>setAccountFilter(e.target.value)} style={{...inputS,width:mob?"100%":180,cursor:"pointer"}}>
             <option value="">All accounts</option>
@@ -4307,7 +4315,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
               </div>
             )}
           </div>
-          {!loaded?<div style={{padding:"42px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>Loading ledger...</div>:filtered.length===0?<div style={{padding:"42px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>No ledger entries for {monthLabel}</div>:(
+          {!loaded?<div style={{padding:"42px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>Loading ledger...</div>:filtered.length===0?<div style={{padding:"42px 0",textAlign:"center",color:C.inkFaint,fontSize:12}}>{search?`No entries match "${search}" in any month`:`No ledger entries for ${monthLabel}`}</div>:(
             <div style={{maxHeight:mob?420:680,overflowY:"auto",overflowX:"hidden"}}>
               {statementRows.groups.map(group=>(
                 <div key={group.key}>
