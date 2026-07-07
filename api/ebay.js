@@ -217,6 +217,17 @@ function parseOrder(block) {
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
+  // Guarantee a JSON response: an unhandled throw otherwise returns Vercel's
+  // plain-text "A server error has occurred", which the client can't JSON.parse.
+  try {
+    return await handleEbay(req, res);
+  } catch (err) {
+    console.error("[ebay] unhandled error:", err);
+    if (!res.headersSent) return res.status(500).json({ error: err?.message || "eBay request failed" });
+  }
+}
+
+async function handleEbay(req, res) {
   const url    = new URL(req.url, `https://${req.headers.host}`);
   const action = url.searchParams.get("action");
 
@@ -361,9 +372,15 @@ export default async function handler(req, res) {
     let videoXml = "";
     let videoWarning = null;
     if (video && typeof video === "string" && video.startsWith("http")) {
-      const v = await uploadEbayVideo(video);
-      if (v.ok && v.videoId) videoXml = `<VideoDetails><VideoID>${esc(v.videoId)}</VideoID></VideoDetails>`;
-      else videoWarning = v.error || "video upload failed";
+      // Non-fatal: a thrown error here (e.g. missing eBay OAuth) must not crash
+      // the publish — fall back to listing without the video and warn the caller.
+      try {
+        const v = await uploadEbayVideo(video);
+        if (v.ok && v.videoId) videoXml = `<VideoDetails><VideoID>${esc(v.videoId)}</VideoID></VideoDetails>`;
+        else videoWarning = v.error || "video upload failed";
+      } catch (e) {
+        videoWarning = e?.message || "video upload failed";
+      }
     }
 
     if (existingId) {
