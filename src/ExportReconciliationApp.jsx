@@ -774,11 +774,12 @@ function NgInvoiceSheet() {
               style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
           </span>
         ))}
-        {/* BOI declaration is generate-only — no signed copy is uploaded back. */}
-        {slot.key !== "decl" && (
+        {/* One file per box: BOI is generate-only, and other slots only show
+            the Upload button until a file exists (delete it to re-upload). */}
+        {slot.key !== "decl" && !(atts || []).length && (
           <button onClick={() => pickFile(inv, slot)} disabled={uploading}
-            style={{ background: "none", border: `1px dashed ${(atts || []).length ? C.border : C.amber}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: uploading ? "default" : "pointer", color: (atts || []).length ? C.inkFaint : C.amber, textAlign: "left", whiteSpace: "nowrap" }}>
-            {uploading ? "⟳ Uploading…" : (atts || []).length ? "+ add" : "⬆ Upload"}
+            style={{ background: "none", border: `1px dashed ${C.amber}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: uploading ? "default" : "pointer", color: C.amber, textAlign: "left", whiteSpace: "nowrap" }}>
+            {uploading ? "⟳ Uploading…" : "⬆ Upload"}
           </button>
         )}
       </div>
