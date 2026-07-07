@@ -716,6 +716,8 @@ function NgInvoiceSheet() {
 
   const rows = invoices
     .filter(i => i.type !== "proforma")
+    // Export Recon is for exports only — INR invoices are domestic sales.
+    .filter(i => (i.currency || "").toUpperCase() !== "INR")
     .filter(i => { if (!q) return true; return `${i.invNo} ${buyerName(i)}`.toLowerCase().includes(q.toLowerCase()); })
     .map(i => {
       const bySlot = {};
