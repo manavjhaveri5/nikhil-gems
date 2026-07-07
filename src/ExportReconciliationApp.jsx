@@ -648,7 +648,8 @@ function NgInvoiceSheet() {
         exporterTel: NG_EXPORTER.tel,
         exporterEmail: NG_EXPORTER.email,
         buyerName: buyerName(inv),
-        buyerAddress: buyer?.address || "",
+        // Buyer address is stored in billingAddress (address is a legacy fallback).
+        buyerAddress: buyer?.billingAddress || buyer?.address || "",
         buyerCountry: buyer?.country || "",
         buyerEmail: buyer?.email || "",
       });

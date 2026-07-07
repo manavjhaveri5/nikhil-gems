@@ -25,10 +25,10 @@ const C1 = {
   expTel:    { x: 150, y: 301 },                      // "Contact number"
   expEmail:  { x: 150, y: 285, size: 7 },             // "E mail ID"
   // Buyer's (Drawee) Details — right column, value cell x373.6–578
-  buyName:   { x: 380, y: 360 },                      // Buyer "Name and address" — line 1
-  buyAddr:   { x: 380, y: 351, size: 7, dy: 9 },      // buyer address lines
-  buyCountry:{ x: 380, y: 318 },                      // "Country"
-  buyEmail:  { x: 380, y: 301, size: 7 },             // "E mail Id"
+  buyName:   { x: 380, y: 360 },                          // Buyer "Name and address" — line 1
+  buyAddr:   { x: 380, y: 351, size: 7, dy: 9, maxW: 195, maxLines: 3 }, // buyer address (wrapped)
+  buyCountry:{ x: 380, y: 318 },                          // "Country"
+  buyEmail:  { x: 380, y: 301, size: 7 },                 // "E mail Id"
 };
 
 const BLACK = rgb(0, 0, 0);
@@ -69,6 +69,20 @@ function amountInWords(currency, amount) {
   let s = `${cur} ${intToWords(whole)}`.trim();
   s += cents ? ` and ${cents}/100` : '';
   return s + ' Only';
+}
+
+// Greedy word-wrap to a max width (in pt) for a given pdf-lib font & size.
+function wrapToWidth(font, text, size, maxW) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const trial = line ? line + ' ' + w : w;
+    if (font.widthOfTextAtSize(trial, size) <= maxW || !line) { line = trial; }
+    else { lines.push(line); line = w; }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 
 /**
@@ -138,8 +152,10 @@ export async function fillExportBillForm(data) {
 
   // ── Buyer's (Drawee) Details ──
   dt(C1.buyName.x, C1.buyName.y, buyerName, true);
-  (buyerAddress ? String(buyerAddress).split('\n') : []).forEach((ln, i) => {
-    dt(C1.buyAddr.x, C1.buyAddr.y - i * C1.buyAddr.dy, ln.trim(), false, C1.buyAddr.size);
+  // Buyer address is free-form — normalise newlines/commas and wrap to the cell.
+  const rawAddr = String(buyerAddress || '').replace(/\s*\n\s*/g, ', ').replace(/\s+/g, ' ').trim();
+  wrapToWidth(hv, rawAddr, C1.buyAddr.size, C1.buyAddr.maxW).slice(0, C1.buyAddr.maxLines).forEach((ln, i) => {
+    dt(C1.buyAddr.x, C1.buyAddr.y - i * C1.buyAddr.dy, ln, false, C1.buyAddr.size);
   });
   dt(C1.buyCountry.x, C1.buyCountry.y, buyerCountry, false);
   dt(C1.buyEmail.x, C1.buyEmail.y, buyerEmail, false, C1.buyEmail.size);
