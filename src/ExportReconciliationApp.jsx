@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { loadK, loadKFresh, saveK, mob, onCacheRefresh, upsertVersionedItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
+import { fillExportBillForm } from "./fillExportBillForm.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
 
 /* ══ ERP THEME TOKENS ═══════════════════════════════════════════
@@ -470,6 +471,15 @@ const learner = (() => {
    shows up on the invoice inside the Invoices module and vice-versa. */
 const NG_INV_KEY = "ng-invoices-v2";
 const NG_BUYERS_KEY = "ng-buyers-v2";
+// Exporter (drawer) details for the BOI Export Bill Collection form — mirrors
+// the `CO` company constant in nikhil-gems-v6.jsx (kept local to avoid a
+// circular import: that file lazy-imports this module).
+const NG_EXPORTER = {
+  name: "Nikhil Gems",
+  address: "110, 19th Floor, Dariya Mahal A,\nNepeansea Road, Mumbai 400006, INDIA",
+  tel: "+91 9619248797",
+  email: "sejal.nikhilgems@gmail.com",
+};
 const NG_DOC_SLOTS = [
   { key: "sbill", label: "Shipping Bill",   match: /shipping\s*bill|\bsb\b/i },
   // HAWB and the shipping label are the same document for NG, so label
@@ -617,6 +627,39 @@ function NgInvoiceSheet() {
     try { await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: (latest.attachments || []).filter(a => a.id !== att.id) })); }
     catch (err) { setMsg({ ok: false, text: `Remove failed: ${err?.message || "check connection"}` }); }
   };
+  // Pre-fill page 1 of the BOI "Export Bill Collection" form from the invoice +
+  // company details, then download/open the 3-page form for printing & signing.
+  const generateBoiDecl = async inv => {
+    setBusy(`${inv.id}:decl-gen`); setMsg(null);
+    try {
+      const buyer = buyers.find(b => b.id === inv.buyerId);
+      const portDestination = inv.portDischarge || buyer?.port || buyer?.country || "";
+      const templateBytes = await (await fetch("/boi/export_bill_form.pdf")).arrayBuffer();
+      const bytes = await fillExportBillForm({
+        templateBytes,
+        invNo: inv.invNo || "",
+        currency: inv.currency || "",
+        amount: +inv.totalAmt || 0,
+        portLoading: inv.portLading || "Mumbai, India",
+        portDestination,
+        origin: "India",
+        exporterName: NG_EXPORTER.name,
+        exporterAddress: NG_EXPORTER.address,
+        exporterTel: NG_EXPORTER.tel,
+        exporterEmail: NG_EXPORTER.email,
+      });
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `BOI_Export_Bill_${(inv.invNo || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "-")}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setMsg({ ok: true, text: `BOI Export Bill form for ${inv.invNo} generated (3 pages, page 1 pre-filled) — print, sign & seal, then upload the scan.` });
+    } catch (err) {
+      setMsg({ ok: false, text: `Could not generate BOI form: ${err?.message || "check connection"}` });
+    } finally { setBusy(null); }
+  };
   const cycleStatus = async inv => {
     const next = NG_BANK_STATUS[ngStatusOf(inv)].next;
     try {
@@ -703,8 +746,16 @@ function NgInvoiceSheet() {
 
   const DocCell = ({ inv, slot, atts }) => {
     const uploading = busy === `${inv.id}:${slot.key}`;
+    const genBusy = busy === `${inv.id}:decl-gen`;
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 118 }}>
+        {slot.key === "decl" && (
+          <button onClick={() => generateBoiDecl(inv)} disabled={genBusy}
+            title="Auto-fill page 1 of the BOI Export Bill form and download it for printing & signing"
+            style={{ background: genBusy ? "none" : C.greenBg, border: `1px solid ${C.green}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: genBusy ? "default" : "pointer", color: C.green, fontWeight: 600, textAlign: "left", whiteSpace: "nowrap" }}>
+            {genBusy ? "⟳ Generating…" : "✨ Generate BOI"}
+          </button>
+        )}
         {(atts || []).map(a => (
           <span key={a.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.greenBg, border: `1px solid ${C.green}`, borderRadius: 6, padding: "2px 7px", fontSize: 11, maxWidth: 175 }}>
             <a href={a.url} target="_blank" rel="noreferrer" title={a.fileName || a.label}
