@@ -14,14 +14,80 @@
  *   POST ?action=update_item&item_id=xxx — ReviseItem (price, qty, title)
  */
 
-import { getEbayAccessToken } from "./ebay-auth.js";
-
 export const maxDuration = 60; // video upload + processing poll can exceed 30s
 
 const APP_ID     = process.env.EBAY_APP_ID     || process.env.EBAY_CLIENT_ID   || "";
 const DEV_ID     = process.env.EBAY_DEV_ID     || "";
 const CERT_ID    = process.env.EBAY_CERT_ID    || process.env.EBAY_CLIENT_SECRET || "";
 const USER_TOKEN = process.env.EBAY_USER_TOKEN || "";
+
+// ── eBay OAuth access token (Media API / video upload) ──────────────────────────
+// Inlined from the former api/ebay-auth.js, which was moved to api-disabled/ to
+// stay under Vercel's 12-function limit. Importing it statically crashed this whole
+// function (FUNCTION_INVOCATION_FAILED on every request). Trading API calls use the
+// Auth'n'Auth USER_TOKEN; only video upload needs this OAuth token.
+const EBAY_TOKEN_URL   = "https://api.ebay.com/identity/v1/oauth2/token";
+const EBAY_SESSION_KEY = "ng-ebay-oauth-session-v1";
+const EBAY_SCOPES = [
+  "https://api.ebay.com/oauth/api_scope",
+  "https://api.ebay.com/oauth/api_scope/sell.inventory",
+  "https://api.ebay.com/oauth/api_scope/sell.item",
+].join(" ");
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+const ebayBasicAuth = () => "Basic " + Buffer.from(`${APP_ID}:${CERT_ID}`).toString("base64");
+
+async function refreshEbayToken(refreshToken) {
+  const r = await fetch(EBAY_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: ebayBasicAuth() },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, scope: EBAY_SCOPES }),
+  });
+  return r.json();
+}
+async function loadEbayTokens() {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${EBAY_SESSION_KEY}&select=value`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    if (!r.ok) return null;
+    const rows = await r.json();
+    return rows?.[0]?.value || null;
+  } catch { return null; }
+}
+async function saveEbayTokens(tokens) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({ key: EBAY_SESSION_KEY, value: tokens }),
+    });
+  } catch {}
+}
+async function getEbayAccessToken() {
+  const stored = await loadEbayTokens();
+  if (stored) {
+    const age = (Date.now() - (stored.updated_at || 0)) / 1000;
+    const ttl = stored.expires_in || 7200;
+    if (stored.access_token && age < ttl - 300) return stored.access_token;
+    if (stored.refresh_token) {
+      const refreshed = await refreshEbayToken(stored.refresh_token);
+      if (refreshed.access_token) {
+        await saveEbayTokens({ access_token: refreshed.access_token, refresh_token: stored.refresh_token, expires_in: refreshed.expires_in || 7200, updated_at: Date.now() });
+        return refreshed.access_token;
+      }
+    }
+  }
+  if (process.env.EBAY_OAUTH_TOKEN) return process.env.EBAY_OAUTH_TOKEN;
+  if (process.env.EBAY_OAUTH_REFRESH_TOKEN) {
+    try {
+      const refreshed = await refreshEbayToken(process.env.EBAY_OAUTH_REFRESH_TOKEN);
+      if (refreshed.access_token) return refreshed.access_token;
+    } catch {}
+  }
+  return null;
+}
 
 const ENDPOINT   = "https://api.ebay.com/ws/api.dll";
 const COMPAT     = "967";
