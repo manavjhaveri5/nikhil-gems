@@ -476,6 +476,91 @@ function FinancialChart({chartData,months6,nextM,openPOtotal,pendingReceivables,
   );
 }
 
+// ══════════════════════════════════════════════════════════════════
+// MORNING STAND-UP (admin only) — daily "good morning" + plan the day
+// ══════════════════════════════════════════════════════════════════
+// getDay(): 0=Sun … 6=Sat. Mirrors the weekly business schedule.
+const WEEKLY_SCHEDULE={
+  1:{emoji:"💰",theme:"Accounts & Admin",items:["Record all income & expenses","Banking","GST & taxes","Invoice management","Supplier payments","Reconcile accounts","File paperwork","Review cash flow"]},
+  2:{emoji:"📧",theme:"Sales & Customers",items:["Reply to emails","Send weekly mailing list","Follow up with buyers","WhatsApp customers","Prepare quotations","Reach out to potential wholesale clients","Check inquiries from Etsy / eBay / Website"]},
+  3:{emoji:"🌍",theme:"Business Development",items:["Earth Editions — Review pricing","Earth Editions — Add new products","Earth Editions — Inventory updates","Atyahara — Work on website","Atyahara — Upload products","Atyahara — Improve pages","Atyahara — SEO & content"]},
+  4:{emoji:"📣",theme:"Marketing & Growth",items:["Create blog / newsletter","Reddit posts","Pinterest uploads","Improve Etsy / eBay SEO","Research trends","Plan promotions & offers","Analyze Instagram & website performance"]},
+  5:{emoji:"📸",theme:"Product Photography",items:["Photograph new products","Edit photos","Upload to Etsy / eBay / Earth Editions / Website","Archive to Google Drive"]},
+  6:{emoji:"🎥",theme:"Content Creation",items:["Plan Reel ideas","Script hooks & captions","Shoot Reels","Take supporting photos","Film behind-the-scenes","Batch create content"]},
+  0:{emoji:"✂️",theme:"Content Editing",items:["Edit all Reels","Create thumbnails","Write captions","Schedule content for the week","Prepare stories","Organize content folders"]},
+};
+const WEEKDAY_NAMES=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const STANDUP_SEEN_KEY="ng-standup-seen-v1";
+
+function MorningStandup({todoKey="ng-todos-v1",onClose}){
+  const now=new Date();
+  const dow=now.getDay();
+  const sched=WEEKLY_SCHEDULE[dow];
+  const hr=now.getHours();
+  const hello=hr<12?"Good morning":hr<17?"Good afternoon":"Good evening";
+  const [picked,setPicked]=useState(()=>new Set());
+  const [extra,setExtra]=useState("");
+  const [saving,setSaving]=useState(false);
+  const toggle=item=>setPicked(prev=>{const n=new Set(prev);n.has(item)?n.delete(item):n.add(item);return n;});
+  const extraLines=extra.split("\n").map(l=>l.replace(/^[-•*\d.)\s]+/,"").trim()).filter(Boolean);
+  const total=picked.size+extraLines.length;
+  const dismiss=()=>{try{localStorage.setItem(STANDUP_SEEN_KEY,today());}catch{}onClose();};
+  const addAll=async()=>{
+    if(total===0){dismiss();return;}
+    setSaving(true);
+    const texts=[...sched.items.filter(i=>picked.has(i)),...extraLines];
+    for(const text of texts){
+      await upsertItemK(todoKey,{id:uid(),text,done:false,dueDate:today(),recurring:"",createdAt:new Date().toISOString()},{prepend:false}).catch(()=>{});
+    }
+    setSaving(false);
+    dismiss();
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.5)",zIndex:950,display:"flex",alignItems:"center",justifyContent:"center",padding:mob?12:20}} onClick={e=>{if(e.target===e.currentTarget)dismiss();}}>
+      <div style={{background:C.surface,borderRadius:16,width:"100%",maxWidth:480,maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"var(--e-modal)",overflow:"hidden"}}>
+        {/* Header */}
+        <div style={{padding:mob?"18px 18px 14px":"22px 24px 16px",background:`linear-gradient(135deg, ${C.goldLight}, ${C.surface})`,borderBottom:`1px solid ${C.border}`,position:"relative"}}>
+          <button onClick={dismiss} title="Skip" style={{position:"absolute",top:12,right:14,background:"none",border:"none",cursor:"pointer",fontSize:22,color:C.inkFaint,lineHeight:1}}>&times;</button>
+          <div style={{fontSize:mob?26:30,marginBottom:4}}>🌅</div>
+          <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?23:27,fontWeight:600,color:C.ink,lineHeight:1.1}}>{hello}, Nikhil</div>
+          <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>{WEEKDAY_NAMES[dow]} · {fmtDate(today())}</div>
+        </div>
+        {/* Body */}
+        <div style={{padding:mob?"14px 16px":"18px 24px",overflowY:"auto",flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+            <span style={{fontSize:18}}>{sched.emoji}</span>
+            <div>
+              <div style={{fontSize:15,fontWeight:600,color:C.ink,lineHeight:1.1}}>{sched.theme}</div>
+              <div style={{fontSize:11,color:C.inkFaint}}>Tap what you'll tackle today — it goes straight to your To-Do</div>
+            </div>
+          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
+            {sched.items.map(item=>{const on=picked.has(item);return(
+              <button key={item} onClick={()=>toggle(item)}
+                style={{fontSize:12.5,padding:"6px 12px",borderRadius:8,border:`1.5px solid ${on?C.ink:C.border}`,background:on?C.ink:"transparent",color:on?"#FAF0DC":C.inkMid,cursor:"pointer",fontWeight:on?600:400,transition:"all .12s",textAlign:"left"}}>
+                {on?"✓ ":""}{item}
+              </button>
+            );})}
+          </div>
+          <div style={{fontSize:11,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>Anything else? (one per line)</div>
+          <textarea value={extra} onChange={e=>setExtra(e.target.value)} rows={mob?3:4}
+            placeholder={"Call the polisher\nDraft newsletter\nPack Etsy orders"}
+            style={{...FI,width:"100%",boxSizing:"border-box",resize:"vertical",fontSize:mob?16:13,lineHeight:1.5,fontFamily:"inherit"}}/>
+        </div>
+        {/* Footer */}
+        <div style={{padding:mob?"12px 16px":"14px 24px",borderTop:`1px solid ${C.border}`,display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={dismiss} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 16px",cursor:"pointer",fontSize:13,color:C.inkMid}}>Skip today</button>
+          <div style={{flex:1}}/>
+          <button onClick={addAll} disabled={saving}
+            style={{background:total>0?C.ink:C.inkFaint,border:"none",borderRadius:8,padding:"10px 20px",cursor:saving?"default":"pointer",fontSize:13.5,fontWeight:600,color:"#FAF0DC",opacity:saving?.7:1}}>
+            {saving?"Adding…":total>0?`Add ${total} & start day →`:"Start day →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
   const t=useT();
   const visibleMods=allowedMods||MODS;
@@ -496,6 +581,13 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   const [dashToast,setDashToast]=useState("");
   const showToast=m=>{setDashToast(m);setTimeout(()=>setDashToast(""),3000);};
   const todayStr=today();
+  // Morning stand-up: once per day, admin only — greet + plan today's tasks
+  const [showStandup,setShowStandup]=useState(false);
+  useEffect(()=>{
+    if(!isAdmin)return;
+    let seen="";try{seen=localStorage.getItem(STANDUP_SEEN_KEY)||"";}catch{}
+    if(seen!==today())setShowStandup(true);
+  },[isAdmin]);
   // Quick Sell widget state
   const [qsCustomsDescs,setQsCustomsDescs]=useState([]);
   useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setQsCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]));},[]);
@@ -686,6 +778,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   return(
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"-apple-system,'SF Pro Display',Figtree,system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
       {assignOpen&&<AssignLocationsModal onClose={()=>setAssignOpen(false)} onSaved={count=>{showToast(`✓ ${count} location${count!==1?"s":""} saved`);loadK(KEYS.stock).then(s=>setUnassignedStock((s||[]).filter(x=>!x.location)));setTimeout(()=>setAssignOpen(false),800);}}/>}
+      {showStandup&&<MorningStandup todoKey={todoKey} onClose={()=>setShowStandup(false)}/>}
       <Toast msg={dashToast}/>
 
       {/* Topbar — frosted glass */}
