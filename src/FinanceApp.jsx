@@ -1190,7 +1190,6 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
   const [filterSearch, setFilterSearch] = useState("");
   const [confirmDel,   setConfirmDel]   = useState(null);
   const [classifyTxn,  setClassifyTxn]  = useState(null);
-  const [sortBy,       setSortBy]       = useState("txnDate");
   const [editAccTxn,   setEditAccTxn]   = useState(null);
   const [editTxn,      setEditTxn]      = useState(null);
   const [attachTxn,    setAttachTxn]    = useState(null);
@@ -1198,11 +1197,10 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
 
   const isBackdated = t => t.createdAt && t.createdAt.slice(0,10) !== t.date;
 
-  // Always sort by txn date asc for bank-statement view when account filtered
-  const sorted = [...transactions].sort((a, b) => {
-    if (sortBy === "entryDate") return (b.createdAt || b.date).localeCompare(a.createdAt || a.date);
-    return a.date.localeCompare(b.date); // asc for running balance
-  });
+  // Ledger always shows newest-logged first, so entries you just added surface at
+  // the top regardless of their transaction date. The running balance below is
+  // computed chronologically so it stays correct despite this display order.
+  const sorted = [...transactions].sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date));
   const filtered = sorted.filter(t => {
     if (filterAcc    && t.accountFrom !== filterAcc && t.accountTo !== filterAcc) return false;
     if (filterType   && t.type !== filterType) return false;
@@ -1214,17 +1212,24 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
     return true;
   });
 
-  // Running balance per row (only meaningful when a single account is selected)
+  // Running balance per row (only meaningful when a single account is selected).
+  // Computed in chronological order (txn date, then entry time) so each row shows
+  // the correct balance-as-of-that-txn even though the list is displayed newest-first.
   const accObj = accounts.find(a => a.id === filterAcc);
-  const runningBals = (() => {
-    if (!filterAcc || !accObj) return null;
+  const { balById, closingBal } = (() => {
+    if (!filterAcc || !accObj) return { balById: null, closingBal: null };
+    const chron = [...filtered].sort((a, b) =>
+      (a.date || "").localeCompare(b.date || "") || (a.createdAt || "").localeCompare(b.createdAt || ""));
     let bal = +(accObj.openingBal || 0);
-    return filtered.map(t => {
+    const m = new Map();
+    chron.forEach(t => {
       if (t.type === "credit") bal += +t.amount;
       else if (t.type === "debit") bal -= +t.amount;
-      return bal;
+      m.set(t.id, bal);
     });
+    return { balById: m, closingBal: bal };
   })();
+  const runningBals = balById ? filtered.map(t => balById.get(t.id)) : null;
 
   const getAcc = id => accounts.find(a => a.id === id);
   const FI = { background: C.surface, border: `1px solid ${C.border}`, color: C.ink, borderRadius: 5, padding: "5px 9px", fontSize: mob ? 14 : 12, fontFamily: "inherit" };
@@ -1241,7 +1246,7 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
     rows.forEach((t, i) => {
       const debit  = t.type === "debit"   ? (+t.amount).toFixed(2) : "";
       const credit = t.type === "credit"  ? (+t.amount).toFixed(2) : "";
-      const bal    = runningBals ? runningBals[i].toFixed(2) : "";
+      const bal    = balById ? (balById.get(t.id) || 0).toFixed(2) : "";
       const row = [
         t.date,
         `"${(t.payee || "").replace(/"/g,'""')}"`,
@@ -1318,11 +1323,6 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
         {(filterAcc || filterType || filterMonth || filterSearch) &&
           <button onClick={() => { setFilterAcc(""); setFilterType(""); setFilterMonth(""); setFilterSearch(""); }} style={{ ...FI, cursor: "pointer", color: C.gold, border: "none", background: "none" }}>✕ Clear</button>}
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 2, background: C.card, borderRadius: 5, padding: 2, border: `1px solid ${C.border}` }}>
-            {[["txnDate","By Date"],["entryDate","Recently Logged"]].map(([id,label]) => (
-              <button key={id} onClick={() => setSortBy(id)} style={{ background: sortBy===id ? C.surface : "transparent", color: sortBy===id ? C.ink : C.inkMid, border: sortBy===id ? `1px solid ${C.border}` : "1px solid transparent", borderRadius: 4, padding: "4px 10px", cursor: "pointer", fontSize: 11, whiteSpace: "nowrap", transition: "all .15s" }}>{label}</button>
-            ))}
-          </div>
           <button onClick={exportCSV} style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 6, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
             ↓ {selected.size > 0 ? `Download ${selected.size}` : "Download All"}
           </button>
@@ -1337,7 +1337,7 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
           <span style={{ color: C.green }}>In: {inrFmt(totalIn)}</span>
           <span style={{ color: C.red }}>Out: {inrFmt(totalOut)}</span>
           <span style={{ color: C.ink, fontWeight: 600 }}>Net: {`${totalIn - totalOut >= 0 ? "+" : ""}${inrFmt(totalIn - totalOut)}`}</span>
-          {runningBals && <span style={{ color: C.inkMid, marginLeft: "auto" }}>Closing: ₹{runningBals[runningBals.length-1]?.toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>}
+          {closingBal != null && <span style={{ color: C.inkMid, marginLeft: "auto" }}>Closing: ₹{closingBal.toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>}
         </div>
       )}
 
