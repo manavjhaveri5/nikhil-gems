@@ -101,9 +101,9 @@ export const DEMO_DATA = {
 
   // ── FINANCE ACCOUNTS ──────────────────────────────────────────────────────
   "ng-fin-accounts-v1": [
-    { id:"fa-boi-0451", name:"Bank of India — 0451", type:"bank",   balance:682500, currency:"INR" },
-    { id:"fa-cash-01",  name:"Office Cash",          type:"cash",   balance:18000,  currency:"INR" },
-    { id:"fa-usd-01",   name:"USD Account",          type:"bank",   balance:8650,   currency:"USD" },
+    { id:"fa-boi-0451", name:"Bank of India — 0451", type:"bank",   balance:682500, currency:"INR", active:true },
+    { id:"fa-cash-01",  name:"Office Cash",          type:"cash",   balance:18000,  currency:"INR", active:true },
+    { id:"fa-usd-01",   name:"USD Account",          type:"bank",   balance:8650,   currency:"USD", active:true },
   ],
 
   // ── GEM SHOWS ─────────────────────────────────────────────────────────────

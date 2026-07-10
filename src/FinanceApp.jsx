@@ -793,7 +793,11 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
 
   const accFrom = accounts.find(a => a.id === accountFrom);
   const accTo   = accounts.find(a => a.id === accountTo);
-  const convToAmt = type === "conversion" && amount && convRate ? (+amount * +convRate) : null;
+  // Same-currency transfer (e.g. bank → cash, both INR) is a plain 1:1 move — no rate needed.
+  const sameCur = type === "conversion" && accFrom && accTo && accFrom.currency === accTo.currency;
+  const convToAmt = type === "conversion" && amount
+    ? (sameCur ? +amount : (convRate ? +amount * +convRate : null))
+    : null;
   const activeAccs = accounts.filter(a => a.active);
   const FI = { background: C.surface, border: `1.5px solid ${C.border}`, color: C.ink, borderRadius: 6, padding: mob ? "10px 12px" : "8px 11px", fontSize: mob ? 16 : 13, width: "100%", fontFamily: "inherit" };
 
@@ -804,13 +808,13 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
     if (type === "credit"     && !accountTo)   return setErr("Select destination account");
     if (type === "debit"      && !accountFrom) return setErr("Select source account");
     if (type === "conversion" && (!accountFrom || !accountTo)) return setErr("Select both accounts");
-    if (type === "conversion" && (!convRate || +convRate <= 0)) return setErr("Enter conversion rate");
+    if (type === "conversion" && !sameCur && (!convRate || +convRate <= 0)) return setErr("Enter conversion rate");
     const txn = {
       id: uid(), date, type,
       accountFrom: type !== "credit"     ? accountFrom : undefined,
       accountTo:   type !== "debit"      ? accountTo   : undefined,
       amount: +amount,
-      convRate: type === "conversion"    ? +convRate   : undefined,
+      convRate: type === "conversion"    ? (sameCur ? 1 : +convRate) : undefined,
       currency: type === "credit" ? accTo?.currency : accFrom?.currency,
       payee, category, notes,
       refType: refType || undefined,
@@ -885,7 +889,9 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
           <>
             <div>
               <FTag>Rate: 1 {accFrom?.currency || "?"} = ? {accTo?.currency || "?"}</FTag>
-              <input type="number" value={convRate} onChange={e => setConvRate(e.target.value)} placeholder="e.g. 85" style={FI} step="0.0001" min="0" />
+              {sameCur
+                ? <div style={{ ...FI, background: C.card, color: C.inkMid, display: "flex", alignItems: "center" }}>1 : 1 · same currency</div>
+                : <input type="number" value={convRate} onChange={e => setConvRate(e.target.value)} placeholder="e.g. 85" style={FI} step="0.0001" min="0" />}
             </div>
             <div>
               <FTag>You Receive ({accTo?.currency || "?"})</FTag>
