@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, forwardRef, useImperativeHandle } from "react";
 import { C, FI, Field } from "./ui.jsx";
 import { mob, uid, fmtDate } from "./utils.js";
 import { aiSuggest } from "./classifyLearner.js";
@@ -18,11 +18,12 @@ import { aiSuggest } from "./classifyLearner.js";
 const DEFAULT_RATES = { USD: 85, EUR: 92, JPY: 0.57, GBP: 107, AUD: 55, INR: 1 };
 const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "A$" };
 
-export default function ClassifyTransactionModal({
+const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
   rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
   learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, interCo = null, reclassifyDirty = false, onSave, onClose,
-}) {
+  inline = false, onValidityChange,
+}, ref) {
   // The learner's local match (if any) pre-fills the form for unclassified txns.
   const L = (!txn.classifiedAs && learned) ? learned : null;
   const R = { ...DEFAULT_RATES, ...(rates || {}) };
@@ -322,6 +323,10 @@ export default function ClassifyTransactionModal({
     await onSave({ classifiedAs: classType, classifiedRef, sideEffects, aiSuggestion: aiSug || null });
   };
 
+  // Inline mode: let the surrounding form trigger our save and know when we're ready.
+  useImperativeHandle(ref, () => ({ submit: save, canSave }));
+  useEffect(() => { onValidityChange?.(canSave); }, [canSave]);
+
   const optionBtn = (id, label, desc, color) => (
     <button key={id} onClick={() => setClassType(id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: classType === id ? C.card : C.surface, border: `1.5px solid ${classType === id ? color : C.border}`, borderRadius: 8, cursor: "pointer", textAlign: "left", width: "100%" }}>
       <div style={{ width: 10, height: 10, borderRadius: "50%", background: classType === id ? color : C.border, flexShrink: 0 }} />
@@ -353,12 +358,14 @@ export default function ClassifyTransactionModal({
     </div>
   );
   return (
-    <div onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position: "fixed", inset: 0, zIndex: 95, background: "rgba(26,19,8,.48)", display: "flex", alignItems: mob ? "stretch" : "center", justifyContent: "center", padding: mob ? 0 : 16 }}>
-      <div onMouseDown={e => e.stopPropagation()} style={{ width: mob ? "100%" : 500, maxWidth: "100%", height: mob ? "100%" : "auto", maxHeight: mob ? "100%" : "90vh", overflowY: "auto", background: C.bg, border: mob ? "none" : `1.5px solid ${C.border}`, borderRadius: mob ? 0 : 12, padding: mob ? "20px 16px" : "24px 26px", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+    <div onMouseDown={e => { if (!inline && e.target === e.currentTarget) onClose(); }} style={inline ? {} : { position: "fixed", inset: 0, zIndex: 95, background: "rgba(26,19,8,.48)", display: "flex", alignItems: mob ? "stretch" : "center", justifyContent: "center", padding: mob ? 0 : 16 }}>
+      <div onMouseDown={e => e.stopPropagation()} style={inline ? {} : { width: mob ? "100%" : 500, maxWidth: "100%", height: mob ? "100%" : "auto", maxHeight: mob ? "100%" : "90vh", overflowY: "auto", background: C.bg, border: mob ? "none" : `1.5px solid ${C.border}`, borderRadius: mob ? 0 : 12, padding: mob ? "20px 16px" : "24px 26px", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+        {!inline && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div><div style={{ fontWeight: 800, fontSize: 15, color: C.ink }}>Classify Transaction</div><div style={{ fontSize: 12, color: C.inkFaint, marginTop: 3 }}>{sym}{txnAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })} · {txn.payee || "No payee"} · {fmtDate(txn.date)}</div></div>
           <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 18, lineHeight: 1, padding: "0 4px" }}>×</button>
         </div>
+        )}
         {/* Learner suggestion banner */}
         {L && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", marginBottom: 14, background: C.greenBg, border: `1px solid ${C.green}55`, borderRadius: 9, fontSize: 12, color: C.ink }}>
@@ -487,8 +494,10 @@ export default function ClassifyTransactionModal({
         </div>}
         {(classType === "expense" || classType === "vendor_bill") && invoices.length > 0 && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}><Field label="Link to Invoice (optional)"><select value={linkedInvId} onChange={e => setLinkedInvId(e.target.value)} style={SI}><option value="">- Not linked to an invoice -</option>{invoices.map(inv => <option key={inv.id} value={inv.id}>{inv.invNo || inv.number || "Invoice"} · {fmtDate(inv.date)}{inv.totalAmt ? ` · ${inv.currency || "$"} ${(+inv.totalAmt).toLocaleString()}` : ""}</option>)}</select></Field></div>}
         <datalist id="acct-class-vendors">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist>
-        <div style={{ display: "flex", gap: 10, marginTop: 22 }}><button onClick={save} disabled={!canSave} style={{ flex: 1, background: C.gold, border: "none", color: "#fff", borderRadius: 7, padding: "10px 0", fontWeight: 800, fontSize: 13, cursor: canSave ? "pointer" : "not-allowed", opacity: canSave ? 1 : .5, fontFamily: "inherit" }}>Save Classification</button><button onClick={onClose} style={{ padding: "10px 16px", background: C.surface, border: `1.5px solid ${C.border}`, color: C.ink, borderRadius: 7, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div>
+        {!inline && <div style={{ display: "flex", gap: 10, marginTop: 22 }}><button onClick={save} disabled={!canSave} style={{ flex: 1, background: C.gold, border: "none", color: "#fff", borderRadius: 7, padding: "10px 0", fontWeight: 800, fontSize: 13, cursor: canSave ? "pointer" : "not-allowed", opacity: canSave ? 1 : .5, fontFamily: "inherit" }}>Save Classification</button><button onClick={onClose} style={{ padding: "10px 16px", background: C.surface, border: `1.5px solid ${C.border}`, color: C.ink, borderRadius: 7, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div>}
       </div>
     </div>
   );
-}
+});
+
+export default ClassifyTransactionModal;

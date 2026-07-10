@@ -776,7 +776,7 @@ function PayeePicker({ value, onChange, type, vendors = [], purchases = [], invo
 }
 
 // ─── Add Transaction Form ─────────────────────────────────────────────────────
-function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCancel }) {
+function AddTxnForm({ accounts, invoices, purchases, vendors = [], buyers = [], rates, expenseCats = [], onSave, onSaveClassified, onCancel }) {
   const [type, setType] = useState("credit");
   const [date, setDate] = useState(today());
   const [accountFrom, setAccountFrom] = useState("");
@@ -784,12 +784,13 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
   const [amount, setAmount] = useState("");
   const [convRate, setConvRate] = useState("");
   const [payee, setPayee] = useState("");
-  const [category, setCategory] = useState("");
   const [notes, setNotes] = useState("");
   const [refType, setRefType] = useState("");
   const [refId, setRefId] = useState("");
   const [err, setErr] = useState("");
-  const [classifyNow, setClassifyNow] = useState(true);
+  const [canClassify, setCanClassify] = useState(false);
+  const txnIdRef = useRef(uid());       // stable id shared by the draft txn + its classification
+  const classifyRef = useRef(null);     // inline classifier's imperative handle
 
   const accFrom = accounts.find(a => a.id === accountFrom);
   const accTo   = accounts.find(a => a.id === accountTo);
@@ -801,28 +802,45 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
   const activeAccs = accounts.filter(a => a.active);
   const FI = { background: C.surface, border: `1.5px solid ${C.border}`, color: C.ink, borderRadius: 6, padding: mob ? "10px 12px" : "8px 11px", fontSize: mob ? 16 : 13, width: "100%", fontFamily: "inherit" };
 
+  const validateTop = () => {
+    if (!date)   return "Date is required";
+    if (!amount || +amount <= 0) return "Enter a valid amount";
+    if (type === "credit"     && !accountTo)   return "Select destination account";
+    if (type === "debit"      && !accountFrom) return "Select source account";
+    if (type === "conversion" && (!accountFrom || !accountTo)) return "Select both accounts";
+    if (type === "conversion" && !sameCur && (!convRate || +convRate <= 0)) return "Enter conversion rate";
+    return "";
+  };
+  const buildTxn = () => ({
+    id: txnIdRef.current, date, type,
+    accountFrom: type !== "credit"     ? accountFrom : undefined,
+    accountTo:   type !== "debit"      ? accountTo   : undefined,
+    amount: +amount,
+    convRate: type === "conversion"    ? (sameCur ? 1 : +convRate) : undefined,
+    currency: type === "credit" ? accTo?.currency : accFrom?.currency,
+    payee, notes,
+    refType: refType || undefined,
+    refId:   refId   || undefined,
+    createdAt: new Date().toISOString(),
+  });
+  // Live draft handed to the inline classifier so it reads amount/account/direction as you type.
+  const draftTxn = buildTxn();
+  // Primary save: validate the top fields, then let the inline classifier fire its onSave
+  // (which rebuilds the txn and applies the classification) — one action, no popup.
   const submit = () => {
     setErr("");
-    if (!date)   return setErr("Date is required");
-    if (!amount || +amount <= 0) return setErr("Enter a valid amount");
-    if (type === "credit"     && !accountTo)   return setErr("Select destination account");
-    if (type === "debit"      && !accountFrom) return setErr("Select source account");
-    if (type === "conversion" && (!accountFrom || !accountTo)) return setErr("Select both accounts");
-    if (type === "conversion" && !sameCur && (!convRate || +convRate <= 0)) return setErr("Enter conversion rate");
-    const txn = {
-      id: uid(), date, type,
-      accountFrom: type !== "credit"     ? accountFrom : undefined,
-      accountTo:   type !== "debit"      ? accountTo   : undefined,
-      amount: +amount,
-      convRate: type === "conversion"    ? (sameCur ? 1 : +convRate) : undefined,
-      currency: type === "credit" ? accTo?.currency : accFrom?.currency,
-      payee, category, notes,
-      refType: refType || undefined,
-      refId:   refId   || undefined,
-      createdAt: new Date().toISOString(),
-    };
-    onSave(txn, classifyNow);
+    const v = validateTop(); if (v) return setErr(v);
+    if (type === "conversion") { onSave(buildTxn(), false); return; }
+    if (!canClassify) return setErr("Complete the classification below");
+    classifyRef.current?.submit();
   };
+  // Escape hatch: record the raw entry now, classify later from the ledger.
+  const submitRaw = () => {
+    setErr("");
+    const v = validateTop(); if (v) return setErr(v);
+    onSave(buildTxn(), false);
+  };
+  const handleInlineClassify = (result) => onSaveClassified(buildTxn(), result);
 
   // Auto-fill from invoice link
   useEffect(() => {
@@ -830,7 +848,6 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
       const inv = invoices.find(i => i.id === refId);
       if (inv) {
         setPayee(inv.buyerName || inv.buyerId || "");
-        setCategory("FIRC / Inward Remittance");
         setAmount(String((+inv.totalAmt || 0) - (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0)));
       }
     }
@@ -847,7 +864,7 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
           { id: "debit",      label: "🔴 Debit (Money Out)" },
           { id: "conversion", label: "🔄 Conversion / Transfer" },
         ].map(t => (
-          <button key={t.id} onClick={() => { setType(t.id); setAccountFrom(""); setAccountTo(""); setCategory(""); }}
+          <button key={t.id} onClick={() => { setType(t.id); setAccountFrom(""); setAccountTo(""); }}
             style={{ flex: 1, padding: mob ? "11px 6px" : "10px 8px", background: type === t.id ? C.ink : C.surface, color: type === t.id ? "#FAF0DC" : C.inkMid, border: `1.5px solid ${type === t.id ? C.ink : C.border}`, borderRadius: 8, cursor: "pointer", fontSize: mob ? 13 : 11, fontWeight: 600, transition: "all .15s" }}>
             {t.label}
           </button>
@@ -907,13 +924,6 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
           <PayeePicker value={payee} onChange={setPayee} type={type} vendors={vendors} purchases={purchases} invoices={invoices} style={FI} />
         </div>
 
-        <div>
-          <FTag>Category</FTag>
-          <select value={category} onChange={e => setCategory(e.target.value)} style={FI}>
-            <option value="">— Select —</option>
-            {(TXN_CATS[type] || []).map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
       </div>
 
       {/* Link to Invoice / Bill */}
@@ -949,24 +959,37 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], onSave, onCan
         <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="FIRC number, reference, any details..." style={{ ...FI, height: 64, resize: "vertical" }} />
       </div>
 
-      {err && <div style={{ background: C.redBg, color: C.red, borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 14 }}>{err}</div>}
-
-      {/* Classify now toggle */}
+      {/* Classification — inline, so a manual entry is one flow (no separate popup) */}
       {type !== "conversion" && (
-        <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18, cursor: "pointer", userSelect: "none" }}>
-          <div onClick={() => setClassifyNow(v => !v)} style={{ width: 38, height: 22, borderRadius: 11, background: classifyNow ? C.green : C.card, border: `1.5px solid ${classifyNow ? C.green : C.border}`, position: "relative", transition: "background .2s, border-color .2s", flexShrink: 0 }}>
-            <div style={{ position: "absolute", top: 2, left: classifyNow ? 17 : 2, width: 15, height: 15, borderRadius: "50%", background: classifyNow ? "#fff" : C.inkFaint, transition: "left .2s" }} />
+        <div style={{ marginBottom: 18 }}>
+          <FTag>Classification</FTag>
+          <div style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: mob ? 12 : 14, background: C.card }}>
+            <ClassifyTransactionModal
+              inline
+              key={type}
+              ref={classifyRef}
+              txn={draftTxn}
+              accounts={accounts}
+              vendors={vendors}
+              purchases={purchases}
+              invoices={invoices}
+              buyers={buyers}
+              rates={rates}
+              expenseCats={expenseCats}
+              onValidityChange={setCanClassify}
+              onSave={handleInlineClassify}
+              onClose={() => {}}
+            />
           </div>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>Classify now</div>
-            <div style={{ fontSize: 11, color: C.inkFaint }}>{classifyNow ? "You'll classify this right after saving" : "Skip — classify later from the ledger"}</div>
-          </div>
-        </label>
+        </div>
       )}
 
-      <div style={{ display: "flex", gap: 10 }}>
-        <button onClick={submit} className="fbp">{classifyNow && type !== "conversion" ? "Save & Classify →" : "Save Transaction"}</button>
+      {err && <div style={{ background: C.redBg, color: C.red, borderRadius: 7, padding: "8px 12px", fontSize: 13, marginBottom: 14 }}>{err}</div>}
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <button onClick={submit} className="fbp" disabled={type !== "conversion" && !canClassify} style={type !== "conversion" && !canClassify ? { opacity: .5, cursor: "not-allowed" } : undefined}>{type === "conversion" ? "Save Transfer" : "Save Transaction"}</button>
         <button onClick={onCancel} className="fbs">Cancel</button>
+        {type !== "conversion" && <button onClick={submitRaw} style={{ marginLeft: "auto", background: "none", border: "none", color: C.inkFaint, fontSize: 12, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}>Save without classifying</button>}
       </div>
     </div>
   );
@@ -2796,10 +2819,10 @@ export default function FinanceApp({ onHome }) {
     showToast(`✓ ${acc.name} corrected to ${fmtAmt(+targetBalance, acc.currency)}`);
   };
 
-  const handleClassify = async (txnId, { classifiedAs, classifiedRef, sideEffects = {} }) => {
+  const handleClassify = async (txnId, { classifiedAs, classifiedRef, sideEffects = {} }, baseTxns = txns) => {
     const _accountPatch = sideEffects.txnPatch;
     const keys = companyKeys(company);
-    const newTxns = txns.map(t => t.id === txnId ? { ...t, classifiedAs, classifiedRef, classifiedAt: new Date().toISOString(), ...(_accountPatch || {}) } : t);
+    const newTxns = baseTxns.map(t => t.id === txnId ? { ...t, classifiedAs, classifiedRef, classifiedAt: new Date().toISOString(), ...(_accountPatch || {}) } : t);
     setTxns(newTxns);
     await saveK(keys.transactions, newTxns);
 
@@ -2846,6 +2869,13 @@ export default function FinanceApp({ onHome }) {
     showToast("✓ Classified");
   };
 
+  // Inline manual entry: add the txn and apply its classification in one pass (against a
+  // base list that already includes the new txn, so there's no setState race).
+  const saveTxnClassified = async (txn, result) => {
+    await handleClassify(txn.id, result, [txn, ...txns]);
+    setView("dashboard");
+  };
+
   const balances  = computeBalances(accounts, txns);
   const totalINR  = accounts.filter(a => a.active).reduce((s, a) => {
   const bal = toINR(balances[a.id] || 0, a.currency, rates);
@@ -2860,7 +2890,7 @@ export default function FinanceApp({ onHome }) {
           {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} />}
           {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
-          {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} vendors={vendors} onSave={saveTxn} onCancel={() => setView("dashboard")} />}
+          {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onAdjustBalance={adjustBalance} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
           {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} onUpdate={updateTxn} />}
           {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [] }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank"); }} />}
