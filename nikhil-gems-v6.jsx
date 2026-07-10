@@ -7248,16 +7248,25 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         {(()=>{
                           const mkts=Array.isArray(s.market)?s.market:[s.market].filter(Boolean);
                           const MARKET_ICON={"India":"🇮🇳","Tucson":"🌵","Denver":"🏔","Japan":"🇯🇵","Etsy/Online":"🌐","General":"📦"};
+                          // Marketplace listing badges — brand-colored when listed, faded grey placeholder when not
+                          const STOCK_PLATFORMS=[
+                            {key:"etsy",   label:"Etsy",   short:"E",  color:"#F56400", listed:!!s.postedEtsy},
+                            {key:"shopify",label:"Shopify",short:"S",  color:"#008060", listed:!!s.postedShopify},
+                            {key:"ebay",   label:"eBay",   short:"eB", color:"#0064D2", listed:!!s.postedEbay},
+                            {key:"wix",    label:"Wix",    short:"W",  color:"#7B2FF7", listed:!!s.postedWix},
+                          ];
                           const chips=[];
                           if(s.photographed) chips.push({icon:"📷",label:"Photographed",key:"photo"});
-                          if(s.postedShopify) chips.push({icon:"🛍",label:"Shopify",key:"shopify"});
-                          if(s.postedEtsy)    chips.push({icon:"🧵",label:"Etsy",key:"etsy"});
-                          if(s.postedWix)     chips.push({icon:"🌐",label:"Wix",key:"wix"});
                           mkts.filter(m=>m&&m!=="Unassigned").forEach(m=>chips.push({icon:MARKET_ICON[m]||"📍",label:m,key:"mkt-"+m}));
                           if(s.billLineId)    chips.push({icon:"↗",label:"From bill",key:"bill",color:C.teal});
                           if(isFutureDate)    chips.push({icon:"⚠",label:"Future date",key:"future",color:C.amber});
                           return(
-                            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:4,marginTop:chips.length||s.showTag||s.productType?6:0}}>
+                            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:4,marginTop:6}}>
+                              {STOCK_PLATFORMS.map(p=>(
+                                <span key={p.key} title={p.listed?`Listed on ${p.label}`:`Not listed on ${p.label}`} style={p.listed
+                                  ?{background:p.color,color:"#fff",borderRadius:10,padding:"1px 6px",fontSize:8,fontWeight:700,lineHeight:1.5,letterSpacing:.2}
+                                  :{background:C.card,color:C.inkFaint,border:`1px solid ${C.border}`,borderRadius:10,padding:"0 5px",fontSize:8,fontWeight:700,lineHeight:1.5,letterSpacing:.2,opacity:.4}}>{p.short}</span>
+                              ))}
                               {chips.map(c=>(
                                 <span key={c.key} title={c.label} style={c.color?{fontSize:12,lineHeight:1,color:c.color}:{fontSize:12,lineHeight:1,filter:"grayscale(1)",opacity:.5}}>{c.icon}</span>
                               ))}
