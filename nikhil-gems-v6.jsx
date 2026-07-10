@@ -4354,7 +4354,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
               <Field label={manual.type==="credit"?"Into account":"From account"}>
                 <select value={manual.accountId} onChange={e=>{const acc=accounts.find(a=>a.id===e.target.value);setManual(m=>({...m,accountId:e.target.value,currency:acc?.currency||m.currency||"INR"}));}} style={{...inputS,padding:"10px 11px",fontSize:13,cursor:"pointer"}}>
                   <option value="">- Select account -</option>
-                  {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+                  {accounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.type==="credit_card"?" · card":""}</option>)}
                 </select>
               </Field>
               {manual.type==="conversion"?(
@@ -4362,7 +4362,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                   <Field label="To account">
                     <select value={manual.accountToId} onChange={e=>setManual(m=>({...m,accountToId:e.target.value}))} style={{...inputS,padding:"10px 11px",fontSize:13,cursor:"pointer"}}>
                       <option value="">- Select account -</option>
-                      {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+                      {accounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.type==="credit_card"?" · card":""}</option>)}
                     </select>
                   </Field>
                   <Field label="Rate"><input type="number" value={manual.rate||""} onChange={e=>setManual(m=>({...m,rate:e.target.value,receivedAmount:e.target.value&&m.amount?String((+m.amount||0)*(+e.target.value||0)):m.receivedAmount}))} style={{...inputS,padding:"10px 11px",fontSize:13}} placeholder="e.g. 85"/></Field>
@@ -4516,7 +4516,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                   <Field label="Account">
                     <select value={selected.type==="credit"?selected.accountTo||"":selected.accountFrom||""} onChange={e=>patchTxn(selected.id,selected.type==="credit"?{accountTo:e.target.value}:{accountFrom:e.target.value})} style={{...inputS,cursor:"pointer"}}>
                       <option value="">- Select account -</option>
-                      {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.type==="credit_card"?" · card":""}</option>)}
+                      {accounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.type==="credit_card"?" · card":""}</option>)}
                     </select>
                   </Field>
                   <Field label="Payee / source"><input value={payeeDraft} onChange={e=>setPayeeDraft(e.target.value)} style={inputS} placeholder="Who paid / who was paid"/></Field>
