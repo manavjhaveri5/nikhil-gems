@@ -3964,7 +3964,11 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(vendor)return{classifiedAs:"vendor_bill",label:"Vendor Bill Payment",why:`Payee matches vendor ${vendor.name}.`,confidence:"medium"};
     return expense("Other","No strong match found. Use Other only if this is a real expense with details in notes.","low");
   };
-  const hiddenCashAccountIds=new Set(accounts.filter(a=>a.type==="cash"||["inr cash","usd cash","eur cash","jpy cash"].includes(String(a.name||"").trim().toLowerCase())).map(a=>a.id));
+  // Hide foreign-currency cash accounts from the ledger, but keep INR Cash visible —
+  // it's used for everyday rupee cash movements the accountant wants alongside the bank.
+  const isCashLike=a=>a.type==="cash"||["inr cash","usd cash","eur cash","jpy cash"].includes(String(a.name||"").trim().toLowerCase());
+  const isInrCash=a=>String(a.name||"").trim().toLowerCase()==="inr cash"||(a.type==="cash"&&(a.currency||"").toUpperCase()==="INR");
+  const hiddenCashAccountIds=new Set(accounts.filter(a=>isCashLike(a)&&!isInrCash(a)).map(a=>a.id));
   const isHiddenCashTxn=t=>hiddenCashAccountIds.has(t.accountFrom)||hiddenCashAccountIds.has(t.accountTo);
   const visibleAccounts=accounts.filter(a=>!hiddenCashAccountIds.has(a.id));
   const isFutureTxn=t=>(t.date||"")>today();
