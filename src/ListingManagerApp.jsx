@@ -868,9 +868,11 @@ function ListingForm({ initial, stock, onSave, onClose }) {
     setTagDraft("");
   };
 
-  // Variations helpers — each variation has a name + options array; options carry per-variant price/qty when enabled
-  const blankVar = () => ({ id: uid(), name: "", perVariantPricing: false, options: [{ id: uid(), label: "", price_etsy: "", qty: "" }] });
-  const blankOpt = () => ({ id: uid(), label: "", price_etsy: "", qty: "" });
+  // Variations helpers — each variation has a name + options array; options carry per-variant
+  // price/qty when enabled. price_etsy is ₹ (Etsy), price_shopify is $ (Earth Ed. store) — each
+  // marketplace bills in its own currency, so we keep them separate rather than converting.
+  const blankVar = () => ({ id: uid(), name: "", perVariantPricing: false, options: [{ id: uid(), label: "", price_etsy: "", price_shopify: "", qty: "" }] });
+  const blankOpt = () => ({ id: uid(), label: "", price_etsy: "", price_shopify: "", qty: "" });
   const addVariation  = () => setForm(f => ({ ...f, variations: [...f.variations, blankVar()] }));
   const removeVariation = i => setForm(f => ({ ...f, variations: f.variations.filter((_, j) => j !== i) }));
   const updVar = (i, patch) => setForm(f => { const a = [...f.variations]; a[i] = { ...a[i], ...patch }; return { ...f, variations: a }; });
@@ -1090,7 +1092,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
             }>
             {form.variations.length === 0 ? (
               <div style={{ fontSize: 12, color: C.inkFaint, padding: "4px 0" }}>
-                No variations. Use variations to offer different sizes, weights, fillings, etc. Each option can have its own price and quantity.
+                No variations. Use variations to offer different sizes, weights, fillings, etc. Each option can have its own price and quantity — these publish to Shopify (Earth Ed.) as product variants.
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1120,16 +1122,18 @@ function ListingForm({ initial, stock, onSave, onClose }) {
                     {v.perVariantPricing ? (
                       <div>
                         {/* Column headers */}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 80px 24px", gap: 6, marginBottom: 4, padding: "0 2px" }}>
-                          {["Option", "Price (₹)", "Qty", ""].map(h => (
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 82px 82px 62px 24px", gap: 6, marginBottom: 4, padding: "0 2px" }}>
+                          {["Option", "₹ Etsy", "$ Earth Ed.", "Qty", ""].map(h => (
                             <div key={h} style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>{h}</div>
                           ))}
                         </div>
                         {v.options.map((opt, j) => (
-                          <div key={opt.id} style={{ display: "grid", gridTemplateColumns: "1fr 100px 80px 24px", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                          <div key={opt.id} style={{ display: "grid", gridTemplateColumns: "1fr 82px 82px 62px 24px", gap: 6, marginBottom: 6, alignItems: "center" }}>
                             <input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
                               placeholder="e.g. Small 4 inch" style={{ ...FI(), fontSize: 12 }} />
                             <input type="number" value={opt.price_etsy} onChange={e => updOpt(i, j, { price_etsy: e.target.value })}
+                              placeholder="0.00" min="0" style={{ ...FI(), fontSize: 12 }} />
+                            <input type="number" value={opt.price_shopify ?? ""} onChange={e => updOpt(i, j, { price_shopify: e.target.value })}
                               placeholder="0.00" min="0" style={{ ...FI(), fontSize: 12 }} />
                             <input type="number" value={opt.qty} onChange={e => updOpt(i, j, { qty: e.target.value })}
                               placeholder="0" min="0" style={{ ...FI(), fontSize: 12 }} />

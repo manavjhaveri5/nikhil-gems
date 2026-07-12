@@ -399,6 +399,50 @@ async function syncShopifyImages(store, token, productId, images = []) {
   return { uploaded };
 }
 
+// Turn the app's `variations` (each = one option axis with labelled options) into Shopify's
+// product options + variant grid. Returns null when there's nothing publishable, in which case
+// the caller falls back to a single default variant. Shopify caps a product at 3 option axes.
+// Per-option price/qty only maps unambiguously to a single axis with per-variant pricing on;
+// with multiple axes (a cartesian grid) every combo falls back to the listing's base price/qty.
+function buildShopifyVariants(listing) {
+  const axes = (Array.isArray(listing.variations) ? listing.variations : [])
+    .map(v => ({
+      name: String(v.name || "").trim(),
+      perVariantPricing: !!v.perVariantPricing,
+      options: (v.options || []).filter(o => String(o.label || "").trim()),
+    }))
+    .filter(v => v.name && v.options.length)
+    .slice(0, 3);
+  if (!axes.length) return null;
+
+  const basePrice = String(listing.price_shopify || 0);
+  const baseQty = listing.type === "unique" ? 1 : Math.max(0, +listing.qty || 0);
+  const perVar = axes.length === 1 && axes[0].perVariantPricing;
+
+  const options = axes.map(a => ({ name: a.name, values: a.options.map(o => o.label.trim()) }));
+
+  // Cartesian product of every axis's options.
+  let combos = [[]];
+  for (const a of axes) {
+    const next = [];
+    for (const c of combos) for (const o of a.options) next.push([...c, o]);
+    combos = next;
+  }
+
+  const variants = combos.map(combo => {
+    const variant = { inventory_management: "shopify", inventory_policy: "deny" };
+    combo.forEach((o, idx) => { variant[`option${idx + 1}`] = o.label.trim(); });
+    const opt = combo[0];
+    const optPrice = perVar && opt.price_shopify !== "" && opt.price_shopify != null ? +opt.price_shopify : NaN;
+    variant.price = String(Number.isFinite(optPrice) && optPrice >= 0 ? optPrice : basePrice);
+    const optQty = perVar && opt.qty !== "" && opt.qty != null ? +opt.qty : NaN;
+    variant.inventory_quantity = Number.isFinite(optQty) && optQty >= 0 ? Math.floor(optQty) : baseQty;
+    return variant;
+  });
+
+  return { options, variants };
+}
+
 async function publishShopify(store, token, listing, ai) {
   const { title, qty = 0, type = "repeatable", price_shopify, sku, productType, material, images = [] } = listing;
 
@@ -406,8 +450,9 @@ async function publishShopify(store, token, listing, ai) {
   const bodyHtml  = ai?.shopify_description || `<p>${listing.description || title}</p>`;
   const tags      = ai?.shopify_tags || listing.tags?.join(", ") || "";
   const quantity  = type === "unique" ? 1 : Math.max(0, +qty || 0);
+  const variantBundle = buildShopifyVariants(listing);
 
-  // Create product
+  // Create product — with real variants when the listing defines variations, else a single default.
   const r = await fetch(`https://${store}/admin/api/2024-04/products.json`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
@@ -418,13 +463,15 @@ async function publishShopify(store, token, listing, ai) {
         product_type: productType || "Crystal",
         tags,
         status: "active",
-        variants: [{
-          sku: sku || "",
-          inventory_management: "shopify",
-          inventory_policy: "deny",
-          inventory_quantity: quantity,
-          price: String(price_shopify || 0),
-        }],
+        ...(variantBundle
+          ? { options: variantBundle.options, variants: variantBundle.variants }
+          : { variants: [{
+              sku: sku || "",
+              inventory_management: "shopify",
+              inventory_policy: "deny",
+              inventory_quantity: quantity,
+              price: String(price_shopify || 0),
+            }] }),
       },
     }),
   });
@@ -693,13 +740,19 @@ export default async function handler(req, res) {
       if (existingId) {
         // Update existing
         const priceField = store_key === "atyahara" ? "price_shopify_aty" : "price_shopify_earth";
+        const resolvedPrice = listing[priceField] || listing.price_shopify || 0;
+        // Rebuild the variant grid when variations are defined; Shopify replaces the product's
+        // options + variants wholesale on PUT. Otherwise just reprice the single default variant.
+        const variantBundle = buildShopifyVariants({ ...listing, price_shopify: resolvedPrice });
         const patchBody = {
           product: {
             id: existingId,
             title: ai?.shopify_title || listing.title,
             body_html: ai?.shopify_description || listing.description || "",
             tags: ai?.shopify_tags || listing.tags?.join(", ") || "",
-            variants: [{ price: String(listing[priceField] || listing.price_shopify || 0) }],
+            ...(variantBundle
+              ? { options: variantBundle.options, variants: variantBundle.variants }
+              : { variants: [{ price: String(resolvedPrice) }] }),
           },
         };
         const r = await fetch(`https://${store}/admin/api/2024-04/products/${existingId}.json`, {
