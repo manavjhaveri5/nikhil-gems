@@ -3798,7 +3798,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [tab,setTab]=useState("all");
   const [filterOpen,setFilterOpen]=useState(false);
   const [month,setMonth]=useState(accountantMonth());
-  const [accountFilter,setAccountFilter]=useState("");
+  const [accountFilter,setAccountFilter]=useState([]); // selected account ids; empty = all
+  const [accountMenuOpen,setAccountMenuOpen]=useState(false);
   const [search,setSearch]=useState("");
   const [customCat,setCustomCat]=useState("");
   const [customCats,setCustomCats]=useState([]);
@@ -3817,7 +3818,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       const arr=Array.isArray(t)?t:[];
       const defName=company==="ng"?"bank of india 0451":"indusind bank";
       const defaultAccount=acc.find(x=>String(x.name||"").trim().toLowerCase()===defName)||null;
-      setAccountFilter(defaultAccount?.id||"");
+      setAccountFilter(defaultAccount?.id?[defaultAccount.id]:[]);
       setAccounts(acc);
       setTxns(arr);
       const first=[...arr].sort((x,y)=>(y.date||"").localeCompare(x.date||"")).find(x=>x.type!=="conversion"&&(x.date||"").startsWith(month));
@@ -3982,7 +3983,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     // just because it lands outside the month currently in view. The month filter only
     // constrains the normal (unsearched) statement view.
     if(!search&&!(t.date||"").startsWith(month))return false;
-    if(accountFilter&&t.accountFrom!==accountFilter&&t.accountTo!==accountFilter)return false;
+    if(accountFilter.length&&!accountFilter.includes(t.accountFrom)&&!accountFilter.includes(t.accountTo))return false;
     if(search){
       const q=search.toLowerCase();
       if(!`${t.payee||""} ${t.category||""} ${t.notes||""}`.toLowerCase().includes(q))return false;
@@ -4030,7 +4031,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const statementRows=(()=>{
     const asc=[...filtered].sort((a,b)=>(a.date||"").localeCompare(b.date||"")||(a.createdAt||"").localeCompare(b.createdAt||""));
     let bal=0;
-    const acc=accounts.find(a=>a.id===accountFilter);
+    // Running balance is only meaningful for a single account; skip it for multi-select/all.
+    const acc=accountFilter.length===1?accounts.find(a=>a.id===accountFilter[0]):null;
     if(acc)bal=+acc.openingBal||0;
     const byId={};
     asc.forEach(t=>{
@@ -4286,7 +4288,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(!loaded)return;
     if(filtered.length&&!filtered.some(t=>t.id===selectedId))setSelectedId(filtered[0].id);
     if(!filtered.length&&selectedId)setSelectedId("");
-  },[loaded,month,tab,accountFilter,search,txns.length]);
+  },[loaded,month,tab,accountFilter.join(","),search,txns.length]);
   const monthVisibleTxns=visibleTxns.filter(t=>(t.date||"").startsWith(month));
   const unclassifiedCount=monthVisibleTxns.filter(isUnclassified).length;
   const ledgerFilters=[["all",`All ${monthVisibleTxns.length}`],["unclassified",`Unclassified ${unclassifiedCount}`],["debit","Payments Out"],["credit","Money In"]];
@@ -4326,10 +4328,37 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             <span style={{fontSize:12,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>{monthLabel}</span>
             <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} onClick={e=>{try{e.currentTarget.showPicker&&e.currentTarget.showPicker();}catch{}}} aria-label="Pick month" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",border:"none",margin:0,padding:0}}/>
           </label>
-          <select value={accountFilter} onChange={e=>setAccountFilter(e.target.value)} style={{...inputS,width:mob?"100%":180,cursor:"pointer"}}>
-            <option value="">All accounts</option>
-            {visibleAccounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          {/* Multi-select account filter: tick one or more accounts, or leave all unticked for
+              "All accounts". Empty selection means no account constraint. */}
+          <div style={{position:"relative",width:mob?"100%":"auto"}}>
+            <button onClick={()=>setAccountMenuOpen(o=>!o)} style={{...inputS,width:mob?"100%":180,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,textAlign:"left"}}>
+              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                {accountFilter.length===0?"All accounts":accountFilter.length===1?(visibleAccounts.find(a=>a.id===accountFilter[0])?.name||"1 account"):`${accountFilter.length} accounts`}
+              </span>
+              <span style={{fontSize:10,color:C.inkFaint,flexShrink:0}}>{accountMenuOpen?"▲":"▼"}</span>
+            </button>
+            {accountMenuOpen&&(
+              <>
+                <div onClick={()=>setAccountMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:60}}/>
+                <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:61,width:mob?"100%":240,maxHeight:320,overflow:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 12px 40px rgba(26,19,8,.18)",padding:6}}>
+                  <label style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:800,color:C.ink}}>
+                    <input type="checkbox" checked={accountFilter.length===0} onChange={()=>setAccountFilter([])} style={{cursor:"pointer"}}/>
+                    All accounts
+                  </label>
+                  <div style={{height:1,background:C.border,margin:"4px 0"}}/>
+                  {visibleAccounts.map(a=>{
+                    const on=accountFilter.includes(a.id);
+                    return(
+                      <label key={a.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:700,color:C.inkMid,background:on?C.goldLight:"transparent"}}>
+                        <input type="checkbox" checked={on} onChange={()=>setAccountFilter(prev=>prev.includes(a.id)?prev.filter(x=>x!==a.id):[...prev,a.id])} style={{cursor:"pointer"}}/>
+                        {a.name}
+                      </label>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search payee, category..." style={{...inputS,width:mob?"100%":220}}/>
         </div>
       </div>
