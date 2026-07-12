@@ -483,7 +483,11 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   };
 
   // Drag-to-reorder selected thumbnails
-  const onImgDragStart = i => { dragSrc.current = i; };
+  const onImgDragStart = (i, e) => {
+    dragSrc.current = i;
+    // Some browsers won't begin a drag unless dataTransfer carries something.
+    try { e?.dataTransfer?.setData("text/plain", String(i)); if (e?.dataTransfer) e.dataTransfer.effectAllowed = "move"; } catch {}
+  };
   const onImgDrop = i => {
     if (dragSrc.current === null || dragSrc.current === i) return;
     const next = [...selectedUrls];
@@ -529,12 +533,12 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
           <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
             {selectedUrls.map((url, i) => (
               <div key={url + i} draggable
-                onDragStart={() => onImgDragStart(i)}
-                onDragOver={e => e.preventDefault()}
-                onDrop={() => onImgDrop(i)}
+                onDragStart={e => onImgDragStart(i, e)}
+                onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+                onDrop={e => { e.preventDefault(); onImgDrop(i); }}
                 style={{ width: 72, height: 72, borderRadius: 8, overflow: "hidden", flexShrink: 0, position: "relative",
                   border: `2.5px solid ${i === 0 ? C.gold : C.border}`, cursor: "grab" }}>
-                <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <img src={url} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }} />
                 {i === 0 && (
                   <div style={{ position: "absolute", top: 3, left: 3, background: C.gold, color: "#fff",
                     borderRadius: 4, fontSize: 8, fontWeight: 700, padding: "1px 5px", letterSpacing: .3 }}>COVER</div>
