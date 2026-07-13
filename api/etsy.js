@@ -192,6 +192,38 @@ export default async function handler(req, res) {
       return res.json(data);
     }
 
+    // ── payments: gross/fees/net per receipt (requires OAuth) ──────────────────
+    // ?receipt_ids=1,2,3 (max 40 per call). Returns { payments: { [receiptId]: {gross,fees,net,currency} } }.
+    // Etsy's payment objects are the source of truth for what the seller actually earns —
+    // receipt totals don't include processing/transaction fees.
+    if (action === "payments") {
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const ids = String(req.query.receipt_ids || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 40);
+      if (!ids.length) return res.status(400).json({ error: "receipt_ids required" });
+      const money = m => (m?.amount || 0) / (m?.divisor || 100);
+      const payments = {};
+      const fetchOne = async rid => {
+        try {
+          const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${rid}/payments`, { headers: authHeaders });
+          if (!r.ok) return;
+          const d = await r.json();
+          const list = d.results || [];
+          if (!list.length) return;
+          // A receipt can (rarely) have multiple payment records — sum them.
+          payments[String(rid)] = {
+            gross: Number(list.reduce((s, p) => s + money(p.amount_gross), 0).toFixed(2)),
+            fees:  Number(list.reduce((s, p) => s + money(p.amount_fees), 0).toFixed(2)),
+            net:   Number(list.reduce((s, p) => s + money(p.amount_net), 0).toFixed(2)),
+            currency: list[0]?.currency || list[0]?.shop_currency || "",
+          };
+        } catch {}
+      };
+      for (let i = 0; i < ids.length; i += 8) {
+        await Promise.all(ids.slice(i, i + 8).map(fetchOne));
+      }
+      return res.json({ ok: true, payments });
+    }
+
     // ── complete_order / add_tracking: mark receipt shipped with tracking ───
     if (action === "complete_order" || action === "add_tracking" || action === "submit_tracking") {
       if (req.method !== "POST") return res.status(405).json({ error: "POST required" });

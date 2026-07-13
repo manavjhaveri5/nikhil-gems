@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, deleteItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
+import { CUSTOMS_DESCS_KEY, DEFAULT_CUSTOMS_DESCS } from "./DatasetsApp.jsx";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
 const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(u);
@@ -58,35 +59,134 @@ const nextAtyaharaInvoiceNo = (existing = [], dateStr = toIsoDate()) => {
 const moneyAmount = m => (m?.amount || 0) / (m?.divisor || 100);
 const cleanInvoiceText = v => String(v || "").replace(/\s+/g, " ").trim();
 
-async function aiEnhanceInvoiceItems(baseItems, context = {}) {
+/* ── Etsy receipt money ────────────────────────────────────────────────────────
+   Etsy line prices are PRE-discount; shop coupons live on the receipt as
+   discount_amt. Recording the raw line price overstated every discounted sale
+   (e.g. listed ₹9,385, buyer actually paid ₹7,039 after a 25% coupon). Allocate
+   the receipt discount across lines by value so per-row sale_price is what the
+   buyer really paid for that item (ex shipping/tax). */
+function etsyReceiptLineMoney(receipt, txn, txns) {
+  const receiptLevel = {
+    order_subtotal: Number(moneyAmount(receipt?.subtotal).toFixed(2)),
+    order_shipping: Number(moneyAmount(receipt?.total_shipping_cost).toFixed(2)),
+    order_tax:      Number((moneyAmount(receipt?.total_tax_cost) + moneyAmount(receipt?.total_vat_cost)).toFixed(2)),
+    order_total:    Number(moneyAmount(receipt?.grandtotal).toFixed(2)),
+  };
+  const discountTotal = moneyAmount(receipt?.discount_amt);
+  if (!txn?.price) {
+    // No transaction detail — receipt subtotal is already post-discount, so use it
+    // directly rather than re-subtracting the coupon from it.
+    const paid = moneyAmount(receipt?.subtotal) || moneyAmount(receipt?.grandtotal);
+    return {
+      qty: 1,
+      list_price: Number((paid + discountTotal).toFixed(2)),
+      discount: Number(discountTotal.toFixed(2)),
+      sale_price: Number(paid.toFixed(2)),
+      ...receiptLevel,
+    };
+  }
+  const lineOf = t => t?.price ? moneyAmount(t.price) * (t.quantity || 1) : 0;
+  const sumLines = (txns || []).filter(Boolean).reduce((s, t) => s + lineOf(t), 0);
+  const lineTotal = lineOf(txn);
+  const share = sumLines > 0 ? lineTotal / sumLines : 1;
+  const discount = Number((discountTotal * share).toFixed(2));
+  return {
+    qty:        Math.max(1, +(txn?.quantity || 1)),
+    list_price: Number(lineTotal.toFixed(2)),
+    discount,
+    sale_price: Number(Math.max(0, lineTotal - discount).toFixed(2)),
+    ...receiptLevel,
+  };
+}
+
+/* ── Customs descriptions by shape ─────────────────────────────────────────────
+   The Datasets tab maps shapes → customs/bill descriptions + HSN. Invoice lines
+   should carry that customs description (what actually goes on the export bill),
+   not the marketing title. A row's `shape` cell may hold several comma-separated
+   shapes sharing one description. */
+async function loadCustomsShapeTokens() {
+  const rows = await loadKFresh(CUSTOMS_DESCS_KEY).catch(() => null);
+  const source = Array.isArray(rows) && rows.length ? rows : DEFAULT_CUSTOMS_DESCS;
+  return source.flatMap(r =>
+    String(r.shape || "").split(",").map(s => s.trim()).filter(Boolean)
+      .map(shape => ({ shape, desc: cleanInvoiceText(r.desc), hsn: cleanInvoiceText(r.hsn) || "71031029" }))
+  );
+}
+const findShapeToken = (tokens, shape) => {
+  const want = String(shape || "").trim().toLowerCase();
+  if (!want) return null;
+  return tokens.find(t => t.shape.toLowerCase() === want)
+    || tokens.find(t => t.shape.toLowerCase().replace(/s$/, "") === want.replace(/s$/, ""))
+    || null;
+};
+// Local title match — longest shape name wins ("Palmstone" beats "Stone"); tolerate
+// simple plural/singular drift (Geodes/Geode, Points/Point, Carvings/Carving).
+const matchShapeInTitle = (tokens, title) => {
+  const t = ` ${String(title || "").toLowerCase()} `;
+  let best = null;
+  for (const tok of tokens) {
+    const name = tok.shape.toLowerCase();
+    const variants = [name, name.replace(/s$/, ""), `${name}s`];
+    if (variants.some(v => v.length >= 3 && new RegExp(`\\b${v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(t))) {
+      if (!best || name.length > best.shape.length) best = tok;
+    }
+  }
+  return best;
+};
+
+async function aiEnhanceInvoiceItems(baseItems, context = {}, shapeTokens = []) {
   if (!baseItems.length) return baseItems;
-  try {
-    const prompt = `Return only JSON. Clean these Etsy order lines for a commercial invoice for Atyahara.
-For each input item return: desc, hsn, unit. Use concise export-safe descriptions for crystals/gemstones.
+  // Resolve each line's shape first: explicit shape on the order row, then a local
+  // title match against the customs table. Only unresolved lines go to AI.
+  const resolved = baseItems.map(item => {
+    const token = findShapeToken(shapeTokens, item._shape) || matchShapeInTitle(shapeTokens, item._title || item.desc);
+    return { item, token };
+  });
+  const needAi = resolved.filter(r => !r.token);
+  let byId = {};
+  if (needAi.length) {
+    try {
+      const shapeList = [...new Set(shapeTokens.map(t => t.shape))];
+      const prompt = `Return only JSON. Clean these Etsy order lines for a commercial invoice for Atyahara.
+For each input item return: shape, desc, hsn, unit.
+"shape" MUST be exactly one value from this list (pick the best match for the product title) or "" if none fits: ${JSON.stringify(shapeList)}.
+Use concise export-safe descriptions for crystals/gemstones.
 Default HSN should be 71031029 unless the title clearly indicates a different gemstone/mineral code.
 Default unit should be pcs unless quantity/description clearly indicates kg, g, ct, strand, pair, or set.
 Context: ${JSON.stringify(context)}
-Items: ${JSON.stringify(baseItems.map(i => ({ id: i.id, title: i.desc, sku: i.sku, qty: i.qty })))} 
-Schema: {"items":[{"id":"same id","desc":"clean description","hsn":"HSN code","unit":"unit"}]}`;
-    const raw = await classify(prompt, 700);
-    const json = JSON.parse(String(raw || "").replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
-    const byId = Object.fromEntries((json.items || []).map(i => [String(i.id), i]));
-    return baseItems.map(item => {
-      const ai = byId[String(item.id)] || {};
+Items: ${JSON.stringify(needAi.map(({ item: i }) => ({ id: i.id, title: i._title || i.desc, sku: i.sku, qty: i.qty })))}
+Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"clean description","hsn":"HSN code","unit":"unit"}]}`;
+      const raw = await classify(prompt, 900);
+      const json = JSON.parse(String(raw || "").replace(/^```json\s*/i, "").replace(/```$/i, "").trim());
+      byId = Object.fromEntries((json.items || []).map(i => [String(i.id), i]));
+    } catch {}
+  }
+  return resolved.map(({ item, token }) => {
+    const ai = byId[String(item.id)] || {};
+    const aiToken = token ? null : findShapeToken(shapeTokens, ai.shape);
+    const finalToken = token || aiToken;
+    if (finalToken) {
+      // Shape known → the customs table is authoritative for description + HSN.
       return {
         ...item,
-        desc: cleanInvoiceText(ai.desc) || item.desc,
-        hsn: cleanInvoiceText(ai.hsn) || item.hsn,
+        desc: finalToken.desc || item.desc,
+        hsn: finalToken.hsn || item.hsn,
         unit: cleanInvoiceText(ai.unit) || item.unit,
-        _aiAutofilled: !!byId[String(item.id)],
+        _shape: finalToken.shape,
+        _aiAutofilled: !!aiToken,
       };
-    });
-  } catch {
-    return baseItems;
-  }
+    }
+    return {
+      ...item,
+      desc: cleanInvoiceText(ai.desc) || item.desc,
+      hsn: cleanInvoiceText(ai.hsn) || item.hsn,
+      unit: cleanInvoiceText(ai.unit) || item.unit,
+      _aiAutofilled: !!byId[String(item.id)],
+    };
+  });
 }
 
-async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "" }) {
+async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null }) {
   const sourceReceiptId = String(receiptId || "");
   if (!sourceReceiptId) throw new Error("Missing Etsy receipt id");
   const fresh = await loadKFresh(AT_INVOICES_KEY).catch(() => []);
@@ -97,7 +197,8 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
   );
 
   const date = toIsoDate(orderDate);
-  const invoiceItems = await aiEnhanceInvoiceItems(items, { receiptId: sourceReceiptId, buyerCountry: buyer.country || address.country || "" });
+  const shapeTokens = await loadCustomsShapeTokens();
+  const invoiceItems = await aiEnhanceInvoiceItems(items, { receiptId: sourceReceiptId, buyerCountry: buyer.country || address.country || "" }, shapeTokens);
   const totalAmt = Number(invoiceItems.reduce((s, item) => s + (+item.qty || 0) * (+item.rate || 0), 0).toFixed(2));
   const nowIso = new Date().toISOString();
   const invoice = {
@@ -121,7 +222,7 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
     terms: existingInv?.terms || "Etsy order",
     items: invoiceItems,
     totalAmt,
-    shippingCost: existingInv?.shippingCost || 0,
+    shippingCost: shippingCost != null ? shippingCost : (existingInv?.shippingCost || 0),
     notes: notes || `Etsy order #${sourceReceiptId}`,
     status: existingInv?.status || "draft",
     paidAmount: existingInv?.paidAmount || 0,
@@ -1821,6 +1922,22 @@ function OrdersView({ orders, listings = [] }) {
   const [invoiceState, setInvoiceState] = useState({});
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
+  // Customs shape list (Datasets tab) — drives the editable Shape field per order and
+  // the customs/bill description on invoices created from these orders.
+  const [customsShapes, setCustomsShapes] = useState([]);
+  useEffect(() => {
+    loadK(CUSTOMS_DESCS_KEY).then(rows => {
+      const source = Array.isArray(rows) && rows.length ? rows : DEFAULT_CUSTOMS_DESCS;
+      setCustomsShapes([...new Set(source.flatMap(r => String(r.shape || "").split(",").map(s => s.trim()).filter(Boolean)))]);
+    });
+  }, []);
+  const setOrderShape = async (order, shape) => {
+    const current = await loadK(ORDERS_KEY) || [];
+    const next = current.map(x => x.id === order.id ? { ...x, listing_shape: shape } : x);
+    const updated = next.find(x => x.id === order.id);
+    if (updated) await upsertItemK(ORDERS_KEY, updated, { prepend: false });
+    window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+  };
   const money = (amount, currency = "INR") => {
     const sym = currency === "INR" ? "₹" : currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency === "JPY" ? "¥" : currency;
     return `${sym}${fmt(amount)}`;
@@ -1921,22 +2038,30 @@ function OrdersView({ orders, listings = [] }) {
       const rows = (orders || []).filter(o => isEtsyOrder(o) && String(etsyReceiptId(o)) === receiptId);
       const sourceRows = rows.length ? rows : [order];
       const currency = sourceRows.find(o => o.currency)?.currency || order.currency || "USD";
-      const items = sourceRows.map((row, i) => ({
-        id: `etsy-${receiptId}-${row.etsy_transaction_id || row.listing_sku || i}`,
-        desc: cleanInvoiceText(row.listing_title || `Etsy order #${receiptId}`),
-        sku: row.listing_sku || row.etsy_transaction_id || "",
-        hsn: "71031029",
-        qty: "1",
-        unit: "pcs",
-        rate: String(+row.sale_price || 0),
-        gst: "0",
-        igst: 0,
-        amt: +row.sale_price || 0,
-        _etsyReceiptId: receiptId,
-        _etsyTransactionId: row.etsy_transaction_id || "",
-        _listingId: row.listing_id || "",
-        _listingImage: findOrderImage(row),
-      }));
+      const items = sourceRows.map((row, i) => {
+        // sale_price is what the buyer actually paid for the line (after coupon) — the
+        // invoice must bill real money, not the pre-discount list price.
+        const qty = Math.max(1, +row.qty || 1);
+        const rate = Number(((+row.sale_price || 0) / qty).toFixed(2));
+        return {
+          id: `etsy-${receiptId}-${row.etsy_transaction_id || row.listing_sku || i}`,
+          desc: cleanInvoiceText(row.listing_title || `Etsy order #${receiptId}`),
+          _title: row.listing_title || "",
+          _shape: row.listing_shape || "",
+          sku: row.listing_sku || row.etsy_transaction_id || "",
+          hsn: "71031029",
+          qty: String(qty),
+          unit: "pcs",
+          rate: String(rate),
+          gst: "0",
+          igst: 0,
+          amt: Number((qty * rate).toFixed(2)),
+          _etsyReceiptId: receiptId,
+          _etsyTransactionId: row.etsy_transaction_id || "",
+          _listingId: row.listing_id || "",
+          _listingImage: findOrderImage(row),
+        };
+      });
       const { invoice, updated } = await upsertAtyaharaInvoiceFromEtsy({
         receiptId,
         orderDate: orderDate(order),
@@ -1953,7 +2078,24 @@ function OrdersView({ orders, listings = [] }) {
         currency,
         items,
         notes: `Created from Listing Manager Etsy receipt #${receiptId}`,
+        shippingCost: order.order_shipping != null ? +order.order_shipping : null,
       });
+      // Persist AI-inferred shapes back onto the order rows so the Shape field fills in
+      // and the next invoice refresh reuses them without another AI call.
+      try {
+        const inferred = (invoice.items || []).filter(it => it._shape && it._etsyTransactionId);
+        if (inferred.length) {
+          const current = await loadK(ORDERS_KEY) || [];
+          const byTxn = Object.fromEntries(inferred.map(it => [String(it._etsyTransactionId), it._shape]));
+          const changed = current.filter(x => isEtsyOrder(x) && byTxn[String(x.etsy_transaction_id)] && !x.listing_shape)
+            .map(x => ({ ...x, listing_shape: byTxn[String(x.etsy_transaction_id)] }));
+          for (const rowPatch of changed) await upsertItemK(ORDERS_KEY, rowPatch, { prepend: false });
+          if (changed.length) {
+            const ids = new Set(changed.map(x => x.id));
+            window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: current.map(x => ids.has(x.id) ? changed.find(c => c.id === x.id) : x) }));
+          }
+        }
+      } catch {}
       setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: "", success: `${updated ? "Updated" : "Created"} ${invoice.invNo}` } }));
     } catch (e) {
       setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: e.message || "Could not create invoice", success: "" } }));
@@ -2018,7 +2160,7 @@ function OrdersView({ orders, listings = [] }) {
         const etsyListingId = txn?.listing_id || "";
         const linked = etsyListingId ? listingByEtsyId[String(etsyListingId)] : null;
         const currency = txn?.price?.currency_code || receipt.grandtotal?.currency_code || "USD";
-        const lineTotal = txn?.price ? etsyMoney(txn.price) * (txn.quantity || 1) : etsyMoney(receipt.grandtotal);
+        const lineMoney = etsyReceiptLineMoney(receipt, txn, txns);
         rows.push({
           id:                `etsy-${receipt.receipt_id}-${txn?.transaction_id || etsyListingId || idx}`,
           order_number:      `ETSY-${receipt.receipt_id}${txns.length > 1 ? `-${idx + 1}` : ""}`,
@@ -2033,7 +2175,7 @@ function OrdersView({ orders, listings = [] }) {
           etsy_listing_id:   etsyListingId,
           etsy_receipt_id:   receipt.receipt_id,
           etsy_transaction_id: txn?.transaction_id || "",
-          sale_price:        Number(lineTotal.toFixed(2)),
+          ...lineMoney,
           currency,
           buyer_name:        receipt.name || etsyEmailFromReceipt(receipt) || "",
           buyer_country:     receipt.country_iso || "",
@@ -2093,6 +2235,7 @@ function OrdersView({ orders, listings = [] }) {
         const id = `etsy-${receiptId}-${txnId || listingId || idx}`;
         patches[id] = {
           ...byReceipt[receiptId],
+          ...etsyReceiptLineMoney(receipt, txn, txns),
           listing_image: etsyImageFromTxn(txn),
           etsy_listing_id: listingId,
         };
@@ -2118,9 +2261,14 @@ function OrdersView({ orders, listings = [] }) {
       const patch = candidates.map(k => patches[k]).find(Boolean) || byReceipt[receiptId];
       if (!patch) return order;
       const merged = { ...order };
+      // Money fields always refresh from Etsy — older rows recorded the pre-discount
+      // line price as sale_price, so filling-only-when-missing would never correct them.
+      const MONEY_KEYS = ["sale_price", "list_price", "discount", "qty", "order_subtotal", "order_shipping", "order_tax", "order_total"];
       Object.entries(patch).forEach(([k, v]) => {
         if (["status", "shipped_at", "tracking_code", "tracking_number", "carrier_name", "etsy_live_is_shipped", "etsy_status_synced_at"].includes(k)) {
           if (v || k === "shipped_at") merged[k] = v;
+        } else if (MONEY_KEYS.includes(k)) {
+          if (v != null) merged[k] = v;
         } else if (v && !merged[k]) {
           merged[k] = v;
         }
@@ -2141,6 +2289,52 @@ function OrdersView({ orders, listings = [] }) {
       window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
     }
     return changed;
+  };
+
+  // Etsy fees & net earnings live on the payment record, not the receipt. Fetch them
+  // once per receipt (they're stable after payment) and allocate to line rows by sale
+  // value so per-row "earned" sums back to the receipt's net.
+  const backfillEtsyFees = async receipts => {
+    try {
+      const current = await loadK(ORDERS_KEY) || [];
+      const feesKnown = new Set(current
+        .filter(o => o.platform === "etsy" && o.etsy_fees != null)
+        .map(o => String(o.etsy_receipt_id || o.platform_order_id)));
+      const ids = [...new Set((receipts || []).map(r => String(r.receipt_id || "")).filter(id => id && !feesKnown.has(id)))].slice(0, 40);
+      if (!ids.length) return;
+      const tok = await getEtsyToken();
+      const r = await fetch(`/api/etsy?action=payments&receipt_ids=${ids.join(",")}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
+      if (!r.ok) return;
+      const d = await r.json();
+      const pay = d?.payments || {};
+      if (!Object.keys(pay).length) return;
+      const fresh = await loadK(ORDERS_KEY) || [];
+      const changedRows = [];
+      const next = fresh.map(o => {
+        if (o.platform !== "etsy") return o;
+        const rid = String(o.etsy_receipt_id || o.platform_order_id || "");
+        const p = pay[rid];
+        if (!p) return o;
+        const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
+        const sum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
+        const share = sum > 0 ? (+o.sale_price || 0) / sum : 1 / Math.max(1, siblings.length);
+        const merged = {
+          ...o,
+          order_gross: p.gross,
+          order_fees: p.fees,
+          order_net: p.net,
+          fees_currency: p.currency || o.currency,
+          etsy_fees: Number((p.fees * share).toFixed(2)),
+          etsy_net: Number((p.net * share).toFixed(2)),
+        };
+        if (JSON.stringify(merged) !== JSON.stringify(o)) changedRows.push(merged);
+        return merged;
+      });
+      if (changedRows.length) {
+        for (const order of changedRows) await upsertItemK(ORDERS_KEY, order, { prepend: false });
+        window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+      }
+    } catch {}
   };
 
   useEffect(() => {
@@ -2173,7 +2367,7 @@ function OrdersView({ orders, listings = [] }) {
         if (!d) return;
         // Record the full-resync clock on a real full pull, or to bootstrap it on first run.
         if (doFull || !hasBaseline) { try { localStorage.setItem("ng-orders-etsy-fullbackfill-ts", String(Date.now())); } catch {} }
-        return mergeEtsyBackfill(d?.results || []);
+        return mergeEtsyBackfill(d?.results || []).then(() => backfillEtsyFees(d?.results || []));
       })
       .catch(() => {})
       .finally(() => setEtsyBackfilling(false));
@@ -2443,17 +2637,42 @@ function OrdersView({ orders, listings = [] }) {
                         ["Buyer",         order.buyer_name || "—"],
                         ["Email",         order.buyer_email || "—"],
                         ["Country",       order.buyer_country || "—"],
+                        // Item money: list price → coupon discount → what the buyer actually paid.
+                        ...(order.list_price != null && +order.discount > 0 ? [
+                          ["List Price",  money(order.list_price, order.currency)],
+                          ["Discount",    `-${money(order.discount, order.currency)}`],
+                        ] : []),
                         ["Sale Price",    money(order.sale_price, order.currency)],
+                        ...(order.order_shipping != null ? [["Shipping", money(order.order_shipping, order.currency)]] : []),
+                        ...(order.order_tax > 0 ? [["Tax (Etsy)", money(order.order_tax, order.currency)]] : []),
+                        ...(order.order_total != null ? [["Buyer Paid", money(order.order_total, order.currency)]] : []),
+                        ...(order.etsy_fees != null ? [["Etsy Fees", `-${money(order.etsy_fees, order.fees_currency || order.currency)}`]] : []),
+                        ...(order.etsy_net != null ? [["Earned", money(order.etsy_net, order.fees_currency || order.currency)]] : []),
                         ["SKU",           order.listing_sku || "—"],
                         ["Status",        shipped ? "Shipped" : "Unshipped"],
                         ["Reference",     order.order_number || "—"],
                         ["Material",      order.listing_material || "—"],
-                        ["Shape",         order.listing_shape || "—"],
+                        ["Shape",         "__shape_select__"],
                         ["Created",       order.created_at ? new Date(order.created_at).toLocaleDateString("en-GB") : "—"],
                       ].map(([k, v]) => (
                         <div key={k} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
-                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>{k}</div>
-                          <div style={{ fontSize: 12, color: C.ink, fontWeight: 600, overflowWrap: "anywhere" }}>{v}</div>
+                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>
+                            {k}{k === "Shape" ? <span title="Drives the customs/bill description on the invoice" style={{ marginLeft: 4, color: C.gold }}>· customs</span> : null}
+                          </div>
+                          {v === "__shape_select__" ? (
+                            <select
+                              value={order.listing_shape || ""}
+                              onChange={e => setOrderShape(order, e.target.value)}
+                              style={{ width: "100%", border: `1px solid ${C.border}`, borderRadius: 6, background: C.card, color: order.listing_shape ? C.ink : C.inkFaint, fontSize: 12, fontWeight: 600, padding: "3px 4px", cursor: "pointer" }}>
+                              <option value="">Auto (AI on invoice)</option>
+                              {order.listing_shape && !customsShapes.includes(order.listing_shape) && (
+                                <option value={order.listing_shape}>{order.listing_shape}</option>
+                              )}
+                              {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                          ) : (
+                            <div style={{ fontSize: 12, color: C.ink, fontWeight: 600, overflowWrap: "anywhere" }}>{v}</div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2616,7 +2835,7 @@ function EtsyLiveView() {
         const linked = etsyListingId ? listingByEtsyId[String(etsyListingId)] : null;
         const liveListing = etsyListingId ? liveListingByEtsyId[String(etsyListingId)] : null;
         const currency = txn?.price?.currency_code || o.grandtotal?.currency_code || "USD";
-        const lineTotal = txn?.price ? etsyMoney(txn.price) * (txn.quantity || 1) : etsyMoney(o.grandtotal);
+        const lineMoney = etsyReceiptLineMoney(o, txn, txns);
         const id = `etsy-${o.receipt_id}-${txn?.transaction_id || etsyListingId || idx}`;
         const shipped = receiptIsShipped(o);
         normalized.push({
@@ -2633,7 +2852,7 @@ function EtsyLiveView() {
           etsy_listing_id:   etsyListingId || "",
           etsy_receipt_id:   o.receipt_id,
           etsy_transaction_id: txn?.transaction_id || "",
-          sale_price:        Number(lineTotal.toFixed(2)),
+          ...lineMoney,
           currency,
           buyer_name:        o.name || etsyBuyerEmail(o) || "",
           buyer_country:     o.country_iso || "",
@@ -2862,19 +3081,22 @@ function EtsyLiveView() {
       const txns = o.transactions?.length ? o.transactions : [null];
       const currency = txns.find(t => t?.price?.currency_code)?.price?.currency_code || o.grandtotal?.currency_code || "USD";
       const items = txns.map((t, i) => {
-        const qty = +(t?.quantity || 1);
-        const rate = t?.price ? moneyAmount(t.price) : moneyAmount(o.grandtotal);
+        // Bill the discounted amount the buyer actually paid, not the list price.
+        const lm = etsyReceiptLineMoney(o, t, txns);
+        const rate = Number((lm.sale_price / lm.qty).toFixed(2));
         return {
           id: `etsy-${receiptId}-${t?.transaction_id || t?.listing_id || i}`,
           desc: cleanInvoiceText(t?.title || `Etsy order #${receiptId}`),
+          _title: t?.title || "",
+          _shape: "",
           sku: t?.sku || "",
           hsn: "71031029",
-          qty: String(qty),
+          qty: String(lm.qty),
           unit: "pcs",
           rate: String(rate),
           gst: "0",
           igst: 0,
-          amt: Number((qty * rate).toFixed(2)),
+          amt: Number((lm.qty * rate).toFixed(2)),
           _etsyReceiptId: receiptId,
           _etsyTransactionId: t?.transaction_id || "",
           _etsyListingId: t?.listing_id || "",
@@ -2897,6 +3119,7 @@ function EtsyLiveView() {
         currency,
         items,
         notes: `Created from live Etsy receipt #${receiptId}${o.message_from_buyer ? `\nBuyer note: ${o.message_from_buyer}` : ""}`,
+        shippingCost: Number(moneyAmount(o.total_shipping_cost).toFixed(2)),
       });
       setEtsyInvoice(s => ({ ...s, [receiptId]: { loading: false, error: "", success: `${updated ? "Updated" : "Created"} ${invoice.invNo}` } }));
       showToast(`✓ ${updated ? "Updated" : "Created"} invoice ${invoice.invNo}`);

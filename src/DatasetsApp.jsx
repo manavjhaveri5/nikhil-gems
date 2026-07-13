@@ -30,8 +30,9 @@ const DATASETS = [
 
 export const CUSTOMS_DESCS_KEY = "ng-customs-descs-v1";
 
-// Seed rows shown the first time (user can edit/delete/add freely)
-const DEFAULT_CUSTOMS_DESCS = [
+// Seed rows shown the first time (user can edit/delete/add freely).
+// Exported so the Listing Manager invoice flow can fall back to these before first save.
+export const DEFAULT_CUSTOMS_DESCS = [
   { shape: "Palmstone",          desc: "Natural agate stone, cut and polished, roughly shaped",               hsn: "71031029" },
   { shape: "Sphere",             desc: "Natural agate stone, sawn and polished into sphere, roughly shaped",  hsn: "71031029" },
   { shape: "Heart",              desc: "Natural Agate, cut into heart form, roughly shaped",                  hsn: "71031029" },
