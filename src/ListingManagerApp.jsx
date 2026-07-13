@@ -29,6 +29,8 @@ const ORDERS_KEY = "ng-orders-v1";
 const STK_KEY    = "ng-stock-v5";
 const IMG_KEY    = "ng-image-library-v1";
 const AT_INVOICES_KEY = "at-invoices-v1";
+const NG_INVOICES_KEY = "ng-invoices-v2";
+const NG_BUYERS_KEY   = "ng-buyers-v2";
 const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
 
@@ -236,6 +238,87 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
   };
   await upsertItemK(AT_INVOICES_KEY, invoice, { prepend: !existingInv });
   return { invoice, updated: !!existingInv };
+}
+
+/* ── Inter-company: Atyahara buys the goods from Nikhil Gems ────────────────────
+   The Etsy sale is invoiced to the buyer under Atyahara (above). The physical
+   stock, though, belongs to Nikhil Gems — so the same goods flow through an NG
+   sales invoice where the *buyer is Atyahara*, exactly like the Quick Sell widget
+   (deduct NG stock, append a line to a rolling draft invoice for that buyer).
+   Line rate defaults to the stock item's cost price; currency is INR (domestic
+   NG → Atyahara transfer). Idempotent per order via the caller's _ngInvoiceNo flag. */
+async function addOrderToNikhilGemsInvoice({ order, stockItem, qty }) {
+  const q = Math.max(1, +qty || 1);
+  if (!stockItem?.id) throw new Error("Link a physical stock item first");
+
+  // 1. Deduct physical stock — fresh read so quantities stay accurate under concurrent edits.
+  const stock = (await loadKFresh(STK_KEY).catch(() => [])) || [];
+  const target = stock.find(s => s.id === stockItem.id);
+  if (!target) throw new Error("Linked stock item no longer exists");
+  const remaining = +parseFloat(Math.max(0, (+target.qty || 0) - q).toFixed(4));
+  const nextStock = stock.map(s => s.id === target.id ? { ...s, qty: String(remaining), updatedAt: new Date().toISOString() } : s);
+  await saveK(STK_KEY, nextStock);
+
+  // 2. Ensure the fixed "Atyahara" buyer exists in NG books.
+  const buyers = (await loadKFresh(NG_BUYERS_KEY).catch(() => [])) || [];
+  let buyer = buyers.find(b => String(b.name || "").trim().toLowerCase() === "atyahara");
+  if (!buyer) {
+    buyer = { id: uid(), name: "Atyahara", contactName: "", billingAddress: "", shippingAddress: "", shippingSameAsBilling: true, country: "India", state: "", email: "", phone: "", port: "", notes: "Auto-created for Etsy inter-company sales" };
+    await saveK(NG_BUYERS_KEY, [buyer, ...buyers]);
+  }
+
+  // 3. Build the line — customs/bill description keyed off the stock item's shape.
+  const shapeTokens = await loadCustomsShapeTokens();
+  const shape = stockItem.shape || order.listing_shape || "";
+  const token = findShapeToken(shapeTokens, shape) || matchShapeInTitle(shapeTokens, order.listing_title || "");
+  const rate = stockItem.costPrice !== "" && stockItem.costPrice != null ? +stockItem.costPrice : 0;
+  const receiptId = String(order.etsy_receipt_id || order.platform_order_id || "");
+  const line = {
+    id: uid(),
+    acctDesc: token?.desc || "",
+    customDesc: [stockItem.material, stockItem.shape, stockItem.origin, stockItem.size].filter(Boolean).join(" · "),
+    hsn: token?.hsn || "71031029",
+    qty: String(q),
+    unit: stockItem.unit || "pcs",
+    rate: String(rate || ""),
+    igst: 0,
+    amt: Number((q * (rate || 0)).toFixed(2)),
+    stockId: stockItem.id,
+    acctStockId: "",
+    ready: false,
+    readyDate: "",
+    _sourceOrderId: order.id,
+    _etsyReceiptId: receiptId,
+  };
+
+  // 4. Append to the rolling Atyahara inter-co draft (or open a new one) — Quick Sell style.
+  const invoices = (await loadKFresh(NG_INVOICES_KEY).catch(() => [])) || [];
+  const rolling = invoices.find(i => i.buyerId === buyer.id && i.status === "draft" && i._etsyInterco);
+  let invoice, isNew = false;
+  if (rolling) {
+    const items = [...(rolling.items || []), line];
+    invoice = { ...rolling, items, totalAmt: Number(items.reduce((s, it) => s + (+it.qty || 0) * (+it.rate || 0), 0).toFixed(2)), updatedAt: new Date().toISOString() };
+  } else {
+    isNew = true;
+    const maxNo = invoices.reduce((mx, inv) => { const m = (inv.invNo || "").match(/(\d+)/); return m ? Math.max(mx, +m[1]) : mx; }, 0);
+    invoice = {
+      id: uid(), invNo: `NG-${String(maxNo + 1).padStart(3, "0")}`, type: "commercial",
+      date: new Date().toISOString().slice(0, 10),
+      dueDate: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
+      buyerId: buyer.id, consigneeId: "", consigneeSameAsBuyer: true,
+      consigneeName: "", consigneeAddress: "", consigneeCountry: "",
+      currency: "INR", portLading: "Mumbai, India", portDischarge: "",
+      terms: "Inter-company transfer",
+      items: [line], shippingCost: 0, notes: "Atyahara Etsy sales — goods purchased from Nikhil Gems.",
+      status: "draft", paidAmount: 0, payments: [],
+      goodsShipped: false, attachments: [],
+      totalAmt: Number((q * (rate || 0)).toFixed(2)),
+      _etsyInterco: true,
+      createdAt: new Date().toISOString(),
+    };
+  }
+  await upsertItemK(NG_INVOICES_KEY, invoice, { prepend: isNew });
+  return { invNo: invoice.invNo, deductedQty: q, remaining, rate };
 }
 
 async function mediaUrlToFile(url, fallbackName) {
@@ -1912,7 +1995,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 /* ══════════════════════════════════════════════════════════════════════════
    ORDERS VIEW
 ══════════════════════════════════════════════════════════════════════════ */
-function OrdersView({ orders, listings = [] }) {
+function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const [pFilter,  setPFilter]  = useState("all");
   const [shipFilter, setShipFilter] = useState("all");
   const [search,   setSearch]   = useState("");
@@ -1920,6 +2003,7 @@ function OrdersView({ orders, listings = [] }) {
   const [copied, setCopied] = useState("");
   const [etsyTracking, setEtsyTracking] = useState({});
   const [invoiceState, setInvoiceState] = useState({});
+  const [ngState, setNgState] = useState({}); // per-order: {qty, loading, error, success}
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   // Customs shape list (Datasets tab) — drives the editable Shape field per order and
@@ -1931,12 +2015,35 @@ function OrdersView({ orders, listings = [] }) {
       setCustomsShapes([...new Set(source.flatMap(r => String(r.shape || "").split(",").map(s => s.trim()).filter(Boolean)))]);
     });
   }, []);
-  const setOrderShape = async (order, shape) => {
+  const patchOrder = async (order, patch) => {
     const current = await loadK(ORDERS_KEY) || [];
-    const next = current.map(x => x.id === order.id ? { ...x, listing_shape: shape } : x);
+    const next = current.map(x => x.id === order.id ? { ...x, ...patch } : x);
     const updated = next.find(x => x.id === order.id);
     if (updated) await upsertItemK(ORDERS_KEY, updated, { prepend: false });
     window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+    return updated;
+  };
+  const setOrderShape = (order, shape) => patchOrder(order, { listing_shape: shape });
+  const ngDraft = o => ngState[o.id] || { qty: String(o._ngDeductedQty || 1), loading: false, error: "", success: "" };
+  const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...ngDraft(o), ...patch } }));
+  const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
+  const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
+  // Deduct the linked NG stock and add a line to Atyahara's inter-company NG invoice.
+  const addOrderToNg = async order => {
+    const draft = ngDraft(order);
+    const stockItem = stock.find(s => s.id === order.linked_stock_id);
+    if (!stockItem) { updNg(order, { error: "Link a physical stock item first." }); return; }
+    const qty = Math.max(1, +draft.qty || 1);
+    if (qty > (+stockItem.qty || 0)) { updNg(order, { error: `Only ${stockItem.qty || 0} ${stockItem.unit || "pcs"} in stock.` }); return; }
+    updNg(order, { loading: true, error: "", success: "" });
+    try {
+      const { invNo, deductedQty, remaining } = await addOrderToNikhilGemsInvoice({ order, stockItem, qty });
+      await patchOrder(order, { _ngInvoiceNo: invNo, _ngDeductedQty: deductedQty, _ngStockId: stockItem.id, _ngInvoicedAt: now() });
+      updNg(order, { loading: false, success: `Added to ${invNo} · −${deductedQty} ${stockItem.unit || "pcs"} (${remaining} left)` });
+      showToast?.(`✓ ${invNo} updated · stock deducted`);
+    } catch (e) {
+      updNg(order, { loading: false, error: e.message || "Could not add to NG invoice" });
+    }
   };
   const money = (amount, currency = "INR") => {
     const sym = currency === "INR" ? "₹" : currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency === "JPY" ? "¥" : currency;
@@ -2601,6 +2708,89 @@ function OrdersView({ orders, listings = [] }) {
                             )}
                           </>
                         )}
+                        {/* Tracking link — paste any carrier URL; shown as a clickable link. */}
+                        <div style={{ marginTop: 10, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint, marginBottom: 5 }}>Tracking Link</div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <input
+                              value={order.tracking_url || ""}
+                              onChange={e => setOrderTrackingUrl(order, e.target.value)}
+                              placeholder="Paste tracking URL (https://…)"
+                              style={{ ...FI(), flex: 1, minWidth: 220, fontSize: 12, padding: "8px 10px", borderRadius: 8 }}
+                            />
+                            {/^https?:\/\//i.test(order.tracking_url || "") && (
+                              <a href={order.tracking_url} target="_blank" rel="noopener noreferrer"
+                                style={{ background: C.blue, color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, textDecoration: "none", whiteSpace: "nowrap" }}>
+                                🔗 Track
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {/* Nikhil Gems inter-company: link physical stock, deduct it, and add to Atyahara's NG invoice. */}
+                    {isEtsyOrder(order) && (
+                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.purple, marginBottom: 3 }}>Nikhil Gems Stock &amp; Invoice</div>
+                            <div style={{ fontSize: 12, color: C.inkMid }}>Link physical stock — it&apos;s deducted and added to Atyahara&apos;s NG invoice at cost.</div>
+                          </div>
+                          {order._ngInvoiceNo && (
+                            <span style={{ fontSize: 11, fontWeight: 800, color: C.green, background: C.greenBg, border: `1px solid ${C.green}40`, borderRadius: 20, padding: "3px 10px", whiteSpace: "nowrap" }}>
+                              ✓ {order._ngInvoiceNo} · −{order._ngDeductedQty}
+                            </span>
+                          )}
+                        </div>
+                        {(() => {
+                          const linked = stock.find(s => s.id === order.linked_stock_id);
+                          const done = !!order._ngInvoiceNo;
+                          return (
+                            <>
+                              <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(220px,1fr) 90px auto", gap: 8, alignItems: "center" }}>
+                                <select
+                                  value={order.linked_stock_id || ""}
+                                  onChange={e => linkOrderStock(order, e.target.value)}
+                                  disabled={done}
+                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, cursor: done ? "default" : "pointer", opacity: done ? .7 : 1 }}>
+                                  <option value="">— Link physical stock item —</option>
+                                  {order.linked_stock_id && !linked && <option value={order.linked_stock_id}>(linked item not found)</option>}
+                                  {stock.map(s => (
+                                    <option key={s.id} value={s.id}>
+                                      {(s.material || s.desc || "Item")}{s.shape ? ` · ${s.shape}` : ""} — {s.qty} {s.unit || "pcs"}{s.location ? ` · 📦 ${s.location}` : ""}{s.sku ? ` (${s.sku})` : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="number" min={1}
+                                  value={ngDraft(order).qty}
+                                  onChange={e => updNg(order, { qty: e.target.value })}
+                                  disabled={done}
+                                  placeholder="Qty"
+                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }}
+                                />
+                                <button
+                                  onClick={() => addOrderToNg(order)}
+                                  disabled={done || !!ngDraft(order).loading || !order.linked_stock_id}
+                                  style={{ background: done ? C.inkFaint : C.purple, color: "#fff", border: "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: done || ngDraft(order).loading || !order.linked_stock_id ? "default" : "pointer", opacity: done || ngDraft(order).loading || !order.linked_stock_id ? .55 : 1, whiteSpace: "nowrap" }}>
+                                  {done ? "Added" : ngDraft(order).loading ? "Adding…" : "Add to NG + deduct"}
+                                </button>
+                              </div>
+                              {linked && !done && (
+                                <div style={{ marginTop: 6, fontSize: 11, color: C.inkMid, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                                  <span>📦 <b>{linked.qty} {linked.unit || "pcs"}</b> available</span>
+                                  <span>💰 cost rate: <b>{linked.costPrice ? money(linked.costPrice, "INR") : "not set (0)"}</b></span>
+                                </div>
+                              )}
+                              {ngDraft(order).error && (
+                                <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>{ngDraft(order).error}</div>
+                              )}
+                              {ngDraft(order).success && (
+                                <div style={{ marginTop: 8, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 8, padding: "7px 9px" }}>{ngDraft(order).success}</div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
                     {isEtsyOrder(order) && (
@@ -5698,7 +5888,7 @@ export default function ListingManagerApp({ onHome }) {
         )}
 
         {/* ══ ORDERS ══ */}
-        {tab === "orders" && <OrdersView orders={orders} listings={listings} />}
+        {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} />}
 
         {/* ══ PLATFORM TABS ══ */}
         {tab === "etsy" && <EtsyLiveView />}
