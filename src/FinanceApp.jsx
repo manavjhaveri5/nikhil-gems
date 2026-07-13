@@ -2831,9 +2831,11 @@ export default function FinanceApp({ onHome }) {
       setExpenses(newExps);
       await saveK(keys.expenses, newExps);
     }
-    if (sideEffects.billUpdates?.length) {
-      const updateMap = Object.fromEntries(sideEffects.billUpdates.map(u => [u.id, u]));
-      const newPurch = purchases.map(p => updateMap[p.id] ? { ...p, ...updateMap[p.id] } : p);
+    if (sideEffects.billUpdates?.length || sideEffects.newBills?.length) {
+      const updateMap = Object.fromEntries((sideEffects.billUpdates || []).map(u => [u.id, u]));
+      const newIds = new Set((sideEffects.newBills || []).map(b => b.id));
+      const basePurchases = [...(sideEffects.newBills || []), ...purchases.filter(p => !newIds.has(p.id))];
+      const newPurch = basePurchases.map(p => updateMap[p.id] ? { ...p, ...updateMap[p.id] } : p);
       setPurchases(newPurch);
       await saveK(keys.purchases, newPurch);
     }

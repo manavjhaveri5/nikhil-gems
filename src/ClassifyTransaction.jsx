@@ -18,6 +18,31 @@ import { aiSuggest } from "./classifyLearner.js";
 const DEFAULT_RATES = { USD: 85, EUR: 92, JPY: 0.57, GBP: 107, AUD: 55, INR: 1 };
 const CUR_SYM = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "A$" };
 
+const purchaseSignature = p => {
+  if (!p || p.type !== "bill") return p?.id || "";
+  const itemSig = (p.items || []).map(it => [it.desc, it.qty, it.unit, it.rate, it.amt].join(":")).join("|");
+  return [
+    p.source === "misc-bill-maker" ? "misc" : "bill",
+    (p.billNumber || "").trim(),
+    (p.supplier || p.vendorName || p.vendor || "").trim(),
+    p.billDate || p.date || "",
+    +p.totalAmount || 0,
+    itemSig,
+  ].join("||").toLowerCase();
+};
+
+const dedupePurchasesForPicker = list => {
+  const seen = new Set();
+  const out = [];
+  (list || []).forEach(p => {
+    const sig = purchaseSignature(p);
+    if (sig && seen.has(sig)) return;
+    if (sig) seen.add(sig);
+    out.push(p);
+  });
+  return out;
+};
+
 const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
   rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
@@ -61,6 +86,9 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const [vendorId, setVendorId] = useState(txn.classifiedRef?.vendorId || L?.vendorId || guessVendor());
   const [selectedBillIds, setSelectedBillIds] = useState(() => new Set(txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : [])));
   const [selectedPoId, setSelectedPoId] = useState(txn.classifiedRef?.poId || "");
+  const [quickBills, setQuickBills] = useState([]);
+  const [quickBillOpen, setQuickBillOpen] = useState(false);
+  const [quickBill, setQuickBill] = useState({ billNumber: "", supplier: "", date: "", amount: "", currency: "" });
   // Inter-company: pick the OTHER company's invoice this payment settles. Pre-select the
   // one whose number appears in the notes/payee (e.g. "Payment against NG-04-2026/27").
   const interInvs = interCo?.invoices || [];
@@ -171,7 +199,8 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
     const s = vendorNameOf(p).toLowerCase(), v = (vendor?.name || "").toLowerCase();
     return s && v && (s.includes(v) || v.includes(s) || v.split(/\s+/).filter(w => w.length > 2).some(w => s.includes(w)));
   };
-  const allBills = purchases.filter(p => p.type === "bill");
+  const purchaseList = dedupePurchasesForPicker([...quickBills, ...purchases]);
+  const allBills = purchaseList.filter(p => p.type === "bill");
   // Bills already linked to THIS payment stay visible even after they're marked paid.
   const linkedBillIds = new Set(txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : []));
   const allOpenBills = allBills.filter(p => p.status !== "paid" || linkedBillIds.has(p.id));
@@ -180,7 +209,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   // and its document attached. Selecting a fully-paid bill adds ₹0 (paying is capped at
   // the amount due), so it never double-pays.
   const vendorBills = vendorId ? allBills.filter(matchesVendor) : allOpenBills.filter(matchesVendor);
-  const vendorPOs = purchases.filter(p => p.type === "po" && !["paid", "closed", "cancelled"].includes(p.status || "open")).filter(matchesVendor);
+  const vendorPOs = purchaseList.filter(p => p.type === "po" && !["paid", "closed", "cancelled"].includes(p.status || "open")).filter(matchesVendor);
   // Invoices already linked to THIS receipt (so a reviewed receipt still shows its
   // invoice even though classifying it flipped the invoice's status to "paid").
   const linkedInvIds = new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : []));
@@ -188,6 +217,8 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const selectedBills = vendorBills.filter(b => selectedBillIds.has(b.id));
   const selectedInvs = openInvoices.filter(i => selectedInvIds.has(i.id));
   const billDue = b => Math.max(0, (+b.totalAmount || 0) - (+b.paidAmount || 0));
+  const poTotal = po => +po.totalAmount || (po.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
+  const poDue = po => Math.max(0, poTotal(po) - (+po.paidAmount || 0));
   const invTotal = inv => +inv.totalAmt || (inv.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
   const invPaid = inv => (+inv.paidAmount || 0) + (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0);
   const invDue = inv => Math.max(0, invTotal(inv) - invPaid(inv));
@@ -196,6 +227,36 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const totalInvDueInTxnCurrency = selectedInvs.reduce((s, inv) => s + convertMoney(invDue(inv), inv.currency || "USD", cur), 0);
   const toggleBill = id => setSelectedBillIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleInv = id => setSelectedInvIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const openQuickBill = () => {
+    setQuickBill({
+      billNumber: txn.refNo || txn.reference || "",
+      supplier: vendor?.name || txn.payee || "",
+      date: txn.date || "",
+      amount: txnAmt ? String(txnAmt) : "",
+      currency: cur,
+    });
+    setQuickBillOpen(true);
+  };
+  const addQuickBill = () => {
+    const supplier = (quickBill.supplier || vendor?.name || txn.payee || "").trim();
+    const amount = +quickBill.amount || 0;
+    if (!supplier || amount <= 0) return;
+    const bill = {
+      id: "bill-" + uid(), type: "bill",
+      vendorId: vendorId || "", vendorName: supplier, supplier,
+      billNumber: quickBill.billNumber || "Bill",
+      date: quickBill.date || txn.date, billDate: quickBill.date || txn.date,
+      currency: quickBill.currency || cur, totalAmount: amount, paidAmount: 0,
+      status: "pending",
+      items: [{ id: uid(), desc: txn.notes || txn.payee || "Purchase bill", qty: "1", unit: "lot", rate: String(amount), amt: amount }],
+      notes: `Created from transaction ${txn.date || ""}`.trim(),
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    setQuickBills(prev => [bill, ...prev]);
+    setSelectedBillIds(prev => new Set([...prev, bill.id]));
+    if (vendorId || !vendors.length) setVendorId(vendorId);
+    setQuickBillOpen(false);
+  };
   const types = isDebit ? [
     ["expense", "Expense", "Rent, freight, salary, etc.", C.amber],
     ["vendor_bill", "Vendor Bill Payment", "Apply against an existing bill", C.blue],
@@ -257,6 +318,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
       }
       const credit = Math.max(0, remaining);
       classifiedRef = { vendorId, vendorName: vendor?.name || txn.payee || "", billIds: [...selectedBillIds], billNumbers: selectedBills.map(b => b.billNumber).filter(Boolean), ...(selectedBillIds.size === 0 && { paymentOnAccount: true }), ...(credit > 0 && { creditApplied: credit }), ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
+      if (quickBills.length) sideEffects.newBills = quickBills;
       sideEffects.billUpdates = billUpdates;
       // Auto-attach the bill's document. Purchases-module bills store it as docUrl/docData;
       // misc-module (no-GST) bills store it as attachUrl/attachData — support both.
@@ -431,7 +493,18 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
             </div>
           )}
           <Field label="Filter by Vendor (optional)"><select value={vendorId} onChange={e => { setVendorId(e.target.value); setSelectedBillIds(new Set()); setSelectedPoId(""); }} style={SI}><option value="">All vendors</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
-          {classType === "vendor_bill" && <div><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, marginBottom: 6 }}>Select bills to pay {vendorId ? `- ${vendor?.name}` : "(all vendors)"} <span style={{ fontWeight: 500 }}>(tap to select multiple)</span></div>
+          {classType === "vendor_bill" && <div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65 }}>Select bills to pay {vendorId ? `- ${vendor?.name}` : "(all vendors)"} <span style={{ fontWeight: 500 }}>(tap to select multiple)</span></div><button type="button" onClick={openQuickBill} style={{ border: `1px solid ${C.blue}55`, background: C.blueBg, color: C.blue, borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer", flexShrink: 0 }}>+ Add bill</button></div>
+            {quickBillOpen && <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1.2fr 1fr 1fr .8fr", gap: 8, marginBottom: 8 }}>
+              <input value={quickBill.billNumber} onChange={e => setQuickBill(q => ({ ...q, billNumber: e.target.value }))} placeholder="Bill no." style={SI} />
+              <input value={quickBill.supplier} onChange={e => setQuickBill(q => ({ ...q, supplier: e.target.value }))} placeholder="Vendor" style={SI} />
+              <input type="date" value={quickBill.date} onChange={e => setQuickBill(q => ({ ...q, date: e.target.value }))} style={SI} />
+              <input type="number" min="0" step="0.01" value={quickBill.amount} onChange={e => setQuickBill(q => ({ ...q, amount: e.target.value }))} placeholder="Amount" style={SI} />
+              <select value={quickBill.currency || cur} onChange={e => setQuickBill(q => ({ ...q, currency: e.target.value }))} style={SI}>{Object.keys(CUR_SYM).map(c => <option key={c} value={c}>{c}</option>)}</select>
+              <div style={{ gridColumn: mob ? "auto" : "1/-1", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button type="button" onClick={() => setQuickBillOpen(false)} style={{ border: `1px solid ${C.border}`, background: C.surface, color: C.inkMid, borderRadius: 6, padding: "7px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancel</button>
+                <button type="button" onClick={addQuickBill} disabled={!(quickBill.supplier || vendor?.name || txn.payee) || !(+quickBill.amount > 0)} style={{ border: "none", background: C.blue, color: "#fff", borderRadius: 6, padding: "7px 12px", fontSize: 12, fontWeight: 800, cursor: (+quickBill.amount > 0) ? "pointer" : "default", opacity: (+quickBill.amount > 0) ? 1 : .55 }}>Add & select</button>
+              </div>
+            </div>}
             {vendorBills.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>{vendorId ? `No open bills — this records an advance to ${vendor?.name || "the vendor"}, offset against their future bills.` : "No open bills. Pick a vendor above to record this as an advance to them."}</div> : <div style={{ maxHeight: 240, overflowY: "auto", display: "grid", gap: 6 }}>
               {vendorBills.map(b => { const sel = selectedBillIds.has(b.id), due = billDue(b); return <button key={b.id} onClick={() => toggleBill(b.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", background: sel ? C.card : C.surface, border: `1.5px solid ${sel ? C.blue : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}>
                 <div style={{ width: 18, height: 18, borderRadius: 4, border: `2px solid ${sel ? C.blue : C.border}`, background: sel ? C.blue : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 900 }}>{sel ? "✓" : ""}</div>
@@ -448,7 +521,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
             </div>}
           </div>}
           {classType === "vendor_po" && <div><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, marginBottom: 6 }}>Open POs {vendorId ? `- ${vendor?.name}` : "(all vendors)"}</div>
-            {vendorPOs.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>No open POs found.</div> : <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 6 }}>{vendorPOs.map(po => <button key={po.id} onClick={() => setSelectedPoId(po.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "9px 12px", background: selectedPoId === po.id ? C.card : C.surface, border: `1.5px solid ${selectedPoId === po.id ? C.purple : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}><div><div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{po.poNumber || "PO"}</div><div style={{ fontSize: 11, color: C.inkFaint }}>{po.supplier} · {fmtDate(po.date)} · {po.status}</div></div><div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{po.currency || "INR"}</div></button>)}</div>}
+            {vendorPOs.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>No open POs found.</div> : <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 6 }}>{vendorPOs.map(po => { const total = poTotal(po), due = poDue(po), poCur = po.currency || "INR"; return <button key={po.id} onClick={() => setSelectedPoId(po.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, width: "100%", padding: "9px 12px", background: selectedPoId === po.id ? C.card : C.surface, border: `1.5px solid ${selectedPoId === po.id ? C.purple : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{po.poNumber || "PO"}</div><div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{po.supplier} · {fmtDate(po.date)} · {po.status}</div></div><div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{moneyText(total, poCur)}</div>{(+po.paidAmount || 0) > 0 && <div style={{ fontSize: 10, color: C.inkFaint }}>{moneyText(due, poCur)} left</div>}</div></button>; })}</div>}
           </div>}
         </div>}
         {classType === "customer_receipt" && <div><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, marginBottom: 6 }}>Apply against invoice(s)</div>

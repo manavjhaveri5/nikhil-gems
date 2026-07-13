@@ -11,7 +11,7 @@
  * The cache name uses SELF_URL so every new sw.js deployment busts the old cache.
  */
 
-const CACHE = "ng-shell-2026-07-04-v13";
+const CACHE = "ng-shell-2026-07-13-v27";
 const SHELL  = ["/", "/index.html"];
 const freshRequest = req => new Request(req, { cache: "no-store" });
 const clearShellCaches = () =>
@@ -26,7 +26,6 @@ self.addEventListener("install", e => {
   e.waitUntil(
     caches.open(CACHE)
       .then(c => c.addAll(SHELL.map(u => new Request(u, { cache: "no-store" }))))
-      .then(() => self.skipWaiting())
   );
 });
 
@@ -42,7 +41,7 @@ self.addEventListener("activate", e => {
 });
 
 self.addEventListener("message", e => {
-  if (e.data?.type === "SKIP_WAITING") self.skipWaiting();
+  if (e.data?.type === "NG_APPLY_UPDATE") self.skipWaiting();
 });
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────

@@ -8673,7 +8673,7 @@ ${panSection}
           <input ref={billDocRef} type="file" accept="image/*,.pdf,application/pdf" style={{display:"none"}} onChange={e=>attachBillFile(e.target.files?.[0])}/>
           {hasBillDoc&&<button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto"}} onClick={()=>setShowDoc(s=>!s)}>📄 {showDoc?"Hide":"View"} Bill</button>}
           <button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto",color:hasBillDoc?C.blue:C.ink}} disabled={attaching} onClick={()=>billDocRef.current?.click()}>{attaching?"Attaching…":hasBillDoc?"📎 Replace Bill PDF":"📎 Attach Bill PDF"}</button>
-          <button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto",opacity:downloading?.6:1}} onClick={downloadBill} disabled={downloading}>{downloading?"Generating…":"📥 Download Bill"}</button>
+          <button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto",opacity:downloading?0.6:1}} onClick={downloadBill} disabled={downloading}>{downloading?"Generating…":"📥 Download Bill"}</button>
           <button className="bs" style={{fontSize:11,padding:"5px 10px",minHeight:mob?44:36,width:mob?"100%":"auto"}} onClick={onEdit}>✏ Edit</button>
           {needsExpand&&<button className="bp" style={{background:C.teal,fontSize:12,minHeight:mob?44:36,width:mob?"100%":"auto"}} onClick={onExpand}>→ Expand to Stock</button>}
           <StatusBadge s={bill.status}/>
@@ -12594,6 +12594,8 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
 // SHOWS MODULE
 // ══════════════════════════════════════════════════════════════════
 const SHOWS_KEY="ng-shows-v1";
+const SHOWS_DRAFT_KEY="ng-shows-v1-local-draft";
+const BUYING_PLAN_DRAFT_PREFIX="ng-buying-plan-draft:";
 const DEFAULT_SHOWS=[
   {id:"tucson-2026",name:"Tucson Gem & Mineral Show",city:"Tucson, USA",startDate:"2026-01-14",endDate:"2026-02-15",year:2026,color:"#B07D12"},
   {id:"osaka-2026",name:"Osaka Mineral Fair",city:"Osaka, Japan",startDate:"2026-04-21",endDate:"2026-04-28",year:2026,color:"#1A4A8A"},
@@ -12605,10 +12607,39 @@ const DEFAULT_SHOWS=[
   {id:"ikebukuro-2026",name:"Ikebukuro Mineral Show",city:"Tokyo, Japan",startDate:"2026-12-05",endDate:"2026-12-10",year:2026,color:"#2A5A8A"},
 ];
 const DEFAULT_CHECKLIST=["Booth confirmed","Flights booked","Hotel booked","Shipping arranged","Stock packed","Invoices ready","Business cards","Display materials"];
+const readShowsDraft=()=>{
+  try{
+    const draft=JSON.parse(localStorage.getItem(SHOWS_DRAFT_KEY)||"null");
+    return Array.isArray(draft?.value)?draft:null;
+  }catch{return null;}
+};
+const writeShowsDraft=list=>{
+  try{localStorage.setItem(SHOWS_DRAFT_KEY,JSON.stringify({ts:Date.now(),value:list}));}catch{}
+};
+const readBuyingPlanDraft=sid=>{
+  try{
+    const draft=JSON.parse(localStorage.getItem(BUYING_PLAN_DRAFT_PREFIX+sid)||"null");
+    return Array.isArray(draft?.value)?draft:null;
+  }catch{return null;}
+};
+const writeBuyingPlanDraft=(sid,plan)=>{
+  try{localStorage.setItem(BUYING_PLAN_DRAFT_PREFIX+sid,JSON.stringify({ts:Date.now(),value:plan}));}catch{}
+};
+const withShowsDraft=list=>{
+  const draft=readShowsDraft();
+  const base=draft?.value||list;
+  return Array.isArray(base)?base.map(show=>{
+    const planDraft=readBuyingPlanDraft(show.id);
+    return planDraft?.value?{...show,buyingPlan:planDraft.value}:show;
+  }):base;
+};
 
 function ShowsApp({onHome,isAdmin=true}){
   const t=useT();
   const [shows,setShows]=useState([]);
+  const showsRef=useRef([]);
+  const showSaveChainRef=useRef(Promise.resolve());
+  const pendingShowSavesRef=useRef(0);
   const [stock,setStock]=useState([]);
   const [purchases,setPurchases]=useState([]);
   const [calEvents,setCalEvents]=useState([]);
@@ -12617,27 +12648,36 @@ function ShowsApp({onHome,isAdmin=true}){
   const [toast,setToast]=useState("");
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   const todayStr=today();
+  const applyShows=list=>{showsRef.current=Array.isArray(list)?list:[];setShows(list);};
 
   useEffect(()=>{
     Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases)]).then(([s,e,st,p])=>{
-      setShows(s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""})));
+      const initial=s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""}));
+      applyShows(withShowsDraft(initial));
       setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);setLoaded(true);
     });
     // Always reconcile with Supabase on open so a device that missed a live update
     // (was closed/backgrounded) doesn't keep showing a stale buying plan.
-    loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)setShows(s);}).catch(()=>{});
+    loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)applyShows(withShowsDraft(s));}).catch(()=>{});
   },[]);
 
   // Stay in sync across devices: when another device saves (or we refocus the tab),
   // utils fires a refresh for the changed keys — reload them fresh from Supabase.
   useEffect(()=>onCacheRefresh(keys=>{
-    if(keys.includes(SHOWS_KEY))loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)setShows(s);}).catch(()=>{});
+    if(keys.includes(SHOWS_KEY)&&pendingShowSavesRef.current===0)loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)applyShows(withShowsDraft(s));}).catch(()=>{});
     if(keys.includes(KEYS.stock))loadKFresh(KEYS.stock).then(st=>{if(Array.isArray(st))setStock(st);}).catch(()=>{});
     if(keys.includes(KEYS.purchases))loadKFresh(KEYS.purchases).then(p=>{if(Array.isArray(p))setPurchases(p);}).catch(()=>{});
     if(keys.includes(CAL_KEY))loadKFresh(CAL_KEY).then(e=>{if(Array.isArray(e))setCalEvents(e);}).catch(()=>{});
   }),[]);
 
-  const save=async(list)=>{setShows(list);await saveK(SHOWS_KEY,list);};
+  const save=async(list)=>{
+    const next=Array.isArray(list)?list:[];
+    applyShows(next);
+    writeShowsDraft(next);
+    pendingShowSavesRef.current+=1;
+    showSaveChainRef.current=showSaveChainRef.current.catch(()=>{}).then(()=>saveK(SHOWS_KEY,showsRef.current)).finally(()=>{pendingShowSavesRef.current=Math.max(0,pendingShowSavesRef.current-1);});
+    await showSaveChainRef.current;
+  };
   const createPOFromBuyingPlan=async (sid,vendorFilter="all",lineIds=null)=>{
     const show=shows.find(s=>s.id===sid);
     if(!show)return;
@@ -12654,7 +12694,8 @@ function ShowsApp({onHome,isAdmin=true}){
       else showToast("All lines are already in purchase orders");
       return;
     }
-    const incomplete=rows.filter(r=>!String(r.vendor||"").trim()||!(+r.qty>0)||!(+r.costPerKg>0));
+    const poCostPerKg=r=>+r.costPerKg||(+r.cpUsd>0?Math.round(+r.cpUsd*85):0);
+    const incomplete=rows.filter(r=>!String(r.vendor||"").trim()||!(+r.qty>0)||!(poCostPerKg(r)>0));
     if(incomplete.length){showToast("Add vendor, qty and CP before creating PO");return;}
     const groups={};
     rows.forEach(r=>{
@@ -12672,7 +12713,7 @@ function ShowsApp({onHome,isAdmin=true}){
       const poNumber=`PO/${new Date().getFullYear()}/${String(poCount).padStart(3,"0")}`;
       const items=lines.map(r=>{
         const qty=String(r.qty||"");
-        const rate=String(r.costPerKg||"");
+        const rate=String(r.costPerKg||poCostPerKg(r)||"");
         const desc=[r.stone,r.shape].filter(Boolean).join(" · ");
         const amt=(+qty||0)*(+rate||0);
         return{...newItem(),id:uid(),desc,shape:r.shape||"",qty,unit:r.unit||"kg",rate,amt};
@@ -12690,7 +12731,7 @@ function ShowsApp({onHome,isAdmin=true}){
     const updatedShows=shows.map(s=>s.id!==sid?s:{...s,buyingPlan:plan.map(r=>lineToPO[r.id]?{...r,...lineToPO[r.id],orderedAt:today(),updatedAt:new Date().toISOString()}:r)});
     const updatedPurchases=[...created,...purchases];
     setPurchases(updatedPurchases);
-    setShows(updatedShows);
+    applyShows(updatedShows);
     await savePurchasesK(updatedPurchases);
     await saveK(SHOWS_KEY,updatedShows);
     showToast(`Created ${created.length} PO${created.length!==1?"s":""} from buying plan`);
@@ -12699,7 +12740,11 @@ function ShowsApp({onHome,isAdmin=true}){
   const addBagItem=(sid,item)=>save(shows.map(s=>s.id!==sid?s:{...s,bagItems:[...(s.bagItems||[]),item]}));
   const updateBagItem=(sid,iid,patch)=>save(shows.map(s=>s.id!==sid?s:{...s,bagItems:(s.bagItems||[]).map(b=>b.id!==iid?b:{...b,...patch})}));
   const removeBagItem=(sid,iid)=>save(shows.map(s=>s.id!==sid?s:{...s,bagItems:(s.bagItems||[]).filter(b=>b.id!==iid)}));
-  const updateShow=(sid,key,val)=>save(shows.map(s=>s.id!==sid?s:{...s,[key]:val}));
+  const updateShow=(sid,key,val)=>save((showsRef.current.length?showsRef.current:shows).map(s=>{
+    if(s.id!==sid)return s;
+    const nextVal=typeof val==="function"?val(s[key],s):val;
+    return{...s,[key]:nextVal};
+  }));
   const toggleCheck=(sid,i)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],done:!c[i].done};return{...s,checklist:c};}));
   const editCheckTask=(sid,i,task)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],task};return{...s,checklist:c};}));
   const addCheckItem=(sid)=>save(shows.map(s=>s.id!==sid?s:{...s,checklist:[...(s.checklist||[]),{id:uid(),task:"",done:false}]}));
@@ -12860,29 +12905,54 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     sp:fmtAmtIN(row.targetSellPrice),
     usd:fmtAmtIN(row.targetSellPriceUsd||usdFromInr(row.targetSellPrice)),
   });
-  const [d,setD]=React.useState(make);
+  const [d,setDState]=React.useState(make);
+  const draftRef=React.useRef(d);
   const editing=React.useRef(false);
   const dirty=React.useRef(false);
-  React.useEffect(()=>{ if(!editing.current) setD(make()); },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.cpUsd,cur,row.targetSellPrice,row.targetSellPriceUsd]);
+  const cpCommitTimer=React.useRef(null);
+  const setD=next=>{
+    const value=typeof next==="function"?next(draftRef.current):next;
+    draftRef.current=value;
+    setDState(value);
+  };
+  React.useEffect(()=>{ if(!editing.current){const next=make();draftRef.current=next;setDState(next);} },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.cpUsd,cur,row.targetSellPrice,row.targetSellPriceUsd]);
+  React.useEffect(()=>()=>{if(cpCommitTimer.current)clearTimeout(cpCommitTimer.current);},[]);
   const set=(k,v)=>{dirty.current=true;setD(p=>({...p,[k]:v}));};
   const commit=()=>{
+    if(cpCommitTimer.current){clearTimeout(cpCommitTimer.current);cpCommitTimer.current=null;}
     if(!dirty.current)return; dirty.current=false;
+    const draft=draftRef.current;
     const patch={};
-    const shp=expandPlanShape(d.shape);
-    if(d.stone!==(row.stone||""))patch.stone=d.stone;
+    const shp=expandPlanShape(draft.shape);
+    if(draft.stone!==(row.stone||""))patch.stone=draft.stone;
     if(shp!==(row.shape||""))patch.shape=shp;
-    if(d.vendor!==(row.vendor||""))patch.vendor=d.vendor;
-    if(rawAmt(d.qty)!==(row.qty||""))patch.qty=rawAmt(d.qty);
-    if(d.unit!==(row.unit||"")){patch.unit=d.unit;patch.unitTouched=true;}
-    const cpRaw=rawAmt(d.cp);
+    if(draft.vendor!==(row.vendor||""))patch.vendor=draft.vendor;
+    if(rawAmt(draft.qty)!==(row.qty||""))patch.qty=rawAmt(draft.qty);
+    if(draft.unit!==(row.unit||"")){patch.unit=draft.unit;patch.unitTouched=true;}
+    const cpRaw=rawAmt(draft.cp);
     if(cur==="USD"){
       if(cpRaw!==(row.cpUsd||"")){patch.cpUsd=cpRaw;patch.cpCurrency="USD";patch.costPerKg=cpRaw?String(Math.round(+cpRaw*(usdInr||85))):"";}
     }else{
       if(cpRaw!==(row.costPerKg||"")){patch.costPerKg=cpRaw;patch.cpUsd="";patch.cpCurrency="INR";patch.currency="INR";}
     }
-    if(rawAmt(d.sp)!==(row.targetSellPrice||""))patch.targetSellPrice=rawAmt(d.sp);
-    if(rawAmt(d.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(d.usd);
+    if(rawAmt(draft.sp)!==(row.targetSellPrice||""))patch.targetSellPrice=rawAmt(draft.sp);
+    if(rawAmt(draft.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(draft.usd);
     if(Object.keys(patch).length)onCommit(row.id,patch);
+  };
+  const cpPatchFor=value=>{
+    const cpRaw=rawAmt(value);
+    return cur==="USD"
+      ? {cpUsd:cpRaw,cpCurrency:"USD",costPerKg:cpRaw?String(Math.round(+cpRaw*(usdInr||85))):""}
+      : {costPerKg:cpRaw,cpUsd:"",cpCurrency:"INR",currency:"INR"};
+  };
+  const commitCp=value=>{
+    dirty.current=true;
+    setD(p=>({...p,cp:value}));
+    if(cpCommitTimer.current)clearTimeout(cpCommitTimer.current);
+    cpCommitTimer.current=setTimeout(()=>{
+      cpCommitTimer.current=null;
+      onCommit(row.id,cpPatchFor(draftRef.current.cp));
+    },450);
   };
   const td={border:`1px solid ${issue?C.red+"66":C.border}`,padding:0,background:issue?C.redBg:(bandBg||C.surface),verticalAlign:"middle"};
   const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
@@ -12941,7 +13011,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,width:86,padding:0}}>
         <div style={{display:"flex",alignItems:"center",width:"100%"}}>
           <span title="Currency is set per vendor (top row)" style={{fontSize:9.5,color:cur==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0}}>{cur==="USD"?"$":"₹"}</span>
-          <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
+          <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>commitCp(e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
         </div>
       </td>
       <td style={{...td,width:78}}><input value={d.sp} inputMode="decimal" placeholder="0" onChange={e=>set("sp",e.target.value)} style={num}/></td>
@@ -12995,6 +13065,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [sheetHoverRow,setSheetHoverRow]=useState(null);
   const [sheetCtxMenu,setSheetCtxMenu]=useState(null);
   const [buyingUndoFlash,setBuyingUndoFlash]=useState(false);
+  const [buyingSaveState,setBuyingSaveState]=useState("idle");
   const [sheetCopyFlash,setSheetCopyFlash]=useState(false);
   const [sheetNoteEdit,setSheetNoteEdit]=useState(null);
   const [poFix,setPoFix]=useState(null);
@@ -13003,6 +13074,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [whatsappIncludeComments,setWhatsappIncludeComments]=useState(false);
   const [buyingPlanView,setBuyingPlanView]=useState(()=>{try{return localStorage.getItem("ng-buying-plan-view")||"cards";}catch{return"cards";}});
   const [compactStoneKey,setCompactStoneKey]=useState("");
+  const skipCreatePOClickRef=useRef(false);
   const allShapes=useShapes();
   const fmtAmtIN=v=>{const n=parseFloat(String(v||"").replace(/,/g,""));return Number.isFinite(n)?n.toLocaleString("en-IN",{maximumFractionDigits:2}):"";};
   const rawAmt=v=>String(v||"").replace(/,/g,"").replace(/[^\d.]/g,"");
@@ -13121,6 +13193,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
       return{...r,cpCurrency:currency,cpUsd,costPerKg,updatedAt:new Date().toISOString()};
     });
     buyingUndoRef.current=[...buyingUndoRef.current,buyingPlan].slice(-100);
+    writeBuyingPlanDraft(show.id,nextPlan);
     onUpdateShow(show.id,"buyingPlan",nextPlan);
     onUpdateShow(show.id,"buyingPlanVendorCurrencies",nextCurrencies);
   };
@@ -13130,7 +13203,29 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const buyingUndoRef=useRef([]);
   const saveBuyingPlan=plan=>{
     buyingUndoRef.current=[...buyingUndoRef.current,buyingPlan].slice(-100);
+    writeBuyingPlanDraft(show.id,plan);
     onUpdateShow(show.id,"buyingPlan",plan);
+  };
+  const saveButtonLabel=buyingSaveState==="saving"?"Saving...":buyingSaveState==="saved"?"Saved":buyingSaveState==="error"?"Save failed":"Save";
+  const manualSaveBuyingPlan=e=>{
+    e?.stopPropagation?.();
+    const active=document.activeElement;
+    if(active?.blur)active.blur();
+    setBuyingSaveState("saving");
+    setTimeout(async()=>{
+      try{
+        await onUpdateShow(show.id,"buyingPlan",(plan=[])=>{
+          const draft=readBuyingPlanDraft(show.id)?.value;
+          return Array.isArray(draft)?draft:(Array.isArray(plan)?plan:buyingPlan);
+        });
+        setBuyingSaveState("saved");
+        setTimeout(()=>setBuyingSaveState("idle"),1400);
+      }catch(err){
+        console.error("Buying plan save failed",err);
+        setBuyingSaveState("error");
+        setTimeout(()=>setBuyingSaveState("idle"),2200);
+      }
+    },250);
   };
   // Cmd/Ctrl+Z restores the previous buying-plan state (last add / edit / delete /
   // duplicate). Skipped while a text field is focused so native text-undo still works.
@@ -13234,46 +13329,55 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     });
     saveBuyingPlan([...buyingPlan.slice(0,insertAt+1),next,...buyingPlan.slice(insertAt+1)]);
   };
-  const updateBuyingLine=(id,patch)=>saveBuyingPlan(buyingPlan.map(row=>{
-    if(row.id!==id)return row;
-    const next={...row,...patch,updatedAt:new Date().toISOString()};
-    const shouldFill=patch.stone!==undefined||patch.shape!==undefined;
-    if(shouldFill){
-      const basis=findCostBasis(next.stone,next.shape);
-      if(basis){
-        next.lastRate=basis.rate||"";next.lastVendor=basis.vendor||"";next.lastDate=basis.date||"";next.lastSource=basis.source||"";
-        if(!next.vendor)next.vendor=basis.vendor||"";
-        if(!next.unit||(!next.unitTouched&&next.unit==="pcs"))next.unit="kg";
-        next.currency="INR";
-        // Autofill CP/kg only if user hasn't entered one — keeps manual edits sticky
-        if(!next.costPerKg&&basis.costPerKg>0)next.costPerKg=String(+basis.costPerKg.toFixed(2));
+  const updateBuyingLine=(id,patch)=>{
+    buyingUndoRef.current=[...buyingUndoRef.current,buyingPlan].slice(-100);
+    const patchPlan=(plan=[])=>{
+      const draft=readBuyingPlanDraft(show.id)?.value;
+      const base=(Array.isArray(draft)&&draft.length)?draft:((Array.isArray(plan)&&plan.length)?plan:buyingPlan);
+      return base.map(row=>{
+      if(row.id!==id)return row;
+      const next={...row,...patch,updatedAt:new Date().toISOString()};
+      const shouldFill=patch.stone!==undefined||patch.shape!==undefined;
+      if(shouldFill){
+        const basis=findCostBasis(next.stone,next.shape);
+        if(basis){
+          next.lastRate=basis.rate||"";next.lastVendor=basis.vendor||"";next.lastDate=basis.date||"";next.lastSource=basis.source||"";
+          if(!next.vendor)next.vendor=basis.vendor||"";
+          if(!next.unit||(!next.unitTouched&&next.unit==="pcs"))next.unit="kg";
+          next.currency="INR";
+          // Autofill CP/kg only if user hasn't entered one — keeps manual edits sticky
+          if(!next.costPerKg&&basis.costPerKg>0)next.costPerKg=String(+basis.costPerKg.toFixed(2));
+        }
+        const shapeNote=shapeNoteFor(next.shape);
+        if(shapeNote&&(!next.notes||next.notesAuto)){
+          next.notes=shapeNote;
+          next.notesAuto=true;
+        }
       }
-      const shapeNote=shapeNoteFor(next.shape);
-      if(shapeNote&&(!next.notes||next.notesAuto)){
-        next.notes=shapeNote;
-        next.notesAuto=true;
+      if(patch.targetSellPrice!==undefined&&!next.targetSellPriceUsdEdited)next.targetSellPriceUsd=usdFromInr(next.targetSellPrice);
+      if(patch.targetSellPriceUsd!==undefined){
+        next.targetSellPriceUsdEdited=!!next.targetSellPriceUsd;
+        next.targetSellPrice=inrFromUsd(next.targetSellPriceUsd);
       }
-    }
-    if(patch.targetSellPrice!==undefined&&!next.targetSellPriceUsdEdited)next.targetSellPriceUsd=usdFromInr(next.targetSellPrice);
-    if(patch.targetSellPriceUsd!==undefined){
-      next.targetSellPriceUsdEdited=!!next.targetSellPriceUsd;
-      next.targetSellPrice=inrFromUsd(next.targetSellPriceUsd);
-    }
-    if(patch.vendor!==undefined&&patch.vendor&&patch.cpCurrency===undefined){
-      const vc=getVendorCurrency(patch.vendor);
-      next.cpCurrency=vc;
-      if(vc==="USD"&&next.costPerKg&&!next.cpUsd)next.cpUsd=String(Math.round(+next.costPerKg/(usdInr||85)*100)/100);
-      if(vc==="INR")next.cpUsd="";
-    }
-    if(patch.cpUsd!==undefined){
-      next.cpCurrency="USD";
-      next.costPerKg=patch.cpUsd?String(Math.round(+patch.cpUsd*usdInr)):"";
-    }
-    if(patch.costPerKg!==undefined&&next.cpCurrency!=="USD"){
-      next.cpUsd=""; next.cpCurrency="INR";
-    }
-    return next;
-  }));
+      if(patch.vendor!==undefined&&patch.vendor&&patch.cpCurrency===undefined){
+        const vc=getVendorCurrency(patch.vendor);
+        next.cpCurrency=vc;
+        if(vc==="USD"&&next.costPerKg&&!next.cpUsd)next.cpUsd=String(Math.round(+next.costPerKg/(usdInr||85)*100)/100);
+        if(vc==="INR")next.cpUsd="";
+      }
+      if(patch.cpUsd!==undefined){
+        next.cpCurrency="USD";
+        next.costPerKg=patch.cpUsd?String(Math.round(+patch.cpUsd*usdInr)):"";
+      }
+      if(patch.costPerKg!==undefined&&next.cpCurrency!=="USD"){
+        next.cpUsd=""; next.cpCurrency="INR";
+      }
+      return next;
+      });
+    };
+    writeBuyingPlanDraft(show.id,patchPlan());
+    onUpdateShow(show.id,"buyingPlan",patchPlan);
+  };
   const updateBuyingLineNote=(row,note)=>{
     const shapeKey=normPlanText(row.shape);
     if(shapeKey){
@@ -13309,10 +13413,11 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const livePoIds=React.useMemo(()=>new Set((purchases||[]).map(p=>p.id)),[purchases]);
   const lineOrdered=row=>!!row.poId&&livePoIds.has(row.poId);
   const planOpen=viewBuyingPlan.filter(row=>!lineOrdered(row)).length;
+  const poCostPerKg=row=>+row.costPerKg||(+row.cpUsd>0?Math.round(+row.cpUsd*usdInr):0);
   const poMissingFields=row=>[
     !String(row.vendor||"").trim()?"vendor":"",
     !(+row.qty>0)?"qty":"",
-    !(+row.costPerKg>0)?"CP":""
+    !(poCostPerKg(row)>0)?"CP":""
   ].filter(Boolean);
   const poCreateRows=()=>{
     const base=buyingPlan.filter(r=>!lineOrdered(r)&&String(r.stone||"").trim());
@@ -13325,8 +13430,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     }
     return base.filter(r=>planVendorFilter==="all"||r.vendor===planVendorFilter);
   };
-  const handleCreateBuyingPO=e=>{
-    e?.stopPropagation?.();
+  const runCreateBuyingPO=()=>{
     const rows=poCreateRows();
     if(!rows.length){
       setPoFix(null);
@@ -13351,6 +13455,26 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     }
     setPoFix(null);
     onCreatePOFromBuyingPlan?.(show.id,"all",rows.map(r=>r.id));
+  };
+  const handleCreateBuyingPO=e=>{
+    e?.stopPropagation?.();
+    if(skipCreatePOClickRef.current){skipCreatePOClickRef.current=false;return;}
+    const active=document.activeElement;
+    if(active?.closest?.('[data-buying-plan-sheet="1"]')){
+      active.blur();
+      setTimeout(runCreateBuyingPO,0);
+      return;
+    }
+    runCreateBuyingPO();
+  };
+  const handleCreateBuyingPOMouseDown=e=>{
+    const active=document.activeElement;
+    if(!active?.closest?.('[data-buying-plan-sheet="1"]'))return;
+    e.preventDefault();
+    e.stopPropagation();
+    skipCreatePOClickRef.current=true;
+    active.blur();
+    setTimeout(runCreateBuyingPO,0);
   };
   React.useEffect(()=>{
     if(!poFix?.ids)return;
@@ -13377,6 +13501,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     if(unit==="g"||unit==="gm")return qty/1000;
     return qty;
   };
+  const buyingLineCp=row=>+row.costPerKg||(+row.cpUsd>0?Math.round(+row.cpUsd*usdInr):0);
   const stockQtyPartsFor=(stone,shape)=>{
     const st=normPlanText(stone);
     const sh=normPlanText(shape);
@@ -13415,7 +13540,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     const costQty=buyingLineCostQty(row);
     bucket.lines+=1;
     bucket.kg+=buyingLineKg(row);
-    bucket.cp+=costQty*(+row.costPerKg||0);
+    bucket.cp+=costQty*buyingLineCp(row);
     bucket.sp+=costQty*(+row.targetSellPrice||0);
     bucket.spUsd+=costQty*(+row.targetSellPriceUsd||+(usdFromInr(row.targetSellPrice))||0);
     if(row.shape)bucket.shapes.add(String(row.shape).trim());
@@ -13683,7 +13808,8 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                       </button>
                     ))}
                   </div>
-                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={handleCreateBuyingPO}>Create PO</button>
+                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap",borderColor:buyingSaveState==="error"?C.red:buyingSaveState==="saved"?C.green:C.border,color:buyingSaveState==="error"?C.red:buyingSaveState==="saved"?C.green:C.inkMid}} onClick={manualSaveBuyingPlan}>{saveButtonLabel}</button>
+                  <button className="bs" style={{fontSize:11,whiteSpace:"nowrap"}} onMouseDown={handleCreateBuyingPOMouseDown} onClick={handleCreateBuyingPO}>Create PO</button>
                   <button className="bp" style={{fontSize:11,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Item</button>
                 </div>
               </div>
@@ -13723,9 +13849,9 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                   (sheetShapes.length===0||sheetShapes.includes(normPlanText(r.shape))));
                 const sortVal={
                   stone:r=>String(r.stone||"").toLowerCase(), shape:r=>String(r.shape||"").toLowerCase(), vendor:r=>String(r.vendor||"").toLowerCase(),
-                  qty:r=>+r.qty||0, unit:r=>String(r.unit||"").toLowerCase(), cp:r=>+r.costPerKg||0, sp:r=>+r.targetSellPrice||0,
+                  qty:r=>+r.qty||0, unit:r=>String(r.unit||"").toLowerCase(), cp:r=>buyingLineCp(r), sp:r=>+r.targetSellPrice||0,
                   usd:r=>+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0,
-                  margin:r=>{const c=+r.costPerKg||0,s=+r.targetSellPrice||0;return s>0&&c>0?((s-c)/s)*100:-1;},
+                  margin:r=>{const c=buyingLineCp(r),s=+r.targetSellPrice||0;return s>0&&c>0?((s-c)/s)*100:-1;},
                   po:r=>lineOrdered(r)?String(r.poNumber||"").toLowerCase():"",
                   ordered:r=>(lineOrdered(r)||r.ordered)?1:0,
                 };
@@ -13747,7 +13873,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                 const bandMap={};{let bi=0,pk=null;rows.forEach(r=>{const k=bandKeyFor(r);if(pk!==null&&k!==pk)bi^=1;pk=k;bandMap[r.id]=bi;});}
                 const anyFilter=sheetVendors.length>0||sheetStones.length>0||sheetShapes.length>0;
                 const visiblePoFixIds=poFix?.ids?rows.filter(r=>poFix.ids.has(r.id)):[];
-                const tCp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.costPerKg||0),0);
+                const tCp=rows.reduce((s,r)=>s+buyingLineCostQty(r)*buyingLineCp(r),0);
                 const tSp=rows.reduce((s,r)=>s+(+r.qty||0)*(+r.targetSellPrice||0),0);
                 const tUsd=rows.reduce((s,r)=>s+(+r.qty||0)*(+(r.targetSellPriceUsd||usdFromInr(r.targetSellPrice))||0),0);
                 const tQty=(()=>{const m=new Map();rows.forEach(r=>{const q=+r.qty||0;if(!q)return;const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");m.set(u,(m.get(u)||0)+q);});const order=["kg","pcs"];return [...m.entries()].sort((a,b)=>{const ia=order.indexOf(a[0]),ib=order.indexOf(b[0]);return (ia<0?9:ia)-(ib<0?9:ib);}).map(([u,q])=>`${fmtAmtIN(q)} ${u}`).join(" · ");})();
@@ -13780,17 +13906,17 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                   const groups=[];const groupByShape=new Map();
                   rows.forEach(r=>{const k=normPlanText(r.shape)||`__${r.id}`;if(!groupByShape.has(k)){const g={key:k,name:r.shape||"(shape not set)",rows:[]};groupByShape.set(k,g);groups.push(g);}groupByShape.get(k).rows.push(r);});
                   const body=groups.map(g=>{
-                    const groupCp=g.rows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.costPerKg||0),0);
+                    const groupCp=g.rows.reduce((s,r)=>s+buyingLineCostQty(r)*buyingLineCp(r),0);
                     const groupSp=g.rows.reduce((s,r)=>s+buyingLineCostQty(r)*(+r.targetSellPrice||0),0);
                     const groupMargin=groupSp>0&&groupCp>0?((groupSp-groupCp)/groupSp)*100:null;
                     const section=`<tr class="group"><td colspan="${tableCols}"><div class="group-line"><div><span class="stone-name">${esc(g.name)}</span><span class="stone-meta">${g.rows.length} line${g.rows.length===1?"":"s"} · ${esc(qtySummaryFor(g.rows))}</span></div>${groupMargin==null?"":`<span class="group-margin">${groupMargin.toFixed(0)}% margin</span>`}</div></td></tr>`;
                     const lines=g.rows.map(r=>{
-                      const cp=+r.costPerKg||0,sp=+r.targetSellPrice||0;
+                      const cp=buyingLineCp(r),sp=+r.targetSellPrice||0;
                       const m=sp>0&&cp>0?((sp-cp)/sp)*100:null;
                       const su=r.targetSellPriceUsd||usdFromInr(r.targetSellPrice);
                       const u=(!r.unitTouched&&r.unit==="pcs"&&!r.stone&&!r.shape)?"kg":(r.unit||"kg");
                       const marginClass=m==null?"muted":m>=60?"great":m>=45?"good":"low";
-                      return`<tr><td class="shape">${esc(r.stone)||"—"}</td>${includeVendorCol?`<td>${esc(r.vendor)||"—"}</td>`:""}<td class=r>${esc(r.qty)||"0"}</td><td class=unit>${esc(u)}</td><td class=r>${esc(fmtAmtIN(r.costPerKg))||"0"}</td><td class="r strong">${esc(fmtAmtIN(r.targetSellPrice))||"0"}</td><td class=r>${esc(fmtAmtIN(su))||"0"}</td><td class="r"><span class="pill ${marginClass}">${m==null?"—":m.toFixed(0)+"%"}</span></td></tr>`;
+                      return`<tr><td class="shape">${esc(r.stone)||"—"}</td>${includeVendorCol?`<td>${esc(r.vendor)||"—"}</td>`:""}<td class=r>${esc(r.qty)||"0"}</td><td class=unit>${esc(u)}</td><td class=r>${esc(fmtAmtIN(cp))||"0"}</td><td class="r strong">${esc(fmtAmtIN(r.targetSellPrice))||"0"}</td><td class=r>${esc(fmtAmtIN(su))||"0"}</td><td class="r"><span class="pill ${marginClass}">${m==null?"—":m.toFixed(0)+"%"}</span></td></tr>`;
                     }).join("");
                     return section+lines;
                   }).join("");
@@ -13871,6 +13997,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                       ))}
                     </div>}
                     <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{rows.length} row{rows.length===1?"":"s"}</span>
+                    <button onClick={manualSaveBuyingPlan} title="Save the current buying plan now" style={{background:buyingSaveState==="error"?C.redBg:buyingSaveState==="saved"?C.greenBg:C.surface,border:`1.5px solid ${buyingSaveState==="error"?C.red:buyingSaveState==="saved"?C.green:C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:900,color:buyingSaveState==="error"?C.red:buyingSaveState==="saved"?C.green:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>{saveButtonLabel}</button>
                     <button onClick={copyOrder} title="Copy a vendor message (no prices) to paste into chat" style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:800,color:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>📋 Copy order</button>
                     <button onClick={printSheet} title="Print this view as a PDF (A4)" style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:8,padding:"6px 11px",fontSize:11,fontWeight:800,color:C.ink,cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>🖨 Print</button>
                     <button onClick={addRow} style={{background:C.green,color:"#fff",border:"none",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:900,cursor:"pointer"}}>+ Add row</button>
@@ -13886,7 +14013,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                       <button onClick={()=>setPoFix(null)} style={{background:"transparent",border:`1px solid ${C.red}44`,borderRadius:8,padding:"5px 9px",fontSize:11,fontWeight:800,color:C.red,cursor:"pointer"}}>Dismiss</button>
                     </div>
                   )}
-                  <div style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
+                  <div data-buying-plan-sheet="1" style={{overflowX:"auto",border:`1px solid ${C.border}`,borderRadius:10,background:C.surface}}>
                     <table style={{borderCollapse:"collapse",width:"100%",minWidth:760}}>
                       <thead>
                         <tr>{th("Stone","stone",null,`${rows.length} lines`,C.inkFaint)}{th("Shape","shape")}{th("Vendor","vendor")}{th("Qty","qty","right",tQty||null,C.ink)}{th("Unit","unit")}{th("CP","cp","right",`₹${fmtAmtIN(Math.round(tCp))||"0"}`,C.ink)}{th("SP ₹","sp","right",`₹${fmtAmtIN(Math.round(tSp))||"0"}`,C.green)}{th("SP $","usd","right",`$${fmtAmtIN(Math.round(tUsd))||"0"}`,C.blue)}{th("Margin","margin","right")}{th("PO","po")}{th("Ordered","ordered")}{th("")}</tr>
@@ -13934,7 +14061,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                   })()}
                   {sheetCtxMenu&&(()=>{
                     const ctxRow=buyingPlan.find(r=>r.id===sheetCtxMenu.rowId);
-                    const q=+(ctxRow?.qty)||0, lineCp=q*(+(ctxRow?.costPerKg)||0), lineSp=q*(+(ctxRow?.targetSellPrice)||0), lineUsd=q*(+(ctxRow?.targetSellPriceUsd||usdFromInr(ctxRow?.targetSellPrice))||0);
+                    const q=+(ctxRow?.qty)||0, lineCp=q*buyingLineCp(ctxRow||{}), lineSp=q*(+(ctxRow?.targetSellPrice)||0), lineUsd=q*(+(ctxRow?.targetSellPriceUsd||usdFromInr(ctxRow?.targetSellPrice))||0);
                     const items=[
                       [(ctxRow?.notes?"📝  Edit note":"📝  Add note"),()=>setSheetNoteEdit({rowId:sheetCtxMenu.rowId,value:ctxRow?.notes||""})],
                       ["⎘  Duplicate row",()=>duplicateBuyingLine(sheetCtxMenu.rowId)],
@@ -14005,7 +14132,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                   {(buyingPlanView==="compact"&&!mob?compactBuyingRows:groupedBuyingPlan).map((row,idx)=>{
                     const last=row.lastRate||row.lastVendor?row:findLastPurchase(row.stone,row.shape);
                     const vendorHistory=vendorHistoryFor(row.vendor);
-                    const cp=+row.costPerKg||0;
+                    const cp=buyingLineCp(row);
                     const sp=+row.targetSellPrice||0;
                     const margin=sp>0&&cp>0?((sp-cp)/sp)*100:null;
                     const marginColor=margin==null?C.inkFaint:margin>=40?C.green:margin>=20?C.amber:C.red;
@@ -14136,7 +14263,8 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
               <div style={{position:"sticky",bottom:10,zIndex:9,display:"flex",justifyContent:"flex-end",pointerEvents:"none",marginTop:10}}>
                 <div style={{display:"flex",gap:7,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,boxShadow:"0 8px 24px rgba(26,19,8,.14)",padding:"6px",pointerEvents:"auto"}}>
                   <div style={{fontSize:11,color:C.inkFaint,fontWeight:750,padding:"0 7px",whiteSpace:"nowrap"}}>{viewBuyingPlan.length} lines · {planOpen} open{planVendorFilter!=="all"?` · ${planVendorFilter}`:""}</div>
-                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={handleCreateBuyingPO}>Create PO</button>
+                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap",borderColor:buyingSaveState==="error"?C.red:buyingSaveState==="saved"?C.green:C.border,color:buyingSaveState==="error"?C.red:buyingSaveState==="saved"?C.green:C.inkMid}} onClick={manualSaveBuyingPlan}>{saveButtonLabel}</button>
+                  <button className="bs" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onMouseDown={handleCreateBuyingPOMouseDown} onClick={handleCreateBuyingPO}>Create PO</button>
                   <button className="bp" style={{fontSize:11,borderRadius:999,whiteSpace:"nowrap"}} onClick={e=>{e.stopPropagation();addBuyingLineInCurrentView();}}>+ Add Line</button>
                 </div>
               </div>
@@ -14150,7 +14278,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                 const totals=calcRows.reduce((m,r)=>{
                   const costQty=buyingLineCostQty(r);
                   const kg=buyingLineKg(r);
-                  const cpRate=+r.costPerKg||0;
+                  const cpRate=buyingLineCp(r);
                   const spRate=+r.targetSellPrice||0;
                   const usdRate=+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0;
                   const unit=String(r.unit||"kg").toLowerCase();
@@ -14229,7 +14357,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                             <div style={{display:"grid",gap:6}}>
                               {calcRows.map(r=>{
                                 const costQty=buyingLineCostQty(r);
-                                const cpRate=+r.costPerKg||0;
+                                const cpRate=buyingLineCp(r);
                                 const spRate=+r.targetSellPrice||0;
                                 const usdRate=+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0;
                                 const rowMargin=spRate>0&&cpRate>0?((spRate-cpRate)/spRate)*100:null;
@@ -14348,7 +14476,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                 const waVendorOptions=[...new Set(buyingPlan.map(r=>r.vendor).filter(Boolean))].sort();
                 const waRows=planVendorFilter==="all"?buyingPlan:buyingPlan.filter(r=>r.vendor===planVendorFilter);
                 const waGroups=(()=>{const order=[];const groups=new Map();waRows.forEach(row=>{const k=normPlanText(row.shape)||`__${row.id}`;if(!groups.has(k)){groups.set(k,[]);order.push(k);}groups.get(k).push(row);});return order.map(k=>({shapeKey:k,rows:groups.get(k)}));})();
-                const waTotals=waRows.reduce((m,r)=>{const cq=buyingLineCostQty(r);m.kg+=buyingLineKg(r);m.cp+=cq*(+r.costPerKg||0);m.sp+=cq*(+r.targetSellPrice||0);m.usd+=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);m.lines+=1;return m;},{kg:0,cp:0,sp:0,usd:0,lines:0});
+                const waTotals=waRows.reduce((m,r)=>{const cq=buyingLineCostQty(r);m.kg+=buyingLineKg(r);m.cp+=cq*buyingLineCp(r);m.sp+=cq*(+r.targetSellPrice||0);m.usd+=cq*(+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0);m.lines+=1;return m;},{kg:0,cp:0,sp:0,usd:0,lines:0});
                 const waMargin=waTotals.sp>0&&waTotals.cp>0?((waTotals.sp-waTotals.cp)/waTotals.sp)*100:null;
                 const buildMessage=()=>{
                   const header=whatsappMode==="prices"?`*Buying Plan*`:`*Order List*`;
@@ -14361,7 +14489,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                       lines.push(`*${shapeName}*${groupKg>0?` (${fmtAmtIN(groupKg)} kg)`:""}`);
                       rows.forEach(r=>{
                         const cq=buyingLineCostQty(r);
-                        const cp=+r.costPerKg||0;
+                        const cp=buyingLineCp(r);
                         const sp=+r.targetSellPrice||0;
                         const usd=+r.targetSellPriceUsd||+(usdFromInr(r.targetSellPrice))||0;
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
@@ -14378,7 +14506,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                       lines.push(`*${shapeName}*${groupKg>0?` (${fmtAmtIN(groupKg)} kg)`:""}`);
                       rows.forEach(r=>{
                         const cq=buyingLineCostQty(r);
-                        const cp=+r.costPerKg||0;
+                        const cp=buyingLineCp(r);
                         const qtyStr=r.qty?`${r.qty} ${r.unit||"kg"}`:"qty open";
                         const comment=whatsappIncludeComments&&r.notes?` | Comments: ${r.notes}`:"";
                         const isUsdRow=getVendorCurrency(r.vendor)==="USD"&&r.cpUsd;
@@ -16298,9 +16426,21 @@ function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil"}){
   const [bills,setBills]=useState(null);
   const [payModal,setPayModal]=useState(null); // {bill, amount, note}
   const [downloading,setDownloading]=useState(null);
+  const [deleting,setDeleting]=useState(null);
 
   const apply=d=>{
-    const misc=(d||[]).filter(b=>b.source==="misc-bill-maker"&&(b.company||"nikhil")===company);
+    const seen=new Set();
+    const misc=[];
+    (d||[]).forEach(b=>{
+      if(b.source!=="misc-bill-maker"||(b.company||"nikhil")!==company)return;
+      const itemSig=(b.items||[]).map(it=>[it.desc,it.qty,it.unit,it.rate,it.amt].join(":")).join("|");
+      const sig=(b.billNumber||"").trim()
+        ? [b.billNumber,b.supplier,b.billDate||b.date,b.totalAmount,itemSig].join("||").toLowerCase()
+        : (b.id||[b.supplier,b.billDate||b.date,b.totalAmount,itemSig].join("||").toLowerCase());
+      if(seen.has(sig))return;
+      seen.add(sig);
+      misc.push(b);
+    });
     misc.sort((a,b)=>new Date(b.createdAt||b.billDate||0)-new Date(a.createdAt||a.billDate||0));
     setBills(misc);
   };
@@ -16314,7 +16454,7 @@ function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil"}){
   const markPaid=async()=>{
     if(!payModal)return;
     const {bill,amount,note}=payModal;
-    const all=await loadK(KEYS.purchases)||[];
+    const all=await loadKFresh(KEYS.purchases)||[];
     const updated=all.map(b=>{
       if(b.id!==bill.id)return b;
       const paid=parseFloat(amount)||bill.totalAmount;
@@ -16325,6 +16465,30 @@ function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil"}){
     showToast("✓ Payment recorded");
     setPayModal(null);
     load();
+  };
+
+  const deleteBill=async bill=>{
+    if(!bill?.id)return;
+    const label=[bill.billNumber,bill.supplier,inr(bill.totalAmount||0)].filter(Boolean).join(" · ");
+    if(!window.confirm(`Delete this bill?\n\n${label}`))return;
+    const previous=bills||[];
+    setDeleting(bill.id);
+    setBills(previous.filter(b=>b.id!==bill.id));
+    showToast("Bill deleted");
+    try{
+      await Promise.race([
+        deleteItemK(KEYS.purchases,bill.id),
+        new Promise((_,reject)=>setTimeout(()=>reject(new Error("sync timeout")),8000)),
+      ]);
+    }catch(e){
+      if(e?.message==="sync timeout")showToast("Deleted locally — sync is still finishing");
+      else{
+        setBills(previous);
+        showToast("Delete failed: "+(e?.message||"try again"));
+      }
+    }finally{
+      setDeleting(null);
+    }
   };
 
   const doDownload=async(bill)=>{
@@ -16409,9 +16573,16 @@ function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil"}){
                     <button
                       onClick={()=>doDownload(bill)}
                       disabled={!!downloading}
-                      style={{fontSize:11,padding:"5px 10px",background:C.card,border:`1px solid ${C.border}`,borderRadius:5,cursor:"pointer",fontFamily:"inherit",opacity:downloading===bill.id?.5:1}}
+                      style={{fontSize:11,padding:"5px 10px",background:C.card,border:`1px solid ${C.border}`,borderRadius:5,cursor:"pointer",fontFamily:"inherit",opacity:downloading===bill.id?0.5:1}}
                     >
                       {downloading===bill.id?"Generating…":"📥 PDF"}
+                    </button>
+                    <button
+                      onClick={()=>deleteBill(bill)}
+                      disabled={deleting===bill.id}
+                      style={{fontSize:11,padding:"5px 10px",background:C.redBg,border:`1px solid ${C.red}55`,borderRadius:5,cursor:deleting===bill.id?"default":"pointer",color:C.red,fontWeight:600,fontFamily:"inherit",opacity:deleting===bill.id?0.65:1}}
+                    >
+                      {deleting===bill.id?"Deleting…":"Delete"}
                     </button>
                     {status!=="paid"&&(
                       <button
@@ -16499,16 +16670,26 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
     paymentScreenshot:bill.paymentScreenshot||"",
     paymentScreenshotName:bill.paymentScreenshotName||"",
   });
+  const billFormSignature=f=>JSON.stringify({
+    company:f.company||"",id:f.id||"",billNumber:(f.billNumber||"").trim(),supplier:(f.supplier||"").trim(),
+    vendorId:f.vendorId||"",panNumber:(f.panNumber||"").trim(),billDate:f.billDate||"",notes:f.notes||"",
+    shipping:String(f.shipping||""),paymentScreenshotName:f.paymentScreenshotName||"",
+    attachName:f.attachName||"",attachExt:f.attachExt||"",
+    panPhotos:(f.panPhotos||[]).map(ph=>({name:ph.name||"",url:ph.url||"",hasData:!!ph.data})),
+    items:(f.items||[]).map(it=>({desc:it.desc||"",hsn:it.hsn||"",qty:String(it.qty||""),unit:it.unit||"",rate:String(it.rate||"")})),
+  });
 
   const [form,setForm]=useState(()=>editBill?formFromBill(editBill):blankForm());
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(null);
+  const [savedSnapshot,setSavedSnapshot]=useState(()=>editBill?billFormSignature(formFromBill(editBill)):null);
   const [vendors,setVendors]=useState([]);
   const [customsDescs,setCustomsDescs]=useState([]); // [{shape,desc,hsn}] from Customs Descriptions dataset
   const panRef=useRef();
   const attachRef=useRef();
   const payRef=useRef();
   const payScreenshotRef=useRef();
+  const saveInFlightRef=useRef(false);
 
   useEffect(()=>{loadK(KEYS.vendors).then(v=>setVendors(Array.isArray(v)?v:[]));},[]);
   useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setCustomsDescs(Array.isArray(cd)?cd:[]));},[]);
@@ -16527,8 +16708,8 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
 
   // Re-hydrate when editBill changes (e.g. switching between edits)
   useEffect(()=>{
-    if(editBill)setForm(formFromBill(editBill));
-    else setForm(blankForm());
+    if(editBill){const next=formFromBill(editBill);setForm(next);setSavedSnapshot(billFormSignature(next));}
+    else{const next=blankForm();setForm(next);setSavedSnapshot(null);}
   },[editBill?.id]);
 
   const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
@@ -16613,12 +16794,16 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
   };
 
   const saveBillData=async({navigateAfter=true}={})=>{
+    if(saveInFlightRef.current)return false;
     if(!form.supplier.trim()){showToast("Enter supplier name");return false;}
     if(!form.items.some(it=>it.desc.trim()&&+it.qty>0&&+it.rate>0)){showToast("Add at least one complete line item");return false;}
+    saveInFlightRef.current=true;
     setSaving(true);
     try{
-      const counter=(await loadK(MISC_BILL_KEY)||0)+1;
-      await saveK(MISC_BILL_KEY,counter);
+      const isEdit=!!editBill;
+      const needsBillNumber=!form.billNumber.trim();
+      const counter=needsBillNumber?(await loadK(MISC_BILL_KEY)||0)+1:(await loadK(MISC_BILL_KEY)||0);
+      if(needsBillNumber)await saveK(MISC_BILL_KEY,counter);
       const billNumber=form.billNumber.trim()||`MISC-${String(counter).padStart(4,"0")}`;
       await supabase.storage.createBucket("bill-docs",{public:true}).catch(()=>{});
 
@@ -16647,6 +16832,7 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
         }catch{}
       }
       const billItems=form.items.filter(it=>it.desc.trim()).map(it=>({...newItem(),id:it.id,desc:it.desc,hsn:it.hsn||"7103",gst:"0",qty:String(it.qty),unit:it.unit||"pcs",rate:String(it.rate),amt:lineAmt(it),physicalEntries:[]}));
+      const existingBill=editBill||{};
       const bill={
         id:form.id,type:"bill",company:form.company||"nikhil",billNumber,supplier:form.supplier.trim(),supplierGstin:"",panNumber:form.panNumber.trim(),
         panPhotos:savedPanPhotos,
@@ -16655,12 +16841,15 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
         attachUrl:attachUrl||undefined,attachData:attachUrl?"":form.attachData||undefined,attachName:form.attachName||undefined,attachExt:form.attachExt||undefined,
         paymentScreenshot:form.paymentScreenshot||undefined,paymentScreenshotName:form.paymentScreenshotName||undefined,
         billDate:form.billDate,currency:"INR",items:billItems,notes:form.notes,shipping:+form.shipping||0,totalAmount:total,
-        status:"pending",paidAmount:0,source:"misc-bill-maker",createdAt:new Date().toISOString(),
+        status:editBill?(existingBill.status||"pending"):"pending",
+        paidAmount:editBill?(+existingBill.paidAmount||0):0,
+        paymentDate:existingBill.paymentDate,
+        paymentNote:existingBill.paymentNote,
+        source:"misc-bill-maker",
+        createdAt:existingBill.createdAt||new Date().toISOString(),
+        updatedAt:new Date().toISOString(),
       };
-      const existing=await loadK(KEYS.purchases)||[];
-      const isEdit=!!editBill;
-      const updated=isEdit?existing.map(b=>b.id===bill.id?{...b,...bill}:b):[bill,...existing];
-      await savePurchasesK(updated);
+      await upsertItemK(KEYS.purchases,bill,{prepend:true});
       logActivity({user:"Admin",action:isEdit?"updated":"created",module:"misc",label:`No-GST bill: ${bill.supplier} · ${billNumber} · ${inr(total)}`,targetId:bill.id,targetMod:"purchases"});
       const matchedVendorId=form.vendorId||vendors.find(v=>v.name.toLowerCase()===form.supplier.trim().toLowerCase())?.id;
       if(matchedVendorId){
@@ -16672,18 +16861,24 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
         await saveK(KEYS.vendors,updatedVendors);setVendors(updatedVendors);
       }
       if(navigateAfter){
-        setSaved(billNumber);setForm({...blankForm()});showToast(`✓ Bill ${billNumber} saved to Purchases`);
+        setSaved(billNumber);setSavedSnapshot(null);setForm({...blankForm()});showToast(`✓ Bill ${billNumber} saved to Purchases`);
         if(onSaved)setTimeout(onSaved,800);
       }else{
-        setForm(f=>({...f,billNumber,id:bill.id}));
+        const nextForm={...form,billNumber,id:bill.id};
+        setForm(nextForm);
+        setSavedSnapshot(billFormSignature(nextForm));
         showToast(`✓ Bill ${billNumber} saved`);
       }
       return true;
     }catch(e){showToast("Save failed: "+e.message);return false;}
-    finally{setSaving(false);}
+    finally{saveInFlightRef.current=false;setSaving(false);}
   };
 
-  const handleSave=()=>saveBillData({navigateAfter:true});
+  const isSavedClean=!!savedSnapshot&&savedSnapshot===billFormSignature(form);
+  const handlePrimaryAction=()=>{
+    if(isSavedClean){onSaved?.();return;}
+    saveBillData({navigateAfter:true});
+  };
 
   return(
     <div style={{maxWidth:680}}>
@@ -16889,12 +17084,12 @@ function PurchaseBillMaker({showToast,onSaved,editBill=null,defaultCompany="nikh
       </div>
 
       <div style={{display:"flex",justifyContent:"flex-end",gap:10}}>
-        <button className="bs" onClick={()=>{setForm(blankForm());setSaved(null);}}>Clear</button>
-        <button className="bs" onClick={()=>saveBillData({navigateAfter:false})} disabled={saving} style={{opacity:saving?.5:1}}>
-          {saving?"Saving…":"Save"}
+        <button className="bs" onClick={()=>{setForm(blankForm());setSaved(null);setSavedSnapshot(null);}}>Clear</button>
+        <button className="bs" onClick={()=>saveBillData({navigateAfter:false})} disabled={saving||isSavedClean} style={{opacity:(saving||isSavedClean)?0.5:1}}>
+          {saving?"Saving…":isSavedClean?"Saved":"Save & stay"}
         </button>
-        <button className="bp" onClick={handleSave} disabled={saving} style={{opacity:saving?.5:1,minWidth:150}}>
-          {saving?"Saving…":"💾 Save to Purchases"}
+        <button className="bp" onClick={handlePrimaryAction} disabled={saving} style={{opacity:saving?0.5:1,minWidth:150}}>
+          {saving?"Saving…":isSavedClean?"Done":"Save & close"}
         </button>
       </div>
     </div>
@@ -17160,13 +17355,25 @@ function UsersApp({onHome}){
 async function reloadForUpdatePreservingScreen(){
   try{
     sessionStorage.setItem("ng-update-scroll",JSON.stringify({x:window.scrollX||0,y:window.scrollY||0}));
+    try{
+      const r=await fetch("/version.json",{cache:"no-store"});
+      if(r.ok){
+        const data=await r.json();
+        if(data?.version)localStorage.setItem("ng-app-build-version",data.version);
+      }
+    }catch{}
     if("caches" in window){
       const keys=await caches.keys();
       await Promise.all(keys.filter(k=>k.startsWith("ng-shell-")).map(k=>caches.delete(k)));
     }
     if("serviceWorker" in navigator){
       const regs=await navigator.serviceWorker.getRegistrations();
-      await Promise.all(regs.map(reg=>reg.update().catch(()=>{})));
+      await Promise.all(regs.map(async reg=>{
+        try{
+          await reg.update();
+          (reg.waiting||reg.installing)?.postMessage?.({type:"NG_APPLY_UPDATE"});
+        }catch{}
+      }));
     }
   }catch{}
   const url=new URL(window.location.href);
@@ -17248,18 +17455,23 @@ export default function Root({onSignOut}){
   const [updateReady,setUpdateReady]=useState(false);
   useEffect(()=>{
     let baseline=null;
+    try{baseline=localStorage.getItem("ng-app-build-version")||null;}catch{}
     const check=async()=>{
       try{
         const r=await fetch("/version.json",{cache:"no-store"});
         if(!r.ok)return;
         const{version}=await r.json();
         if(!version||version==="dev")return;       // local / no SHA — stay quiet
-        if(baseline===null){baseline=version;return;} // first load — record baseline
+        if(baseline===null){
+          baseline=version;
+          try{localStorage.setItem("ng-app-build-version",version);}catch{}
+          return;
+        }
         if(version!==baseline)setUpdateReady(true);
       }catch{}
     };
     check();
-    const id=setInterval(check,30*1000);            // poll often so stale tabs notice deploys quickly
+    const id=setInterval(check,5000);               // keep deploy/update prompt near-immediate
     const onVisible=()=>{if(!document.hidden)check();};
     document.addEventListener("visibilitychange",onVisible);
     return()=>{clearInterval(id);document.removeEventListener("visibilitychange",onVisible);};

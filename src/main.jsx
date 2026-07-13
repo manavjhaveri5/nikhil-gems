@@ -82,25 +82,9 @@ class ErrorBoundary extends Component {
 
 // ── Service Worker registration ───────────────────────────────────────────────
 if ("serviceWorker" in navigator && !DEMO_MODE) {
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (refreshing) return;
-    refreshing = true;
-    window.location.reload();
-  });
   navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" }).then(reg => {
     reg.update().catch(() => {});
     setInterval(() => reg.update().catch(() => {}), 60 * 1000);
-    if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
-    reg.addEventListener("updatefound", () => {
-      const worker = reg.installing;
-      if (!worker) return;
-      worker.addEventListener("statechange", () => {
-        if (worker.state === "installed" && navigator.serviceWorker.controller) {
-          worker.postMessage({ type: "SKIP_WAITING" });
-        }
-      });
-    });
   }).catch(() => {});
 }
 
