@@ -575,6 +575,110 @@ function parseBankSbReport(XLSX, buf) {
   return list;
 }
 
+// ── Full Nikhil Gems company profile (mirrors `CO` in nikhil-gems-v6.jsx) ──
+// Kept local to avoid a circular import (that file lazy-imports this module).
+// Used to render a commercial invoice straight from the invoice-module record
+// when a packet is built, so the invoice need not be uploaded by hand.
+const NG_CO = {
+  name: "Nikhil Gems",
+  address: "110, 19th Floor, Dariya Mahal A,\nNepeansea Road, Mumbai 400006, INDIA",
+  tel: "+91 9619248797",
+  email: "sejal.nikhilgems@gmail.com",
+  gstin: "27AKFPJ0990D1ZB",
+  iec: "0315085886",
+  bank: "Bank of India",
+  bankAcc: "006420110000451",
+  swift: "BKIDINBBCMB",
+  ifsc: "BKID0000064",
+  lutArn: "AD270326086706O",
+};
+// Compact "amount in words" for the invoice total (mirrors numToWords in nikhil-gems-v6.jsx).
+const ngNumToWords = n => {
+  const a = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const b = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+  if (!(n > 0)) return "Zero Only";
+  const words = num => {
+    if (num === 0) return "";
+    if (num < 20) return a[num] + " ";
+    if (num < 100) return b[Math.floor(num / 10)] + " " + (num % 10 ? a[num % 10] + " " : "");
+    if (num < 1000) return a[Math.floor(num / 100)] + " Hundred " + (num % 100 ? words(num % 100) : "");
+    if (num < 100000) return words(Math.floor(num / 1000)) + "Thousand " + (num % 1000 ? words(num % 1000) : "");
+    if (num < 10000000) return words(Math.floor(num / 100000)) + "Lakh " + (num % 100000 ? words(num % 100000) : "");
+    return words(Math.floor(num / 10000000)) + "Crore " + (num % 10000000 ? words(num % 10000000) : "");
+  };
+  const intPart = Math.floor(n);
+  const decPart = Math.round((n - intPart) * 100);
+  let result = words(intPart).trim();
+  if (decPart > 0) result += " and Cents " + words(decPart).trim();
+  return result + " Only";
+};
+const ngWrapPdfText = (text, max = 78) => {
+  const wds = String(text || "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const lines = []; let ln = "";
+  wds.forEach(w => { if ((ln + " " + w).trim().length > max) { if (ln) lines.push(ln); ln = w; } else ln = (ln + " " + w).trim(); });
+  if (ln) lines.push(ln);
+  return lines.length ? lines : [""];
+};
+// Render a commercial-invoice PDF straight from an invoice-module record with
+// pdf-lib. Mirrors renderBasicInvoicePacketPdf in nikhil-gems-v6.jsx so the
+// invoice in the packet matches the Invoices module. Returns PDF bytes.
+async function renderNgInvoicePdf(inv, buyers) {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const co = NG_CO;
+  const buyer = (buyers || []).find(b => b.id === inv.buyerId) || {};
+  const buyerName = buyer.name || inv.buyerName || inv.buyer || "";
+  const buyerAddr = buyer.billingAddress || buyer.address || inv.buyerAddress || "";
+  const buyerCountry = buyer.country || inv.buyerCountry || "";
+  const portDischarge = inv.portDischarge || buyer.port || buyerCountry || "";
+  const subTotal = (inv.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
+  const total = +inv.totalAmt || subTotal;
+  let page = pdf.addPage([595, 842]);
+  let y = 800;
+  const pdfSafe = txt => String(txt || "").replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ");
+  const draw = (txt, x, y0, size = 9, f = font, color = rgb(0, 0, 0)) => page.drawText(pdfSafe(txt), { x, y: y0, size, font: f, color });
+  const nextPage = () => { page = pdf.addPage([595, 842]); y = 800; };
+  const line = (txt, x = 40, size = 9, f = font) => { if (y < 50) nextPage(); draw(txt, x, y, size, f); y -= size + 6; };
+  draw(co.name, 40, y, 18, bold);
+  draw(inv.type === "proforma" ? "PROFORMA INVOICE" : "COMMERCIAL INVOICE", 360, y, 16, bold);
+  y -= 22;
+  co.address.split("\n").forEach(t => line(t, 40, 9));
+  line(`TEL: ${co.tel}   Email: ${co.email}`, 40, 9);
+  y -= 8;
+  line(`Invoice #: ${inv.invNo || ""}`, 40, 10, bold);
+  line(`Date: ${fd(inv.date)}    Terms: ${inv.terms || ""}    Currency: ${inv.currency || ""}`, 40, 9);
+  line(`Port of Lading: ${inv.portLading || ""}    Port of Discharge: ${portDischarge}`, 40, 9);
+  y -= 8;
+  line("Buyer / Consignee", 40, 10, bold);
+  line(buyerName, 40, 9, bold);
+  (buyerAddr || "").split("\n").forEach(t => line(t, 40, 9));
+  if (buyerCountry) line(buyerCountry, 40, 9);
+  y -= 6;
+  line("Items", 40, 10, bold);
+  line("#  Description                                      HSN        Qty       Rate        Amount", 40, 8, bold);
+  line("--------------------------------------------------------------------------------", 40, 8);
+  (inv.items || []).forEach((it, idx) => {
+    const desc = it.desc || it.acctDesc || it.customDesc || "Item";
+    const descLines = ngWrapPdfText(desc, 42);
+    const first = `${String(idx + 1).padEnd(3)}${descLines[0].padEnd(45).slice(0, 45)} ${(it.hsn || "").padEnd(9).slice(0, 9)} ${String(it.qty || "").padStart(7)} ${String(it.rate || "").padStart(10)} ${(+it.amt || 0).toFixed(2).padStart(12)}`;
+    line(first, 40, 8);
+    descLines.slice(1).forEach(d => line(`   ${d}`, 40, 8));
+  });
+  line("--------------------------------------------------------------------------------", 40, 8);
+  line(`Sub Total: ${inv.currency || ""} ${subTotal.toFixed(2)}`, 360, 10, bold);
+  if (+inv.shippingCost > 0) line(`Shipping/Freight: ${inv.currency || ""} ${(+inv.shippingCost).toFixed(2)}`, 360, 9);
+  line(`Total: ${inv.currency || ""} ${(+total || 0).toFixed(2)}`, 360, 12, bold);
+  y -= 10;
+  line(`Total in words: ${inv.currency || ""} ${ngNumToWords(Math.round((+total || 0) * 100) / 100)}`, 40, 9);
+  y -= 4;
+  line(`IEC: ${co.iec}   GSTIN: ${co.gstin}   LUT ARN: ${inv.lutArn || co.lutArn}`, 40, 9);
+  line(`Bank: ${co.bank}   A/C: ${co.bankAcc}   Swift: ${co.swift}   IFSC: ${co.ifsc}`, 40, 9);
+  line(`For ${co.name}`, 420, 10, bold);
+  line("AUTHORIZED SIGNATORY", 420, 9, bold);
+  return await pdf.save();
+}
+
 function NgInvoiceSheet() {
   const [invoices, setInvoices] = useState([]);
   const [buyers, setBuyers] = useState([]);
@@ -796,12 +900,14 @@ function NgInvoiceSheet() {
   };
 
   const packetDocsFor = bySlot => ([
-    { key: "invoice", label: "Invoice", att: bySlot.invoice?.[0] },
+    // The invoice is auto-generated from the invoice-module record when no file
+    // has been uploaded, so it never blocks the packet (autoGen: true).
+    { key: "invoice", label: "Invoice", att: bySlot.invoice?.[0], autoGen: true },
     { key: "hawb", label: "Shipping Label / HAWB / HBL", att: bySlot.hawb?.[0] },
     { key: "sbill", label: "Shipping Bill", att: bySlot.sbill?.[0] },
     { key: "decl", label: "BOI Declaration", att: bySlot.decl?.[0] },
   ]);
-  const missingPacketDocs = bySlot => packetDocsFor(bySlot).filter(d => !d.att).map(d => d.label);
+  const missingPacketDocs = bySlot => packetDocsFor(bySlot).filter(d => !d.att && !d.autoGen).map(d => d.label);
 
   const appendAttToPacket = async (merged, att, label) => {
     const res = await fetch(att.url);
@@ -841,9 +947,21 @@ function NgInvoiceSheet() {
       return;
     }
     setBusy(`${inv.id}:packet`); setMsg(null);
+    let autoInvoice = false;
     try {
       const merged = await PDFDocument.create();
-      for (const d of packetDocsFor(bySlot)) await appendAttToPacket(merged, d.att, d.label);
+      for (const d of packetDocsFor(bySlot)) {
+        if (d.att) { await appendAttToPacket(merged, d.att, d.label); continue; }
+        if (d.key === "invoice") {
+          // No invoice file uploaded — render one from the invoice-module record
+          // (the same data the Invoices module shows) and merge it in.
+          const invBytes = await renderNgInvoicePdf(inv, buyers);
+          const invDoc = await PDFDocument.load(invBytes, { ignoreEncryption: true });
+          const pages = await merged.copyPages(invDoc, invDoc.getPageIndices());
+          pages.forEach(p => merged.addPage(p));
+          autoInvoice = true;
+        }
+      }
       const bytes = await merged.save();
       const blob = new Blob([bytes], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
@@ -855,7 +973,7 @@ function NgInvoiceSheet() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setMsg({ ok: true, text: `Packet downloaded for ${inv.invNo}.` });
+      setMsg({ ok: true, text: `Packet downloaded for ${inv.invNo}.${autoInvoice ? " Invoice was auto-generated from the invoice record." : ""}` });
     } catch (err) {
       setMsg({ ok: false, text: `Packet download failed: ${err?.message || "check documents"}` });
     } finally { setBusy(null); }
@@ -1197,7 +1315,7 @@ function NgInvoiceSheet() {
                   ))}
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <button onClick={() => downloadPacket(inv, bySlot)} disabled={packetBusy || packetMissing.length > 0}
-                      title={packetMissing.length ? `Missing: ${packetMissing.join(", ")}` : "Download invoice + shipping label + shipping bill + BOI declaration"}
+                      title={packetMissing.length ? `Missing: ${packetMissing.join(", ")}` : "Download combined PDF: invoice (auto-generated if not uploaded) + shipping label + shipping bill + BOI declaration"}
                       style={{ background: packetMissing.length ? C.card : C.ink, border: `1px solid ${packetMissing.length ? C.border : C.ink}`, borderRadius: 7, padding: "4px 9px", fontSize: 10.5, fontWeight: 800, color: packetMissing.length ? C.inkFaint : "#fff", cursor: packetBusy || packetMissing.length ? "default" : "pointer", whiteSpace: "nowrap", opacity: packetBusy ? .65 : 1 }}>
                       {packetBusy ? "Building..." : "Download packet"}
                     </button>
