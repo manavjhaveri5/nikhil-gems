@@ -12986,50 +12986,39 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
   const draftRef=React.useRef(d);
   const editing=React.useRef(false);
   const dirty=React.useRef(false);
-  const cpCommitTimer=React.useRef(null);
+  // Only fields the user actually edited get written back on commit. Re-diffing every cell each
+  // commit meant a momentarily out-of-sync draft (e.g. a re-render mid-edit) could clobber an
+  // untouched field — that's why editing Qty could change the rate, or typing SP could zero CP.
+  const touchedRef=React.useRef(new Set());
   const setD=next=>{
     const value=typeof next==="function"?next(draftRef.current):next;
     draftRef.current=value;
     setDState(value);
   };
-  React.useEffect(()=>{ if(!editing.current){const next=make();draftRef.current=next;setDState(next);} },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.cpUsd,cur,row.targetSellPrice,row.targetSellPriceUsd]);
-  React.useEffect(()=>()=>{if(cpCommitTimer.current)clearTimeout(cpCommitTimer.current);},[]);
-  const set=(k,v)=>{dirty.current=true;setD(p=>({...p,[k]:v}));};
+  React.useEffect(()=>{ if(!editing.current){const next=make();draftRef.current=next;setDState(next);touchedRef.current=new Set();} },[row.stone,row.shape,row.vendor,row.qty,row.unit,row.unitTouched,row.costPerKg,row.cpUsd,cur,row.targetSellPrice,row.targetSellPriceUsd]);
+  const set=(k,v)=>{dirty.current=true;touchedRef.current.add(k);setD(p=>({...p,[k]:v}));};
   const commit=()=>{
-    if(cpCommitTimer.current){clearTimeout(cpCommitTimer.current);cpCommitTimer.current=null;}
-    if(!dirty.current)return; dirty.current=false;
+    if(!dirty.current){touchedRef.current=new Set();return;} dirty.current=false;
     const draft=draftRef.current;
+    const t=touchedRef.current;
     const patch={};
-    const shp=expandPlanShape(draft.shape);
-    if(draft.stone!==(row.stone||""))patch.stone=draft.stone;
-    if(shp!==(row.shape||""))patch.shape=shp;
-    if(draft.vendor!==(row.vendor||""))patch.vendor=draft.vendor;
-    if(rawAmt(draft.qty)!==(row.qty||""))patch.qty=rawAmt(draft.qty);
-    if(draft.unit!==(row.unit||"")){patch.unit=draft.unit;patch.unitTouched=true;}
-    const cpRaw=rawAmt(draft.cp);
-    if(cur==="USD"){
-      if(cpRaw!==(row.cpUsd||"")){patch.cpUsd=cpRaw;patch.cpCurrency="USD";patch.costPerKg=cpRaw?String(Math.round(+cpRaw*(usdInr||85))):"";}
-    }else{
-      if(cpRaw!==(row.costPerKg||"")){patch.costPerKg=cpRaw;patch.cpUsd="";patch.cpCurrency="INR";patch.currency="INR";}
+    if(t.has("stone")&&draft.stone!==(row.stone||""))patch.stone=draft.stone;
+    if(t.has("shape")){const shp=expandPlanShape(draft.shape);if(shp!==(row.shape||""))patch.shape=shp;}
+    if(t.has("vendor")&&draft.vendor!==(row.vendor||""))patch.vendor=draft.vendor;
+    if(t.has("qty")&&rawAmt(draft.qty)!==(row.qty||""))patch.qty=rawAmt(draft.qty);
+    if(t.has("unit")&&draft.unit!==(row.unit||"")){patch.unit=draft.unit;patch.unitTouched=true;}
+    if(t.has("cp")){
+      const cpRaw=rawAmt(draft.cp);
+      if(cur==="USD"){
+        if(cpRaw!==(row.cpUsd||"")){patch.cpUsd=cpRaw;patch.cpCurrency="USD";patch.costPerKg=cpRaw?String(Math.round(+cpRaw*(usdInr||85))):"";}
+      }else{
+        if(cpRaw!==(row.costPerKg||"")){patch.costPerKg=cpRaw;patch.cpUsd="";patch.cpCurrency="INR";patch.currency="INR";}
+      }
     }
-    if(rawAmt(draft.sp)!==(row.targetSellPrice||""))patch.targetSellPrice=rawAmt(draft.sp);
-    if(rawAmt(draft.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(draft.usd);
+    if(t.has("sp")&&rawAmt(draft.sp)!==(row.targetSellPrice||""))patch.targetSellPrice=rawAmt(draft.sp);
+    if(t.has("usd")&&rawAmt(draft.usd)!==(row.targetSellPriceUsd||""))patch.targetSellPriceUsd=rawAmt(draft.usd);
+    touchedRef.current=new Set();
     if(Object.keys(patch).length)onCommit(row.id,patch);
-  };
-  const cpPatchFor=value=>{
-    const cpRaw=rawAmt(value);
-    return cur==="USD"
-      ? {cpUsd:cpRaw,cpCurrency:"USD",costPerKg:cpRaw?String(Math.round(+cpRaw*(usdInr||85))):""}
-      : {costPerKg:cpRaw,cpUsd:"",cpCurrency:"INR",currency:"INR"};
-  };
-  const commitCp=value=>{
-    dirty.current=true;
-    setD(p=>({...p,cp:value}));
-    if(cpCommitTimer.current)clearTimeout(cpCommitTimer.current);
-    cpCommitTimer.current=setTimeout(()=>{
-      cpCommitTimer.current=null;
-      onCommit(row.id,cpPatchFor(draftRef.current.cp));
-    },450);
   };
   const td={border:`1px solid ${issue?C.red+"66":C.border}`,padding:0,background:issue?C.redBg:(bandBg||C.surface),verticalAlign:"middle"};
   const ci={width:"100%",boxSizing:"border-box",border:"none",background:"transparent",padding:"6px 8px",fontSize:11.5,color:C.ink,outline:"none",fontFamily:"inherit"};
@@ -13088,7 +13077,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
       <td style={{...td,width:86,padding:0}}>
         <div style={{display:"flex",alignItems:"center",width:"100%"}}>
           <span title="Currency is set per vendor (top row)" style={{fontSize:9.5,color:cur==="USD"?C.blue:C.inkFaint,padding:"0 2px 0 5px",fontWeight:700,lineHeight:1,flexShrink:0}}>{cur==="USD"?"$":"₹"}</span>
-          <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>commitCp(e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
+          <input value={d.cp} inputMode="decimal" placeholder="0" onChange={e=>set("cp",e.target.value)} style={{...num,flex:1,paddingLeft:2}}/>
         </div>
       </td>
       <td style={{...td,width:78}}><input value={d.sp} inputMode="decimal" placeholder="0" onChange={e=>set("sp",e.target.value)} style={num}/></td>

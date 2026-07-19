@@ -323,7 +323,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
 
   // Under "Other", the typed sub-category becomes the real category.
   const effectiveExpenseCat = (expCat === "Other" && otherCat.trim()) ? otherCat.trim() : expCat;
-  const canSave = classType === "expense" ? !!effectiveExpenseCat : classType === "vendor_bill" ? (selectedBillIds.size > 0 || !!vendorId || !!interCoInvId) : classType === "vendor_po" ? !!selectedPoId : classType === "customer_receipt" ? (selectedInvIds.size > 0 || openInvoices.length === 0) : classType === "cc_payment" ? !!ccAccountId : classType === "conversion" ? (!!convOtherAcct && convRateNum > 0) : true;
+  const canSave = classType === "expense" ? !!effectiveExpenseCat : classType === "vendor_bill" ? (selectedBillIds.size > 0 || !!vendorId || !!interCoInvId) : classType === "vendor_po" ? (!!selectedPoId || !!vendorId) : classType === "customer_receipt" ? (selectedInvIds.size > 0 || openInvoices.length === 0) : classType === "cc_payment" ? !!ccAccountId : classType === "conversion" ? (!!convOtherAcct && convRateNum > 0) : true;
   const SI = { ...FI, fontSize: 13, padding: "8px 10px", borderRadius: 7 };
 
   const save = async () => {
@@ -393,9 +393,16 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
       }).filter(Boolean);
       if (credit > 0 && vendorId) sideEffects.vendorCredit = { vendorId, amount: credit };
     } else if (classType === "vendor_po") {
-      const po = purchases.find(p => p.id === selectedPoId);
-      classifiedRef = { vendorId, vendorName: vendor?.name, poId: selectedPoId, poNumber: po?.poNumber };
-      sideEffects.poUpdate = { id: selectedPoId, paidAmount: (+po?.paidAmount || 0) + txnAmt };
+      const po = selectedPoId ? purchases.find(p => p.id === selectedPoId) : null;
+      if (po) {
+        classifiedRef = { vendorId, vendorName: vendor?.name, poId: selectedPoId, poNumber: po?.poNumber };
+        sideEffects.poUpdate = { id: selectedPoId, paidAmount: (+po?.paidAmount || 0) + txnAmt };
+      } else {
+        // No PO chosen → record a plain advance to the vendor. It's added to their credit balance
+        // and can be applied against any of their bills later (see the "Apply advance" control).
+        classifiedRef = { vendorId, vendorName: vendor?.name || txn.payee || "", paymentOnAccount: true, advanceToVendor: true, advanceAmount: txnAmt };
+        if (vendorId) sideEffects.vendorCredit = { vendorId, amount: txnAmt };
+      }
     } else if (classType === "customer_receipt" && selectedInvs.length === 0) {
       // No invoice to apply against (e.g. a Payoneer payout with no matching invoice in the
       // system) — record it as a plain, unapplied sales receipt. No invoice updates, no FX diff.
@@ -598,6 +605,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
           </div>}
           {classType === "vendor_po" && <div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65 }}>Open POs {vendorId ? `- ${vendor?.name}` : "(all vendors)"}</div>{onCreatePO && <button type="button" onClick={onCreatePO} title="Create a new Purchase Order — opens the Purchases PO form, then returns here with it selected" style={{ border: `1px solid ${C.purple}55`, background: C.purple, color: "#fff", borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer", flexShrink: 0 }}>+ New PO</button>}</div>
             {vendorPOs.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>No open POs found.</div> : <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 6 }}>{vendorPOs.map(po => { const total = poTotal(po), due = poDue(po), poCur = po.currency || "INR"; return <button key={po.id} onClick={() => setSelectedPoId(po.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, width: "100%", padding: "9px 12px", background: selectedPoId === po.id ? C.card : C.surface, border: `1.5px solid ${selectedPoId === po.id ? C.purple : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{po.poNumber || "PO"}</div><div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{po.supplier} · {fmtDate(po.date)} · {po.status}</div></div><div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{moneyText(total, poCur)}</div>{(+po.paidAmount || 0) > 0 && <div style={{ fontSize: 10, color: C.inkFaint }}>{moneyText(due, poCur)} left</div>}</div></button>; })}</div>}
+            {!selectedPoId && <div style={{ marginTop: 10, padding: "10px 13px", background: vendorId ? C.blueBg : C.surface, border: `1px solid ${vendorId ? C.blue + "55" : C.border}`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>{vendorId ? <>No PO selected — this records <b>₹{txnAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b> as an advance to <strong>{vendor?.name}</strong>, added to their credit and usable against any future bill.</> : <>Pick a vendor above to record this as an advance to them (usable against future bills), or select a PO.</>}</div>}
           </div>}
         </div>}
         {classType === "customer_receipt" && <div><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, marginBottom: 6 }}>Apply against invoice(s)</div>
