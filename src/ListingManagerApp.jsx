@@ -2017,6 +2017,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const [detailsOpen, setDetailsOpen] = useState({});
   const [stepSel, setStepSel] = useState({}); // per-order: which fulfilment step panel is open (overrides the auto-active one)
   const [stockModalOrder, setStockModalOrder] = useState(null); // order whose stock-picker modal is open
+  const [atInvoices, setAtInvoices] = useState([]); // Atyahara invoices, for matching/linking existing invoices to orders
+  const [invoiceModalOrder, setInvoiceModalOrder] = useState(null); // order whose "link existing invoice" picker is open
+  const [invoiceModalSearch, setInvoiceModalSearch] = useState("");
+  const [reconciling, setReconciling] = useState(false);
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   // Customs shape list (Datasets tab) — drives the editable Shape field per order and
@@ -2041,6 +2045,51 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...ngDraft(o), ...patch } }));
   const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
   const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
+  // Atyahara invoices share the store the Orders flow writes to, so we can link existing
+  // invoices (created in Invoicing) back onto orders and mark "Sales invoice" done.
+  const invNoOf = inv => inv.invNo || inv.number || "";
+  const invAmt = inv => +inv.totalAmt || (inv.items || []).reduce((s, i) => s + (+i.amt || (+i.qty || 0) * (+i.rate || 0) || 0), 0);
+  const normName = s => String(s || "").toLowerCase().replace(/\bvia etsy\b/g, "").replace(/[^a-z0-9]/g, "");
+  useEffect(() => { loadKFresh(AT_INVOICES_KEY).then(d => setAtInvoices(Array.isArray(d) ? d : [])).catch(() => {}); }, []);
+  const linkOrderInvoice = (order, inv) => { setInvoiceModalOrder(null); patchOrder(order, { _atInvoiceNo: invNoOf(inv), _atInvoicedAt: now() }); showToast?.(`Linked ${invNoOf(inv)} to this order`); };
+  // Bulk-match unlinked Etsy orders to existing Atyahara invoices. Only links on a strong
+  // signal: an exact Etsy receipt id, or a clean 1:1 buyer-name match (skips ambiguous ones
+  // so duplicate buyers never get mislinked — those are handled manually per order).
+  const reconcileInvoices = async () => {
+    setReconciling(true);
+    try {
+      const invs = (await loadKFresh(AT_INVOICES_KEY).catch(() => atInvoices)) || atInvoices;
+      setAtInvoices(Array.isArray(invs) ? invs : []);
+      const current = await loadK(ORDERS_KEY) || [];
+      const unlinked = current.filter(o => isEtsyOrder(o) && !o._atInvoiceNo);
+      const byReceipt = new Map();
+      for (const inv of invs) for (const id of [inv._etsyReceiptId, inv.etsy_receipt_id, ...(inv.sourceOrderIds || [])].filter(Boolean).map(String)) if (!byReceipt.has(id)) byReceipt.set(id, inv);
+      const invByName = new Map();
+      for (const inv of invs) { const k = normName(inv.buyerName || inv.buyer || inv.consigneeName); if (k) (invByName.get(k) || invByName.set(k, []).get(k)).push(inv); }
+      const ordersByName = new Map();
+      for (const o of unlinked) { const k = normName(o.buyer_name); if (k) (ordersByName.get(k) || ordersByName.set(k, []).get(k)).push(o); }
+      const claimed = new Set(current.map(o => o._atInvoiceNo).filter(Boolean));
+      const patches = {};
+      let linked = 0, ambiguous = 0;
+      for (const o of unlinked) {
+        const rid = String(etsyReceiptId(o) || "");
+        const hit = rid && byReceipt.get(rid);
+        if (hit) { patches[o.id] = invNoOf(hit); claimed.add(invNoOf(hit)); linked++; continue; }
+        const k = normName(o.buyer_name);
+        const cand = (invByName.get(k) || []).filter(inv => !claimed.has(invNoOf(inv)));
+        if (cand.length === 1 && (ordersByName.get(k) || []).length === 1) { patches[o.id] = invNoOf(cand[0]); claimed.add(invNoOf(cand[0])); linked++; }
+        else if (cand.length) ambiguous++;
+      }
+      if (linked) {
+        const next = current.map(o => patches[o.id] ? { ...o, _atInvoiceNo: patches[o.id], _atInvoicedAt: o._atInvoicedAt || now() } : o);
+        for (const o of next) if (patches[o.id]) await upsertItemK(ORDERS_KEY, o, { prepend: false });
+        window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+      }
+      showToast?.(linked ? `Linked ${linked} order${linked !== 1 ? "s" : ""} to existing invoices${ambiguous ? ` · ${ambiguous} need manual linking` : ""}` : "No new matches found — link ambiguous ones from each order's step 3");
+    } catch (e) {
+      showToast?.(e.message || "Could not match invoices");
+    } finally { setReconciling(false); }
+  };
   // Deduct the linked NG stock and add a line to Atyahara's inter-company NG invoice.
   const addOrderToNg = async order => {
     const draft = ngDraft(order);
@@ -2607,6 +2656,43 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           </div>
         );
       })()}
+      {invoiceModalOrder && (() => {
+        const order = invoiceModalOrder;
+        const q = invoiceModalSearch.trim().toLowerCase();
+        const list = [...atInvoices]
+          .filter(inv => !q || `${invNoOf(inv)} ${inv.buyerName || inv.buyer || ""} ${inv.consigneeName || ""}`.toLowerCase().includes(q))
+          .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        const suggested = !q ? normName(order.buyer_name) : "";
+        const ranked = suggested ? [...list].sort((a, b) => (normName(b.buyerName || b.buyer) === suggested ? 1 : 0) - (normName(a.buyerName || a.buyer) === suggested ? 1 : 0)) : list;
+        return (
+          <div onMouseDown={() => setInvoiceModalOrder(null)} style={{ position: "fixed", inset: 0, zIndex: 950, display: "grid", placeItems: "center", padding: 18, background: "rgba(24,19,12,.46)" }}>
+            <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(100%, 620px)", maxHeight: "86vh", display: "flex", flexDirection: "column", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 24px 70px rgba(0,0,0,.28)", overflow: "hidden" }}>
+              <div style={{ padding: "18px 20px 12px", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start", marginBottom: 12 }}>
+                  <div><div style={{ fontSize: 18, fontWeight: 850, color: C.ink }}>Link an existing invoice</div><div style={{ marginTop: 3, fontSize: 12, color: C.inkMid }}>Mark this order's sales invoice as already created for <b>{order.buyer_name || "this buyer"}</b>.</div></div>
+                  <button onClick={() => setInvoiceModalOrder(null)} aria-label="Close" style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+                </div>
+                <input autoFocus value={invoiceModalSearch} onChange={e => setInvoiceModalSearch(e.target.value)} placeholder="Search invoice no. or buyer" style={{ ...FI(), width: "100%", fontSize: 14, padding: "11px 13px" }} />
+              </div>
+              <div style={{ overflowY: "auto", padding: 8 }}>
+                {ranked.length === 0
+                  ? <div style={{ padding: "34px 12px", fontSize: 13, color: C.inkFaint, textAlign: "center" }}>No invoices found</div>
+                  : ranked.slice(0, 60).map(inv => {
+                    const isSuggested = suggested && normName(inv.buyerName || inv.buyer) === suggested;
+                    return <button key={inv.id} onClick={() => linkOrderInvoice(order, inv)} style={{ display: "flex", gap: 12, alignItems: "center", width: "100%", textAlign: "left", padding: "10px 12px", background: "transparent", border: "none", borderRadius: 9, cursor: "pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background = C.card} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>{invNoOf(inv) || "(no number)"}{isSuggested && <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: C.green, background: C.greenBg, borderRadius: 20, padding: "2px 8px" }}>likely match</span>}</div>
+                        <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{inv.buyerName || inv.buyer || "Buyer"}{inv.date ? ` · ${new Date(inv.date).toLocaleDateString("en-GB")}` : ""}</div>
+                      </div>
+                      <div style={{ flexShrink: 0, fontSize: 12.5, fontWeight: 850, color: C.ink }}>{money(invAmt(inv), inv.currency || "INR")}</div>
+                    </button>;
+                  })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {/* stats */}
       <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
         {[
@@ -2650,9 +2736,13 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
             </button>
           ))}
         </div>
+        <button onClick={reconcileInvoices} disabled={reconciling} title="Match unshipped/unlinked Etsy orders to invoices you already created in Invoicing"
+          style={{ marginLeft: "auto", background: reconciling ? C.card : C.blueBg, color: C.blue, border: `1.5px solid ${C.blue}55`, borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: reconciling ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+          {reconciling ? "Matching…" : "🔗 Link existing invoices"}
+        </button>
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="Search buyer, email, SKU, order..."
-          style={{ ...FI(), width: mob() ? "100%" : 260, fontSize: 12, padding: "8px 13px", borderRadius: 10, marginLeft: "auto" }} />
+          style={{ ...FI(), width: mob() ? "100%" : 260, fontSize: 12, padding: "8px 13px", borderRadius: 10 }} />
       </div>
       {etsyBackfilling && (
         <div style={{ marginBottom: 10, background: C.blueBg, border: `1px solid ${C.blue}25`, color: C.blue, borderRadius: 9, padding: "8px 11px", fontSize: 12, fontWeight: 700 }}>
@@ -2895,14 +2985,18 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                               {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
                             </select>}
                           </div>
-                          <button
-                            onClick={() => createAtyaharaInvoiceForOrder(order)}
-                            disabled={!!invoiceDraft(order).loading}
-                            style={{ background: order._atInvoiceNo ? C.card : C.green, color: order._atInvoiceNo ? C.ink : "#fff", border: order._atInvoiceNo ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
-                            {invoiceDraft(order).loading ? "Creating..." : order._atInvoiceNo ? "Refresh invoice" : "Create Invoice"}
-                          </button>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                            {!order._atInvoiceNo && <button onClick={() => { setInvoiceModalSearch(""); setInvoiceModalOrder(order); }} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Already invoiced?</button>}
+                            <button
+                              onClick={() => createAtyaharaInvoiceForOrder(order)}
+                              disabled={!!invoiceDraft(order).loading}
+                              style={{ background: order._atInvoiceNo ? C.card : C.green, color: order._atInvoiceNo ? C.ink : "#fff", border: order._atInvoiceNo ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
+                              {invoiceDraft(order).loading ? "Creating..." : order._atInvoiceNo ? "Refresh invoice" : "Create Invoice"}
+                            </button>
+                          </div>
                         </div>
-                        {!order.linked_stock_id && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Tip: allocate a stock item in step 2 so the invoice links to physical stock.</div>}
+                        {order._atInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.green, fontWeight: 700 }}>Linked to {order._atInvoiceNo} · <button onClick={() => patchOrder(order, { _atInvoiceNo: "", _atInvoicedAt: "" })} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}>unlink</button></div>}
+                        {!order.linked_stock_id && !order._atInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Tip: allocate a stock item in step 2 so the invoice links to physical stock.</div>}
                         {invoiceDraft(order).error && (
                           <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
                             {invoiceDraft(order).error}
