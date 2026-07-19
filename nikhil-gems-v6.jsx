@@ -3797,6 +3797,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [attachOpen,setAttachOpen]=useState(false);
   const [billUploadOpen,setBillUploadOpen]=useState(false); // Purchases upload flow as an overlay on classify
   const [preselectBillId,setPreselectBillId]=useState(""); // newly-uploaded bill to auto-select in classify
+  const [poCreateOpen,setPoCreateOpen]=useState(false);   // Purchases PO form as an overlay on classify
+  const [preselectPoId,setPreselectPoId]=useState("");    // newly-created PO to auto-select in classify
   const [tab,setTab]=useState("all");
   const [filterOpen,setFilterOpen]=useState(false);
   const [month,setMonth]=useState(accountantMonth());
@@ -4741,6 +4743,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             onUploadBill={company==="ng"?()=>setBillUploadOpen(true):undefined}
             preselectBillId={preselectBillId}
             onPreselectConsumed={()=>setPreselectBillId("")}
+            onCreatePO={company==="ng"?()=>setPoCreateOpen(true):undefined}
+            preselectPoId={preselectPoId}
+            onPreselectPoConsumed={()=>setPreselectPoId("")}
           />
         )}
         {billUploadOpen&&(
@@ -4755,6 +4760,21 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                 const fresh=await loadKFresh(keys.purchases).catch(()=>null);
                 if(Array.isArray(fresh))setPurchases(fresh);
                 showToast("Bill added — selected for this payment");
+              }}
+            />
+          </div>
+        )}
+        {poCreateOpen&&(
+          <div style={{position:"fixed",inset:0,zIndex:120,background:C.bg,overflowY:"auto"}}>
+            <PurchasesApp
+              startView="po"
+              onHome={()=>setPoCreateOpen(false)}
+              onPoSaved={async(po)=>{
+                setPoCreateOpen(false);
+                setPreselectPoId(po?.id||"");
+                const fresh=await loadKFresh(keys.purchases).catch(()=>null);
+                if(Array.isArray(fresh))setPurchases(fresh);
+                showToast("PO created — selected for this advance");
               }}
             />
           </div>
@@ -8084,7 +8104,7 @@ async function loadStockWithPhotos({fresh=false}={}){
   return (Array.isArray(rows)?rows:[]).map(normalizeStockRecord);
 }
 
-function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor,onBillSaved}){
+function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor,onBillSaved,onPoSaved}){
   const t=useT();
   // Company-scoped bills/vendors. Gem stock/glossary are Nikhil-Gems-only (empty for Atyahara).
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-vendors-company")||"ng");
@@ -8097,7 +8117,7 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
   const [stock,setStock]=useState(()=>readCache(KEYS.stock)||[]);
   const [glossary,setGlossary]=useState(()=>readCache(KEYS.glossary)||[]);
   const [accStock,setAccStock]=useState(()=>readCache(KEYS.accStock)||[]);
-  const [view,setView]=useState(startView==="upload"?"upload":"list");const [tab,setTab]=useState("all");const [sortBy,setSortBy]=useState("date");
+  const [view,setView]=useState(startView==="upload"?"upload":startView==="po"?"po":"list");const [tab,setTab]=useState("all");const [sortBy,setSortBy]=useState("date");
   const [draft,setDraft]=useState(null);const [expandBill,setExpandBill]=useState(null);const [detail,setDetail]=useState(null);
   const [extracting,setExtracting]=useState(false);const [bulkQueue,setBulkQueue]=useState([]);const [bulkIdx,setBulkIdx]=useState(0);
   const [fileData,setFileData]=useState(null);const [toast,setToast]=useState("");
@@ -8115,6 +8135,8 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
         setPurchases(p||[]);setVendors(v||[]);setStock(s||[]);setGlossary(g||[]);
         setFinAccounts((fa||[]).filter(a=>a.active!==false));setAccStock(ac||[]);setCustomMarkets(cm||[]);setCustomsDescs(Array.isArray(cd)?cd:[]);
         setLoaded(true);
+        // Launched straight into PO creation (classify "New PO" shortcut) — seed a blank PO draft.
+        if(startView==="po"){const poNo=`PO/${new Date().getFullYear()}/${String((p||[]).filter(x=>x.type==="po").length+1).padStart(3,"0")}`;setDraft(prev=>prev||{type:"po",id:uid(),poNumber:poNo,supplier:"",date:today(),currency:"INR",advance:"",items:[newItem()],notes:"",followUpDate:"",status:"open",paidAmount:0,createdAt:new Date().toISOString()});}
         if(startBillId){const bill=(p||[]).find(b=>b.id===startBillId);if(bill){setDetail(bill);}onBillIdConsumed?.();}
       })
       .catch(e=>{console.error("PurchasesApp load error:",e);setLoaded(true);});
@@ -8224,7 +8246,8 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
     if(+item.advance>0){
       setAdvDialog({po:item,amount:String(item.advance),vendor:item.supplier});
     }
-  },[purchases,vendors,upsertVendor]);
+    onPoSaved?.(item);
+  },[purchases,vendors,upsertVendor,onPoSaved]);
 
   const handleUpdatePO=useCallback(async item=>{
     const totalQty=(item.items||[]).reduce((a,it)=>a+(+it.qty||0),0);

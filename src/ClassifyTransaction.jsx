@@ -49,6 +49,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, interCo = null, reclassifyDirty = false, onSave, onClose,
   inline = false, onValidityChange,
   onUploadBill, preselectBillId, onPreselectConsumed,
+  onCreatePO, preselectPoId, onPreselectPoConsumed,
 }, ref) {
   // The learner's local match (if any) pre-fills the form for unclassified txns.
   const L = (!txn.classifiedAs && learned) ? learned : null;
@@ -105,6 +106,20 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
     });
     onPreselectConsumed?.();
   }, [preselectBillId, purchases]);
+  // Same for the inline "New PO" shortcut — auto-select the freshly-created PO.
+  useEffect(() => {
+    if (!preselectPoId) return;
+    const po = purchases.find(p => p.id === preselectPoId);
+    if (!po) return;
+    setClassType("vendor_po");
+    setSelectedPoId(preselectPoId);
+    setVendorId(prev => {
+      if (prev) return prev;
+      const v = vendors.find(x => (x.name || "").toLowerCase() === (po.supplier || "").toLowerCase());
+      return v ? v.id : prev;
+    });
+    onPreselectPoConsumed?.();
+  }, [preselectPoId, purchases]);
   // Inter-company: pick the OTHER company's invoice this payment settles. Pre-select the
   // one whose number appears in the notes/payee (e.g. "Payment against NG-04-2026/27").
   const interInvs = interCo?.invoices || [];
@@ -536,7 +551,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
               No purchase bill selected. This will still be saved in <strong>{vendor?.name || "the vendor"}'s ledger</strong> as a payment on account / advance.
             </div>}
           </div>}
-          {classType === "vendor_po" && <div><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, marginBottom: 6 }}>Open POs {vendorId ? `- ${vendor?.name}` : "(all vendors)"}</div>
+          {classType === "vendor_po" && <div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65 }}>Open POs {vendorId ? `- ${vendor?.name}` : "(all vendors)"}</div>{onCreatePO && <button type="button" onClick={onCreatePO} title="Create a new Purchase Order — opens the Purchases PO form, then returns here with it selected" style={{ border: `1px solid ${C.purple}55`, background: C.purple, color: "#fff", borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer", flexShrink: 0 }}>+ New PO</button>}</div>
             {vendorPOs.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>No open POs found.</div> : <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 6 }}>{vendorPOs.map(po => { const total = poTotal(po), due = poDue(po), poCur = po.currency || "INR"; return <button key={po.id} onClick={() => setSelectedPoId(po.id)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, width: "100%", padding: "9px 12px", background: selectedPoId === po.id ? C.card : C.surface, border: `1.5px solid ${selectedPoId === po.id ? C.purple : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{po.poNumber || "PO"}</div><div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{po.supplier} · {fmtDate(po.date)} · {po.status}</div></div><div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{moneyText(total, poCur)}</div>{(+po.paidAmount || 0) > 0 && <div style={{ fontSize: 10, color: C.inkFaint }}>{moneyText(due, poCur)} left</div>}</div></button>; })}</div>}
           </div>}
         </div>}
