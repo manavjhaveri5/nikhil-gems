@@ -2041,7 +2041,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     return updated;
   };
   const setOrderShape = (order, shape) => patchOrder(order, { listing_shape: shape });
-  const ngDraft = o => ngState[o.id] || { qty: String(o._ngDeductedQty || 1), qty2: String(o._ngDeductedQty2 || ""), loading: false, error: "", success: "" };
+  const ngDraft = o => ngState[o.id] || { qty: String(o._ngDeductedQty || o._ngPlanQty || 1), qty2: String(o._ngDeductedQty2 || o._ngPlanQty2 || ""), shipCost: o.ship_cost != null && o.ship_cost !== "" ? String(o.ship_cost) : "", loading: false, error: "", success: "" };
   const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...ngDraft(o), ...patch } }));
   const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
   const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
@@ -2089,6 +2089,23 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     } catch (e) {
       showToast?.(e.message || "Could not match invoices");
     } finally { setReconciling(false); }
+  };
+  // Save step-2 choices (quantities used + what shipping cost you) onto the order. Stock is
+  // not deducted here — that happens when the NG invoice is created (step 4) — so this just
+  // records the plan and your shipping spend for later profit stats.
+  const saveAllocation = async order => {
+    const draft = ngDraft(order);
+    const stockItem = stock.find(s => s.id === order.linked_stock_id);
+    if (!stockItem) { updNg(order, { error: "Pick a stock item first.", success: "" }); return; }
+    const qty = Math.max(0, +draft.qty || 0);
+    const qty2 = Math.max(0, +draft.qty2 || 0);
+    if (qty <= 0 && qty2 <= 0) { updNg(order, { error: "Enter how much you used.", success: "" }); return; }
+    if (qty > (+stockItem.qty || 0)) { updNg(order, { error: `Only ${stockItem.qty || 0} ${stockItem.unit || "pcs"} in stock.`, success: "" }); return; }
+    if (String(stockItem.qty2 || "").trim() !== "" && qty2 > (+stockItem.qty2 || 0)) { updNg(order, { error: `Only ${stockItem.qty2 || 0} ${stockItem.unit2 || "secondary units"} available.`, success: "" }); return; }
+    const shipCost = draft.shipCost === "" ? "" : Math.max(0, +draft.shipCost || 0);
+    await patchOrder(order, { _ngPlanQty: String(qty), _ngPlanQty2: qty2 ? String(qty2) : "", ship_cost: shipCost });
+    updNg(order, { error: "", success: "Allocation saved — stock deducts when you create the NG invoice." });
+    setStepSel(s => ({ ...s, [order.id]: 2 }));
   };
   // Deduct the linked NG stock and add a line to Atyahara's inter-company NG invoice.
   const addOrderToNg = async order => {
@@ -2959,10 +2976,18 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                                 </button>
                               )}
                               {linked && !done && (
-                                <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : hasQty2 ? "160px 160px 1fr" : "160px 1fr", gap: 10, alignItems: "end" }}>
-                                  <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Qty used ({linked.unit || "pcs"})<input type="number" min={1} value={ngDraft(order).qty} onChange={e => updNg(order, { qty: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 13, padding: "9px 11px", borderRadius: 8, marginTop: 5 }} /></label>
-                                  {hasQty2 && <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>{linked.unit2 || "Secondary"} used<input type="number" min={0} value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 13, padding: "9px 11px", borderRadius: 8, marginTop: 5 }} /></label>}
-                                </div>
+                                <>
+                                  <div style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, textTransform: "uppercase", letterSpacing: .5, margin: "6px 0 8px" }}>How much did this order use?</div>
+                                  <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : `repeat(${hasQty2 ? 3 : 2}, 1fr)`, gap: 10, alignItems: "end" }}>
+                                    <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Quantity used<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).qty} onChange={e => updNg(order, { qty: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 14, padding: "10px 44px 10px 11px", borderRadius: 8, marginTop: 5 }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-30%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>{linked.unit || "pcs"}</span></div></label>
+                                    {hasQty2 && <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Also used<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 14, padding: "10px 44px 10px 11px", borderRadius: 8, marginTop: 5 }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-30%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>{linked.unit2 || "pcs"}</span></div></label>}
+                                    <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 14, padding: "10px 44px 10px 11px", borderRadius: 8, marginTop: 5 }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-30%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
+                                  </div>
+                                  <div style={{ marginTop: 7, fontSize: 11, color: C.inkFaint }}>Your carrier cost — used for profit stats. Stock is deducted when you create the NG invoice (step 4).</div>
+                                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+                                    <button onClick={() => saveAllocation(order)} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 850, cursor: "pointer" }}>Save allocation →</button>
+                                  </div>
+                                </>
                               )}
                               {ngDraft(order).error && (
                                 <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>{ngDraft(order).error}</div>
