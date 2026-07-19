@@ -48,6 +48,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
   learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, interCo = null, reclassifyDirty = false, onSave, onClose,
   inline = false, onValidityChange,
+  onUploadBill, preselectBillId, onPreselectConsumed,
 }, ref) {
   // The learner's local match (if any) pre-fills the form for unclassified txns.
   const L = (!txn.classifiedAs && learned) ? learned : null;
@@ -89,6 +90,21 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const [quickBills, setQuickBills] = useState([]);
   const [quickBillOpen, setQuickBillOpen] = useState(false);
   const [quickBill, setQuickBill] = useState({ billNumber: "", supplier: "", date: "", amount: "", currency: "" });
+  // When the parent's inline "Upload Bill" shortcut saves a new bill, auto-select it here so the
+  // payment continues without leaving the classify modal.
+  useEffect(() => {
+    if (!preselectBillId) return;
+    const bill = purchases.find(p => p.id === preselectBillId);
+    if (!bill) return; // wait until the refreshed purchases list includes it
+    setClassType("vendor_bill");
+    setSelectedBillIds(prev => new Set([...prev, preselectBillId]));
+    setVendorId(prev => {
+      if (prev) return prev;
+      const v = vendors.find(x => (x.name || "").toLowerCase() === (bill.supplier || "").toLowerCase());
+      return v ? v.id : prev;
+    });
+    onPreselectConsumed?.();
+  }, [preselectBillId, purchases]);
   // Inter-company: pick the OTHER company's invoice this payment settles. Pre-select the
   // one whose number appears in the notes/payee (e.g. "Payment against NG-04-2026/27").
   const interInvs = interCo?.invoices || [];
@@ -493,7 +509,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
             </div>
           )}
           <Field label="Filter by Vendor (optional)"><select value={vendorId} onChange={e => { setVendorId(e.target.value); setSelectedBillIds(new Set()); setSelectedPoId(""); }} style={SI}><option value="">All vendors</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
-          {classType === "vendor_bill" && <div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65 }}>Select bills to pay {vendorId ? `- ${vendor?.name}` : "(all vendors)"} <span style={{ fontWeight: 500 }}>(tap to select multiple)</span></div><button type="button" onClick={openQuickBill} style={{ border: `1px solid ${C.blue}55`, background: C.blueBg, color: C.blue, borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer", flexShrink: 0 }}>+ Add bill</button></div>
+          {classType === "vendor_bill" && <div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65 }}>Select bills to pay {vendorId ? `- ${vendor?.name}` : "(all vendors)"} <span style={{ fontWeight: 500 }}>(tap to select multiple)</span></div><div style={{ display: "flex", gap: 6, flexShrink: 0 }}>{onUploadBill && <button type="button" onClick={onUploadBill} title="Upload a bill document — opens the Purchases bill scanner, then returns here with it selected" style={{ border: `1px solid ${C.blue}55`, background: C.blue, color: "#fff", borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>⬆ Upload Bill</button>}<button type="button" onClick={openQuickBill} style={{ border: `1px solid ${C.blue}55`, background: C.blueBg, color: C.blue, borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>+ Add bill</button></div></div>
             {quickBillOpen && <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1.2fr 1fr 1fr .8fr", gap: 8, marginBottom: 8 }}>
               <input value={quickBill.billNumber} onChange={e => setQuickBill(q => ({ ...q, billNumber: e.target.value }))} placeholder="Bill no." style={SI} />
               <input value={quickBill.supplier} onChange={e => setQuickBill(q => ({ ...q, supplier: e.target.value }))} placeholder="Vendor" style={SI} />

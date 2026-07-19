@@ -3795,6 +3795,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [selectedId,setSelectedId]=useState("");
   const [classifyOpen,setClassifyOpen]=useState(false);
   const [attachOpen,setAttachOpen]=useState(false);
+  const [billUploadOpen,setBillUploadOpen]=useState(false); // Purchases upload flow as an overlay on classify
+  const [preselectBillId,setPreselectBillId]=useState(""); // newly-uploaded bill to auto-select in classify
   const [tab,setTab]=useState("all");
   const [filterOpen,setFilterOpen]=useState(false);
   const [month,setMonth]=useState(accountantMonth());
@@ -4736,7 +4738,26 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             reclassifyDirty={(()=>{const s=selected?.classifiedSnapshot;return !!(selected?.classifiedAs&&s&&((selected.payee||"")!==(s.payee||"")||(selected.notes||"")!==(s.notes||"")||(selected.type||"debit")!==(s.type||"debit")||attSig(txnAttachments(selected))!==(s.att||"")));})()}
             onSave={handleStructuredClassify}
             onClose={()=>setClassifyOpen(false)}
+            onUploadBill={company==="ng"?()=>setBillUploadOpen(true):undefined}
+            preselectBillId={preselectBillId}
+            onPreselectConsumed={()=>setPreselectBillId("")}
           />
+        )}
+        {billUploadOpen&&(
+          <div style={{position:"fixed",inset:0,zIndex:120,background:C.bg,overflowY:"auto"}}>
+            <PurchasesApp
+              startView="upload"
+              onHome={()=>setBillUploadOpen(false)}
+              onBillSaved={async(bill)=>{
+                setBillUploadOpen(false);
+                setPreselectBillId(bill?.id||"");
+                // Refresh the classify picker with the just-saved bill.
+                const fresh=await loadKFresh(keys.purchases).catch(()=>null);
+                if(Array.isArray(fresh))setPurchases(fresh);
+                showToast("Bill added — selected for this payment");
+              }}
+            />
+          </div>
         )}
         {attachOpen&&selected&&(
           <AccountingTxnAttachmentModal
@@ -8063,7 +8084,7 @@ async function loadStockWithPhotos({fresh=false}={}){
   return (Array.isArray(rows)?rows:[]).map(normalizeStockRecord);
 }
 
-function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor}){
+function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendor,onBillSaved}){
   const t=useT();
   // Company-scoped bills/vendors. Gem stock/glossary are Nikhil-Gems-only (empty for Atyahara).
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-vendors-company")||"ng");
@@ -8163,7 +8184,8 @@ function PurchasesApp({onHome,startView,startBillId,onBillIdConsumed,onGoToVendo
     setView("list");setExpandBill(null);setDraft(null);setFileData(null);
     showToast(savedItem.status==="pending"?"Bill saved as pending":`Bill saved${newPhysicalItems.length?` · ${newPhysicalItems.length} physical item${newPhysicalItems.length!==1?"s":""} added`:""}`);
     try{await savePurchasesK(updated);logActivity({user:"Admin",action:"created",module:"purchases",label:`Purchase bill: ${savedItem.supplier||"vendor"} · ${savedItem.billNumber||savedItem.id.slice(0,6)}`,targetId:savedItem.id,targetMod:"purchases"});}catch(e){showToast("⚠ Saved locally — sync failed: "+e.message);}
-  },[purchases,vendors,upsertVendor,accStock,stock]);
+    onBillSaved?.(savedItem);
+  },[purchases,vendors,upsertVendor,accStock,stock,onBillSaved]);
 
   const handleExpandDone=useCallback(async(expandedLines)=>{
     // Create physical stock entries
