@@ -2015,6 +2015,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const [stockSearch, setStockSearch] = useState({});
   const [trackingModalOrder, setTrackingModalOrder] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState({});
+  const [stepSel, setStepSel] = useState({}); // per-order: which fulfilment step panel is open (overrides the auto-active one)
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   // Customs shape list (Datasets tab) — drives the editable Shape field per order and
@@ -2627,6 +2628,11 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
             const isExp = expanded === order.id;
             const shipped = isShipped(order);
             const status = shipped ? "shipped" : "unshipped";
+            // Fulfilment step the panels show. Auto-advances to the first incomplete step,
+            // but the stepper lets the user click any step to open it (nothing is blocked).
+            const etsyDone = [shipped, !!order.linked_stock_id, !!order._atInvoiceNo, !!order._ngInvoiceNo];
+            const etsyFirstOpen = etsyDone.findIndex(d => !d);
+            const selStep = stepSel[order.id] != null ? stepSel[order.id] : (etsyFirstOpen === -1 ? 3 : etsyFirstOpen);
             const addr = addressLines(order);
             const copyAddress = addr.join("\n");
             const image = findOrderImage(order);
@@ -2683,25 +2689,34 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                           ["Sales invoice", "Invoice the Etsy buyer", !!order._atInvoiceNo],
                           ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
                         ];
-                        const activeIndex = stages.findIndex(stage => !stage[2]);
+                        const firstOpen = stages.findIndex(stage => !stage[2]);
+                        const activeIndex = firstOpen === -1 ? stages.length - 1 : firstOpen;
                         const doneCount = stages.filter(stage => stage[2]).length;
                         const allDone = doneCount === stages.length;
+                        const sel = stepSel[order.id] != null ? stepSel[order.id] : activeIndex;
+                        const pct = Math.round((doneCount / stages.length) * 100);
                         return <div style={{ marginBottom: 14 }}>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 9 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
                             <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: C.inkFaint }}>Fulfilment</span>
-                            <span style={{ fontSize: 11, fontWeight: 850, color: allDone ? C.green : C.inkMid }}>{allDone ? "✓ Complete" : `Step ${activeIndex + 1} of ${stages.length}`}</span>
+                            <span style={{ fontSize: 11, fontWeight: 850, color: allDone ? C.green : C.inkMid }}>{allDone ? "✓ Complete" : `${doneCount} of ${stages.length} done`}</span>
+                          </div>
+                          {/* segmented progress bar */}
+                          <div style={{ display: "grid", gridTemplateColumns: `repeat(${stages.length}, 1fr)`, gap: 4, marginBottom: 12 }}>
+                            {stages.map(([label], index) => (
+                              <div key={label} style={{ height: 6, borderRadius: 4, background: stages[index][2] ? C.green : index === activeIndex && !allDone ? ETSY : C.border, opacity: stages[index][2] || (index === activeIndex && !allDone) ? 1 : .5, transition: "background .2s" }} />
+                            ))}
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, minmax(0, 1fr))", gap: 8 }}>
                             {stages.map(([label, note, complete], index) => {
-                              const active = index === activeIndex;
-                              const accent = complete ? C.green : active ? ETSY : C.border;
-                              return <div key={label} style={{ minWidth: 0, padding: "11px 12px", borderRadius: 10, background: complete ? C.greenBg : active ? C.surface : C.bg, border: `1.5px solid ${accent}`, boxShadow: active ? `0 2px 10px ${ETSY}22` : "none", opacity: complete || active ? 1 : .58 }}>
+                              const selected = index === sel;
+                              const accent = complete ? C.green : index === activeIndex ? ETSY : C.border;
+                              return <button key={label} onClick={() => setStepSel(s => ({ ...s, [order.id]: index }))} style={{ textAlign: "left", cursor: "pointer", fontFamily: "inherit", minWidth: 0, padding: "10px 11px", borderRadius: 10, background: selected ? C.surface : complete ? C.greenBg : C.bg, border: `1.5px solid ${selected ? accent : complete ? C.green + "66" : C.border}`, boxShadow: selected ? `0 0 0 3px ${accent}22` : "none", opacity: complete || selected || index === activeIndex ? 1 : .62, transition: "box-shadow .15s, border-color .15s" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                                  <span style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: complete ? C.green : active ? ETSY : C.card, color: complete || active ? "#fff" : C.inkFaint, fontSize: 11, fontWeight: 900 }}>{complete ? "✓" : index + 1}</span>
+                                  <span style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: complete ? C.green : index === activeIndex ? ETSY : C.card, color: complete || index === activeIndex ? "#fff" : C.inkFaint, fontSize: 11, fontWeight: 900 }}>{complete ? "✓" : index + 1}</span>
                                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 850, color: C.ink }}>{label}</span>
                                 </div>
                                 <div style={{ marginTop: 6, fontSize: 10.5, color: C.inkMid, lineHeight: 1.3 }}>{note}</div>
-                              </div>;
+                              </button>;
                             })}
                           </div>
                         </div>;
@@ -2741,24 +2756,30 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         </div>
                       </div>
                     </div>}
-                    {isEtsyOrder(order) && !shipped && (
-                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                    {isEtsyOrder(order) && selStep === 0 && (
+                      <div style={{ background: C.surface, border: `1.5px solid ${shipped ? C.green : "#F56400"}`, borderLeft: `4px solid ${shipped ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Ship this order on Etsy</div>
-                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>Add a carrier &amp; tracking number — Etsy marks it shipped and emails the buyer.</div>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{shipped ? "Shipped on Etsy" : "Ship this order on Etsy"}</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{shipped ? "Etsy has this order marked shipped and the buyer notified." : "Add a carrier & tracking number — Etsy marks it shipped and emails the buyer."}</div>
                           </div>
                           <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>Receipt #{etsyReceiptId(order)}</div>
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-                          <button onClick={() => setTrackingModalOrder(order)} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking &amp; ship</button>
+                          {shipped
+                            ? <>
+                                <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>✓ {order.tracking_code || order.tracking_number || "Tracking sent"}</span>
+                                {/^https?:\/\//i.test(order.tracking_url || "") && <a href={order.tracking_url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, fontSize: 12, fontWeight: 750, textDecoration: "none" }}>Open tracking link</a>}
+                                <button onClick={() => setTrackingModalOrder(order)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Update tracking</button>
+                              </>
+                            : <button onClick={() => setTrackingModalOrder(order)} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking & ship</button>}
                           {trackingDraft(order).error && needsEtsyReconnect(trackingDraft(order).error) && <button onClick={reconnectEtsy} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Reconnect Etsy</button>}
                         </div>
                       </div>
                     )}
                     {/* Step 2 stays lightweight: allocation only. The invoice commits the stock movement later. */}
-                    {isEtsyOrder(order) && shipped && !order.linked_stock_id && (
-                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                    {isEtsyOrder(order) && selStep === 1 && (
+                      <div style={{ background: C.surface, border: `1.5px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderLeft: `4px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Allocate physical stock</div>
@@ -2812,25 +2833,26 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         })()}
                       </div>
                     )}
-                    {isEtsyOrder(order) && shipped && !!order.linked_stock_id && !order._atInvoiceNo && (
-                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                    {isEtsyOrder(order) && selStep === 2 && (
+                      <div style={{ background: C.surface, border: `1.5px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Create sales invoice</div>
-                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>Bill the Etsy buyer from Atyahara. Pick the customs shape if auto-detect is off.</div>
-                            <select value={order.listing_shape || ""} onChange={e => setOrderShape(order, e.target.value)} style={{ ...FI(), marginTop: 8, minWidth: 220, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{order._atInvoiceNo ? "Sales invoice created" : "Create sales invoice"}</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._atInvoiceNo ? `Atyahara invoice ${order._atInvoiceNo} bills the Etsy buyer.` : "Bill the Etsy buyer from Atyahara. Pick the customs shape if auto-detect is off."}</div>
+                            {!order._atInvoiceNo && <select value={order.listing_shape || ""} onChange={e => setOrderShape(order, e.target.value)} style={{ ...FI(), marginTop: 8, minWidth: 220, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>
                               <option value="">Auto-detect customs shape</option>
                               {order.listing_shape && !customsShapes.includes(order.listing_shape) && <option value={order.listing_shape}>{order.listing_shape}</option>}
                               {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
-                            </select>
+                            </select>}
                           </div>
                           <button
                             onClick={() => createAtyaharaInvoiceForOrder(order)}
                             disabled={!!invoiceDraft(order).loading}
-                            style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
-                            {invoiceDraft(order).loading ? "Creating..." : "Create Invoice"}
+                            style={{ background: order._atInvoiceNo ? C.card : C.green, color: order._atInvoiceNo ? C.ink : "#fff", border: order._atInvoiceNo ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
+                            {invoiceDraft(order).loading ? "Creating..." : order._atInvoiceNo ? "Refresh invoice" : "Create Invoice"}
                           </button>
                         </div>
+                        {!order.linked_stock_id && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Tip: allocate a stock item in step 2 so the invoice links to physical stock.</div>}
                         {invoiceDraft(order).error && (
                           <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
                             {invoiceDraft(order).error}
@@ -2843,16 +2865,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         )}
                       </div>
                     )}
-                    {isEtsyOrder(order) && shipped && !!order._atInvoiceNo && !order._ngInvoiceNo && (
-                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                    {isEtsyOrder(order) && selStep === 3 && (
+                      <div style={{ background: C.surface, border: `1.5px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Create NG purchase invoice</div>
-                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>Records the allocated stock into Nikhil Gems at cost — the last step.</div>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{order._ngInvoiceNo ? "NG purchase invoice recorded" : "Create NG purchase invoice"}</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._ngInvoiceNo ? `Added to ${order._ngInvoiceNo} — stock recorded into Nikhil Gems at cost.` : "Records the allocated stock into Nikhil Gems at cost — the last step."}</div>
                           </div>
                           <button onClick={() => addOrderToNg(order)} disabled={!!order._ngInvoiceNo || !!ngDraft(order).loading || !order.linked_stock_id} style={{ background: order._ngInvoiceNo ? C.green : C.purple, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? "default" : "pointer", opacity: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? .6 : 1, whiteSpace: "nowrap" }}>{order._ngInvoiceNo ? "Added" : ngDraft(order).loading ? "Creating…" : "Create invoice"}</button>
                         </div>
-                        {!order.linked_stock_id && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Choose a physical stock item in step 2 first.</div>}
+                        {!order.linked_stock_id && !order._ngInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Choose a physical stock item in step 2 first.</div>}
                       </div>
                     )}
                     {isEtsyOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · Etsy shipped · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
