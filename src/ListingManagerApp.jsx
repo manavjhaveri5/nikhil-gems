@@ -2016,6 +2016,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const [trackingModalOrder, setTrackingModalOrder] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState({});
   const [stepSel, setStepSel] = useState({}); // per-order: which fulfilment step panel is open (overrides the auto-active one)
+  const [stockModalOrder, setStockModalOrder] = useState(null); // order whose stock-picker modal is open
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   // Customs shape list (Datasets tab) — drives the editable Shape field per order and
@@ -2563,6 +2564,49 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           </div>
         );
       })()}
+      {stockModalOrder && (() => {
+        const order = stockModalOrder;
+        const q = (stockSearch[order.id] || "").trim().toLowerCase();
+        const matches = q
+          ? stock.filter(s => `${s.material || ""} ${s.desc || ""} ${s.shape || ""} ${s.sku || ""} ${s.location || ""} ${s.productType || ""}`.toLowerCase().includes(q))
+          : stock;
+        const thumb = (s, size) => s.photo
+          ? <img src={s.photo} alt="" loading="lazy" style={{ width: size, height: size, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: `1px solid ${C.border}` }} />
+          : <div style={{ width: size, height: size, borderRadius: 8, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, display: "grid", placeItems: "center", fontSize: Math.round(size * 0.42) }}>💎</div>;
+        const pick = s => { linkOrderStock(order, s.id); updNg(order, { qty: "1" }); setStockSearch(m => ({ ...m, [order.id]: "" })); setStockModalOrder(null); };
+        return (
+          <div onMouseDown={() => setStockModalOrder(null)} style={{ position: "fixed", inset: 0, zIndex: 950, display: "grid", placeItems: "center", padding: 18, background: "rgba(24,19,12,.46)" }}>
+            <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(100%, 620px)", maxHeight: "86vh", display: "flex", flexDirection: "column", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 24px 70px rgba(0,0,0,.28)", overflow: "hidden" }}>
+              <div style={{ padding: "18px 20px 12px", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start", marginBottom: 12 }}>
+                  <div><div style={{ fontSize: 18, fontWeight: 850, color: C.ink }}>Choose stock</div><div style={{ marginTop: 3, fontSize: 12, color: C.inkMid }}>Pick the physical item that filled this order.</div></div>
+                  <button onClick={() => setStockModalOrder(null)} aria-label="Close" style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+                </div>
+                <input autoFocus value={stockSearch[order.id] || ""} onChange={e => setStockSearch(s => ({ ...s, [order.id]: e.target.value }))} placeholder="Search by stone, shape, SKU or location" style={{ ...FI(), width: "100%", fontSize: 14, padding: "11px 13px" }} />
+              </div>
+              <div style={{ overflowY: "auto", padding: 8 }}>
+                {matches.length === 0
+                  ? <div style={{ padding: "34px 12px", fontSize: 13, color: C.inkFaint, textAlign: "center" }}>No stock matches “{stockSearch[order.id]}”</div>
+                  : matches.slice(0, 60).map(s => {
+                    const out = (+s.qty || 0) <= 0;
+                    return <button key={s.id} onClick={() => pick(s)} style={{ display: "flex", gap: 12, alignItems: "center", width: "100%", textAlign: "left", padding: "10px 12px", background: "transparent", border: "none", borderRadius: 9, cursor: "pointer" }}
+                      onMouseEnter={e => e.currentTarget.style.background = C.card} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                      {thumb(s, 52)}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.material || s.desc || "Item"}{s.shape ? ` · ${s.shape}` : ""}</div>
+                        <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.location ? `🗄 ${s.location} · ` : ""}{s.sku ? `${s.sku} · ` : ""}💰 {s.costPrice ? money(s.costPrice, "INR") : "cost —"}</div>
+                      </div>
+                      <div style={{ flexShrink: 0, textAlign: "right" }}>
+                        <div style={{ fontSize: 13, fontWeight: 850, color: out ? C.red : C.green }}>{s.qty} {s.unit || "pcs"}</div>
+                        {String(s.qty2 || "").trim() !== "" && <div style={{ fontSize: 10.5, color: C.inkFaint }}>{s.qty2} {s.unit2 || ""}</div>}
+                      </div>
+                    </button>;
+                  })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {/* stats */}
       <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
         {[
@@ -2796,8 +2840,6 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         {(() => {
                           const linked = stock.find(s => s.id === order.linked_stock_id);
                           const done = !!order._ngInvoiceNo;
-                          const q = (stockSearch[order.id] || "").trim().toLowerCase();
-                          const matches = q ? stock.filter(s => `${s.material || ""} ${s.desc || ""} ${s.shape || ""} ${s.sku || ""} ${s.location || ""} ${s.productType || ""}`.toLowerCase().includes(q)).slice(0, 12) : [];
                           const thumb = (s, size) => s.photo
                             ? <img src={s.photo} alt="" loading="lazy" style={{ width: size, height: size, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: `1px solid ${C.border}` }} />
                             : <div style={{ width: size, height: size, borderRadius: 8, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, display: "grid", placeItems: "center", fontSize: Math.round(size * 0.42) }}>💎</div>;
@@ -2819,29 +2861,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                                   <button onClick={() => { linkOrderStock(order, ""); setStockSearch(s => ({ ...s, [order.id]: "" })); }} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Change</button>
                                 </div>
                               ) : !done && (
-                                <div style={{ position: "relative", marginBottom: 10 }}>
-                                  <input autoFocus value={stockSearch[order.id] || ""} onChange={e => setStockSearch(s => ({ ...s, [order.id]: e.target.value }))} placeholder="Search stock by stone, shape, SKU or location" style={{ ...FI(), width: "100%", fontSize: 13, padding: "10px 12px", borderRadius: 8 }} />
-                                  {q && (
-                                    <div style={{ position: "absolute", zIndex: 20, left: 0, right: 0, top: "calc(100% + 4px)", maxHeight: 320, overflowY: "auto", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 12px 28px rgba(0,0,0,.14)" }}>
-                                      {matches.length === 0
-                                        ? <div style={{ padding: "14px 12px", fontSize: 12, color: C.inkFaint, textAlign: "center" }}>No stock matches “{stockSearch[order.id]}”</div>
-                                        : matches.map(s => {
-                                          const out = (+s.qty || 0) <= 0;
-                                          return <button key={s.id} onClick={() => { linkOrderStock(order, s.id); updNg(order, { qty: "1" }); setStockSearch(m => ({ ...m, [order.id]: "" })); }} style={{ display: "flex", gap: 11, alignItems: "center", width: "100%", textAlign: "left", padding: "9px 11px", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}>
-                                            {thumb(s, 46)}
-                                            <div style={{ minWidth: 0, flex: 1 }}>
-                                              <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.material || s.desc || "Item"}{s.shape ? ` · ${s.shape}` : ""}</div>
-                                              <div style={{ fontSize: 11, color: C.inkMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.location ? `🗄 ${s.location} · ` : ""}{s.sku ? `${s.sku} · ` : ""}💰 {s.costPrice ? money(s.costPrice, "INR") : "cost —"}</div>
-                                            </div>
-                                            <div style={{ flexShrink: 0, textAlign: "right" }}>
-                                              <div style={{ fontSize: 12.5, fontWeight: 850, color: out ? C.red : C.green }}>{s.qty} {s.unit || "pcs"}</div>
-                                              {String(s.qty2 || "").trim() !== "" && <div style={{ fontSize: 10, color: C.inkFaint }}>{s.qty2} {s.unit2 || ""}</div>}
-                                            </div>
-                                          </button>;
-                                        })}
-                                    </div>
-                                  )}
-                                </div>
+                                <button onClick={() => { setStockSearch(s => ({ ...s, [order.id]: "" })); setStockModalOrder(order); }} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: C.card, color: C.inkMid, border: `1.5px dashed ${C.border}`, borderRadius: 9, padding: "12px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 10 }}>
+                                  <span style={{ fontSize: 16 }}>🔍</span>
+                                  <span>Search stock to allocate…</span>
+                                </button>
                               )}
                               {linked && !done && (
                                 <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : hasQty2 ? "160px 160px 1fr" : "160px 1fr", gap: 10, alignItems: "end" }}>
