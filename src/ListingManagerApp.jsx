@@ -2796,32 +2796,57 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         {(() => {
                           const linked = stock.find(s => s.id === order.linked_stock_id);
                           const done = !!order._ngInvoiceNo;
+                          const q = (stockSearch[order.id] || "").trim().toLowerCase();
+                          const matches = q ? stock.filter(s => `${s.material || ""} ${s.desc || ""} ${s.shape || ""} ${s.sku || ""} ${s.location || ""} ${s.productType || ""}`.toLowerCase().includes(q)).slice(0, 12) : [];
+                          const thumb = (s, size) => s.photo
+                            ? <img src={s.photo} alt="" loading="lazy" style={{ width: size, height: size, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: `1px solid ${C.border}` }} />
+                            : <div style={{ width: size, height: size, borderRadius: 8, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, display: "grid", placeItems: "center", fontSize: Math.round(size * 0.42) }}>💎</div>;
+                          const hasQty2 = linked && String(linked.qty2 || "").trim() !== "";
                           return (
                             <>
-                              <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(250px,1fr) 90px 90px", gap: 8, alignItems: "start" }}>
-                                <div style={{ position: "relative" }}>
-                                  <input value={stockSearch[order.id] || ""} onChange={e => setStockSearch(s => ({ ...s, [order.id]: e.target.value }))} disabled={done} placeholder={linked ? `${linked.material || linked.desc || "Item"}${linked.shape ? ` · ${linked.shape}` : ""}` : "Search stock by stone, shape, SKU or location"} style={{ ...FI(), width: "100%", fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }} />
-                                  {!done && (stockSearch[order.id] || "").trim() && (
-                                    <div style={{ position: "absolute", zIndex: 20, left: 0, right: 0, top: "calc(100% + 4px)", maxHeight: 216, overflowY: "auto", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 12px 24px rgba(0,0,0,.12)" }}>
-                                      {stock.filter(s => `${s.material} ${s.desc} ${s.shape} ${s.sku} ${s.location}`.toLowerCase().includes((stockSearch[order.id] || "").toLowerCase())).slice(0, 8).map(s => <button key={s.id} onClick={() => { linkOrderStock(order, s.id); setStockSearch(q => ({ ...q, [order.id]: "" })); }} style={{ width: "100%", textAlign: "left", padding: "8px 10px", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", color: C.ink, fontSize: 12 }}><b>{s.material || s.desc || "Item"}{s.shape ? ` · ${s.shape}` : ""}</b><span style={{ color: C.inkMid }}> · {s.qty} {s.unit || "pcs"}{s.qty2 ? ` · ${s.qty2} ${s.unit2 || ""}` : ""}{s.sku ? ` · ${s.sku}` : ""}</span></button>)}
+                              {linked && !done ? (
+                                <div style={{ display: "flex", gap: 12, alignItems: "center", padding: 10, background: C.card, border: `1.5px solid ${C.green}66`, borderRadius: 10, marginBottom: 10 }}>
+                                  {thumb(linked, 56)}
+                                  <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ fontSize: 13.5, fontWeight: 850, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{linked.material || linked.desc || "Item"}{linked.shape ? ` · ${linked.shape}` : ""}</div>
+                                    <div style={{ fontSize: 11, color: C.inkMid, marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                                      <span>📦 <b style={{ color: (+linked.qty || 0) > 0 ? C.green : C.red }}>{linked.qty} {linked.unit || "pcs"}</b> available{hasQty2 ? ` · ${linked.qty2} ${linked.unit2 || ""}` : ""}</span>
+                                      {linked.location && <span>🗄 {linked.location}</span>}
+                                      {linked.sku && <span style={{ fontFamily: "monospace" }}>{linked.sku}</span>}
+                                      <span>💰 {linked.costPrice ? money(linked.costPrice, "INR") : "cost not set"}</span>
+                                    </div>
+                                  </div>
+                                  <button onClick={() => { linkOrderStock(order, ""); setStockSearch(s => ({ ...s, [order.id]: "" })); }} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Change</button>
+                                </div>
+                              ) : !done && (
+                                <div style={{ position: "relative", marginBottom: 10 }}>
+                                  <input autoFocus value={stockSearch[order.id] || ""} onChange={e => setStockSearch(s => ({ ...s, [order.id]: e.target.value }))} placeholder="Search stock by stone, shape, SKU or location" style={{ ...FI(), width: "100%", fontSize: 13, padding: "10px 12px", borderRadius: 8 }} />
+                                  {q && (
+                                    <div style={{ position: "absolute", zIndex: 20, left: 0, right: 0, top: "calc(100% + 4px)", maxHeight: 320, overflowY: "auto", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 12px 28px rgba(0,0,0,.14)" }}>
+                                      {matches.length === 0
+                                        ? <div style={{ padding: "14px 12px", fontSize: 12, color: C.inkFaint, textAlign: "center" }}>No stock matches “{stockSearch[order.id]}”</div>
+                                        : matches.map(s => {
+                                          const out = (+s.qty || 0) <= 0;
+                                          return <button key={s.id} onClick={() => { linkOrderStock(order, s.id); updNg(order, { qty: "1" }); setStockSearch(m => ({ ...m, [order.id]: "" })); }} style={{ display: "flex", gap: 11, alignItems: "center", width: "100%", textAlign: "left", padding: "9px 11px", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}>
+                                            {thumb(s, 46)}
+                                            <div style={{ minWidth: 0, flex: 1 }}>
+                                              <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.material || s.desc || "Item"}{s.shape ? ` · ${s.shape}` : ""}</div>
+                                              <div style={{ fontSize: 11, color: C.inkMid, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.location ? `🗄 ${s.location} · ` : ""}{s.sku ? `${s.sku} · ` : ""}💰 {s.costPrice ? money(s.costPrice, "INR") : "cost —"}</div>
+                                            </div>
+                                            <div style={{ flexShrink: 0, textAlign: "right" }}>
+                                              <div style={{ fontSize: 12.5, fontWeight: 850, color: out ? C.red : C.green }}>{s.qty} {s.unit || "pcs"}</div>
+                                              {String(s.qty2 || "").trim() !== "" && <div style={{ fontSize: 10, color: C.inkFaint }}>{s.qty2} {s.unit2 || ""}</div>}
+                                            </div>
+                                          </button>;
+                                        })}
                                     </div>
                                   )}
                                 </div>
-                                <input
-                                  type="number" min={1}
-                                  value={ngDraft(order).qty}
-                                  onChange={e => updNg(order, { qty: e.target.value })}
-                                  disabled={done}
-                                  placeholder={linked?.unit || "Qty"}
-                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }}
-                                />
-                                {linked && String(linked.qty2 || "").trim() !== "" ? <input type="number" min={0} value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} disabled={done} placeholder={linked.unit2 || "Secondary"} style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }} /> : <div />}
-                              </div>
+                              )}
                               {linked && !done && (
-                                <div style={{ marginTop: 6, fontSize: 11, color: C.inkMid, display: "flex", gap: 14, flexWrap: "wrap" }}>
-                                  <span>📦 <b>{linked.qty} {linked.unit || "pcs"}</b> available</span>
-                                  {String(linked.qty2 || "").trim() !== "" && <span>↕ <b>{linked.qty2} {linked.unit2 || "secondary units"}</b> available</span>}
-                                  <span>💰 cost rate: <b>{linked.costPrice ? money(linked.costPrice, "INR") : "not set (0)"}</b></span>
+                                <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : hasQty2 ? "160px 160px 1fr" : "160px 1fr", gap: 10, alignItems: "end" }}>
+                                  <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Qty used ({linked.unit || "pcs"})<input type="number" min={1} value={ngDraft(order).qty} onChange={e => updNg(order, { qty: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 13, padding: "9px 11px", borderRadius: 8, marginTop: 5 }} /></label>
+                                  {hasQty2 && <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>{linked.unit2 || "Secondary"} used<input type="number" min={0} value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 13, padding: "9px 11px", borderRadius: 8, marginTop: 5 }} /></label>}
                                 </div>
                               )}
                               {ngDraft(order).error && (
