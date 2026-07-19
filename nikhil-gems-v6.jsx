@@ -407,6 +407,7 @@ const MODS=[
   {id:"finance",icon:"💰",title:"Finance",desc:"Ledger, balances, reconcile, P&L",ready:true},
   {id:"jobwork",icon:"🔧",title:"Job Work",desc:"Track goods sent for polishing, resetting, cutting",ready:true},
   {id:"etsy",icon:"🏷️",title:"Listing Manager",desc:"Etsy, eBay, Atyahara, Earth Editions listings & orders",ready:true},
+  {id:"orders",icon:"📦",title:"Orders",desc:"Customer orders, shipping and fulfilment",ready:true},
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
   {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",ready:true},
   {id:"bgremove",icon:"✂️",title:"Background Remover",desc:"Phone photo → clean white background (sandbox)",ready:true},
@@ -773,7 +774,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   };
 
   // Apple-style icon colors per module (iOS Settings palette)
-  const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",users:"#007AFF",datasets:"#5AC8FA"};
+  const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",users:"#007AFF",datasets:"#5AC8FA"};
 
   return(
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"-apple-system,'SF Pro Display',Figtree,system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
@@ -3896,6 +3897,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const isUnclassified=t=>{
     if(!t||t.type==="conversion")return false;
     const kind=t.classifiedAs||t.category||"";
+    if(t.classifiedAs&&ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(t.classifiedAs)&&t.category!==t.classifiedAs)return true;
     if(ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(kind))return false;
     // A deliberately-classified expense counts as classified even if its category is "Other"
     // (the user made a decision). Only auto-imported "Other" expenses still need attention.
@@ -4026,6 +4028,12 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     return accounts.find(a=>a.id===id)?.name||"Account";
   };
   const txnCur=t=>t?.currency||accounts.find(a=>a.id===(t?.accountTo||t?.accountFrom))?.currency||"INR";
+  const convertTxnMoney=(amount,fromCur="INR",toCur="INR")=>{
+    const n=+amount||0;
+    if(fromCur===toCur)return n;
+    const inrAmt=fromCur==="INR"?n:n*(rates[fromCur]||1);
+    return toCur==="INR"?inrAmt:inrAmt/(rates[toCur]||1);
+  };
   const money=t=>{
     const cur=txnCur(t);
     const sym={INR:"₹",USD:"$",EUR:"€",JPY:"¥",GBP:"£",AUD:"A$"}[cur]||cur+" ";
@@ -4177,6 +4185,30 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(sideEffects.billUpdates?.length){
       const map=Object.fromEntries(sideEffects.billUpdates.map(u=>[u.id,u]));
       nextPurchases=nextPurchases.map(p=>map[p.id]?{...p,...map[p.id]}:p);
+      const affectedIds=new Set(sideEffects.billUpdates.map(u=>u.id));
+      const ledgerPaidForBill=bid=>nextTxns.reduce((sum,t)=>{
+        if(t.classifiedAs!=="vendor_bill"||t.classifiedRef?.interCo)return sum;
+        if(t.classifiedRef?.billPayments&&typeof t.classifiedRef.billPayments==="object")return sum+(+t.classifiedRef.billPayments[bid]||0);
+        const ids=t.classifiedRef?.billIds||(t.classifiedRef?.billId?[t.classifiedRef.billId]:[]);
+        if(!ids.includes(bid))return sum;
+        let rem=+t.amount||0;
+        const legacy={};
+        for(const id of ids){
+          if(rem<=0.005)break;
+          const bill=nextPurchases.find(p=>p.id===id);
+          const cap=Math.max(0,+bill?.totalAmount||rem);
+          const applied=Math.min(cap||rem,rem);
+          if(applied>0)legacy[id]=applied;
+          rem-=applied;
+        }
+        return sum+(+legacy[bid]||0);
+      },0);
+      nextPurchases=nextPurchases.map(p=>{
+        if(!affectedIds.has(p.id)||p.source!=="misc-bill-maker"||p.paymentNote)return p;
+        const paid=+ledgerPaidForBill(p.id).toFixed(2);
+        const total=+p.totalAmount||0;
+        return{...p,paidAmount:paid,status:paid>=total&&total>0?"paid":paid>0?"partial":"pending",paymentDate:paid>0?(p.paymentDate||selected.date):undefined};
+      });
       purchasesDirty=true;
     }
     // Advance/credit applied against the bill: consume the vendor's credit balance first, then
@@ -4268,10 +4300,81 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       ?{type:"credit",accountTo:acct||"",accountFrom:undefined}
       :{type:"debit",accountFrom:acct||"",accountTo:undefined};
     // Direction change invalidates an existing classification — reset to unclassified.
-    if(selected.classifiedAs){Object.assign(patch,{classifiedAs:undefined,classifiedRef:undefined,classifiedAt:undefined,classifiedBy:undefined});}
+    if(selected.classifiedAs){Object.assign(patch,{classifiedAs:null,classifiedRef:null,classifiedAt:null,classifiedBy:null,classifiedSnapshot:null});}
     await patchTxn(selected.id,patch);
     captureDecision(selected.id);
     showToast?.(`Changed to ${newType==="credit"?"Credit (money in)":"Debit (money out)"}`);
+  };
+  const unclassifySelected=async()=>{
+    if(!selected||selected.type==="conversion"||isUnclassified(selected))return;
+    if(!window.confirm("Unclassify this payment? The payment and attachments stay, but it will move back to Not classified."))return;
+    const wasVendorBill=selected.classifiedAs==="vendor_bill"&&!selected.classifiedRef?.interCo;
+    const wasCustomerReceipt=selected.classifiedAs==="customer_receipt";
+    const prevBillIds=wasVendorBill?(selected.classifiedRef?.billIds||(selected.classifiedRef?.billId?[selected.classifiedRef.billId]:[])):[];
+    const prevInvoiceIds=wasCustomerReceipt?(selected.classifiedRef?.invoiceIds||(selected.classifiedRef?.invoiceId?[selected.classifiedRef.invoiceId]:[])):[];
+    const prevBillPayments=wasVendorBill&&selected.classifiedRef?.billPayments&&typeof selected.classifiedRef.billPayments==="object"?selected.classifiedRef.billPayments:null;
+    const legacyBillPayments=()=>{
+      if(!wasVendorBill||prevBillPayments)return{};
+      let rem=+selected.amount||0;
+      const out={};
+      for(const id of prevBillIds){
+        if(rem<=0.005)break;
+        const bill=purchases.find(p=>p.id===id);
+        const cap=Math.max(0,+bill?.totalAmount||rem);
+        const applied=Math.min(cap||rem,rem);
+        if(applied>0)out[id]=applied;
+        rem-=applied;
+      }
+      return out;
+    };
+    const amountsToReverse=prevBillPayments||legacyBillPayments();
+    const patch={
+      category:"",
+      classifiedAs:null,
+      classifiedRef:null,
+      classifiedAt:null,
+      classifiedBy:null,
+      classifiedSnapshot:null,
+    };
+    await patchTxn(selected.id,patch);
+    if(wasCustomerReceipt&&prevInvoiceIds.length){
+      const fresh=await loadKFresh(keys.invoices);
+      const base=Array.isArray(fresh)?fresh:invoices;
+      const txCur=txnCur(selected);
+      let remaining=+selected.amount||0;
+      const next=base.map(inv=>{
+        if(!prevInvoiceIds.includes(inv.id)||remaining<=0.005)return inv;
+        const invCur=inv.currency||txCur;
+        const paidNow=+inv.paidAmount||0;
+        if(paidNow<=0)return inv;
+        const paidInTxnCur=convertTxnMoney(paidNow,invCur,txCur);
+        const reverseTxn=Math.min(remaining,paidInTxnCur);
+        remaining=+(remaining-reverseTxn).toFixed(2);
+        const reverseInv=convertTxnMoney(reverseTxn,txCur,invCur);
+        const paid=Math.max(0,paidNow-reverseInv);
+        const total=+inv.totalAmt||0;
+        const status=paid>=total*0.99&&total>0?"paid":paid>0?"partial":inv.goodsShipped?"shipped":"sent";
+        return{...inv,paidAmount:+paid.toFixed(2),status,paidDate:paid>0?inv.paidDate:undefined};
+      });
+      setInvoices(next);
+      await saveK(keys.invoices,next);
+    }
+    if(wasVendorBill&&prevBillIds.length){
+      const next=purchases.map(p=>{
+        if(!prevBillIds.includes(p.id))return p;
+        const total=+p.totalAmount||0;
+        const paid=Math.max(0,(+p.paidAmount||0)-(+amountsToReverse[p.id]||0));
+        return{...p,paidAmount:+paid.toFixed(2),status:paid>=total&&total>0?"paid":paid>0?"partial":"pending",paymentDate:paid>0?p.paymentDate:undefined};
+      });
+      setPurchases(next);
+      await saveK(keys.purchases,next);
+    }
+    if(selected.classifiedAs==="expense"){
+      const next=expenses.filter(e=>e.ledgerTxnId!==selected.id);
+      setExpenses(next);
+      await saveK(keys.expenses,next);
+    }
+    showToast?.("Payment moved back to Not classified");
   };
   // Silent ambient auto-fill: when a confidently-seen unclassified txn is selected,
   // quietly apply the learned cleaned payee/notes (with Undo). One patchTxn, run once.
@@ -4608,7 +4711,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
                     <div style={{fontSize:15,fontWeight:950,color:transfer?C.blue:done?C.green:C.red}}>{transfer?"Transfer saved":done?"Classified":"Needs classification"}</div>
                     <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>{transfer?"No classification needed for conversion / transfer.":done?displayClassification(selected):"Choose what this payment is."}</div>
                   </div>
-                  {!transfer&&<button className="bp" onClick={()=>setClassifyOpen(true)} style={{width:"100%",fontSize:13,padding:"11px 12px"}}>{done?"Review classification":"Classify now"}</button>}
+                  {!transfer&&<div style={{display:"grid",gridTemplateColumns:done&&!isUnclassified(selected)?(mob?"1fr":"1fr auto"):"1fr",gap:8}}>
+                    <button className="bp" onClick={()=>setClassifyOpen(true)} style={{width:"100%",fontSize:13,padding:"11px 12px"}}>{done?"Review classification":"Classify now"}</button>
+                    {done&&!isUnclassified(selected)&&<button onClick={unclassifySelected} style={{border:`1.5px solid ${C.border}`,background:C.surface,color:C.inkMid,borderRadius:8,padding:"11px 14px",fontSize:13,fontWeight:850,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Unclassify</button>}
+                  </div>}
                 </div>
                 <div style={{height:1,background:C.border,margin:"4px 0"}}/>
                 <button onClick={()=>deleteTxn(selected.id)} style={{justifySelf:"start",background:"transparent",border:"none",color:C.red,cursor:"pointer",fontSize:12,fontWeight:900,padding:"4px 0"}}>Delete transaction</button>
@@ -4754,6 +4860,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             accounts={accounts}
             vendors={vendors}
             purchases={purchases}
+            ledgerTxns={txns}
             invoices={invoices}
             buyers={buyers}
             rates={rates}
@@ -10597,12 +10704,13 @@ function InvoicesApp({onHome,startDraft}){
     await saveK(INV_KEYS.buyers,list);
     return{draft:{...draftWithDischarge,buyerId:buyer.id,consigneeSameAsBuyer:true},buyers:list};
   };
-  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadK(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock((s||[]).map(normalizeStockRecord));setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");if(prepared.draft.autoAttach&&prepared.draft.sourceSbId)setAutoAttachId(prepared.draft.id);}});},[company]);
+  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadKFresh(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock((s||[]).map(normalizeStockRecord));setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");if(prepared.draft.autoAttach&&prepared.draft.sourceSbId)setAutoAttachId(prepared.draft.id);}});},[company]);
   // Keep stock/acct stock live: realtime invalidations land here (items added in
   // the Stock module, stock journal, or another device while Invoicing is open).
   useEffect(()=>onCacheRefresh(keys=>{
     if(KEYS.stock&&keys.includes(KEYS.stock))loadK(KEYS.stock).then(s=>setStock((s||[]).map(normalizeStockRecord))).catch(()=>{});
     if(keys.includes(KEYS.accStock))loadK(KEYS.accStock).then(a=>setAccStock(a||[])).catch(()=>{});
+    if(keys.includes(vk.transactions))loadKFresh(vk.transactions).then(ft=>Array.isArray(ft)&&setFinTxns(ft)).catch(()=>{});
   }),[company]);
   // Belt-and-braces: pickers re-fetch on open so they never show a stale list.
   const refreshStock=useCallback(async()=>{
@@ -10763,6 +10871,31 @@ function InvoicesApp({onHome,startDraft}){
     await saveK(CAL_KEY,calList);
     logActivity({user:"Admin",action:"created",module:"invoices",label:`Invoice ${inv.invNo||inv.id.slice(0,6)} · ${inv.buyer||"buyer"}`,targetId:inv.id,targetMod:"invoices"});
     showToast(inv.sourceSbId?(packetAttachOk?"Invoice saved and attached to SB packet":`Invoice saved, but packet attach failed: ${packetAttachErr}`):"Invoice saved");if(navigateAway){setView("list");setDraft(null);}
+  };
+  const cancelInvoicePaymentSource=async(inv,row)=>{
+    if(!inv?.id||!row)return;
+    if(!window.confirm(`Cancel this invoice payment source for ${row.currency||inv.currency||"INR"} ${(+row.amount||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}?`))return;
+    const freshInvs=await loadKFresh(INV_KEYS.invoices).catch(()=>invoices);
+    const baseInvs=Array.isArray(freshInvs)?freshInvs:invoices;
+    const target=baseInvs.find(x=>x.id===inv.id)||inv;
+    const paidAmount=Math.max(0,(+target.paidAmount||0)-(+row.amount||0));
+    const manualPaid=(target.payments||[]).reduce((s,p)=>s+(+p.amount||0),0);
+    const total=+target.totalAmt||0;
+    const paidTotal=manualPaid+paidAmount;
+    const status=paidTotal>=total*0.99&&total>0?"paid":paidTotal>0?"partial":target.goodsShipped?"shipped":"sent";
+    const patchedInv={...target,paidAmount:+paidAmount.toFixed(2),status,paidDate:paidTotal>0?target.paidDate:undefined,updatedAt:new Date().toISOString()};
+    const nextInvs=baseInvs.map(x=>x.id===patchedInv.id?patchedInv:x);
+    setInvoices(nextInvs);
+    setDraft(d=>d?.id===patchedInv.id?patchedInv:d);
+    await saveK(INV_KEYS.invoices,nextInvs);
+    if(row.txnId){
+      const freshTxns=await loadKFresh(vk.transactions).catch(()=>finTxns);
+      const baseTxns=Array.isArray(freshTxns)?freshTxns:finTxns;
+      const nextTxns=baseTxns.map(t=>t.id===row.txnId?{...t,category:"",classifiedAs:null,classifiedRef:null,classifiedAt:null,classifiedBy:null,classifiedSnapshot:null,updatedAt:new Date().toISOString()}:t);
+      setFinTxns(nextTxns);
+      await saveK(vk.transactions,nextTxns);
+    }
+    showToast("Payment source cancelled");
   };
   const delInvoice=async id=>{
     const inv=invoices.find(i=>i.id===id);
@@ -11127,7 +11260,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
-	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast} onRefreshStock={refreshStock}/>}
+	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
 	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")}/>}
 	      {loaded&&view==="bulk-inv"&&<InvBulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} buyers={buyers} company={company} extractInvoice={extractInvoice} onSave={async inv=>{await saveInvoice(inv,{navigateAway:false});if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);}else{showToast(`${bulkQueue.length} invoice${bulkQueue.length>1?"s":""} processed`);setView("list");setDraft(null);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
     </Shell>
@@ -11343,7 +11476,7 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
   );
 }
 
-function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],onSave,onDelete,onPreview,showToast,onRefreshStock}) {
+function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],onSave,onDelete,onPreview,showToast,onRefreshStock,onCancelPaymentSource}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
 	  const co=companyProfileFromKey(company);
   const gstBuyer=buyers.find(b=>b.id===draft.buyerId);
@@ -11490,8 +11623,55 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   };
   const consignee=draft.consigneeSameAsBuyer?buyer:{name:draft.consigneeName,address:draft.consigneeAddress,country:draft.consigneeCountry};
   const CI={...FI,padding:"6px 9px",fontSize:12};
-  const totalPaid=(draft.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+draft.paidAmount||0);
+  const rawTotalPaid=(draft.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+draft.paidAmount||0);
+  const invNoOf=inv=>inv?.invNo||inv?.invNumber||inv?.number||"";
+  const invoiceMoney=(amount,currency=draft.currency)=>`${currency||"INR"} ${(+amount||0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const normText=v=>String(v||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+  const buyerName=buyer?.name||draft.buyerName||draft.customerName||"";
+  const linkedReceiptTxns=(finTxns||[]).filter(t=>{
+    if(!t||t.classifiedAs!=="customer_receipt"||t.category!=="customer_receipt")return false;
+    const ref=t.classifiedRef||{};
+    const ids=ref.invoiceIds||(ref.invoiceId?[ref.invoiceId]:[]);
+    const nums=ref.invNumbers||(ref.invNumber?[ref.invNumber]:[]);
+    const invNo=invNoOf(draft);
+    return ids.includes(draft.id)||(invNo&&nums.includes(invNo));
+  });
+  const paymentRowsTotal=(draft.payments||[]).reduce((s,p)=>s+(+p.amount||0),0);
+  const linkedReceiptTotal=linkedReceiptTxns.reduce((s,t)=>s+(+t.amount||0),0);
+  const directPaid=Math.max(0,(+draft.paidAmount||0)-linkedReceiptTotal-paymentRowsTotal);
+  const likelyUnlinkedReceipt=directPaid>0.5?(finTxns||[]).find(t=>{
+    if(!t)return false;
+    if(t.classifiedAs&&t.category===t.classifiedAs)return false;
+    if((t.type||"").toLowerCase()!=="credit")return false;
+    const amountMatches=Math.abs((+t.amount||0)-directPaid)<=1;
+    const partyMatches=!buyerName||normText(t.payee||t.party||t.source).includes(normText(buyerName))||normText(buyerName).includes(normText(t.payee||t.party||t.source));
+    return amountMatches&&partyMatches;
+  }):null;
+  const staleUnlinkedPaid=!!likelyUnlinkedReceipt&&linkedReceiptTxns.length===0&&paymentRowsTotal===0&&directPaid>0.5;
+  const totalPaid=Math.max(0,rawTotalPaid-(staleUnlinkedPaid?directPaid:0));
   const balance=(+draft.totalAmt||0)-totalPaid;
+  const paymentSourceRows=[
+    ...linkedReceiptTxns.map(t=>({
+      id:`ledger-${t.id}`,
+      txnId:t.id,
+      kind:"ledger",
+      label:`Linked ledger receipt${t.date?` · ${fmtDate(t.date)}`:""}${t.payee?` · ${t.payee}`:""}`,
+      amount:+t.amount||0,
+      currency:t.currency||draft.currency,
+      color:C.green
+    })),
+    ...(directPaid>0.5?[{
+      id:"direct-paid",
+      txnId:likelyUnlinkedReceipt?.id||"",
+      kind:likelyUnlinkedReceipt?"matched":"direct",
+      label:likelyUnlinkedReceipt
+        ?`Unlinked receipt match · ${fmtDate(likelyUnlinkedReceipt.date)}${likelyUnlinkedReceipt.payee?` · ${likelyUnlinkedReceipt.payee}`:""}`
+        :"Marked paid directly on invoice",
+      amount:directPaid,
+      currency:draft.currency,
+      color:likelyUnlinkedReceipt?C.amber:C.inkMid
+    }]:[])
+  ];
 
   const computeStatus=(payments,shipped)=>{
     const tot=(+draft.totalAmt||0);
@@ -11777,6 +11957,19 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                 <span style={{fontWeight:600,color:C.green}}>{draft.currency} {(+p.amount).toFixed(2)}</span>
               </div>
             ))}
+            {paymentSourceRows.length>0&&(
+              <div style={{display:"grid",gap:5,marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+                {paymentSourceRows.map(r=>(
+                  <div key={r.id} style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",fontSize:12,background:r.id==="direct-paid"&&likelyUnlinkedReceipt?C.amberBg:C.card,border:`1px solid ${r.id==="direct-paid"&&likelyUnlinkedReceipt?C.gold:C.border}`,borderRadius:6,padding:"7px 9px"}}>
+                    <span style={{color:C.inkMid,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.label}</span>
+                    <span style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                      <span style={{fontWeight:700,color:r.color,whiteSpace:"nowrap"}}>{invoiceMoney(r.amount,r.currency)}</span>
+                      {onCancelPaymentSource&&<button onClick={()=>onCancelPaymentSource(draft,r)} style={{border:`1px solid ${C.red}55`,background:C.redBg,color:C.red,borderRadius:5,padding:"2px 8px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginTop:7,paddingTop:7,borderTop:`1px solid ${C.border}`}}>
               <span style={{fontWeight:700}}>Balance due</span>
               <span style={{fontWeight:700,color:balance<=0?C.green:C.red}}>{draft.currency} {balance.toFixed(2)}</span>
@@ -17175,6 +17368,7 @@ const ALL_STAFF_MODS=[
   {id:"recon",label:"Export Recon"},
   {id:"jobwork",label:"Job Work"},
   {id:"etsy",label:"Listing Manager"},
+  {id:"orders",label:"Orders"},
   {id:"ai",label:"Ask AI"},
   {id:"images",label:"Image Library"},
   {id:"bgremove",label:"Background Remover"},
@@ -17608,7 +17802,7 @@ export default function Root({onSignOut}){
   const isAdmin=userProfile===false||userProfile===undefined;
   const todoKey=isAdmin?"ng-todos-v1":TODO_KEY_FOR(currentEmail);
   const currentUser=isAdmin?{name:"Admin",email:currentEmail,role:"admin"}:userProfile||null;
-  const allowedMods=isAdmin?[...MODS,{id:"users",icon:"👥",title:"Users",desc:"Manage staff and permissions",ready:true},{id:"datasets",icon:"🗂️",title:"Datasets",desc:"Manage shapes, categories, markets and more",ready:true}]:MODS.filter(m=>(userProfile?.allowedModules||[]).includes(m.id));
+  const allowedMods=isAdmin?[...MODS,{id:"users",icon:"👥",title:"Users",desc:"Manage staff and permissions",ready:true},{id:"datasets",icon:"🗂️",title:"Datasets",desc:"Manage shapes, categories, markets and more",ready:true}]:MODS.filter(m=>(userProfile?.allowedModules||[]).includes(m.id)||(m.id==="orders"&&(userProfile?.allowedModules||[]).includes("etsy")));
 
   // Handle Shopify OAuth redirect — token arrives in URL hash
   useEffect(()=>{
@@ -17672,6 +17866,7 @@ export default function Root({onSignOut}){
     else if(mod==="finance"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><FinanceApp onHome={goHome}/></React.Suspense>;
     else if(mod==="jobwork")content=<JobWorkApp onHome={goHome}/>;
     else if(mod==="etsy")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp onHome={goHome}/></React.Suspense>;
+    else if(mod==="orders")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp onHome={goHome} startTab="orders"/></React.Suspense>;
     else if(mod==="ai")content=<AIAssistantApp onHome={goHome}/>;
     else if(mod==="users"&&isAdmin)content=<UsersApp onHome={goHome}/>;
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;

@@ -776,7 +776,7 @@ function PayeePicker({ value, onChange, type, vendors = [], purchases = [], invo
 }
 
 // ─── Add Transaction Form ─────────────────────────────────────────────────────
-function AddTxnForm({ accounts, invoices, purchases, vendors = [], buyers = [], rates, expenseCats = [], onSave, onSaveClassified, onCancel }) {
+function AddTxnForm({ accounts, invoices, purchases, ledgerTxns = [], vendors = [], buyers = [], rates, expenseCats = [], onSave, onSaveClassified, onCancel }) {
   const [type, setType] = useState("credit");
   const [date, setDate] = useState(today());
   const [accountFrom, setAccountFrom] = useState("");
@@ -970,9 +970,10 @@ function AddTxnForm({ accounts, invoices, purchases, vendors = [], buyers = [], 
               ref={classifyRef}
               txn={draftTxn}
               accounts={accounts}
-              vendors={vendors}
-              purchases={purchases}
-              invoices={invoices}
+	              vendors={vendors}
+	              purchases={purchases}
+	              ledgerTxns={ledgerTxns}
+	              invoices={invoices}
               buyers={buyers}
               rates={rates}
               expenseCats={expenseCats}
@@ -1142,9 +1143,9 @@ function EditTxnModal({ txn, accounts, onSave, onClose }) {
       // side and reset any now-wrong classification.
       if (type !== txn.type) {
         const acct = txn.type === "credit" ? txn.accountTo : txn.accountFrom;
-        if (type === "credit") { patch.type = "credit"; patch.accountTo = acct || ""; patch.accountFrom = undefined; }
-        else { patch.type = "debit"; patch.accountFrom = acct || ""; patch.accountTo = undefined; }
-        if (txn.classifiedAs) { patch.classifiedAs = undefined; patch.classifiedRef = undefined; patch.classifiedAt = undefined; }
+        if (type === "credit") { patch.type = "credit"; patch.accountTo = acct || ""; patch.accountFrom = ""; }
+        else { patch.type = "debit"; patch.accountFrom = acct || ""; patch.accountTo = ""; }
+        if (txn.classifiedAs) { patch.classifiedAs = null; patch.classifiedRef = null; patch.classifiedAt = null; }
       }
     }
     onSave(txn.id, patch);
@@ -1305,9 +1306,10 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
 	        <ClassifyTransactionModal
           txn={classifyTxn}
           accounts={accounts}
-          vendors={vendors}
-          purchases={purchases}
-          invoices={invoices}
+	          vendors={vendors}
+	          purchases={purchases}
+	          ledgerTxns={transactions}
+	          invoices={invoices}
           buyers={buyers}
           rates={rates}
           expenseCats={EXP_CATS}
@@ -2839,6 +2841,30 @@ export default function FinanceApp({ onHome }) {
       const newIds = new Set((sideEffects.newBills || []).map(b => b.id));
       const basePurchases = [...(sideEffects.newBills || []), ...purchases.filter(p => !newIds.has(p.id))];
       nextPurch = basePurchases.map(p => updateMap[p.id] ? { ...p, ...updateMap[p.id] } : p);
+      const affectedIds = new Set((sideEffects.billUpdates || []).map(u => u.id));
+      const ledgerPaidForBill = bid => newTxns.reduce((sum, t) => {
+        if (t.classifiedAs !== "vendor_bill" || t.classifiedRef?.interCo) return sum;
+        if (t.classifiedRef?.billPayments && typeof t.classifiedRef.billPayments === "object") return sum + (+t.classifiedRef.billPayments[bid] || 0);
+        const ids = t.classifiedRef?.billIds || (t.classifiedRef?.billId ? [t.classifiedRef.billId] : []);
+        if (!ids.includes(bid)) return sum;
+        let rem = +t.amount || 0;
+        const legacy = {};
+        for (const id of ids) {
+          if (rem <= 0.005) break;
+          const bill = nextPurch.find(p => p.id === id);
+          const cap = Math.max(0, +bill?.totalAmount || rem);
+          const applied = Math.min(cap || rem, rem);
+          if (applied > 0) legacy[id] = applied;
+          rem -= applied;
+        }
+        return sum + (+legacy[bid] || 0);
+      }, 0);
+      nextPurch = nextPurch.map(p => {
+        if (!affectedIds.has(p.id) || p.source !== "misc-bill-maker" || p.paymentNote) return p;
+        const paid = +ledgerPaidForBill(p.id).toFixed(2);
+        const total = +p.totalAmount || 0;
+        return { ...p, paidAmount: paid, status: paid >= total && total > 0 ? "paid" : paid > 0 ? "partial" : "pending", paymentDate: paid > 0 ? (p.paymentDate || newTxns.find(t => t.id === txnId)?.date) : undefined };
+      });
       purchDirty = true;
     }
     // Advance/credit applied against the bill: draw it from the vendor's credit balance first,
@@ -2922,7 +2948,7 @@ export default function FinanceApp({ onHome }) {
           {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} />}
           {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
-          {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
+          {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onAdjustBalance={adjustBalance} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
           {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} onUpdate={updateTxn} />}
           {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [] }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank"); }} />}
@@ -2933,9 +2959,10 @@ export default function FinanceApp({ onHome }) {
         <ClassifyTransactionModal
           txn={pendingClassify}
           accounts={accounts}
-          vendors={vendors}
-          purchases={purchases}
-          invoices={invoices}
+	          vendors={vendors}
+	          purchases={purchases}
+	          ledgerTxns={txns}
+	          invoices={invoices}
           buyers={buyers}
           rates={rates}
           expenseCats={EXP_CATS}

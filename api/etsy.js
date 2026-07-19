@@ -200,7 +200,20 @@ export default async function handler(req, res) {
       if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
       const ids = String(req.query.receipt_ids || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 40);
       if (!ids.length) return res.status(400).json({ error: "receipt_ids required" });
-      const money = m => (m?.amount || 0) / (m?.divisor || 100);
+      const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : null;
+      const paymentAmounts = payment => {
+        const read = prefix => ["gross", "fees", "net"].map(key => money(payment[`${prefix}_${key}`]));
+        const amount = read("amount");
+        const posted = read("posted");
+        const adjusted = read("adjusted");
+        // Etsy presents settled earnings from its posted fields. Adjusted fields take
+        // precedence when an order has a later refund or payment adjustment.
+        const hasValues = values => values.some(value => value != null);
+        const hasAdjustment = adjusted.some(value => Math.abs(value || 0) > 0);
+        if (hasAdjustment) return { values: adjusted, source: "adjusted" };
+        if (hasValues(posted)) return { values: posted, source: "posted" };
+        return { values: amount.map(value => value || 0), source: "amount" };
+      };
       const payments = {};
       const fetchOne = async rid => {
         try {
@@ -210,11 +223,20 @@ export default async function handler(req, res) {
           const list = d.results || [];
           if (!list.length) return;
           // A receipt can (rarely) have multiple payment records — sum them.
+          const totals = list.reduce((sum, payment) => {
+            const { values, source } = paymentAmounts(payment);
+            sum.gross += values[0] || 0;
+            sum.fees += values[1] || 0;
+            sum.net += values[2] || 0;
+            if (source === "adjusted" || (source === "posted" && sum.source === "amount")) sum.source = source;
+            return sum;
+          }, { gross: 0, fees: 0, net: 0, source: "amount" });
           payments[String(rid)] = {
-            gross: Number(list.reduce((s, p) => s + money(p.amount_gross), 0).toFixed(2)),
-            fees:  Number(list.reduce((s, p) => s + money(p.amount_fees), 0).toFixed(2)),
-            net:   Number(list.reduce((s, p) => s + money(p.amount_net), 0).toFixed(2)),
-            currency: list[0]?.currency || list[0]?.shop_currency || "",
+            gross: Number(totals.gross.toFixed(2)),
+            fees: Number(totals.fees.toFixed(2)),
+            net: Number(totals.net.toFixed(2)),
+            source: totals.source,
+            currency: list[0]?.shop_currency || list[0]?.currency || "",
           };
         } catch {}
       };

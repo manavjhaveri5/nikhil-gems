@@ -247,8 +247,9 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
    (deduct NG stock, append a line to a rolling draft invoice for that buyer).
    Line rate defaults to the stock item's cost price; currency is INR (domestic
    NG → Atyahara transfer). Idempotent per order via the caller's _ngInvoiceNo flag. */
-async function addOrderToNikhilGemsInvoice({ order, stockItem, qty }) {
+async function addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2 }) {
   const q = Math.max(1, +qty || 1);
+  const q2 = Math.max(0, +qty2 || 0);
   if (!stockItem?.id) throw new Error("Link a physical stock item first");
 
   // 1. Deduct physical stock — fresh read so quantities stay accurate under concurrent edits.
@@ -256,7 +257,14 @@ async function addOrderToNikhilGemsInvoice({ order, stockItem, qty }) {
   const target = stock.find(s => s.id === stockItem.id);
   if (!target) throw new Error("Linked stock item no longer exists");
   const remaining = +parseFloat(Math.max(0, (+target.qty || 0) - q).toFixed(4));
-  const nextStock = stock.map(s => s.id === target.id ? { ...s, qty: String(remaining), updatedAt: new Date().toISOString() } : s);
+  const hasQty2 = String(target.qty2 || "").trim() !== "";
+  const remaining2 = hasQty2 ? +parseFloat(Math.max(0, (+target.qty2 || 0) - q2).toFixed(4)) : null;
+  const nextStock = stock.map(s => s.id === target.id ? {
+    ...s,
+    qty: String(remaining),
+    ...(hasQty2 ? { qty2: String(remaining2) } : {}),
+    updatedAt: new Date().toISOString(),
+  } : s);
   await saveK(STK_KEY, nextStock);
 
   // 2. Ensure the fixed "Atyahara" buyer exists in NG books.
@@ -318,7 +326,7 @@ async function addOrderToNikhilGemsInvoice({ order, stockItem, qty }) {
     };
   }
   await upsertItemK(NG_INVOICES_KEY, invoice, { prepend: isNew });
-  return { invNo: invoice.invNo, deductedQty: q, remaining, rate };
+  return { invNo: invoice.invNo, deductedQty: q, deductedQty2: q2, remaining, remaining2, rate };
 }
 
 async function mediaUrlToFile(url, fallbackName) {
@@ -2004,6 +2012,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const [etsyTracking, setEtsyTracking] = useState({});
   const [invoiceState, setInvoiceState] = useState({});
   const [ngState, setNgState] = useState({}); // per-order: {qty, loading, error, success}
+  const [stockSearch, setStockSearch] = useState({});
+  const [trackingModalOrder, setTrackingModalOrder] = useState(null);
+  const [detailsOpen, setDetailsOpen] = useState({});
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   // Customs shape list (Datasets tab) — drives the editable Shape field per order and
@@ -2024,7 +2035,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     return updated;
   };
   const setOrderShape = (order, shape) => patchOrder(order, { listing_shape: shape });
-  const ngDraft = o => ngState[o.id] || { qty: String(o._ngDeductedQty || 1), loading: false, error: "", success: "" };
+  const ngDraft = o => ngState[o.id] || { qty: String(o._ngDeductedQty || 1), qty2: String(o._ngDeductedQty2 || ""), loading: false, error: "", success: "" };
   const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...ngDraft(o), ...patch } }));
   const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
   const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
@@ -2034,12 +2045,15 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     const stockItem = stock.find(s => s.id === order.linked_stock_id);
     if (!stockItem) { updNg(order, { error: "Link a physical stock item first." }); return; }
     const qty = Math.max(1, +draft.qty || 1);
+    const qty2 = Math.max(0, +draft.qty2 || 0);
     if (qty > (+stockItem.qty || 0)) { updNg(order, { error: `Only ${stockItem.qty || 0} ${stockItem.unit || "pcs"} in stock.` }); return; }
+    if (String(stockItem.qty2 || "").trim() !== "" && qty2 > (+stockItem.qty2 || 0)) { updNg(order, { error: `Only ${stockItem.qty2 || 0} ${stockItem.unit2 || "secondary units"} available.` }); return; }
     updNg(order, { loading: true, error: "", success: "" });
     try {
-      const { invNo, deductedQty, remaining } = await addOrderToNikhilGemsInvoice({ order, stockItem, qty });
-      await patchOrder(order, { _ngInvoiceNo: invNo, _ngDeductedQty: deductedQty, _ngStockId: stockItem.id, _ngInvoicedAt: now() });
-      updNg(order, { loading: false, success: `Added to ${invNo} · −${deductedQty} ${stockItem.unit || "pcs"} (${remaining} left)` });
+      const { invNo, deductedQty, deductedQty2, remaining, remaining2 } = await addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2 });
+      await patchOrder(order, { _ngInvoiceNo: invNo, _ngDeductedQty: deductedQty, _ngDeductedQty2: deductedQty2 || "", _ngStockId: stockItem.id, _ngInvoicedAt: now() });
+      const secondaryNote = remaining2 == null ? "" : ` · −${deductedQty2} ${stockItem.unit2 || "secondary units"} (${remaining2} left)`;
+      updNg(order, { loading: false, success: `Added to ${invNo} · −${deductedQty} ${stockItem.unit || "pcs"} (${remaining} left)${secondaryNote}` });
       showToast?.(`✓ ${invNo} updated · stock deducted`);
     } catch (e) {
       updNg(order, { loading: false, error: e.message || "Could not add to NG invoice" });
@@ -2075,6 +2089,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const trackingDraft = o => etsyTracking[o.id] || {
     tracking_code: o.tracking_code || o.tracking_number || "",
     carrier_name: o.carrier_name || o.shipping_carrier || "other",
+    note_to_buyer: "",
+    send_bcc: false,
     loading: false,
     error: "",
     success: "",
@@ -2101,7 +2117,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       let r = await fetch("/api/etsy?action=add_tracking", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...(tok ? { "X-Etsy-Token": tok } : {}) },
-        body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName }),
+        body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName, note_to_buyer: draft.note_to_buyer || undefined, send_bcc: !!draft.send_bcc }),
       });
       let d = await r.json().catch(() => ({}));
       if (!r.ok && tok && needsEtsyReconnect(d.fix || d.error)) {
@@ -2109,7 +2125,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         r = await fetch("/api/etsy?action=add_tracking", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName }),
+          body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName, note_to_buyer: draft.note_to_buyer || undefined, send_bcc: !!draft.send_bcc }),
         });
         d = await r.json().catch(() => ({}));
       }
@@ -2130,8 +2146,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       for (const order of changedOrders) await upsertItemK(ORDERS_KEY, order, { prepend: false });
       window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
       updateTrackingDraft(o, { loading: false, error: "", success: "Completed on Etsy", tracking_code: trackingCode, carrier_name: carrierName });
+      return true;
     } catch (e) {
       updateTrackingDraft(o, { loading: false, error: e.message || "Could not complete Etsy order", success: "" });
+      return false;
     }
   };
   const createAtyaharaInvoiceForOrder = async order => {
@@ -2187,6 +2205,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         notes: `Created from Listing Manager Etsy receipt #${receiptId}`,
         shippingCost: order.order_shipping != null ? +order.order_shipping : null,
       });
+      await patchOrder(order, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now() });
       // Persist AI-inferred shapes back onto the order rows so the Shape field fills in
       // and the next invoice refresh reuses them without another AI call.
       try {
@@ -2405,7 +2424,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     try {
       const current = await loadK(ORDERS_KEY) || [];
       const feesKnown = new Set(current
-        .filter(o => o.platform === "etsy" && o.etsy_fees != null)
+        .filter(o => o.platform === "etsy" && o.etsy_fee_version === 3)
         .map(o => String(o.etsy_receipt_id || o.platform_order_id)));
       const ids = [...new Set((receipts || []).map(r => String(r.receipt_id || "")).filter(id => id && !feesKnown.has(id)))].slice(0, 40);
       if (!ids.length) return;
@@ -2433,6 +2452,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           fees_currency: p.currency || o.currency,
           etsy_fees: Number((p.fees * share).toFixed(2)),
           etsy_net: Number((p.net * share).toFixed(2)),
+          etsy_fee_source: p.source || "amount",
+          etsy_processing_fee: null,
+          etsy_transaction_fee: null,
+          etsy_fee_version: 3,
         };
         if (JSON.stringify(merged) !== JSON.stringify(o)) changedRows.push(merged);
         return merged;
@@ -2512,6 +2535,33 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
 
   return (
     <div>
+      {trackingModalOrder && (() => {
+        const order = trackingModalOrder;
+        const draft = trackingDraft(order);
+        return (
+          <div onMouseDown={() => setTrackingModalOrder(null)} style={{ position: "fixed", inset: 0, zIndex: 900, display: "grid", placeItems: "center", padding: 18, background: "rgba(24,19,12,.46)" }}>
+            <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(100%, 520px)", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 24px 70px rgba(0,0,0,.24)", padding: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start", marginBottom: 18 }}>
+                <div><div style={{ fontSize: 18, fontWeight: 850, color: C.ink }}>Ship on Etsy</div><div style={{ marginTop: 4, fontSize: 12, color: C.inkMid }}>Etsy will mark this receipt shipped and email the buyer.</div></div>
+                <button onClick={() => setTrackingModalOrder(null)} aria-label="Close" style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+              </div>
+              <div style={{ display: "grid", gap: 11 }}>
+                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking number<input autoFocus value={draft.tracking_code} onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })} placeholder="e.g. 1234 5678 90" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
+                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Carrier<select value={draft.carrier_name} onChange={e => updateTrackingDraft(order, { carrier_name: e.target.value })} style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px", cursor: "pointer" }}><option value="other">Other</option><option value="dhl">DHL</option><option value="fedex">FedEx</option><option value="ups">UPS</option><option value="usps">USPS</option><option value="india-post">India Post</option><option value="bluedart">Blue Dart</option></select></label>
+                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking link <span style={{ fontWeight: 500 }}>(optional, internal reference)</span><input value={order.tracking_url || ""} onChange={e => setOrderTrackingUrl(order, e.target.value)} placeholder="https://…" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
+                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Note to buyer <span style={{ fontWeight: 500 }}>(optional)</span><input value={draft.note_to_buyer || ""} onChange={e => updateTrackingDraft(order, { note_to_buyer: e.target.value })} placeholder="A short shipping note" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}><input type="checkbox" checked={!!draft.send_bcc} onChange={e => updateTrackingDraft(order, { send_bcc: e.target.checked })} /> Send me Etsy's shipping email too</label>
+              </div>
+              <div style={{ marginTop: 12, padding: "8px 10px", borderRadius: 7, background: C.card, color: C.inkMid, fontSize: 11, lineHeight: 1.45 }}>This does not buy a label or confirm a carrier scan. The tracking link above stays in this app; Etsy receives the carrier and tracking number.</div>
+              {draft.error && <div style={{ marginTop: 12, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{draft.error}</div>}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 18 }}>
+                <button onClick={() => setTrackingModalOrder(null)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7, padding: "9px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Cancel</button>
+                <button onClick={async () => { if (await completeEtsyOrder(order)) setTrackingModalOrder(null); }} disabled={!!draft.loading} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 12, fontWeight: 850, cursor: draft.loading ? "wait" : "pointer", opacity: draft.loading ? .7 : 1 }}>{draft.loading ? "Sending…" : "Send to Etsy & complete"}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {/* stats */}
       <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
         {[
@@ -2624,7 +2674,43 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                 {/* expanded detail */}
                 {isExp && (
                   <div style={{ borderTop: `1px solid ${C.border}`, padding: "13px 14px", background: C.bg }}>
-                    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                    {isEtsyOrder(order) && (
+                      (() => {
+                        const ETSY = "#F56400";
+                        const stages = [
+                          ["Ship on Etsy", "Send carrier + tracking", shipped],
+                          ["Allocate stock", "Choose item & quantity", !!order.linked_stock_id],
+                          ["Sales invoice", "Invoice the Etsy buyer", !!order._atInvoiceNo],
+                          ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
+                        ];
+                        const activeIndex = stages.findIndex(stage => !stage[2]);
+                        const doneCount = stages.filter(stage => stage[2]).length;
+                        const allDone = doneCount === stages.length;
+                        return <div style={{ marginBottom: 14 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 9 }}>
+                            <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: C.inkFaint }}>Fulfilment</span>
+                            <span style={{ fontSize: 11, fontWeight: 850, color: allDone ? C.green : C.inkMid }}>{allDone ? "✓ Complete" : `Step ${activeIndex + 1} of ${stages.length}`}</span>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+                            {stages.map(([label, note, complete], index) => {
+                              const active = index === activeIndex;
+                              const accent = complete ? C.green : active ? ETSY : C.border;
+                              return <div key={label} style={{ minWidth: 0, padding: "11px 12px", borderRadius: 10, background: complete ? C.greenBg : active ? C.surface : C.bg, border: `1.5px solid ${accent}`, boxShadow: active ? `0 2px 10px ${ETSY}22` : "none", opacity: complete || active ? 1 : .58 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                                  <span style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: complete ? C.green : active ? ETSY : C.card, color: complete || active ? "#fff" : C.inkFaint, fontSize: 11, fontWeight: 900 }}>{complete ? "✓" : index + 1}</span>
+                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 850, color: C.ink }}>{label}</span>
+                                </div>
+                                <div style={{ marginTop: 6, fontSize: 10.5, color: C.inkMid, lineHeight: 1.3 }}>{note}</div>
+                              </div>;
+                            })}
+                          </div>
+                        </div>;
+                      })()
+                    )}
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+                      <button onClick={() => setDetailsOpen(s => ({ ...s, [order.id]: !s[order.id] }))} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 0 }}>{detailsOpen[order.id] ? "Hide order details" : "Order details"}</button>
+                    </div>
+                    {detailsOpen[order.id] && <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 10 }}>
                       <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
                           <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint }}>Ship To</div>
@@ -2654,87 +2740,29 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                           {order.ship_phone && <div>{order.ship_phone}</div>}
                         </div>
                       </div>
-                    </div>
-                    {isEtsyOrder(order) && (
-                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: shipped ? 0 : 10 }}>
-                          <div>
-                            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: "#F56400", marginBottom: 3 }}>Etsy Fulfillment</div>
-                            <div style={{ fontSize: 12, color: C.inkMid }}>
-                              {shipped
-                                ? `Completed${order.tracking_code || order.tracking_number ? ` · ${order.tracking_code || order.tracking_number}` : ""}`
-                                : "Add tracking here and mark the Etsy order complete."}
-                            </div>
+                    </div>}
+                    {isEtsyOrder(order) && !shipped && (
+                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Ship this order on Etsy</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>Add a carrier &amp; tracking number — Etsy marks it shipped and emails the buyer.</div>
                           </div>
-                          <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700 }}>Receipt #{etsyReceiptId(order)}</div>
+                          <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>Receipt #{etsyReceiptId(order)}</div>
                         </div>
-                        {!shipped && (
-                          <>
-                            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(220px,1fr) 160px auto", gap: 8, alignItems: "center" }}>
-                              <input
-                                value={trackingDraft(order).tracking_code}
-                                onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })}
-                                placeholder="Tracking number"
-                                style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8 }}
-                              />
-                              <input
-                                value={trackingDraft(order).carrier_name}
-                                onChange={e => updateTrackingDraft(order, { carrier_name: e.target.value })}
-                                placeholder="Carrier, e.g. DHL"
-                                style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8 }}
-                              />
-                              <button
-                                onClick={() => completeEtsyOrder(order)}
-                                disabled={!!trackingDraft(order).loading}
-                                style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: trackingDraft(order).loading ? "wait" : "pointer", opacity: trackingDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
-                                {trackingDraft(order).loading ? "Completing..." : "Add Tracking + Complete"}
-                              </button>
-                            </div>
-                            {trackingDraft(order).error && (
-                              <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                                <span style={{ flex: 1, minWidth: 180 }}>{trackingDraft(order).error}</span>
-                                {needsEtsyReconnect(trackingDraft(order).error) && (
-                                  <button onClick={reconnectEtsy}
-                                    style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 850, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
-                                    🔑 Reconnect Etsy
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                            {trackingDraft(order).success && (
-                              <div style={{ marginTop: 8, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 8, padding: "7px 9px" }}>
-                                {trackingDraft(order).success}
-                              </div>
-                            )}
-                          </>
-                        )}
-                        {/* Tracking link — paste any carrier URL; shown as a clickable link. */}
-                        <div style={{ marginTop: 10, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
-                          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.inkFaint, marginBottom: 5 }}>Tracking Link</div>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                            <input
-                              value={order.tracking_url || ""}
-                              onChange={e => setOrderTrackingUrl(order, e.target.value)}
-                              placeholder="Paste tracking URL (https://…)"
-                              style={{ ...FI(), flex: 1, minWidth: 220, fontSize: 12, padding: "8px 10px", borderRadius: 8 }}
-                            />
-                            {/^https?:\/\//i.test(order.tracking_url || "") && (
-                              <a href={order.tracking_url} target="_blank" rel="noopener noreferrer"
-                                style={{ background: C.blue, color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, textDecoration: "none", whiteSpace: "nowrap" }}>
-                                🔗 Track
-                              </a>
-                            )}
-                          </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+                          <button onClick={() => setTrackingModalOrder(order)} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking &amp; ship</button>
+                          {trackingDraft(order).error && needsEtsyReconnect(trackingDraft(order).error) && <button onClick={reconnectEtsy} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Reconnect Etsy</button>}
                         </div>
                       </div>
                     )}
-                    {/* Nikhil Gems inter-company: link physical stock, deduct it, and add to Atyahara's NG invoice. */}
-                    {isEtsyOrder(order) && (
-                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-                          <div>
-                            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.purple, marginBottom: 3 }}>Nikhil Gems Stock &amp; Invoice</div>
-                            <div style={{ fontSize: 12, color: C.inkMid }}>Link physical stock — it&apos;s deducted and added to Atyahara&apos;s NG invoice at cost.</div>
+                    {/* Step 2 stays lightweight: allocation only. The invoice commits the stock movement later. */}
+                    {isEtsyOrder(order) && shipped && !order.linked_stock_id && (
+                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Allocate physical stock</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>Search your stock and set the quantity that filled this order.</div>
                           </div>
                           {order._ngInvoiceNo && (
                             <span style={{ fontSize: 11, fontWeight: 800, color: C.green, background: C.greenBg, border: `1px solid ${C.green}40`, borderRadius: 20, padding: "3px 10px", whiteSpace: "nowrap" }}>
@@ -2747,38 +2775,29 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                           const done = !!order._ngInvoiceNo;
                           return (
                             <>
-                              <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(220px,1fr) 90px auto", gap: 8, alignItems: "center" }}>
-                                <select
-                                  value={order.linked_stock_id || ""}
-                                  onChange={e => linkOrderStock(order, e.target.value)}
-                                  disabled={done}
-                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, cursor: done ? "default" : "pointer", opacity: done ? .7 : 1 }}>
-                                  <option value="">— Link physical stock item —</option>
-                                  {order.linked_stock_id && !linked && <option value={order.linked_stock_id}>(linked item not found)</option>}
-                                  {stock.map(s => (
-                                    <option key={s.id} value={s.id}>
-                                      {(s.material || s.desc || "Item")}{s.shape ? ` · ${s.shape}` : ""} — {s.qty} {s.unit || "pcs"}{s.location ? ` · 📦 ${s.location}` : ""}{s.sku ? ` (${s.sku})` : ""}
-                                    </option>
-                                  ))}
-                                </select>
+                              <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(250px,1fr) 90px 90px", gap: 8, alignItems: "start" }}>
+                                <div style={{ position: "relative" }}>
+                                  <input value={stockSearch[order.id] || ""} onChange={e => setStockSearch(s => ({ ...s, [order.id]: e.target.value }))} disabled={done || !shipped} placeholder={!shipped ? "Complete tracking in step 1 first" : linked ? `${linked.material || linked.desc || "Item"}${linked.shape ? ` · ${linked.shape}` : ""}` : "Search stock by stone, shape, SKU or location"} style={{ ...FI(), width: "100%", fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done || !shipped ? .7 : 1 }} />
+                                  {!done && shipped && (stockSearch[order.id] || "").trim() && (
+                                    <div style={{ position: "absolute", zIndex: 20, left: 0, right: 0, top: "calc(100% + 4px)", maxHeight: 216, overflowY: "auto", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 12px 24px rgba(0,0,0,.12)" }}>
+                                      {stock.filter(s => `${s.material} ${s.desc} ${s.shape} ${s.sku} ${s.location}`.toLowerCase().includes((stockSearch[order.id] || "").toLowerCase())).slice(0, 8).map(s => <button key={s.id} onClick={() => { linkOrderStock(order, s.id); setStockSearch(q => ({ ...q, [order.id]: "" })); }} style={{ width: "100%", textAlign: "left", padding: "8px 10px", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", color: C.ink, fontSize: 12 }}><b>{s.material || s.desc || "Item"}{s.shape ? ` · ${s.shape}` : ""}</b><span style={{ color: C.inkMid }}> · {s.qty} {s.unit || "pcs"}{s.qty2 ? ` · ${s.qty2} ${s.unit2 || ""}` : ""}{s.sku ? ` · ${s.sku}` : ""}</span></button>)}
+                                    </div>
+                                  )}
+                                </div>
                                 <input
                                   type="number" min={1}
                                   value={ngDraft(order).qty}
                                   onChange={e => updNg(order, { qty: e.target.value })}
-                                  disabled={done}
-                                  placeholder="Qty"
-                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }}
+                                  disabled={done || !shipped}
+                                  placeholder={linked?.unit || "Qty"}
+                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done || !shipped ? .7 : 1 }}
                                 />
-                                <button
-                                  onClick={() => addOrderToNg(order)}
-                                  disabled={done || !!ngDraft(order).loading || !order.linked_stock_id}
-                                  style={{ background: done ? C.inkFaint : C.purple, color: "#fff", border: "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: done || ngDraft(order).loading || !order.linked_stock_id ? "default" : "pointer", opacity: done || ngDraft(order).loading || !order.linked_stock_id ? .55 : 1, whiteSpace: "nowrap" }}>
-                                  {done ? "Added" : ngDraft(order).loading ? "Adding…" : "Add to NG + deduct"}
-                                </button>
+                                {linked && String(linked.qty2 || "").trim() !== "" ? <input type="number" min={0} value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} disabled={done || !shipped} placeholder={linked.unit2 || "Secondary"} style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done || !shipped ? .7 : 1 }} /> : <div />}
                               </div>
                               {linked && !done && (
                                 <div style={{ marginTop: 6, fontSize: 11, color: C.inkMid, display: "flex", gap: 14, flexWrap: "wrap" }}>
                                   <span>📦 <b>{linked.qty} {linked.unit || "pcs"}</b> available</span>
+                                  {String(linked.qty2 || "").trim() !== "" && <span>↕ <b>{linked.qty2} {linked.unit2 || "secondary units"}</b> available</span>}
                                   <span>💰 cost rate: <b>{linked.costPrice ? money(linked.costPrice, "INR") : "not set (0)"}</b></span>
                                 </div>
                               )}
@@ -2793,12 +2812,17 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         })()}
                       </div>
                     )}
-                    {isEtsyOrder(order) && (
-                      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                          <div>
-                            <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .6, color: C.green, marginBottom: 3 }}>Atyahara Invoice</div>
-                            <div style={{ fontSize: 12, color: C.inkMid }}>Create or refresh a draft invoice in Finance from this Etsy receipt.</div>
+                    {isEtsyOrder(order) && shipped && !!order.linked_stock_id && !order._atInvoiceNo && (
+                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Create sales invoice</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>Bill the Etsy buyer from Atyahara. Pick the customs shape if auto-detect is off.</div>
+                            <select value={order.listing_shape || ""} onChange={e => setOrderShape(order, e.target.value)} style={{ ...FI(), marginTop: 8, minWidth: 220, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>
+                              <option value="">Auto-detect customs shape</option>
+                              {order.listing_shape && !customsShapes.includes(order.listing_shape) && <option value={order.listing_shape}>{order.listing_shape}</option>}
+                              {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
                           </div>
                           <button
                             onClick={() => createAtyaharaInvoiceForOrder(order)}
@@ -2819,7 +2843,20 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         )}
                       </div>
                     )}
-                    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
+                    {isEtsyOrder(order) && shipped && !!order._atInvoiceNo && !order._ngInvoiceNo && (
+                      <div style={{ background: C.surface, border: `1.5px solid #F56400`, borderLeft: "4px solid #F56400", borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>Create NG purchase invoice</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>Records the allocated stock into Nikhil Gems at cost — the last step.</div>
+                          </div>
+                          <button onClick={() => addOrderToNg(order)} disabled={!!order._ngInvoiceNo || !!ngDraft(order).loading || !order.linked_stock_id} style={{ background: order._ngInvoiceNo ? C.green : C.purple, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? "default" : "pointer", opacity: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? .6 : 1, whiteSpace: "nowrap" }}>{order._ngInvoiceNo ? "Added" : ngDraft(order).loading ? "Creating…" : "Create invoice"}</button>
+                        </div>
+                        {!order.linked_stock_id && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Choose a physical stock item in step 2 first.</div>}
+                      </div>
+                    )}
+                    {isEtsyOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · Etsy shipped · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
+                    {detailsOpen[order.id] && <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
                       {[
                         ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
                         ["Transaction",   order.etsy_transaction_id || "—"],
@@ -2836,7 +2873,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         ...(order.order_shipping != null ? [["Shipping", money(order.order_shipping, order.currency)]] : []),
                         ...(order.order_tax > 0 ? [["Tax (Etsy)", money(order.order_tax, order.currency)]] : []),
                         ...(order.order_total != null ? [["Buyer Paid", money(order.order_total, order.currency)]] : []),
-                        ...(order.etsy_fees != null ? [["Etsy Fees", `-${money(order.etsy_fees, order.fees_currency || order.currency)}`]] : []),
+                        ...(order.etsy_fees != null ? [["Etsy fees", `-${money(order.etsy_fees, order.fees_currency || order.currency)}`]] : []),
                         ...(order.etsy_net != null ? [["Earned", money(order.etsy_net, order.fees_currency || order.currency)]] : []),
                         ["SKU",           order.listing_sku || "—"],
                         ["Status",        shipped ? "Shipped" : "Unshipped"],
@@ -2865,8 +2902,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                           )}
                         </div>
                       ))}
-                    </div>
-                    {order.notes && (
+                    </div>}
+                    {detailsOpen[order.id] && order.notes && (
                       <div style={{ marginTop: 10, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 11px" }}>
                         <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>Notes</div>
                         <div style={{ fontSize: 12, color: C.inkMid, lineHeight: 1.45 }}>{order.notes}</div>
@@ -5348,13 +5385,13 @@ function ShopifyEarthView({ listings, onEditLocal }) {
 /* ══════════════════════════════════════════════════════════════════════════
    MAIN
 ══════════════════════════════════════════════════════════════════════════ */
-export default function ListingManagerApp({ onHome }) {
+export default function ListingManagerApp({ onHome, startTab = "listings" }) {
   const [listings,   setListings]   = useState([]);
   const [orders,     setOrders]     = useState([]);
   const [stock,      setStock]      = useState([]);
   const [loaded,     setLoaded]     = useState(false);
 
-  const [tab,        setTab]        = useState("listings");
+  const [tab,        setTab]        = useState(startTab);
   const [showForm,   setShowForm]   = useState(false);
   const [editing,    setEditing]    = useState(null);
   const [soldModal,  setSoldModal]  = useState(null);
@@ -5362,6 +5399,8 @@ export default function ListingManagerApp({ onHome }) {
 
   const [search,     setSearch]     = useState("");
   const [filter,     setFilter]     = useState("all");
+
+  useEffect(() => { setTab(startTab); }, [startTab]);
 
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
 

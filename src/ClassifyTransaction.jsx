@@ -31,12 +31,12 @@ const purchaseSignature = p => {
   ].join("||").toLowerCase();
 };
 
-const dedupePurchasesForPicker = list => {
+const dedupePurchasesForPicker = (list, keepIds = new Set()) => {
   const seen = new Set();
   const out = [];
   (list || []).forEach(p => {
     const sig = purchaseSignature(p);
-    if (sig && seen.has(sig)) return;
+    if (sig && seen.has(sig) && !keepIds.has(p.id)) return;
     if (sig) seen.add(sig);
     out.push(p);
   });
@@ -45,6 +45,7 @@ const dedupePurchasesForPicker = list => {
 
 const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   txn, accounts = [], vendors = [], purchases = [], invoices = [], buyers = [],
+  ledgerTxns = [],
   rates, categoryGroups, expenseCats = [], customCats = [], onAddCustomCat, normalizeCat, suggestedType,
   learned = null, learnMemory = [], embMap = {}, company = "ng", enableLearner = false, interCo = null, reclassifyDirty = false, onSave, onClose,
   inline = false, onValidityChange,
@@ -132,7 +133,8 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const [interCoInvId, setInterCoInvId] = useState(txn.classifiedRef?.interCoInvoiceId || guessedInterId);
   const [selectedInvIds, setSelectedInvIds] = useState(() => new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : [])));
   const [linkedInvId, setLinkedInvId] = useState(txn.classifiedRef?.linkedInvoiceId || "");
-  const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "bank_charges");
+  const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "advance");
+  const [recvDiffTouched, setRecvDiffTouched] = useState(!!txn.classifiedRef?.differenceMode);
   const [convOtherAcct, setConvOtherAcct] = useState(txn.classifiedRef?.convOtherAccountId || "");
   const [convRateInput, setConvRateInput] = useState(txn.classifiedRef?.rate ? String(txn.classifiedRef.rate) : "");
   const rawCat = txn.classifiedRef?.cat || txn.category || "";
@@ -165,6 +167,9 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   // out of the main picker; remembered for next time.
   const [otherCat, setOtherCat] = useState(guessedCat.specify);
   const [catOpen, setCatOpen] = useState(false);
+  const [vendorOpen, setVendorOpen] = useState(false);
+  const [vendorQuery, setVendorQuery] = useState("");
+  const [vendorActiveIndex, setVendorActiveIndex] = useState(0);
   // Prefill the party from the (cleaned, editable) payee shown in the ledger. A stale
   // classifiedRef.party often holds the raw bank narration from an earlier classify, so
   // only fall back to it when there's no payee.
@@ -179,6 +184,16 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   };
   const [ccAccountId, setCcAccountId] = useState(txn.classifiedRef?.cardAccountId || (L?.classifiedAs === "cc_payment" ? L.cardAccountId : "") || guessCard());
   const vendor = vendors.find(v => v.id === vendorId);
+  const buyerNameOfInv = inv => buyers.find(b => b.id === inv.buyerId)?.name || inv.buyerName || inv.customerName || inv.buyer || "";
+  const guessBuyer = () => {
+    const p = (txn.payee || "").toLowerCase();
+    return buyers.find(b => {
+      const n = (b.name || b.contactName || "").toLowerCase();
+      return n && p && (n.includes(p) || p.includes(n) || p.split(/\s+/).some(w => w.length > 3 && n.includes(w)));
+    }) || null;
+  };
+  const guessedBuyer = guessBuyer();
+  const [receiptPartyQuery, setReceiptPartyQuery] = useState(txn.classifiedRef?.buyer || guessedBuyer?.name || txn.payee || "");
 
   // ── Learner: pre-fill from local history (L, done above) or, for unseen txns, ask AI ──
   const applySuggestion = s => {
@@ -190,6 +205,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
       else { setExpCat(expenseCats.includes("Other") ? "Other" : (expenseCats[0] || "")); setOtherCat(s.cat); }
     }
     if (s.party || s.payee) setExpParty(s.party || s.payee);
+    if (s.classifiedAs === "customer_receipt" && (s.party || s.payee)) setReceiptPartyQuery(s.party || s.payee);
     if (s.notes) setExpNotes(s.notes);
     if (s.vendorId) setVendorId(s.vendorId);
     if (s.cardAccountId) setCcAccountId(s.cardAccountId);
@@ -231,29 +247,107 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
     const s = vendorNameOf(p).toLowerCase(), v = (vendor?.name || "").toLowerCase();
     return s && v && (s.includes(v) || v.includes(s) || v.split(/\s+/).filter(w => w.length > 2).some(w => s.includes(w)));
   };
-  const purchaseList = dedupePurchasesForPicker([...quickBills, ...purchases]);
-  const allBills = purchaseList.filter(p => p.type === "bill");
   // Bills already linked to THIS payment stay visible even after they're marked paid.
   const linkedBillIds = new Set(txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : []));
+  const purchaseList = dedupePurchasesForPicker([...quickBills, ...purchases], linkedBillIds);
+  const allBills = purchaseList.filter(p => p.type === "bill");
   const allOpenBills = allBills.filter(p => p.status !== "paid" || linkedBillIds.has(p.id));
   // When a vendor is chosen, also surface that vendor's PAID bills so a bank payment
   // (e.g. one already settled in the Finance module) can still be linked to the bill
   // and its document attached. Selecting a fully-paid bill adds ₹0 (paying is capped at
   // the amount due), so it never double-pays.
-  const vendorBills = vendorId ? allBills.filter(matchesVendor) : allOpenBills.filter(matchesVendor);
+  const linkedOrMatchesVendor = p => linkedBillIds.has(p.id) || matchesVendor(p);
+  const vendorBills = vendorId ? allBills.filter(linkedOrMatchesVendor) : allOpenBills.filter(linkedOrMatchesVendor);
   const vendorPOs = purchaseList.filter(p => p.type === "po" && !["paid", "closed", "cancelled"].includes(p.status || "open")).filter(matchesVendor);
   // Invoices already linked to THIS receipt (so a reviewed receipt still shows its
   // invoice even though classifying it flipped the invoice's status to "paid").
   const linkedInvIds = new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : []));
-  const openInvoices = (invoices || []).filter(inv => !["paid", "cancelled", "draft"].includes(inv.status || "draft") || linkedInvIds.has(inv.id)).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  const selectedBills = vendorBills.filter(b => selectedBillIds.has(b.id));
+  const invoiceHasDue = inv => {
+    const total = +inv.totalAmt || (inv.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
+    const paid = (+inv.paidAmount || 0) + (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0);
+    return Math.max(0, total - paid) > 0.5;
+  };
+  const invoiceIsOpen = inv => {
+    const status = String(inv.status || "").toLowerCase();
+    if (linkedInvIds.has(inv.id)) return true;
+    if (status === "cancelled" || status === "paid") return false;
+    if (status === "draft" && !invoiceHasDue(inv)) return false;
+    return invoiceHasDue(inv) || !status;
+  };
+  const receiptPartyNeedle = String(receiptPartyQuery || "").trim().toLowerCase();
+  const receiptPartyMatches = inv => {
+    if (!receiptPartyNeedle) return true;
+    const hay = `${buyerNameOfInv(inv)} ${inv.buyerName || ""} ${inv.customerName || ""} ${inv.invNo || ""} ${inv.invNumber || ""}`.toLowerCase();
+    return hay.includes(receiptPartyNeedle) || receiptPartyNeedle.split(/\s+/).filter(w => w.length > 2).some(w => hay.includes(w));
+  };
+  const openInvoices = (invoices || [])
+    .filter(invoiceIsOpen)
+    .filter(inv => linkedInvIds.has(inv.id) || receiptPartyMatches(inv))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const selectedBills = allBills.filter(b => selectedBillIds.has(b.id));
   const selectedInvs = openInvoices.filter(i => selectedInvIds.has(i.id));
-  const billDue = b => Math.max(0, (+b.totalAmount || 0) - (+b.paidAmount || 0));
+  const ledgerPaidForBill = bid => (ledgerTxns || []).reduce((sum, t) => {
+    if (!t || t.id === txn.id || t.classifiedAs !== "vendor_bill" || t.classifiedRef?.interCo) return sum;
+    if (t.classifiedRef?.billPayments && typeof t.classifiedRef.billPayments === "object") return sum + (+t.classifiedRef.billPayments[bid] || 0);
+    const ids = t.classifiedRef?.billIds || (t.classifiedRef?.billId ? [t.classifiedRef.billId] : []);
+    if (!ids.includes(bid)) return sum;
+    let remaining = +t.amount || 0;
+    const legacy = {};
+    for (const id of ids) {
+      if (remaining <= 0.005) break;
+      const bill = allBills.find(b => b.id === id);
+      const cap = Math.max(0, +bill?.totalAmount || remaining);
+      const applied = Math.min(cap || remaining, remaining);
+      if (applied > 0) legacy[id] = applied;
+      remaining -= applied;
+    }
+    return sum + (+legacy[bid] || 0);
+  }, 0);
+  const billPaid = b => b?.source === "misc-bill-maker" && !b.paymentNote ? ledgerPaidForBill(b.id) + (+priorBillPayments[b.id] || 0) : (+b?.paidAmount || 0);
+  const billDue = b => Math.max(0, (+b.totalAmount || 0) - billPaid(b));
+  const priorBillPayments = (() => {
+    if (txn.classifiedAs !== "vendor_bill" || txn.classifiedRef?.interCo) return {};
+    if (txn.classifiedRef?.billPayments && typeof txn.classifiedRef.billPayments === "object") return txn.classifiedRef.billPayments;
+    const ids = txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : []);
+    let remaining = txnAmt;
+    const out = {};
+    for (const id of ids) {
+      if (remaining <= 0.005) break;
+      const bill = allBills.find(b => b.id === id);
+      const cap = Math.max(0, +bill?.totalAmount || remaining);
+      const applied = Math.min(cap || remaining, remaining);
+      if (applied > 0) out[id] = applied;
+      remaining -= applied;
+    }
+    return out;
+  })();
   const poTotal = po => +po.totalAmount || (po.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
   const poDue = po => Math.max(0, poTotal(po) - (+po.paidAmount || 0));
   const invTotal = inv => +inv.totalAmt || (inv.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
   const invPaid = inv => (+inv.paidAmount || 0) + (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0);
   const invDue = inv => Math.max(0, invTotal(inv) - invPaid(inv));
+  const invNoOf = inv => inv.invNo || inv.invNumber || inv.number || "";
+  const invoicePaidSourceLines = inv => {
+    const invNo = invNoOf(inv);
+    const linked = (ledgerTxns || []).filter(t => {
+      if (!t || t.id === txn.id || t.classifiedAs !== "customer_receipt") return false;
+      const ref = t.classifiedRef || {};
+      const ids = ref.invoiceIds || (ref.invoiceId ? [ref.invoiceId] : []);
+      const nums = ref.invNumbers || (ref.invNumber ? [ref.invNumber] : []);
+      return ids.includes(inv.id) || (invNo && nums.includes(invNo));
+    });
+    const lines = [];
+    linked.slice(0, 2).forEach(t => lines.push(`Paid from ${fmtDate(t.date)} receipt: ${moneyText(+t.amount || 0, t.currency || cur)}${t.payee ? ` · ${t.payee}` : ""}`));
+    (inv.payments || []).slice(0, Math.max(0, 2 - lines.length)).forEach(p => lines.push(`Recorded on invoice: ${moneyText(+p.amount || 0, p.currency || inv.currency || cur)}${p.date ? ` · ${fmtDate(p.date)}` : ""}`));
+    const directlyPaid = +inv.paidAmount || 0;
+    const linkedAmt = linked.reduce((s, t) => s + convertMoney(+t.amount || 0, t.currency || cur, inv.currency || cur), 0);
+    const paymentRowsAmt = (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0);
+    const unexplained = Math.max(0, directlyPaid - linkedAmt - paymentRowsAmt);
+    if (unexplained > 0.5 && lines.length < 2) lines.push(`Marked paid on invoice: ${moneyText(unexplained, inv.currency || cur)}`);
+    const selectedMatches = !txn.classifiedAs && Math.abs(convertMoney(txnAmt, cur, inv.currency || cur) - invPaid(inv)) <= 1;
+    if (selectedMatches) lines.unshift(`This selected payment matches the paid amount, but is not linked yet.`);
+    return lines.slice(0, 2);
+  };
   const totalBillsDue = selectedBills.reduce((s, b) => s + billDue(b), 0);
   // Advance/credit pooled for this vendor: money already advanced on their open POs plus any
   // running credit balance. Applying it against a bill lets you clear what's left after cash
@@ -267,6 +361,11 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const advanceToApply = Math.min(Math.max(0, +applyAdvance || 0), maxAdvanceApply);
   const selectedInvDueByCurrency = selectedInvs.reduce((acc, inv) => { const invCur = inv.currency || "USD"; acc[invCur] = (acc[invCur] || 0) + invDue(inv); return acc; }, {});
   const totalInvDueInTxnCurrency = selectedInvs.reduce((s, inv) => s + convertMoney(invDue(inv), inv.currency || "USD", cur), 0);
+  const selectedDiffInr = Math.round((selectedInvs.reduce((s, inv) => s + toInr(invDue(inv), inv.currency || "USD"), 0) - toInr(txnAmt, cur)) * 100) / 100;
+  useEffect(() => {
+    if (recvDiffTouched || selectedInvIds.size === 0) return;
+    setRecvDiffMode(Math.abs(selectedDiffInr) <= 5 ? "bank_charges" : "advance");
+  }, [recvDiffTouched, selectedInvIds.size, selectedDiffInr]);
   const toggleBill = id => setSelectedBillIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleInv = id => setSelectedInvIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const openQuickBill = () => {
@@ -353,11 +452,26 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
     } else if (classType === "vendor_bill") {
       let remaining = txnAmt;
       const billUpdates = [];
+      const billPayments = {};
       for (const bill of selectedBills) {
-        const due = billDue(bill), paying = Math.min(due, remaining), newPaid = (+bill.paidAmount || 0) + paying, total = +bill.totalAmount || 0;
+        const alreadyFromThisTxn = +priorBillPayments[bill.id] || 0;
+        const paidExcludingThisTxn = Math.max(0, billPaid(bill) - alreadyFromThisTxn);
+        const total = +bill.totalAmount || 0;
+        const due = Math.max(0, total - paidExcludingThisTxn);
+        const paying = Math.min(due, remaining);
+        const newPaid = paidExcludingThisTxn + paying;
+        if (paying > 0) billPayments[bill.id] = +paying.toFixed(2);
         billUpdates.push({ id: bill.id, paidAmount: newPaid, paymentDate: txn.date, status: newPaid >= total && total > 0 ? "paid" : "partial" });
         remaining -= paying;
       }
+      Object.entries(priorBillPayments).forEach(([id, amount]) => {
+        if (selectedBillIds.has(id) || billUpdates.some(u => u.id === id)) return;
+        const bill = allBills.find(b => b.id === id);
+        if (!bill) return;
+        const total = +bill.totalAmount || 0;
+        const paid = Math.max(0, (+bill.paidAmount || 0) - (+amount || 0));
+        billUpdates.push({ id, paidAmount: paid, paymentDate: paid > 0 ? bill.paymentDate : undefined, status: paid >= total && total > 0 ? "paid" : paid > 0 ? "partial" : "pending" });
+      });
       const credit = Math.max(0, remaining);
       // Apply the vendor's advance/credit on top of the cash, against whatever is still due on
       // each bill. Consumed amount is reported so the parent can draw it down from the vendor's
@@ -378,7 +492,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
         }
       }
       const advanceUsed = +(advanceToApply - advRemaining).toFixed(2);
-      classifiedRef = { vendorId, vendorName: vendor?.name || txn.payee || "", billIds: [...selectedBillIds], billNumbers: selectedBills.map(b => b.billNumber).filter(Boolean), ...(selectedBillIds.size === 0 && { paymentOnAccount: true }), ...(credit > 0 && { creditApplied: credit }), ...(advanceUsed > 0 && { advanceApplied: advanceUsed }), ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
+      classifiedRef = { vendorId, vendorName: vendor?.name || txn.payee || "", billIds: [...selectedBillIds], billNumbers: selectedBills.map(b => b.billNumber).filter(Boolean), billPayments, ...(selectedBillIds.size === 0 && { paymentOnAccount: true }), ...(credit > 0 && { creditApplied: credit }), ...(advanceUsed > 0 && { advanceApplied: advanceUsed }), ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
       if (quickBills.length) sideEffects.newBills = quickBills;
       sideEffects.billUpdates = billUpdates;
       if (advanceUsed > 0 && vendorId) sideEffects.advanceApplied = { vendorId, amount: advanceUsed };
@@ -561,7 +675,40 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
               </div>
             </div>
           )}
-          <Field label="Filter by Vendor (optional)"><select value={vendorId} onChange={e => { setVendorId(e.target.value); setSelectedBillIds(new Set()); setSelectedPoId(""); }} style={SI}><option value="">All vendors</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></Field>
+          <Field label="Filter by Vendor (optional)">{(() => {
+            const sorted = [...vendors].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
+            const q = vendorQuery.trim().toLowerCase();
+            const filtered = q ? sorted.filter(v => (v.name || "").toLowerCase().includes(q)) : sorted;
+            const selName = vendors.find(v => v.id === vendorId)?.name || "";
+            const choices = [{ id: "", name: "All vendors" }, ...filtered];
+            const pick = id => { setVendorId(id); setSelectedBillIds(new Set()); setSelectedPoId(""); setVendorQuery(""); setVendorActiveIndex(0); setVendorOpen(false); };
+            const rowSt = { display: "block", width: "100%", textAlign: "left", border: "none", background: "transparent", padding: "8px 10px", fontSize: 13, color: C.ink, cursor: "pointer", borderRadius: 6, fontFamily: "inherit" };
+            return (
+              <div style={{ position: "relative" }}>
+                <input
+                  value={vendorOpen ? vendorQuery : (selName || "All vendors")}
+                  placeholder="All vendors — type to search"
+                  onFocus={() => { setVendorQuery(""); setVendorActiveIndex(0); setVendorOpen(true); }}
+                  onChange={e => { setVendorQuery(e.target.value); setVendorActiveIndex(0); setVendorOpen(true); }}
+                  onKeyDown={e => {
+                    if (e.key === "Escape") { e.preventDefault(); setVendorQuery(""); setVendorActiveIndex(0); setVendorOpen(false); }
+                    if (e.key === "ArrowDown") { e.preventDefault(); setVendorOpen(true); setVendorActiveIndex(i => Math.min(i + 1, choices.length - 1)); }
+                    if (e.key === "ArrowUp") { e.preventDefault(); setVendorOpen(true); setVendorActiveIndex(i => Math.max(i - 1, 0)); }
+                    if (e.key === "Enter") { e.preventDefault(); pick(choices[vendorActiveIndex]?.id || ""); }
+                  }}
+                  onBlur={() => setTimeout(() => { setVendorQuery(""); setVendorActiveIndex(0); setVendorOpen(false); }, 150)}
+                  style={{ ...SI, cursor: "text" }} />
+                {vendorOpen && (
+                  <div style={{ position: "absolute", left: 0, right: 0, top: "calc(100% + 6px)", zIndex: 6, background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, boxShadow: "0 18px 44px rgba(26,19,8,.18)", padding: 6, maxHeight: 260, overflowY: "auto" }}>
+                    {choices.map((v, idx) => (
+                      <button key={v.id || "__all"} type="button" onMouseDown={e => e.preventDefault()} onMouseEnter={() => setVendorActiveIndex(idx)} onClick={() => pick(v.id)} style={{ ...rowSt, fontWeight: v.id === vendorId ? 900 : 600, background: idx === vendorActiveIndex ? C.card : (v.id === vendorId ? C.goldLight : "transparent") }}>{v.name}</button>
+                    ))}
+                    {filtered.length === 0 && <div style={{ padding: "8px 10px", fontSize: 12, color: C.inkFaint }}>No vendors match “{vendorQuery}”</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })()}</Field>
           {classType === "vendor_bill" && <div><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65 }}>Select bills to pay {vendorId ? `- ${vendor?.name}` : "(all vendors)"} <span style={{ fontWeight: 500 }}>(tap to select multiple)</span></div><div style={{ display: "flex", gap: 6, flexShrink: 0 }}>{onUploadBill && <button type="button" onClick={onUploadBill} title="Upload a bill document — opens the Purchases bill scanner, then returns here with it selected" style={{ border: `1px solid ${C.blue}55`, background: C.blue, color: "#fff", borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>⬆ Upload Bill</button>}<button type="button" onClick={openQuickBill} style={{ border: `1px solid ${C.blue}55`, background: C.blueBg, color: C.blue, borderRadius: 6, padding: "5px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>+ Add bill</button></div></div>
             {quickBillOpen && <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1.2fr 1fr 1fr .8fr", gap: 8, marginBottom: 8 }}>
               <input value={quickBill.billNumber} onChange={e => setQuickBill(q => ({ ...q, billNumber: e.target.value }))} placeholder="Bill no." style={SI} />
@@ -584,14 +731,14 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
             {selectedBillIds.size > 0 && <div style={{ marginTop: 10, padding: "10px 13px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}><span style={{ color: C.inkFaint }}>Selected due</span><b>₹{totalBillsDue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b></div>
               <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: C.inkFaint }}>Payment amount</span><b>₹{txnAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b></div>
-              {availableAdvance > 0.005 && <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
+              {availableAdvance > 0.005 && <div style={{ marginTop: 8, padding: "9px 10px", borderTop: `1px dashed ${C.border}`, background: C.surface, borderRadius: 7 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                  <span style={{ color: C.green, fontWeight: 800 }}>Advance / credit available: ₹{availableAdvance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
-                  <button type="button" onClick={() => setApplyAdvance(String(maxAdvanceApply))} disabled={maxAdvanceApply <= 0} style={{ border: `1px solid ${C.green}55`, background: C.greenBg, color: C.green, borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: maxAdvanceApply > 0 ? "pointer" : "default", opacity: maxAdvanceApply > 0 ? 1 : .5, flexShrink: 0 }}>Apply max</button>
+                  <span style={{ color: C.green, fontWeight: 900 }}>Vendor advance available: ₹{availableAdvance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+                  <button type="button" onClick={() => setApplyAdvance(String(maxAdvanceApply))} disabled={maxAdvanceApply <= 0} style={{ border: `1px solid ${C.green}55`, background: C.greenBg, color: C.green, borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: maxAdvanceApply > 0 ? "pointer" : "default", opacity: maxAdvanceApply > 0 ? 1 : .5, flexShrink: 0 }}>Use max</button>
                 </div>
-                <div style={{ fontSize: 10, color: C.inkFaint, marginBottom: 6 }}>{poAdvanceAvailable > 0 && `₹${poAdvanceAvailable.toLocaleString("en-IN")} from open POs`}{poAdvanceAvailable > 0 && vendorCreditAvailable > 0 && " · "}{vendorCreditAvailable > 0 && `₹${vendorCreditAvailable.toLocaleString("en-IN")} credit balance`}</div>
+                <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 8 }}>Money already paid to this vendor. Enter an amount only if you want to use it to reduce this bill.</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ color: C.inkMid, whiteSpace: "nowrap" }}>Apply advance ₹</span>
+                  <span style={{ color: C.inkMid, whiteSpace: "nowrap" }}>Use advance ₹</span>
                   <input type="number" min="0" step="0.01" value={applyAdvance} onChange={e => setApplyAdvance(e.target.value)} placeholder="0.00" style={{ ...SI, padding: "6px 8px" }} />
                   {applyAdvance !== "" && <button type="button" onClick={() => setApplyAdvance("")} style={{ border: "none", background: "transparent", color: C.inkFaint, cursor: "pointer", fontSize: 11, flexShrink: 0 }}>clear</button>}
                 </div>
@@ -608,8 +755,15 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
             {!selectedPoId && <div style={{ marginTop: 10, padding: "10px 13px", background: vendorId ? C.blueBg : C.surface, border: `1px solid ${vendorId ? C.blue + "55" : C.border}`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>{vendorId ? <>No PO selected — this records <b>₹{txnAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b> as an advance to <strong>{vendor?.name}</strong>, added to their credit and usable against any future bill.</> : <>Pick a vendor above to record this as an advance to them (usable against future bills), or select a PO.</>}</div>}
           </div>}
         </div>}
-        {classType === "customer_receipt" && <div><div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, marginBottom: 6 }}>Apply against invoice(s)</div>
-          {openInvoices.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>No open invoices found — save anyway to record this as a sales receipt.</div> : openInvoices.map(inv => { const checked = selectedInvIds.has(inv.id), due = invDue(inv), buyerName = buyers.find(b => b.id === inv.buyerId)?.name || inv.buyerName || "Buyer"; return <button key={inv.id} onClick={() => toggleInv(inv.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", marginBottom: 6, background: checked ? C.card : C.surface, border: `1.5px solid ${checked ? C.green : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}><div style={{ width: 16, height: 16, borderRadius: 4, border: `2px solid ${checked ? C.green : C.border}`, background: checked ? C.green : "transparent", color: "#fff", fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{checked ? "✓" : ""}</div><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{inv.invNo || inv.invNumber || inv.number || "(no number)"}</div><div style={{ fontSize: 11, color: C.inkFaint }}>{buyerName} · {fmtDate(inv.date)} · {inv.status || "-"}</div></div><div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.red }}>{inv.currency || "USD"} {due.toLocaleString(undefined, { minimumFractionDigits: 2 })} due</div><div style={{ fontSize: 10, color: C.inkFaint }}>of {inv.currency || "USD"} {invTotal(inv).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div></div></button>; })}
+        {classType === "customer_receipt" && <div>
+          <Field label="Filter by buyer / vendor (optional)">
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input list="acct-class-buyers" value={receiptPartyQuery} onChange={e => setReceiptPartyQuery(e.target.value)} placeholder="Type buyer/vendor name..." style={{ ...SI, flex: 1 }} />
+              {receiptPartyQuery && <button type="button" onClick={() => setReceiptPartyQuery("")} style={{ border: `1px solid ${C.border}`, background: C.surface, color: C.inkMid, borderRadius: 7, padding: "8px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", flexShrink: 0 }}>Clear</button>}
+            </div>
+          </Field>
+          <div style={{ fontSize: 10, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65, margin: "10px 0 6px" }}>Apply against invoice(s){receiptPartyQuery ? ` - ${receiptPartyQuery}` : ""}</div>
+          {openInvoices.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>No open invoices found — save anyway to record this as a sales receipt.</div> : openInvoices.map(inv => { const checked = selectedInvIds.has(inv.id), due = invDue(inv), paidLines = invoicePaidSourceLines(inv), buyerName = buyers.find(b => b.id === inv.buyerId)?.name || inv.buyerName || "Buyer"; return <button key={inv.id} onClick={() => toggleInv(inv.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", marginBottom: 6, background: checked ? C.card : C.surface, border: `1.5px solid ${checked ? C.green : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}><div style={{ width: 16, height: 16, borderRadius: 4, border: `2px solid ${checked ? C.green : C.border}`, background: checked ? C.green : "transparent", color: "#fff", fontSize: 10, fontWeight: 900, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{checked ? "✓" : ""}</div><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{invNoOf(inv) || "(no number)"}</div><div style={{ fontSize: 11, color: C.inkFaint }}>{buyerName} · {fmtDate(inv.date)} · {inv.status || "-"}</div>{paidLines.map((line, i) => <div key={i} style={{ fontSize: 10, color: line.startsWith("This selected") ? C.amber : C.green, marginTop: 2, fontWeight: line.startsWith("This selected") ? 850 : 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{line}</div>)}</div><div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.red }}>{inv.currency || "USD"} {due.toLocaleString(undefined, { minimumFractionDigits: 2 })} due</div><div style={{ fontSize: 10, color: C.inkFaint }}>of {inv.currency || "USD"} {invTotal(inv).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div></div></button>; })}
           {selectedInvIds.size > 0 && <div style={{ marginTop: 10, padding: "10px 13px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, gap: 10 }}><span style={{ color: C.inkFaint }}>Payment received</span><b>{moneyText(txnAmt, cur)}</b></div>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, gap: 10 }}><span style={{ color: C.inkFaint }}>Selected invoice due</span><b style={{ color: C.red }}>{Object.entries(selectedInvDueByCurrency).map(([c, a]) => moneyText(a, c)).join(" + ")}</b></div>
@@ -623,7 +777,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 7, gap: 10 }}><span style={{ color: C.inkFaint }}>Difference vs. invoice{selectedInvIds.size > 1 ? "s" : ""}</span><b style={{ color: diffInr > 0 ? C.amber : C.green }}>{diffInr > 0 ? "−" : "+"}{moneyText(Math.abs(diffInr), "INR")} {diffInr > 0 ? "short" : "over"}</b></div>
                 <div style={{ display: "flex", gap: 6 }}>
                   {[["bank_charges", diffInr > 0 ? "Bank charges" : "Round-off", "Close invoice"], ["advance", "Advance", diffInr > 0 ? "Leave outstanding" : "Keep as credit"]].map(([id, label, desc]) => (
-                    <button key={id} onClick={() => setRecvDiffMode(id)} style={{ flex: 1, padding: "7px 8px", borderRadius: 7, cursor: "pointer", textAlign: "left", background: recvDiffMode === id ? C.surface : "transparent", border: `1.5px solid ${recvDiffMode === id ? C.gold : C.border}` }}>
+                    <button key={id} onClick={() => { setRecvDiffTouched(true); setRecvDiffMode(id); }} style={{ flex: 1, padding: "7px 8px", borderRadius: 7, cursor: "pointer", textAlign: "left", background: recvDiffMode === id ? C.surface : "transparent", border: `1.5px solid ${recvDiffMode === id ? C.gold : C.border}` }}>
                       <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>{label}</div><div style={{ fontSize: 10, color: C.inkFaint }}>{desc}</div>
                     </button>
                   ))}
@@ -651,6 +805,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
         </div>}
         {(classType === "expense" || classType === "vendor_bill") && invoices.length > 0 && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}><Field label="Link to Invoice (optional)"><select value={linkedInvId} onChange={e => setLinkedInvId(e.target.value)} style={SI}><option value="">- Not linked to an invoice -</option>{invoices.map(inv => <option key={inv.id} value={inv.id}>{inv.invNo || inv.number || "Invoice"} · {fmtDate(inv.date)}{inv.totalAmt ? ` · ${inv.currency || "$"} ${(+inv.totalAmt).toLocaleString()}` : ""}</option>)}</select></Field></div>}
         <datalist id="acct-class-vendors">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist>
+        <datalist id="acct-class-buyers">{buyers.map(b => <option key={b.id || b.name} value={b.name || b.contactName || ""} />)}</datalist>
         {!inline && <div style={{ display: "flex", gap: 10, marginTop: 22 }}><button onClick={save} disabled={!canSave} style={{ flex: 1, background: C.gold, border: "none", color: "#fff", borderRadius: 7, padding: "10px 0", fontWeight: 800, fontSize: 13, cursor: canSave ? "pointer" : "not-allowed", opacity: canSave ? 1 : .5, fontFamily: "inherit" }}>Save Classification</button><button onClick={onClose} style={{ padding: "10px 16px", background: C.surface, border: `1.5px solid ${C.border}`, color: C.ink, borderRadius: 7, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button></div>}
       </div>
     </div>
