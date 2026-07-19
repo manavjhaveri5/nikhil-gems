@@ -2616,8 +2616,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       {stockModalOrder && (() => {
         const order = stockModalOrder;
         const q = (stockSearch[order.id] || "").trim().toLowerCase();
-        const matches = q
-          ? stock.filter(s => `${s.material || ""} ${s.desc || ""} ${s.shape || ""} ${s.sku || ""} ${s.location || ""} ${s.productType || ""}`.toLowerCase().includes(q))
+        const tokens = q.split(/\s+/).filter(Boolean);
+        const matches = tokens.length
+          ? stock.filter(s => { const h = `${s.material || ""} ${s.desc || ""} ${s.shape || ""} ${s.sku || ""} ${s.location || ""} ${s.productType || ""}`.toLowerCase(); return tokens.every(t => h.includes(t)); })
           : stock;
         const thumb = (s, size) => s.photo
           ? <img src={s.photo} alt="" loading="lazy" style={{ width: size, height: size, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: `1px solid ${C.border}` }} />
@@ -2659,8 +2660,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       {invoiceModalOrder && (() => {
         const order = invoiceModalOrder;
         const q = invoiceModalSearch.trim().toLowerCase();
+        const qTokens = q.split(/\s+/).filter(Boolean);
         const list = [...atInvoices]
-          .filter(inv => !q || `${invNoOf(inv)} ${inv.buyerName || inv.buyer || ""} ${inv.consigneeName || ""}`.toLowerCase().includes(q))
+          .filter(inv => { if (!qTokens.length) return true; const h = `${invNoOf(inv)} ${inv.buyerName || inv.buyer || ""} ${inv.consigneeName || ""}`.toLowerCase(); return qTokens.every(t => h.includes(t)); })
           .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
         const suggested = !q ? normName(order.buyer_name) : "";
         const ranked = suggested ? [...list].sort((a, b) => (normName(b.buyerName || b.buyer) === suggested ? 1 : 0) - (normName(a.buyerName || a.buyer) === suggested ? 1 : 0)) : list;
@@ -4621,7 +4623,31 @@ function EbayLiveView() {
       ]);
       let newListings = listings, newOrders = orders;
       if (lr.ok) { const ld = await lr.json(); newListings = ld.results || []; setListings(newListings); }
-      if (or_.ok) { const od = await or_.json(); newOrders = od.results || []; setOrders(newOrders); }
+      if (or_.ok) {
+        const od = await or_.json(); newOrders = od.results || []; setOrders(newOrders);
+        // Mirror eBay orders into the shared Orders store so they show in the Orders module.
+        // Keyed by a stable ebay-<id>; manual/ERP edits on the row are preserved, only the
+        // live synced fields (status, total) are refreshed.
+        try {
+          const current = await loadK(ORDERS_KEY) || [];
+          const prevById = new Map(current.map(o => [o.id, o]));
+          for (const eo of newOrders) {
+            if (!eo?.orderId) continue;
+            const norm = {
+              id: `ebay-${eo.orderId}`, platform: "ebay",
+              order_number: `EBAY-${eo.orderId}`, platform_order_id: String(eo.orderId),
+              listing_title: eo.items?.[0]?.title || `eBay order ${eo.orderId}`,
+              buyer_name: eo.buyer || "", sale_price: +eo.total || 0, order_total: +eo.total || 0,
+              currency: eo.currency || "USD", status: eo.status || "",
+              date: (eo.created || "").slice(0, 10) || undefined, created_at: eo.created || undefined,
+              source: "ebay-sync",
+            };
+            const prev = prevById.get(norm.id);
+            const merged = { ...norm, ...prev, status: norm.status || prev?.status, sale_price: norm.sale_price, order_total: norm.order_total };
+            if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) await upsertItemK(ORDERS_KEY, merged, { prepend: true });
+          }
+        } catch {}
+      }
       try { localStorage.setItem(EBAY_CACHE, JSON.stringify({ listings: newListings, orders: newOrders, syncedAt: Date.now() })); } catch {}
     } catch (e) { setError(e.message); }
     bg ? setSyncing(false) : setLoading(false);

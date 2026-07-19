@@ -407,7 +407,7 @@ const MODS=[
   {id:"finance",icon:"💰",title:"Finance",desc:"Ledger, balances, reconcile, P&L",ready:true},
   {id:"jobwork",icon:"🔧",title:"Job Work",desc:"Track goods sent for polishing, resetting, cutting",ready:true},
   {id:"etsy",icon:"🏷️",title:"Listing Manager",desc:"Etsy, eBay, Atyahara, Earth Editions listings & orders",ready:true},
-  {id:"orders",icon:"📦",title:"Orders",desc:"Customer orders, shipping and fulfilment",ready:true},
+  {id:"orders",icon:"🛍️",title:"Orders",desc:"Customer orders, shipping and fulfilment",ready:true},
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
   {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",ready:true},
   {id:"bgremove",icon:"✂️",title:"Background Remover",desc:"Phone photo → clean white background (sandbox)",ready:true},
@@ -565,6 +565,8 @@ function MorningStandup({todoKey="ng-todos-v1",onClose}){
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
   const t=useT();
   const visibleMods=allowedMods||MODS;
+  // Quick Sell is hidden for specific staff who don't sell directly (e.g. Madiha).
+  const hideQuickSell=(currentUser?.name||"").toLowerCase().includes("madiha");
   const [vis,setVis]=useState(false);
   const [dashTab,setDashTab]=useState("overview"); // "overview" | "activity"
   const [activities,setActivities]=useState([]);
@@ -1087,7 +1089,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           )}
 
           {/* ── Quick Sell + Chart row ── */}
-          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1.6fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .19s both":"none",alignItems:"stretch"}}>
+          {!hideQuickSell&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1.6fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .19s both":"none",alignItems:"stretch"}}>
           {/* ── Quick Sell Widget ── */}
           <div style={{background:C.surface,borderRadius:16,padding:mob?"12px 14px":"15px 20px",boxShadow:"var(--e-1)"}}>
             {/* Header row — click to expand/collapse */}
@@ -1303,7 +1305,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
             <FinancialChart chartData={chartData} months6={months6} nextM={nextM} openPOtotal={openPOtotal} pendingReceivables={pendingReceivables} todayStr={todayStr}/>
             <div style={{fontSize:9,color:C.inkFaint,marginTop:4,textAlign:"right"}}>All values in ₹ · Hover for values · *Next month extrapolated</div>
           </div>}
-          </div>{/* end Quick Sell + Chart grid */}
+          </div>}{/* end Quick Sell + Chart grid */}
 
           {/* Upcoming calendar events */}
           <div style={{background:C.surface,borderRadius:16,padding:"14px 18px",marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .24s both":"none",boxShadow:"var(--e-1)"}}>
