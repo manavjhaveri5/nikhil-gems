@@ -2831,17 +2831,47 @@ export default function FinanceApp({ onHome }) {
       setExpenses(newExps);
       await saveK(keys.expenses, newExps);
     }
+    // Bill payments + advance draw-down both touch `purchases`; build one array so neither
+    // write clobbers the other.
+    let nextPurch = purchases; let purchDirty = false;
     if (sideEffects.billUpdates?.length || sideEffects.newBills?.length) {
       const updateMap = Object.fromEntries((sideEffects.billUpdates || []).map(u => [u.id, u]));
       const newIds = new Set((sideEffects.newBills || []).map(b => b.id));
       const basePurchases = [...(sideEffects.newBills || []), ...purchases.filter(p => !newIds.has(p.id))];
-      const newPurch = basePurchases.map(p => updateMap[p.id] ? { ...p, ...updateMap[p.id] } : p);
-      setPurchases(newPurch);
-      await saveK(keys.purchases, newPurch);
+      nextPurch = basePurchases.map(p => updateMap[p.id] ? { ...p, ...updateMap[p.id] } : p);
+      purchDirty = true;
     }
+    // Advance/credit applied against the bill: draw it from the vendor's credit balance first,
+    // then their open PO advances. Total cash to the vendor is unchanged.
+    if (sideEffects.advanceApplied) {
+      const { vendorId: avId, amount } = sideEffects.advanceApplied;
+      let rem = +amount || 0;
+      const vName = (vendors.find(v => v.id === avId)?.name || "").toLowerCase();
+      const newVendors = vendors.map(v => {
+        if (v.id !== avId) return v;
+        const cb = +v.creditBalance || 0; const used = Math.min(cb, rem); rem = +(rem - used).toFixed(2);
+        return { ...v, creditBalance: +(cb - used).toFixed(2) };
+      });
+      if (newVendors.some((v, i) => v !== vendors[i])) { setVendors(newVendors); await saveK(keys.vendors, newVendors); }
+      if (rem > 0.005) {
+        nextPurch = nextPurch.map(p => {
+          if (rem <= 0.005 || p.type !== "po" || ["paid", "closed", "cancelled"].includes(p.status || "")) return p;
+          const s = (p.supplier || p.vendorName || "").toLowerCase();
+          const match = p.vendorId === avId || (s && vName && (s.includes(vName) || vName.includes(s)));
+          if (!match) return p;
+          const adv = Math.max(0, +p.paidAmount || +p.advance || 0);
+          if (adv <= 0) return p;
+          const used = Math.min(adv, rem); rem = +(rem - used).toFixed(2);
+          const left = +(adv - used).toFixed(2);
+          return { ...p, paidAmount: left, ...(p.advance != null ? { advance: String(left) } : {}) };
+        });
+        purchDirty = true;
+      }
+    }
+    if (purchDirty) { setPurchases(nextPurch); await saveK(keys.purchases, nextPurch); }
     // legacy single-bill update (backwards compat)
     if (sideEffects.billUpdate) {
-      const newPurch = purchases.map(p => p.id === sideEffects.billUpdate.id ? { ...p, ...sideEffects.billUpdate } : p);
+      const newPurch = nextPurch.map(p => p.id === sideEffects.billUpdate.id ? { ...p, ...sideEffects.billUpdate } : p);
       setPurchases(newPurch);
       await saveK(keys.purchases, newPurch);
     }
@@ -2852,7 +2882,7 @@ export default function FinanceApp({ onHome }) {
       await saveK(keys.vendors, newVendors);
     }
     if (sideEffects.poUpdate) {
-      const newPurch = purchases.map(p => p.id === sideEffects.poUpdate.id ? { ...p, ...sideEffects.poUpdate } : p);
+      const newPurch = nextPurch.map(p => p.id === sideEffects.poUpdate.id ? { ...p, ...sideEffects.poUpdate } : p);
       setPurchases(newPurch);
       await saveK(keys.purchases, newPurch);
     }

@@ -4171,18 +4171,50 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       const next=expenses.filter(e=>e.ledgerTxnId!==selected.id);
       setExpenses(next);await saveK(keys.expenses,next);
     }
+    // Bill payments + advance draw-down both touch `purchases`; build one array so neither write
+    // clobbers the other.
+    let nextPurchases=purchases; let purchasesDirty=false;
     if(sideEffects.billUpdates?.length){
       const map=Object.fromEntries(sideEffects.billUpdates.map(u=>[u.id,u]));
-      const next=purchases.map(p=>map[p.id]?{...p,...map[p.id]}:p);
-      setPurchases(next);await saveK(keys.purchases,next);
+      nextPurchases=nextPurchases.map(p=>map[p.id]?{...p,...map[p.id]}:p);
+      purchasesDirty=true;
     }
+    // Advance/credit applied against the bill: consume the vendor's credit balance first, then
+    // draw the rest from their open PO advances (reduce each PO's paidAmount). Total cash to the
+    // vendor is unchanged — the money just moves from "advance/credit" onto the bill.
+    if(sideEffects.advanceApplied){
+      const {vendorId:avId,amount}=sideEffects.advanceApplied;
+      let rem=+amount||0;
+      const vName=(vendors.find(v=>v.id===avId)?.name||"").toLowerCase();
+      const nextVendors=vendors.map(v=>{
+        if(v.id!==avId)return v;
+        const cb=+v.creditBalance||0;const used=Math.min(cb,rem);rem=+(rem-used).toFixed(2);
+        return {...v,creditBalance:+(cb-used).toFixed(2)};
+      });
+      if(nextVendors.some((v,i)=>v!==vendors[i])){setVendors(nextVendors);await saveK(keys.vendors,nextVendors);}
+      if(rem>0.005){
+        nextPurchases=nextPurchases.map(p=>{
+          if(rem<=0.005||p.type!=="po"||["paid","closed","cancelled"].includes(p.status||""))return p;
+          const s=(p.supplier||p.vendorName||"").toLowerCase();
+          const match=p.vendorId===avId||(s&&vName&&(s.includes(vName)||vName.includes(s)));
+          if(!match)return p;
+          const adv=Math.max(0,+p.paidAmount||+p.advance||0);
+          if(adv<=0)return p;
+          const used=Math.min(adv,rem);rem=+(rem-used).toFixed(2);
+          const left=+(adv-used).toFixed(2);
+          return {...p,paidAmount:left,...(p.advance!=null?{advance:String(left)}:{})};
+        });
+        purchasesDirty=true;
+      }
+    }
+    if(purchasesDirty){setPurchases(nextPurchases);await saveK(keys.purchases,nextPurchases);}
     if(sideEffects.vendorCredit){
       const {vendorId,amount}=sideEffects.vendorCredit;
       const next=vendors.map(v=>v.id===vendorId?{...v,creditBalance:(+v.creditBalance||0)+(+amount||0)}:v);
       setVendors(next);await saveK(keys.vendors,next);
     }
     if(sideEffects.poUpdate){
-      const next=purchases.map(p=>p.id===sideEffects.poUpdate.id?{...p,...sideEffects.poUpdate}:p);
+      const next=nextPurchases.map(p=>p.id===sideEffects.poUpdate.id?{...p,...sideEffects.poUpdate}:p);
       setPurchases(next);await saveK(keys.purchases,next);
     }
     if(sideEffects.invoiceUpdates?.length){

@@ -91,6 +91,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const [quickBills, setQuickBills] = useState([]);
   const [quickBillOpen, setQuickBillOpen] = useState(false);
   const [quickBill, setQuickBill] = useState({ billNumber: "", supplier: "", date: "", amount: "", currency: "" });
+  const [applyAdvance, setApplyAdvance] = useState(""); // advance/credit to offset against the selected bill(s)
   // When the parent's inline "Upload Bill" shortcut saves a new bill, auto-select it here so the
   // payment continues without leaving the classify modal.
   useEffect(() => {
@@ -254,6 +255,16 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const invPaid = inv => (+inv.paidAmount || 0) + (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0);
   const invDue = inv => Math.max(0, invTotal(inv) - invPaid(inv));
   const totalBillsDue = selectedBills.reduce((s, b) => s + billDue(b), 0);
+  // Advance/credit pooled for this vendor: money already advanced on their open POs plus any
+  // running credit balance. Applying it against a bill lets you clear what's left after cash
+  // (e.g. ₹60k advanced on a PO + ₹40k paid now settles a ₹1L bill). Only meaningful once a
+  // vendor is chosen, since the pool is per-vendor.
+  const poAdvanceAvailable = vendorId ? vendorPOs.reduce((s, po) => s + Math.max(0, +po.paidAmount || +po.advance || 0), 0) : 0;
+  const vendorCreditAvailable = vendorId ? Math.max(0, +vendor?.creditBalance || 0) : 0;
+  const availableAdvance = poAdvanceAvailable + vendorCreditAvailable;
+  const dueAfterCash = Math.max(0, totalBillsDue - txnAmt);
+  const maxAdvanceApply = Math.min(availableAdvance, dueAfterCash);
+  const advanceToApply = Math.min(Math.max(0, +applyAdvance || 0), maxAdvanceApply);
   const selectedInvDueByCurrency = selectedInvs.reduce((acc, inv) => { const invCur = inv.currency || "USD"; acc[invCur] = (acc[invCur] || 0) + invDue(inv); return acc; }, {});
   const totalInvDueInTxnCurrency = selectedInvs.reduce((s, inv) => s + convertMoney(invDue(inv), inv.currency || "USD", cur), 0);
   const toggleBill = id => setSelectedBillIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -348,9 +359,29 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
         remaining -= paying;
       }
       const credit = Math.max(0, remaining);
-      classifiedRef = { vendorId, vendorName: vendor?.name || txn.payee || "", billIds: [...selectedBillIds], billNumbers: selectedBills.map(b => b.billNumber).filter(Boolean), ...(selectedBillIds.size === 0 && { paymentOnAccount: true }), ...(credit > 0 && { creditApplied: credit }), ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
+      // Apply the vendor's advance/credit on top of the cash, against whatever is still due on
+      // each bill. Consumed amount is reported so the parent can draw it down from the vendor's
+      // credit balance + open-PO advances, keeping the books consistent.
+      let advRemaining = advanceToApply;
+      if (advRemaining > 0) {
+        for (const upd of billUpdates) {
+          if (advRemaining <= 0.005) break;
+          const bill = selectedBills.find(b => b.id === upd.id);
+          const total = +bill.totalAmount || 0;
+          const stillDue = Math.max(0, total - upd.paidAmount);
+          const apply = Math.min(stillDue, advRemaining);
+          if (apply <= 0) continue;
+          upd.paidAmount = +(upd.paidAmount + apply).toFixed(2);
+          upd.advanceApplied = +((upd.advanceApplied || 0) + apply).toFixed(2);
+          upd.status = upd.paidAmount >= total && total > 0 ? "paid" : "partial";
+          advRemaining -= apply;
+        }
+      }
+      const advanceUsed = +(advanceToApply - advRemaining).toFixed(2);
+      classifiedRef = { vendorId, vendorName: vendor?.name || txn.payee || "", billIds: [...selectedBillIds], billNumbers: selectedBills.map(b => b.billNumber).filter(Boolean), ...(selectedBillIds.size === 0 && { paymentOnAccount: true }), ...(credit > 0 && { creditApplied: credit }), ...(advanceUsed > 0 && { advanceApplied: advanceUsed }), ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
       if (quickBills.length) sideEffects.newBills = quickBills;
       sideEffects.billUpdates = billUpdates;
+      if (advanceUsed > 0 && vendorId) sideEffects.advanceApplied = { vendorId, amount: advanceUsed };
       // Auto-attach the bill's document. Purchases-module bills store it as docUrl/docData;
       // misc-module (no-GST) bills store it as attachUrl/attachData — support both.
       sideEffects.attachments = selectedBills.map(b => {
@@ -546,6 +577,20 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
             {selectedBillIds.size > 0 && <div style={{ marginTop: 10, padding: "10px 13px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}><span style={{ color: C.inkFaint }}>Selected due</span><b>₹{totalBillsDue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b></div>
               <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: C.inkFaint }}>Payment amount</span><b>₹{txnAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b></div>
+              {availableAdvance > 0.005 && <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                  <span style={{ color: C.green, fontWeight: 800 }}>Advance / credit available: ₹{availableAdvance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+                  <button type="button" onClick={() => setApplyAdvance(String(maxAdvanceApply))} disabled={maxAdvanceApply <= 0} style={{ border: `1px solid ${C.green}55`, background: C.greenBg, color: C.green, borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: maxAdvanceApply > 0 ? "pointer" : "default", opacity: maxAdvanceApply > 0 ? 1 : .5, flexShrink: 0 }}>Apply max</button>
+                </div>
+                <div style={{ fontSize: 10, color: C.inkFaint, marginBottom: 6 }}>{poAdvanceAvailable > 0 && `₹${poAdvanceAvailable.toLocaleString("en-IN")} from open POs`}{poAdvanceAvailable > 0 && vendorCreditAvailable > 0 && " · "}{vendorCreditAvailable > 0 && `₹${vendorCreditAvailable.toLocaleString("en-IN")} credit balance`}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: C.inkMid, whiteSpace: "nowrap" }}>Apply advance ₹</span>
+                  <input type="number" min="0" step="0.01" value={applyAdvance} onChange={e => setApplyAdvance(e.target.value)} placeholder="0.00" style={{ ...SI, padding: "6px 8px" }} />
+                  {applyAdvance !== "" && <button type="button" onClick={() => setApplyAdvance("")} style={{ border: "none", background: "transparent", color: C.inkFaint, cursor: "pointer", fontSize: 11, flexShrink: 0 }}>clear</button>}
+                </div>
+                {(+applyAdvance || 0) > maxAdvanceApply + 0.005 && <div style={{ marginTop: 4, fontSize: 11, color: C.amber }}>Capped at ₹{maxAdvanceApply.toLocaleString("en-IN", { minimumFractionDigits: 2 })} (available / due after cash).</div>}
+                {advanceToApply > 0 && (() => { const paidToBills = Math.min(txnAmt, totalBillsDue) + advanceToApply; const cleared = paidToBills >= totalBillsDue - 0.01; return <div style={{ marginTop: 6, fontSize: 11, color: cleared ? C.green : C.inkMid, fontWeight: cleared ? 800 : 500 }}>Bill{selectedBillIds.size > 1 ? "s" : ""} settled ₹{paidToBills.toLocaleString("en-IN", { minimumFractionDigits: 2 })} of ₹{totalBillsDue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}{cleared ? " · fully cleared ✓" : ` · ₹${Math.max(0, totalBillsDue - paidToBills).toLocaleString("en-IN", { minimumFractionDigits: 2 })} still due`}</div>; })()}
+              </div>}
             </div>}
             {selectedBillIds.size === 0 && vendorId && <div style={{ marginTop: 10, padding: "10px 13px", background: C.blueBg, border: `1px solid ${C.blue}55`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>
               No purchase bill selected. This will still be saved in <strong>{vendor?.name || "the vendor"}'s ledger</strong> as a payment on account / advance.
