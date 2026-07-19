@@ -2529,9 +2529,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     { key: "manual", label: "Manual",   icon: "✏️", color: C.inkMid },
   ];
   const SHIP_OPTS = [
-    { key:"all", label:"All", n:orders.length, color:C.ink },
-    { key:"unshipped", label:"Unshipped", n:unshippedCount, color:C.amber },
-    { key:"shipped", label:"Shipped", n:shippedCount, color:C.green },
+    { key:"all", label:"All", n:orders.length, color:C.ink, bg:C.card },
+    { key:"unshipped", label:"Unshipped", n:unshippedCount, color:C.amber, bg:C.amberBg },
+    { key:"shipped", label:"Shipped", n:shippedCount, color:C.green, bg:C.greenBg },
   ];
 
   return (
@@ -2581,16 +2581,18 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       {/* filter bar */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
         <div style={{ display: "flex", gap: 4, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
-          {SHIP_OPTS.map(opt => (
+          {SHIP_OPTS.map(opt => {
+            const on = shipFilter === opt.key;
+            return (
             <button key={opt.key} onClick={() => setShipFilter(opt.key)}
-              style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", border: "none",
-                fontWeight: shipFilter === opt.key ? 800 : 500,
-                background: shipFilter === opt.key ? C.surface : "transparent",
-                color: shipFilter === opt.key ? opt.color : C.inkMid,
-                boxShadow: shipFilter === opt.key ? "0 1px 4px rgba(0,0,0,.08)" : "none" }}>
-              {opt.label} <span style={{ opacity: .65 }}>{opt.n}</span>
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 13px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                border: on ? `1.5px solid ${opt.color}55` : "1.5px solid transparent",
+                fontWeight: on ? 850 : 600,
+                background: on ? opt.bg : "transparent",
+                color: on ? opt.color : C.inkMid }}>
+              {opt.label} <span style={{ fontWeight: 850, fontSize: 11, padding: "1px 7px", borderRadius: 20, background: on ? "#fff9" : C.card, color: on ? opt.color : C.inkFaint }}>{opt.n}</span>
             </button>
-          ))}
+          ); })}
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {FILTER_OPTS.map(p => (
@@ -2798,8 +2800,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                             <>
                               <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(250px,1fr) 90px 90px", gap: 8, alignItems: "start" }}>
                                 <div style={{ position: "relative" }}>
-                                  <input value={stockSearch[order.id] || ""} onChange={e => setStockSearch(s => ({ ...s, [order.id]: e.target.value }))} disabled={done || !shipped} placeholder={!shipped ? "Complete tracking in step 1 first" : linked ? `${linked.material || linked.desc || "Item"}${linked.shape ? ` · ${linked.shape}` : ""}` : "Search stock by stone, shape, SKU or location"} style={{ ...FI(), width: "100%", fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done || !shipped ? .7 : 1 }} />
-                                  {!done && shipped && (stockSearch[order.id] || "").trim() && (
+                                  <input value={stockSearch[order.id] || ""} onChange={e => setStockSearch(s => ({ ...s, [order.id]: e.target.value }))} disabled={done} placeholder={linked ? `${linked.material || linked.desc || "Item"}${linked.shape ? ` · ${linked.shape}` : ""}` : "Search stock by stone, shape, SKU or location"} style={{ ...FI(), width: "100%", fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }} />
+                                  {!done && (stockSearch[order.id] || "").trim() && (
                                     <div style={{ position: "absolute", zIndex: 20, left: 0, right: 0, top: "calc(100% + 4px)", maxHeight: 216, overflowY: "auto", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, boxShadow: "0 12px 24px rgba(0,0,0,.12)" }}>
                                       {stock.filter(s => `${s.material} ${s.desc} ${s.shape} ${s.sku} ${s.location}`.toLowerCase().includes((stockSearch[order.id] || "").toLowerCase())).slice(0, 8).map(s => <button key={s.id} onClick={() => { linkOrderStock(order, s.id); setStockSearch(q => ({ ...q, [order.id]: "" })); }} style={{ width: "100%", textAlign: "left", padding: "8px 10px", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, cursor: "pointer", color: C.ink, fontSize: 12 }}><b>{s.material || s.desc || "Item"}{s.shape ? ` · ${s.shape}` : ""}</b><span style={{ color: C.inkMid }}> · {s.qty} {s.unit || "pcs"}{s.qty2 ? ` · ${s.qty2} ${s.unit2 || ""}` : ""}{s.sku ? ` · ${s.sku}` : ""}</span></button>)}
                                     </div>
@@ -2809,11 +2811,11 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                                   type="number" min={1}
                                   value={ngDraft(order).qty}
                                   onChange={e => updNg(order, { qty: e.target.value })}
-                                  disabled={done || !shipped}
+                                  disabled={done}
                                   placeholder={linked?.unit || "Qty"}
-                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done || !shipped ? .7 : 1 }}
+                                  style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }}
                                 />
-                                {linked && String(linked.qty2 || "").trim() !== "" ? <input type="number" min={0} value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} disabled={done || !shipped} placeholder={linked.unit2 || "Secondary"} style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done || !shipped ? .7 : 1 }} /> : <div />}
+                                {linked && String(linked.qty2 || "").trim() !== "" ? <input type="number" min={0} value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} disabled={done} placeholder={linked.unit2 || "Secondary"} style={{ ...FI(), fontSize: 12, padding: "8px 10px", borderRadius: 8, opacity: done ? .7 : 1 }} /> : <div />}
                               </div>
                               {linked && !done && (
                                 <div style={{ marginTop: 6, fontSize: 11, color: C.inkMid, display: "flex", gap: 14, flexWrap: "wrap" }}>
