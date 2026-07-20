@@ -276,12 +276,18 @@ export default async function handler(req, res) {
             for (const t of d.transactions || []) if (t.transaction_id != null) rec.ids.add(String(t.transaction_id));
           }
         } catch {}
+        // Etsy fills the net into different fields per shop (adjusted → posted → amount);
+        // reading only amount_net returned 0 for shops that use posted_net.
+        const netOf = p => {
+          for (const m of [p.adjusted_net, p.posted_net, p.amount_net]) if (m && m.amount != null && +m.amount !== 0) return money(m);
+          return money(p.posted_net || p.amount_net);
+        };
         try {
           const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${rid}/payments`, { headers: authHeaders });
           if (r.ok) {
             const d = await r.json();
             for (const p of d.results || []) {
-              rec.net += money(p.amount_net);
+              rec.net += netOf(p);
               if (!rec.currency) rec.currency = p.shop_currency || p.currency || "";
               if (p.payment_id != null) rec.ids.add(String(p.payment_id));
               if (!rec.created) rec.created = +p.create_timestamp || 0;

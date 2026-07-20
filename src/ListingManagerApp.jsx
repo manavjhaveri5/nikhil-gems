@@ -2519,7 +2519,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     try {
       const current = await loadK(ORDERS_KEY) || [];
       const feesKnown = new Set(current
-        .filter(o => o.platform === "etsy" && o.etsy_fee_version === 4)
+        .filter(o => o.platform === "etsy" && o.etsy_fee_version === 5)
         .map(o => String(o.etsy_receipt_id || o.platform_order_id)));
       const ids = [...new Set((receipts || []).map(r => String(r.receipt_id || "")).filter(id => id && !feesKnown.has(id)))].slice(0, 40);
       if (!ids.length) return;
@@ -2550,7 +2550,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           etsy_fee_source: p.source || "amount",
           etsy_processing_fee: null,
           etsy_transaction_fee: null,
-          etsy_fee_version: 4,
+          etsy_fee_version: 5,
         };
         if (JSON.stringify(merged) !== JSON.stringify(o)) changedRows.push(merged);
         return merged;
