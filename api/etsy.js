@@ -362,17 +362,31 @@ export default async function handler(req, res) {
       if (!targetReceiptId) return res.status(400).json({ error: "receipt_id required" });
       const trackingCode = String(body.tracking_code || body.trackingCode || body.tracking || "").trim();
       const carrierName = String(body.carrier_name || body.carrierName || body.carrier || "other").trim() || "other";
-      const payload = {};
-      if (trackingCode) payload.tracking_code = trackingCode;
-      if (carrierName) payload.carrier_name = carrierName;
-      if (body.note_to_buyer || body.noteToBuyer) payload.note_to_buyer = body.note_to_buyer || body.noteToBuyer;
-      if (body.send_bcc !== undefined) payload.send_bcc = !!body.send_bcc;
-      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${targetReceiptId}/tracking`, {
-        method: "POST",
-        headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const { data } = await readJsonish(r);
+      const basePayload = {};
+      if (trackingCode) basePayload.tracking_code = trackingCode;
+      if (body.note_to_buyer || body.noteToBuyer) basePayload.note_to_buyer = body.note_to_buyer || body.noteToBuyer;
+      if (body.send_bcc !== undefined) basePayload.send_bcc = !!body.send_bcc;
+      const postTracking = async carrier => {
+        const payload = { ...basePayload, ...(carrier ? { carrier_name: carrier } : {}) };
+        const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${targetReceiptId}/tracking`, {
+          method: "POST",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const { data } = await readJsonish(r);
+        return { r, data };
+      };
+      let { r, data } = await postTracking(carrierName);
+      let usedCarrier = carrierName;
+      // Etsy only accepts carriers from its own list. For couriers it doesn't know
+      // (Cirro, ShipGlobal, etc.) it 400s on carrier_name — retry as "other" so the
+      // order still ships; the real courier + tracking link stay recorded in the app.
+      if (!r.ok && carrierName && carrierName.toLowerCase() !== "other"
+        && !/scope|permission|forbidden|transactions_w/i.test(JSON.stringify(data || {}))
+        && (r.status === 400 || /carrier/i.test(JSON.stringify(data || {})))) {
+        ({ r, data } = await postTracking("other"));
+        usedCarrier = "other";
+      }
       if (!r.ok) {
         const msg = etsyMessage(data);
         return res.status(r.status).json({
@@ -383,7 +397,7 @@ export default async function handler(req, res) {
             : undefined,
         });
       }
-      return res.json({ ok: true, receipt: data, tracking_code: trackingCode, carrier_name: carrierName });
+      return res.json({ ok: true, receipt: data, tracking_code: trackingCode, carrier_name: carrierName, carrier_sent: usedCarrier });
     }
 
     // ── discounts: active shop sales / discounts ─────────────────────────────
