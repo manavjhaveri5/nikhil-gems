@@ -531,6 +531,7 @@ function StatusPill({ status }) {
     sold:     { label: "Sold",     color: C.blue,    bg: C.blueBg  },
     shipped:  { label: "Shipped",  color: C.green,   bg: C.greenBg },
     unshipped:{ label: "Unshipped",color: C.amber,   bg: C.amberBg },
+    cancelled:{ label: "Cancelled",color: C.red,     bg: C.redBg   },
   };
   const s = map[status] || { label: status || "—", color: C.inkFaint, bg: C.card };
   return (
@@ -2132,7 +2133,19 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     return `${sym}${fmt(amount)}`;
   };
   const isShipped = o => ["shipped", "completed", "fulfilled"].includes(String(o.status || "").toLowerCase()) || !!o.shipped_at;
+  const isCancelled = o => !!o?.cancelled || ["canceled", "cancelled", "fully_refunded"].includes(String(o?.status || "").toLowerCase());
   const orderDate = o => o.date || o.created_at || new Date().toISOString().slice(0, 10);
+  // Cancelling keeps the order (for stats/accounting) but marks it fully refunded — not deleted.
+  const cancelOrder = async order => {
+    if (!window.confirm("Mark this order as cancelled and fully refunded? It stays in your records for stats and accounting, but counts as ₹0 revenue.")) return;
+    const refund = +order.order_total || +order.sale_price || 0;
+    await patchOrder(order, { cancelled: true, cancelled_at: now(), refunded: true, refund_amount: refund, status: "canceled" });
+    showToast?.("Order marked cancelled · fully refunded");
+  };
+  const restoreOrder = async order => {
+    await patchOrder(order, { cancelled: false, refunded: false, refund_amount: 0, cancelled_at: "", status: order.shipped_at ? "shipped" : "sold" });
+    showToast?.("Order restored");
+  };
   const addressLines = o => [
     o.ship_name || o.buyer_name,
     o.ship_address1,
@@ -2332,6 +2345,14 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     );
   };
   const etsyMoney = m => (m?.amount || 0) / (m?.divisor || 100);
+  // Etsy reports cancellations via receipt.status = "Canceled" and/or a full refund.
+  const receiptIsCancelled = receipt => {
+    const status = String(receipt?.status || "").toLowerCase();
+    if (["canceled", "cancelled"].includes(status)) return true;
+    const grand = etsyMoney(receipt?.grandtotal);
+    const refunded = (receipt?.refunds || []).reduce((s, r) => s + etsyMoney(r?.amount || r?.gross || r), 0);
+    return grand > 0 && refunded >= grand - 0.01;
+  };
   const etsyOrderDate = receipt => {
     const ts = receipt?.create_timestamp || receipt?.creation_tsz || receipt?.created_timestamp || receipt?.update_timestamp;
     return ts ? new Date(ts * 1000).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
@@ -2350,6 +2371,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     (rawOrders || []).forEach(receipt => {
       const txns = receipt.transactions?.length ? receipt.transactions : [null];
       const shipped = receiptIsShipped(receipt);
+      const cancelled = receiptIsCancelled(receipt);
       txns.forEach((txn, idx) => {
         const etsyListingId = txn?.listing_id || "";
         const linked = etsyListingId ? listingByEtsyId[String(etsyListingId)] : null;
@@ -2382,7 +2404,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           ship_postcode:     receipt.zip || "",
           ship_country:      receipt.country_iso || "",
           ship_phone:        receipt.phone || receipt.formatted_phone || "",
-          status:            shipped ? "shipped" : "sold",
+          status:            cancelled ? "canceled" : shipped ? "shipped" : "sold",
+          ...(cancelled ? { cancelled: true, refunded: true, refund_amount: lineMoney.order_total != null ? lineMoney.order_total : (lineMoney.sale_price || 0), cancelled_at: etsyCreatedAt(receipt) } : {}),
           tracking_code:     receiptTrackingCode(receipt),
           tracking_number:   receiptTrackingCode(receipt),
           carrier_name:      receiptCarrierName(receipt) || "other",
@@ -2403,6 +2426,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       const txns = receipt.transactions?.length ? receipt.transactions : [null];
       const receiptId = String(receipt.receipt_id || "");
       const shipped = receiptIsShipped(receipt);
+      const cancelled = receiptIsCancelled(receipt);
       byReceipt[receiptId] = {
         buyer_email: etsyEmailFromReceipt(receipt),
         buyer_name: receipt.name || etsyEmailFromReceipt(receipt),
@@ -2418,7 +2442,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         tracking_code: receiptTrackingCode(receipt),
         tracking_number: receiptTrackingCode(receipt),
         carrier_name: receiptCarrierName(receipt),
-        status: shipped ? "shipped" : "sold",
+        status: cancelled ? "canceled" : shipped ? "shipped" : "sold",
+        ...(cancelled ? { cancelled: true, refunded: true, cancelled_at: etsyCreatedAt(receipt) } : {}),
         shipped_at: shipped ? receiptShippedAt(receipt) || new Date().toISOString() : "",
         etsy_live_is_shipped: shipped,
         etsy_status_synced_at: new Date().toISOString(),
@@ -2573,7 +2598,12 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
 
   const filtered = (orders || [])
     .filter(o => pFilter === "all" || o.platform === pFilter)
-    .filter(o => shipFilter === "all" || (shipFilter === "shipped" ? isShipped(o) : !isShipped(o)))
+    .filter(o => {
+      if (shipFilter === "all") return true;
+      if (shipFilter === "cancelled") return isCancelled(o);
+      if (isCancelled(o)) return false; // cancelled orders only show under All / Cancelled
+      return shipFilter === "shipped" ? isShipped(o) : !isShipped(o);
+    })
     .filter(o => !search || [
       o.listing_title, o.buyer_name, o.buyer_email, o.order_number, o.platform_order_id,
       o.listing_sku, o.buyer_country, o.ship_address1, o.ship_city, o.ship_postcode,
@@ -2582,13 +2612,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     .sort((a, b) => new Date(b.created_at || b.date) - new Date(a.created_at || a.date));
 
   const revenueByCurrency = filtered.reduce((m, o) => {
+    if (isCancelled(o)) return m; // cancelled/refunded orders don't count toward revenue
     const c = o.currency || "INR";
     m[c] = (m[c] || 0) + (+o.sale_price || 0);
     return m;
   }, {});
   const revenueLabel = Object.entries(revenueByCurrency).map(([c, v]) => money(v, c)).join(" · ") || money(0);
-  const shippedCount = (orders || []).filter(isShipped).length;
-  const unshippedCount = (orders || []).length - shippedCount;
+  const activeOrders = (orders || []).filter(o => !isCancelled(o));
+  const shippedCount = activeOrders.filter(isShipped).length;
+  const unshippedCount = activeOrders.length - shippedCount;
+  const cancelledCount = (orders || []).filter(isCancelled).length;
 
   const FILTER_OPTS = [
     { key: "all",    label: "All",      icon: "📦" },
@@ -2599,6 +2632,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     { key:"all", label:"All", n:orders.length, color:C.ink, bg:C.card },
     { key:"unshipped", label:"Unshipped", n:unshippedCount, color:C.amber, bg:C.amberBg },
     { key:"shipped", label:"Shipped", n:shippedCount, color:C.green, bg:C.greenBg },
+    ...(cancelledCount ? [{ key:"cancelled", label:"Cancelled", n:cancelledCount, color:C.red, bg:C.redBg }] : []),
   ];
 
   return (
@@ -2782,7 +2816,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
             const p = PLATFORMS.find(x => x.key === order.platform) || { label: "Manual", icon: "✏️", color: C.inkMid };
             const isExp = expanded === order.id;
             const shipped = isShipped(order);
-            const status = shipped ? "shipped" : "unshipped";
+            const cancelled = isCancelled(order);
+            const status = cancelled ? "cancelled" : shipped ? "shipped" : "unshipped";
             // Fulfilment step the panels show. Auto-advances to the first incomplete step,
             // but the stepper lets the user click any step to open it (nothing is blocked).
             const etsyDone = [shipped, !!order.linked_stock_id, !!order._atInvoiceNo, !!order._ngInvoiceNo];
@@ -2827,7 +2862,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                     <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{new Date(orderDate(order)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>
                   </div>
                   <div style={{ textAlign: mob() ? "left" : "right", gridColumn: mob() ? "2 / 3" : "auto" }}>
-                    <div style={{ fontSize: 16, fontWeight: 850, color: C.green }}>{money(order.sale_price, order.currency)}</div>
+                    <div style={{ fontSize: 16, fontWeight: 850, color: cancelled ? C.inkFaint : C.green, textDecoration: cancelled ? "line-through" : "none" }}>{money(order.sale_price, order.currency)}</div>
                     <div style={{ marginTop: 3 }}><StatusPill status={status} /></div>
                   </div>
                 </div>
@@ -2835,7 +2870,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                 {/* expanded detail */}
                 {isExp && (
                   <div style={{ borderTop: `1px solid ${C.border}`, padding: "13px 14px", background: C.bg }}>
-                    {isEtsyOrder(order) && (
+                    {cancelled && (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: C.redBg, border: `1.5px solid ${C.red}`, borderRadius: 10, padding: "12px 14px", marginBottom: 12 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 850, color: C.red }}>Cancelled · fully refunded</div>
+                          <div style={{ fontSize: 12, color: C.inkMid, marginTop: 2 }}>Refunded {money(order.refund_amount != null ? order.refund_amount : (order.order_total || order.sale_price), order.currency)}{order.cancelled_at ? ` · ${new Date(order.cancelled_at).toLocaleDateString("en-GB")}` : ""}. Kept for records; counts as ₹0 revenue.</div>
+                        </div>
+                        <button onClick={() => restoreOrder(order)} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Restore order</button>
+                      </div>
+                    )}
+                    {!cancelled && isEtsyOrder(order) && (
                       (() => {
                         const ETSY = "#F56400";
                         const stages = [
@@ -2877,7 +2921,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         </div>;
                       })()
                     )}
-                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      {!cancelled ? <button onClick={() => cancelOrder(order)} style={{ border: "none", background: "transparent", color: C.red, fontSize: 11, fontWeight: 800, cursor: "pointer", padding: 0 }}>Cancel order</button> : <span />}
                       <button onClick={() => setDetailsOpen(s => ({ ...s, [order.id]: !s[order.id] }))} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 0 }}>{detailsOpen[order.id] ? "Hide order details" : "Order details"}</button>
                     </div>
                     {detailsOpen[order.id] && <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 10 }}>
@@ -2911,7 +2956,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         </div>
                       </div>
                     </div>}
-                    {isEtsyOrder(order) && selStep === 0 && (
+                    {!cancelled && isEtsyOrder(order) && selStep === 0 && (
                       <div style={{ background: C.surface, border: `1.5px solid ${shipped ? C.green : "#F56400"}`, borderLeft: `4px solid ${shipped ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
@@ -2933,7 +2978,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                       </div>
                     )}
                     {/* Step 2 stays lightweight: allocation only. The invoice commits the stock movement later. */}
-                    {isEtsyOrder(order) && selStep === 1 && (
+                    {!cancelled && isEtsyOrder(order) && selStep === 1 && (
                       <div style={{ background: C.surface, border: `1.5px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderLeft: `4px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
                           <div style={{ minWidth: 0 }}>
@@ -3000,7 +3045,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         })()}
                       </div>
                     )}
-                    {isEtsyOrder(order) && selStep === 2 && (
+                    {!cancelled && isEtsyOrder(order) && selStep === 2 && (
                       <div style={{ background: C.surface, border: `1.5px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
@@ -3036,7 +3081,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         )}
                       </div>
                     )}
-                    {isEtsyOrder(order) && selStep === 3 && (
+                    {!cancelled && isEtsyOrder(order) && selStep === 3 && (
                       <div style={{ background: C.surface, border: `1.5px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
@@ -3048,7 +3093,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         {!order.linked_stock_id && !order._ngInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Choose a physical stock item in step 2 first.</div>}
                       </div>
                     )}
-                    {isEtsyOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · Etsy shipped · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
+                    {!cancelled && isEtsyOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · Etsy shipped · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
                     {detailsOpen[order.id] && <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
                       {[
                         ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
