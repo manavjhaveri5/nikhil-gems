@@ -2170,6 +2170,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const trackingDraft = o => etsyTracking[o.id] || {
     tracking_code: o.tracking_code || o.tracking_number || "",
     carrier_name: o.carrier_name || o.shipping_carrier || "other",
+    tracking_url: o.tracking_url || "",
     note_to_buyer: "",
     send_bcc: false,
     loading: false,
@@ -2221,6 +2222,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         tracking_code: trackingCode,
         tracking_number: trackingCode,
         carrier_name: carrierName,
+        ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         etsy_completed_at: now,
       } : x);
       const changedOrders = next.filter(x => sameReceipt(x));
@@ -2650,7 +2652,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
               <div style={{ display: "grid", gap: 11 }}>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking number<input autoFocus value={draft.tracking_code} onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })} placeholder="e.g. 1234 5678 90" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Carrier<select value={draft.carrier_name} onChange={e => updateTrackingDraft(order, { carrier_name: e.target.value })} style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px", cursor: "pointer" }}><option value="other">Other</option><option value="dhl">DHL</option><option value="fedex">FedEx</option><option value="ups">UPS</option><option value="usps">USPS</option><option value="india-post">India Post</option><option value="bluedart">Blue Dart</option></select></label>
-                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking link <span style={{ fontWeight: 500 }}>(optional, internal reference)</span><input value={order.tracking_url || ""} onChange={e => setOrderTrackingUrl(order, e.target.value)} placeholder="https://…" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
+                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking link <span style={{ fontWeight: 500 }}>(optional, internal reference)</span><input value={draft.tracking_url} onChange={e => updateTrackingDraft(order, { tracking_url: e.target.value })} onBlur={e => setOrderTrackingUrl(order, e.target.value)} placeholder="https://…" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Note to buyer <span style={{ fontWeight: 500 }}>(optional)</span><input value={draft.note_to_buyer || ""} onChange={e => updateTrackingDraft(order, { note_to_buyer: e.target.value })} placeholder="A short shipping note" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}><input type="checkbox" checked={!!draft.send_bcc} onChange={e => updateTrackingDraft(order, { send_bcc: e.target.checked })} /> Send me Etsy's shipping email too</label>
               </div>
