@@ -2384,6 +2384,14 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     const ts = receipt?.create_timestamp || receipt?.creation_tsz || receipt?.created_timestamp || receipt?.update_timestamp;
     return new Date((ts || Date.now() / 1000) * 1000).toISOString();
   };
+  // Buyer-selected options (Filling, Size, …) come from the transaction's variations,
+  // plus any personalization the buyer typed.
+  const etsyVariations = txn => {
+    const out = (txn?.variations || []).map(v => ({ name: String(v.formatted_name || v.name || "").trim(), value: String(v.formatted_value || v.value || "").trim() })).filter(v => v.name || v.value);
+    const pers = String(txn?.buyer_personalization || txn?.personalization || "").trim();
+    if (pers && !out.some(v => /personal/i.test(v.name))) out.push({ name: "Personalization", value: pers });
+    return out;
+  };
   const normalizeEtsyOrdersForERP = rawOrders => {
     const listingByEtsyId = {};
     (listings || []).forEach(l => {
@@ -2408,6 +2416,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           listing_material:  linked?.material || "",
           listing_shape:     linked?.shape || "",
           listing_sku:       txn?.sku || linked?.sku || "",
+          variations:        etsyVariations(txn),
           listing_image:     etsyImageFromTxn(txn) || linked?.images?.[0] || "",
           platform:          "etsy",
           platform_order_id: String(receipt.receipt_id),
@@ -2479,6 +2488,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           ...byReceipt[receiptId],
           ...etsyReceiptLineMoney(receipt, txn, txns),
           listing_image: etsyImageFromTxn(txn),
+          variations: etsyVariations(txn),
           etsy_listing_id: listingId,
         };
       });
@@ -2879,6 +2889,11 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                       {[order.buyer_name, order.buyer_email, order.listing_sku || order.etsy_transaction_id || order.platform_order_id]
                         .filter(Boolean).join(" · ")}
                     </div>
+                    {(order.variations || []).filter(v => v && v.value).length > 0 && (
+                      <div style={{ fontSize: 11, color: C.inkMid, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
+                        {(order.variations || []).filter(v => v && v.value).map(v => `${v.name ? v.name + ": " : ""}${v.value}`).join(" · ")}
+                      </div>
+                    )}
                     {isEtsyOrder(order) && !cancelled && (() => {
                       const steps = [
                         ["🚚", "Shipped on Etsy", shipped],
@@ -3168,6 +3183,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         ...(order.etsy_fees != null ? [["Etsy fees", `-${money(order.etsy_fees, order.fees_currency || order.currency)}`]] : []),
                         ...(order.etsy_net != null ? [["Earned", money(order.etsy_net, order.fees_currency || order.currency)]] : []),
                         ["SKU",           order.listing_sku || "—"],
+                        ...(order.variations || []).filter(v => v && (v.name || v.value)).map(v => [v.name || "Option", v.value || "—"]),
                         ["Status",        shipped ? "Shipped" : "Unshipped"],
                         ["Reference",     order.order_number || "—"],
                         ["Material",      order.listing_material || "—"],
