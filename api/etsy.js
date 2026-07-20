@@ -246,6 +246,104 @@ export default async function handler(req, res) {
       return res.json({ ok: true, payments });
     }
 
+    // ── earnings: EXACT per-receipt "you earned" from the payment-account ledger ─
+    // A receipt's payment record only carries the processing fee; the transaction
+    // fee, regulatory operating fee, etc. are separate ledger entries. We sum every
+    // ledger entry tied to a receipt (via its receipt_id, payment ids, or transaction
+    // ids) — that signed sum is exactly what Etsy shows as "You earned". Falls back to
+    // the payment net when no ledger entries can be attributed (e.g. missing scope).
+    // ?receipt_ids=1,2,3 (max 40). Add &debug=1 to see the matched ledger lines.
+    if (action === "earnings") {
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const ids = String(req.query.receipt_ids || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 40);
+      if (!ids.length) return res.status(400).json({ error: "receipt_ids required" });
+      const debug = req.query.debug === "1";
+      const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
+
+      // 1. Per receipt: grandtotal (buyer paid), transaction ids, created ts, and the
+      //    payment record (net for fallback, payment ids, currency).
+      const info = {}; // rid -> { buyerPaid, currency, created, ids:Set(candidate ids), net }
+      const fetchOne = async rid => {
+        const key = String(rid);
+        const rec = { buyerPaid: 0, currency: "", created: 0, ids: new Set([key]), net: 0 };
+        try {
+          const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${rid}`, { headers: authHeaders });
+          if (r.ok) {
+            const d = await r.json();
+            rec.buyerPaid = money(d.grandtotal);
+            rec.currency = d.grandtotal?.currency_code || rec.currency;
+            rec.created = +d.create_timestamp || +d.created_timestamp || +d.creation_tsz || 0;
+            for (const t of d.transactions || []) if (t.transaction_id != null) rec.ids.add(String(t.transaction_id));
+          }
+        } catch {}
+        try {
+          const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/receipts/${rid}/payments`, { headers: authHeaders });
+          if (r.ok) {
+            const d = await r.json();
+            for (const p of d.results || []) {
+              rec.net += money(p.amount_net);
+              if (!rec.currency) rec.currency = p.shop_currency || p.currency || "";
+              if (p.payment_id != null) rec.ids.add(String(p.payment_id));
+              if (!rec.created) rec.created = +p.create_timestamp || 0;
+            }
+          }
+        } catch {}
+        info[key] = rec;
+      };
+      for (let i = 0; i < ids.length; i += 8) await Promise.all(ids.slice(i, i + 8).map(fetchOne));
+
+      // 2. Ledger window derived from the receipts' create dates (fees post within a
+      //    day or two); default to a 60-day look-back if timestamps are missing.
+      const nowS = Math.floor(Date.now() / 1000);
+      const createds = Object.values(info).map(r => r.created).filter(Boolean);
+      const minCreated = (createds.length ? Math.min(...createds) : nowS - 60 * 86400) - 3 * 86400;
+      const maxCreated = nowS + 86400;
+
+      // candidate id -> receipt id
+      const idToReceipt = new Map();
+      for (const [rid, rec] of Object.entries(info)) for (const cid of rec.ids) if (!idToReceipt.has(cid)) idToReceipt.set(cid, rid);
+
+      // 3. Page the ledger; attribute each entry to a receipt by reference_id.
+      const attributed = {}; // rid -> { sum, entries:[] }
+      let offset = 0, pages = 0, ledgerErr = null;
+      while (pages < 25) {
+        let d;
+        try {
+          const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${minCreated}&max_created=${maxCreated}&limit=100&offset=${offset}`, { headers: authHeaders });
+          if (!r.ok) { ledgerErr = `ledger ${r.status}`; break; }
+          d = await r.json();
+        } catch (e) { ledgerErr = e.message; break; }
+        const results = d.results || [];
+        for (const e of results) {
+          const rid = idToReceipt.get(String(e.reference_id != null ? e.reference_id : ""));
+          if (!rid) continue;
+          const amt = (+e.amount || 0) / 100;
+          const a = attributed[rid] || (attributed[rid] = { sum: 0, entries: [] });
+          a.sum += amt;
+          if (debug) a.entries.push({ amount: +amt.toFixed(2), description: e.description, ref_type: e.reference_type, ref_id: String(e.reference_id) });
+        }
+        pages++;
+        if (results.length < 100) break;
+        offset += 100;
+      }
+
+      // 4. Prefer the exact ledger sum; fall back to the payment net.
+      const payments = {};
+      for (const rid of ids) {
+        const rec = info[String(rid)];
+        const att = attributed[String(rid)];
+        if (att && Math.abs(att.sum) > 0.001) {
+          const earned = Number(att.sum.toFixed(2));
+          const gross = Number((rec?.buyerPaid || earned).toFixed(2));
+          payments[String(rid)] = { gross, net: earned, fees: Number((gross - earned).toFixed(2)), currency: rec?.currency || "", source: "ledger", matched: att.entries.length || undefined, ...(debug ? { entries: att.entries } : {}) };
+        } else if (rec) {
+          const gross = Number((rec.buyerPaid || rec.net).toFixed(2)), net = Number(rec.net.toFixed(2));
+          payments[String(rid)] = { gross, net, fees: Number((gross - net).toFixed(2)), currency: rec.currency || "", source: "payment" };
+        }
+      }
+      return res.json({ ok: true, payments, window: { minCreated, maxCreated }, ...(ledgerErr ? { ledgerErr } : {}) });
+    }
+
     // ── complete_order / add_tracking: mark receipt shipped with tracking ───
     if (action === "complete_order" || action === "add_tracking" || action === "submit_tracking") {
       if (req.method !== "POST") return res.status(405).json({ error: "POST required" });
