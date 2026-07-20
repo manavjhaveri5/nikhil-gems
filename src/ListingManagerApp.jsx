@@ -2858,6 +2858,23 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                       {[order.buyer_name, order.buyer_email, order.listing_sku || order.etsy_transaction_id || order.platform_order_id]
                         .filter(Boolean).join(" · ")}
                     </div>
+                    {isEtsyOrder(order) && !cancelled && (() => {
+                      const steps = [
+                        ["🚚", "Shipped on Etsy", shipped],
+                        ["📦", "Stock allocated", !!order.linked_stock_id],
+                        ["🧾", "Sales invoice", !!order._atInvoiceNo],
+                        ["🏷️", "NG invoice", !!order._ngInvoiceNo],
+                      ];
+                      const doneN = steps.filter(s => s[2]).length;
+                      return (
+                        <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6 }}>
+                          {steps.map(([icon, label, done], i) => (
+                            <span key={i} title={`${i + 1}. ${label} — ${done ? "done" : "pending"}`} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 21, height: 21, borderRadius: 6, fontSize: 11, lineHeight: 1, background: done ? C.greenBg : C.card, border: `1px solid ${done ? C.green : C.border}`, opacity: done ? 1 : .5, filter: done ? "none" : "grayscale(1)" }}>{icon}</span>
+                          ))}
+                          <span style={{ fontSize: 9, fontWeight: 850, color: doneN === 4 ? C.green : C.inkFaint, marginLeft: 3, letterSpacing: .3 }}>{doneN === 4 ? "DONE" : `${doneN}/4`}</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <div style={{ display: mob() ? "none" : "block" }}>
                     <div style={{ fontSize: 11, color: p.color, fontWeight: 750 }}>{p.icon} {p.label}</div>
