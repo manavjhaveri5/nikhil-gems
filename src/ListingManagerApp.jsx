@@ -48,15 +48,29 @@ const fiscalYearLabel = dateStr => {
   return `${String(start).slice(-2)}-${String(start + 1).slice(-2)}`;
 };
 
-const nextAtyaharaInvoiceNo = (existing = [], dateStr = toIsoDate()) => {
-  const fy = fiscalYearLabel(dateStr);
-  const max = (existing || []).reduce((mx, inv) => {
+// Full "2026/27" FY label to match the Atyahara invoice standard (ATY-###-YYYY/YY).
+const fiscalYearFull = dateStr => {
+  const d = new Date(`${dateStr || toIsoDate()}T12:00:00`);
+  const y = d.getFullYear();
+  const start = d.getMonth() >= 3 ? y : y - 1;
+  return `${start}/${String(start + 1).slice(-2)}`;
+};
+// Highest sequential invoice number in the current FY. Only counts 1–4 digit numbers on
+// ATY/AT invoices so a stray id-like value can never inflate the sequence.
+const maxAtyaharaInvoiceNo = (existing = [], dateStr = toIsoDate()) => {
+  const short = fiscalYearLabel(dateStr);                 // "26-27"
+  const full = fiscalYearFull(dateStr);                   // "2026/27"
+  const tokens = [full, full.replace("/", "-"), short];
+  const inFY = no => tokens.some(t => no.includes(t));
+  return (existing || []).reduce((mx, inv) => {
     const no = String(inv?.invNo || inv?.number || "");
-    const m = no.match(/(?:ATY?|AT)-?(\d+)/i) || no.match(/(\d+)/);
+    if (!inFY(no)) return mx;
+    const m = no.match(/^AT[Y]?-0*(\d{1,4})[-/]/i);
     return m ? Math.max(mx, +m[1] || 0) : mx;
   }, 0);
-  return `AT-${String(max + 1).padStart(3, "0")}/${fy}`;
 };
+const nextAtyaharaInvoiceNo = (existing = [], dateStr = toIsoDate()) =>
+  `ATY-${maxAtyaharaInvoiceNo(existing, dateStr) + 1}-${fiscalYearFull(dateStr)}`;
 
 const moneyAmount = m => (m?.amount || 0) / (m?.divisor || 100);
 const cleanInvoiceText = v => String(v || "").replace(/\s+/g, " ").trim();
@@ -188,7 +202,7 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
   });
 }
 
-async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null }) {
+async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null, invNoOverride = "" }) {
   const sourceReceiptId = String(receiptId || "");
   if (!sourceReceiptId) throw new Error("Missing Etsy receipt id");
   const fresh = await loadKFresh(AT_INVOICES_KEY).catch(() => []);
@@ -197,6 +211,9 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
     String(inv._etsyReceiptId || inv.etsy_receipt_id || "") === sourceReceiptId ||
     (inv.sourceOrderIds || []).some(id => String(id) === sourceReceiptId)
   );
+  // Chosen number wins for a new invoice, unless it's already taken by another invoice.
+  const overrideNo = String(invNoOverride || "").trim();
+  const overrideTaken = overrideNo && existing.some(inv => inv.id !== existingInv?.id && String(inv.invNo || "") === overrideNo);
 
   const date = toIsoDate(orderDate);
   const shapeTokens = await loadCustomsShapeTokens();
@@ -206,7 +223,7 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
   const invoice = {
     ...(existingInv || {}),
     id: existingInv?.id || `at-etsy-${sourceReceiptId}`,
-    invNo: existingInv?.invNo || nextAtyaharaInvoiceNo(existing, date),
+    invNo: existingInv?.invNo || (overrideNo && !overrideTaken ? overrideNo : nextAtyaharaInvoiceNo(existing, date)),
     type: existingInv?.type || "commercial",
     date,
     dueDate: existingInv?.dueDate || date,
@@ -2021,6 +2038,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const [atInvoices, setAtInvoices] = useState([]); // Atyahara invoices, for matching/linking existing invoices to orders
   const [invoiceModalOrder, setInvoiceModalOrder] = useState(null); // order whose "link existing invoice" picker is open
   const [invoiceModalSearch, setInvoiceModalSearch] = useState("");
+  const [invNoDraft, setInvNoDraft] = useState({}); // per-order editable invoice number for step 3
   const [reconciling, setReconciling] = useState(false);
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
@@ -2235,7 +2253,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       return false;
     }
   };
-  const createAtyaharaInvoiceForOrder = async order => {
+  const createAtyaharaInvoiceForOrder = async (order, invNoOverride = "") => {
     const receiptId = String(etsyReceiptId(order) || "");
     if (!receiptId) {
       setInvoiceState(s => ({ ...s, [receiptId || order.id]: { loading: false, error: "Missing Etsy receipt id.", success: "" } }));
@@ -2287,8 +2305,11 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         items,
         notes: `Created from Listing Manager Etsy receipt #${receiptId}`,
         shippingCost: order.order_shipping != null ? +order.order_shipping : null,
+        invNoOverride,
       });
       await patchOrder(order, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now() });
+      // Refresh the local invoice list so the next order's suggested number increments.
+      loadKFresh(AT_INVOICES_KEY).then(d => Array.isArray(d) && setAtInvoices(d)).catch(() => {});
       // Persist AI-inferred shapes back onto the order rows so the Shape field fills in
       // and the next invoice refresh reuses them without another AI call.
       try {
@@ -3064,22 +3085,35 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         })()}
                       </div>
                     )}
-                    {!cancelled && isEtsyOrder(order) && selStep === 2 && (
+                    {!cancelled && isEtsyOrder(order) && selStep === 2 && (() => {
+                      const invFy = fiscalYearFull(orderDate(order));
+                      const invNumVal = invNoDraft[order.id] != null ? invNoDraft[order.id] : String(maxAtyaharaInvoiceNo(atInvoices, orderDate(order)) + 1);
+                      const composedInvNo = `ATY-${String(invNumVal).trim()}-${invFy}`;
+                      const numTaken = !order._atInvoiceNo && atInvoices.some(inv => String(inv.invNo || "") === composedInvNo);
+                      return (
                       <div style={{ background: C.surface, border: `1.5px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{order._atInvoiceNo ? "Sales invoice created" : "Create sales invoice"}</div>
                             <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._atInvoiceNo ? `Atyahara invoice ${order._atInvoiceNo} bills the Etsy buyer.` : "Bill the Etsy buyer from Atyahara. Pick the customs shape if auto-detect is off."}</div>
-                            {!order._atInvoiceNo && <select value={order.listing_shape || ""} onChange={e => setOrderShape(order, e.target.value)} style={{ ...FI(), marginTop: 8, minWidth: 220, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}>
-                              <option value="">Auto-detect customs shape</option>
-                              {order.listing_shape && !customsShapes.includes(order.listing_shape) && <option value={order.listing_shape}>{order.listing_shape}</option>}
-                              {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
-                            </select>}
+                            {!order._atInvoiceNo && <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 8 }}>
+                              <label style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint }}>Invoice no.<div style={{ display: "flex", alignItems: "center", gap: 0, marginTop: 4 }}>
+                                <span style={{ padding: "7px 8px", fontSize: 13, fontWeight: 800, color: C.inkMid, background: C.card, border: `1px solid ${C.border}`, borderRight: "none", borderRadius: "8px 0 0 8px" }}>ATY-</span>
+                                <input value={invNumVal} onChange={e => setInvNoDraft(s => ({ ...s, [order.id]: e.target.value.replace(/[^0-9]/g, "") }))} style={{ ...FI(), width: 66, fontSize: 13, fontWeight: 800, textAlign: "center", padding: "7px 4px", borderRadius: 0, borderLeft: "none", borderRight: "none" }} />
+                                <span style={{ padding: "7px 8px", fontSize: 13, fontWeight: 800, color: C.inkMid, background: C.card, border: `1px solid ${C.border}`, borderLeft: "none", borderRadius: "0 8px 8px 0" }}>-{invFy}</span>
+                              </div></label>
+                              <select value={order.listing_shape || ""} onChange={e => setOrderShape(order, e.target.value)} style={{ ...FI(), minWidth: 200, padding: "7px 8px", fontSize: 11, cursor: "pointer" }}>
+                                <option value="">Auto-detect customs shape</option>
+                                {order.listing_shape && !customsShapes.includes(order.listing_shape) && <option value={order.listing_shape}>{order.listing_shape}</option>}
+                                {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                            </div>}
+                            {numTaken && <div style={{ marginTop: 6, fontSize: 11, color: C.amber, fontWeight: 700 }}>⚠ {composedInvNo} already exists — it'll be bumped to the next free number.</div>}
                           </div>
                           <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
                             {!order._atInvoiceNo && <button onClick={() => { setInvoiceModalSearch(""); setInvoiceModalOrder(order); }} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Already invoiced?</button>}
                             <button
-                              onClick={() => createAtyaharaInvoiceForOrder(order)}
+                              onClick={() => createAtyaharaInvoiceForOrder(order, order._atInvoiceNo ? "" : composedInvNo)}
                               disabled={!!invoiceDraft(order).loading}
                               style={{ background: order._atInvoiceNo ? C.card : C.green, color: order._atInvoiceNo ? C.ink : "#fff", border: order._atInvoiceNo ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
                               {invoiceDraft(order).loading ? "Creating..." : order._atInvoiceNo ? "Refresh invoice" : "Create Invoice"}
@@ -3099,7 +3133,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                           </div>
                         )}
                       </div>
-                    )}
+                      );
+                    })()}
                     {!cancelled && isEtsyOrder(order) && selStep === 3 && (
                       <div style={{ background: C.surface, border: `1.5px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
