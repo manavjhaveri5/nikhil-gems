@@ -3,6 +3,23 @@ import { C, FI, Field } from "./ui.jsx";
 import { mob, uid, fmtDate } from "./utils.js";
 import { aiSuggest } from "./classifyLearner.js";
 
+// Words that say nothing about WHICH vendor this is. Nearly every supplier here is
+// a "…Gems & Stones Trading Co.", so these carry no identifying signal and must not
+// be allowed to match one vendor's records against another's.
+const GENERIC_VENDOR_WORDS = new Set([
+  "co", "company", "pvt", "private", "ltd", "limited", "llp", "inc", "corp", "corporation",
+  "and", "the", "of", "sons", "son", "brothers", "bros", "associates", "group",
+  "gem", "gems", "gemstone", "gemstones", "stone", "stones", "mineral", "minerals",
+  "crystal", "crystals", "jewel", "jewels", "jewellery", "jewelry", "lapidary", "agate",
+  "trading", "traders", "trade", "export", "exports", "exporter", "exporters",
+  "import", "imports", "importer", "importers", "enterprise", "enterprises",
+  "industries", "industry", "international", "overseas", "global", "india",
+  "agency", "agencies", "supplier", "suppliers", "supplies", "works", "impex",
+]);
+const normVendorName = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+const vendorWords = name => normVendorName(name).split(" ").filter(Boolean);
+const distinctiveVendorWords = name => vendorWords(name).filter(w => !GENERIC_VENDOR_WORDS.has(w));
+
 // Shared "Classify Transaction" modal used by BOTH finance UIs:
 //   • Finance module        (src/FinanceApp.jsx, admin)
 //   • Accounting Journal     (nikhil-gems-v6.jsx → AccountingFinanceLedger, accountant)
@@ -244,8 +261,21 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const matchesVendor = p => {
     if (!vendorId) return true;
     if (p.vendorId === vendorId) return true;
-    const s = vendorNameOf(p).toLowerCase(), v = (vendor?.name || "").toLowerCase();
-    return s && v && (s.includes(v) || v.includes(s) || v.split(/\s+/).filter(w => w.length > 2).some(w => s.includes(w)));
+    const s = normVendorName(vendorNameOf(p)), v = normVendorName(vendor?.name);
+    if (!s || !v) return false;
+    if (s === v || s.includes(v) || v.includes(s)) return true;
+    // Match on the distinctive part of the name only. Matching on any shared word
+    // put every vendor in this business against every other — "ZN Gems & Stones
+    // Trading Co." matched "Gemstones Infinity" and "Shahi Mineral Stones" on
+    // "gems"/"stones" alone, which surfaced their bills under the wrong vendor.
+    const want = distinctiveVendorWords(vendor?.name);
+    const have = new Set(distinctiveVendorWords(vendorNameOf(p)));
+    if (!want.length || !want.every(w => have.has(w))) return false;
+    // One shared distinctive word is weak on its own — "Rajasthan Gems & Minerals"
+    // and "Rajasthan Stone Works" are different firms sharing a place name. Require
+    // half the vendor's words to appear as well.
+    const vt = vendorWords(vendor?.name), st = new Set(vendorWords(vendorNameOf(p)));
+    return vt.filter(w => st.has(w)).length / vt.length >= 0.5;
   };
   // Bills already linked to THIS payment stay visible even after they're marked paid.
   const linkedBillIds = new Set(txn.classifiedRef?.billIds || (txn.classifiedRef?.billId ? [txn.classifiedRef.billId] : []));
@@ -353,20 +383,17 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   // running credit balance. Applying it against a bill lets you clear what's left after cash
   // (e.g. ₹60k advanced on a PO + ₹40k paid now settles a ₹1L bill). Only meaningful once a
   // vendor is chosen, since the pool is per-vendor.
-  const poAdvanceAvailable = vendorId ? vendorPOs.reduce((s, po) => s + Math.max(0, +po.paidAmount || +po.advance || 0), 0) : 0;
+  // Only money explicitly booked as an advance counts. Paying against a PO used to be
+  // pooled in here too, but that money is already recorded on the PO and carries over
+  // when the PO is billed — offering it again as free credit against an unrelated bill
+  // spends it twice.
   const vendorCreditAvailable = vendorId ? Math.max(0, +vendor?.creditBalance || 0) : 0;
-  const availableAdvance = poAdvanceAvailable + vendorCreditAvailable;
+  const availableAdvance = vendorCreditAvailable;
   // Where that pool actually comes from. Shown in the UI because "advance
   // available" on its own is unauditable — you can't tell a stale credit balance
   // from money genuinely sitting on an open PO without being told which.
-  const advanceSources = !vendorId ? [] : [
-    ...(vendorCreditAvailable > 0.005 ? [{ key: "credit", label: "Credit balance on vendor", sub: "from an earlier advance or overpayment", amount: vendorCreditAvailable }] : []),
-    ...vendorPOs.map(po => ({
-      key: po.id,
-      label: `Paid on ${po.poNumber || "PO"}`,
-      sub: [po.date ? fmtDate(po.date) : "", po.status].filter(Boolean).join(" · "),
-      amount: Math.max(0, +po.paidAmount || +po.advance || 0),
-    })).filter(s => s.amount > 0.005),
+  const advanceSources = !vendorId || vendorCreditAvailable <= 0.005 ? [] : [
+    { key: "credit", label: "Credit balance on vendor", sub: "from payments booked as an advance", amount: vendorCreditAvailable },
   ];
   const dueAfterCash = Math.max(0, totalBillsDue - txnAmt);
   const maxAdvanceApply = Math.min(availableAdvance, dueAfterCash);
