@@ -326,20 +326,6 @@ const TOOLS = [
   {
     type: "function",
     function: {
-      name: "log_bank_sms",
-      description: "Book a forwarded bank SMS alert (Bank of India debit/credit/OD alerts) straight into the Finance ledger. ALWAYS use this — not log_finance_transaction or log_finance_transfer — whenever the user forwards raw bank SMS text containing 'Debited'/'Credited' and 'Avl Bal'. It parses the amount, both account numbers, the date and the bank's own balance, handles OD drawdowns/repayments and OD interest charges, and safely de-duplicates the two SMS the bank sends for a single OD transfer. Pass the message through verbatim; if the user forwards two SMS at once, call this once per message.",
-      parameters: {
-        type: "object",
-        properties: {
-          text: { type: "string", description: "The bank SMS text, copied exactly as received — do not reword, reformat or strip account numbers." }
-        },
-        required: ["text"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
       name: "log_finance_transfer",
       description: "Add an internal transfer/conversion between two own Finance accounts, such as EEFC to current account/BOI, USD cash to EEFC, or bank-to-bank transfer. Use this instead of log_finance_transaction for transfers between Nikhil's own accounts.",
       parameters: {
@@ -1156,148 +1142,6 @@ async function execLogFinanceTransfer({ from_account, to_account, amount_from, c
   return { success: true, txn_id: txn.id, type: "conversion", from: from.name, to: to.name, amount_from: srcAmt, currency_from: txn.currency, amount_to: Math.round(srcAmt * convRate * 100) / 100, currency_to: to.currency || currency_to || "INR", rate: convRate, date: txn.date, file_attached: attached };
 }
 
-// ── Bank of India SMS alerts ──────────────────────────────────────────────────
-// Every OD draw fires two SMS — one on the OD account, one on the current
-// account — describing the same transfer from opposite sides. Each is parsed
-// independently into a "leg"; the second one to arrive is recognised as the
-// mirror of the first and merges its balance snapshot in instead of double
-// booking. Forwarding either one alone is enough.
-//
-//   BOI - Rs 300000.00 Debited(TRF) CD 006420110000451 in your Ac XX0008 on
-//         22-07-2026. .Avl BalRs 1320000.00.
-//   BOI - Rs 300000.00 Credited(TRF)OD 006427280000008 in your Ac XX0451 on
-//         22-07-2026. .Avl BalRs 487032.02.
-const OD_INT_CAT = "Interest – OD";
-
-function parseBoiSmsLeg(text) {
-  const s = String(text || "").replace(/\s+/g, " ").trim();
-  const num = v => +String(v || "").replace(/,/g, "") || 0;
-
-  const mAmt = s.match(/Rs\.?\s*([\d,]+(?:\.\d+)?)\s*(Debited|Credited)/i);
-  if (!mAmt) return null;
-  const amount = num(mAmt[1]);
-  const dir = mAmt[2].toLowerCase(); // debited = left my account
-
-  // "in your Ac XX0008" — the account this SMS is addressed to, masked to last 4.
-  const mOwn = s.match(/in\s+your\s+A\/?c\.?\s*[Xx*]*(\d{3,})/i);
-  if (!mOwn) return null;
-  const ownLast = mOwn[1];
-
-  // "(TRF) CD 006420110000451" / "(TRF)OD 006427280000008" — the other side.
-  const mOther = s.match(/(?:Debited|Credited)\s*\([A-Za-z]+\)\s*[A-Za-z]{0,4}\s*(\d{8,})/i);
-  const otherNo = mOther ? mOther[1] : null;
-
-  const mDate = s.match(/on\s*(\d{2})-(\d{2})-(\d{4})/);
-  const date = mDate ? `${mDate[3]}-${mDate[2]}-${mDate[1]}` : new Date().toISOString().slice(0, 10);
-
-  const mBal = s.match(/Avl\s*Bal\s*\.?\s*Rs\.?\s*([\d,]+(?:\.\d+)?)/i);
-  const avlBal = mBal ? num(mBal[1]) : null;
-
-  const isInterest = /\bint\b|interest/i.test(s);
-
-  return { amount, dir, ownLast, otherNo, date, avlBal, isInterest, raw: s };
-}
-
-// Digits that identify an account: its OD/account number plus any number in its
-// name (e.g. "Bank of India 0451").
-function accNumbers(a) {
-  return [a.odAccountNo, a.accountNo, ...(String(a.name || "").match(/\d{4,}/g) || [])]
-    .filter(Boolean).map(String);
-}
-function matchAccByNumber(accs, digits) {
-  if (!digits) return null;
-  const d = String(digits);
-  const last4 = d.slice(-4);
-  // Exact/suffix match first, then fall back to matching on the last 4.
-  return accs.find(a => accNumbers(a).some(n => n === d || n.endsWith(d) || d.endsWith(n)))
-      || accs.find(a => accNumbers(a).some(n => n.slice(-4) === last4))
-      || null;
-}
-
-async function execLogBankSms({ text }) {
-  const leg = parseBoiSmsLeg(text);
-  if (!leg) return { error: "Couldn't read that as a bank SMS. Forward the message text exactly as the bank sent it." };
-
-  const [accounts, transactions] = await Promise.all([loadK(_ctx.finAccs), loadK(_ctx.finTxns)]);
-  const accs = (accounts || []).filter(a => a.active !== false);
-  const txns = transactions || [];
-
-  const own = matchAccByNumber(accs, leg.ownLast);
-  if (!own) return { error: `No Finance account matches "…${leg.ownLast}". Add the account number to the account in Finance → Accounts first.` };
-  const other = leg.otherNo ? matchAccByNumber(accs, leg.otherNo) : null;
-
-  const odAcc = own.type === "od" ? own : (other?.type === "od" ? other : null);
-  const balPatch = leg.avlBal == null ? {}
-    : own.type === "od"
-      // On an OD account the bank reports remaining drawing power, not a balance.
-      ? { odAvailAfter: leg.avlBal, odAvailAccId: own.id }
-      : { bankBalAfter: leg.avlBal, bankBalAccId: own.id };
-
-  // Interest charged by the bank — a one-sided debit, not a transfer.
-  if (leg.isInterest && leg.dir === "debited" && !other) {
-    const txn = {
-      id: uid(), type: "debit", amount: String(leg.amount), currency: own.currency || "INR",
-      accountFrom: own.id, payee: "Bank of India", category: OD_INT_CAT,
-      date: leg.date, notes: `OD interest, from bank SMS: ${leg.raw}`,
-      ...balPatch, createdAt: new Date().toISOString(),
-    };
-    await saveK(_ctx.finTxns, [txn, ...txns]);
-    await logActivity({ user: "Telegram", action: "created", module: "finance", label: `OD interest ${fmtMoney(leg.amount, txn.currency)}`, targetId: txn.id, targetMod: "finance" });
-    return { success: true, kind: "od_interest", amount: leg.amount, account: own.name, date: leg.date };
-  }
-
-  if (!other) {
-    return { error: `Read ${leg.dir} ${leg.amount} on ${own.name}, but couldn't tell which account it moved to/from. Log it with log_finance_transaction instead.` };
-  }
-
-  // Normalise both legs to the same direction: money leaves `from`, lands in `to`.
-  const from = leg.dir === "debited" ? own : other;
-  const to   = leg.dir === "debited" ? other : own;
-
-  // The mirror SMS for this same transfer may already be booked.
-  const dup = txns.find(t =>
-    t.type === "conversion" && t.date === leg.date &&
-    t.accountFrom === from.id && t.accountTo === to.id &&
-    Math.abs((+t.amount || 0) - leg.amount) < 0.01);
-  if (dup) {
-    if (Object.keys(balPatch).length) {
-      await saveK(_ctx.finTxns, txns.map(t => t.id === dup.id ? { ...t, ...balPatch } : t));
-    }
-    return {
-      success: true, kind: "od_transfer", duplicate: true, txn_id: dup.id,
-      note: "This is the matching second SMS for a transfer already in the ledger — recorded the bank's balance against it instead of booking it twice.",
-      ...(odAcc && leg.avlBal != null && own.type === "od" ? { od_available: leg.avlBal } : {}),
-    };
-  }
-
-  const drawing = from.type === "od"; // OD → current = drawing; the reverse = repaying
-  const txn = {
-    id: uid(), type: "conversion", amount: String(leg.amount),
-    currency: from.currency || "INR", convRate: "1",
-    accountFrom: from.id, accountTo: to.id,
-    payee: `${from.name} → ${to.name}`,
-    category: "Bank Transfer (Internal)",
-    date: leg.date,
-    notes: `${odAcc ? (drawing ? "OD drawdown" : "OD repayment") : "Bank transfer"}, from bank SMS: ${leg.raw}`,
-    classifiedAs: "conversion",
-    classifiedRef: { convOtherAccountId: to.id, rate: 1 },
-    ...balPatch, createdAt: new Date().toISOString(),
-  };
-  await saveK(_ctx.finTxns, [txn, ...txns]);
-  await logActivity({ user: "Telegram", action: "created", module: "finance", label: `${odAcc ? (drawing ? "OD draw" : "OD repay") : "Transfer"}: ${fmtMoney(leg.amount, txn.currency)} ${from.name} → ${to.name}`, targetId: txn.id, targetMod: "finance" });
-
-  const out = {
-    success: true, kind: odAcc ? (drawing ? "od_drawdown" : "od_repayment") : "transfer",
-    txn_id: txn.id, amount: leg.amount, from: from.name, to: to.name, date: leg.date,
-    note: "Forward the other SMS for this transfer too — it will be matched to this entry, not double booked.",
-  };
-  if (odAcc && leg.avlBal != null && own.type === "od") {
-    out.od_available_per_bank = leg.avlBal;
-    if (odAcc.odLimit) out.od_drawn_per_bank = Math.round((+odAcc.odLimit - leg.avlBal) * 100) / 100;
-  }
-  return out;
-}
-
 async function execAttachDocument({ payee, amount, days_back = 45 } = {}) {
   if (!_pendingFile) return { error: "No file is attached. Send the PDF/photo together with the instruction in one message." };
   const txns = (await loadK(_ctx.finTxns)) || [];
@@ -1582,7 +1426,6 @@ async function runTool(name, args) {
       get_finance_transactions: execGetFinanceTransactions,
       log_finance_transaction: execLogFinanceTransaction,
       log_finance_transfer: execLogFinanceTransfer,
-      log_bank_sms: execLogBankSms,
       attach_document_to_transaction: execAttachDocument,
       record_payment: execRecordPayment,
       create_purchase: execCreatePurchase, create_expense: execCreateExpense,
@@ -1627,7 +1470,7 @@ You have full access to read AND write everything:
 - Purchases & POs: create, view, record payments (record_payment)
 - Expenses: create, view
 - Invoices: view
-- Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (one-sided income/expense), log_finance_transfer (internal transfer/conversion), log_bank_sms (forwarded bank SMS alerts)
+- Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (one-sided income/expense), log_finance_transfer (internal transfer/conversion)
 - Documents: you CAN attach files to transactions. When a user sends a payment screenshot/receipt and you log that payment, the image is AUTOMATICALLY attached to that transaction — confirm it ("…and saved the screenshot to it"). To attach a file to an EXISTING/older transaction, call attach_document_to_transaction.
 - Vendors: search, create
 - Memory: save/delete persistent facts
@@ -1636,7 +1479,6 @@ IMPORTANT RULES:
 1. ALWAYS fetch real data with tools — never guess or make up numbers
 2. "How much in [bank]" → use get_finance_accounts
 3. "I paid X to Y" or "received X from Y" → call get_finance_accounts first (to know which accounts exist), then IMMEDIATELY call log_finance_transaction with the correct account. Do NOT ask if it's against a bill/PO — just log it. If the user mentioned a bill or PO explicitly, also call record_payment.
-3z. If the message is raw bank SMS text (contains "Debited"/"Credited" plus "Avl Bal", e.g. from BOI), call log_bank_sms with the text VERBATIM — once per SMS — instead of log_finance_transaction/log_finance_transfer. Do not retype the numbers yourself. An OD transfer produces two SMS (one on the OD account …0008, one on the current account …0451); forwarding both is fine and safe — the second is matched to the first, never double booked. When reporting back an OD drawdown, state the OD amount drawn and the limit still available, and remind that interest runs on the drawn amount daily.
 3a. If money moves between Nikhil's own accounts (especially EEFC → current account / BOI, USD cash → EEFC, or bank-to-bank), use log_finance_transfer, not log_finance_transaction. For BOI foreign inward remittance advice PDFs, treat them as EEFC → BOI/current conversions.
 4. "What did I spend / what transactions" → use get_finance_transactions
 5. For any write action, confirm what you're saving in one short line, then do it immediately — don't ask "shall I proceed?"
