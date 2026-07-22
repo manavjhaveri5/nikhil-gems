@@ -177,6 +177,21 @@ const yearOfDay   = n => new Date(n * 86400000).getUTCFullYear();
 const yearStartDay = y => Math.floor(Date.UTC(y, 0, 1) / 86400000);
 const daysInYear  = y => ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365;
 
+// Interest on a flat span of days at one balance, split at 31 Dec so each part
+// is divided by its own year's length. The single place the rate is applied —
+// the dashboard estimate and the statement's working both run through here, so
+// the two can never disagree.
+function accrueFlat(bal, fromDay, toDay, rate) {
+  let out = 0, c = fromDay;
+  while (c < toDay) {
+    const y = yearOfDay(c);
+    const until = Math.min(toDay, yearStartDay(y + 1));
+    out += Math.max(0, bal) * (until - c) * (rate / 100) / daysInYear(y);
+    c = until;
+  }
+  return out;
+}
+
 // Interest accrued on the daily outstanding between two YYYY-MM-DD dates
 // (inclusive of `from`, exclusive of `to`) — the "daily products" method Indian
 // banks use for an OD: interest runs only on the amount actually drawn, for the
@@ -194,18 +209,7 @@ function odAccruedInterest(acc, transactions, from, to) {
   const startDay = dayNum(from), endDay = dayNum(to);
   if (endDay <= startDay) return { interest: 0, avgBal: 0, days: 0 };
 
-  // A flat span of days at one balance, split at 31 Dec so each part is divided
-  // by its own year length.
-  const accrueSpan = (bal, spanFrom, spanTo) => {
-    let out = 0, c = spanFrom;
-    while (c < spanTo) {
-      const y = yearOfDay(c);
-      const until = Math.min(spanTo, yearStartDay(y + 1));
-      out += Math.max(0, bal) * (until - c) * (rate / 100) / daysInYear(y);
-      c = until;
-    }
-    return out;
-  };
+  const accrueSpan = (bal, spanFrom, spanTo) => accrueFlat(bal, spanFrom, spanTo, rate);
 
   // Outstanding as at the start of the window.
   let bal = 0;
@@ -227,6 +231,87 @@ function odAccruedInterest(acc, transactions, from, to) {
 
 const OD_INT_CAT = "Interest – OD";
 const isOdInterestTxn = t => (t.category || "") === OD_INT_CAT;
+
+// Movement on the OD in liability sense: positive = outstanding goes UP.
+function odDelta(acc, t) {
+  const amt = +t.amount || 0;
+  if (t.type === "credit"     && t.accountTo   === acc.id) return -amt;
+  if (t.type === "debit"      && t.accountFrom === acc.id) return  amt;
+  if (t.type === "conversion") {
+    if (t.accountFrom === acc.id) return  amt;
+    if (t.accountTo   === acc.id) return -amt * (+t.convRate || 1);
+  }
+  return 0;
+}
+
+// A full statement for one period: opening balance, every movement, and the
+// bank's own "daily products" working — Σ(balance × days) ÷ days-in-year × rate.
+// Laid out this way so each line can be checked against BOI's statement rather
+// than taken on trust.
+function odStatement(acc, transactions, from, to) {
+  const rate = odRate(acc);
+  const touching = transactions
+    .filter(t => t.accountFrom === acc.id || t.accountTo === acc.id)
+    .sort((a, b) => (a.date || "").localeCompare(b.date || "")
+                 || (a.createdAt || "").localeCompare(b.createdAt || ""));
+
+  let bal = +(acc.openingBal || 0);
+  const rows = [];
+  for (const t of touching) {
+    const d = t.date || "";
+    if (d >= to) continue;
+    const delta = odDelta(acc, t);
+    bal += delta;
+    if (d < from) continue;                       // rolls into the opening balance
+    rows.push({
+      id: t.id, date: d,
+      time: t.createdAt ? new Date(t.createdAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "",
+      kind: isOdInterestTxn(t) ? "interest" : delta > 0 ? "draw" : "repay",
+      particulars: t.payee || t.category || "—",
+      notes: t.notes || "",
+      drawn:  delta > 0 ?  delta : 0,
+      repaid: delta < 0 ? -delta : 0,
+      balance: bal,
+      bankSaid: t.odAvailAfter != null ? +t.odAvailAfter : null,
+    });
+  }
+  const closing = bal;
+
+  // Opening = balance before the window, i.e. reverse out everything inside it.
+  const opening = closing - rows.reduce((s, r) => s + r.drawn - r.repaid, 0);
+
+  // Balance periods: a movement dated D takes effect on D (banks charge on the
+  // day's closing balance), so [previous change, D) sits at the old balance.
+  const lastByDate = new Map();
+  rows.forEach(r => lastByDate.set(r.date, r.balance));
+  const periods = [];
+  let pBal = opening, cursor = from;
+  for (const d of [...lastByDate.keys()].sort()) {
+    if (d > cursor) periods.push({ from: cursor, to: d, balance: pBal });
+    pBal = lastByDate.get(d);
+    cursor = d;
+  }
+  if (cursor < to) periods.push({ from: cursor, to, balance: pBal });
+
+  const priced = periods.map(p => {
+    const days = dayNum(p.to) - dayNum(p.from);
+    return { ...p, days,
+      product:  Math.max(0, p.balance) * days,
+      interest: accrueFlat(p.balance, dayNum(p.from), dayNum(p.to), rate) };
+  }).filter(p => p.days > 0);
+
+  const totalDays = dayNum(to) - dayNum(from);
+  return {
+    rate, opening, closing, rows, periods: priced, totalDays,
+    drawn:    rows.reduce((s, r) => s + r.drawn, 0),
+    repaid:   rows.reduce((s, r) => s + r.repaid, 0),
+    charged:  rows.filter(r => r.kind === "interest").reduce((s, r) => s + r.drawn, 0),
+    productSum: priced.reduce((s, p) => s + p.product, 0),
+    interest:   priced.reduce((s, p) => s + p.interest, 0),
+    avgBal:     totalDays ? priced.reduce((s, p) => s + p.product, 0) / totalDays : 0,
+    peak:       Math.max(0, ...priced.map(p => p.balance)),
+  };
+}
 
 function toINR(amount, currency, rates) {
   if (!currency || currency === "INR") return +amount || 0;
@@ -344,6 +429,212 @@ function FShell({ title, view, setView, onHome, masked, toggleMask, company, set
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
+// ─── OD Statement ─────────────────────────────────────────────────────────────
+// A month's overdraft account laid out the way a bank statement is, plus the
+// interest working underneath it, so every rupee charged can be traced to a
+// balance and a number of days.
+function OdStatementModal({ acc, transactions, onClose }) {
+  const masked = useMasked();
+  const m = makeMask(masked);
+  const now = new Date();
+  const [ym, setYm] = useState({ y: now.getFullYear(), mo: now.getMonth() });
+
+  const pad   = n => String(n).padStart(2, "0");
+  const start = `${ym.y}-${pad(ym.mo + 1)}-01`;
+  const endD  = new Date(ym.y, ym.mo + 1, 1);
+  const end   = `${endD.getFullYear()}-${pad(endD.getMonth() + 1)}-01`;
+  const cur   = acc.currency || "INR";
+  const f     = n => m(fmtAmt(n, cur));
+
+  const st = odStatement(acc, transactions, start, end);
+  const isCurrentMonth = ym.y === now.getFullYear() && ym.mo === now.getMonth();
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+  const shift = n => setYm(v => {
+    const d = new Date(v.y, v.mo + n, 1);
+    return { y: d.getFullYear(), mo: d.getMonth() };
+  });
+  const label = new Date(ym.y, ym.mo, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
+
+  const exportCsv = () => {
+    const q = s => `"${String(s ?? "").replace(/"/g, '""')}"`;
+    const lines = [
+      [`OD Statement — ${acc.name}`], [label], [`Rate`, `${st.rate.toFixed(2)}% p.a.`], [],
+      ["Date", "Time", "Particulars", "Drawn", "Repaid", "Outstanding"],
+      [q("Opening balance"), "", "", "", "", st.opening.toFixed(2)],
+      ...st.rows.map(r => [r.date, r.time, q(r.particulars), r.drawn ? r.drawn.toFixed(2) : "",
+                           r.repaid ? r.repaid.toFixed(2) : "", r.balance.toFixed(2)]),
+      [q("Closing balance"), "", "", st.drawn.toFixed(2), st.repaid.toFixed(2), st.closing.toFixed(2)], [],
+      ["Interest working — daily products"],
+      ["From", "To", "Days", "Outstanding", "Product (bal x days)", "Interest"],
+      ...st.periods.map(p => [p.from, p.to, p.days, p.balance.toFixed(2), p.product.toFixed(2), p.interest.toFixed(2)]),
+      ["", "", st.totalDays, "", st.productSum.toFixed(2), st.interest.toFixed(2)],
+    ];
+    const blob = new Blob([lines.map(r => r.join(",")).join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `OD-statement-${ym.y}-${pad(ym.mo + 1)}.csv`;
+    a.click(); URL.revokeObjectURL(a.href);
+  };
+
+  const TH = { fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, padding: "7px 10px", textAlign: "left", whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` };
+  const TD = { fontSize: 12, color: C.ink, padding: "8px 10px", whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` };
+  const NUM = { ...TD, textAlign: "right", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 14, fontWeight: 600 };
+  const KIND = { draw: [C.red, "Drawdown"], repay: [C.green, "Repayment"], interest: [C.amber, "Interest charged"] };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 3000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: mob ? 0 : "28px 20px", overflowY: "auto" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: mob ? 0 : 14, width: "100%", maxWidth: 940, boxShadow: "0 24px 70px rgba(0,0,0,.28)", overflow: "hidden" }}>
+
+        {/* Header */}
+        <div style={{ background: `linear-gradient(135deg,${C.ink} 0%,#3A2810 100%)`, color: "#FAF0DC", padding: mob ? "16px 18px" : "20px 24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", opacity: .55 }}>Overdraft Statement</div>
+              <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: mob ? 21 : 26, fontWeight: 600, lineHeight: 1.15, marginTop: 2 }}>{acc.name}</div>
+              <div style={{ fontSize: 10, opacity: .6, marginTop: 3 }}>
+                {acc.odAccountNo ? `A/c ${acc.odAccountNo} · ` : ""}{st.rate.toFixed(2)}% p.a.
+                {acc.odLimit ? ` · limit ${f(+acc.odLimit)}` : ""}
+              </div>
+            </div>
+            <button onClick={onClose} style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#FAF0DC", borderRadius: 7, width: 30, height: 30, fontSize: 16, cursor: "pointer", flexShrink: 0 }}>×</button>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+            {[["‹", -1], ["›", 1]].map(([g, n], i) => (
+              <button key={g} onClick={() => shift(n)} style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#FAF0DC", borderRadius: 6, padding: "4px 11px", fontSize: 15, cursor: "pointer", order: i === 0 ? 0 : 2 }}>{g}</button>
+            ))}
+            <div style={{ fontSize: 13, fontWeight: 600, minWidth: 118, textAlign: "center", order: 1 }}>{label}</div>
+            <button onClick={exportCsv} style={{ background: "rgba(255,255,255,.12)", border: "none", color: "#FAF0DC", borderRadius: 6, padding: "5px 12px", fontSize: 11, cursor: "pointer", order: 3, marginLeft: "auto" }}>⤓ CSV</button>
+          </div>
+        </div>
+
+        <div style={{ padding: mob ? "14px 14px 22px" : "18px 24px 26px" }}>
+
+          {/* Summary */}
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5,1fr)", gap: 9, marginBottom: 16 }}>
+            {[
+              ["Opening", f(st.opening), "outstanding", C.inkMid],
+              ["Drawn", st.drawn ? `+${f(st.drawn)}` : f(0), `${st.rows.filter(r => r.kind === "draw").length} draw(s)`, C.red],
+              ["Repaid", st.repaid ? `−${f(st.repaid)}` : f(0), `${st.rows.filter(r => r.kind === "repay").length} repayment(s)`, C.green],
+              ["Closing", f(st.closing), "outstanding", C.ink],
+              ["Interest", f(st.interest), isCurrentMonth ? "projected" : "for the month", C.amber],
+            ].map(([l, v, s, col]) => (
+              <div key={l} style={{ background: C.card, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 }}>{l}</div>
+                <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 17, fontWeight: 600, color: col, lineHeight: 1.15, marginTop: 3 }}>{v}</div>
+                <div style={{ fontSize: 9, color: C.inkFaint, marginTop: 1 }}>{s}</div>
+              </div>
+            ))}
+          </div>
+
+          {isCurrentMonth && (
+            <div style={{ fontSize: 10, color: C.inkMid, background: C.amberBg, border: `1px solid ${C.borderHi}`, borderRadius: 7, padding: "8px 11px", marginBottom: 16 }}>
+              This month is still running. Days after {todayStr} are priced at the balance as it stands now — repay or draw again and this restates.
+            </div>
+          )}
+
+          {/* Transactions */}
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .8, marginBottom: 7 }}>Account Movements</div>
+          <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 20 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+              <thead><tr>
+                {["Date", "Time", "Particulars", "Drawn", "Repaid", "Outstanding"].map((h, i) => (
+                  <th key={h} style={{ ...TH, textAlign: i >= 3 ? "right" : "left" }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                <tr style={{ background: C.card }}>
+                  <td style={{ ...TD, fontWeight: 600 }} colSpan={5}>Opening balance</td>
+                  <td style={{ ...NUM, fontWeight: 700 }}>{f(st.opening)}</td>
+                </tr>
+                {st.rows.map(r => {
+                  const [col, lbl] = KIND[r.kind];
+                  return (
+                    <tr key={r.id}>
+                      <td style={TD}>{new Date(r.date + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</td>
+                      <td style={{ ...TD, color: C.inkFaint, fontSize: 11 }}>{r.time || "—"}</td>
+                      <td style={{ ...TD, whiteSpace: "normal", minWidth: 200 }}>
+                        <div style={{ fontWeight: 500 }}>{r.particulars}</div>
+                        <div style={{ fontSize: 9, color: col, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, marginTop: 2 }}>{lbl}</div>
+                        {r.bankSaid != null && (
+                          <div style={{ fontSize: 9, color: C.inkFaint, marginTop: 2 }}>bank reported {f(r.bankSaid)} available</div>
+                        )}
+                      </td>
+                      <td style={{ ...NUM, color: r.drawn ? C.red : C.inkFaint }}>{r.drawn ? f(r.drawn) : "—"}</td>
+                      <td style={{ ...NUM, color: r.repaid ? C.green : C.inkFaint }}>{r.repaid ? f(r.repaid) : "—"}</td>
+                      <td style={NUM}>{f(r.balance)}</td>
+                    </tr>
+                  );
+                })}
+                {st.rows.length === 0 && (
+                  <tr><td style={{ ...TD, color: C.inkFaint, textAlign: "center" }} colSpan={6}>No movement this month</td></tr>
+                )}
+                <tr style={{ background: C.card }}>
+                  <td style={{ ...TD, fontWeight: 600 }} colSpan={3}>Closing balance</td>
+                  <td style={{ ...NUM, color: C.red }}>{f(st.drawn)}</td>
+                  <td style={{ ...NUM, color: C.green }}>{f(st.repaid)}</td>
+                  <td style={{ ...NUM, fontWeight: 700 }}>{f(st.closing)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Interest working */}
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .8, marginBottom: 3 }}>Interest Working — Daily Products</div>
+          <div style={{ fontSize: 10, color: C.inkFaint, marginBottom: 7 }}>
+            Interest is charged on each day's closing balance. Every period below is a stretch where the balance did not move.
+          </div>
+          <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+              <thead><tr>
+                {["From", "To", "Days", "Outstanding", "Product (bal × days)", "Interest"].map((h, i) => (
+                  <th key={h} style={{ ...TH, textAlign: i >= 2 ? "right" : "left" }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {st.periods.map(p => (
+                  <tr key={p.from}>
+                    <td style={TD}>{new Date(p.from + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</td>
+                    <td style={TD}>{new Date(dayNum(p.to) * 86400000 - 86400000).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" })}</td>
+                    <td style={NUM}>{p.days}</td>
+                    <td style={{ ...NUM, color: p.balance > 0 ? C.ink : C.inkFaint }}>{f(p.balance)}</td>
+                    <td style={{ ...NUM, color: C.inkMid }}>{m(Math.round(p.product).toLocaleString("en-IN"))}</td>
+                    <td style={{ ...NUM, color: p.interest > 0 ? C.amber : C.inkFaint }}>{f(p.interest)}</td>
+                  </tr>
+                ))}
+                <tr style={{ background: C.card }}>
+                  <td style={{ ...TD, fontWeight: 600 }} colSpan={2}>Total</td>
+                  <td style={{ ...NUM, fontWeight: 700 }}>{st.totalDays}</td>
+                  <td style={{ ...NUM, color: C.inkFaint, fontSize: 11 }}>avg {f(st.avgBal)}</td>
+                  <td style={{ ...NUM, fontWeight: 700 }}>{m(Math.round(st.productSum).toLocaleString("en-IN"))}</td>
+                  <td style={{ ...NUM, fontWeight: 700, color: C.amber }}>{f(st.interest)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* The arithmetic, spelled out */}
+          <div style={{ background: C.card, borderRadius: 9, padding: "12px 14px", fontSize: 11, color: C.inkMid, lineHeight: 1.7 }}>
+            <span style={{ fontWeight: 700, color: C.ink }}>How this is worked out</span><br />
+            Σ products {m(Math.round(st.productSum).toLocaleString("en-IN"))} ÷ {daysInYear(ym.y)} days
+            {" "}× {st.rate.toFixed(2)}% = <span style={{ fontWeight: 700, color: C.amber }}>{f(st.interest)}</span>
+            <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 5 }}>
+              {daysInYear(ym.y) === 366 ? "366-day year (leap)" : "365-day year"} · rate = FD {acc.odFdRate}% + {acc.odSpread}% spread
+              {st.peak > 0 && <> · peak outstanding {f(st.peak)}</>}
+              {st.charged > 0 && <> · BOI actually debited {f(st.charged)} this month</>}
+            </div>
+            {st.charged > 0 && Math.abs(st.charged - st.interest) >= 1 && (
+              <div style={{ fontSize: 10, color: C.red, marginTop: 6 }}>
+                ⚠ Charged {f(Math.abs(st.charged - st.interest))} {st.charged > st.interest ? "more" : "less"} than this working — worth querying with the branch.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ accounts, transactions, rates, invoices, purchases, balances, totalINR, onAddTxn }) {
   const masked = useMasked();
   const m = makeMask(masked);
@@ -378,6 +669,7 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
   const bankAccs = accounts.filter(a => a.type === "bank" && a.active);
   const cardAccs = accounts.filter(a => a.type === "credit_card" && a.active);
   const odAccs   = accounts.filter(a => a.type === "od" && a.active);
+  const [odStatementAcc, setOdStatement] = useState(null);
 
   const StatCard = ({ label, value, sub, color, bg }) => (
     <div style={{ background: bg || C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: mob ? "14px 15px" : "16px 18px" }}>
@@ -494,6 +786,10 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
         </div>
       </div>
 
+      {odStatementAcc && (
+        <OdStatementModal acc={odStatementAcc} transactions={transactions} onClose={() => setOdStatement(null)} />
+      )}
+
       {/* Overdraft */}
       {odAccs.map(a => {
         const drawn     = Math.max(0, balances[a.id] || 0);
@@ -550,6 +846,9 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
                     {available != null ? m(fmtAmt(available, a.currency || "INR")) : "—"}
                   </div>
                   {limit > 0 && <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 2 }}>of {m(fmtAmt(limit, a.currency || "INR"))} limit</div>}
+                  <button onClick={() => setOdStatement(a)} className="fbs" style={{ fontSize: 11, padding: "5px 11px", marginTop: 7 }}>
+                    📜 Detailed ledger
+                  </button>
                 </div>
               </div>
 
