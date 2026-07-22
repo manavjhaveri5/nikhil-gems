@@ -171,11 +171,22 @@ function odBalanceSteps(acc, transactions) {
   return steps;
 }
 
-const dayNum = d => Math.floor(new Date(d + "T00:00:00").getTime() / 86400000);
+// UTC throughout, so a day number never shifts with the local timezone.
+const dayNum      = d => Math.floor(Date.parse(d + "T00:00:00Z") / 86400000);
+const yearOfDay   = n => new Date(n * 86400000).getUTCFullYear();
+const yearStartDay = y => Math.floor(Date.UTC(y, 0, 1) / 86400000);
+const daysInYear  = y => ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365;
 
-// Interest accrued on daily outstanding between two YYYY-MM-DD dates (inclusive
-// of `from`, exclusive of `to`). This is the estimate — the bank's actual debit
-// is logged separately and compared against it.
+// Interest accrued on the daily outstanding between two YYYY-MM-DD dates
+// (inclusive of `from`, exclusive of `to`) — the "daily products" method Indian
+// banks use for an OD: interest runs only on the amount actually drawn, for the
+// exact days it stays drawn, so a part repayment cuts it from that day onward.
+// The bank uses a 365-day year, 366 in a leap year, so each day is divided by
+// the length of the year it actually falls in.
+//
+// This is the estimate. The bank debits the real figure monthly (which is why it
+// compounds — the debit lands in the OD and next month's interest runs on it
+// too); that debit is logged from its SMS and shown beside this number.
 function odAccruedInterest(acc, transactions, from, to) {
   const rate = odRate(acc);
   if (!rate || !from || !to) return { interest: 0, avgBal: 0, days: 0 };
@@ -183,25 +194,35 @@ function odAccruedInterest(acc, transactions, from, to) {
   const startDay = dayNum(from), endDay = dayNum(to);
   if (endDay <= startDay) return { interest: 0, avgBal: 0, days: 0 };
 
+  // A flat span of days at one balance, split at 31 Dec so each part is divided
+  // by its own year length.
+  const accrueSpan = (bal, spanFrom, spanTo) => {
+    let out = 0, c = spanFrom;
+    while (c < spanTo) {
+      const y = yearOfDay(c);
+      const until = Math.min(spanTo, yearStartDay(y + 1));
+      out += Math.max(0, bal) * (until - c) * (rate / 100) / daysInYear(y);
+      c = until;
+    }
+    return out;
+  };
+
   // Outstanding as at the start of the window.
   let bal = 0;
   for (const s of steps) { if (dayNum(s.date) <= startDay) bal = s.bal; else break; }
   const future = steps.filter(s => dayNum(s.date) > startDay && dayNum(s.date) < endDay);
 
-  let balDays = 0, cursor = startDay, si = 0;
+  let balDays = 0, interest = 0, cursor = startDay, si = 0;
   while (cursor < endDay) {
     const nextChange = si < future.length ? dayNum(future[si].date) : endDay;
     const until = Math.min(nextChange, endDay);
-    balDays += Math.max(0, bal) * (until - cursor);
+    balDays  += Math.max(0, bal) * (until - cursor);
+    interest += accrueSpan(bal, cursor, until);
     cursor = until;
     if (si < future.length && cursor === nextChange) { bal = future[si].bal; si++; }
   }
   const days = endDay - startDay;
-  return {
-    interest: balDays * (rate / 100) / 365,
-    avgBal: days ? balDays / days : 0,
-    days,
-  };
+  return { interest, avgBal: days ? balDays / days : 0, days };
 }
 
 const OD_INT_CAT = "Interest – OD";
@@ -481,12 +502,17 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
         const utilPct   = limit ? Math.min(100, Math.round(drawn / limit * 100)) : 0;
         const rate      = odRate(a);
 
-        const now       = new Date();
+        // All local dates — mixing these with toISOString() would shift the window
+        // by a day for the IST evening, since UTC is still on the previous date.
+        const now  = new Date();
+        const ymd  = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
         const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-        const todayStr   = now.toISOString().slice(0, 10);
+        // End is exclusive, so pass tomorrow to include today — interest accrues on
+        // today's closing balance, and a draw made today should show a day's cost.
+        const tomorrow   = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         const fyStart    = `${now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1}-04-01`;
 
-        const mtd = odAccruedInterest(a, transactions, monthStart, todayStr);
+        const mtd = odAccruedInterest(a, transactions, monthStart, ymd(tomorrow));
         const paidFY = transactions
           .filter(t => isOdInterestTxn(t) && (t.accountFrom === a.id || t.accountTo === a.id) && (t.date || "") >= fyStart)
           .reduce((s, t) => s + (+t.amount || 0), 0);
@@ -540,6 +566,20 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
                   </div>
                 ))}
               </div>
+
+              {drawn > 0 && (
+                <div style={{ marginTop: 10, fontSize: 10, color: C.inkFaint }}>
+                  Interest runs on the amount actually drawn, for the exact days it stays drawn — repay part of it and it drops from that day.
+                  {" "}At {rate.toFixed(2)}% that's about {m(fmtAmt(Math.round(drawn * rate / 100 / 365), a.currency || "INR"))}/day on the current {m(fmtAmt(drawn, a.currency || "INR"))}.
+                  {" "}BOI debits the month's interest into the OD at the start of the next month.
+                </div>
+              )}
+
+              {limit > 0 && drawn > limit && (
+                <div style={{ marginTop: 10, fontSize: 10, color: C.red, background: C.redBg, borderRadius: 6, padding: "7px 10px" }}>
+                  ⚠ Drawn {m(fmtAmt(drawn - limit, a.currency || "INR"))} over the sanctioned limit — banks charge penal interest on the excess, so the real cost is above the estimate here.
+                </div>
+              )}
 
               {drift != null && Math.abs(drift) >= 1 && (
                 <div style={{ marginTop: 10, fontSize: 10, color: C.red, background: C.redBg, borderRadius: 6, padding: "7px 10px" }}>
@@ -1418,10 +1458,19 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
     const chron = [...filtered].sort((a, b) =>
       (a.date || "").localeCompare(b.date || "") || (a.createdAt || "").localeCompare(b.createdAt || ""));
     let bal = +(accObj.openingBal || 0);
+    const liab = isLiabilityAcc(accObj);
     const m = new Map();
     chron.forEach(t => {
-      if (t.type === "credit") bal += +t.amount;
-      else if (t.type === "debit") bal -= +t.amount;
+      // Asset-sense delta, then flipped for liability accounts (card/OD), matching
+      // computeBalances. Transfers count too — an OD draw is a transfer, and
+      // without this the running balance ignored it entirely.
+      let delta = 0;
+      if (t.type === "credit") delta = +t.amount;
+      else if (t.type === "debit") delta = -(+t.amount);
+      else if (t.type === "conversion") {
+        delta = t.accountFrom === filterAcc ? -(+t.amount) : (+t.amount) * (+t.convRate || 1);
+      }
+      bal += liab ? -delta : delta;
       m.set(t.id, bal);
     });
     return { balById: m, closingBal: bal };
