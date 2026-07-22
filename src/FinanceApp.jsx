@@ -114,8 +114,18 @@ function computeBalances(accounts, transactions) {
         bals[t.classifiedRef.cardAccountId] = (bals[t.classifiedRef.cardAccountId] || 0) - (+t.amount || 0);
       }
     } else if (t.type === "conversion") {
-      if (t.accountFrom) bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
-      if (t.accountTo)   bals[t.accountTo]   = (bals[t.accountTo]   || 0) + (+t.amount || 0) * (+t.convRate || 1);
+      // Transfer / conversion. For a liability line (credit card, OD) the sign flips:
+      // moving money OUT of an OD (into another account) increases the drawn balance,
+      // moving money INTO an OD repays it and reduces the drawn balance.
+      if (t.accountFrom) {
+        if (liabilityIds.has(t.accountFrom)) bals[t.accountFrom] = (bals[t.accountFrom] || 0) + (+t.amount || 0);
+        else bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
+      }
+      if (t.accountTo) {
+        const inAmt = (+t.amount || 0) * (+t.convRate || 1);
+        if (liabilityIds.has(t.accountTo)) bals[t.accountTo] = (bals[t.accountTo] || 0) - inAmt;
+        else bals[t.accountTo] = (bals[t.accountTo] || 0) + inAmt;
+      }
     }
   });
   return bals;
@@ -138,6 +148,99 @@ function convertMoney(amount, fromCurrency, toCurrency, rates) {
 function moneyText(amount, currency) {
   const cur = currency || "INR";
   return `${cur} ${(+amount || 0).toLocaleString("en-IN", { minimumFractionDigits: cur === "JPY" ? 0 : 2, maximumFractionDigits: cur === "JPY" ? 0 : 2 })}`;
+}
+
+// ─── Bank SMS import (Bank of India OD ⇄ account transfers) ────────────────────
+// A transfer between the OD and a linked account fires two SMS alerts — one per
+// account. Either one names both sides, so a single message is enough to record
+// the move; pasting both lets us also capture the OD's bank-reported balance.
+function parseBankSms(text) {
+  const raw = String(text || "");
+  const chunks = raw.split(/(?=BOI\b)|\n{2,}/i).map(s => s.trim()).filter(Boolean);
+  const legs = [];
+  for (const msg of chunks) {
+    const amtM = msg.match(/Rs\.?\s*([\d,]+(?:\.\d+)?)\s*(Debited|Credited)/i);
+    if (!amtM) continue;
+    const amount = +amtM[1].replace(/,/g, "");
+    const dir    = /Credited/i.test(amtM[2]) ? "credit" : "debit";
+    const cpM    = msg.match(/(?:Debited|Credited)\s*\(TRF\)\s*([A-Za-z]{2,3})?\s*(\d{4,})/i);
+    const yourM  = msg.match(/your\s*Ac\s*[Xx]+\s*(\d+)/i);
+    const dateM  = msg.match(/on\s*(\d{2})-(\d{2})-(\d{4})/);
+    const avlM   = msg.match(/Avl\s*Bal\.?\s*Rs\.?\s*([\d,]+(?:\.\d+)?)/i);
+    const cpType = cpM && cpM[1] ? cpM[1].toUpperCase() : null;
+    const cpNo   = cpM ? cpM[2] : null;
+    const yourNo = yourM ? yourM[1] : null;
+    const date   = dateM ? `${dateM[3]}-${dateM[2]}-${dateM[1]}` : null; // → YYYY-MM-DD
+    const avl    = avlM ? +avlM[1].replace(/,/g, "") : null;
+    // Debited → your account is the source; Credited → your account is the destination.
+    const fromNo = dir === "debit" ? yourNo : cpNo;
+    const toNo   = dir === "debit" ? cpNo   : yourNo;
+    legs.push({ amount, dir, date, avl, yourNo, cpNo, cpType, fromNo, toNo });
+  }
+  if (!legs.length) return null;
+  const withBoth = legs.find(l => l.fromNo && l.toNo) || legs[0];
+  return {
+    amount: withBoth.amount,
+    date:   withBoth.date || legs.find(l => l.date)?.date || today(),
+    fromNo: withBoth.fromNo,
+    toNo:   withBoth.toNo,
+    legs,
+  };
+}
+
+// Match a bank account number from an SMS to a configured account. Prefer an
+// explicit acctNo suffix, else fall back to the last-4 digits in the account name.
+function matchAccountByNo(accounts, no) {
+  if (!no) return null;
+  const digits = String(no).replace(/\D/g, "");
+  const last4 = digits.slice(-4);
+  const active = accounts.filter(a => a.active);
+  const byAcct = active.find(a => a.acctNo && String(a.acctNo).replace(/\D/g, "").endsWith(digits.slice(-Math.min(digits.length, 8))));
+  if (byAcct) return byAcct;
+  if (last4) {
+    const byName = active.find(a => (a.name || "").replace(/\D/g, "").endsWith(last4));
+    if (byName) return byName;
+  }
+  return null;
+}
+
+// Estimate OD interest by integrating the daily drawn balance at the OD rate —
+// banks charge interest only on the amount actually drawn, day by day.
+function accountBalanceEvents(account, transactions) {
+  const isLia = account.type === "credit_card" || account.type === "overdraft";
+  const evts = [];
+  for (const t of transactions) {
+    let delta = 0;
+    if (t.type === "credit" && t.accountTo === account.id) delta = isLia ? -(+t.amount || 0) : (+t.amount || 0);
+    else if (t.type === "debit" && t.accountFrom === account.id) delta = isLia ? (+t.amount || 0) : -(+t.amount || 0);
+    else if (t.type === "conversion") {
+      if (t.accountFrom === account.id) delta += isLia ? (+t.amount || 0) : -(+t.amount || 0);
+      if (t.accountTo === account.id) { const inAmt = (+t.amount || 0) * (+t.convRate || 1); delta += isLia ? -inAmt : inAmt; }
+    }
+    if (delta && t.date) evts.push({ date: t.date, delta });
+  }
+  return evts.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+}
+function estimateOdInterest(account, transactions, fromISO, toISO) {
+  const rate = +account.interestRate || 0;
+  if (!rate) return null;
+  const evts = accountBalanceEvents(account, transactions);
+  let drawn = +(account.openingBal || 0);
+  let ei = 0;
+  for (; ei < evts.length && evts[ei].date < fromISO; ei++) drawn += evts[ei].delta;
+  let interest = 0, days = 0, drawnDays = 0, peak = 0, sumDrawn = 0;
+  const cur = new Date(fromISO + "T00:00:00");
+  const end = new Date(toISO + "T00:00:00");
+  while (cur <= end) {
+    const iso = cur.toISOString().slice(0, 10);
+    while (ei < evts.length && evts[ei].date === iso) { drawn += evts[ei].delta; ei++; }
+    const d = Math.max(0, drawn);
+    interest += d * rate / 100 / 365;
+    sumDrawn += d; if (d > 0) drawnDays++; if (d > peak) peak = d;
+    days++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return { interest, days, drawnDays, peak, avgDrawn: days ? sumDrawn / days : 0 };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -237,7 +340,7 @@ function FShell({ title, view, setView, onHome, masked, toggleMask, company, set
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-function Dashboard({ accounts, transactions, rates, invoices, purchases, balances, totalINR, onAddTxn }) {
+function Dashboard({ accounts, transactions, rates, invoices, purchases, balances, totalINR, onAddTxn, onImportSms }) {
   const masked = useMasked();
   const m = makeMask(masked);
   const today_str = today();
@@ -437,7 +540,10 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
       {/* Overdrafts (FD-backed) */}
       {odAccs.length > 0 && (
         <>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.blue, textTransform: "uppercase", letterSpacing: .8, marginBottom: 8 }}>🏦 Overdraft (FD-backed)</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.blue, textTransform: "uppercase", letterSpacing: .8 }}>🏦 Overdraft (FD-backed)</div>
+            {onImportSms && <button onClick={onImportSms} className="fbs" style={{ fontSize: 10, padding: "4px 10px" }}>📩 Log transfer from SMS</button>}
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : `repeat(${Math.min(odAccs.length, 3)}, 1fr)`, gap: 10, marginBottom: 14 }}>
             {odAccs.map(a => {
               const bal   = balances[a.id] || 0;
@@ -446,6 +552,14 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
               const limit = a.odLimit || 0;
               const available = limit ? Math.max(0, limit - drawn) : null;
               const utilPct   = limit ? Math.min(100, Math.round(drawn / limit * 100)) : null;
+              // Month-to-date interest estimate on the daily drawn balance.
+              const now = new Date();
+              const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+              const todayISO = now.toISOString().slice(0, 10);
+              const est = estimateOdInterest(a, transactions, monthStart, todayISO);
+              // Reconciliation: bank-reported available vs. our ledger-derived available.
+              const bankAvl = a.bankAvl != null ? +a.bankAvl : null;
+              const mismatch = (bankAvl != null && available != null) ? Math.abs(bankAvl - available) : null;
               return (
                 <div key={a.id} style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: mob ? "14px 15px" : "16px 18px" }}>
                   <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .8, marginBottom: 4 }}>{a.name}</div>
@@ -467,6 +581,18 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
                     {a.interestRate ? `${a.interestRate}% p.a. on drawn` : "Interest on drawn only"}
                     {a.linkedFd ? ` · FD: ${a.linkedFd}` : ""}
                   </div>
+                  {est && (
+                    <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 4, paddingTop: 4, borderTop: `1px solid ${C.border}` }}>
+                      Est. interest this month: <span style={{ fontWeight: 700, color: C.ink }}>{m(fmtAmt(Math.round(est.interest), a.currency || "INR"))}</span>
+                      <span style={{ opacity: .7 }}> · {est.drawnDays}/{est.days} days drawn</span>
+                    </div>
+                  )}
+                  {bankAvl != null && (
+                    <div style={{ fontSize: 9.5, color: mismatch != null && mismatch > 1 ? C.amber : C.green, marginTop: 3 }}>
+                      {mismatch != null && mismatch > 1 ? "⚠ " : "✓ "}Bank avail {m(fmtAmt(bankAvl, a.currency || "INR"))} on {a.bankAvlDate}
+                      {mismatch != null && mismatch > 1 ? ` (ledger ${m(fmtAmt(available, a.currency || "INR"))})` : " matches"}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1844,6 +1970,12 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
                     </div>
                   </>
                 )}
+                {(newAcc.type === "bank" || newAcc.type === "overdraft") && (
+                  <div style={{ marginTop: 8 }}>
+                    <FTag>Bank A/C Number (for SMS matching)</FTag>
+                    <input value={newAcc.acctNo || ""} onChange={e => setNewAcc(a => ({ ...a, acctNo: e.target.value }))} placeholder="e.g. 006427280000008" style={FI} />
+                  </div>
+                )}
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={addAccount} className="fbp" style={{ fontSize: 12 }}>Add Account</button>
             <button onClick={() => setAddingAcc(false)} className="fbs" style={{ fontSize: 12 }}>Cancel</button>
@@ -2751,6 +2883,110 @@ If nothing is missing, output <missing_json>[]</missing_json>.`;
 }
 
 // ─── Main Finance App ─────────────────────────────────────────────────────────
+// ─── Bank-SMS import modal ────────────────────────────────────────────────────
+function SmsImportModal({ accounts, onImport, onClose }) {
+  const [text, setText] = useState("");
+  const [parsed, setParsed] = useState(null);
+  const [fromId, setFromId] = useState("");
+  const [toId, setToId] = useState("");
+  const [err, setErr] = useState("");
+  const FI = { background: C.surface, border: `1.5px solid ${C.border}`, color: C.ink, borderRadius: 6, padding: "9px 11px", fontSize: mob ? 16 : 13, width: "100%", fontFamily: "inherit" };
+  const active = accounts.filter(a => a.active);
+
+  const parse = () => {
+    setErr("");
+    const p = parseBankSms(text);
+    if (!p || !p.amount) { setErr("Couldn't read a transfer from that text. Paste the BOI SMS alert(s)."); setParsed(null); return; }
+    const from = matchAccountByNo(accounts, p.fromNo);
+    const to   = matchAccountByNo(accounts, p.toNo);
+    setParsed(p);
+    setFromId(from?.id || "");
+    setToId(to?.id || "");
+  };
+
+  // Bank-reported available balance for whichever mapped account the leg belongs to.
+  const reportedFor = id => {
+    if (!parsed) return null;
+    const acc = accounts.find(a => a.id === id); if (!acc) return null;
+    const leg = parsed.legs.find(l => matchAccountByNo(accounts, l.yourNo)?.id === id && l.avl != null);
+    return leg ? { avl: leg.avl, date: leg.date } : null;
+  };
+
+  const record = () => {
+    setErr("");
+    if (!parsed) return setErr("Parse the SMS first");
+    if (!fromId || !toId) return setErr("Map both accounts");
+    if (fromId === toId)  return setErr("From and To must differ");
+    const from = accounts.find(a => a.id === fromId);
+    const to   = accounts.find(a => a.id === toId);
+    const sameCur = (from?.currency || "INR") === (to?.currency || "INR");
+    const txn = {
+      id: uid(), date: parsed.date, type: "conversion",
+      accountFrom: fromId, accountTo: toId,
+      amount: parsed.amount, convRate: sameCur ? 1 : 1,
+      currency: from?.currency || "INR",
+      payee: "", notes: `Bank transfer (SMS import) · ${from?.name} → ${to?.name}`,
+      createdAt: new Date().toISOString(),
+    };
+    // Capture the OD's bank-reported available balance for reconciliation.
+    const accountUpdates = [];
+    [fromId, toId].forEach(id => {
+      const acc = accounts.find(a => a.id === id);
+      if (acc?.type === "overdraft") {
+        const rep = reportedFor(id);
+        if (rep) accountUpdates.push({ id, bankAvl: rep.avl, bankAvlDate: rep.date });
+      }
+    });
+    onImport({ txn, accountUpdates });
+  };
+
+  const AccountPick = ({ label, value, onChange, reported }) => (
+    <div>
+      <FTag>{label}</FTag>
+      <select value={value} onChange={e => onChange(e.target.value)} style={FI}>
+        <option value="">— Select account —</option>
+        {active.map(a => <option key={a.id} value={a.id}>{a.name} ({a.currency})</option>)}
+      </select>
+      {reported && <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 3 }}>Bank-reported bal: ₹{reported.avl.toLocaleString("en-IN")} on {reported.date}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: mob ? "18px" : "22px 24px", width: mob ? "100%" : 520, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>📩 Import transfer from bank SMS</div>
+        <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 12 }}>Paste one or both BOI alert messages for the transfer.</div>
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={5} style={{ ...FI, resize: "vertical", fontFamily: "inherit" }} placeholder={"BOI - Rs 300000.00 Credited(TRF)OD 006427280000008 in your Ac XX0451 on 22-07-2026. Avl Bal Rs 487032.02."} />
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button onClick={parse} className="fbs" style={{ fontSize: 12 }}>Parse</button>
+        </div>
+        {parsed && (
+          <div style={{ marginTop: 14, background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "14px 16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: C.inkFaint }}>Amount</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>₹{parsed.amount.toLocaleString("en-IN")}</div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: C.inkFaint }}>Date</div>
+              <div style={{ fontSize: 13 }}>{parsed.date}</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12 }}>
+              <AccountPick label={`From (a/c …${(parsed.fromNo || "").slice(-4)})`} value={fromId} onChange={setFromId} reported={reportedFor(fromId)} />
+              <AccountPick label={`To (a/c …${(parsed.toNo || "").slice(-4)})`} value={toId} onChange={setToId} reported={reportedFor(toId)} />
+            </div>
+            {(!fromId || !toId) && <div style={{ fontSize: 11, color: C.amber, marginTop: 10 }}>⚠ Couldn't auto-match an account by number — pick it above. Tip: set the account's number under Accounts, or include the last 4 digits in its name.</div>}
+          </div>
+        )}
+        {err && <div style={{ fontSize: 12, color: C.red, marginTop: 10 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+          <button onClick={onClose} className="fbs" style={{ fontSize: 12 }}>Cancel</button>
+          <button onClick={record} className="fbp" style={{ fontSize: 12 }} disabled={!parsed}>Record transfer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function FinanceApp({ onHome }) {
   const [company,       setCompanyState]  = useState(() => localStorage.getItem("ng-active-company") || "ng");
   const [view,          setView]          = useState("dashboard");
@@ -2768,6 +3004,7 @@ export default function FinanceApp({ onHome }) {
   const [masked,        setMasked]        = useState(false);
   const [fetchingRates, setFetchingRates] = useState(false);
   const [pendingClassify, setPendingClassify] = useState(null); // txn waiting to be classified
+  const [smsOpen, setSmsOpen] = useState(false); // bank-SMS transfer importer
 
   const setCompany = co => { setCompanyState(co); localStorage.setItem("ng-active-company", co); };
 
@@ -2873,6 +3110,21 @@ export default function FinanceApp({ onHome }) {
       showToast("Transaction saved");
       setView("dashboard");
     }
+  };
+  // Bank-SMS importer: record the transfer and stamp any OD's bank-reported balance.
+  const importSms = async ({ txn, accountUpdates = [] }) => {
+    const list = [txn, ...txns];
+    setTxns(list);
+    await saveK(companyKeys(company).transactions, list);
+    if (accountUpdates.length) {
+      const byId = Object.fromEntries(accountUpdates.map(u => [u.id, u]));
+      const accs = accounts.map(a => byId[a.id] ? { ...a, bankAvl: byId[a.id].bankAvl, bankAvlDate: byId[a.id].bankAvlDate } : a);
+      setAccounts(accs);
+      await saveK(companyKeys(company).accounts, accs);
+    }
+    setSmsOpen(false);
+    showToast("Transfer recorded from SMS");
+    setView("dashboard");
   };
   const deleteTxn = async id => {
     const list = txns.filter(t => t.id !== id);
@@ -3039,7 +3291,7 @@ export default function FinanceApp({ onHome }) {
       {!loaded
         ? <div style={{ textAlign: "center", padding: "60px 20px", color: C.inkFaint, fontSize: 14 }}>Loading financial data…</div>
         : <>
-          {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} />}
+          {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} onImportSms={() => setSmsOpen(true)} />}
           {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
@@ -3068,6 +3320,7 @@ export default function FinanceApp({ onHome }) {
           onClose={() => { setPendingClassify(null); showToast("Transaction saved"); }}
         />
       )}
+      {smsOpen && <SmsImportModal accounts={accounts} onImport={importSms} onClose={() => setSmsOpen(false)} />}
       <FToast msg={toast} />
     </FShell>
   );
