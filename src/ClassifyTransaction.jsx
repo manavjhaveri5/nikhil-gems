@@ -356,6 +356,18 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const poAdvanceAvailable = vendorId ? vendorPOs.reduce((s, po) => s + Math.max(0, +po.paidAmount || +po.advance || 0), 0) : 0;
   const vendorCreditAvailable = vendorId ? Math.max(0, +vendor?.creditBalance || 0) : 0;
   const availableAdvance = poAdvanceAvailable + vendorCreditAvailable;
+  // Where that pool actually comes from. Shown in the UI because "advance
+  // available" on its own is unauditable — you can't tell a stale credit balance
+  // from money genuinely sitting on an open PO without being told which.
+  const advanceSources = !vendorId ? [] : [
+    ...(vendorCreditAvailable > 0.005 ? [{ key: "credit", label: "Credit balance on vendor", sub: "from an earlier advance or overpayment", amount: vendorCreditAvailable }] : []),
+    ...vendorPOs.map(po => ({
+      key: po.id,
+      label: `Paid on ${po.poNumber || "PO"}`,
+      sub: [po.date ? fmtDate(po.date) : "", po.status].filter(Boolean).join(" · "),
+      amount: Math.max(0, +po.paidAmount || +po.advance || 0),
+    })).filter(s => s.amount > 0.005),
+  ];
   const dueAfterCash = Math.max(0, totalBillsDue - txnAmt);
   const maxAdvanceApply = Math.min(availableAdvance, dueAfterCash);
   const advanceToApply = Math.min(Math.max(0, +applyAdvance || 0), maxAdvanceApply);
@@ -736,6 +748,20 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
                   <span style={{ color: C.green, fontWeight: 900 }}>Vendor advance available: ₹{availableAdvance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
                   <button type="button" onClick={() => setApplyAdvance(String(maxAdvanceApply))} disabled={maxAdvanceApply <= 0} style={{ border: `1px solid ${C.green}55`, background: C.greenBg, color: C.green, borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: maxAdvanceApply > 0 ? "pointer" : "default", opacity: maxAdvanceApply > 0 ? 1 : .5, flexShrink: 0 }}>Use max</button>
                 </div>
+                {advanceSources.length > 0 && (
+                  <div style={{ marginBottom: 8, paddingBottom: 7, borderBottom: `1px dashed ${C.border}` }}>
+                    <div style={{ fontSize: 10, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5, fontWeight: 700, marginBottom: 3 }}>Made up of</div>
+                    {advanceSources.map(s => (
+                      <div key={s.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, fontSize: 11, marginTop: 3 }}>
+                        <span style={{ color: C.inkMid, minWidth: 0 }}>
+                          {s.label}
+                          {s.sub && <span style={{ color: C.inkFaint }}> · {s.sub}</span>}
+                        </span>
+                        <b style={{ color: C.inkMid, flexShrink: 0 }}>₹{s.amount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 8 }}>Money already paid to this vendor. Enter an amount only if you want to use it to reduce this bill.</div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ color: C.inkMid, whiteSpace: "nowrap" }}>Use advance ₹</span>
