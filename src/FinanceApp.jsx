@@ -93,19 +93,21 @@ const ASSET_TYPES = [
 // ─── Core calculations ────────────────────────────────────────────────────────
 function computeBalances(accounts, transactions) {
   const bals = {};
-  const cardIds = new Set(accounts.filter(a => a.type === "credit_card").map(a => a.id));
+  // Credit cards and FD-backed overdrafts are liability lines: money in reduces the
+  // outstanding/drawn balance, money out increases it (opposite of cash/bank accounts).
+  const liabilityIds = new Set(accounts.filter(a => a.type === "credit_card" || a.type === "overdraft").map(a => a.id));
   accounts.forEach(a => { bals[a.id] = +(a.openingBal || 0); });
   transactions.forEach(t => {
     if (t.type === "credit") {
       if (t.accountTo) {
-        // Credit card payment received → reduces outstanding (liability goes down)
-        if (cardIds.has(t.accountTo)) bals[t.accountTo] = (bals[t.accountTo] || 0) - (+t.amount || 0);
+        // Payment into a liability line → reduces outstanding/drawn (liability goes down)
+        if (liabilityIds.has(t.accountTo)) bals[t.accountTo] = (bals[t.accountTo] || 0) - (+t.amount || 0);
         else bals[t.accountTo] = (bals[t.accountTo] || 0) + (+t.amount || 0);
       }
     } else if (t.type === "debit") {
       if (t.accountFrom) {
-        // Credit card spend → increases outstanding (liability goes up)
-        if (cardIds.has(t.accountFrom)) bals[t.accountFrom] = (bals[t.accountFrom] || 0) + (+t.amount || 0);
+        // Draw / spend from a liability line → increases outstanding/drawn (liability goes up)
+        if (liabilityIds.has(t.accountFrom)) bals[t.accountFrom] = (bals[t.accountFrom] || 0) + (+t.amount || 0);
         else bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
       }
       if (t.classifiedAs === "cc_payment" && t.classifiedRef?.cardAccountId) {
@@ -268,6 +270,7 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
   const cashAccs = accounts.filter(a => a.type === "cash" && a.active);
   const bankAccs = accounts.filter(a => a.type === "bank" && a.active);
   const cardAccs = accounts.filter(a => a.type === "credit_card" && a.active);
+  const odAccs   = accounts.filter(a => a.type === "overdraft" && a.active);
 
   const StatCard = ({ label, value, sub, color, bg }) => (
     <div style={{ background: bg || C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: mob ? "14px 15px" : "16px 18px" }}>
@@ -424,6 +427,46 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
                       {dueSoon ? "⚠ " : ""}Due in {daysUntilDue}d
                     </div>
                   )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* Overdrafts (FD-backed) */}
+      {odAccs.length > 0 && (
+        <>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.blue, textTransform: "uppercase", letterSpacing: .8, marginBottom: 8 }}>🏦 Overdraft (FD-backed)</div>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : `repeat(${Math.min(odAccs.length, 3)}, 1fr)`, gap: 10, marginBottom: 14 }}>
+            {odAccs.map(a => {
+              const bal   = balances[a.id] || 0;
+              const drawn = Math.max(0, bal);              // amount currently borrowed
+              const parked = Math.max(0, -bal);            // surplus parked in the OD (reduces interest)
+              const limit = a.odLimit || 0;
+              const available = limit ? Math.max(0, limit - drawn) : null;
+              const utilPct   = limit ? Math.min(100, Math.round(drawn / limit * 100)) : null;
+              return (
+                <div key={a.id} style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: mob ? "14px 15px" : "16px 18px" }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .8, marginBottom: 4 }}>{a.name}</div>
+                  <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: mob ? 19 : 22, fontWeight: 600, color: drawn > 0 ? C.red : C.green, lineHeight: 1.1, marginBottom: 6 }}>{m(fmtAmt(drawn, a.currency || "INR"))}</div>
+                  {limit > 0 && (
+                    <>
+                      <div style={{ height: 4, background: C.card, borderRadius: 2, overflow: "hidden", marginBottom: 4 }}>
+                        <div style={{ height: "100%", width: `${utilPct}%`, background: utilPct > 80 ? C.red : utilPct > 50 ? C.amber : C.green, borderRadius: 2, transition: "width .4s" }} />
+                      </div>
+                      <div style={{ fontSize: 10, color: C.inkFaint, marginBottom: 4 }}>
+                        {m(fmtAmt(available, a.currency || "INR"))} available · {utilPct}% of {m(fmtAmt(limit, a.currency || "INR"))}
+                      </div>
+                    </>
+                  )}
+                  {parked > 0 && (
+                    <div style={{ fontSize: 10, fontWeight: 600, color: C.green, marginTop: 2 }}>{m(fmtAmt(parked, a.currency || "INR"))} parked (nil interest)</div>
+                  )}
+                  <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 2 }}>
+                    {a.interestRate ? `${a.interestRate}% p.a. on drawn` : "Interest on drawn only"}
+                    {a.linkedFd ? ` · FD: ${a.linkedFd}` : ""}
+                  </div>
                 </div>
               );
             })}
@@ -1563,6 +1606,7 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
   const cashAccs = accounts.filter(a => a.type === "cash");
   const bankAccs = accounts.filter(a => a.type === "bank");
   const cardAccs = accounts.filter(a => a.type === "credit_card");
+  const odAccs   = accounts.filter(a => a.type === "overdraft");
 
   return (
     <div style={{ maxWidth: 720 }}>
@@ -1728,13 +1772,42 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
         </div>
       )}
 
+      {/* Overdrafts (FD-backed) */}
+      {odAccs.length > 0 && (
+        <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "18px 20px", marginBottom: 22 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: C.ink, marginBottom: 12 }}>🏦 Overdraft (FD-backed)</div>
+          {odAccs.map(a => {
+            const bal   = balances[a.id] || 0;
+            const drawn = Math.max(0, bal);
+            const limit = a.odLimit || 0;
+            const available = limit ? Math.max(0, limit - drawn) : null;
+            return (
+              <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: C.ink }}>{a.name}</div>
+                  <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>
+                    {limit > 0 ? `Limit: ₹${limit.toLocaleString("en-IN")}` : "No limit set"}
+                    {a.interestRate ? ` · ${a.interestRate}% p.a.` : ""}
+                    {a.linkedFd ? ` · FD: ${a.linkedFd}` : ""}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 16, fontWeight: 600, color: drawn > 0 ? C.red : C.green }}>{m(fmtAmt(drawn, a.currency || "INR"))}</div>
+                  <div style={{ fontSize: 10, color: C.inkFaint }}>drawn{available != null ? ` · ${m(fmtAmt(available, a.currency || "INR"))} free` : ""}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Add Account */}
       {addingAcc ? (
         <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "18px 20px" }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>New Account</div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
             <div><FTag>Name</FTag><input value={newAcc.name} onChange={e => setNewAcc(a => ({ ...a, name: e.target.value }))} style={FI} placeholder="Account name" /></div>
-            <div><FTag>Type</FTag><select value={newAcc.type} onChange={e => setNewAcc(a => ({ ...a, type: e.target.value }))} style={FI}><option value="cash">Cash</option><option value="bank">Bank Account</option><option value="credit_card">Credit Card</option></select></div>
+            <div><FTag>Type</FTag><select value={newAcc.type} onChange={e => setNewAcc(a => ({ ...a, type: e.target.value }))} style={FI}><option value="cash">Cash</option><option value="bank">Bank Account</option><option value="credit_card">Credit Card</option><option value="overdraft">Overdraft (FD-backed)</option></select></div>
             <div><FTag>Currency</FTag><select value={newAcc.currency} onChange={e => setNewAcc(a => ({ ...a, currency: e.target.value }))} style={FI}><option>INR</option><option>USD</option><option>EUR</option><option>JPY</option><option>GBP</option><option>AUD</option></select></div>
             <div><FTag>Opening Balance</FTag><input type="number" value={newAcc.openingBal} onChange={e => setNewAcc(a => ({ ...a, openingBal: +e.target.value }))} style={FI} step="0.01" /></div>
           </div>
@@ -1749,6 +1822,27 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
                       <input type="number" value={newAcc.billingDueDay || ""} onChange={e => setNewAcc(a => ({ ...a, billingDueDay: +e.target.value }))} placeholder="e.g. 15" min="1" max="31" style={FI} />
                     </div>
                   </div>
+                )}
+                {newAcc.type === "overdraft" && (
+                  <>
+                    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 4, marginBottom: 8 }}>
+                      Opening Balance = amount currently drawn (0 if nothing borrowed yet). Money paid in reduces the drawn balance; money drawn out increases it.
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 8, marginTop: 4 }}>
+                      <div>
+                        <FTag>Sanctioned OD Limit</FTag>
+                        <input type="number" value={newAcc.odLimit || ""} onChange={e => setNewAcc(a => ({ ...a, odLimit: +e.target.value }))} placeholder="e.g. 90% of FD" style={FI} />
+                      </div>
+                      <div>
+                        <FTag>Interest Rate % (on drawn)</FTag>
+                        <input type="number" value={newAcc.interestRate || ""} onChange={e => setNewAcc(a => ({ ...a, interestRate: +e.target.value }))} placeholder="e.g. 7.5" step="0.01" style={FI} />
+                      </div>
+                      <div>
+                        <FTag>Linked FD (reference)</FTag>
+                        <input value={newAcc.linkedFd || ""} onChange={e => setNewAcc(a => ({ ...a, linkedFd: e.target.value }))} placeholder="e.g. SBI FD ₹10L" style={FI} />
+                      </div>
+                    </div>
+                  </>
                 )}
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={addAccount} className="fbp" style={{ fontSize: 12 }}>Add Account</button>
@@ -2937,7 +3031,7 @@ export default function FinanceApp({ onHome }) {
   const balances  = computeBalances(accounts, txns);
   const totalINR  = accounts.filter(a => a.active).reduce((s, a) => {
   const bal = toINR(balances[a.id] || 0, a.currency, rates);
-  return a.type === "credit_card" ? s - bal : s + bal;
+  return (a.type === "credit_card" || a.type === "overdraft") ? s - bal : s + bal;
 }, 0);
 
   return (
