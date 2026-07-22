@@ -9326,6 +9326,28 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
   const addBoughtLine=()=>setDraft(d=>({...d,boughtItems:[...(d.boughtItems||[]),newBoughtLine()]}));
   const delBoughtLine=idx=>setDraft(d=>({...d,boughtItems:(d.boughtItems||[]).filter((_,i)=>i!==idx)}));
   const updateBoughtLine=(idx,patch)=>setDraft(d=>{const b=[...(d.boughtItems||[])];b[idx]={...b[idx],...patch};return{...d,boughtItems:b};});
+  // Duplicate a line in place. Same stone at a different shape or size is the common
+  // case on these bills, so copying and changing one field beats retyping the row.
+  const dupBoughtLine=idx=>setDraft(d=>{
+    const b=[...(d.boughtItems||[])];
+    b.splice(idx+1,0,{...b[idx],id:uid()});
+    return{...d,boughtItems:b};
+  });
+  // Stones already on the books first (what this business actually buys), then the
+  // standard list. Free text still works — new material, just type it.
+  const materialOptions=useMemo(()=>{
+    const seen=[
+      ...accStock.map(s=>s.material),
+      ...purchases.flatMap(p=>[...(p.boughtItems||[]),...(p.items||[])].map(i=>i.material)),
+    ].map(s=>String(s||"").trim()).filter(Boolean);
+    const rank=new Map();
+    seen.forEach(s=>rank.set(s,(rank.get(s)||0)+1));
+    const used=[...rank.keys()].sort((a,b)=>rank.get(b)-rank.get(a)||a.localeCompare(b));
+    return[...new Set([...used,...DEFAULT_STONES])];
+  },[accStock,purchases]);
+  // The bought lines describe the real goods, so offer every shape — not just the
+  // narrower set derived from the customs descriptions.
+  const boughtShapeOptions=useMemo(()=>[...new Set([...shapeOptions,...allShapes])].filter(Boolean),[shapeOptions,allShapes]);
   const setShape=(idx,val)=>setDraft(d=>{
     const items=[...(d.items||[])];
     const hit=customsDescs.find(x=>customsShapeMatch(x.shape,val));
@@ -9418,6 +9440,8 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
           </div>
 
           <datalist id="purchase-shapes">{shapeOptions.map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="bought-materials">{materialOptions.map(s=><option key={s} value={s}/>)}</datalist>
+          <datalist id="bought-shapes">{boughtShapeOptions.map(s=><option key={s} value={s}/>)}</datalist>
           <datalist id="purchase-acct-descs">{[...new Set([...customsDescs.map(d=>d.desc).filter(Boolean),...shapeOptions])].map(s=><option key={s} value={s}/>)}</datalist>
 
           <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"12px 16px",marginBottom:12,display:"flex",gap:18,flexWrap:"wrap",alignItems:"center"}}>
@@ -9446,14 +9470,17 @@ function VerifyView({draft,setDraft,fileData,vendors,purchases=[],accStock=[],cu
                   const tot=(+b.qty||0)*(+b.rate||0);
                   return(
                     <div key={b.id} style={{borderTop:bi?`1px solid ${C.border}`:"none",padding:"12px 14px"}}>
-                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr .7fr .8fr .7fr .95fr 24px",gap:8,alignItems:"end"}}>
-                        <Field label="Stone / material"><input value={b.material||""} onChange={e=>updateBoughtLine(bi,{material:e.target.value})} style={CI} placeholder="agate"/></Field>
-                        <Field label="Shape"><input value={b.shape||""} onChange={e=>updateBoughtLine(bi,{shape:e.target.value})} style={CI} placeholder="Sphere" list="purchase-shapes"/></Field>
+                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1.2fr 1fr .7fr .8fr .7fr .95fr 52px",gap:8,alignItems:"end"}}>
+                        <Field label="Stone / material"><input value={b.material||""} onChange={e=>updateBoughtLine(bi,{material:e.target.value})} style={CI} placeholder="Agate" list="bought-materials"/></Field>
+                        <Field label="Shape"><input value={b.shape||""} onChange={e=>updateBoughtLine(bi,{shape:e.target.value})} style={CI} placeholder="Sphere" list="bought-shapes"/></Field>
                         <Field label="Unit"><select value={b.unit||"kg"} onChange={e=>updateBoughtLine(bi,{unit:e.target.value})} style={{...CI,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></Field>
                         <Field label="Price"><input type="number" value={b.rate||""} onChange={e=>updateBoughtLine(bi,{rate:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
                         <Field label="Qty"><input type="number" value={b.qty||""} onChange={e=>updateBoughtLine(bi,{qty:e.target.value})} style={{...CI,textAlign:"right"}} placeholder="0"/></Field>
                         <Field label="Total"><div style={{...CI,background:C.card,textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:700}}>{inr(tot)}</div></Field>
-                        <button onClick={()=>delBoughtLine(bi)} title="Delete line" style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1,paddingBottom:6}}>×</button>
+                        <div style={{display:"flex",gap:2,alignItems:"center",paddingBottom:6}}>
+                          <button onClick={()=>dupBoughtLine(bi)} title="Duplicate this line" style={{background:"none",border:"none",color:C.teal,cursor:"pointer",fontSize:14,lineHeight:1,padding:"0 3px"}}>⧉</button>
+                          <button onClick={()=>delBoughtLine(bi)} title="Delete line" style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:18,lineHeight:1,padding:"0 3px"}}>×</button>
+                        </div>
                       </div>
                     </div>
                   );
