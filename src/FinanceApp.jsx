@@ -52,6 +52,17 @@ function companyKeys(co) {
 }
 
 const CC_GRACE = 3; // days before due date to show warning
+
+// Overdraft against the fixed deposit at Bank of India. Sanctioned limit is 90%
+// of the FD; the rate floats with the FD (FD rate + 1%). All of these are
+// editable in Finance → Accounts when the FD renews at a new rate.
+const OD_BOI = {
+  id: "fa-boi-od", name: "Bank of India OD (against FD)", type: "od",
+  currency: "INR", openingBal: 0, active: true,
+  odLimit: 1620000, odFdRate: 7.3, odSpread: 1,
+  odAccountNo: "006427280000008", odLinkedAccountId: "fa-boi-0451",
+};
+
 const DEFAULT_ACCOUNTS = [
   { id: "fa-inr-cash",  name: "INR Cash",             type: "cash", currency: "INR", openingBal: 0, active: true },
   { id: "fa-usd-cash",  name: "USD Cash",             type: "cash", currency: "USD", openingBal: 0, active: true },
@@ -61,6 +72,7 @@ const DEFAULT_ACCOUNTS = [
   { id: "fa-eefc",      name: "EEFC",                 type: "bank", currency: "USD", openingBal: 0, active: true },
   { id: "fa-vantage",   name: "Vantage West",         type: "bank", currency: "USD", openingBal: 0, active: true },
   { id: "fa-chase",     name: "Chase Earth Editions", type: "bank", currency: "USD", openingBal: 0, active: true },
+  OD_BOI,
 ];
 
 const DEFAULT_ACCOUNTS_AT = [
@@ -91,33 +103,109 @@ const ASSET_TYPES = [
 ];
 
 // ─── Core calculations ────────────────────────────────────────────────────────
+
+// Credit cards and overdrafts are liabilities: their balance is stored as a
+// positive "outstanding" (what you owe). Every movement therefore lands on them
+// with the sign flipped — money leaving the account increases what you owe.
+const LIABILITY_TYPES = new Set(["credit_card", "od"]);
+export const isLiabilityAcc = a => LIABILITY_TYPES.has(a?.type);
+
+// `delta` is always in asset sense (+ = more money available to you).
+function applyDelta(bals, id, delta, liabIds) {
+  if (!id) return;
+  bals[id] = (bals[id] || 0) + (liabIds.has(id) ? -delta : delta);
+}
+
 function computeBalances(accounts, transactions) {
   const bals = {};
-  const cardIds = new Set(accounts.filter(a => a.type === "credit_card").map(a => a.id));
+  const liabIds = new Set(accounts.filter(isLiabilityAcc).map(a => a.id));
   accounts.forEach(a => { bals[a.id] = +(a.openingBal || 0); });
   transactions.forEach(t => {
+    const amt = +t.amount || 0;
     if (t.type === "credit") {
-      if (t.accountTo) {
-        // Credit card payment received → reduces outstanding (liability goes down)
-        if (cardIds.has(t.accountTo)) bals[t.accountTo] = (bals[t.accountTo] || 0) - (+t.amount || 0);
-        else bals[t.accountTo] = (bals[t.accountTo] || 0) + (+t.amount || 0);
-      }
+      applyDelta(bals, t.accountTo, amt, liabIds);
     } else if (t.type === "debit") {
-      if (t.accountFrom) {
-        // Credit card spend → increases outstanding (liability goes up)
-        if (cardIds.has(t.accountFrom)) bals[t.accountFrom] = (bals[t.accountFrom] || 0) + (+t.amount || 0);
-        else bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
-      }
+      applyDelta(bals, t.accountFrom, -amt, liabIds);
       if (t.classifiedAs === "cc_payment" && t.classifiedRef?.cardAccountId) {
-        bals[t.classifiedRef.cardAccountId] = (bals[t.classifiedRef.cardAccountId] || 0) - (+t.amount || 0);
+        applyDelta(bals, t.classifiedRef.cardAccountId, amt, liabIds);
       }
     } else if (t.type === "conversion") {
-      if (t.accountFrom) bals[t.accountFrom] = (bals[t.accountFrom] || 0) - (+t.amount || 0);
-      if (t.accountTo)   bals[t.accountTo]   = (bals[t.accountTo]   || 0) + (+t.amount || 0) * (+t.convRate || 1);
+      // Internal transfer. Drawing on an OD is exactly this: money leaves the
+      // OD (outstanding rises) and lands in the current account.
+      applyDelta(bals, t.accountFrom, -amt, liabIds);
+      applyDelta(bals, t.accountTo, amt * (+t.convRate || 1), liabIds);
     }
   });
   return bals;
 }
+
+// ─── Overdraft ────────────────────────────────────────────────────────────────
+// The OD is secured against an FD, so its rate tracks that FD: rate = FD + spread.
+export const odRate = a => (+a?.odFdRate || 0) + (+a?.odSpread || 0);
+
+// Day-by-day outstanding on an OD account, from the account's opening balance
+// forward through every transaction that touches it. Returns [{ date, bal }]
+// with one entry per transaction date (balance holds until the next entry).
+function odBalanceSteps(acc, transactions) {
+  const touching = transactions
+    .filter(t => t.accountFrom === acc.id || t.accountTo === acc.id)
+    .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  let bal = +(acc.openingBal || 0);
+  const steps = [];
+  for (const t of touching) {
+    const amt = +t.amount || 0;
+    // Asset-sense delta, then flipped because the OD is a liability.
+    let delta = 0;
+    if (t.type === "credit" && t.accountTo === acc.id) delta = amt;
+    else if (t.type === "debit" && t.accountFrom === acc.id) delta = -amt;
+    else if (t.type === "conversion") {
+      if (t.accountFrom === acc.id) delta = -amt;
+      else if (t.accountTo === acc.id) delta = amt * (+t.convRate || 1);
+    }
+    bal += -delta;
+    const date = t.date || "";
+    const last = steps[steps.length - 1];
+    if (last && last.date === date) last.bal = bal;
+    else steps.push({ date, bal });
+  }
+  return steps;
+}
+
+const dayNum = d => Math.floor(new Date(d + "T00:00:00").getTime() / 86400000);
+
+// Interest accrued on daily outstanding between two YYYY-MM-DD dates (inclusive
+// of `from`, exclusive of `to`). This is the estimate — the bank's actual debit
+// is logged separately and compared against it.
+function odAccruedInterest(acc, transactions, from, to) {
+  const rate = odRate(acc);
+  if (!rate || !from || !to) return { interest: 0, avgBal: 0, days: 0 };
+  const steps = odBalanceSteps(acc, transactions);
+  const startDay = dayNum(from), endDay = dayNum(to);
+  if (endDay <= startDay) return { interest: 0, avgBal: 0, days: 0 };
+
+  // Outstanding as at the start of the window.
+  let bal = 0;
+  for (const s of steps) { if (dayNum(s.date) <= startDay) bal = s.bal; else break; }
+  const future = steps.filter(s => dayNum(s.date) > startDay && dayNum(s.date) < endDay);
+
+  let balDays = 0, cursor = startDay, si = 0;
+  while (cursor < endDay) {
+    const nextChange = si < future.length ? dayNum(future[si].date) : endDay;
+    const until = Math.min(nextChange, endDay);
+    balDays += Math.max(0, bal) * (until - cursor);
+    cursor = until;
+    if (si < future.length && cursor === nextChange) { bal = future[si].bal; si++; }
+  }
+  const days = endDay - startDay;
+  return {
+    interest: balDays * (rate / 100) / 365,
+    avgBal: days ? balDays / days : 0,
+    days,
+  };
+}
+
+const OD_INT_CAT = "Interest – OD";
+const isOdInterestTxn = t => (t.category || "") === OD_INT_CAT;
 
 function toINR(amount, currency, rates) {
   if (!currency || currency === "INR") return +amount || 0;
@@ -268,6 +356,7 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
   const cashAccs = accounts.filter(a => a.type === "cash" && a.active);
   const bankAccs = accounts.filter(a => a.type === "bank" && a.active);
   const cardAccs = accounts.filter(a => a.type === "credit_card" && a.active);
+  const odAccs   = accounts.filter(a => a.type === "od" && a.active);
 
   const StatCard = ({ label, value, sub, color, bg }) => (
     <div style={{ background: bg || C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: mob ? "14px 15px" : "16px 18px" }}>
@@ -383,6 +472,84 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
           {openPOs.length === 0 && <div style={{ fontSize: 11, color: C.inkFaint }}>No open purchase orders</div>}
         </div>
       </div>
+
+      {/* Overdraft */}
+      {odAccs.map(a => {
+        const drawn     = Math.max(0, balances[a.id] || 0);
+        const limit     = +a.odLimit || 0;
+        const available = limit ? Math.max(0, limit - drawn) : null;
+        const utilPct   = limit ? Math.min(100, Math.round(drawn / limit * 100)) : 0;
+        const rate      = odRate(a);
+
+        const now       = new Date();
+        const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+        const todayStr   = now.toISOString().slice(0, 10);
+        const fyStart    = `${now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1}-04-01`;
+
+        const mtd = odAccruedInterest(a, transactions, monthStart, todayStr);
+        const paidFY = transactions
+          .filter(t => isOdInterestTxn(t) && (t.accountFrom === a.id || t.accountTo === a.id) && (t.date || "") >= fyStart)
+          .reduce((s, t) => s + (+t.amount || 0), 0);
+
+        // Latest "Avl Bal" the bank itself reported, captured from the OD SMS.
+        const lastSnap = [...transactions]
+          .filter(t => t.odAvailAfter != null && (t.accountFrom === a.id || t.accountTo === a.id))
+          .sort((x, y) => (y.date || "").localeCompare(x.date || ""))[0];
+        const drift = lastSnap && available != null
+          ? Math.round((available - (+lastSnap.odAvailAfter || 0)) * 100) / 100
+          : null;
+
+        return (
+          <div key={a.id} style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: C.amber, textTransform: "uppercase", letterSpacing: .8, marginBottom: 8 }}>🏛 Overdraft</div>
+            <div style={{ background: C.surface, border: `1.5px solid ${utilPct > 80 ? C.red : C.border}`, borderRadius: 10, padding: mob ? "14px 15px" : "16px 18px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .8, marginBottom: 4 }}>{a.name}</div>
+                  <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: mob ? 24 : 30, fontWeight: 600, color: drawn > 0 ? C.red : C.green, lineHeight: 1 }}>
+                    {m(fmtAmt(drawn, a.currency || "INR"))}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 3 }}>drawn{rate ? ` · ${rate.toFixed(2)}% p.a. (FD ${a.odFdRate}% + ${a.odSpread}%)` : ""}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .8 }}>Available</div>
+                  <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: mob ? 19 : 22, fontWeight: 600, color: C.ink }}>
+                    {available != null ? m(fmtAmt(available, a.currency || "INR")) : "—"}
+                  </div>
+                  {limit > 0 && <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 2 }}>of {m(fmtAmt(limit, a.currency || "INR"))} limit</div>}
+                </div>
+              </div>
+
+              {limit > 0 && (
+                <div style={{ height: 6, background: C.card, borderRadius: 3, overflow: "hidden", marginBottom: 10 }}>
+                  <div style={{ height: "100%", width: `${utilPct}%`, background: utilPct > 80 ? C.red : utilPct > 50 ? C.amber : C.green, borderRadius: 3, transition: "width .4s" }} />
+                </div>
+              )}
+
+              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+                {[
+                  ["Utilisation", `${utilPct}%`, null],
+                  ["Avg outstanding MTD", m(fmtAmt(Math.round(mtd.avgBal), a.currency || "INR")), `${mtd.days} day${mtd.days === 1 ? "" : "s"}`],
+                  ["Interest accrued MTD", m(fmtAmt(Math.round(mtd.interest), a.currency || "INR")), "estimate"],
+                  ["Interest paid FY", m(fmtAmt(Math.round(paidFY), a.currency || "INR")), "charged by bank"],
+                ].map(([lbl, val, sub]) => (
+                  <div key={lbl}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 3 }}>{lbl}</div>
+                    <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 17, fontWeight: 600, color: C.ink, lineHeight: 1.1 }}>{val}</div>
+                    {sub && <div style={{ fontSize: 9, color: C.inkFaint, marginTop: 2 }}>{sub}</div>}
+                  </div>
+                ))}
+              </div>
+
+              {drift != null && Math.abs(drift) >= 1 && (
+                <div style={{ marginTop: 10, fontSize: 10, color: C.red, background: C.redBg, borderRadius: 6, padding: "7px 10px" }}>
+                  ⚠ Off by {m(fmtAmt(Math.abs(drift), a.currency || "INR"))} vs the bank — BOI last reported {m(fmtAmt(+lastSnap.odAvailAfter, a.currency || "INR"))} available on {lastSnap.date}. A draw or repayment is probably missing from the ledger.
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
 
       {/* Credit Cards */}
       {cardAccs.length > 0 && (
@@ -1563,6 +1730,8 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
   const cashAccs = accounts.filter(a => a.type === "cash");
   const bankAccs = accounts.filter(a => a.type === "bank");
   const cardAccs = accounts.filter(a => a.type === "credit_card");
+  const odAccs   = accounts.filter(a => a.type === "od");
+  const updateAccField = (id, patch) => onUpdate(accounts.map(a => a.id === id ? { ...a, ...patch } : a));
 
   return (
     <div style={{ maxWidth: 720 }}>
@@ -1702,6 +1871,44 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
         </div>
       )}
 
+      {/* Overdrafts */}
+      {odAccs.length > 0 && (
+        <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "18px 20px", marginBottom: 22 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, color: C.ink, marginBottom: 4 }}>🏛 Overdraft Accounts</div>
+          <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 12 }}>
+            The OD is secured against the FD, so its rate moves with the FD. When the FD renews at a new rate, change the FD rate here and the interest estimate follows.
+          </div>
+          {odAccs.map(a => {
+            const drawn = Math.max(0, balances[a.id] || 0);
+            return (
+              <div key={a.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{a.name}</div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 16, fontWeight: 600, color: drawn > 0 ? C.red : C.green }}>{m(fmtAmt(drawn, a.currency || "INR"))}</div>
+                    <div style={{ fontSize: 10, color: C.inkFaint }}>drawn · {odRate(a).toFixed(2)}% p.a.</div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 8 }}>
+                  <div><FTag>Sanctioned Limit</FTag><input type="number" value={a.odLimit || ""} onChange={e => updateAccField(a.id, { odLimit: +e.target.value })} style={FI} /></div>
+                  <div><FTag>FD Rate %</FTag><input type="number" step="0.01" value={a.odFdRate ?? ""} onChange={e => updateAccField(a.id, { odFdRate: +e.target.value })} style={FI} /></div>
+                  <div><FTag>Spread %</FTag><input type="number" step="0.01" value={a.odSpread ?? ""} onChange={e => updateAccField(a.id, { odSpread: +e.target.value })} style={FI} /></div>
+                  <div><FTag>OD A/c Number</FTag><input value={a.odAccountNo || ""} onChange={e => updateAccField(a.id, { odAccountNo: e.target.value.trim() })} style={FI} placeholder="006427280000008" /></div>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <FTag>Linked Current Account</FTag>
+                  <select value={a.odLinkedAccountId || ""} onChange={e => updateAccField(a.id, { odLinkedAccountId: e.target.value })} style={{ ...FI, width: "100%" }}>
+                    <option value="">— none —</option>
+                    {accounts.filter(x => x.type === "bank").map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+                  </select>
+                  <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 4 }}>Draws forwarded from the BOI SMS are booked between these two accounts.</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Credit Cards */}
       {cardAccs.length > 0 && (
         <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "18px 20px", marginBottom: 22 }}>
@@ -1734,7 +1941,7 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>New Account</div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 12 }}>
             <div><FTag>Name</FTag><input value={newAcc.name} onChange={e => setNewAcc(a => ({ ...a, name: e.target.value }))} style={FI} placeholder="Account name" /></div>
-            <div><FTag>Type</FTag><select value={newAcc.type} onChange={e => setNewAcc(a => ({ ...a, type: e.target.value }))} style={FI}><option value="cash">Cash</option><option value="bank">Bank Account</option><option value="credit_card">Credit Card</option></select></div>
+            <div><FTag>Type</FTag><select value={newAcc.type} onChange={e => setNewAcc(a => ({ ...a, type: e.target.value }))} style={FI}><option value="cash">Cash</option><option value="bank">Bank Account</option><option value="credit_card">Credit Card</option><option value="od">Overdraft</option></select></div>
             <div><FTag>Currency</FTag><select value={newAcc.currency} onChange={e => setNewAcc(a => ({ ...a, currency: e.target.value }))} style={FI}><option>INR</option><option>USD</option><option>EUR</option><option>JPY</option><option>GBP</option><option>AUD</option></select></div>
             <div><FTag>Opening Balance</FTag><input type="number" value={newAcc.openingBal} onChange={e => setNewAcc(a => ({ ...a, openingBal: +e.target.value }))} style={FI} step="0.01" /></div>
           </div>
@@ -1748,6 +1955,14 @@ function AccountsSettings({ accounts, rates, balances, onUpdate, onUpdateRates, 
                       <FTag>Payment Due Day (of month)</FTag>
                       <input type="number" value={newAcc.billingDueDay || ""} onChange={e => setNewAcc(a => ({ ...a, billingDueDay: +e.target.value }))} placeholder="e.g. 15" min="1" max="31" style={FI} />
                     </div>
+                  </div>
+                )}
+                {newAcc.type === "od" && (
+                  <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 8, marginTop: 8 }}>
+                    <div><FTag>Sanctioned Limit</FTag><input type="number" value={newAcc.odLimit || ""} onChange={e => setNewAcc(a => ({ ...a, odLimit: +e.target.value }))} placeholder="e.g. 1620000" style={FI} /></div>
+                    <div><FTag>FD Rate %</FTag><input type="number" step="0.01" value={newAcc.odFdRate || ""} onChange={e => setNewAcc(a => ({ ...a, odFdRate: +e.target.value }))} placeholder="7.3" style={FI} /></div>
+                    <div><FTag>Spread %</FTag><input type="number" step="0.01" value={newAcc.odSpread || ""} onChange={e => setNewAcc(a => ({ ...a, odSpread: +e.target.value }))} placeholder="1" style={FI} /></div>
+                    <div><FTag>OD A/c Number</FTag><input value={newAcc.odAccountNo || ""} onChange={e => setNewAcc(a => ({ ...a, odAccountNo: e.target.value.trim() }))} style={FI} /></div>
                   </div>
                 )}
           <div style={{ display: "flex", gap: 8 }}>
@@ -2722,7 +2937,13 @@ export default function FinanceApp({ onHome }) {
       loadK(keys.expenses),
       loadK(PERSONAL_ASSETS_KEY),
     ]).then(([accs, t, r, invs, buys, purch, vends, exps, personalAssets]) => {
-      setAccounts(accs?.length ? accs : (company === "ng" ? DEFAULT_ACCOUNTS : DEFAULT_ACCOUNTS_AT));
+      // Existing books were saved before the OD account existed, so seed it in
+      // rather than leaving it only in DEFAULT_ACCOUNTS (which never applies once
+      // accounts have been saved once).
+      const seeded = accs?.length
+        ? (company === "ng" && !accs.some(a => a.type === "od") ? [...accs, OD_BOI] : accs)
+        : (company === "ng" ? DEFAULT_ACCOUNTS : DEFAULT_ACCOUNTS_AT);
+      setAccounts(seeded);
       setTxns(t  || []);
       const savedRates = r && Object.keys(r || {}).length ? r : DEFAULT_RATES;
       setRates(savedRates);
@@ -2937,7 +3158,7 @@ export default function FinanceApp({ onHome }) {
   const balances  = computeBalances(accounts, txns);
   const totalINR  = accounts.filter(a => a.active).reduce((s, a) => {
   const bal = toINR(balances[a.id] || 0, a.currency, rates);
-  return a.type === "credit_card" ? s - bal : s + bal;
+  return isLiabilityAcc(a) ? s - bal : s + bal;
 }, 0);
 
   return (
