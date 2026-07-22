@@ -513,6 +513,13 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
         const fyStart    = `${now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1}-04-01`;
 
         const mtd = odAccruedInterest(a, transactions, monthStart, ymd(tomorrow));
+        // Same calculation run to month end. There are no transactions after today,
+        // so the current outstanding simply carries forward — i.e. "what BOI will
+        // debit on the 1st if nothing changes". Repay tomorrow and this drops by
+        // itself, because the repayment lands in the history it walks.
+        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        const projected = odAccruedInterest(a, transactions, monthStart, ymd(nextMonth));
+        const daysLeft  = Math.round((nextMonth - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000) - 1;
         const paidFY = transactions
           .filter(t => isOdInterestTxn(t) && (t.accountFrom === a.id || t.accountTo === a.id) && (t.date || "") >= fyStart)
           .reduce((s, t) => s + (+t.amount || 0), 0);
@@ -552,16 +559,18 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
                 </div>
               )}
 
-              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5, 1fr)", gap: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
                 {[
-                  ["Utilisation", `${utilPct}%`, null],
-                  ["Avg outstanding MTD", m(fmtAmt(Math.round(mtd.avgBal), a.currency || "INR")), `${mtd.days} day${mtd.days === 1 ? "" : "s"}`],
-                  ["Interest accrued MTD", m(fmtAmt(Math.round(mtd.interest), a.currency || "INR")), "estimate"],
-                  ["Interest paid FY", m(fmtAmt(Math.round(paidFY), a.currency || "INR")), "charged by bank"],
-                ].map(([lbl, val, sub]) => (
+                  ["Utilisation", `${utilPct}%`, null, null],
+                  ["Avg outstanding MTD", m(fmtAmt(Math.round(mtd.avgBal), a.currency || "INR")), `${mtd.days} day${mtd.days === 1 ? "" : "s"}`, null],
+                  ["Interest accrued MTD", m(fmtAmt(Math.round(mtd.interest), a.currency || "INR")), "so far", null],
+                  ["Due at month end", m(fmtAmt(Math.round(projected.interest), a.currency || "INR")),
+                    drawn > 0 && daysLeft > 0 ? `if ${m(fmtAmt(drawn, a.currency || "INR"))} stays drawn` : "debited ~1st", C.amber],
+                  ["Interest paid FY", m(fmtAmt(Math.round(paidFY), a.currency || "INR")), "charged by bank", null],
+                ].map(([lbl, val, sub, tone]) => (
                   <div key={lbl}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 3 }}>{lbl}</div>
-                    <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 17, fontWeight: 600, color: C.ink, lineHeight: 1.1 }}>{val}</div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: tone || C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 3 }}>{lbl}</div>
+                    <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 17, fontWeight: 600, color: tone || C.ink, lineHeight: 1.1 }}>{val}</div>
                     {sub && <div style={{ fontSize: 9, color: C.inkFaint, marginTop: 2 }}>{sub}</div>}
                   </div>
                 ))}
