@@ -2989,10 +2989,15 @@ export default function FinanceApp({ onHome }) {
       // Existing books were saved before the OD account existed, so seed it in
       // rather than leaving it only in DEFAULT_ACCOUNTS (which never applies once
       // accounts have been saved once).
+      const needsOd = company === "ng" && accs?.length && !accs.some(a => a.type === "od");
       const seeded = accs?.length
-        ? (company === "ng" && !accs.some(a => a.type === "od") ? [...accs, OD_BOI] : accs)
+        ? (needsOd ? [...accs, OD_BOI] : accs)
         : (company === "ng" ? DEFAULT_ACCOUNTS : DEFAULT_ACCOUNTS_AT);
       setAccounts(seeded);
+      // Persist the seed — the Telegram bot resolves accounts from the database,
+      // so an OD that only ever exists in this component's state would leave it
+      // unable to match the account number in a forwarded BOI SMS.
+      if (needsOd) saveK(keys.accounts, seeded);
       setTxns(t  || []);
       const savedRates = r && Object.keys(r || {}).length ? r : DEFAULT_RATES;
       setRates(savedRates);
