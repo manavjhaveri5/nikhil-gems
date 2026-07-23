@@ -29,10 +29,25 @@ const ORDERS_KEY = "ng-orders-v1";
 const STK_KEY    = "ng-stock-v5";
 const IMG_KEY    = "ng-image-library-v1";
 const AT_INVOICES_KEY = "at-invoices-v1";
+const AT_BUYERS_KEY   = "at-buyers-v1";
 const NG_INVOICES_KEY = "ng-invoices-v2";
 const NG_BUYERS_KEY   = "ng-buyers-v2";
 const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
+const listingOrderId = () => `NG-LST-${new Date().getFullYear()}-${uid().slice(-6).toUpperCase()}`;
+const ensureListingOrderId = listing => listing.listing_order_id ? listing : { ...listing, listing_order_id: listingOrderId() };
+const listingMarketplaceSku = listing => String(listing?.sku || listing?.listing_order_id || listing?.id || "").trim();
+const normalizeListingIds = async rows => {
+  const arr = Array.isArray(rows) ? rows : [];
+  let changed = false;
+  const next = arr.map(l => {
+    if (l?.listing_order_id) return l;
+    changed = true;
+    return ensureListingOrderId(l);
+  });
+  if (changed) await saveK(LIST_KEY, next).catch(() => {});
+  return next;
+};
 
 const toIsoDate = value => {
   if (!value) return new Date().toISOString().slice(0, 10);
@@ -71,9 +86,50 @@ const maxAtyaharaInvoiceNo = (existing = [], dateStr = toIsoDate()) => {
 };
 const nextAtyaharaInvoiceNo = (existing = [], dateStr = toIsoDate()) =>
   `ATY-${maxAtyaharaInvoiceNo(existing, dateStr) + 1}-${fiscalYearFull(dateStr)}`;
+const maxFiscalInvoiceNo = (existing = [], prefix = "NG", dateStr = toIsoDate()) => {
+  const short = fiscalYearLabel(dateStr);
+  const full = fiscalYearFull(dateStr);
+  const fullDash = full.replace("/", "-");
+  const tokens = [short, full, fullDash];
+  const inFY = no => tokens.some(t => String(no || "").includes(t));
+  const re = new RegExp(`^${prefix}-0*(\\d{1,4})[-/]`, "i");
+  return (existing || []).reduce((mx, inv) => {
+    const no = String(inv?.invNo || inv?.number || "");
+    if (!inFY(no)) return mx;
+    const m = no.match(re);
+    return m ? Math.max(mx, +m[1] || 0) : mx;
+  }, 0);
+};
+const nextFiscalInvoiceNo = (existing = [], prefix = "NG", dateStr = toIsoDate()) =>
+  `${prefix}-${String(maxFiscalInvoiceNo(existing, prefix, dateStr) + 1).padStart(2, "0")}/${fiscalYearLabel(dateStr)}`;
+const monthKey = value => toIsoDate(value).slice(0, 7);
+const monthLabel = value => new Date(`${toIsoDate(value)}T12:00:00`).toLocaleString("en-GB", { month: "long", year: "numeric" });
 
 const moneyAmount = m => (m?.amount || 0) / (m?.divisor || 100);
 const cleanInvoiceText = v => String(v || "").replace(/\s+/g, " ").trim();
+const etsyBuyerName = name => {
+  const base = cleanInvoiceText(name) || "Etsy Buyer";
+  return /\bvia\s+etsy\b/i.test(base) ? base : `${base} via Etsy`;
+};
+const buyerMatchKey = value => String(value || "").toLowerCase().replace(/\bvia\s+etsy\b/g, "").replace(/[^a-z0-9]/g, "");
+const compactAddress = address => [
+  address?.line1,
+  address?.line2,
+  [address?.city, address?.state, address?.postcode].filter(Boolean).join(", "),
+  address?.country,
+].filter(Boolean).join("\n");
+const suggestEtsyProductDesc = order => {
+  const saved = cleanInvoiceText(order?._atProductDesc || order?.invoice_product_desc || order?.listing_product_desc || "");
+  if (saved) return saved;
+  const raw = cleanInvoiceText(order?.listing_title || order?.title || order?.name || "");
+  const beforeMeta = raw.replace(/[:|].*$/g, " ").replace(/\bfrom\b.*$/i, " ");
+  const words = (beforeMeta.match(/[A-Za-z][A-Za-z-]*/g) || [])
+    .map(w => w.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, ""))
+    .filter(w => w && !/^(gm|g|kg|ct|carat|pcs|piece|no|number|the|and|with|for|from)$/i.test(w));
+  const stoneIdx = words.findIndex(w => /(agate|amethyst|quartz|jasper|opal|calcite|fluorite|tourmaline|garnet|beryl|crystal|stone|gem|emerald|ruby|sapphire)/i.test(w));
+  const slice = stoneIdx > 0 ? words.slice(Math.max(0, stoneIdx - 1), stoneIdx + 2) : words.slice(0, 3);
+  return cleanInvoiceText(slice.join(" ")) || cleanInvoiceText(raw.split(/\s+/).slice(0, 3).join(" "));
+};
 
 /* ── Etsy receipt money ────────────────────────────────────────────────────────
    Etsy line prices are PRE-discount; shop coupons live on the receipt as
@@ -150,6 +206,58 @@ const matchShapeInTitle = (tokens, title) => {
   return best;
 };
 
+async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {} }) {
+  const displayName = etsyBuyerName(buyer.name || address.name || "");
+  const addressText = compactAddress(address);
+  const country = cleanInvoiceText(buyer.country || address.country || "");
+  const email = cleanInvoiceText(buyer.email || "");
+  const fresh = await loadKFresh(AT_BUYERS_KEY).catch(() => []);
+  const buyers = Array.isArray(fresh) ? fresh : [];
+  const displayKey = buyerMatchKey(displayName);
+  const emailKey = email.toLowerCase();
+  const existing = buyers.find(b => buyerMatchKey(b.name) === displayKey && /\bvia\s+etsy\b/i.test(String(b.name || "")))
+    || (emailKey ? buyers.find(b => String(b.email || "").trim().toLowerCase() === emailKey && /\bvia\s+etsy\b/i.test(String(b.name || ""))) : null);
+
+  if (existing) {
+    const patched = {
+      ...existing,
+      name: /\bvia\s+etsy\b/i.test(existing.name || "") ? existing.name : displayName,
+      email: existing.email || email,
+      country: existing.country || country,
+      billingAddress: existing.billingAddress || existing.address || addressText,
+      address: existing.address || existing.billingAddress || addressText,
+      shippingAddress: existing.shippingAddress || addressText,
+      shippingSameAsBilling: existing.shippingSameAsBilling ?? true,
+      port: existing.port || country,
+      updatedAt: new Date().toISOString(),
+    };
+    if (JSON.stringify(patched) !== JSON.stringify(existing)) {
+      await saveK(AT_BUYERS_KEY, [patched, ...buyers.filter(b => b.id !== patched.id)]);
+    }
+    return patched;
+  }
+
+  const created = {
+    id: uid(),
+    name: displayName,
+    contactName: cleanInvoiceText(buyer.name || address.name || ""),
+    billingAddress: addressText,
+    address: addressText,
+    shippingAddress: addressText,
+    shippingSameAsBilling: true,
+    country,
+    state: cleanInvoiceText(address.state || ""),
+    email,
+    phone: cleanInvoiceText(address.phone || ""),
+    port: country,
+    notes: `Auto-created from Etsy buyer${buyer.name ? ` ${buyer.name}` : ""}`,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  await saveK(AT_BUYERS_KEY, [created, ...buyers]);
+  return created;
+}
+
 async function aiEnhanceInvoiceItems(baseItems, context = {}, shapeTokens = []) {
   if (!baseItems.length) return baseItems;
   // Resolve each line's shape first: explicit shape on the order row, then a local
@@ -216,6 +324,8 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
   const overrideTaken = overrideNo && existing.some(inv => inv.id !== existingInv?.id && String(inv.invNo || "") === overrideNo);
 
   const date = toIsoDate(orderDate);
+  const buyerRecord = await ensureAtyaharaEtsyBuyer({ buyer, address });
+  const displayBuyerName = buyerRecord?.name || etsyBuyerName(buyer.name || address.name || "");
   const shapeTokens = await loadCustomsShapeTokens();
   const invoiceItems = await aiEnhanceInvoiceItems(items, { receiptId: sourceReceiptId, buyerCountry: buyer.country || address.country || "" }, shapeTokens);
   const totalAmt = Number(invoiceItems.reduce((s, item) => s + (+item.qty || 0) * (+item.rate || 0), 0).toFixed(2));
@@ -227,12 +337,12 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
     type: existingInv?.type || "commercial",
     date,
     dueDate: existingInv?.dueDate || date,
-    buyerId: existingInv?.buyerId || "",
-    buyerName: buyer.name || existingInv?.buyerName || "Etsy Buyer",
-    buyerEmail: buyer.email || existingInv?.buyerEmail || "",
-    buyerCountry: buyer.country || address.country || existingInv?.buyerCountry || "",
+    buyerId: buyerRecord?.id || existingInv?.buyerId || "",
+    buyerName: displayBuyerName || existingInv?.buyerName || "Etsy Buyer via Etsy",
+    buyerEmail: buyer.email || buyerRecord?.email || existingInv?.buyerEmail || "",
+    buyerCountry: buyer.country || address.country || buyerRecord?.country || existingInv?.buyerCountry || "",
     consigneeSameAsBuyer: true,
-    consigneeName: address.name || buyer.name || existingInv?.consigneeName || "",
+    consigneeName: displayBuyerName || address.name || buyer.name || existingInv?.consigneeName || "",
     consigneeAddress: [address.line1, address.line2, [address.city, address.state, address.postcode].filter(Boolean).join(", "), address.country].filter(Boolean).join("\n"),
     consigneeCountry: address.country || buyer.country || existingInv?.consigneeCountry || "",
     currency,
@@ -264,25 +374,29 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
    (deduct NG stock, append a line to a rolling draft invoice for that buyer).
    Line rate defaults to the stock item's cost price; currency is INR (domestic
    NG → Atyahara transfer). Idempotent per order via the caller's _ngInvoiceNo flag. */
-async function addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2 }) {
-  const q = Math.max(1, +qty || 1);
+async function addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2, deductStock = true, targetInvNo = "", createNew = false, productDesc = "", shapeOverride = "", rateOverride = null, customsDescOverride = "" }) {
+  const q = Math.max(0, +qty || 0);
   const q2 = Math.max(0, +qty2 || 0);
   if (!stockItem?.id) throw new Error("Link a physical stock item first");
+  if (q <= 0) throw new Error("Enter an invoice quantity first");
 
-  // 1. Deduct physical stock — fresh read so quantities stay accurate under concurrent edits.
+  // 1. Optionally deduct physical stock — allocation normally owns this now.
   const stock = (await loadKFresh(STK_KEY).catch(() => [])) || [];
   const target = stock.find(s => s.id === stockItem.id);
   if (!target) throw new Error("Linked stock item no longer exists");
-  const remaining = +parseFloat(Math.max(0, (+target.qty || 0) - q).toFixed(4));
+  const remaining = +parseFloat(Math.max(0, (+target.qty || 0) - (deductStock ? q : 0)).toFixed(4));
   const hasQty2 = String(target.qty2 || "").trim() !== "";
-  const remaining2 = hasQty2 ? +parseFloat(Math.max(0, (+target.qty2 || 0) - q2).toFixed(4)) : null;
-  const nextStock = stock.map(s => s.id === target.id ? {
-    ...s,
-    qty: String(remaining),
-    ...(hasQty2 ? { qty2: String(remaining2) } : {}),
-    updatedAt: new Date().toISOString(),
-  } : s);
-  await saveK(STK_KEY, nextStock);
+  const remaining2 = hasQty2 ? +parseFloat(Math.max(0, (+target.qty2 || 0) - (deductStock ? q2 : 0)).toFixed(4)) : null;
+  if (deductStock) {
+    const nextStock = stock.map(s => s.id === target.id ? {
+      ...s,
+      qty: String(remaining),
+      ...(hasQty2 ? { qty2: String(remaining2) } : {}),
+      updatedAt: new Date().toISOString(),
+    } : s);
+    await saveK(STK_KEY, nextStock);
+    window.dispatchEvent(new CustomEvent("ng-stock-updated", { detail: nextStock }));
+  }
 
   // 2. Ensure the fixed "Atyahara" buyer exists in NG books.
   const buyers = (await loadKFresh(NG_BUYERS_KEY).catch(() => [])) || [];
@@ -294,14 +408,16 @@ async function addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2 }) {
 
   // 3. Build the line — customs/bill description keyed off the stock item's shape.
   const shapeTokens = await loadCustomsShapeTokens();
-  const shape = stockItem.shape || order.listing_shape || "";
+  const shape = shapeOverride || stockItem.shape || order.listing_shape || "";
   const token = findShapeToken(shapeTokens, shape) || matchShapeInTitle(shapeTokens, order.listing_title || "");
-  const rate = stockItem.costPrice !== "" && stockItem.costPrice != null ? +stockItem.costPrice : 0;
+  const rate = rateOverride !== null && rateOverride !== "" && Number.isFinite(+rateOverride)
+    ? +rateOverride
+    : (stockItem.costPrice !== "" && stockItem.costPrice != null ? +stockItem.costPrice : 0);
   const receiptId = String(order.etsy_receipt_id || order.platform_order_id || "");
   const line = {
     id: uid(),
-    acctDesc: token?.desc || "",
-    customDesc: [stockItem.material, stockItem.shape, stockItem.origin, stockItem.size].filter(Boolean).join(" · "),
+    acctDesc: cleanInvoiceText(customsDescOverride) || token?.desc || "",
+    customDesc: cleanInvoiceText(productDesc) || [stockItem.material, stockItem.shape, stockItem.origin, stockItem.size].filter(Boolean).join(" · "),
     hsn: token?.hsn || "71031029",
     qty: String(q),
     unit: stockItem.unit || "pcs",
@@ -316,19 +432,26 @@ async function addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2 }) {
     _etsyReceiptId: receiptId,
   };
 
-  // 4. Append to the rolling Atyahara inter-co draft (or open a new one) — Quick Sell style.
+  // 4. Append to the normal Atyahara draft invoice, matching Quick Sell's buyer
+  // draft workflow. Older Etsy-only interco drafts are ignored unless manually used.
   const invoices = (await loadKFresh(NG_INVOICES_KEY).catch(() => [])) || [];
-  const rolling = invoices.find(i => i.buyerId === buyer.id && i.status === "draft" && i._etsyInterco);
+  const normalAtyaharaDrafts = invoices
+    .filter(i => i.buyerId === buyer.id && i.status === "draft" && !i._etsyInterco)
+    .sort((a, b) => String(b.date || b.createdAt || "").localeCompare(String(a.date || a.createdAt || "")) || String(b.invNo || "").localeCompare(String(a.invNo || "")));
+  const rolling = createNew ? null : (targetInvNo
+    ? normalAtyaharaDrafts.find(i => String(i.invNo || "") === String(targetInvNo))
+    : normalAtyaharaDrafts[0]);
   let invoice, isNew = false;
+  let lineNo = 1;
   if (rolling) {
     const items = [...(rolling.items || []), line];
+    lineNo = items.length;
     invoice = { ...rolling, items, totalAmt: Number(items.reduce((s, it) => s + (+it.qty || 0) * (+it.rate || 0), 0).toFixed(2)), updatedAt: new Date().toISOString() };
   } else {
     isNew = true;
-    const maxNo = invoices.reduce((mx, inv) => { const m = (inv.invNo || "").match(/(\d+)/); return m ? Math.max(mx, +m[1]) : mx; }, 0);
     invoice = {
-      id: uid(), invNo: `NG-${String(maxNo + 1).padStart(3, "0")}`, type: "commercial",
-      date: new Date().toISOString().slice(0, 10),
+      id: uid(), invNo: nextFiscalInvoiceNo(invoices, "NG", order.date || order.created_at || toIsoDate()), type: "commercial",
+      date: toIsoDate(order.date || order.created_at),
       dueDate: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
       buyerId: buyer.id, consigneeId: "", consigneeSameAsBuyer: true,
       consigneeName: "", consigneeAddress: "", consigneeCountry: "",
@@ -338,12 +461,64 @@ async function addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2 }) {
       status: "draft", paidAmount: 0, payments: [],
       goodsShipped: false, attachments: [],
       totalAmt: Number((q * (rate || 0)).toFixed(2)),
-      _etsyInterco: true,
       createdAt: new Date().toISOString(),
     };
+    lineNo = 1;
   }
   await upsertItemK(NG_INVOICES_KEY, invoice, { prepend: isNew });
-  return { invNo: invoice.invNo, deductedQty: q, deductedQty2: q2, remaining, remaining2, rate };
+  return { invNo: invoice.invNo, lineNo, lineId: line.id, deductedQty: q, deductedQty2: q2, remaining, remaining2, rate };
+}
+
+async function applyOrderStockAllocation({ order, stockItem, qty, qty2 }) {
+  const q = Math.max(0, +qty || 0);
+  const q2 = Math.max(0, +qty2 || 0);
+  if (!stockItem?.id) throw new Error("Pick a physical stock item first");
+  if (q <= 0 && q2 <= 0) throw new Error("Enter how much you used.");
+
+  const prevStockId = order._ngAllocatedStockId || order._ngStockId || "";
+  const prevQty = Math.max(0, +(order._ngAllocatedQty ?? order._ngDeductedQty) || 0);
+  const prevQty2 = Math.max(0, +(order._ngAllocatedQty2 ?? order._ngDeductedQty2) || 0);
+  const stock = (await loadKFresh(STK_KEY).catch(() => [])) || [];
+  const target = stock.find(s => s.id === stockItem.id);
+  if (!target) throw new Error("Linked stock item no longer exists");
+
+  const sameStock = prevStockId && prevStockId === target.id;
+  const availableQty = (+target.qty || 0) + (sameStock ? prevQty : 0);
+  const hasQty2 = String(target.qty2 || "").trim() !== "";
+  const availableQty2 = (+target.qty2 || 0) + (sameStock ? prevQty2 : 0);
+  if (q > availableQty) throw new Error(`Only ${availableQty} ${target.unit || "pcs"} available.`);
+  if (hasQty2 && q2 > availableQty2) throw new Error(`Only ${availableQty2} ${target.unit2 || "secondary units"} available.`);
+
+  const nextStock = stock.map(s => {
+    let nextQty = +s.qty || 0;
+    let nextQty2 = String(s.qty2 || "").trim() !== "" ? (+s.qty2 || 0) : null;
+    if (prevStockId && s.id === prevStockId) {
+      nextQty += prevQty;
+      if (nextQty2 != null) nextQty2 += prevQty2;
+    }
+    if (s.id === target.id) {
+      nextQty -= q;
+      if (nextQty2 != null) nextQty2 -= q2;
+    }
+    return (s.id === prevStockId || s.id === target.id)
+      ? {
+          ...s,
+          qty: String(+parseFloat(Math.max(0, nextQty).toFixed(4))),
+          ...(nextQty2 != null ? { qty2: String(+parseFloat(Math.max(0, nextQty2).toFixed(4))) } : {}),
+          updatedAt: new Date().toISOString(),
+        }
+      : s;
+  });
+  await saveK(STK_KEY, nextStock);
+  window.dispatchEvent(new CustomEvent("ng-stock-updated", { detail: nextStock }));
+
+  const updatedTarget = nextStock.find(s => s.id === target.id) || target;
+  return {
+    allocatedQty: q,
+    allocatedQty2: q2,
+    remaining: +updatedTarget.qty || 0,
+    remaining2: String(updatedTarget.qty2 || "").trim() !== "" ? (+updatedTarget.qty2 || 0) : null,
+  };
 }
 
 async function mediaUrlToFile(url, fallbackName) {
@@ -885,6 +1060,7 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
       buyer_country:     "",
       date:              new Date().toISOString().slice(0, 10),
       notes:             "",
+      remove_other_platforms: listing.type === "unique",
     };
   });
 
@@ -957,8 +1133,15 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
           {listing.type === "unique" && otherLive.length > 0 && (
             <div style={{ background: C.amberBg, border: `1px solid ${C.amber}50`, borderRadius: 8,
               padding: "10px 14px", fontSize: 12, color: C.ink, lineHeight: 1.5 }}>
-              <strong>⚡ Unique item</strong> — will automatically be removed from{" "}
-              <strong>{otherLive.map(p => p.label).join(", ")}</strong> after recording this sale.
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 9, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!form.remove_other_platforms}
+                  onChange={e => set("remove_other_platforms", e.target.checked)}
+                  style={{ marginTop: 2, accentColor: C.amber }} />
+                <span>
+                  <strong>Unique item</strong> — remove from{" "}
+                  <strong>{otherLive.map(p => p.label).join(", ")}</strong> after recording this sale.
+                </span>
+              </label>
             </div>
           )}
 
@@ -1004,7 +1187,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
   const [form, setForm] = useState(() => {
     const base = initial || {
       id: uid(), title: "", description: "", material: "", shape: "Mineral",
-      origin: "", size: "", weight: "", sku: "", productType: "Lapidary",
+      origin: "", size: "", weight: "", sku: "", listing_order_id: listingOrderId(), productType: "Lapidary",
       type: "unique", qty: 1, linked_stock_id: "", officeLocation: "",
       tags: [], images: [], video: "",
       price_etsy: "", price_shopify_earth: "", price_shopify_aty: "", price_ebay: "",
@@ -1013,7 +1196,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
       etsy_shipping_profile_id: null, etsy_return_policy_id: null,
       etsy_auto_renew: false, etsy_ads: false,
     };
-    return { ...base, variations: base.variations || [] };
+    return { ...ensureListingOrderId(base), variations: base.variations || [] };
   });
 
   const [category,    setCategory]    = useState(inferCategory);
@@ -1108,7 +1291,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
 
   const handleSave = () => {
     if (!validate()) return;
-    onSave({ ...form, tags, _ai: form._ai || null, updated_at: now() }, publishTo);
+    onSave(ensureListingOrderId({ ...form, tags, _ai: form._ai || null, updated_at: now() }), publishTo);
   };
 
   const catLabel = ETSY_CATEGORIES.find(c => c.value === category)?.label || "—";
@@ -1584,6 +1767,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
             {showOptional && (
               <div style={{ marginTop: 12, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px" }}>
                 <Grid cols={2}>
+                  <div><Label>Order ID</Label><input value={form.listing_order_id || ""} onChange={e => set("listing_order_id", e.target.value)} placeholder="NG-LST-2026-ABC123" style={FI()} /></div>
                   <div><Label>SKU</Label><input value={form.sku} onChange={e => set("sku", e.target.value)} placeholder="CQ-SPH-001" style={FI()} /></div>
                   <div><Label>Origin</Label><input value={form.origin} onChange={e => set("origin", e.target.value)} placeholder="Brazil, India…" style={FI()} /></div>
                   <div><Label>Size</Label><input value={form.size} onChange={e => set("size", e.target.value)} placeholder="4 inch, 45mm…" style={FI()} /></div>
@@ -1656,7 +1840,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
                 if (p.key === "etsy" && pd.listing_id) return true;
                 if (p.key === "ebay" && pd.item_id) return true;
                 if ((p.key === "shopify_aty" || p.key === "shopify_earth") && pd.product_id) return true;
-                return pd.status === "active" || pd.status === "draft";
+                return false;
               });
               const linkedKeys = new Set(linkedPlatforms.map(p => p.key));
               const newPlatforms = PLATFORMS.filter(p => !linkedKeys.has(p.key));
@@ -1822,7 +2006,9 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
           {/* meta */}
           <div style={{ fontSize: 12, color: C.inkMid, marginBottom: storageLocation ? 4 : 6 }}>
             {[listing.material, listing.shape, listing.origin].filter(Boolean).join(" · ")}
-            {listing.sku && <span style={{ marginLeft: 8, fontFamily: "monospace", fontSize: 11, color: C.inkFaint }}>SKU: {listing.sku}</span>}
+            {(listing.sku || listing.listing_order_id) && <span style={{ marginLeft: 8, fontFamily: "monospace", fontSize: 11, color: C.inkFaint }}>
+              {listing.sku ? `SKU: ${listing.sku}` : `ID: ${listing.listing_order_id}`}
+            </span>}
           </div>
 
           {/* storage location badge (internal ERP only) */}
@@ -2021,9 +2207,11 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 /* ══════════════════════════════════════════════════════════════════════════
    ORDERS VIEW
 ══════════════════════════════════════════════════════════════════════════ */
-function OrdersView({ orders, listings = [], stock = [], showToast }) {
+function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoice, onViewInvoicePdf }) {
   const [pFilter,  setPFilter]  = useState("all");
   const [shipFilter, setShipFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState("this_month");
+  const [monthFilter, setMonthFilter] = useState(() => new Date().toISOString().slice(0, 7));
   const [search,   setSearch]   = useState("");
   const [expanded, setExpanded] = useState(null);
   const [copied, setCopied] = useState("");
@@ -2034,20 +2222,29 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const [trackingModalOrder, setTrackingModalOrder] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState({});
   const [stepSel, setStepSel] = useState({}); // per-order: which fulfilment step panel is open (overrides the auto-active one)
+  const [allocEdit, setAllocEdit] = useState({}); // per-order: allow editing a saved physical stock allocation
   const [stockModalOrder, setStockModalOrder] = useState(null); // order whose stock-picker modal is open
   const [atInvoices, setAtInvoices] = useState([]); // Atyahara invoices, for matching/linking existing invoices to orders
+  const [ngInvoices, setNgInvoices] = useState([]);
+  const [ngBuyers, setNgBuyers] = useState([]);
   const [invoiceModalOrder, setInvoiceModalOrder] = useState(null); // order whose "link existing invoice" picker is open
   const [invoiceModalSearch, setInvoiceModalSearch] = useState("");
   const [invNoDraft, setInvNoDraft] = useState({}); // per-order editable invoice number for step 3
+  const [ngInvoiceMode, setNgInvoiceMode] = useState({});
+  const [productDescDraft, setProductDescDraft] = useState({}); // per-order editable invoice detail/product desc
+  const [customsDescDraft, setCustomsDescDraft] = useState({});
+  const [invoiceEdit, setInvoiceEdit] = useState({});
   const [reconciling, setReconciling] = useState(false);
   const [etsyBackfilling, setEtsyBackfilling] = useState(false);
   const etsyBackfillRef = useRef(false);
   // Customs shape list (Datasets tab) — drives the editable Shape field per order and
   // the customs/bill description on invoices created from these orders.
   const [customsShapes, setCustomsShapes] = useState([]);
+  const [customsRows, setCustomsRows] = useState([]);
   useEffect(() => {
     loadK(CUSTOMS_DESCS_KEY).then(rows => {
       const source = Array.isArray(rows) && rows.length ? rows : DEFAULT_CUSTOMS_DESCS;
+      setCustomsRows(source);
       setCustomsShapes([...new Set(source.flatMap(r => String(r.shape || "").split(",").map(s => s.trim()).filter(Boolean)))]);
     });
   }, []);
@@ -2060,16 +2257,137 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     return updated;
   };
   const setOrderShape = (order, shape) => patchOrder(order, { listing_shape: shape });
-  const ngDraft = o => ngState[o.id] || { qty: String(o._ngDeductedQty || o._ngPlanQty || 1), qty2: String(o._ngDeductedQty2 || o._ngPlanQty2 || ""), shipCost: o.ship_cost != null && o.ship_cost !== "" ? String(o.ship_cost) : "", loading: false, error: "", success: "" };
+  const ngDraft = o => ngState[o.id] || { qty: String(o._ngAllocatedQty || o._ngDeductedQty || o._ngPlanQty || ""), qty2: String(o._ngAllocatedQty2 || o._ngDeductedQty2 || o._ngPlanQty2 || ""), shipCost: o.ship_cost != null && o.ship_cost !== "" ? String(o.ship_cost) : "", costMode: "earned", multiplier: "2", rate: "", loading: false, error: "", success: "" };
   const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...ngDraft(o), ...patch } }));
   const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
   const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
+  const saveOrderShipCost = (order, value) => {
+    const shipCost = value === "" ? "" : Math.max(0, +value || 0);
+    updNg(order, { shipCost: value });
+    return patchOrder(order, { ship_cost: shipCost });
+  };
   // Atyahara invoices share the store the Orders flow writes to, so we can link existing
   // invoices (created in Invoicing) back onto orders and mark "Sales invoice" done.
   const invNoOf = inv => inv.invNo || inv.number || "";
   const invAmt = inv => +inv.totalAmt || (inv.items || []).reduce((s, i) => s + (+i.amt || (+i.qty || 0) * (+i.rate || 0) || 0), 0);
   const normName = s => String(s || "").toLowerCase().replace(/\bvia etsy\b/g, "").replace(/[^a-z0-9]/g, "");
   useEffect(() => { loadKFresh(AT_INVOICES_KEY).then(d => setAtInvoices(Array.isArray(d) ? d : [])).catch(() => {}); }, []);
+  const refreshNgInvoices = () => Promise.all([
+    loadKFresh(NG_INVOICES_KEY).catch(() => []),
+    loadKFresh(NG_BUYERS_KEY).catch(() => []),
+  ]).then(([i, b]) => {
+    setNgInvoices(Array.isArray(i) ? i : []);
+    setNgBuyers(Array.isArray(b) ? b : []);
+  }).catch(() => {});
+  useEffect(() => { refreshNgInvoices(); }, []);
+  const atyaharaBuyerIds = () => new Set((ngBuyers || []).filter(b => String(b.name || "").trim().toLowerCase() === "atyahara").map(b => b.id));
+  const atyaharaNgDrafts = () => {
+    const ids = atyaharaBuyerIds();
+    return [...(ngInvoices || [])]
+      .filter(inv => !inv._etsyInterco && inv.status === "draft" && (ids.has(inv.buyerId) || String(inv.buyerName || inv.buyer || "").trim().toLowerCase() === "atyahara"))
+      .sort((a, b) => String(b.date || b.createdAt || "").localeCompare(String(a.date || a.createdAt || "")) || String(b.invNo || "").localeCompare(String(a.invNo || "")));
+  };
+  const latestAtyaharaNgDraft = dateStr => atyaharaNgDrafts().find(inv => monthKey(inv.date || inv.createdAt) === monthKey(dateStr)) || null;
+  const latestAnyAtyaharaNgDraft = () => atyaharaNgDrafts()[0] || null;
+  const ngLineNoForOrder = order => {
+    if (order?._ngLineNo) return order._ngLineNo;
+    const inv = (ngInvoices || []).find(i => String(i.invNo || "") === String(order?._ngInvoiceNo || ""));
+    if (!inv) return "";
+    const receiptId = String(etsyReceiptId(order) || "");
+    const idx = (inv.items || []).findIndex(it => String(it._sourceOrderId || "") === String(order.id) || (receiptId && String(it._etsyReceiptId || "") === receiptId));
+    return idx >= 0 ? idx + 1 : "";
+  };
+  const ngInvoiceForOrder = order => (ngInvoices || []).find(i => String(i.invNo || "") === String(order?._ngInvoiceNo || "")) || null;
+  const ngInvoiceLineForOrder = order => {
+    const inv = ngInvoiceForOrder(order);
+    if (!inv) return null;
+    const receiptId = String(etsyReceiptId(order) || "");
+    return (inv.items || []).find(it =>
+      String(it._sourceOrderId || "") === String(order.id) ||
+      (receiptId && String(it._etsyReceiptId || "") === receiptId) ||
+      (order._ngLineId && String(it.id || "") === String(order._ngLineId))
+    ) || null;
+  };
+  const isNgInvoiceLocked = order => {
+    const inv = ngInvoiceForOrder(order);
+    return !!inv && String(inv.status || "draft").toLowerCase() !== "draft";
+  };
+  const atInvoiceForOrder = order => (atInvoices || []).find(i => String(i.invNo || "") === String(order?._atInvoiceNo || "")) || null;
+  const isAtInvoiceLocked = order => {
+    const inv = atInvoiceForOrder(order);
+    return !!inv && String(inv.status || "draft").toLowerCase() !== "draft";
+  };
+  const plausibleEtsyFees = (fees, gross) => {
+    const f = Math.abs(+fees || 0);
+    const g = Math.max(0, +gross || 0);
+    return f > 0 && (!g || (f < g && f < g * 0.6));
+  };
+  const deriveEtsyEarnings = (order = {}, payment = {}) => {
+    const gross = +payment.gross || +order.order_total || +order.buyer_paid || 0;
+    const rawFees = Math.abs(+payment.fees || +order.etsy_fees || +order.order_fees || 0);
+    const fees = plausibleEtsyFees(rawFees, gross) ? rawFees : 0;
+    const net = +payment.net || 0;
+    if (net > 0) {
+      const netFees = Math.max(0, gross - net);
+      return { gross, fees: plausibleEtsyFees(fees || netFees, gross) ? (fees || netFees) : netFees, net: Number(net.toFixed(2)), source: payment.source || order.etsy_fee_source || "etsy" };
+    }
+    if (gross > 0 && fees > 0) return { gross, fees, net: Number(Math.max(0, gross - fees).toFixed(2)), source: "derived_from_fees" };
+    const sale = +order.sale_price || 0;
+    const shipping = +order.order_shipping || 0;
+    const tax = +order.order_tax || 0;
+    const fallbackGross = gross || Math.max(0, sale + shipping + tax);
+    if ((order.platform === "etsy" || order.etsy_receipt_id) && fallbackGross > 0) {
+      const taxableSubtotal = Math.max(0, sale + shipping);
+      const estimatedTransactionFee = taxableSubtotal * 0.065;
+      const estimatedProcessingFee = fallbackGross * 0.06;
+      const estimatedFees = Number(Math.round(tax + estimatedTransactionFee + estimatedProcessingFee));
+      if (estimatedFees > 0) {
+        return {
+          gross: fallbackGross,
+          fees: estimatedFees,
+          net: Number(Math.max(0, fallbackGross - estimatedFees).toFixed(2)),
+          source: "etsy_inr_fee_estimate",
+        };
+      }
+    }
+    return { gross: fallbackGross, fees: 0, net: 0, source: "fees_missing" };
+  };
+  const hasReliableEtsyEarnings = order => {
+    if (order?.platform !== "etsy") return true;
+    const source = String(order.etsy_fee_source || "");
+    if (source === "gross_fallback" || source === "fees_missing") return false;
+    const gross = +order.order_total || +order.buyer_paid || 0;
+    return plausibleEtsyFees(+order.etsy_fees || +order.order_fees || 0, gross) && +order.etsy_fee_version >= 7;
+  };
+  const orderEarnedValue = order => {
+    const explicit = +order.etsy_net;
+    const source = String(order?.etsy_fee_source || "");
+    if (Number.isFinite(explicit) && explicit > 0 && source !== "gross_fallback" && source !== "fees_missing") return explicit;
+    return deriveEtsyEarnings(order).net;
+  };
+  const ngInvoiceRate = (order, stockItem, qty, draft = ngDraft(order)) => {
+    if (draft.rate !== "" && draft.rate != null && Number.isFinite(+draft.rate)) return +draft.rate;
+    const q = Math.max(0, +qty || 0);
+    if (q <= 0) return 0;
+    const mode = draft.costMode || "earned";
+    if (mode === "stock") {
+      const base = stockItem?.costPrice !== "" && stockItem?.costPrice != null ? +stockItem.costPrice : 0;
+      return Number((base * Math.max(0, +draft.multiplier || 2)).toFixed(2));
+    }
+    const earned = orderEarnedValue(order);
+    const shippingPaid = Math.max(0, +draft.shipCost || +order.ship_cost || 0);
+    return Number((Math.max(0, earned - shippingPaid) / 3 / q).toFixed(2));
+  };
+  const ngCustomsDesc = (order, stockItem) => {
+    const shape = order.listing_shape || stockItem?.shape || "";
+    const token = findShapeToken(customsRows, shape) || matchShapeInTitle(customsRows, order.listing_title || "");
+    return token?.desc || "";
+  };
+  const ngHsn = (order, stockItem) => {
+    const shape = order.listing_shape || stockItem?.shape || "";
+    const token = findShapeToken(customsRows, shape) || matchShapeInTitle(customsRows, order.listing_title || "");
+    return token?.hsn || "71031029";
+  };
   const linkOrderInvoice = (order, inv) => { setInvoiceModalOrder(null); patchOrder(order, { _atInvoiceNo: invNoOf(inv), _atInvoicedAt: now() }); showToast?.(`Linked ${invNoOf(inv)} to this order`); };
   // Bulk-match unlinked Etsy orders to existing Atyahara invoices. Only links on a strong
   // signal: an exact Etsy receipt id, or a clean 1:1 buyer-name match (skips ambiguous ones
@@ -2109,9 +2427,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       showToast?.(e.message || "Could not match invoices");
     } finally { setReconciling(false); }
   };
-  // Save step-2 choices (quantities used + what shipping cost you) onto the order. Stock is
-  // not deducted here — that happens when the NG invoice is created (step 4) — so this just
-  // records the plan and your shipping spend for later profit stats.
+  // Save step-2 choices and apply the physical stock movement immediately. If the
+  // allocation is edited later, previous quantities are reversed before new ones apply.
   const saveAllocation = async order => {
     const draft = ngDraft(order);
     const stockItem = stock.find(s => s.id === order.linked_stock_id);
@@ -2119,11 +2436,23 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     const qty = Math.max(0, +draft.qty || 0);
     const qty2 = Math.max(0, +draft.qty2 || 0);
     if (qty <= 0 && qty2 <= 0) { updNg(order, { error: "Enter how much you used.", success: "" }); return; }
-    if (qty > (+stockItem.qty || 0)) { updNg(order, { error: `Only ${stockItem.qty || 0} ${stockItem.unit || "pcs"} in stock.`, success: "" }); return; }
-    if (String(stockItem.qty2 || "").trim() !== "" && qty2 > (+stockItem.qty2 || 0)) { updNg(order, { error: `Only ${stockItem.qty2 || 0} ${stockItem.unit2 || "secondary units"} available.`, success: "" }); return; }
-    const shipCost = draft.shipCost === "" ? "" : Math.max(0, +draft.shipCost || 0);
-    await patchOrder(order, { _ngPlanQty: String(qty), _ngPlanQty2: qty2 ? String(qty2) : "", ship_cost: shipCost });
-    updNg(order, { error: "", success: "Allocation saved — stock deducts when you create the NG invoice." });
+    try {
+      const { allocatedQty, allocatedQty2, remaining, remaining2 } = await applyOrderStockAllocation({ order, stockItem, qty, qty2 });
+      await patchOrder(order, {
+        _ngPlanQty: String(allocatedQty),
+        _ngPlanQty2: allocatedQty2 ? String(allocatedQty2) : "",
+        _ngAllocatedQty: allocatedQty,
+        _ngAllocatedQty2: allocatedQty2 || "",
+        _ngAllocatedStockId: stockItem.id,
+        _ngStockAllocatedAt: now(),
+      });
+      const secondaryNote = remaining2 == null ? "" : ` · ${remaining2} ${stockItem.unit2 || "secondary units"} left`;
+      updNg(order, { error: "", success: `Allocation saved · ${remaining} ${stockItem.unit || "pcs"} left${secondaryNote}` });
+      setAllocEdit(s => ({ ...s, [order.id]: false }));
+    } catch (e) {
+      updNg(order, { error: e.message || "Could not save allocation", success: "" });
+      return;
+    }
     setStepSel(s => ({ ...s, [order.id]: 2 }));
   };
   // Deduct the linked NG stock and add a line to Atyahara's inter-company NG invoice.
@@ -2131,19 +2460,119 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     const draft = ngDraft(order);
     const stockItem = stock.find(s => s.id === order.linked_stock_id);
     if (!stockItem) { updNg(order, { error: "Link a physical stock item first." }); return; }
-    const qty = Math.max(1, +draft.qty || 1);
+    const qty = Math.max(0, +draft.qty || +order._ngAllocatedQty || +order._ngDeductedQty || 0);
     const qty2 = Math.max(0, +draft.qty2 || 0);
-    if (qty > (+stockItem.qty || 0)) { updNg(order, { error: `Only ${stockItem.qty || 0} ${stockItem.unit || "pcs"} in stock.` }); return; }
-    if (String(stockItem.qty2 || "").trim() !== "" && qty2 > (+stockItem.qty2 || 0)) { updNg(order, { error: `Only ${stockItem.qty2 || 0} ${stockItem.unit2 || "secondary units"} available.` }); return; }
+    if (qty <= 0) { updNg(order, { error: "Enter invoice quantity in step 2.", success: "" }); return; }
+    const target = latestAtyaharaNgDraft(orderDate(order));
+    const mode = ngInvoiceMode[order.id] || (target ? "latest" : "new");
+    const productDesc = cleanInvoiceText(productDescDraft[order.id] || order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
+    const rate = ngInvoiceRate(order, stockItem, qty, draft);
+    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : productDesc);
+    const earnedAtCreate = orderEarnedValue(order);
+    const shippingAtCreate = Math.max(0, +draft.shipCost || +order.ship_cost || 0);
+    const amountAtCreate = Number((qty * (rate || 0)).toFixed(2));
     updNg(order, { loading: true, error: "", success: "" });
     try {
-      const { invNo, deductedQty, deductedQty2, remaining, remaining2 } = await addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2 });
-      await patchOrder(order, { _ngInvoiceNo: invNo, _ngDeductedQty: deductedQty, _ngDeductedQty2: deductedQty2 || "", _ngStockId: stockItem.id, _ngInvoicedAt: now() });
+      if (!order._ngStockAllocatedAt && !order._ngInvoiceNo) {
+        await applyOrderStockAllocation({ order, stockItem, qty, qty2 });
+      }
+      const { invNo, lineNo, lineId, deductedQty, deductedQty2, remaining, remaining2 } = await addOrderToNikhilGemsInvoice({
+        order, stockItem, qty, qty2, deductStock: false,
+        targetInvNo: mode === "latest" ? target?.invNo || "" : "",
+        createNew: mode === "new",
+        productDesc,
+        shapeOverride: order.listing_shape || stockItem.shape || "",
+        rateOverride: rate,
+        customsDescOverride: customsDesc,
+      });
+      await patchOrder(order, {
+        _ngInvoiceNo: invNo,
+        _ngProductDesc: productDesc,
+        _ngCustomsDesc: customsDesc,
+        _ngLineNo: lineNo,
+        _ngLineId: lineId,
+        _ngRate: rate,
+        _ngAmount: amountAtCreate,
+        _ngUnit: stockItem.unit || "pcs",
+        _ngHsn: ngHsn(order, stockItem),
+        _ngEarnedAtCreate: earnedAtCreate,
+        _ngShippingAtCreate: shippingAtCreate,
+        _ngCostMode: draft.costMode || "earned",
+        _ngDeductedQty: deductedQty,
+        _ngDeductedQty2: deductedQty2 || "",
+        _ngStockId: stockItem.id,
+        _ngAllocatedQty: order._ngAllocatedQty || deductedQty,
+        _ngAllocatedQty2: order._ngAllocatedQty2 || deductedQty2 || "",
+        _ngAllocatedStockId: order._ngAllocatedStockId || stockItem.id,
+        _ngStockAllocatedAt: order._ngStockAllocatedAt || now(),
+        _ngInvoicedAt: now(),
+      });
       const secondaryNote = remaining2 == null ? "" : ` · −${deductedQty2} ${stockItem.unit2 || "secondary units"} (${remaining2} left)`;
-      updNg(order, { loading: false, success: `Added to ${invNo} · −${deductedQty} ${stockItem.unit || "pcs"} (${remaining} left)${secondaryNote}` });
+      updNg(order, { loading: false, success: `Added to ${invNo} line ${lineNo} · −${deductedQty} ${stockItem.unit || "pcs"} (${remaining} left)${secondaryNote}` });
+      refreshNgInvoices();
       showToast?.(`✓ ${invNo} updated · stock deducted`);
     } catch (e) {
       updNg(order, { loading: false, error: e.message || "Could not add to NG invoice" });
+    }
+  };
+  const saveNgInvoiceEdits = async order => {
+    const stockItem = stock.find(s => s.id === order.linked_stock_id || s.id === order._ngStockId || s.id === order._ngAllocatedStockId);
+    if (!stockItem) { updNg(order, { error: "Link a physical stock item first.", success: "" }); return; }
+    if (!order._ngInvoiceNo) { updNg(order, { error: "Create/link the NG invoice first.", success: "" }); return; }
+    const draft = ngDraft(order);
+    const q = Math.max(0, +draft.qty || +order._ngAllocatedQty || +order._ngDeductedQty || 0);
+    const q2 = Math.max(0, +draft.qty2 || +order._ngAllocatedQty2 || +order._ngDeductedQty2 || 0);
+    if (q <= 0) { updNg(order, { error: "Enter invoice quantity first.", success: "" }); return; }
+    const productDesc = cleanInvoiceText(productDescDraft[order.id] || order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
+    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : productDesc);
+    updNg(order, { loading: true, error: "", success: "" });
+    try {
+      const invoices = (await loadKFresh(NG_INVOICES_KEY).catch(() => ngInvoices)) || [];
+      const inv = invoices.find(i => String(i.invNo || "") === String(order._ngInvoiceNo));
+      if (!inv) throw new Error(`${order._ngInvoiceNo} was deleted. Unlink and remake it.`);
+      if (String(inv.status || "draft").toLowerCase() !== "draft") throw new Error(`${order._ngInvoiceNo} is ${inv.status}; linked invoice lines are locked.`);
+      const shapeTokens = await loadCustomsShapeTokens();
+      const shape = order.listing_shape || stockItem.shape || "";
+      const token = findShapeToken(shapeTokens, shape) || matchShapeInTitle(shapeTokens, order.listing_title || "");
+      const rate = ngInvoiceRate(order, stockItem, q, draft);
+      const earnedAtSave = orderEarnedValue(order);
+      const shippingAtSave = Math.max(0, +draft.shipCost || +order.ship_cost || 0);
+      const amountAtSave = Number((q * (rate || 0)).toFixed(2));
+      const receiptId = String(etsyReceiptId(order) || "");
+      const replacement = {
+        id: "",
+        acctDesc: customsDesc || token?.desc || "",
+        customDesc: productDesc || [stockItem.material, stockItem.shape, stockItem.origin, stockItem.size].filter(Boolean).join(" · "),
+        hsn: token?.hsn || "71031029",
+        qty: String(q),
+        unit: stockItem.unit || "pcs",
+        rate: String(rate || ""),
+        igst: 0,
+        amt: Number((q * (rate || 0)).toFixed(2)),
+        stockId: stockItem.id,
+        acctStockId: "",
+        ready: false,
+        readyDate: "",
+        _sourceOrderId: order.id,
+        _etsyReceiptId: receiptId,
+      };
+      let matched = false, lineNo = "";
+      const items = (inv.items || []).map((it, idx) => {
+        const hit = String(it._sourceOrderId || "") === String(order.id) || (receiptId && String(it._etsyReceiptId || "") === receiptId);
+        if (!hit) return it;
+        matched = true;
+        lineNo = idx + 1;
+        return { ...it, ...replacement, id: it.id || uid() };
+      });
+      if (!matched) { items.push({ ...replacement, id: uid() }); lineNo = items.length; }
+      const invoice = { ...inv, items, totalAmt: Number(items.reduce((s, it) => s + (+it.qty || 0) * (+it.rate || 0), 0).toFixed(2)), updatedAt: now() };
+      await upsertItemK(NG_INVOICES_KEY, invoice, { prepend: false });
+      await patchOrder(order, { _ngProductDesc: productDesc, _ngCustomsDesc: customsDesc, _ngLineNo: lineNo, _ngRate: rate, _ngAmount: amountAtSave, _ngUnit: stockItem.unit || "pcs", _ngHsn: token?.hsn || "71031029", _ngEarnedAtCreate: earnedAtSave, _ngShippingAtCreate: shippingAtSave, _ngCostMode: draft.costMode || "earned", _ngDeductedQty: q, _ngDeductedQty2: q2 || "", _ngStockId: stockItem.id });
+      refreshNgInvoices();
+      updNg(order, { loading: false, success: `Saved ${order._ngInvoiceNo} · ${q} ${stockItem.unit || "pcs"} at ${money(rate, "INR")}` });
+      setInvoiceEdit(s => ({ ...s, [`ng:${order.id}`]: false }));
+    } catch (e) {
+      updNg(order, { loading: false, error: e.message || "Could not update NG invoice" });
     }
   };
   const money = (amount, currency = "INR") => {
@@ -2240,6 +2669,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         tracking_code: trackingCode,
         tracking_number: trackingCode,
         carrier_name: carrierName,
+        ship_cost: draft.shipCost === "" ? (x.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         etsy_completed_at: now,
       } : x);
@@ -2253,10 +2683,15 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       return false;
     }
   };
-  const createAtyaharaInvoiceForOrder = async (order, invNoOverride = "") => {
+  const createAtyaharaInvoiceForOrder = async (order, invNoOverride = "", productDescOverride = "") => {
     const receiptId = String(etsyReceiptId(order) || "");
     if (!receiptId) {
       setInvoiceState(s => ({ ...s, [receiptId || order.id]: { loading: false, error: "Missing Etsy receipt id.", success: "" } }));
+      return;
+    }
+    const lockedInv = order._atInvoiceNo ? atInvoiceForOrder(order) : null;
+    if (lockedInv && String(lockedInv.status || "draft").toLowerCase() !== "draft") {
+      setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: `${lockedInv.invNo} is ${lockedInv.status}; final invoices are locked.`, success: "" } }));
       return;
     }
     setInvoiceState(s => ({ ...s, [receiptId]: { loading: true, error: "", success: "" } }));
@@ -2264,14 +2699,22 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       const rows = (orders || []).filter(o => isEtsyOrder(o) && String(etsyReceiptId(o)) === receiptId);
       const sourceRows = rows.length ? rows : [order];
       const currency = sourceRows.find(o => o.currency)?.currency || order.currency || "USD";
+      const productDesc = cleanInvoiceText(productDescOverride || productDescDraft[order.id] || order._atProductDesc || suggestEtsyProductDesc(order));
+      const receiptEarned = orderEarnedValue(order);
+      const receiptSaleTotal = sourceRows.reduce((sum, row) => sum + Math.max(0, +row.sale_price || 0), 0);
       const items = sourceRows.map((row, i) => {
-        // sale_price is what the buyer actually paid for the line (after coupon) — the
-        // invoice must bill real money, not the pre-discount list price.
+        // ATY invoices for Etsy orders use the net earned amount, allocated across
+        // receipt lines by sale value, so the invoice matches Etsy earnings.
         const qty = Math.max(1, +row.qty || 1);
-        const rate = Number(((+row.sale_price || 0) / qty).toFixed(2));
+        const rowSale = Math.max(0, +row.sale_price || 0);
+        const lineEarned = receiptEarned > 0
+          ? Number((receiptSaleTotal > 0 ? receiptEarned * (rowSale / receiptSaleTotal) : receiptEarned / sourceRows.length).toFixed(2))
+          : rowSale;
+        const rate = Number((lineEarned / qty).toFixed(2));
         return {
           id: `etsy-${receiptId}-${row.etsy_transaction_id || row.listing_sku || i}`,
           desc: cleanInvoiceText(row.listing_title || `Etsy order #${receiptId}`),
+          customDesc: productDesc,
           _title: row.listing_title || "",
           _shape: row.listing_shape || "",
           sku: row.listing_sku || row.etsy_transaction_id || "",
@@ -2281,7 +2724,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           rate: String(rate),
           gst: "0",
           igst: 0,
-          amt: Number((qty * rate).toFixed(2)),
+          amt: lineEarned,
           _etsyReceiptId: receiptId,
           _etsyTransactionId: row.etsy_transaction_id || "",
           _listingId: row.listing_id || "",
@@ -2300,14 +2743,15 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
           state: order.ship_state || "",
           postcode: order.ship_postcode || "",
           country: order.ship_country || order.buyer_country || "",
+          phone: order.ship_phone || "",
         },
         currency,
         items,
         notes: `Created from Listing Manager Etsy receipt #${receiptId}`,
-        shippingCost: order.order_shipping != null ? +order.order_shipping : null,
+        shippingCost: 0,
         invNoOverride,
       });
-      await patchOrder(order, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now() });
+      await patchOrder(order, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now(), _atProductDesc: productDesc });
       // Refresh the local invoice list so the next order's suggested number increments.
       loadKFresh(AT_INVOICES_KEY).then(d => Array.isArray(d) && setAtInvoices(d)).catch(() => {});
       // Persist AI-inferred shapes back onto the order rows so the Shape field fills in
@@ -2549,16 +2993,24 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
   const backfillEtsyFees = async receipts => {
     try {
       const current = await loadK(ORDERS_KEY) || [];
-      const feesKnown = new Set(current
-        .filter(o => o.platform === "etsy" && o.etsy_fee_version === 5)
-        .map(o => String(o.etsy_receipt_id || o.platform_order_id)));
-      const ids = [...new Set((receipts || []).map(r => String(r.receipt_id || "")).filter(id => id && !feesKnown.has(id)))].slice(0, 40);
+      const repairIds = current
+        .filter(o => o.platform === "etsy" && !hasReliableEtsyEarnings(o))
+        .map(o => String(o.etsy_receipt_id || o.platform_order_id || "").trim())
+        .filter(Boolean);
+      const receiptIds = (receipts || [])
+        .map(r => String(r.receipt_id || "").trim())
+        .filter(Boolean);
+      const ids = [...new Set([...repairIds, ...receiptIds])].slice(0, 120);
       if (!ids.length) return;
       const tok = await getEtsyToken();
-      const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${ids.join(",")}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
-      if (!r.ok) return;
-      const d = await r.json();
-      const pay = d?.payments || {};
+      const pay = {};
+      for (let i = 0; i < ids.length; i += 40) {
+        const chunk = ids.slice(i, i + 40);
+        const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${chunk.join(",")}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
+        if (!r.ok) continue;
+        const d = await r.json();
+        Object.assign(pay, d?.payments || {});
+      }
       if (!Object.keys(pay).length) return;
       const fresh = await loadK(ORDERS_KEY) || [];
       const changedRows = [];
@@ -2570,18 +3022,22 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
         const sum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
         const share = sum > 0 ? (+o.sale_price || 0) / sum : 1 / Math.max(1, siblings.length);
+        const derived = deriveEtsyEarnings(o, p);
+        const lineFees = Number(((derived.fees || 0) * share).toFixed(2));
+        const lineNet = Number(((derived.net || 0) * share).toFixed(2));
         const merged = {
           ...o,
-          order_gross: p.gross,
-          order_fees: p.fees,
-          order_net: p.net,
+          order_gross: derived.gross,
+          order_fees: derived.fees,
+          order_net: derived.net,
           fees_currency: p.currency || o.currency,
-          etsy_fees: Number((p.fees * share).toFixed(2)),
-          etsy_net: Number((p.net * share).toFixed(2)),
-          etsy_fee_source: p.source || "amount",
+          etsy_fees: lineFees,
+          etsy_net: lineNet,
+          etsy_fee_source: derived.source || p.source || "derived",
           etsy_processing_fee: null,
           etsy_transaction_fee: null,
-          etsy_fee_version: 5,
+          etsy_fee_version: 7,
+          etsy_fee_repaired_at: new Date().toISOString(),
         };
         if (JSON.stringify(merged) !== JSON.stringify(o)) changedRows.push(merged);
         return merged;
@@ -2629,7 +3085,29 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       .finally(() => setEtsyBackfilling(false));
   }, [orders, listings]);
 
-  const filtered = (orders || [])
+  const orderTime = o => Date.parse(o.created_at || o.date || orderDate(o)) || 0;
+  const monthKeyForOrder = o => new Date(orderTime(o) || Date.now()).toISOString().slice(0, 7);
+  const monthLabelShort = key => {
+    const [y, m] = String(key || "").split("-");
+    if (!y || !m) return "Month";
+    return new Date(+y, +m - 1, 1).toLocaleString("en-GB", { month: "short", year: "numeric" });
+  };
+  const dateMatches = o => {
+    if (dateFilter === "all") return true;
+    const d = new Date(orderTime(o));
+    if (!Number.isFinite(d.getTime())) return false;
+    const nowD = new Date();
+    if (dateFilter === "this_year") return d.getFullYear() === nowD.getFullYear();
+    if (dateFilter === "this_month") return d.getFullYear() === nowD.getFullYear() && d.getMonth() === nowD.getMonth();
+    if (dateFilter === "last_month") {
+      const last = new Date(nowD.getFullYear(), nowD.getMonth() - 1, 1);
+      return d.getFullYear() === last.getFullYear() && d.getMonth() === last.getMonth();
+    }
+    if (dateFilter === "month") return monthKeyForOrder(o) === monthFilter;
+    return true;
+  };
+  const dateFilteredOrders = (orders || []).filter(dateMatches);
+  const filtered = dateFilteredOrders
     .filter(o => pFilter === "all" || o.platform === pFilter)
     .filter(o => {
       if (shipFilter === "all") return true;
@@ -2651,10 +3129,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     return m;
   }, {});
   const revenueLabel = Object.entries(revenueByCurrency).map(([c, v]) => money(v, c)).join(" · ") || money(0);
-  const activeOrders = (orders || []).filter(o => !isCancelled(o));
+  const activeOrders = dateFilteredOrders.filter(o => !isCancelled(o));
   const shippedCount = activeOrders.filter(isShipped).length;
   const unshippedCount = activeOrders.length - shippedCount;
-  const cancelledCount = (orders || []).filter(isCancelled).length;
+  const cancelledCount = dateFilteredOrders.filter(isCancelled).length;
 
   const FILTER_OPTS = [
     { key: "all",    label: "All",      icon: "📦" },
@@ -2662,10 +3140,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
     { key: "manual", label: "Manual",   icon: "✏️", color: C.inkMid },
   ];
   const SHIP_OPTS = [
-    { key:"all", label:"All", n:orders.length, color:C.ink, bg:C.card },
+    { key:"all", label:"All", n:dateFilteredOrders.length, color:C.ink, bg:C.card },
     { key:"unshipped", label:"Unshipped", n:unshippedCount, color:C.amber, bg:C.amberBg },
     { key:"shipped", label:"Shipped", n:shippedCount, color:C.green, bg:C.greenBg },
     ...(cancelledCount ? [{ key:"cancelled", label:"Cancelled", n:cancelledCount, color:C.red, bg:C.redBg }] : []),
+  ];
+  const dateQuick = [
+    ["this_month", "This month"],
+    ["last_month", "Last month"],
+    ["this_year", "This year"],
+    ["all", "All dates"],
   ];
 
   return (
@@ -2683,6 +3167,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
               <div style={{ display: "grid", gap: 11 }}>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking number<input autoFocus value={draft.tracking_code} onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })} placeholder="e.g. 1234 5678 90" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Carrier<select value={draft.carrier_name} onChange={e => updateTrackingDraft(order, { carrier_name: e.target.value })} style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px", cursor: "pointer" }}><option value="other">Other</option><option value="cirro">Cirro</option><option value="shipglobal">ShipGlobal</option><option value="dhl">DHL</option><option value="dhl-ecommerce">DHL eCommerce</option><option value="fedex">FedEx</option><option value="ups">UPS</option><option value="usps">USPS</option><option value="aramex">Aramex</option><option value="india-post">India Post</option><option value="bluedart">Blue Dart</option></select></label>
+                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 44px 10px 11px" }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-18%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking link <span style={{ fontWeight: 500 }}>(optional, internal reference)</span><input value={draft.tracking_url} onChange={e => updateTrackingDraft(order, { tracking_url: e.target.value })} onBlur={e => setOrderTrackingUrl(order, e.target.value)} placeholder="https://…" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Note to buyer <span style={{ fontWeight: 500 }}>(optional)</span><input value={draft.note_to_buyer || ""} onChange={e => updateTrackingDraft(order, { note_to_buyer: e.target.value })} placeholder="A short shipping note" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}><input type="checkbox" checked={!!draft.send_bcc} onChange={e => updateTrackingDraft(order, { send_bcc: e.target.checked })} /> Send me Etsy's shipping email too</label>
@@ -2707,7 +3192,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
         const thumb = (s, size) => s.photo
           ? <img src={s.photo} alt="" loading="lazy" style={{ width: size, height: size, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: `1px solid ${C.border}` }} />
           : <div style={{ width: size, height: size, borderRadius: 8, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, display: "grid", placeItems: "center", fontSize: Math.round(size * 0.42) }}>💎</div>;
-        const pick = s => { linkOrderStock(order, s.id); updNg(order, { qty: "1" }); setStockSearch(m => ({ ...m, [order.id]: "" })); setStockModalOrder(null); };
+        const pick = s => { linkOrderStock(order, s.id); updNg(order, { qty: "1", qty2: "" }); setAllocEdit(m => ({ ...m, [order.id]: true })); setStockSearch(m => ({ ...m, [order.id]: "" })); setStockModalOrder(null); };
         return (
           <div onMouseDown={() => setStockModalOrder(null)} style={{ position: "fixed", inset: 0, zIndex: 950, display: "grid", placeItems: "center", padding: 18, background: "rgba(24,19,12,.46)" }}>
             <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(100%, 620px)", maxHeight: "86vh", display: "flex", flexDirection: "column", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, boxShadow: "0 24px 70px rgba(0,0,0,.28)", overflow: "hidden" }}>
@@ -2782,7 +3267,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
       {/* stats */}
       <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
         {[
-          { label: "Total Orders",  val: orders.length,     color: C.ink, bg: C.surface },
+          { label: dateFilter === "all" ? "Total Orders" : "Orders",  val: dateFilteredOrders.length,     color: C.ink, bg: C.surface },
           { label: "Unshipped",     val: unshippedCount,    color: C.amber, bg: C.amberBg },
           { label: "Shipped",       val: shippedCount,      color: C.green, bg: C.greenBg },
           { label: "Revenue",       val: revenueLabel,      color: C.blue, bg: C.blueBg },
@@ -2796,6 +3281,17 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
 
       {/* filter bar */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
+          {dateQuick.map(([key, label]) => {
+            const on = dateFilter === key;
+            return <button key={key} onClick={() => setDateFilter(key)} style={{ padding: "6px 11px", borderRadius: 8, fontSize: 12, cursor: "pointer", border: on ? `1.5px solid ${C.gold}` : "1.5px solid transparent", background: on ? C.gold + "20" : "transparent", color: on ? C.ink : C.inkMid, fontWeight: on ? 850 : 650 }}>{label}</button>;
+          })}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 4px", fontSize: 11, color: dateFilter === "month" ? C.ink : C.inkMid, fontWeight: 800 }}>
+            Month
+            <input type="month" value={monthFilter} onChange={e => { setMonthFilter(e.target.value); setDateFilter("month"); }} style={{ ...FI(), width: 132, padding: "5px 7px", fontSize: 12, borderRadius: 7, background: dateFilter === "month" ? C.surface : C.card }} />
+          </label>
+          <span style={{ fontSize: 11, color: C.inkFaint, padding: "0 7px", fontWeight: 750 }}>{dateFilter === "month" ? monthLabelShort(monthFilter) : dateFilter === "all" ? "All time" : ""}</span>
+        </div>
         <div style={{ display: "flex", gap: 4, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
           {SHIP_OPTS.map(opt => {
             const on = shipFilter === opt.key;
@@ -3021,6 +3517,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                           <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>Receipt #{etsyReceiptId(order)}</div>
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+                          <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 170 }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 13, padding: "8px 36px 8px 10px", borderRadius: 8, marginTop: 4 }} /><span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
                           {shipped
                             ? <>
                                 <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>✓ {order.tracking_code || order.tracking_number || "Tracking sent"}</span>
@@ -3048,14 +3545,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         </div>
                         {(() => {
                           const linked = stock.find(s => s.id === order.linked_stock_id);
-                          const done = !!order._ngInvoiceNo;
+                          const invoiceDone = !!order._ngInvoiceNo;
+                          const allocationSaved = !!(order._ngStockAllocatedAt || order._ngAllocatedQty || order._ngDeductedQty);
+                          const editingAllocation = !!linked && (allocEdit[order.id] || !allocationSaved);
                           const thumb = (s, size) => s.photo
                             ? <img src={s.photo} alt="" loading="lazy" style={{ width: size, height: size, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: `1px solid ${C.border}` }} />
                             : <div style={{ width: size, height: size, borderRadius: 8, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, display: "grid", placeItems: "center", fontSize: Math.round(size * 0.42) }}>💎</div>;
                           const hasQty2 = linked && String(linked.qty2 || "").trim() !== "";
                           return (
                             <>
-                              {linked && !done ? (
+                              {linked ? (
                                 <div style={{ display: "flex", gap: 12, alignItems: "center", padding: 10, background: C.card, border: `1.5px solid ${C.green}66`, borderRadius: 10, marginBottom: 10 }}>
                                   {thumb(linked, 56)}
                                   <div style={{ minWidth: 0, flex: 1 }}>
@@ -3066,26 +3565,36 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                                       {linked.sku && <span style={{ fontFamily: "monospace" }}>{linked.sku}</span>}
                                       <span>💰 {linked.costPrice ? money(linked.costPrice, "INR") : "cost not set"}</span>
                                     </div>
+                                    {allocationSaved && (
+                                      <div style={{ marginTop: 5, fontSize: 11, fontWeight: 800, color: C.green }}>
+                                        Allocated: {order._ngAllocatedQty || order._ngDeductedQty || order._ngPlanQty || 0} {linked.unit || "pcs"}
+                                        {(order._ngAllocatedQty2 || order._ngDeductedQty2 || order._ngPlanQty2) ? ` · ${order._ngAllocatedQty2 || order._ngDeductedQty2 || order._ngPlanQty2} ${linked.unit2 || ""}` : ""}
+                                      </div>
+                                    )}
                                   </div>
-                                  <button onClick={() => { linkOrderStock(order, ""); setStockSearch(s => ({ ...s, [order.id]: "" })); }} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Change</button>
+                                  {editingAllocation ? (
+                                    allocationSaved && <button onClick={() => setAllocEdit(s => ({ ...s, [order.id]: false }))} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Cancel edit</button>
+                                  ) : (
+                                    <button onClick={() => setAllocEdit(s => ({ ...s, [order.id]: true }))} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Edit allocation</button>
+                                  )}
+                                  {!invoiceDone && editingAllocation && <button onClick={() => { linkOrderStock(order, ""); setStockSearch(s => ({ ...s, [order.id]: "" })); }} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Change item</button>}
                                 </div>
-                              ) : !done && (
+                              ) : (
                                 <button onClick={() => { setStockSearch(s => ({ ...s, [order.id]: "" })); setStockModalOrder(order); }} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: C.card, color: C.inkMid, border: `1.5px dashed ${C.border}`, borderRadius: 9, padding: "12px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 10 }}>
                                   <span style={{ fontSize: 16 }}>🔍</span>
                                   <span>Search stock to allocate…</span>
                                 </button>
                               )}
-                              {linked && !done && (
+                              {linked && editingAllocation && (
                                 <>
                                   <div style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, textTransform: "uppercase", letterSpacing: .5, margin: "6px 0 8px" }}>How much did this order use?</div>
-                                  <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : `repeat(${hasQty2 ? 3 : 2}, 1fr)`, gap: 10, alignItems: "end" }}>
+                                  <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : `repeat(${hasQty2 ? 2 : 1}, minmax(220px, 1fr))`, gap: 10, alignItems: "end", maxWidth: hasQty2 ? 620 : 320 }}>
                                     <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Quantity used<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).qty} onChange={e => updNg(order, { qty: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 14, padding: "10px 44px 10px 11px", borderRadius: 8, marginTop: 5 }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-30%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>{linked.unit || "pcs"}</span></div></label>
                                     {hasQty2 && <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Also used<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).qty2} onChange={e => updNg(order, { qty2: e.target.value })} style={{ ...FI(), width: "100%", fontSize: 14, padding: "10px 44px 10px 11px", borderRadius: 8, marginTop: 5 }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-30%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>{linked.unit2 || "pcs"}</span></div></label>}
-                                    <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 14, padding: "10px 44px 10px 11px", borderRadius: 8, marginTop: 5 }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-30%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
                                   </div>
-                                  <div style={{ marginTop: 7, fontSize: 11, color: C.inkFaint }}>Your carrier cost — used for profit stats. Stock is deducted when you create the NG invoice (step 4).</div>
+                                  <div style={{ marginTop: 7, fontSize: 11, color: C.inkFaint }}>Saving allocation deducts physical stock now. Shipping cost is recorded in step 1 and used by the NG invoice calculator.</div>
                                   <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
-                                    <button onClick={() => saveAllocation(order)} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 850, cursor: "pointer" }}>Save allocation →</button>
+                                    <button onClick={() => saveAllocation(order)} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 850, cursor: "pointer" }}>{allocationSaved ? "Save adjustment →" : "Save allocation →"}</button>
                                   </div>
                                 </>
                               )}
@@ -3105,13 +3614,38 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                       const invNumVal = invNoDraft[order.id] != null ? invNoDraft[order.id] : String(maxAtyaharaInvoiceNo(atInvoices, orderDate(order)) + 1);
                       const composedInvNo = `ATY-${String(invNumVal).trim()}-${invFy}`;
                       const numTaken = !order._atInvoiceNo && atInvoices.some(inv => String(inv.invNo || "") === composedInvNo);
+                      const productDescVal = productDescDraft[order.id] != null ? productDescDraft[order.id] : suggestEtsyProductDesc(order);
+                      const salesQty = Math.max(1, +order.qty || 1);
+                      const salesAmount = Number((orderEarnedValue(order) || +order.sale_price || 0).toFixed(2));
+                      const salesRate = Number((salesAmount / salesQty).toFixed(2));
+                      const salesCustomsDesc = cleanInvoiceText(order.listing_title || `Etsy order #${etsyReceiptId(order)}`);
+                      const atLocked = isAtInvoiceLocked(order);
                       return (
                       <div style={{ background: C.surface, border: `1.5px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{order._atInvoiceNo ? "Sales invoice created" : "Create sales invoice"}</div>
                             <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._atInvoiceNo ? `Atyahara invoice ${order._atInvoiceNo} bills the Etsy buyer.` : "Bill the Etsy buyer from Atyahara. Pick the customs shape if auto-detect is off."}</div>
-                            {!order._atInvoiceNo && <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 8 }}>
+                            <div style={{ marginTop: 10, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
+                              <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1.6fr 1.1fr .62fr .55fr .55fr .7fr .8fr", gap: 0, alignItems: "stretch" }}>
+                                {[
+                                  ["Customs desc", <input value={salesCustomsDesc} readOnly style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: C.surface, color: C.inkMid }} />],
+                                  ["Detail / product desc", <input value={productDescVal} readOnly={!!order._atInvoiceNo && atLocked} onChange={e => setProductDescDraft(s => ({ ...s, [order.id]: e.target.value }))} placeholder="Alien Amethyst Specimen" style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: order._atInvoiceNo && atLocked ? C.card : C.surface }} />],
+                                  ["HSN", <input value="71031029" readOnly style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: C.surface, color: C.inkMid }} />],
+                                  ["Qty", <input value={String(salesQty)} readOnly style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: C.surface, color: C.inkMid }} />],
+                                  ["Unit", <input value="pcs" readOnly style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: C.surface, color: C.inkMid }} />],
+                                  ["Rate", <input value={String(salesRate || "")} readOnly style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: C.surface, color: C.inkMid }} />],
+                                  ["Amount (earned)", <div style={{ padding: "10px 9px", fontSize: 12, fontWeight: 850, color: C.ink }}>{money(salesAmount, order.currency || "INR")}</div>],
+                                ].map(([label, field]) => (
+                                  <label key={label} style={{ display: "block", borderRight: mob() ? "none" : `1px solid ${C.border}`, borderBottom: mob() ? `1px solid ${C.border}` : "none" }}>
+                                    <div style={{ padding: "7px 9px 0", fontSize: 9, color: C.inkFaint, fontWeight: 850, textTransform: "uppercase", letterSpacing: .35 }}>{label}</div>
+                                    <div>{field}</div>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 8 }}>
+                              {!order._atInvoiceNo && <>
                               <label style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint }}>Invoice no.<div style={{ display: "flex", alignItems: "center", gap: 0, marginTop: 4 }}>
                                 <span style={{ padding: "7px 8px", fontSize: 13, fontWeight: 800, color: C.inkMid, background: C.card, border: `1px solid ${C.border}`, borderRight: "none", borderRadius: "8px 0 0 8px" }}>ATY-</span>
                                 <input value={invNumVal} onChange={e => setInvNoDraft(s => ({ ...s, [order.id]: e.target.value.replace(/[^0-9]/g, "") }))} style={{ ...FI(), width: 66, fontSize: 13, fontWeight: 800, textAlign: "center", padding: "7px 4px", borderRadius: 0, borderLeft: "none", borderRight: "none" }} />
@@ -3122,20 +3656,34 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                                 {order.listing_shape && !customsShapes.includes(order.listing_shape) && <option value={order.listing_shape}>{order.listing_shape}</option>}
                                 {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
                               </select>
-                            </div>}
+                              </>}
+                            </div>
                             {numTaken && <div style={{ marginTop: 6, fontSize: 11, color: C.amber, fontWeight: 700 }}>⚠ {composedInvNo} already exists — it'll be bumped to the next free number.</div>}
                           </div>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
                             {!order._atInvoiceNo && <button onClick={() => { setInvoiceModalSearch(""); setInvoiceModalOrder(order); }} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Already invoiced?</button>}
+                            {order._atInvoiceNo && <>
+                              <button onClick={() => onViewInvoicePdf?.({ company: "at", invNo: order._atInvoiceNo, receiptId: etsyReceiptId(order) })} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>View PDF</button>
+                              <button onClick={() => onOpenInvoice?.({ company: "at", invNo: order._atInvoiceNo, receiptId: etsyReceiptId(order) })} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Go to invoice module</button>
+                              {atLocked
+                                ? <span style={{ background: C.card, color: C.inkFaint, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap" }}>Locked</span>
+                                : <button onClick={() => setInvoiceEdit(s => ({ ...s, [`at:${order.id}`]: !s[`at:${order.id}`] }))} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Edit</button>}
+                            </>}
                             <button
-                              onClick={() => createAtyaharaInvoiceForOrder(order, order._atInvoiceNo ? "" : composedInvNo)}
-                              disabled={!!invoiceDraft(order).loading}
-                              style={{ background: order._atInvoiceNo ? C.card : C.green, color: order._atInvoiceNo ? C.ink : "#fff", border: order._atInvoiceNo ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1, whiteSpace: "nowrap" }}>
+                              onClick={() => createAtyaharaInvoiceForOrder(order, order._atInvoiceNo ? "" : composedInvNo, productDescVal)}
+                              disabled={!!invoiceDraft(order).loading || atLocked}
+                              style={{ background: order._atInvoiceNo ? C.card : C.green, color: order._atInvoiceNo ? C.ink : "#fff", border: order._atInvoiceNo ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : atLocked ? "not-allowed" : "pointer", opacity: invoiceDraft(order).loading || atLocked ? .6 : 1, whiteSpace: "nowrap" }}>
                               {invoiceDraft(order).loading ? "Creating..." : order._atInvoiceNo ? "Refresh invoice" : "Create Invoice"}
                             </button>
                           </div>
                         </div>
-                        {order._atInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.green, fontWeight: 700 }}>Linked to {order._atInvoiceNo} · <button onClick={() => patchOrder(order, { _atInvoiceNo: "", _atInvoicedAt: "" })} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}>unlink</button></div>}
+                        {order._atInvoiceNo && invoiceEdit[`at:${order.id}`] && !atLocked && (
+                          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
+                            <span style={{ fontSize: 12, color: C.inkMid, fontWeight: 750 }}>Edits here sync back to {order._atInvoiceNo}.</span>
+                            <button onClick={() => createAtyaharaInvoiceForOrder(order, "", productDescVal)} disabled={!!invoiceDraft(order).loading} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 850, cursor: invoiceDraft(order).loading ? "wait" : "pointer", opacity: invoiceDraft(order).loading ? .7 : 1 }}>Save edits</button>
+                          </div>
+                        )}
+                        {order._atInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.green, fontWeight: 700 }}>Linked to <button onClick={() => onOpenInvoice?.({ company: "at", invNo: order._atInvoiceNo, receiptId: etsyReceiptId(order) })} title="Open this invoice in the invoice module" style={{ border: "none", background: "transparent", color: C.green, fontSize: 11, fontWeight: 800, cursor: "pointer", textDecoration: "underline", padding: 0 }}>{order._atInvoiceNo}</button> · <button onClick={() => patchOrder(order, { _atInvoiceNo: "", _atInvoicedAt: "" })} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}>unlink</button></div>}
                         {!order.linked_stock_id && !order._atInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Tip: allocate a stock item in step 2 so the invoice links to physical stock.</div>}
                         {invoiceDraft(order).error && (
                           <div style={{ marginTop: 8, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "7px 9px" }}>
@@ -3150,20 +3698,119 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                       </div>
                       );
                     })()}
-                    {!cancelled && isEtsyOrder(order) && selStep === 3 && (
+                    {!cancelled && isEtsyOrder(order) && selStep === 3 && (() => {
+                      const targetNg = latestAtyaharaNgDraft(orderDate(order));
+                      const priorNg = latestAnyAtyaharaNgDraft();
+                      const monthChanged = !targetNg && priorNg && monthKey(priorNg.date || priorNg.createdAt) !== monthKey(orderDate(order));
+                      const mode = ngInvoiceMode[order.id] || (targetNg ? "latest" : "new");
+                      const nextNgNo = nextFiscalInvoiceNo(ngInvoices, "NG", orderDate(order));
+                      const productDescVal = productDescDraft[order.id] != null ? productDescDraft[order.id] : (order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
+                      const stockItem = stock.find(s => s.id === order.linked_stock_id || s.id === order._ngStockId || s.id === order._ngAllocatedStockId);
+                      const draft = ngDraft(order);
+                      const linkedNgLine = order._ngInvoiceNo ? ngInvoiceLineForOrder(order) : null;
+                      const ngLocked = isNgInvoiceLocked(order);
+                      const editingNg = !!invoiceEdit[`ng:${order.id}`] && !ngLocked;
+                      const plannedQty = Math.max(0, +(linkedNgLine?.qty ?? "") || +draft.qty || +order._ngAllocatedQty || +order._ngDeductedQty || 0);
+                      const plannedQty2 = Math.max(0, +draft.qty2 || +order._ngAllocatedQty2 || +order._ngDeductedQty2 || 0);
+                      const computedRate = stockItem ? ngInvoiceRate(order, stockItem, plannedQty, draft) : 0;
+                      const costRate = order._ngInvoiceNo && !editingNg ? +(linkedNgLine?.rate ?? order._ngRate ?? computedRate) || 0 : computedRate;
+                      const lineAmount = order._ngInvoiceNo && !editingNg
+                        ? +(linkedNgLine?.amt ?? order._ngAmount ?? Number((plannedQty * (costRate || 0)).toFixed(2))) || 0
+                        : Number((plannedQty * (costRate || 0)).toFixed(2));
+                      const customsDescVal = customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (linkedNgLine?.acctDesc || order._ngCustomsDesc || productDescVal);
+                      const hsnVal = linkedNgLine?.hsn || order._ngHsn || ngHsn(order, stockItem);
+                      const earnedBasis = order._ngInvoiceNo && !editingNg ? +(order._ngEarnedAtCreate ?? orderEarnedValue(order)) || 0 : orderEarnedValue(order);
+                      const shippingPaid = order._ngInvoiceNo && !editingNg ? +(order._ngShippingAtCreate ?? order.ship_cost ?? 0) || 0 : Math.max(0, +draft.shipCost || +order.ship_cost || 0);
+                      const ngLineNo = ngLineNoForOrder(order);
+                      const fieldReadOnly = !!order._ngInvoiceNo && !editingNg;
+                      return (
                       <div style={{ background: C.surface, border: `1.5px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._ngInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{order._ngInvoiceNo ? "NG purchase invoice recorded" : "Create NG purchase invoice"}</div>
-                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._ngInvoiceNo ? `Added to ${order._ngInvoiceNo} — stock recorded into Nikhil Gems at cost.` : "Records the allocated stock into Nikhil Gems at cost — the last step."}</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._ngInvoiceNo ? `Added to ${order._ngInvoiceNo}${ngLineNo ? ` line ${ngLineNo}` : ""} — stock recorded into Nikhil Gems at cost.` : "Records the allocated stock into Nikhil Gems at cost — the last step."}</div>
+                            <div style={{ marginTop: 10, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
+                              <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1.6fr 1.1fr .62fr .55fr .55fr .7fr .8fr", gap: 0, alignItems: "stretch" }}>
+                                {[
+                                  ["Customs desc", <input value={customsDescVal} readOnly={fieldReadOnly} onChange={e => setCustomsDescDraft(s => ({ ...s, [order.id]: e.target.value }))} placeholder="Natural mineral stone..." style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: fieldReadOnly ? C.card : C.surface, color: fieldReadOnly ? C.ink : undefined }} />],
+                                  ["Detail / product desc", <input value={productDescVal} readOnly={fieldReadOnly} onChange={e => setProductDescDraft(s => ({ ...s, [order.id]: e.target.value }))} placeholder="Alien Amethyst Dark" style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: fieldReadOnly ? C.card : C.surface, color: fieldReadOnly ? C.ink : undefined }} />],
+                                  ["HSN", <input value={hsnVal} readOnly style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: C.surface, color: C.inkMid }} />],
+                                  ["Qty", <input value={fieldReadOnly ? String(plannedQty || "") : draft.qty} readOnly={fieldReadOnly} onChange={e => updNg(order, { qty: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.146" style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: fieldReadOnly ? C.card : C.surface, color: fieldReadOnly ? C.ink : undefined }} />],
+                                  ["Unit", <input value={stockItem?.unit || ""} readOnly style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: C.surface, color: C.inkMid }} />],
+                                  ["Rate", <input value={fieldReadOnly ? String(costRate || "") : (draft.rate !== "" && draft.rate != null ? draft.rate : String(costRate || ""))} readOnly={fieldReadOnly} onChange={e => updNg(order, { rate: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0" style={{ ...FI(), border: "none", borderRadius: 0, width: "100%", background: fieldReadOnly ? C.card : C.surface, color: fieldReadOnly ? C.ink : undefined }} />],
+                                  ["Amount", <div style={{ padding: "10px 9px", fontSize: 12, fontWeight: 850, color: C.ink }}>{money(lineAmount, "INR")}</div>],
+                                ].map(([label, field]) => (
+                                  <label key={label} style={{ display: "block", borderRight: mob() ? "none" : `1px solid ${C.border}`, borderBottom: mob() ? `1px solid ${C.border}` : "none" }}>
+                                    <div style={{ padding: "7px 9px 0", fontSize: 9, color: C.inkFaint, fontWeight: 850, textTransform: "uppercase", letterSpacing: .35 }}>{label}</div>
+                                    <div>{field}</div>
+                                  </label>
+                                ))}
+                              </div>
+                              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", padding: 10, borderTop: `1px solid ${C.border}`, background: C.surface }}>
+                                <label style={{ fontSize: 10, fontWeight: 850, color: C.inkFaint, textTransform: "uppercase" }}>Cost calculator
+                                  <select value={order._ngInvoiceNo && !editingNg ? (order._ngCostMode || draft.costMode || "earned") : (draft.costMode || "earned")} disabled={fieldReadOnly} onChange={e => updNg(order, { costMode: e.target.value, rate: "" })} style={{ ...FI(), marginLeft: 8, padding: "7px 8px", fontSize: 11, opacity: fieldReadOnly ? .75 : 1 }}>
+                                    <option value="earned">(Earned - shipping) / 3</option>
+                                    <option value="stock">Stock cost x multiplier</option>
+                                  </select>
+                                </label>
+                                {(draft.costMode || "earned") === "stock" && <label style={{ fontSize: 10, fontWeight: 850, color: C.inkFaint, textTransform: "uppercase" }}>Multiplier
+                                  <input value={draft.multiplier ?? "2"} onChange={e => updNg(order, { multiplier: e.target.value.replace(/[^0-9.]/g, ""), rate: "" })} style={{ ...FI(), marginLeft: 8, width: 70, padding: "7px 8px", fontSize: 11 }} />
+                                </label>}
+                                <span style={{ fontSize: 11, color: C.inkMid }}>
+                                  {(draft.costMode || "earned") === "stock"
+                                    ? `Stock cost ${money(+(stockItem?.costPrice || 0), "INR")} / ${stockItem?.unit || "unit"} x ${draft.multiplier || 2}`
+                                    : `Earned ${money(earnedBasis, "INR")} - shipping ${money(shippingPaid, "INR")} = ${money(Math.max(0, earnedBasis - shippingPaid), "INR")}; cost pool / 3`}
+                                </span>
+                                {plannedQty2 > 0 && <span style={{ fontSize: 11, color: C.green, fontWeight: 750 }}>Also deducted {plannedQty2} {stockItem?.unit2 || "pcs"} from stock</span>}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 8 }}>
+                              {!order._ngInvoiceNo && <>
+                                <label style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint }}>NG invoice<div style={{ marginTop: 4 }}>
+                                  <select value={mode} onChange={e => setNgInvoiceMode(s => ({ ...s, [order.id]: e.target.value }))} style={{ ...FI(), minWidth: 230, padding: "7px 8px", fontSize: 11, cursor: "pointer" }}>
+                                    {targetNg && <option value="latest">Add to {monthLabel(orderDate(order))} Atyahara draft: {targetNg.invNo}</option>}
+                                    <option value="new">Create new invoice: {nextNgNo}</option>
+                                  </select>
+                                </div></label>
+                                <select value={order.listing_shape || ""} onChange={e => setOrderShape(order, e.target.value)} style={{ ...FI(), minWidth: 200, padding: "7px 8px", fontSize: 11, cursor: "pointer" }}>
+                                  <option value="">Auto-detect customs shape</option>
+                                  {order.listing_shape && !customsShapes.includes(order.listing_shape) && <option value={order.listing_shape}>{order.listing_shape}</option>}
+                                  {customsShapes.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                              </>}
+                            </div>
+                            {monthChanged && !order._ngInvoiceNo && (
+                              <div style={{ marginTop: 8, fontSize: 11, color: C.amber, background: C.amberBg, border: `1px solid ${C.amber}30`, borderRadius: 8, padding: "7px 9px", fontWeight: 750 }}>
+                                Last Atyahara NG draft is {priorNg.invNo} for {monthLabel(priorNg.date || priorNg.createdAt)}. This order is {monthLabel(orderDate(order))}, so start the new month invoice.
+                              </div>
+                            )}
                           </div>
-                          <button onClick={() => addOrderToNg(order)} disabled={!!order._ngInvoiceNo || !!ngDraft(order).loading || !order.linked_stock_id} style={{ background: order._ngInvoiceNo ? C.green : C.purple, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? "default" : "pointer", opacity: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? .6 : 1, whiteSpace: "nowrap" }}>{order._ngInvoiceNo ? "Added" : ngDraft(order).loading ? "Creating…" : "Create invoice"}</button>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            {order._ngInvoiceNo && <>
+                              <button onClick={() => onViewInvoicePdf?.({ company: "ng", invNo: order._ngInvoiceNo, receiptId: etsyReceiptId(order) })} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>View PDF</button>
+                              <button onClick={() => onOpenInvoice?.({ company: "ng", invNo: order._ngInvoiceNo, receiptId: etsyReceiptId(order) })} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Go to invoice module</button>
+                              {ngLocked
+                                ? <span style={{ background: C.card, color: C.inkFaint, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap" }}>Locked</span>
+                                : <button onClick={() => setInvoiceEdit(s => ({ ...s, [`ng:${order.id}`]: !s[`ng:${order.id}`] }))} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>Edit</button>}
+                            </>}
+                            <button onClick={() => addOrderToNg(order)} disabled={!!order._ngInvoiceNo || !!ngDraft(order).loading || !order.linked_stock_id} style={{ background: order._ngInvoiceNo ? C.green : C.purple, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? "default" : "pointer", opacity: order._ngInvoiceNo || ngDraft(order).loading || !order.linked_stock_id ? .6 : 1, whiteSpace: "nowrap" }}>{order._ngInvoiceNo ? "Added" : ngDraft(order).loading ? "Creating…" : "Create invoice"}</button>
+                          </div>
                         </div>
+                        {order._ngInvoiceNo && editingNg && (
+                          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
+                            <span style={{ fontSize: 12, color: C.inkMid, fontWeight: 750 }}>Edits here update the matching line in {order._ngInvoiceNo}.</span>
+                            <button onClick={() => saveNgInvoiceEdits(order)} disabled={!!ngDraft(order).loading} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 850, cursor: ngDraft(order).loading ? "wait" : "pointer", opacity: ngDraft(order).loading ? .7 : 1 }}>Save edits</button>
+                          </div>
+                        )}
+                        {order._ngInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.green, fontWeight: 700 }}>Linked to <button onClick={() => onOpenInvoice?.({ company: "ng", invNo: order._ngInvoiceNo, receiptId: etsyReceiptId(order) })} title="Open this invoice in the invoice module" style={{ border: "none", background: "transparent", color: C.green, fontSize: 11, fontWeight: 800, cursor: "pointer", textDecoration: "underline", padding: 0 }}>{order._ngInvoiceNo}</button>{ngLineNo ? ` · line ${ngLineNo}` : ""} · <button onClick={() => patchOrder(order, { _ngInvoiceNo: "", _ngCustomsDesc: "", _ngLineNo: "", _ngLineId: "", _ngRate: "", _ngAmount: "", _ngUnit: "", _ngHsn: "", _ngEarnedAtCreate: "", _ngShippingAtCreate: "", _ngCostMode: "", _ngDeductedQty: "", _ngDeductedQty2: "", _ngStockId: "", _ngInvoicedAt: "" })} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, cursor: "pointer", textDecoration: "underline", padding: 0 }}>unlink / remake</button></div>}
                         {!order.linked_stock_id && !order._ngInvoiceNo && <div style={{ marginTop: 8, fontSize: 11, color: C.inkFaint }}>Choose a physical stock item in step 2 first.</div>}
                       </div>
-                    )}
+                      );
+                    })()}
                     {!cancelled && isEtsyOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · Etsy shipped · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
-                    {detailsOpen[order.id] && <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
+                    {detailsOpen[order.id] && (() => {
+                      const earnings = deriveEtsyEarnings(order);
+                      return <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
                       {[
                         ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
                         ["Transaction",   order.etsy_transaction_id || "—"],
@@ -3180,8 +3827,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                         ...(order.order_shipping != null ? [["Shipping", money(order.order_shipping, order.currency)]] : []),
                         ...(order.order_tax > 0 ? [["Tax (Etsy)", money(order.order_tax, order.currency)]] : []),
                         ...(order.order_total != null ? [["Buyer Paid", money(order.order_total, order.currency)]] : []),
-                        ...(order.etsy_fees != null ? [["Etsy fees", `-${money(order.etsy_fees, order.fees_currency || order.currency)}`]] : []),
-                        ...(order.etsy_net != null ? [["Earned", money(order.etsy_net, order.fees_currency || order.currency)]] : []),
+                        ...(earnings.fees > 0 ? [["Etsy fees", `-${money(earnings.fees, order.fees_currency || order.currency)}`]] : []),
+                        ...(earnings.net > 0 ? [["Earned", money(earnings.net, order.fees_currency || order.currency)]] : []),
                         ["SKU",           order.listing_sku || "—"],
                         ...(order.variations || []).filter(v => v && (v.name || v.value)).map(v => [v.name || "Option", v.value || "—"]),
                         ["Status",        shipped ? "Shipped" : "Unshipped"],
@@ -3210,7 +3857,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast }) {
                           )}
                         </div>
                       ))}
-                    </div>}
+                    </div>;
+                    })()}
                     {detailsOpen[order.id] && order.notes && (
                       <div style={{ marginTop: 10, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 11px" }}>
                         <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>Notes</div>
@@ -5717,7 +6365,7 @@ function ShopifyEarthView({ listings, onEditLocal }) {
 /* ══════════════════════════════════════════════════════════════════════════
    MAIN
 ══════════════════════════════════════════════════════════════════════════ */
-export default function ListingManagerApp({ onHome, startTab = "listings" }) {
+export default function ListingManagerApp({ onHome, startTab = "listings", onOpenInvoice, onViewInvoicePdf }) {
   const [listings,   setListings]   = useState([]);
   const [orders,     setOrders]     = useState([]);
   const [stock,      setStock]      = useState([]);
@@ -5774,20 +6422,26 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
   };
 
   useEffect(() => {
-    Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(([l, o, s]) => {
-      setListings(l || []); setOrders(o || []); setStock(s || []); setLoaded(true);
-      reconcileEtsyStates(l || []);
+    Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(async ([l, o, s]) => {
+      const normalized = await normalizeListingIds(l);
+      setListings(normalized); setOrders(o || []); setStock(s || []); setLoaded(true);
+      reconcileEtsyStates(normalized);
     });
     const onOrdersUpdated = e => {
       if (Array.isArray(e.detail)) setOrders(e.detail);
       else loadK(ORDERS_KEY).then(o => setOrders(o || []));
     };
+    const onStockUpdated = e => {
+      if (Array.isArray(e.detail)) setStock(e.detail);
+      else loadK(STK_KEY).then(s => { if (Array.isArray(s)) setStock(s); });
+    };
     window.addEventListener("ng-orders-updated", onOrdersUpdated);
+    window.addEventListener("ng-stock-updated", onStockUpdated);
     // Live cross-user sync: when another session saves listings/orders/stock, the
     // shared cache is invalidated and we re-read so this screen reflects their changes
     // (without this, each user only ever saw their own copy and saves clobbered each other).
     const offRefresh = onCacheRefresh(keys => {
-      if (keys.includes(LIST_KEY))   loadK(LIST_KEY).then(l => { if (Array.isArray(l)) setListings(l); });
+      if (keys.includes(LIST_KEY))   loadK(LIST_KEY).then(async l => { if (Array.isArray(l)) setListings(await normalizeListingIds(l)); });
       if (keys.includes(ORDERS_KEY)) loadK(ORDERS_KEY).then(o => { if (Array.isArray(o)) setOrders(o); });
       if (keys.includes(STK_KEY))    loadK(STK_KEY).then(s => { if (Array.isArray(s)) setStock(s); });
     });
@@ -5798,7 +6452,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
     const refreshFromServer = async () => {
       try {
         const [l, o] = await Promise.all([loadKFresh(LIST_KEY), loadKFresh(ORDERS_KEY)]);
-        if (Array.isArray(l)) setListings(l);
+        if (Array.isArray(l)) setListings(await normalizeListingIds(l));
         if (Array.isArray(o)) setOrders(o);
       } catch {}
     };
@@ -5808,6 +6462,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
     window.addEventListener("online", onOnline);
     return () => {
       window.removeEventListener("ng-orders-updated", onOrdersUpdated);
+      window.removeEventListener("ng-stock-updated", onStockUpdated);
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onOnline);
       offRefresh();
@@ -5848,11 +6503,11 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
 
   /* save */
   const handleSave = async (listing, publishTo = {}) => {
-    let savedListing = listing;
+    let savedListing = ensureListingOrderId(listing);
     if ((listing.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(listing.video)) {
       showToast("Uploading listing media...");
       try {
-        savedListing = await persistListingMedia(listing);
+        savedListing = await persistListingMedia(savedListing);
       } catch (e) {
         showToast(`⚠ Media upload failed: ${e.message}`, 8000);
         return;
@@ -5877,7 +6532,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
           if (p.key === "etsy" && pd.listing_id) return true;
           if (p.key === "ebay" && pd.item_id) return true;
           if ((p.key === "shopify_aty" || p.key === "shopify_earth") && pd.product_id) return true;
-          return pd.status === "active" || pd.status === "draft";
+          return false;
         }).map(p => p.key)
       : [];
     const newTargets  = Object.entries(publishTo).filter(([, v]) => v).map(([k]) => k);
@@ -5886,7 +6541,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
     showToast(`Syncing to ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…`);
     // Always sync-only on save — never activate. Only the explicit Publish button activates.
     const results = await Promise.allSettled(targets.map(pkey =>
-      handlePublish(savedListing, pkey, { syncOnly: true })
+      handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey) })
     ));
     const failed = results.filter(r => r.status === "rejected");
     if (failed.length === 0) {
@@ -5915,7 +6570,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
   };
 
   /* publish — syncOnly=true means update fields only, never activate */
-  const handlePublish = async (listing, pkey, { syncOnly = false } = {}) => {
+  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly } = {}) => {
     // Apply per-platform title/description overrides into _ai so the API picks them up
     const ai = { ...(listing._ai || {}) };
     if (pkey === "etsy") {
@@ -5925,13 +6580,14 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
       if (listing.shopify_title)       ai.shopify_title       = listing.shopify_title;
       if (listing.shopify_description) ai.shopify_description = listing.shopify_description;
     }
-    listing = { ...listing, _ai: ai };
+    listing = ensureListingOrderId({ ...listing, _ai: ai });
 
     let result;
 
     if (pkey === "ebay") {
       // eBay — call ebay.js directly
       const existingItemId = listing.platforms?.ebay?.item_id;
+      if (syncOnly && !allowCreate && !existingItemId) throw new Error("Skipped eBay sync: no existing eBay item ID");
       const r = await fetch("/api/ebay?action=publish_listing", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5941,6 +6597,9 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
           quantity:     listing.qty || 1,
           images:       listing.images || [],
           video:        listing.video || "",
+          sku:          listingMarketplaceSku(listing),
+          syncOnly,
+          allowCreate,
           conditionId:  listing.conditionId || "3000",
           shippingCost: listing.shippingCost || 0,
           ...(existingItemId ? { itemId: existingItemId } : {}),
@@ -5959,7 +6618,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
 
       const r = await fetch("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey, sync_only: syncOnly }),
+        body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate }),
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "Publishing failed");
@@ -5968,7 +6627,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
 
     await patchListingItem(listing, current => ({
       ...current,
-      platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], status: "active", ...result } },
+      listing_order_id: current.listing_order_id || listing.listing_order_id,
+      platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], status: result.status || "active", ...result } },
       updated_at: now(),
     }));
     return result;
@@ -6014,6 +6674,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
       listing_material:  listing.material,
       listing_shape:     listing.shape,
       listing_sku:       listing.sku || "",
+      listing_order_id:  listing.listing_order_id || "",
       listing_image:     listing.images?.[0] || "",
       platform:          saleForm.platform,
       platform_order_id: saleForm.platform_order_id,
@@ -6029,15 +6690,22 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
     await saveOrderItem(order, { prepend: true });
 
     // For unique items: remove from ALL live platforms in one state update
-    if (listing.type === "unique") {
-      const livePlatforms = PLATFORMS.filter(p => !p.coming && listing.platforms?.[p.key]?.status === "active");
+    if (listing.type === "unique" && saleForm.remove_other_platforms) {
+      const livePlatforms = PLATFORMS.filter(p => !p.coming && p.key !== saleForm.platform && listing.platforms?.[p.key]?.status === "active");
       // Fire API calls in parallel for all live platforms
       await Promise.allSettled(livePlatforms.map(async p => {
         let action, storeKey;
         if (p.key === "etsy") { action = "unpublish_etsy"; }
         else if (p.key === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
         else if (p.key === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
-        else return;
+        else if (p.key === "ebay") {
+          const itemId = listing.platforms?.ebay?.item_id;
+          if (!itemId) return;
+          const r = await fetch(`/api/ebay?action=end_item&item_id=${itemId}`, { method: "POST" });
+          const d = await r.json();
+          if (!d.ok) console.warn("Auto-unpublish failed for ebay:", d.error);
+          return;
+        } else return;
         const r = await fetch("/api/listing-manager", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey }),
@@ -6248,7 +6916,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
                     onEdit={l => { setEditing(l); setShowForm(true); }}
                     onDelete={handleDelete}
                     onPublish={handlePublish}
-                    onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true })}
+                    onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
                     onMarkSold={setSoldModal}
                   />
@@ -6259,7 +6927,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings" }) {
         )}
 
         {/* ══ ORDERS ══ */}
-        {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} />}
+        {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} />}
 
         {/* ══ PLATFORM TABS ══ */}
         {tab === "etsy" && <EtsyLiveView />}

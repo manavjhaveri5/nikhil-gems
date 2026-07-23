@@ -22,6 +22,8 @@ async function etsyHeaders(json = true) {
   };
 }
 
+const listingSku = listing => String(listing?.sku || listing?.listing_order_id || listing?.id || "").trim();
+
 // Shipping profile IDs (from Atyahara shop)
 const ETSY_SHIPPING = {
   under35:  226959740451,  // listings under $35
@@ -208,7 +210,7 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
     should_auto_renew: listing.etsy_auto_renew ?? false,
     ...(listing.etsy_ads ? { is_on_etsy_ads: true } : {}),
     ...(sectionId ? { shop_section_id: sectionId } : {}),
-    ...(listing.sku ? { skus: [listing.sku] } : {}),
+    ...(listingSku(listing) ? { skus: [listingSku(listing)] } : {}),
   };
 
   const hdrs = await etsyHeaders();
@@ -292,7 +294,7 @@ async function updateEtsyListing(listingId, listing, ai) {
     quantity,
     tags:        etsyTags,
     should_auto_renew: listing.etsy_auto_renew ?? false,
-    ...(listing.sku ? { skus: [listing.sku] } : {}),
+    ...(listingSku(listing) ? { skus: [listingSku(listing)] } : {}),
   };
 
   const existingStatus = listing.platforms?.etsy?.status || "draft";
@@ -444,7 +446,7 @@ function buildShopifyVariants(listing) {
 }
 
 async function publishShopify(store, token, listing, ai) {
-  const { title, qty = 0, type = "repeatable", price_shopify, sku, productType, material, images = [] } = listing;
+  const { title, qty = 0, type = "repeatable", price_shopify, productType, material, images = [] } = listing;
 
   const shopTitle = ai?.shopify_title || title;
   const bodyHtml  = ai?.shopify_description || `<p>${listing.description || title}</p>`;
@@ -466,7 +468,7 @@ async function publishShopify(store, token, listing, ai) {
         ...(variantBundle
           ? { options: variantBundle.options, variants: variantBundle.variants }
           : { variants: [{
-              sku: sku || "",
+              sku: listingSku(listing),
               inventory_management: "shopify",
               inventory_policy: "deny",
               inventory_quantity: quantity,
@@ -700,11 +702,15 @@ export default async function handler(req, res) {
       // sync_only=true → just update fields, never activate (used on every save)
       // sync_only=false (default) → explicit publish, activate the listing
       const syncOnly = req.body?.sync_only === true;
+      const allowCreate = req.body?.allow_create === true;
 
       let result;
       if (listing.platforms?.etsy?.listing_id) {
         result = await updateEtsyListing(listing.platforms.etsy.listing_id, listing, ai);
       } else {
+        if (syncOnly && !allowCreate) {
+          return res.status(409).json({ ok: false, error: "Skipped Etsy sync: no existing Etsy listing_id" });
+        }
         // New listing: create as draft always; only activate if user explicitly published
         result = await publishEtsy(listing, ai, { activate: !syncOnly });
       }
@@ -735,6 +741,8 @@ export default async function handler(req, res) {
       const ai = listing._ai || null;
       const platformKey = store_key === "atyahara" ? "shopify_aty" : "shopify_earth";
       const existingId = listing.platforms?.[platformKey]?.product_id;
+      const syncOnly = req.body?.sync_only === true;
+      const allowCreate = req.body?.allow_create === true;
 
       let result;
       if (existingId) {
@@ -765,6 +773,9 @@ export default async function handler(req, res) {
         const imageSync = await syncShopifyImages(store, token, existingId, listing.images || []);
         result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded };
       } else {
+        if (syncOnly && !allowCreate) {
+          return res.status(409).json({ ok: false, error: `Skipped ${platformKey} sync: no existing product_id` });
+        }
         const priceField = store_key === "atyahara" ? "price_shopify_aty" : "price_shopify_earth";
         result = await publishShopify(store, token, { ...listing, price_shopify: listing[priceField] || listing.price_shopify }, ai);
       }

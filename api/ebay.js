@@ -424,8 +424,9 @@ async function handleEbay(req, res) {
       title, description, price, quantity = 1, images = [],
       conditionId = "3000", shippingCost = 0, itemId: existingId,
       categoryId = "4218", // Crystals & Mineral Specimens
-      video,
+      video, sku, syncOnly = false, allowCreate = !syncOnly,
     } = body;
+    const itemSku = String(sku || "").trim();
 
     if (!title) return res.status(400).json({ error: "title required" });
     if (!price)  return res.status(400).json({ error: "price required" });
@@ -454,6 +455,7 @@ async function handleEbay(req, res) {
       const fields = [
         `<ItemID>${esc(existingId)}</ItemID>`,
         `<Title>${esc(title.slice(0, 80))}</Title>`,
+        ...(itemSku ? [`<SKU>${esc(itemSku.slice(0, 50))}</SKU>`] : []),
         `<Description><![CDATA[${plainToHtml(description || title)}]]></Description>`,
         `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
         `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
@@ -468,14 +470,22 @@ async function handleEbay(req, res) {
         if (errCode !== "17" && errCode !== "291") {
           return res.status(500).json({ error: xmlTag("LongMessage", xml) || "ReviseItem failed" });
         }
+        if (syncOnly && !allowCreate) {
+          return res.status(409).json({ error: xmlTag("LongMessage", xml) || "Skipped eBay sync: existing item could not be revised" });
+        }
       } else {
         return res.json({ ok: true, itemId: xmlTag("ItemID", xml), isNew: false, ...(videoWarning ? { videoWarning } : {}) });
       }
     }
 
+    if (syncOnly && !allowCreate) {
+      return res.status(409).json({ error: "Skipped eBay sync: no existing eBay item ID" });
+    }
+
     // AddItem — create new listing
     const itemXml = `
       <Title>${esc(title.slice(0, 80))}</Title>
+      ${itemSku ? `<SKU>${esc(itemSku.slice(0, 50))}</SKU>` : ""}
       <Description><![CDATA[${plainToHtml(description || title)}]]></Description>
       <PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>
       <StartPrice>${Number(price).toFixed(2)}</StartPrice>
