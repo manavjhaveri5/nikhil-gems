@@ -290,13 +290,10 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
     const aiToken = token ? null : findShapeToken(shapeTokens, ai.shape);
     const finalToken = token || aiToken;
     if (finalToken) {
-      // Shape known → take HSN and shape classification from the customs table, but
-      // keep the listing title as the customs description so it matches the sales
-      // invoice. The token's generic per-shape text was overwriting it (and could be
-      // the wrong material entirely, e.g. "Natural Agate" on a Ruby in Kyanite).
+      // Shape known → the customs table is authoritative for description + HSN.
       return {
         ...item,
-        desc: item.desc || finalToken.desc,
+        desc: finalToken.desc || item.desc,
         hsn: finalToken.hsn || item.hsn,
         unit: cleanInvoiceText(ai.unit) || item.unit,
         _shape: finalToken.shape,
@@ -305,7 +302,7 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
     }
     return {
       ...item,
-      desc: item.desc || cleanInvoiceText(ai.desc),
+      desc: cleanInvoiceText(ai.desc) || item.desc,
       hsn: cleanInvoiceText(ai.hsn) || item.hsn,
       unit: cleanInvoiceText(ai.unit) || item.unit,
       _aiAutofilled: !!byId[String(item.id)],
@@ -2247,8 +2244,15 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   useEffect(() => {
     loadK(CUSTOMS_DESCS_KEY).then(rows => {
       const source = Array.isArray(rows) && rows.length ? rows : DEFAULT_CUSTOMS_DESCS;
-      setCustomsRows(source);
-      setCustomsShapes([...new Set(source.flatMap(r => String(r.shape || "").split(",").map(s => s.trim()).filter(Boolean)))]);
+      // Flatten to one token per shape, exactly like loadCustomsShapeTokens (used when
+      // the invoice is actually created), so a row like "Egg, Ovoid" is matchable and
+      // the previewed customs desc is the same one that gets written.
+      const tokens = source.flatMap(r =>
+        String(r.shape || "").split(",").map(s => s.trim()).filter(Boolean)
+          .map(shape => ({ shape, desc: cleanInvoiceText(r.desc), hsn: cleanInvoiceText(r.hsn) || "71031029" }))
+      );
+      setCustomsRows(tokens);
+      setCustomsShapes([...new Set(tokens.map(t => t.shape))]);
     });
   }, []);
   const patchOrder = async (order, patch) => {
@@ -2470,10 +2474,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     const mode = ngInvoiceMode[order.id] || (target ? "latest" : "new");
     const productDesc = cleanInvoiceText(productDescDraft[order.id] || order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
     const rate = ngInvoiceRate(order, stockItem, qty, draft);
-    // Customs desc mirrors the Atyahara sales invoice — the listing title — so the
-    // NG export bill and the sales invoice read the same. Product desc is only a
-    // fallback when there's no title.
-    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (order.listing_title || productDesc));
+    // Customs desc comes from the shape → customs-description table, the same source
+    // the Atyahara sales invoice uses, so the NG export bill and the sales invoice
+    // read the same. Product desc is only a fallback when the shape has no mapping.
+    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (ngCustomsDesc(order, stockItem) || productDesc));
     const earnedAtCreate = orderEarnedValue(order);
     const shippingAtCreate = Math.max(0, +draft.shipCost || +order.ship_cost || 0);
     const amountAtCreate = Number((qty * (rate || 0)).toFixed(2));
@@ -2530,10 +2534,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     const q2 = Math.max(0, +draft.qty2 || +order._ngAllocatedQty2 || +order._ngDeductedQty2 || 0);
     if (q <= 0) { updNg(order, { error: "Enter invoice quantity first.", success: "" }); return; }
     const productDesc = cleanInvoiceText(productDescDraft[order.id] || order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
-    // Customs desc mirrors the Atyahara sales invoice — the listing title — so the
-    // NG export bill and the sales invoice read the same. Product desc is only a
-    // fallback when there's no title.
-    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (order.listing_title || productDesc));
+    // Customs desc comes from the shape → customs-description table, the same source
+    // the Atyahara sales invoice uses, so the NG export bill and the sales invoice
+    // read the same. Product desc is only a fallback when the shape has no mapping.
+    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (ngCustomsDesc(order, stockItem) || productDesc));
     updNg(order, { loading: true, error: "", success: "" });
     try {
       const invoices = (await loadKFresh(NG_INVOICES_KEY).catch(() => ngInvoices)) || [];
@@ -3627,7 +3631,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       const salesQty = Math.max(1, +order.qty || 1);
                       const salesAmount = Number((orderEarnedValue(order) || +order.sale_price || 0).toFixed(2));
                       const salesRate = Number((salesAmount / salesQty).toFixed(2));
-                      const salesCustomsDesc = cleanInvoiceText(order.listing_title || `Etsy order #${etsyReceiptId(order)}`);
+                      // Preview the shape-based customs description that will actually be
+                      // written, so the card matches the saved invoice. Falls back to the
+                      // title only when the selected shape has no customs mapping.
+                      const salesCustomsDesc = cleanInvoiceText(ngCustomsDesc(order, null) || order.listing_title || `Etsy order #${etsyReceiptId(order)}`);
                       const atLocked = isAtInvoiceLocked(order);
                       return (
                       <div style={{ background: C.surface, border: `1.5px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderLeft: `4px solid ${order._atInvoiceNo ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
@@ -3726,7 +3733,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       const lineAmount = order._ngInvoiceNo && !editingNg
                         ? +(linkedNgLine?.amt ?? order._ngAmount ?? Number((plannedQty * (costRate || 0)).toFixed(2))) || 0
                         : Number((plannedQty * (costRate || 0)).toFixed(2));
-                      const customsDescVal = customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (linkedNgLine?.acctDesc || order._ngCustomsDesc || cleanInvoiceText(order.listing_title) || productDescVal);
+                      const customsDescVal = customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (linkedNgLine?.acctDesc || order._ngCustomsDesc || ngCustomsDesc(order, stockItem) || productDescVal);
                       const hsnVal = linkedNgLine?.hsn || order._ngHsn || ngHsn(order, stockItem);
                       const earnedBasis = order._ngInvoiceNo && !editingNg ? +(order._ngEarnedAtCreate ?? orderEarnedValue(order)) || 0 : orderEarnedValue(order);
                       const shippingPaid = order._ngInvoiceNo && !editingNg ? +(order._ngShippingAtCreate ?? order.ship_cost ?? 0) || 0 : Math.max(0, +draft.shipCost || +order.ship_cost || 0);
