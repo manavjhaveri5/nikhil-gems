@@ -3035,6 +3035,55 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     finally { setEarnedRefreshing(s => ({ ...s, [order.id]: false })); }
   };
 
+  const [earnedRefreshAll, setEarnedRefreshAll] = useState(null); // null | {done,total}
+  // Force-pull exact earnings for every Etsy order still on an estimate (or all of
+  // them). Same ledger source and per-line split as the automatic backfill, but
+  // user-triggered so orders that hadn't settled at sync time can be caught in one go.
+  const refreshAllEarned = async ({ onlyEstimates = true } = {}) => {
+    const all = await loadK(ORDERS_KEY) || [];
+    const targets = all.filter(o => o.platform === "etsy" &&
+      (onlyEstimates ? !hasReliableEtsyEarnings(o) : true));
+    const ids = [...new Set(targets.map(o => String(o.etsy_receipt_id || o.platform_order_id || "").trim()).filter(Boolean))];
+    if (!ids.length) { showToast?.(onlyEstimates ? "All orders already have exact Etsy earnings." : "No Etsy orders to refresh."); return; }
+    setEarnedRefreshAll({ done: 0, total: ids.length });
+    try {
+      const tok = await getEtsyToken();
+      const pay = {};
+      for (let i = 0; i < ids.length; i += 40) {
+        const chunk = ids.slice(i, i + 40);
+        const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${chunk.join(",")}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
+        if (r.ok) Object.assign(pay, (await r.json())?.payments || {});
+        setEarnedRefreshAll({ done: Math.min(ids.length, i + chunk.length), total: ids.length });
+      }
+      const settled = Object.entries(pay).filter(([, p]) => p && p.net > 0).map(([rid]) => rid);
+      if (!settled.length) { showToast?.("Etsy hasn't settled fees for these orders yet — try again in a day or two."); return; }
+      const fresh = await loadK(ORDERS_KEY) || [];
+      let updated = 0;
+      for (const rid of settled) {
+        const p = pay[rid];
+        const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
+        const saleSum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
+        for (const sib of siblings) {
+          const share = saleSum > 0 ? (+sib.sale_price || 0) / saleSum : 1 / Math.max(1, siblings.length);
+          const derived = deriveEtsyEarnings(sib, p);
+          await patchOrder(sib, {
+            order_gross: derived.gross, order_fees: derived.fees, order_net: derived.net,
+            fees_currency: p.currency || sib.currency,
+            etsy_fees: Number(((derived.fees || 0) * share).toFixed(2)),
+            etsy_net: Number(((derived.net || 0) * share).toFixed(2)),
+            etsy_fee_source: derived.source || p.source || "ledger",
+            etsy_processing_fee: null, etsy_transaction_fee: null,
+            etsy_fee_version: 7, etsy_fee_repaired_at: new Date().toISOString(),
+          });
+          updated++;
+        }
+      }
+      const pending = ids.length - settled.length;
+      showToast?.(`Earned refreshed on ${updated} order${updated === 1 ? "" : "s"}${pending > 0 ? ` · ${pending} not settled yet` : ""}.`);
+    } catch { showToast?.("Couldn't reach Etsy to refresh earnings."); }
+    finally { setEarnedRefreshAll(null); }
+  };
+
   // Etsy fees & net earnings live on the payment record, not the receipt. Fetch them
   // once per receipt (they're stable after payment) and allocate to line rows by sale
   // value so per-row "earned" sums back to the receipt's net.
@@ -3366,8 +3415,12 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
             </button>
           ))}
         </div>
+        <button onClick={() => refreshAllEarned({ onlyEstimates: true })} disabled={!!earnedRefreshAll} title="Pull Etsy's exact 'you earned' from the payment ledger for every order still on an estimate"
+          style={{ marginLeft: "auto", background: earnedRefreshAll ? C.card : C.greenBg, color: C.green, border: `1.5px solid ${C.green}55`, borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: earnedRefreshAll ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+          {earnedRefreshAll ? `Refreshing… ${earnedRefreshAll.done}/${earnedRefreshAll.total}` : "↻ Refresh earned (all)"}
+        </button>
         <button onClick={reconcileInvoices} disabled={reconciling} title="Match unshipped/unlinked Etsy orders to invoices you already created in Invoicing"
-          style={{ marginLeft: "auto", background: reconciling ? C.card : C.blueBg, color: C.blue, border: `1.5px solid ${C.blue}55`, borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: reconciling ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+          style={{ background: reconciling ? C.card : C.blueBg, color: C.blue, border: `1.5px solid ${C.blue}55`, borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: reconciling ? "wait" : "pointer", whiteSpace: "nowrap" }}>
           {reconciling ? "Matching…" : "🔗 Link existing invoices"}
         </button>
         <input value={search} onChange={e => setSearch(e.target.value)}
