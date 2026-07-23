@@ -3000,6 +3000,41 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     return changed;
   };
 
+  const [earnedRefreshing, setEarnedRefreshing] = useState({});
+  // Force-pull the exact "you earned" for a single order from Etsy's payment ledger,
+  // for when the automatic backfill ran before Etsy had posted this order's fees (they
+  // settle a day or two after the sale, so fresh orders sit on the estimate until then).
+  const refreshOrderEarned = async order => {
+    const rid = String(order.etsy_receipt_id || order.platform_order_id || "").trim();
+    if (!rid) { showToast?.("No Etsy receipt id on this order."); return; }
+    setEarnedRefreshing(s => ({ ...s, [order.id]: true }));
+    try {
+      const tok = await getEtsyToken();
+      const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${rid}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
+      const d = r.ok ? await r.json() : null;
+      const p = d?.payments?.[rid];
+      if (!p || !(p.net > 0)) { showToast?.("Etsy hasn't settled this order's fees yet — try again in a day or two."); return; }
+      const fresh = await loadK(ORDERS_KEY) || [];
+      const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
+      const saleSum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
+      for (const sib of siblings) {
+        const share = saleSum > 0 ? (+sib.sale_price || 0) / saleSum : 1 / Math.max(1, siblings.length);
+        const derived = deriveEtsyEarnings(sib, p);
+        await patchOrder(sib, {
+          order_gross: derived.gross, order_fees: derived.fees, order_net: derived.net,
+          fees_currency: p.currency || sib.currency,
+          etsy_fees: Number(((derived.fees || 0) * share).toFixed(2)),
+          etsy_net: Number(((derived.net || 0) * share).toFixed(2)),
+          etsy_fee_source: derived.source || p.source || "ledger",
+          etsy_processing_fee: null, etsy_transaction_fee: null,
+          etsy_fee_version: 7, etsy_fee_repaired_at: new Date().toISOString(),
+        });
+      }
+      showToast?.(`Earned updated from Etsy: ${money(p.net, p.currency || order.currency)}${p.source === "ledger" ? "" : " (payment net)"}`);
+    } catch { showToast?.("Couldn't reach Etsy to refresh earnings."); }
+    finally { setEarnedRefreshing(s => ({ ...s, [order.id]: false })); }
+  };
+
   // Etsy fees & net earnings live on the payment record, not the receipt. Fetch them
   // once per receipt (they're stable after payment) and allocate to line rows by sale
   // value so per-row "earned" sums back to the receipt's net.
@@ -3875,6 +3910,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       ))}
                     </div>;
                     })()}
+                    {detailsOpen[order.id] && isEtsyOrder(order) && (
+                      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <button onClick={() => refreshOrderEarned(order)} disabled={!!earnedRefreshing[order.id]} title="Pull the exact 'you earned' from Etsy's payment ledger for this order" style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 800, cursor: earnedRefreshing[order.id] ? "wait" : "pointer", opacity: earnedRefreshing[order.id] ? .6 : 1 }}>
+                          {earnedRefreshing[order.id] ? "Refreshing…" : "↻ Refresh earned from Etsy"}
+                        </button>
+                        {String(order.etsy_fee_source || "").includes("estimate") && (
+                          <span style={{ fontSize: 11, color: C.amber, fontWeight: 700 }}>Earned is estimated — Etsy's exact fees post a day or two after the sale.</span>
+                        )}
+                      </div>
+                    )}
                     {detailsOpen[order.id] && order.notes && (
                       <div style={{ marginTop: 10, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 11px" }}>
                         <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>Notes</div>
