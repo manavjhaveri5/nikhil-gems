@@ -274,6 +274,15 @@ export default async function handler(req, res) {
             rec.currency = d.grandtotal?.currency_code || rec.currency;
             rec.created = +d.create_timestamp || +d.created_timestamp || +d.creation_tsz || 0;
             for (const t of d.transactions || []) if (t.transaction_id != null) rec.ids.add(String(t.transaction_id));
+            // Cancellation: Etsy marks status "canceled", or the buyer was fully
+            // refunded. This detail fetch is authoritative — the order-list receipt
+            // often lacks refunds, so a cancellation after the initial sync is only
+            // reliably seen here.
+            const st = String(d.status || "").toLowerCase();
+            const refunded = (d.refunds || []).reduce((s, rf) => s + money(rf.amount || rf.gross || rf), 0);
+            rec.status = st;
+            rec.canceled = ["canceled", "cancelled"].includes(st) || (rec.buyerPaid > 0 && refunded >= rec.buyerPaid - 0.01);
+            rec.refunded = Number(refunded.toFixed(2));
           }
         } catch {}
         // Etsy fills the net into different fields per shop (adjusted → posted → amount);
@@ -338,13 +347,14 @@ export default async function handler(req, res) {
       for (const rid of ids) {
         const rec = info[String(rid)];
         const att = attributed[String(rid)];
+        const cancelInfo = rec ? { canceled: !!rec.canceled, status: rec.status || "", refunded: rec.refunded || 0 } : {};
         if (att && Math.abs(att.sum) > 0.001) {
           const earned = Number(att.sum.toFixed(2));
           const gross = Number((rec?.buyerPaid || earned).toFixed(2));
-          payments[String(rid)] = { gross, net: earned, fees: Number((gross - earned).toFixed(2)), currency: rec?.currency || "", source: "ledger", matched: att.entries.length || undefined, ...(debug ? { entries: att.entries } : {}) };
+          payments[String(rid)] = { gross, net: earned, fees: Number((gross - earned).toFixed(2)), currency: rec?.currency || "", source: "ledger", matched: att.entries.length || undefined, ...cancelInfo, ...(debug ? { entries: att.entries } : {}) };
         } else if (rec) {
           const gross = Number((rec.buyerPaid || rec.net).toFixed(2)), net = Number(rec.net.toFixed(2));
-          payments[String(rid)] = { gross, net, fees: Number((gross - net).toFixed(2)), currency: rec.currency || "", source: "payment" };
+          payments[String(rid)] = { gross, net, fees: Number((gross - net).toFixed(2)), currency: rec.currency || "", source: "payment", ...cancelInfo };
         }
       }
       return res.json({ ok: true, payments, window: { minCreated, maxCreated }, ...(ledgerErr ? { ledgerErr } : {}) });

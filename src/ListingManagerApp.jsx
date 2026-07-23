@@ -3013,9 +3013,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${rid}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
       const d = r.ok ? await r.json() : null;
       const p = d?.payments?.[rid];
-      if (!p || !(p.net > 0)) { showToast?.("Etsy hasn't settled this order's fees yet — try again in a day or two."); return; }
+      if (!p) { showToast?.("Etsy hasn't settled this order yet — try again in a day or two."); return; }
       const fresh = await loadK(ORDERS_KEY) || [];
       const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
+      if (p.canceled) {
+        let n = 0;
+        for (const sib of siblings) if (!isCancelled(sib)) { await patchOrder(sib, { cancelled: true, refunded: true, refund_amount: +sib.order_total || +sib.sale_price || 0, cancelled_at: now(), status: "canceled" }); n++; }
+        showToast?.(n ? "Order marked cancelled — refunded on Etsy." : "Already marked cancelled.");
+        return;
+      }
+      if (!(p.net > 0)) { showToast?.("Etsy hasn't settled this order's fees yet — try again in a day or two."); return; }
       const saleSum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
       for (const sib of siblings) {
         const share = saleSum > 0 ? (+sib.sale_price || 0) / saleSum : 1 / Math.max(1, siblings.length);
@@ -3039,12 +3046,15 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   // Force-pull exact earnings for every Etsy order still on an estimate (or all of
   // them). Same ledger source and per-line split as the automatic backfill, but
   // user-triggered so orders that hadn't settled at sync time can be caught in one go.
-  const refreshAllEarned = async ({ onlyEstimates = true } = {}) => {
+  const refreshAllEarned = async () => {
     const all = await loadK(ORDERS_KEY) || [];
-    const targets = all.filter(o => o.platform === "etsy" &&
-      (onlyEstimates ? !hasReliableEtsyEarnings(o) : true));
-    const ids = [...new Set(targets.map(o => String(o.etsy_receipt_id || o.platform_order_id || "").trim()).filter(Boolean))];
-    if (!ids.length) { showToast?.(onlyEstimates ? "All orders already have exact Etsy earnings." : "No Etsy orders to refresh."); return; }
+    // Every non-cancelled Etsy order — so this catches both stale earnings and a
+    // cancellation that landed after the order first synced. Recent first, capped so
+    // one click stays bounded.
+    const targets = all.filter(o => o.platform === "etsy" && !isCancelled(o))
+      .sort((a, b) => (Date.parse(b.created_at || b.date) || 0) - (Date.parse(a.created_at || a.date) || 0));
+    const ids = [...new Set(targets.map(o => String(o.etsy_receipt_id || o.platform_order_id || "").trim()).filter(Boolean))].slice(0, 120);
+    if (!ids.length) { showToast?.("No Etsy orders to refresh."); return; }
     setEarnedRefreshAll({ done: 0, total: ids.length });
     try {
       const tok = await getEtsyToken();
@@ -3055,15 +3065,23 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         if (r.ok) Object.assign(pay, (await r.json())?.payments || {});
         setEarnedRefreshAll({ done: Math.min(ids.length, i + chunk.length), total: ids.length });
       }
-      const settled = Object.entries(pay).filter(([, p]) => p && p.net > 0).map(([rid]) => rid);
-      if (!settled.length) { showToast?.("Etsy hasn't settled fees for these orders yet — try again in a day or two."); return; }
       const fresh = await loadK(ORDERS_KEY) || [];
-      let updated = 0;
-      for (const rid of settled) {
-        const p = pay[rid];
+      let updated = 0, canceled = 0, settledRids = 0;
+      for (const [rid, p] of Object.entries(pay)) {
+        if (!p) continue;
         const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
+        if (!siblings.length) continue;
+        if (p.canceled) {
+          for (const sib of siblings) if (!isCancelled(sib)) { await patchOrder(sib, { cancelled: true, refunded: true, refund_amount: +sib.order_total || +sib.sale_price || 0, cancelled_at: now(), status: "canceled" }); canceled++; }
+          continue;
+        }
+        if (!(p.net > 0)) continue;
+        // Only rewrite earnings on orders that don't already hold an exact figure.
+        const needy = siblings.filter(sib => !hasReliableEtsyEarnings(sib));
+        if (!needy.length) continue;
+        settledRids++;
         const saleSum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
-        for (const sib of siblings) {
+        for (const sib of needy) {
           const share = saleSum > 0 ? (+sib.sale_price || 0) / saleSum : 1 / Math.max(1, siblings.length);
           const derived = deriveEtsyEarnings(sib, p);
           await patchOrder(sib, {
@@ -3078,8 +3096,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
           updated++;
         }
       }
-      const pending = ids.length - settled.length;
-      showToast?.(`Earned refreshed on ${updated} order${updated === 1 ? "" : "s"}${pending > 0 ? ` · ${pending} not settled yet` : ""}.`);
+      const pending = ids.filter(rid => { const p = pay[rid]; return !p || (!(p.net > 0) && !p.canceled); }).length;
+      if (!updated && !canceled) { showToast?.(pending ? "Etsy hasn't settled these orders yet — try again in a day or two." : "Everything already up to date."); return; }
+      showToast?.([updated ? `Earned refreshed on ${updated} order${updated === 1 ? "" : "s"}` : "", canceled ? `${canceled} marked cancelled` : "", pending > 0 ? `${pending} not settled yet` : ""].filter(Boolean).join(" · ") + ".");
     } catch { showToast?.("Couldn't reach Etsy to refresh earnings."); }
     finally { setEarnedRefreshAll(null); }
   };
@@ -3116,6 +3135,13 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         const rid = String(o.etsy_receipt_id || o.platform_order_id || "");
         const p = pay[rid];
         if (!p) return o;
+        // Etsy reports this order refunded/cancelled — mark it (the order-list sync
+        // often misses a cancellation that happened after the order first synced).
+        if (p.canceled && !isCancelled(o)) {
+          const merged = { ...o, cancelled: true, refunded: true, refund_amount: +o.order_total || +o.sale_price || 0, cancelled_at: now(), status: "canceled", etsy_status_synced_at: new Date().toISOString() };
+          changedRows.push(merged);
+          return merged;
+        }
         const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
         const sum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
         const share = sum > 0 ? (+o.sale_price || 0) / sum : 1 / Math.max(1, siblings.length);
@@ -3415,9 +3441,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
             </button>
           ))}
         </div>
-        <button onClick={() => refreshAllEarned({ onlyEstimates: true })} disabled={!!earnedRefreshAll} title="Pull Etsy's exact 'you earned' from the payment ledger for every order still on an estimate"
+        <button onClick={() => refreshAllEarned()} disabled={!!earnedRefreshAll} title="Pull Etsy's exact 'you earned' and cancellation status from Etsy for every order"
           style={{ marginLeft: "auto", background: earnedRefreshAll ? C.card : C.greenBg, color: C.green, border: `1.5px solid ${C.green}55`, borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: earnedRefreshAll ? "wait" : "pointer", whiteSpace: "nowrap" }}>
-          {earnedRefreshAll ? `Refreshing… ${earnedRefreshAll.done}/${earnedRefreshAll.total}` : "↻ Refresh earned (all)"}
+          {earnedRefreshAll ? `Syncing… ${earnedRefreshAll.done}/${earnedRefreshAll.total}` : "↻ Sync earned & cancellations"}
         </button>
         <button onClick={reconcileInvoices} disabled={reconciling} title="Match unshipped/unlinked Etsy orders to invoices you already created in Invoicing"
           style={{ background: reconciling ? C.card : C.blueBg, color: C.blue, border: `1.5px solid ${C.blue}55`, borderRadius: 10, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: reconciling ? "wait" : "pointer", whiteSpace: "nowrap" }}>
