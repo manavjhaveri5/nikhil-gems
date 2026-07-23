@@ -4730,9 +4730,11 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             const activeAtt=attachments[0]||null;
             const isImg=att=>/^image\//i.test(att?.type||"")||/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(att?.name||att?.url||"");
             const isPdf=att=>/pdf/i.test(att?.type||"")||/\.pdf($|\?)/i.test(att?.name||att?.url||"");
+            const selectedUnclassified=isUnclassified(selected);
             // Sales receipt → auto-show the linked invoice in the preview (invoices are
             // generated HTML, not stored files, so we render it on the fly).
             const linkedInvInfo=(()=>{
+              if(selectedUnclassified)return null;
               if(selected.classifiedAs==="customer_receipt"){
                 const ids=selected.classifiedRef?.invoiceIds||(selected.classifiedRef?.invoiceId?[selected.classifiedRef.invoiceId]:[]);
                 const inv=ids.length?invoices.find(iv=>ids.includes(iv.id)):null;
@@ -4751,7 +4753,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
             // Vendor bill payment with no attachment → find the linked/matched bill's
             // document (by billIds, else bill number appearing in the notes/payee).
             const linkedBillDoc=(()=>{
-              if(activeAtt||linkedInv||selected.classifiedAs!=="vendor_bill")return null;
+              if(activeAtt||linkedInv||selectedUnclassified||selected.classifiedAs!=="vendor_bill")return null;
               const ids=selected.classifiedRef?.billIds||(selected.classifiedRef?.billId?[selected.classifiedRef.billId]:[]);
               const billDoc=p=>p.docUrl||p.docData||p.attachUrl||p.attachData;
               let bill=ids.length?purchases.find(p=>ids.includes(p.id)):null;
@@ -10597,7 +10599,7 @@ function InvBulkView({queue,idx,setIdx,buyers,company="ng",extractInvoice,onSave
   );
 }
 
-function InvoicesApp({onHome,startDraft}){
+function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   const t=useT();
   // Company-scoped: Nikhil Gems and Atyahara keep separate invoices / buyers / acc-stock.
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-vendors-company")||"ng");
@@ -10761,6 +10763,42 @@ function InvoicesApp({onHome,startDraft}){
     setDraft(inv); // drop the flag so later manual saves don't carry it
     saveInvoice(inv,{navigateAway:false});
   },[loaded,autoAttachId,draft]);
+
+  useEffect(()=>{
+    if(!startInvoiceId)return;
+    const target=typeof startInvoiceId==="object"?startInvoiceId:{id:startInvoiceId};
+    const targetCompany=target.company==="at"||target.company==="ng"?target.company:company;
+    let cancelled=false;
+    const wanted=String(target.id||target.invNo||"").trim();
+    const receipt=String(target.receiptId||"").trim();
+    const norm=s=>String(s||"").trim().toLowerCase();
+    const findInv=list=>(list||[]).find(x=>
+      (wanted&&(norm(x.id)===norm(wanted)||norm(x.invNo)===norm(wanted)))||
+      (receipt&&[x._etsyReceiptId,x.etsy_receipt_id,...(x.sourceOrderIds||[])].filter(Boolean).map(String).includes(receipt))
+    );
+    const openInv=inv=>{
+      setDraft({...inv});
+      setView("form");
+      onInvoiceIdConsumed?.();
+    };
+    localStorage.setItem("ng-vendors-company",targetCompany);
+    setCompany(targetCompany);
+    const keys=accountingCompanyKeys(targetCompany);
+    const cached=targetCompany===company?findInv(invoices):null;
+    if(cached){openInv(cached);return()=>{cancelled=true;};}
+    loadKFresh(keys.invoices).then(async fresh=>{
+      if(cancelled)return;
+      if(Array.isArray(fresh))setInvoices(fresh);
+      const freshBuyers=await loadKFresh(keys.buyers).catch(()=>null);
+      if(!cancelled&&Array.isArray(freshBuyers))setBuyers(freshBuyers);
+      const inv=findInv(Array.isArray(fresh)?fresh:[]);
+      if(inv)openInv(inv);
+      else{showToast(`Invoice ${wanted||receipt} not found`);onInvoiceIdConsumed?.();}
+    }).catch(()=>{
+      if(!cancelled){showToast(`Invoice ${wanted||receipt} not found`);onInvoiceIdConsumed?.();}
+    });
+    return()=>{cancelled=true;};
+  },[startInvoiceId,invoices,company]);
 
   const nextInvNo=useCallback(()=>{
     const y1=new Date().getFullYear(), y2=y1+1;
@@ -10931,6 +10969,26 @@ function InvoicesApp({onHome,startDraft}){
     const list=await deleteVersionedItemK(INV_KEYS.invoices,inv||id,{user:"Admin"});
     setInvoices(list);
     if(inv){
+      if(company==="at"||company==="ng"){
+        try{
+          const receiptIds=new Set([inv._etsyReceiptId,inv.etsy_receipt_id,...(inv.sourceOrderIds||[])].filter(Boolean).map(String));
+          const invNo=String(inv.invNo||"");
+          const freshOrders=await loadKFresh("ng-orders-v1").catch(()=>loadK("ng-orders-v1"));
+          const orderList=Array.isArray(freshOrders)?freshOrders:[];
+          const changed=orderList.filter(o=>{
+            const linkedNo=String(company==="at"?o._atInvoiceNo:o._ngInvoiceNo||"");
+            const rid=String(o.etsy_receipt_id||o.platform_order_id||String(o.order_number||"").replace(/^ETSY-/,"").split("-")[0]||"");
+            return (invNo&&linkedNo===invNo)||(receiptIds.size&&receiptIds.has(rid));
+          }).map(o=>company==="at"
+            ? {...o,_atInvoiceNo:"",_atInvoicedAt:""}
+            : {...o,_ngInvoiceNo:"",_ngDeductedQty:"",_ngDeductedQty2:"",_ngStockId:"",_ngInvoicedAt:""});
+          for(const order of changed)await upsertItemK("ng-orders-v1",order,{prepend:false});
+          if(changed.length){
+            const changedIds=new Set(changed.map(o=>o.id));
+            window.dispatchEvent(new CustomEvent("ng-orders-updated",{detail:orderList.map(o=>changedIds.has(o.id)?changed.find(c=>c.id===o.id):o)}));
+          }
+        }catch(e){/* invoice delete should not be blocked by Listing Manager cleanup */}
+      }
       // Restore physical stock quantities (supports both stockLinks[] and legacy stockId)
       const newStock=[...stock];let physChanged=false;
       inv.items.forEach(it=>{
@@ -15631,7 +15689,7 @@ function ExportReconShell({onHome,onCreateInvoiceFromSb}){
   return(
     <Shell title="Export Recon" crumb={company==="nikhil"?"Nikhil Gems":"Atyahara"} onHome={onHome} onBack={onHome} actions={companySwitcher}>
       <React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"50vh",color:C.inkFaint,fontSize:13}}>Loading Export Recon…</div>}>
-        <ExportReconciliationApp company={company} onCreateInvoiceFromSb={onCreateInvoiceFromSb?draft=>onCreateInvoiceFromSb(draft,company):undefined}/>
+        <ExportReconciliationApp company={company} renderInvoicePdf={renderInvoicePacketPdf} onCreateInvoiceFromSb={onCreateInvoiceFromSb?draft=>onCreateInvoiceFromSb(draft,company):undefined}/>
       </React.Suspense>
     </Shell>
   );
@@ -17856,7 +17914,7 @@ export default function Root({onSignOut}){
   const _savedMod=localStorage.getItem("ng-last-mod");
   const _stockParam=new URLSearchParams(window.location.search).get("stock");
   const _locationParam=new URLSearchParams(window.location.search).get("location");
-  const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);
+  const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startInvoiceId,setStartInvoiceId]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);
   const go=(id,sv=null)=>{
     // Block access to modules not in allowedMods
     if(userProfile&&userProfile!==false&&!allowedMods.find(m=>m.id===id))return;
@@ -17883,6 +17941,43 @@ export default function Root({onSignOut}){
   if(userProfile===undefined){const _ll=localStorage.getItem("ng-user-lang")||"en";return<LanguageProvider language={_ll}><div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--c-bg)",color:"#8C7E66",fontSize:13,fontFamily:"system-ui,sans-serif"}}>{_ll==="mr"?"लोड होत आहे…":"Loading…"}</div></LanguageProvider>;}
   let content;
   const goHome=()=>{setScreen("welcome");localStorage.removeItem("ng-last-mod");};
+  const openInvoiceModuleTarget=target=>{
+    const company=target?.company==="at"?"at":"ng";
+    localStorage.setItem("ng-vendors-company",company);
+    setStartInvoiceDraft(null);
+    setStartInvoiceId({...target,company,id:target?.id||target?.invNo||"",requestId:Date.now()});
+    setMod("invoices");
+    setScreen("app");
+  };
+  const viewInvoicePdfTarget=async target=>{
+    const tab=window.open("","_blank");
+    if(tab)tab.document.write("<title>Invoice PDF</title><body style='font-family:system-ui,sans-serif;padding:24px'>Rendering invoice PDF...</body>");
+    const company=target?.company==="at"?"at":"ng";
+    const keys=accountingCompanyKeys(company);
+    const wanted=String(target?.id||target?.invNo||"").trim();
+    const receipt=String(target?.receiptId||"").trim();
+    const norm=s=>String(s||"").trim().toLowerCase();
+    const findInv=list=>(list||[]).find(x=>
+      (wanted&&(norm(x.id)===norm(wanted)||norm(x.invNo)===norm(wanted)))||
+      (receipt&&[x._etsyReceiptId,x.etsy_receipt_id,...(x.sourceOrderIds||[])].filter(Boolean).map(String).includes(receipt))
+    );
+    try{
+      const [freshInvoices,freshBuyers]=await Promise.all([
+        loadKFresh(keys.invoices).catch(()=>loadK(keys.invoices)),
+        loadKFresh(keys.buyers).catch(()=>loadK(keys.buyers)),
+      ]);
+      const inv=findInv(Array.isArray(freshInvoices)?freshInvoices:[]);
+      if(!inv)throw new Error(`Invoice ${wanted||receipt} not found`);
+      const bytes=await renderInvoicePacketPdf(inv,Array.isArray(freshBuyers)?freshBuyers:[],company);
+      const url=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
+      if(tab)tab.location.href=url;
+      else window.open(url,"_blank");
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+    }catch(e){
+      if(tab)tab.document.body.innerHTML=`<pre style="font-family:system-ui,sans-serif;white-space:pre-wrap;color:#8a1f11">Could not render invoice PDF.\n${String(e?.message||e)}</pre>`;
+      else alert(e?.message||"Could not render invoice PDF");
+    }
+  };
   if(screen==="app"){
     if(mod==="purchases")content=<PurchasesApp onHome={()=>{goHome();setStartView(null);setStartBillId(null);}} startView={startView} startBillId={startBillId} onBillIdConsumed={()=>setStartBillId(null)} onGoToVendor={name=>{setStartVendor(name);setMod("vendors");setScreen("app");}}/>;
     else if(mod==="vendors")content=<VendorsApp onHome={()=>{goHome();setStartVendor(null);}} startVendor={startVendor}/>;
@@ -17891,11 +17986,11 @@ export default function Root({onSignOut}){
     else if(mod==="shows")content=<ShowsApp onHome={goHome} isAdmin={isAdmin}/>;
     else if(mod==="calendar")content=<CalendarApp onHome={goHome}/>;
     else if(mod==="recon")content=<ExportReconShell onHome={goHome} onCreateInvoiceFromSb={(draft,coKey)=>{localStorage.setItem("ng-vendors-company",(coKey==="nikhil"||coKey==="ng")?"ng":"at");setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}}/>;
-    else if(mod==="invoices")content=<InvoicesApp onHome={()=>{goHome();setStartInvoiceDraft(null);}} startDraft={startInvoiceDraft}/>;
+    else if(mod==="invoices")content=<InvoicesApp onHome={()=>{goHome();setStartInvoiceDraft(null);setStartInvoiceId(null);}} startDraft={startInvoiceDraft} startInvoiceId={startInvoiceId} onInvoiceIdConsumed={()=>setStartInvoiceId(null)}/>;
     else if(mod==="finance"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><FinanceApp onHome={goHome}/></React.Suspense>;
     else if(mod==="jobwork")content=<JobWorkApp onHome={goHome}/>;
-    else if(mod==="etsy")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp onHome={goHome}/></React.Suspense>;
-    else if(mod==="orders")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp onHome={goHome} startTab="orders"/></React.Suspense>;
+    else if(mod==="etsy")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp onHome={goHome} onOpenInvoice={openInvoiceModuleTarget} onViewInvoicePdf={viewInvoicePdfTarget}/></React.Suspense>;
+    else if(mod==="orders")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp onHome={goHome} startTab="orders" onOpenInvoice={openInvoiceModuleTarget} onViewInvoicePdf={viewInvoicePdfTarget}/></React.Suspense>;
     else if(mod==="ai")content=<AIAssistantApp onHome={goHome}/>;
     else if(mod==="users"&&isAdmin)content=<UsersApp onHome={goHome}/>;
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;
