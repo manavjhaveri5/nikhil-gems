@@ -290,10 +290,13 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
     const aiToken = token ? null : findShapeToken(shapeTokens, ai.shape);
     const finalToken = token || aiToken;
     if (finalToken) {
-      // Shape known → the customs table is authoritative for description + HSN.
+      // Shape known → take HSN and shape classification from the customs table, but
+      // keep the listing title as the customs description so it matches the sales
+      // invoice. The token's generic per-shape text was overwriting it (and could be
+      // the wrong material entirely, e.g. "Natural Agate" on a Ruby in Kyanite).
       return {
         ...item,
-        desc: finalToken.desc || item.desc,
+        desc: item.desc || finalToken.desc,
         hsn: finalToken.hsn || item.hsn,
         unit: cleanInvoiceText(ai.unit) || item.unit,
         _shape: finalToken.shape,
@@ -302,7 +305,7 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
     }
     return {
       ...item,
-      desc: cleanInvoiceText(ai.desc) || item.desc,
+      desc: item.desc || cleanInvoiceText(ai.desc),
       hsn: cleanInvoiceText(ai.hsn) || item.hsn,
       unit: cleanInvoiceText(ai.unit) || item.unit,
       _aiAutofilled: !!byId[String(item.id)],
@@ -2467,7 +2470,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     const mode = ngInvoiceMode[order.id] || (target ? "latest" : "new");
     const productDesc = cleanInvoiceText(productDescDraft[order.id] || order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
     const rate = ngInvoiceRate(order, stockItem, qty, draft);
-    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : productDesc);
+    // Customs desc mirrors the Atyahara sales invoice — the listing title — so the
+    // NG export bill and the sales invoice read the same. Product desc is only a
+    // fallback when there's no title.
+    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (order.listing_title || productDesc));
     const earnedAtCreate = orderEarnedValue(order);
     const shippingAtCreate = Math.max(0, +draft.shipCost || +order.ship_cost || 0);
     const amountAtCreate = Number((qty * (rate || 0)).toFixed(2));
@@ -2524,7 +2530,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     const q2 = Math.max(0, +draft.qty2 || +order._ngAllocatedQty2 || +order._ngDeductedQty2 || 0);
     if (q <= 0) { updNg(order, { error: "Enter invoice quantity first.", success: "" }); return; }
     const productDesc = cleanInvoiceText(productDescDraft[order.id] || order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
-    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : productDesc);
+    // Customs desc mirrors the Atyahara sales invoice — the listing title — so the
+    // NG export bill and the sales invoice read the same. Product desc is only a
+    // fallback when there's no title.
+    const customsDesc = cleanInvoiceText(customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (order.listing_title || productDesc));
     updNg(order, { loading: true, error: "", success: "" });
     try {
       const invoices = (await loadKFresh(NG_INVOICES_KEY).catch(() => ngInvoices)) || [];
@@ -3717,7 +3726,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       const lineAmount = order._ngInvoiceNo && !editingNg
                         ? +(linkedNgLine?.amt ?? order._ngAmount ?? Number((plannedQty * (costRate || 0)).toFixed(2))) || 0
                         : Number((plannedQty * (costRate || 0)).toFixed(2));
-                      const customsDescVal = customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (linkedNgLine?.acctDesc || order._ngCustomsDesc || productDescVal);
+                      const customsDescVal = customsDescDraft[order.id] != null ? customsDescDraft[order.id] : (linkedNgLine?.acctDesc || order._ngCustomsDesc || cleanInvoiceText(order.listing_title) || productDescVal);
                       const hsnVal = linkedNgLine?.hsn || order._ngHsn || ngHsn(order, stockItem);
                       const earnedBasis = order._ngInvoiceNo && !editingNg ? +(order._ngEarnedAtCreate ?? orderEarnedValue(order)) || 0 : orderEarnedValue(order);
                       const shippingPaid = order._ngInvoiceNo && !editingNg ? +(order._ngShippingAtCreate ?? order.ship_cost ?? 0) || 0 : Math.max(0, +draft.shipCost || +order.ship_cost || 0);
