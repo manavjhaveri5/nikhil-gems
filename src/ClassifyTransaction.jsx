@@ -406,6 +406,23 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
     setRecvDiffMode(Math.abs(selectedDiffInr) <= 5 ? "bank_charges" : "advance");
   }, [recvDiffTouched, selectedInvIds.size, selectedDiffInr]);
   const toggleBill = id => setSelectedBillIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // Settled bills stay selectable — that's how a payment already recorded elsewhere
+  // gets linked to its bill and its document attached — but they're listed apart, so
+  // "select bills to pay" isn't contradicted by a row reading ₹0.00 due.
+  const billsToPay   = vendorBills.filter(b => billDue(b) > 0.005);
+  const billsSettled = vendorBills.filter(b => billDue(b) <= 0.005);
+  const renderBillRow = b => {
+    const sel = selectedBillIds.has(b.id), due = billDue(b), settled = due <= 0.005;
+    return <button key={b.id} onClick={() => toggleBill(b.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", background: sel ? C.card : C.surface, border: `1.5px solid ${sel ? C.blue : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left", opacity: settled && !sel ? .62 : 1 }}>
+      <div style={{ width: 18, height: 18, borderRadius: 4, border: `2px solid ${sel ? C.blue : C.border}`, background: sel ? C.blue : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 900 }}>{sel ? "✓" : ""}</div>
+      <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.billNumber || "Bill"}</div><div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.supplier} · {fmtDate(b.billDate)} · {b.status}</div></div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        {settled
+          ? <><div style={{ fontSize: 12, fontWeight: 800, color: C.green }}>Settled</div><div style={{ fontSize: 10, color: C.inkFaint }}>₹{(+b.totalAmount || 0).toLocaleString("en-IN")} paid</div></>
+          : <><div style={{ fontSize: 12, fontWeight: 800, color: C.red }}>₹{due.toLocaleString("en-IN", { minimumFractionDigits: 2 })} due</div><div style={{ fontSize: 10, color: C.inkFaint }}>of ₹{(+b.totalAmount || 0).toLocaleString("en-IN")}</div></>}
+      </div>
+    </button>;
+  };
   const toggleInv = id => setSelectedInvIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const openQuickBill = () => {
     setQuickBill({
@@ -761,11 +778,23 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
               </div>
             </div>}
             {vendorBills.length === 0 ? <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>{vendorId ? `No open bills — this records an advance to ${vendor?.name || "the vendor"}, offset against their future bills.` : "No open bills. Pick a vendor above to record this as an advance to them."}</div> : <div style={{ maxHeight: 240, overflowY: "auto", display: "grid", gap: 6 }}>
-              {vendorBills.map(b => { const sel = selectedBillIds.has(b.id), due = billDue(b); return <button key={b.id} onClick={() => toggleBill(b.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", background: sel ? C.card : C.surface, border: `1.5px solid ${sel ? C.blue : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}>
-                <div style={{ width: 18, height: 18, borderRadius: 4, border: `2px solid ${sel ? C.blue : C.border}`, background: sel ? C.blue : "transparent", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 900 }}>{sel ? "✓" : ""}</div>
-                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.billNumber || "Bill"}</div><div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.supplier} · {fmtDate(b.billDate)} · {b.status}</div></div>
-                <div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.red }}>₹{due.toLocaleString("en-IN", { minimumFractionDigits: 2 })} due</div><div style={{ fontSize: 10, color: C.inkFaint }}>of ₹{(+b.totalAmount || 0).toLocaleString("en-IN")}</div></div>
-              </button>; })}
+              {billsToPay.map(renderBillRow)}
+              {billsToPay.length === 0 && (
+                <div style={{ fontSize: 11, color: C.inkFaint, padding: "6px 2px" }}>
+                  Nothing outstanding for {vendor?.name || "this vendor"} — this will be saved as an advance unless you link it to a settled bill below.
+                </div>
+              )}
+              {billsSettled.length > 0 && (
+                <div style={{ display: "grid", gap: 6, marginTop: billsToPay.length ? 4 : 0 }}>
+                  <div style={{ fontSize: 9, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5, paddingTop: 7, borderTop: `1px dashed ${C.border}` }}>
+                    Already settled · nothing to pay
+                  </div>
+                  <div style={{ fontSize: 10, color: C.inkFaint, marginTop: -2 }}>
+                    Pick one only to attach this payment or its document to the bill — it adds ₹0.
+                  </div>
+                  {billsSettled.map(renderBillRow)}
+                </div>
+              )}
             </div>}
             {selectedBillIds.size > 0 && <div style={{ marginTop: 10, padding: "10px 13px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}><span style={{ color: C.inkFaint }}>Selected due</span><b>₹{totalBillsDue.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</b></div>
