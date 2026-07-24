@@ -1400,6 +1400,7 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
   };
 
   // Modal: pick or upload the inward remittance for one invoice.
+  const remitIsImage = rem => /^image\//.test(rem?.attachment?.type || "") || /\.(png|jpe?g|gif|webp|bmp|heic)$/i.test(rem?.attachment?.fileName || rem?.attachment?.name || "");
   const RemitPicker = () => {
     const inv = remitModal.inv;
     const invCur = String(inv.currency || "").toUpperCase();
@@ -1410,21 +1411,27 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
       .sort((a, b) => { const rank = s => ({ open: 0, used: 1, closed: 2 }[remitStatus(s)]); return rank(a) - rank(b) || (b.createdAt || "").localeCompare(a.createdAt || ""); });
     const other = remittances.filter(r => String(r.currency || "").toUpperCase() !== invCur && r.currency);
     const badge = st => ({ open: { t: "Open", c: C.green, bg: C.greenBg }, used: { t: "Used up", c: C.inkMid, bg: C.card }, closed: { t: "Closed", c: C.red, bg: C.redBg } }[st]);
+    // Which remittance's file is shown in the viewer pane.
+    const [previewId, setPreviewId] = useState(() => (linkedRemit(inv) || mine.find(r => r.attachment?.url))?.id || null);
+    const preview = remittances.find(r => r.id === previewId) || null;
 
     const row = rem => {
       const st = remitStatus(rem), rem_ = remitRemaining(rem), b = badge(st);
       const linkable = st === "open";
       const draft = allocDraft[rem.id] != null ? allocDraft[rem.id] : String(Math.min(rem_, invAmt || rem_) || "");
+      const active = rem.id === previewId;
       return (
-        <div key={rem.id} style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 12px", marginBottom: 8, background: st === "open" ? C.surface : C.card, opacity: st === "open" ? 1 : .82 }}>
+        <div key={rem.id} onClick={() => rem.attachment?.url && setPreviewId(rem.id)}
+          style={{ border: `1.5px solid ${active ? C.blue : C.border}`, borderRadius: 9, padding: "10px 12px", marginBottom: 8, background: st === "open" ? C.surface : C.card, opacity: st === "open" ? 1 : .82, cursor: rem.attachment?.url ? "pointer" : "default" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>
                 💵 {rem.irt || "(no IRT)"} <span style={{ background: b.bg, color: b.c, borderRadius: 999, padding: "1px 8px", fontSize: 10, fontWeight: 700, marginLeft: 6 }}>{b.t}</span>
+                {active && <span style={{ color: C.blue, fontSize: 10, fontWeight: 700, marginLeft: 6 }}>▸ viewing</span>}
               </div>
               <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 3 }}>
                 {rem.buyer || "—"}{rem.dateRaw ? ` · ${rem.dateRaw}` : ""}
-                {rem.attachment?.url && <> · <a href={rem.attachment.url} target="_blank" rel="noreferrer" style={{ color: C.blue }}>file</a></>}
+                {rem.attachment?.url && <> · <a href={rem.attachment.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: C.blue }}>open ↗</a></>}
               </div>
               <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>
                 {rem.currency} {fmtAmt(rem.amount)} total · <b style={{ color: rem_ > 0.01 ? C.green : C.inkFaint }}>{rem.currency} {fmtAmt(rem_)} left</b>
@@ -1432,15 +1439,15 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-              <button onClick={() => toggleRemitClosed(rem)} title={rem.closed ? "Re-open so it can take more invoices" : "Close so no further invoices can use it"}
+              <button onClick={e => { e.stopPropagation(); toggleRemitClosed(rem); }} title={rem.closed ? "Re-open so it can take more invoices" : "Close so no further invoices can use it"}
                 style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, color: C.inkMid, cursor: "pointer" }}>
                 {rem.closed ? "Re-open" : "Close"}
               </button>
-              <button onClick={() => deleteRemittance(rem)} title="Delete remittance" style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>🗑</button>
+              <button onClick={e => { e.stopPropagation(); deleteRemittance(rem); }} title="Delete remittance" style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>🗑</button>
             </div>
           </div>
           {linkable && (
-            <div style={{ display: "flex", gap: 7, alignItems: "center", marginTop: 9, flexWrap: "wrap" }}>
+            <div onClick={e => e.stopPropagation()} style={{ display: "flex", gap: 7, alignItems: "center", marginTop: 9, flexWrap: "wrap" }}>
               <span style={{ fontSize: 11, color: C.inkMid }}>Allocate</span>
               <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{rem.currency}</span>
               <input type="number" step="0.01" value={draft} onChange={e => setAllocDraft(s => ({ ...s, [rem.id]: e.target.value }))}
@@ -1456,29 +1463,55 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
       );
     };
 
+    const isMob = mob;
     return (
-      <div onClick={() => !remitBusy && setRemitModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 4000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", overflowY: "auto" }}>
-        <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 12, width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,.25)", overflow: "hidden" }}>
-          <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+      <div onClick={() => !remitBusy && setRemitModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 4000, display: "flex", alignItems: "center", justifyContent: "center", padding: isMob ? 0 : "24px" }}>
+        <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: isMob ? 0 : 14, width: "100%", maxWidth: 1180, height: isMob ? "100%" : "90vh", boxShadow: "0 24px 70px rgba(0,0,0,.3)", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "15px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexShrink: 0 }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>Inward remittance · {inv.invNo}</div>
               <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>{buyerName(inv)} · {invCur} {fmtAmt(invAmt)} — link this invoice to a remittance, or upload a new one.</div>
             </div>
-            <button onClick={() => setRemitModal(null)} disabled={remitBusy} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.inkFaint, lineHeight: 1 }}>×</button>
+            <button onClick={() => setRemitModal(null)} disabled={remitBusy} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: C.inkFaint, lineHeight: 1 }}>×</button>
           </div>
-          <div style={{ padding: "14px 20px", maxHeight: "62vh", overflowY: "auto" }}>
-            <button onClick={pickRemitFile} disabled={remitBusy}
-              style={{ width: "100%", background: C.amberBg, border: `1px dashed ${C.amber}`, borderRadius: 9, padding: "11px", fontSize: 12.5, fontWeight: 800, color: C.amber, cursor: remitBusy ? "default" : "pointer", marginBottom: 14 }}>
-              {remitBusy ? "⟳ Reading remittance…" : "⬆ Upload new remittance (reads IRT, amount, currency, buyer)"}
-            </button>
-            {mine.length === 0
-              ? <div style={{ fontSize: 12, color: C.inkFaint, textAlign: "center", padding: "14px 0" }}>No {invCur} remittances yet — upload one above.</div>
-              : mine.map(row)}
-            {other.length > 0 && (
-              <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
-                {other.length} remittance(s) in another currency are hidden — a {invCur} invoice can only link to a {invCur} remittance.
-              </div>
-            )}
+          <div style={{ display: "flex", flexDirection: isMob ? "column" : "row", flex: 1, minHeight: 0 }}>
+            {/* Left: controls + remittance list */}
+            <div style={{ width: isMob ? "100%" : 440, flexShrink: 0, padding: "14px 18px", overflowY: "auto", borderRight: isMob ? "none" : `1px solid ${C.border}`, borderBottom: isMob ? `1px solid ${C.border}` : "none", maxHeight: isMob ? "42vh" : "none" }}>
+              <button onClick={pickRemitFile} disabled={remitBusy}
+                style={{ width: "100%", background: C.amberBg, border: `1px dashed ${C.amber}`, borderRadius: 9, padding: "11px", fontSize: 12.5, fontWeight: 800, color: C.amber, cursor: remitBusy ? "default" : "pointer", marginBottom: 14 }}>
+                {remitBusy ? "⟳ Reading remittance…" : "⬆ Upload new remittance (reads IRT, amount, currency, buyer)"}
+              </button>
+              {mine.length === 0
+                ? <div style={{ fontSize: 12, color: C.inkFaint, textAlign: "center", padding: "14px 0" }}>No {invCur} remittances yet — upload one above.</div>
+                : mine.map(row)}
+              {other.length > 0 && (
+                <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
+                  {other.length} remittance(s) in another currency are hidden — a {invCur} invoice can only link to a {invCur} remittance.
+                </div>
+              )}
+            </div>
+            {/* Right: document viewer */}
+            <div style={{ flex: 1, minWidth: 0, background: C.card, display: "flex", flexDirection: "column" }}>
+              {preview?.attachment?.url ? (
+                <>
+                  <div style={{ padding: "8px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: C.inkMid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      💵 {preview.irt || "remittance"} · {preview.attachment.fileName || preview.attachment.name || "document"}
+                    </div>
+                    <a href={preview.attachment.url} target="_blank" rel="noreferrer" style={{ fontSize: 11, fontWeight: 700, color: C.blue, whiteSpace: "nowrap" }}>Open in tab ↗</a>
+                  </div>
+                  <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: "#3a3a3a", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {remitIsImage(preview)
+                      ? <img src={preview.attachment.url} alt={preview.irt || "remittance"} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                      : <iframe title="remittance" src={preview.attachment.url} style={{ width: "100%", height: "100%", border: "none", background: "#fff" }} />}
+                  </div>
+                </>
+              ) : (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: C.inkFaint, fontSize: 12.5, textAlign: "center", padding: 20 }}>
+                  {mine.some(r => r.attachment?.url) ? "Select a remittance on the left to view its document here." : "Upload a remittance to preview it here while you allocate."}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
