@@ -3013,6 +3013,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${rid}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
       const d = r.ok ? await r.json() : null;
       const p = d?.payments?.[rid];
+      try { console.log(`[Etsy earnings] receipt ${rid}:`, p); } catch {}
       if (!p) { showToast?.("Etsy hasn't settled this order yet — try again in a day or two."); return; }
       const fresh = await loadK(ORDERS_KEY) || [];
       const siblings = fresh.filter(x => x.platform === "etsy" && String(x.etsy_receipt_id || x.platform_order_id) === rid);
@@ -3022,7 +3023,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         showToast?.(n ? "Order marked cancelled — refunded on Etsy." : "Already marked cancelled.");
         return;
       }
-      if (!(p.net > 0)) { showToast?.("Etsy hasn't settled this order's fees yet — try again in a day or two."); return; }
+      if (!(p.net > 0)) { showToast?.(`Etsy: status "${p.status || "?"}", refunded ${money(p.refunded || 0, p.currency || order.currency)} of ${money(p.gross || 0, p.currency || order.currency)}, net ${money(p.net || 0, p.currency || order.currency)} — not settled/cancelled yet.`); return; }
       const saleSum = siblings.reduce((s, x) => s + (+x.sale_price || 0), 0);
       for (const sib of siblings) {
         const share = saleSum > 0 ? (+sib.sale_price || 0) / saleSum : 1 / Math.max(1, siblings.length);
