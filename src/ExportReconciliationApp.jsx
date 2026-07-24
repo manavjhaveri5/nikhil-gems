@@ -242,6 +242,7 @@ const STATUS_STYLE = {
 async function aiExtract(b64, docType, mime="application/pdf") {
   const prompts = {
     firc: 'This is a FIRC from an Indian bank. Return ONLY valid JSON, no markdown: {"number":"FIRC reference number","dateRaw":"date exactly as printed on document e.g. 02/06/2025","amount":"total remittance amount digits only"}',
+    inward: 'This is an inward remittance advice / FIRC for an export payment received into an Indian bank. Return ONLY valid JSON, no markdown: {"irt":"IRT / UTR / reference number of the remittance","dateRaw":"value/credit date exactly as printed e.g. 02/06/2025","amount":"remittance amount in foreign currency, digits only","currency":"foreign currency code e.g. USD EUR GBP JPY","buyer":"remitter / sender / ordering customer name"}',
     sb:   'This is an Indian customs export document. Return ONLY valid JSON, no markdown: {"sbNumber":"document number","dateRaw":"LEO date or filing date exactly as printed e.g. 02/06/2025 or 10/12/2025","amount":"FOB value INR digits only","docType":"pbe if Postal Bill of Export | csb if Courier Shipping Bill CSB-V CSB-IV | commercial if standard Shipping Bill"}',
     invoice: 'This is a commercial export invoice from an Indian exporter. Return ONLY valid JSON, no markdown: {"invoiceNumber":"invoice number","dateRaw":"invoice date exactly as printed DD/MM/YYYY","amount":"total invoice value digits only","currency":"currency code e.g. INR USD GBP","buyerName":"buyer/consignee name","buyerAddress":"buyer/consignee full address one line","buyerCountry":"buyer/consignee country","buyerEmail":"buyer/consignee email if printed else empty string","description":"goods description max 8 words","portLoading":"port of loading if printed else empty string","portDestination":"port/destination/discharge country or city if printed else empty string","terms":"payment/delivery terms if printed else empty string","suggestedSbNumber":"if you see a shipping bill number or reference anywhere on this document put it here else empty string","items":[{"description":"goods description","hsn":"HSN code if printed else empty string","qty":"quantity digits only","unit":"unit e.g. PCS KG CTN","unitPrice":"unit price digits only","amount":"line total digits only"}]}',
   };
@@ -501,21 +502,24 @@ const ngSlotOf = att => {
 // Per-invoice status tag, same idea as the Atyahara SB status cycle.
 // New invoices start on Pending automatically; clicking rotates the tag.
 const NG_BANK_STATUS = {
-  pending:   { label: "Pending",           next: "submitted" },
-  submitted: { label: "Submitted to Bank", next: "done" },
-  done:      { label: "✓ Done",            next: "pending" },
+  pending:           { label: "Pending",           next: "packet_downloaded" },
+  packet_downloaded: { label: "Packet downloaded", next: "submitted" },
+  submitted:         { label: "Submitted to Bank", next: "done" },
+  done:              { label: "✓ Done",            next: "pending" },
 };
 // Legacy records may carry reconDone (old Mark-done button) or bankStatus
 // "cleared" (old third state) — both count as done.
 const ngStatusOf = inv =>
   (inv.reconDone || inv.bankStatus === "cleared" || inv.bankStatus === "done") ? "done"
-  : inv.bankStatus === "submitted" ? "submitted" : "pending";
+  : inv.bankStatus === "submitted" ? "submitted"
+  : inv.bankStatus === "packet_downloaded" ? "packet_downloaded" : "pending";
 const ngUid = () => Math.random().toString(36).slice(2, 10);
 
 /* Bank "SB Outstanding" report (EDPMS export from the bank portal).
    Kept deliberately thin: we only need the SB numbers still open at the
    bank, to tick off the ones we already hold documents for. */
 const NG_BANK_SB_KEY = "er-ng-bank-sbs-v1";
+const NG_REMIT_KEY = "er-ng-remittances-v1";
 const sbKey = v => String(v ?? "").replace(/\D/g, "").replace(/^0+/, "");
 const displaySbNumber = v => {
   const nums = String(v ?? "").match(/\d+/g);
@@ -589,8 +593,10 @@ const NG_CO = {
   tel: "+91 9619248797",
   email: "sejal.nikhilgems@gmail.com",
   gstin: "27AKFPJ0990D1ZB",
+  stateCode: "27",
   iec: "0315085886",
   bank: "Bank of India",
+  bankBranch: "Petil Hall Shopping Centre, Nepeansea Road., Mumbai - 400006",
   bankAcc: "006420110000451",
   swift: "BKIDINBBCMB",
   ifsc: "BKID0000064",
@@ -623,67 +629,164 @@ const ngWrapPdfText = (text, max = 78) => {
   if (ln) lines.push(ln);
   return lines.length ? lines : [""];
 };
+const ngMoney = n => (+n || 0).toFixed(2);
+const ngQty = v => {
+  const n = +v;
+  return Number.isFinite(n) ? String(Number(n.toFixed(4))).replace(/\.0+$/, "") : String(v || "");
+};
 // Render a commercial-invoice PDF straight from an invoice-module record with
-// pdf-lib. Mirrors renderBasicInvoicePacketPdf in nikhil-gems-v6.jsx so the
-// invoice in the packet matches the Invoices module. Returns PDF bytes.
+// pdf-lib. Mirrors the invoice module's print layout closely enough that packet
+// fallback invoices look like the actual invoice record, not a simplified stub.
 async function renderNgInvoicePdf(inv, buyers) {
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const co = NG_CO;
   const buyer = (buyers || []).find(b => b.id === inv.buyerId) || {};
+  const consignee = inv.consigneeSameAsBuyer === false
+    ? {
+        name: inv.consigneeName || buyer.name || inv.buyerName || inv.buyer || "",
+        address: inv.consigneeAddress || buyer.shippingAddress || buyer.billingAddress || buyer.address || inv.buyerAddress || "",
+        country: inv.consigneeCountry || buyer.country || inv.buyerCountry || "",
+      }
+    : buyer;
   const buyerName = buyer.name || inv.buyerName || inv.buyer || "";
   const buyerAddr = buyer.billingAddress || buyer.address || inv.buyerAddress || "";
   const buyerCountry = buyer.country || inv.buyerCountry || "";
   const portDischarge = inv.portDischarge || buyer.port || buyerCountry || "";
-  const subTotal = (inv.items || []).reduce((s, i) => s + (+i.amt || 0), 0);
-  const total = +inv.totalAmt || subTotal;
-  let page = pdf.addPage([595, 842]);
-  let y = 800;
-  const pdfSafe = txt => String(txt || "").replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ");
-  const draw = (txt, x, y0, size = 9, f = font, color = rgb(0, 0, 0)) => page.drawText(pdfSafe(txt), { x, y: y0, size, font: f, color });
-  const nextPage = () => { page = pdf.addPage([595, 842]); y = 800; };
-  const line = (txt, x = 40, size = 9, f = font) => { if (y < 50) nextPage(); draw(txt, x, y, size, f); y -= size + 6; };
-  draw(co.name, 40, y, 18, bold);
-  draw(inv.type === "proforma" ? "PROFORMA INVOICE" : "COMMERCIAL INVOICE", 360, y, 16, bold);
-  y -= 22;
-  co.address.split("\n").forEach(t => line(t, 40, 9));
-  line(`TEL: ${co.tel}   Email: ${co.email}`, 40, 9);
-  y -= 8;
-  line(`Invoice #: ${inv.invNo || ""}`, 40, 10, bold);
-  line(`Date: ${fd(inv.date)}    Terms: ${inv.terms || ""}    Currency: ${inv.currency || ""}`, 40, 9);
-  line(`Port of Lading: ${inv.portLading || ""}    Port of Discharge: ${portDischarge}`, 40, 9);
-  y -= 8;
-  line("Buyer / Consignee", 40, 10, bold);
-  line(buyerName, 40, 9, bold);
-  (buyerAddr || "").split("\n").forEach(t => line(t, 40, 9));
-  if (buyerCountry) line(buyerCountry, 40, 9);
-  y -= 6;
-  line("Items", 40, 10, bold);
-  line("#  Description                                      HSN        Qty       Rate        Amount", 40, 8, bold);
-  line("--------------------------------------------------------------------------------", 40, 8);
-  (inv.items || []).forEach((it, idx) => {
-    const desc = it.desc || it.acctDesc || it.customDesc || "Item";
-    const descLines = ngWrapPdfText(desc, 42);
-    const first = `${String(idx + 1).padEnd(3)}${descLines[0].padEnd(45).slice(0, 45)} ${(it.hsn || "").padEnd(9).slice(0, 9)} ${String(it.qty || "").padStart(7)} ${String(it.rate || "").padStart(10)} ${(+it.amt || 0).toFixed(2).padStart(12)}`;
-    line(first, 40, 8);
-    descLines.slice(1).forEach(d => line(`   ${d}`, 40, 8));
+  const items = [...(inv.items || [])].sort((a, b) => {
+    const aw = /freight|shipping|courier/i.test(a.desc || "") ? 1 : 0;
+    const bw = /freight|shipping|courier/i.test(b.desc || "") ? 1 : 0;
+    return aw - bw;
   });
-  line("--------------------------------------------------------------------------------", 40, 8);
-  line(`Sub Total: ${inv.currency || ""} ${subTotal.toFixed(2)}`, 360, 10, bold);
-  if (+inv.shippingCost > 0) line(`Shipping/Freight: ${inv.currency || ""} ${(+inv.shippingCost).toFixed(2)}`, 360, 9);
-  line(`Total: ${inv.currency || ""} ${(+total || 0).toFixed(2)}`, 360, 12, bold);
+  const freight = +inv.shippingCost || 0;
+  const subTotal = items.reduce((s, i) => s + (+i.amt || 0), 0);
+  const total = +inv.totalAmt || subTotal;
+  const totalTax = items.reduce((s, i) => s + (+i.amt || 0) * (+i.igst || 0) / 100, 0);
+  const currWords = { USD: "United States Dollar", EUR: "Euro", JPY: "Japanese Yen", GBP: "British Pound", AUD: "Australian Dollar", INR: "Indian Rupee" };
+  let page = pdf.addPage([595, 842]);
+  const pdfSafe = txt => String(txt || "").replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ");
+  const draw = (txt, x, y, size = 9, f = font, opts = {}) => page.drawText(pdfSafe(txt), { x, y, size, font: f, color: opts.color || rgb(0, 0, 0) });
+  const drawRight = (txt, right, y, size = 9, f = font) => draw(txt, right - f.widthOfTextAtSize(pdfSafe(txt), size), y, size, f);
+  const rect = (x, y, w, h, opts = {}) => page.drawRectangle({ x, y, width: w, height: h, borderColor: opts.border || rgb(0.78, 0.78, 0.78), borderWidth: opts.borderWidth ?? 0.6, color: opts.fill });
+  const hLine = (x, y, w) => page.drawLine({ start: { x, y }, end: { x: x + w, y }, thickness: 0.6, color: rgb(0.75, 0.75, 0.75) });
+  const textBlock = (text, x, y, size = 8.4, f = font, maxChars = 44, lineGap = 4) => {
+    let cy = y;
+    for (const raw of String(text || "").split("\n")) {
+      for (const ln of ngWrapPdfText(raw, maxChars)) {
+        draw(ln, x, cy, size, f);
+        cy -= size + lineGap;
+      }
+    }
+    return cy;
+  };
+  let stampImg = null;
+  try {
+    const sr = await fetch("/ng-sign-stamp.jpg");
+    if (sr.ok) stampImg = await pdf.embedJpg(await sr.arrayBuffer());
+  } catch {}
+
+  const left = 32, right = 563, width = right - left;
+  let y = 790;
+  draw(co.name, left, y, 15, bold);
+  drawRight(inv.type === "proforma" ? "PROFORMA INVOICE" : "COMMERCIAL INVOICE", right, y, 15, bold);
+  y -= 16;
+  textBlock(co.address, left, y, 7.4, font, 58, 3);
+  drawRight(`Invoice# ${inv.invNo || ""}`, right, y, 9, font);
+  y -= 28;
+  draw(`TEL: ${co.tel}`, left, y, 7.4);
+  draw(`E.Mail: ${co.email}`, left + 86, y, 7.4);
+  y -= 17;
+  hLine(left, y, width);
+  const rowH = 17;
+  const meta = [
+    [`Invoice Date : ${fd(inv.date)}`, `Port of Lading : ${inv.portLading || ""}`],
+    [`Terms : ${inv.terms || ""}`, `Port of Discharge : ${portDischarge}`],
+    [`Due Date : ${inv.dueDate ? fd(inv.dueDate) : ""}`, ""],
+  ];
+  for (const [a, b] of meta) {
+    y -= rowH;
+    hLine(left, y, width);
+    page.drawLine({ start: { x: left + width / 2, y: y + rowH }, end: { x: left + width / 2, y }, thickness: 0.6, color: rgb(0.75, 0.75, 0.75) });
+    const [al, av] = a.split(" : ");
+    const [bl, bv] = b.split(" : ");
+    draw(`${al} :`, left + 6, y + 5, 8, bold); draw(av || "", left + 82, y + 5, 8);
+    if (b) { draw(`${bl} :`, left + width / 2 + 6, y + 5, 8, bold); draw(bv || "", left + width / 2 + 96, y + 5, 8); }
+  }
   y -= 10;
-  line(`Total in words: ${inv.currency || ""} ${ngNumToWords(Math.round((+total || 0) * 100) / 100)}`, 40, 9);
-  y -= 4;
-  line(`IEC: ${co.iec}   GSTIN: ${co.gstin}   LUT ARN: ${inv.lutArn || co.lutArn}`, 40, 9);
-  line(`Bank: ${co.bank}   A/C: ${co.bankAcc}   Swift: ${co.swift}   IFSC: ${co.ifsc}`, 40, 9);
-  line(`For ${co.name}`, 420, 10, bold);
-  line("AUTHORIZED SIGNATORY", 420, 9, bold);
+  const partyH = 88;
+  rect(left, y - partyH, width, partyH);
+  rect(left, y - 18, width / 2, 18, { fill: rgb(0.94, 0.94, 0.94) });
+  rect(left + width / 2, y - 18, width / 2, 18, { fill: rgb(0.94, 0.94, 0.94) });
+  page.drawLine({ start: { x: left + width / 2, y }, end: { x: left + width / 2, y: y - partyH }, thickness: 0.6, color: rgb(0.75, 0.75, 0.75) });
+  draw("Buyer", left + 6, y - 12, 8.2, bold);
+  draw("Consignee", left + width / 2 + 6, y - 12, 8.2, bold);
+  textBlock(`${buyerName}\n${buyerAddr}\n${buyerCountry}`, left + 6, y - 34, 8, bold, 39, 4);
+  textBlock(`${consignee?.name || buyerName}\n${consignee?.address || buyerAddr}\n${consignee?.country || buyerCountry}`, left + width / 2 + 6, y - 34, 8, bold, 39, 4);
+  y -= partyH + 12;
+
+  const cols = [left, left + 22, left + 232, left + 292, left + 330, left + 368, left + 414, left + 472, right];
+  const headers = ["#", "Item & Description", "HSN", "Qty", "Rate", "IGST%", "IGST Amt", "Amount"];
+  const tableTop = y;
+  const headH = 18;
+  rect(left, y - headH, width, headH, { fill: rgb(0.94, 0.94, 0.94) });
+  headers.forEach((h, i) => draw(h, cols[i] + 4, y - 12, 7.5, bold));
+  cols.slice(1, -1).forEach(x => page.drawLine({ start: { x, y }, end: { x, y: y - headH }, thickness: 0.5, color: rgb(0.75, 0.75, 0.75) }));
+  y -= headH;
+  for (const [idx, it] of items.entries()) {
+    const desc = it.acctDesc || it.desc || "Item";
+    const custom = it.customDesc || "";
+    const lines = [...ngWrapPdfText(desc, 36), ...ngWrapPdfText(custom, 38).filter(Boolean)];
+    const rowH = Math.max(26, 14 + lines.length * 9);
+    if (y - rowH < 230) break;
+    rect(left, y - rowH, width, rowH);
+    cols.slice(1, -1).forEach(x => page.drawLine({ start: { x, y }, end: { x, y: y - rowH }, thickness: 0.5, color: rgb(0.75, 0.75, 0.75) }));
+    draw(String(idx + 1), cols[0] + 8, y - 15, 7.8);
+    let dy = y - 14;
+    draw(lines[0] || desc, cols[1] + 5, dy, 7.8);
+    dy -= 9;
+    for (const extra of lines.slice(1)) { draw(extra, cols[1] + 5, dy, 6.8, font, { color: rgb(0.32, 0.32, 0.32) }); dy -= 8; }
+    draw(it.hsn || "", cols[2] + 5, y - 15, 7.5);
+    drawRight(ngQty(it.qty), cols[4] - 6, y - 14, 7.5);
+    if (it.unit) drawRight(it.unit, cols[4] - 6, y - 23, 6.5);
+    drawRight(ngMoney(it.rate), cols[5] - 6, y - 15, 7.5);
+    draw(`${+it.igst || 0}%`, cols[5] + 9, y - 15, 7.5);
+    drawRight(ngMoney((+it.amt || 0) * (+it.igst || 0) / 100), cols[7] - 6, y - 15, 7.5);
+    drawRight(ngMoney(it.amt), cols[8] - 6, y - 15, 7.8, bold);
+    y -= rowH;
+  }
+  rect(left, y, width, tableTop - y);
+  y -= 14;
+  const words = `${currWords[inv.currency] || inv.currency} ${ngNumToWords(Math.round((+total || 0) * 100) / 100)}`;
+  draw("Total In Words", left, y, 8, bold);
+  y -= 12;
+  textBlock(words, left, y, 7.6, font, 58, 3);
+  const totalsX = 430;
+  draw("Sub Total", totalsX, y + 12, 8); drawRight(ngMoney(subTotal), right, y + 12, 8);
+  if (freight > 0) { draw("Shipping & Freight", totalsX, y, 8); drawRight(ngMoney(freight), right, y, 8); }
+  draw("Total", totalsX, y - 14, 10, bold); drawRight(`${inv.currency || ""} ${ngMoney(total)}`, right, y - 14, 10, bold);
+  y -= 40;
+  draw("Payment within 180 days ONLY in:", left, y, 8, bold);
+  y -= 12;
+  [co.bank, co.bankBranch, `A/C No. - ${co.bankAcc}`, `Swift Code - ${co.swift}; IFSC Code - ${co.ifsc}`].forEach(t => { draw(t, left, y, 7.5); y -= 12; });
+  y -= 8;
+  hLine(left, y, width);
+  y -= 16;
+  if (inv.notes) { draw("Notes", left, y, 8, bold); y -= 11; y = textBlock(inv.notes, left, y, 7.5, font, 92, 3); y -= 4; }
+  draw(`IEC NO : ${co.iec}    LUT ARN - ${inv.lutArn || co.lutArn}`, left, y, 7.5); y -= 12;
+  draw(`GSTIN: ${co.gstin}    STATE CODE: ${co.stateCode}`, left, y, 7.5); y -= 18;
+  textBlock("We declare that invoice shows the actual price of the goods described and that all particulars are true and Correct.", left, y, 7.5, font, 100, 3);
+  const sigX = 430;
+  drawRight(`FOR ${co.name.toUpperCase()}`, right, 112, 6.5, bold);
+  if (stampImg) {
+    const stampW = 102;
+    page.drawImage(stampImg, { x: right - stampW, y: 58, width: stampW, height: stampW * (stampImg.height / stampImg.width) });
+  }
+  drawRight("Authorized Signature", right, 38, 7.2);
   return await pdf.save();
 }
 
-function NgInvoiceSheet() {
+function NgInvoiceSheet({ renderInvoicePdf }) {
   const [invoices, setInvoices] = useState([]);
   const [buyers, setBuyers] = useState([]);
   const [q, setQ] = useState("");
@@ -699,19 +802,24 @@ function NgInvoiceSheet() {
   const [manualOpen, setManualOpen] = useState(false);
   const [manual, setManual] = useState(blankManualNgInvoiceSet);
   const [manualBusy, setManualBusy] = useState(false);
+  const [remittances, setRemittances] = useState([]);
+  const [remitModal, setRemitModal] = useState(null); // { inv } while the picker is open
+  const [remitBusy, setRemitBusy] = useState(false);
   const fileRef = useRef(null);
   const bankFileRef = useRef(null);
+  const remitFileRef = useRef(null);
   const pendingSlot = useRef(null);         // {inv, slot}
 
   const reload = useCallback(() => {
-    Promise.all([loadK(NG_INV_KEY), loadK(NG_BUYERS_KEY), loadK(NG_BANK_SB_KEY)]).then(([i, b, r]) => {
+    Promise.all([loadK(NG_INV_KEY), loadK(NG_BUYERS_KEY), loadK(NG_BANK_SB_KEY), loadK(NG_REMIT_KEY)]).then(([i, b, r, rem]) => {
       setInvoices(Array.isArray(i) ? i : []);
       setBuyers(Array.isArray(b) ? b : []);
       setBankRep(r && !Array.isArray(r) && Array.isArray(r.list) && r.list.length ? r : null);
+      setRemittances(Array.isArray(rem) ? rem : []);
     });
   }, []);
   useEffect(() => { reload(); }, [reload]);
-  useEffect(() => onCacheRefresh(keys => { if (keys.includes(NG_INV_KEY) || keys.includes(NG_BUYERS_KEY) || keys.includes(NG_BANK_SB_KEY)) reload(); }), [reload]);
+  useEffect(() => onCacheRefresh(keys => { if (keys.includes(NG_INV_KEY) || keys.includes(NG_BUYERS_KEY) || keys.includes(NG_BANK_SB_KEY) || keys.includes(NG_REMIT_KEY)) reload(); }), [reload]);
   useEffect(() => {
     if (!msg) return;
     const t = setTimeout(() => setMsg(null), 6000);
@@ -736,6 +844,18 @@ function NgInvoiceSheet() {
     if (!latest) throw new Error("Invoice not found — it may have been deleted");
     const list = await upsertVersionedItemK(NG_INV_KEY, patch(latest), { user: "Admin" });
     setInvoices(list);
+  };
+
+  const setBankStatus = async (inv, status) => {
+    const ts = new Date().toISOString();
+    await saveInvoicePatch(inv.id, latest => ({
+      ...latest,
+      bankStatus: status,
+      packetDownloadedAt: status === "packet_downloaded" ? (latest.packetDownloadedAt || ts) : latest.packetDownloadedAt,
+      bankSubmittedAt: status === "submitted" ? (latest.bankSubmittedAt || ts) : latest.bankSubmittedAt,
+      reconDone: status === "done",
+      reconDoneAt: status === "done" ? ts : null,
+    }));
   };
 
   const addManualSet = async () => {
@@ -860,6 +980,74 @@ function NgInvoiceSheet() {
     try { await saveInvoicePatch(inv.id, latest => ({ ...latest, attachments: (latest.attachments || []).filter(a => a.id !== att.id) })); }
     catch (err) { setMsg({ ok: false, text: `Remove failed: ${err?.message || "check connection"}` }); }
   };
+
+  // ── Inward remittance pool ─────────────────────────────────────────────────
+  // One remittance (an IRT credit from the bank) can be shared across several
+  // invoices: linking an invoice consumes an amount from its balance. Allocations
+  // live on the invoice record (_remittanceId/_remittanceAlloc) so they show in the
+  // Invoices module too and survive independent of the pool.
+  const saveRemittances = async next => { setRemittances(next); await saveK(NG_REMIT_KEY, next); };
+  const remitAllocated = rem => invoices.reduce((s, i) => s + (i._remittanceId === rem.id ? (+i._remittanceAlloc || 0) : 0), 0);
+  const remitRemaining = rem => Math.max(0, (+rem.amount || 0) - remitAllocated(rem));
+  const remitStatus = rem => rem.closed ? "closed" : (remitRemaining(rem) <= 0.01 ? "used" : "open");
+  const linkedRemit = inv => remittances.find(r => r.id === inv._remittanceId) || null;
+  const invLinkedList = rem => invoices.filter(i => i._remittanceId === rem.id);
+
+  const pickRemitFile = () => remitFileRef.current?.click();
+  const onRemitFile = async e => {
+    const file = e.target.files?.[0]; e.target.value = "";
+    if (!file || !remitModal) return;
+    setRemitBusy(true); setMsg(null);
+    try {
+      const safe = (file.name || "remittance").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 90) || "remittance";
+      const url = await uploadToStorage(`invoice-shipment-docs/ng/remittances/${Date.now()}-${ngUid()}-${safe}`, file);
+      let ex = {};
+      try { const { b64, mime } = await readB64WithMime(file); ex = await aiExtract(b64, "inward", mime) || {}; }
+      catch { /* extraction best-effort — the file is stored regardless */ }
+      const rem = {
+        id: ngUid(),
+        irt: String(ex.irt || "").trim(),
+        amount: +String(ex.amount || "").replace(/[^\d.]/g, "") || 0,
+        currency: String(ex.currency || remitModal.inv?.currency || "").toUpperCase(),
+        buyer: String(ex.buyer || "").trim(),
+        dateRaw: ex.dateRaw || "", date: ex.date || "",
+        closed: false,
+        attachment: { url, fileName: file.name, name: file.name, type: file.type || "", size: file.size || 0 },
+        createdAt: new Date().toISOString(),
+      };
+      await saveRemittances([rem, ...remittances]);
+      setMsg({ ok: true, text: `Remittance ${rem.irt || "(no IRT read)"} added${rem.amount ? ` · ${rem.currency} ${fmtAmt(rem.amount)}` : ""}. Now link an invoice to it below.` });
+    } catch (err) { setMsg({ ok: false, text: `Remittance upload failed: ${err?.message || "check connection"}` }); }
+    finally { setRemitBusy(false); }
+  };
+
+  const linkInvoiceToRemit = async (inv, rem, amount) => {
+    const alloc = Math.max(0, +amount || 0);
+    if (!alloc) { setMsg({ ok: false, text: "Enter an amount to allocate." }); return; }
+    setRemitBusy(true);
+    try {
+      await saveInvoicePatch(inv.id, latest => ({ ...latest, _remittanceId: rem.id, _remittanceAlloc: alloc, _remittanceIrt: rem.irt, _remittanceCurrency: rem.currency }));
+      setRemitModal(null);
+      setMsg({ ok: true, text: `${inv.invNo} linked to IRT ${rem.irt || "remittance"} · allocated ${rem.currency} ${fmtAmt(alloc)}.` });
+    } catch (err) { setMsg({ ok: false, text: `Link failed: ${err?.message || "check connection"}` }); }
+    finally { setRemitBusy(false); }
+  };
+  const unlinkRemit = async inv => {
+    setRemitBusy(true);
+    try {
+      await saveInvoicePatch(inv.id, latest => { const { _remittanceId, _remittanceAlloc, _remittanceIrt, _remittanceCurrency, ...rest } = latest; return rest; });
+      setMsg({ ok: true, text: `${inv.invNo} unlinked from its remittance.` });
+    } catch (err) { setMsg({ ok: false, text: `Unlink failed: ${err?.message || "check connection"}` }); }
+    finally { setRemitBusy(false); }
+  };
+  const toggleRemitClosed = async rem => saveRemittances(remittances.map(r => r.id === rem.id ? { ...r, closed: !r.closed } : r));
+  const deleteRemittance = async rem => {
+    const linked = invLinkedList(rem);
+    if (linked.length && !window.confirm(`${rem.irt || "This remittance"} is linked to ${linked.length} invoice(s). Delete it and unlink them?`)) return;
+    for (const inv of linked) await unlinkRemit(inv);
+    await saveRemittances(remittances.filter(r => r.id !== rem.id));
+  };
+  const updateRemitField = async (rem, patch) => saveRemittances(remittances.map(r => r.id === rem.id ? { ...r, ...patch } : r));
   // Pre-fill page 1 of the BOI "Export Bill Collection" form from the invoice +
   // company details, then download/open the 3-page form for printing & signing.
   const generateBoiDecl = async inv => {
@@ -904,8 +1092,8 @@ function NgInvoiceSheet() {
   };
 
   const packetDocsFor = bySlot => ([
-    // The invoice is auto-generated from the invoice-module record when no file
-    // has been uploaded, so it never blocks the packet (autoGen: true).
+    // The invoice is rendered from the existing invoice-module record when no
+    // invoice PDF has been uploaded, so it never blocks the packet (autoGen: true).
     { key: "invoice", label: "Invoice", att: bySlot.invoice?.[0], autoGen: true },
     { key: "hawb", label: "Shipping Label / HAWB / HBL", att: bySlot.hawb?.[0] },
     { key: "sbill", label: "Shipping Bill", att: bySlot.sbill?.[0] },
@@ -944,30 +1132,62 @@ function NgInvoiceSheet() {
     page.drawText(`${label}: unsupported file type`, { x: 40, y: 420, size: 12, font, color: rgb(0.75, 0.12, 0.12) });
   };
 
-  const downloadPacket = async (inv, bySlot) => {
-    const missing = missingPacketDocs(bySlot);
-    if (missing.length) {
-      setMsg({ ok: false, text: `Packet is missing: ${missing.join(", ")}.` });
-      return;
-    }
-    setBusy(`${inv.id}:packet`); setMsg(null);
-    let autoInvoice = false;
+  const stampLastPacketPage = async merged => {
     try {
-      const merged = await PDFDocument.create();
-      for (const d of packetDocsFor(bySlot)) {
-        if (d.att) { await appendAttToPacket(merged, d.att, d.label); continue; }
-        if (d.key === "invoice") {
-          // No invoice file uploaded — render one from the invoice-module record
-          // (the same data the Invoices module shows) and merge it in.
-          const invBytes = await renderNgInvoicePdf(inv, buyers);
-          const invDoc = await PDFDocument.load(invBytes, { ignoreEncryption: true });
-          const pages = await merged.copyPages(invDoc, invDoc.getPageIndices());
-          pages.forEach(p => merged.addPage(p));
-          autoInvoice = true;
-        }
+      const res = await fetch("/ng-sign-stamp.jpg");
+      if (!res.ok) return;
+      const stamp = await merged.embedJpg(await res.arrayBuffer());
+      const ratio = stamp.height / stamp.width;
+      const pages = merged.getPages();
+      const page = pages[pages.length - 1];
+      if (!page) return;
+      const { width, height } = page.getSize();
+      const stampW = Math.min(185, Math.max(120, width * 0.28));
+      const stampH = stampW * ratio;
+      page.drawImage(stamp, {
+        x: Math.max(24, width - stampW - 36),
+        y: Math.max(18, Math.min(34, height * 0.04)),
+        width: stampW,
+        height: stampH,
+      });
+    } catch (e) {
+      console.warn("Packet stamp skipped:", e?.message || e);
+    }
+  };
+
+  const buildPacketBlob = async (inv, bySlot) => {
+    const missing = missingPacketDocs(bySlot);
+    if (missing.length > 1) {
+      throw new Error(`Packet is missing: ${missing.join(", ")}.`);
+    }
+    let autoInvoice = false;
+    const merged = await PDFDocument.create();
+    for (const d of packetDocsFor(bySlot)) {
+      if (d.att) { await appendAttToPacket(merged, d.att, d.label); continue; }
+      if (d.key === "invoice") {
+        // No invoice PDF uploaded — render the existing invoice-module record
+        // (the same data the Invoices module shows) and merge it in.
+          const invBytes = renderInvoicePdf
+            ? await renderInvoicePdf(inv, buyers, "ng")
+            : await renderNgInvoicePdf(inv, buyers);
+        const invDoc = await PDFDocument.load(invBytes, { ignoreEncryption: true });
+        const pages = await merged.copyPages(invDoc, invDoc.getPageIndices());
+        pages.forEach(p => merged.addPage(p));
+        autoInvoice = true;
       }
-      const bytes = await merged.save();
-      const blob = new Blob([bytes], { type: "application/pdf" });
+    }
+    await stampLastPacketPage(merged);
+    const bytes = await merged.save();
+    return { blob: new Blob([bytes], { type: "application/pdf" }), autoInvoice, missing };
+  };
+
+  const packetSuccessText = (action, inv, autoInvoice, missing) =>
+    `Packet ${action} for ${inv.invNo}.${autoInvoice ? " Invoice rendered from the linked Invoice module record." : ""}${missing.length === 1 ? ` Missing: ${missing[0]}.` : ""}`;
+
+  const downloadPacket = async (inv, bySlot) => {
+    setBusy(`${inv.id}:packet`); setMsg(null);
+    try {
+      const { blob, autoInvoice, missing } = await buildPacketBlob(inv, bySlot);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       const safeInv = (inv.invNo || "invoice").replace(/[^a-zA-Z0-9._-]+/g, "-");
@@ -977,18 +1197,60 @@ function NgInvoiceSheet() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setMsg({ ok: true, text: `Packet downloaded for ${inv.invNo}.${autoInvoice ? " Invoice was auto-generated from the invoice record." : ""}` });
+      if (ngStatusOf(inv) === "pending") await setBankStatus(inv, "packet_downloaded");
+      setMsg({ ok: true, text: packetSuccessText("downloaded", inv, autoInvoice, missing) });
     } catch (err) {
       setMsg({ ok: false, text: `Packet download failed: ${err?.message || "check documents"}` });
+    } finally { setBusy(null); }
+  };
+
+  const printPacket = async (inv, bySlot) => {
+    setBusy(`${inv.id}:print`); setMsg(null);
+    try {
+      const { blob, autoInvoice, missing } = await buildPacketBlob(inv, bySlot);
+      const url = URL.createObjectURL(blob);
+      const frame = document.createElement("iframe");
+      frame.style.position = "fixed";
+      frame.style.right = "0";
+      frame.style.bottom = "0";
+      frame.style.width = "0";
+      frame.style.height = "0";
+      frame.style.border = "0";
+      frame.src = url;
+      frame.onload = () => {
+        try {
+          frame.contentWindow?.focus();
+          frame.contentWindow?.print();
+        } catch {}
+      };
+      document.body.appendChild(frame);
+      setTimeout(() => { frame.remove(); URL.revokeObjectURL(url); }, 60000);
+      if (ngStatusOf(inv) === "pending") await setBankStatus(inv, "packet_downloaded");
+      setMsg({ ok: true, text: packetSuccessText("opened for print", inv, autoInvoice, missing) });
+    } catch (err) {
+      setMsg({ ok: false, text: `Packet print failed: ${err?.message || "check documents"}` });
     } finally { setBusy(null); }
   };
 
   const cycleStatus = async inv => {
     const next = NG_BANK_STATUS[ngStatusOf(inv)].next;
     try {
-      await saveInvoicePatch(inv.id, latest => ({ ...latest, bankStatus: next, reconDone: next === "done", reconDoneAt: next === "done" ? new Date().toISOString() : null }));
+      await setBankStatus(inv, next);
       if (next === "done" && !(inv.attachments || []).some(a => ngSlotOf(a) === "brc")) setBrcPrompt(inv);
     } catch (err) { setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` }); }
+  };
+
+  const handlePacketClick = async (inv, bySlot) => {
+    if (ngStatusOf(inv) === "packet_downloaded") {
+      try {
+        await setBankStatus(inv, "submitted");
+        setMsg({ ok: true, text: `${inv.invNo} marked submitted to bank.` });
+      } catch (err) {
+        setMsg({ ok: false, text: `Could not save: ${err?.message || "check connection"}` });
+      }
+      return;
+    }
+    await downloadPacket(inv, bySlot);
   };
 
   const onBankFile = async e => {
@@ -1075,6 +1337,34 @@ function NgInvoiceSheet() {
   const th = { padding: "9px 10px", fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}`, background: C.card, position: "sticky", top: 0, zIndex: 1 };
   const td = { padding: "9px 10px", fontSize: 12.5, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "top" };
 
+  // Inward-remittance cell: a chip when linked (IRT + allocated), else a Select
+  // button that opens the pool picker.
+  const InwardCell = ({ inv }) => {
+    const rem = linkedRemit(inv);
+    if (rem) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 118 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.greenBg, border: `1px solid ${C.green}`, borderRadius: 6, padding: "2px 7px", fontSize: 11, maxWidth: 190 }}>
+            {rem.attachment?.url
+              ? <a href={rem.attachment.url} target="_blank" rel="noreferrer" title={rem.attachment.fileName || rem.irt} style={{ color: C.green, fontWeight: 700, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>💵 {rem.irt || "IRT"}</a>
+              : <span style={{ color: C.green, fontWeight: 700, flex: 1 }}>💵 {rem.irt || "IRT"}</span>}
+            <button onClick={() => unlinkRemit(inv)} title="Unlink this remittance" disabled={remitBusy}
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+          </span>
+          <span style={{ fontSize: 10, color: C.inkFaint, whiteSpace: "nowrap" }}>
+            {rem.currency} {fmtAmt(inv._remittanceAlloc)} · {rem.currency} {fmtAmt(remitRemaining(rem))} left
+          </span>
+        </div>
+      );
+    }
+    return (
+      <button onClick={() => setRemitModal({ inv })} disabled={remitBusy}
+        style={{ background: "none", border: `1px dashed ${C.amber}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: "pointer", color: C.amber, textAlign: "left", whiteSpace: "nowrap", minWidth: 118 }}>
+        ＋ Select / upload
+      </button>
+    );
+  };
+
   const DocCell = ({ inv, slot, atts }) => {
     const uploading = busy === `${inv.id}:${slot.key}`;
     const genBusy = busy === `${inv.id}:decl-gen`;
@@ -1109,10 +1399,98 @@ function NgInvoiceSheet() {
     );
   };
 
+  // Modal: pick or upload the inward remittance for one invoice.
+  const RemitPicker = () => {
+    const inv = remitModal.inv;
+    const invCur = String(inv.currency || "").toUpperCase();
+    const invAmt = +inv.totalAmt || 0;
+    const [allocDraft, setAllocDraft] = useState({});
+    const mine = remittances
+      .filter(r => String(r.currency || "").toUpperCase() === invCur || !r.currency)
+      .sort((a, b) => { const rank = s => ({ open: 0, used: 1, closed: 2 }[remitStatus(s)]); return rank(a) - rank(b) || (b.createdAt || "").localeCompare(a.createdAt || ""); });
+    const other = remittances.filter(r => String(r.currency || "").toUpperCase() !== invCur && r.currency);
+    const badge = st => ({ open: { t: "Open", c: C.green, bg: C.greenBg }, used: { t: "Used up", c: C.inkMid, bg: C.card }, closed: { t: "Closed", c: C.red, bg: C.redBg } }[st]);
+
+    const row = rem => {
+      const st = remitStatus(rem), rem_ = remitRemaining(rem), b = badge(st);
+      const linkable = st === "open";
+      const draft = allocDraft[rem.id] != null ? allocDraft[rem.id] : String(Math.min(rem_, invAmt || rem_) || "");
+      return (
+        <div key={rem.id} style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 12px", marginBottom: 8, background: st === "open" ? C.surface : C.card, opacity: st === "open" ? 1 : .82 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>
+                💵 {rem.irt || "(no IRT)"} <span style={{ background: b.bg, color: b.c, borderRadius: 999, padding: "1px 8px", fontSize: 10, fontWeight: 700, marginLeft: 6 }}>{b.t}</span>
+              </div>
+              <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 3 }}>
+                {rem.buyer || "—"}{rem.dateRaw ? ` · ${rem.dateRaw}` : ""}
+                {rem.attachment?.url && <> · <a href={rem.attachment.url} target="_blank" rel="noreferrer" style={{ color: C.blue }}>file</a></>}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>
+                {rem.currency} {fmtAmt(rem.amount)} total · <b style={{ color: rem_ > 0.01 ? C.green : C.inkFaint }}>{rem.currency} {fmtAmt(rem_)} left</b>
+                {invLinkedList(rem).length > 0 && ` · ${invLinkedList(rem).length} invoice(s)`}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button onClick={() => toggleRemitClosed(rem)} title={rem.closed ? "Re-open so it can take more invoices" : "Close so no further invoices can use it"}
+                style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", fontSize: 10.5, fontWeight: 700, color: C.inkMid, cursor: "pointer" }}>
+                {rem.closed ? "Re-open" : "Close"}
+              </button>
+              <button onClick={() => deleteRemittance(rem)} title="Delete remittance" style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 13 }}>🗑</button>
+            </div>
+          </div>
+          {linkable && (
+            <div style={{ display: "flex", gap: 7, alignItems: "center", marginTop: 9, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: C.inkMid }}>Allocate</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{rem.currency}</span>
+              <input type="number" step="0.01" value={draft} onChange={e => setAllocDraft(s => ({ ...s, [rem.id]: e.target.value }))}
+                style={{ width: 110, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 8px", fontSize: 12 }} />
+              <button onClick={() => linkInvoiceToRemit(inv, rem, +draft)} disabled={remitBusy || !(+draft > 0)}
+                style={{ background: C.ink, border: `1px solid ${C.ink}`, borderRadius: 6, padding: "5px 12px", fontSize: 11.5, fontWeight: 800, color: "#fff", cursor: remitBusy || !(+draft > 0) ? "default" : "pointer", opacity: remitBusy || !(+draft > 0) ? .6 : 1 }}>
+                Link {inv.invNo}
+              </button>
+              {+draft > rem_ + 0.01 && <span style={{ fontSize: 10.5, color: C.amber }}>Over the {rem.currency} {fmtAmt(rem_)} balance</span>}
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <div onClick={() => !remitBusy && setRemitModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 4000, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "40px 16px", overflowY: "auto" }}>
+        <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 12, width: "100%", maxWidth: 560, boxShadow: "0 20px 60px rgba(0,0,0,.25)", overflow: "hidden" }}>
+          <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>Inward remittance · {inv.invNo}</div>
+              <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>{buyerName(inv)} · {invCur} {fmtAmt(invAmt)} — link this invoice to a remittance, or upload a new one.</div>
+            </div>
+            <button onClick={() => setRemitModal(null)} disabled={remitBusy} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.inkFaint, lineHeight: 1 }}>×</button>
+          </div>
+          <div style={{ padding: "14px 20px", maxHeight: "62vh", overflowY: "auto" }}>
+            <button onClick={pickRemitFile} disabled={remitBusy}
+              style={{ width: "100%", background: C.amberBg, border: `1px dashed ${C.amber}`, borderRadius: 9, padding: "11px", fontSize: 12.5, fontWeight: 800, color: C.amber, cursor: remitBusy ? "default" : "pointer", marginBottom: 14 }}>
+              {remitBusy ? "⟳ Reading remittance…" : "⬆ Upload new remittance (reads IRT, amount, currency, buyer)"}
+            </button>
+            {mine.length === 0
+              ? <div style={{ fontSize: 12, color: C.inkFaint, textAlign: "center", padding: "14px 0" }}>No {invCur} remittances yet — upload one above.</div>
+              : mine.map(row)}
+            {other.length > 0 && (
+              <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 10, paddingTop: 8, borderTop: `1px dashed ${C.border}` }}>
+                {other.length} remittance(s) in another currency are hidden — a {invCur} invoice can only link to a {invCur} remittance.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div>
       <input ref={fileRef} type="file" accept="application/pdf,image/*" style={{ display: "none" }} onChange={onFile} />
       <input ref={bankFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={onBankFile} />
+      <input ref={remitFileRef} type="file" accept="application/pdf,image/*" style={{ display: "none" }} onChange={onRemitFile} />
+      {remitModal && <RemitPicker />}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, color: C.ink, letterSpacing: "-.01em" }}>Invoice Sets</div>
@@ -1258,6 +1636,7 @@ function NgInvoiceSheet() {
               const done = st === "done";
               const packetMissing = missingPacketDocs(bySlot);
               const packetBusy = busy === `${inv.id}:packet`;
+              const printBusy = busy === `${inv.id}:print`;
               return (
                 <tr key={inv.id} style={{ background: done || (missing.length === 0 && pay.t === "✓ Received") ? C.greenBg : "transparent", opacity: done ? .72 : 1 }}>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
@@ -1293,11 +1672,11 @@ function NgInvoiceSheet() {
                   <td style={{ ...td, whiteSpace: "nowrap", fontWeight: 600 }}>{inv.currency || ""} {fmtAmt(inv.totalAmt)}</td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     {(() => {
-                      const tone = done ? { bg: C.greenBg, c: C.green } : st === "submitted" ? { bg: C.blueBg, c: C.blue } : { bg: C.amberBg, c: C.amber };
+                      const tone = done ? { bg: C.greenBg, c: C.green } : st === "submitted" ? { bg: C.blueBg, c: C.blue } : st === "packet_downloaded" ? { bg: C.card, c: C.inkMid } : { bg: C.amberBg, c: C.amber };
                       return (
                         <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-start" }}>
                           <button className="er-status" onClick={() => cycleStatus(inv)}
-                            title={`Click to change: Pending → Submitted to Bank → Done${done && inv.reconDoneAt ? ` (done on ${inv.reconDoneAt.slice(0, 10)})` : ""}`}
+                            title={`Click to change: Pending → Packet downloaded → Submitted to Bank → Done${done && inv.reconDoneAt ? ` (done on ${inv.reconDoneAt.slice(0, 10)})` : ""}`}
                             style={{ background: tone.bg, border: `1px solid ${tone.c}`, color: tone.c, borderRadius: 999, padding: "3px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                             <span key={st}>{NG_BANK_STATUS[st].label}</span>
                           </button>
@@ -1308,7 +1687,7 @@ function NgInvoiceSheet() {
                   </td>
                   {NG_DOC_SLOTS.map(s => (
                     <td key={s.key} style={td}>
-                      <DocCell inv={inv} slot={s} atts={bySlot[s.key]} />
+                      {s.key === "inward" ? <InwardCell inv={inv} /> : <DocCell inv={inv} slot={s} atts={bySlot[s.key]} />}
                       {s.key === "sbill" && inv.sbNo && (
                         <div title={bankRep ? (bankDue.has(sbKey(inv.sbNo)) ? "This SB is still outstanding on the bank report" : "Not on the bank outstanding report (as of import) — cleared") : "SB number read from the uploaded document"}
                           style={{ marginTop: 4, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", color: !bankRep ? C.inkFaint : bankDue.has(sbKey(inv.sbNo)) ? C.amber : C.green }}>
@@ -1318,14 +1697,21 @@ function NgInvoiceSheet() {
                     </td>
                   ))}
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
-                    <button onClick={() => downloadPacket(inv, bySlot)} disabled={packetBusy || packetMissing.length > 0}
-                      title={packetMissing.length ? `Missing: ${packetMissing.join(", ")}` : "Download combined PDF: invoice (auto-generated if not uploaded) + shipping label + shipping bill + BOI declaration"}
-                      style={{ background: packetMissing.length ? C.card : C.ink, border: `1px solid ${packetMissing.length ? C.border : C.ink}`, borderRadius: 7, padding: "4px 9px", fontSize: 10.5, fontWeight: 800, color: packetMissing.length ? C.inkFaint : "#fff", cursor: packetBusy || packetMissing.length ? "default" : "pointer", whiteSpace: "nowrap", opacity: packetBusy ? .65 : 1 }}>
-                      {packetBusy ? "Building..." : "Download packet"}
-                    </button>
+                    <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                      <button onClick={() => handlePacketClick(inv, bySlot)} disabled={packetBusy || printBusy || packetMissing.length > 1}
+                        title={packetMissing.length > 1 ? `Missing: ${packetMissing.join(", ")}` : packetMissing.length === 1 ? `Download anyway. Missing: ${packetMissing[0]}` : st === "packet_downloaded" ? "Mark this packet as submitted to bank" : "Download combined PDF: invoice from the existing invoice record + shipping label + shipping bill + BOI declaration"}
+                        style={{ background: packetMissing.length > 1 ? C.card : C.ink, border: `1px solid ${packetMissing.length > 1 ? C.border : C.ink}`, borderRadius: 7, padding: "4px 9px", fontSize: 10.5, fontWeight: 800, color: packetMissing.length > 1 ? C.inkFaint : "#fff", cursor: packetBusy || printBusy || packetMissing.length > 1 ? "default" : "pointer", whiteSpace: "nowrap", opacity: packetBusy ? .65 : 1 }}>
+                        {packetBusy ? "Building..." : st === "packet_downloaded" ? "Submit to bank" : "Download packet"}
+                      </button>
+                      <button onClick={() => printPacket(inv, bySlot)} disabled={packetBusy || printBusy || packetMissing.length > 1}
+                        title={packetMissing.length > 1 ? `Missing: ${packetMissing.join(", ")}` : packetMissing.length === 1 ? `Print anyway. Missing: ${packetMissing[0]}` : "Print packet without downloading"}
+                        style={{ background: packetMissing.length > 1 ? C.card : C.surface, border: `1px solid ${packetMissing.length > 1 ? C.border : C.ink}`, borderRadius: 7, padding: "4px 8px", fontSize: 10.5, fontWeight: 800, color: packetMissing.length > 1 ? C.inkFaint : C.ink, cursor: packetBusy || printBusy || packetMissing.length > 1 ? "default" : "pointer", whiteSpace: "nowrap", opacity: printBusy ? .65 : 1 }}>
+                        {printBusy ? "Opening..." : "Print"}
+                      </button>
+                    </div>
                     {packetMissing.length > 0 && (
                       <div style={{ marginTop: 4, color: C.inkFaint, fontSize: 10, maxWidth: 130, whiteSpace: "normal", lineHeight: 1.25 }}>
-                        Missing {packetMissing.length}
+                        Missing {packetMissing.length}{packetMissing.length === 1 ? " allowed" : ""}
                       </div>
                     )}
                   </td>
@@ -1366,7 +1752,7 @@ function NgInvoiceSheet() {
   );
 }
 
-export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
+export default function App({ company = "atyahara", onCreateInvoiceFromSb, renderInvoicePdf }) {
   const [data, setData]         = useState({fircs:[],shippingBills:[],invoices:[]});
   const dataRef                  = useRef(data);
   const [loading, setLoading]   = useState(true);
@@ -1803,7 +2189,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb }) {
           </div>
         )}
         {view!=="ngsheet"&&<HowItWorks setView={setView}/>}
-        {view==="ngsheet"  && company==="nikhil" && <NgInvoiceSheet/>}
+        {view==="ngsheet"  && company==="nikhil" && <NgInvoiceSheet renderInvoicePdf={renderInvoicePdf}/>}
         {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={openSheet}/>}
         {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={openSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
         {view==="invoices" && <InvoicesView data={data} onAddInvoice={addInvoice} onPatchInvoice={patchInvoice} onDeleteInvoice={deleteInvoice} onApprove={approveInvoice} showPdf={showPdf} onCreateInvoiceFromSb={onCreateInvoiceFromSb}/>}
