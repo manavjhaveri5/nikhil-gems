@@ -487,6 +487,10 @@ const NG_DOC_SLOTS = [
   // uploads land in this slot too (incl. rows uploaded before the merge).
   { key: "hawb",  label: "HAWB / HBL",      match: /hawb|awb|hbl|airway|air\s*way|bill\s*of\s*lading|label/i },
   { key: "decl",  label: "BOI Declaration", match: /declaration|\bboi\b/i },
+  // Inward remittance advice / FIRC — proof the export payment came in. Arrives
+  // after shipping, so it's excluded from the "missing docs" completeness check
+  // below (like the BOI declaration), and just offers an upload slot + column.
+  { key: "inward", label: "Inward Remittance", match: /inward|\bfirc\b|remittance|inward\s*advice/i },
 ];
 const ngSlotOf = att => {
   const hay = `${att?.label || ""} ${att?.fileName || att?.name || ""}`;
@@ -1043,7 +1047,7 @@ function NgInvoiceSheet() {
       (i.attachments || []).forEach(a => { const k = ngSlotOf(a); (bySlot[k] = bySlot[k] || []).push(a); });
       // BOI declaration is generated on demand (not uploaded/stored), so it
       // doesn't count toward "missing docs" / "fully documented".
-      const missing = NG_DOC_SLOTS.filter(s => s.key !== "decl" && !(bySlot[s.key] || []).length);
+      const missing = NG_DOC_SLOTS.filter(s => s.key !== "decl" && s.key !== "inward" && !(bySlot[s.key] || []).length);
       return { inv: i, bySlot, missing };
     })
     .filter(r => !missingOnly || (r.missing.length > 0 && ngStatusOf(r.inv) !== "done"))
