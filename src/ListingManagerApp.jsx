@@ -6601,7 +6601,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
         </div>
       </div>
 
-      {!!error && !products.length && /credential|token|store|domain|unauthor|401|403|not set/i.test(String(error)) && (
+      {(!creds?.token || (!!error && /credential|token|store|domain|unauthor|401|403|not set/i.test(String(error)))) && (
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
           <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: platform.color, marginBottom: 10 }}>Connect {storeName} <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: C.inkFaint }}>· override (defaults to server credentials)</span></div>
           <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr auto", gap: 10, alignItems: "end" }}>
