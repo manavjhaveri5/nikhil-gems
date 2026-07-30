@@ -2443,6 +2443,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     return plausibleEtsyFees(+order.etsy_fees || +order.order_fees || 0, gross) && +order.etsy_fee_version >= 7;
   };
   const orderEarnedValue = order => {
+    // Direct (non-Etsy) sales have no marketplace fees, so "earned" is the order total.
+    if (!isEtsyOrder(order)) return Math.max(0, +order.order_total || +order.sale_price || 0);
     const explicit = +order.etsy_net;
     const source = String(order?.etsy_fee_source || "");
     if (Number.isFinite(explicit) && explicit > 0 && source !== "gross_fallback" && source !== "fees_missing") return explicit;
@@ -2701,6 +2703,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     }
   };
   const isEtsyOrder = o => o.platform === "etsy" || !!o.etsy_receipt_id || String(o.order_number || "").startsWith("ETSY-");
+  // Atyahara Shopify orders get the same 4-step fulfilment as Etsy. etsyReceiptId falls
+  // back to platform_order_id, so it doubles as the stable invoice key for these too.
+  const isAtyahOrder  = o => o.platform === "shopify_aty";
+  const isFulfilOrder = o => isEtsyOrder(o) || isAtyahOrder(o);
   const etsyReceiptId = o => o.etsy_receipt_id || o.platform_order_id || String(o.order_number || "").replace(/^ETSY-/, "").split("-")[0];
   const invoiceDraft = o => invoiceState[etsyReceiptId(o)] || { loading: false, error: "", success: "" };
   const trackingDraft = o => etsyTracking[o.id] || {
@@ -2770,6 +2776,49 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       return true;
     } catch (e) {
       updateTrackingDraft(o, { loading: false, error: e.message || "Could not complete Etsy order", success: "" });
+      return false;
+    }
+  };
+  // Step 1 for Shopify stores: push a real fulfilment (with tracking) to Shopify,
+  // which emails the customer, then mark the order shipped locally. Mirrors
+  // completeEtsyOrder but hits the store's Admin API via our fulfill_order endpoint.
+  const completeShopifyOrder = async o => {
+    const draft = trackingDraft(o);
+    const trackingCode = String(draft.tracking_code || "").trim();
+    const carrierName  = String(draft.carrier_name || "other").trim();
+    const storeKey = o.platform === "shopify_earth" ? "earth" : "atyahara";
+    if (!o.platform_order_id) { updateTrackingDraft(o, { error: "Missing Shopify order id.", success: "" }); return; }
+    updateTrackingDraft(o, { loading: true, error: "", success: "" });
+    try {
+      const creds = (await loadK(`ng-shopify-creds-${storeKey}`)) || (storeKey === "atyahara" ? await loadK("ng-shopify-creds-v1") : null);
+      const body = {
+        action: "fulfill_order",
+        store_key: storeKey,
+        order_id: o.platform_order_id,
+        tracking_number: trackingCode,
+        tracking_company: carrierName && carrierName !== "other" ? carrierName : "",
+        tracking_url: draft.tracking_url || "",
+        notify: true,
+      };
+      if (creds?.token && creds?.store) { body.shopStore = creds.store; body.shopToken = creds.token; }
+      const r = await fetch("/api/shopify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.error || "Could not fulfil on Shopify");
+      const nowIso = new Date().toISOString();
+      await patchOrder(o, {
+        status: "shipped",
+        shipped_at: o.shipped_at || nowIso,
+        tracking_code: trackingCode || o.tracking_code || "",
+        tracking_number: trackingCode || o.tracking_number || "",
+        carrier_name: carrierName,
+        ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
+        _shipStepUndone: false,
+      });
+      updateTrackingDraft(o, { loading: false, error: "", success: d.already_fulfilled ? "Already fulfilled on Shopify" : "Fulfilled on Shopify", tracking_code: trackingCode, carrier_name: carrierName });
+      return true;
+    } catch (e) {
+      updateTrackingDraft(o, { loading: false, error: e.message || "Could not fulfil on Shopify", success: "" });
       return false;
     }
   };
@@ -3380,7 +3429,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
           <div onMouseDown={() => setTrackingModalOrder(null)} style={{ position: "fixed", inset: 0, zIndex: 900, display: "grid", placeItems: "center", padding: 18, background: "rgba(24,19,12,.46)" }}>
             <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(100%, 520px)", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 24px 70px rgba(0,0,0,.24)", padding: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start", marginBottom: 18 }}>
-                <div><div style={{ fontSize: 18, fontWeight: 850, color: C.ink }}>Ship on Etsy</div><div style={{ marginTop: 4, fontSize: 12, color: C.inkMid }}>Etsy will mark this receipt shipped and email the buyer.</div></div>
+                <div><div style={{ fontSize: 18, fontWeight: 850, color: C.ink }}>{isAtyahOrder(order) ? "Ship & fulfil on Shopify" : "Ship on Etsy"}</div><div style={{ marginTop: 4, fontSize: 12, color: C.inkMid }}>{isAtyahOrder(order) ? "Shopify will mark this order fulfilled and email the buyer tracking." : "Etsy will mark this receipt shipped and email the buyer."}</div></div>
                 <button onClick={() => setTrackingModalOrder(null)} aria-label="Close" style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
               </div>
               <div style={{ display: "grid", gap: 11 }}>
@@ -3395,7 +3444,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
               {draft.error && <div style={{ marginTop: 12, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{draft.error}</div>}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 18 }}>
                 <button onClick={() => setTrackingModalOrder(null)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7, padding: "9px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Cancel</button>
-                <button onClick={async () => { if (await completeEtsyOrder(order)) setTrackingModalOrder(null); }} disabled={!!draft.loading} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 12, fontWeight: 850, cursor: draft.loading ? "wait" : "pointer", opacity: draft.loading ? .7 : 1 }}>{draft.loading ? "Sending…" : "Send to Etsy & complete"}</button>
+                <button onClick={async () => { if (await (isAtyahOrder(order) ? completeShopifyOrder(order) : completeEtsyOrder(order))) setTrackingModalOrder(null); }} disabled={!!draft.loading} style={{ background: isAtyahOrder(order) ? (PLATFORMS.find(x => x.key === "shopify_aty")?.color || "#6B3FA0") : "#F56400", color: "#fff", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 12, fontWeight: 850, cursor: draft.loading ? "wait" : "pointer", opacity: draft.loading ? .7 : 1 }}>{draft.loading ? "Sending…" : isAtyahOrder(order) ? "Fulfil & notify buyer" : "Send to Etsy & complete"}</button>
               </div>
             </div>
           </div>
@@ -3613,9 +3662,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         {(order.variations || []).filter(v => v && v.value).map(v => `${v.name ? v.name + ": " : ""}${v.value}`).join(" · ")}
                       </div>
                     )}
-                    {isEtsyOrder(order) && !cancelled && (() => {
+                    {isFulfilOrder(order) && !cancelled && (() => {
                       const steps = [
-                        ["🚚", "Shipped on Etsy", shipped],
+                        ["🚚", isAtyahOrder(order) ? "Shipped" : "Shipped on Etsy", shipped],
                         ["📦", "Stock allocated", !!order.linked_stock_id],
                         ["🧾", "Sales invoice", !!order._atInvoiceNo],
                         ["🏷️", "NG invoice", !!order._ngInvoiceNo],
@@ -3653,13 +3702,13 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         <button onClick={() => restoreOrder(order)} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Restore order</button>
                       </div>
                     )}
-                    {!cancelled && isEtsyOrder(order) && (
+                    {!cancelled && isFulfilOrder(order) && (
                       (() => {
-                        const ETSY = "#F56400";
+                        const ETSY = isAtyahOrder(order) ? (p.color || "#6B3FA0") : "#F56400";
                         const stages = [
-                          ["Ship on Etsy", "Send carrier + tracking", shipped],
+                          [isAtyahOrder(order) ? "Ship on Shopify" : "Ship on Etsy", "Send carrier + tracking", shipped],
                           ["Allocate stock", "Choose item & quantity", !!order.linked_stock_id],
-                          ["Sales invoice", "Invoice the Etsy buyer", !!order._atInvoiceNo],
+                          ["Sales invoice", isAtyahOrder(order) ? "Invoice the buyer" : "Invoice the Etsy buyer", !!order._atInvoiceNo],
                           ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
                         ];
                         const firstOpen = stages.findIndex(stage => !stage[2]);
@@ -3753,8 +3802,30 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         </div>
                       </div>
                     )}
+                    {!cancelled && isAtyahOrder(order) && selStep === 0 && (
+                      <div style={{ background: C.surface, border: `1.5px solid ${shipped ? C.green : (p.color || "#6B3FA0")}`, borderLeft: `4px solid ${shipped ? C.green : (p.color || "#6B3FA0")}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{shipped ? "Fulfilled on Shopify" : "Ship & fulfil on Shopify"}</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{shipped ? "Marked fulfilled on Shopify; the buyer was emailed tracking." : "Add a carrier & tracking number — Shopify marks it fulfilled and emails the buyer."}</div>
+                          </div>
+                          <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>{order.order_number}</div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
+                          <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 170 }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 13, padding: "8px 36px 8px 10px", borderRadius: 8, marginTop: 4 }} /><span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
+                          {shipped
+                            ? <>
+                                <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>✓ {order.tracking_code || order.tracking_number || "Fulfilled"}</span>
+                                {/^https?:\/\//i.test(order.tracking_url || "") && <a href={order.tracking_url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, fontSize: 12, fontWeight: 750, textDecoration: "none" }}>Open tracking link</a>}
+                                <button onClick={() => setTrackingModalOrder(order)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Update tracking</button>
+                              </>
+                            : <button onClick={() => setTrackingModalOrder(order)} style={{ background: (p.color || "#6B3FA0"), color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking & ship</button>}
+                        </div>
+                        {trackingDraft(order).error && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{trackingDraft(order).error}</div>}
+                      </div>
+                    )}
                     {/* Step 2 stays lightweight: allocation only. The invoice commits the stock movement later. */}
-                    {!cancelled && isEtsyOrder(order) && selStep === 1 && (
+                    {!cancelled && isFulfilOrder(order) && selStep === 1 && (
                       <div style={{ background: C.surface, border: `1.5px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderLeft: `4px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
                           <div style={{ minWidth: 0 }}>
@@ -3833,7 +3904,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         })()}
                       </div>
                     )}
-                    {!cancelled && isEtsyOrder(order) && selStep === 2 && (() => {
+                    {!cancelled && isFulfilOrder(order) && selStep === 2 && (() => {
                       const invFy = fiscalYearFull(orderDate(order));
                       const invNumVal = invNoDraft[order.id] != null ? invNoDraft[order.id] : String(maxAtyaharaInvoiceNo(atInvoices, orderDate(order)) + 1);
                       const composedInvNo = `ATY-${String(invNumVal).trim()}-${invFy}`;
@@ -3925,7 +3996,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       </div>
                       );
                     })()}
-                    {!cancelled && isEtsyOrder(order) && selStep === 3 && (() => {
+                    {!cancelled && isFulfilOrder(order) && selStep === 3 && (() => {
                       const targetNg = latestAtyaharaNgDraft(orderDate(order));
                       const priorNg = latestAnyAtyaharaNgDraft();
                       const monthChanged = !targetNg && priorNg && monthKey(priorNg.date || priorNg.createdAt) !== monthKey(orderDate(order));
@@ -4034,7 +4105,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       </div>
                       );
                     })()}
-                    {!cancelled && isEtsyOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · Etsy shipped · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
+                    {!cancelled && isFulfilOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · {isAtyahOrder(order) ? "Shipped" : "Etsy shipped"} · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
                     {detailsOpen[order.id] && (() => {
                       const earnings = deriveEtsyEarnings(order);
                       return <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
