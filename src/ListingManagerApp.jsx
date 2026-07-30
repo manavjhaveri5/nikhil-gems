@@ -2262,16 +2262,27 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     if (shopifyOrdersSyncedRef.current) return;
     shopifyOrdersSyncedRef.current = true;
     const STORES = [
-      { store_key: "atyahara", platform: "shopify_aty",   prefix: "ATY"   },
-      { store_key: "earth",    platform: "shopify_earth", prefix: "EARTH" },
+      { store_key: "atyahara", platform: "shopify_aty",   prefix: "ATY",   domain: "7b7b96-29.myshopify.com" },
+      { store_key: "earth",    platform: "shopify_earth", prefix: "EARTH", domain: "" },
     ];
     (async () => {
+      // Token captured by the in-app Shopify OAuth connect, saved workspace-wide in
+      // Supabase (ng-shopify-creds-v1). Preferring it means the sync works off the
+      // OAuth token without needing a per-store SHOPIFY_*_TOKEN env var; the endpoint
+      // still falls back to the server env token when no saved cred matches.
+      const shopCreds = await loadK("ng-shopify-creds-v1"); // { store, token } | null
       for (const s of STORES) {
         try {
+          const body = { action: "get_orders", store_key: s.store_key, days: 90 };
+          if (shopCreds?.token && shopCreds?.store && s.domain &&
+              String(shopCreds.store).toLowerCase() === s.domain.toLowerCase()) {
+            body.shopStore = shopCreds.store;
+            body.shopToken = shopCreds.token;
+          }
           const r = await fetch("/api/shopify", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "get_orders", store_key: s.store_key, days: 90 }),
+            body: JSON.stringify(body),
           });
           if (!r.ok) continue; // creds/scope not set for this store — skip silently
           const d = await r.json();
