@@ -1237,8 +1237,9 @@ Return ONLY JSON (no markdown), with:
 - "simple_title": a short clean product name — drop size prefixes and marketing suffixes (e.g. "20-25mm Chiastolite Mini Heart - Natural Cross Matrix" -> "Chiastolite Mini Heart")
 - "size": the physical size if stated or clearly inferable from the title/description (e.g. "20-25mm"), else ""
 - "pieces_per_kg": an estimated pieces-per-kilogram range for a wholesale lot of this size/type (e.g. "80-100"), else ""
+- "location": a DETAILED mine/source location. First use any origin stated in the description; otherwise infer the primary well-known source region for this specific stone. Be specific — mine or locality, province/state, and country (e.g. "Hunan Province, China" or "Sakha Republic, Siberia, Russia"). If genuinely unsure, use "".
 
-JSON: {"simple_title":"...","size":"...","pieces_per_kg":"..."}`;
+JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}`;
       const res = await fetch("/api/claude", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 300, temperature: 0, messages: [{ role: "user", content: prompt }] }),
@@ -1247,7 +1248,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"..."}`;
       const d = await res.json();
       const txt = (d.content || []).map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(txt);
-      const desc = `Pieces : per kg ${parsed.pieces_per_kg || "___"}\nLocation : ___\nSize : ${parsed.size || "___"}`;
+      const desc = `Pieces : per kg ${parsed.pieces_per_kg || "___"}\nLocation : ${parsed.location || "___"}\nSize : ${parsed.size || "___"}`;
       setForm(f => ({ ...f, shopify_title: parsed.simple_title || f.shopify_title || "", shopify_description: desc }));
     } catch (e) {
       setAiFillError(e.message || "Could not generate");
