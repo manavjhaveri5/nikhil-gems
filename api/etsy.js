@@ -438,7 +438,7 @@ export default async function handler(req, res) {
       return res.json(data);
     }
 
-    // ── listings_all: paginate all active + inactive + sold_out listings ──────
+    // ── listings_all: paginate all active + draft + inactive + sold_out listings
     if (action === "listings_all") {
       const results = [];
       const stateErrors = [];
@@ -448,7 +448,7 @@ export default async function handler(req, res) {
         return fetch(url, { headers: authHeaders, signal: ctrl.signal })
           .finally(() => clearTimeout(t));
       };
-      for (const state of ["active", "inactive", "sold_out"]) {
+      for (const state of ["active", "draft", "inactive", "sold_out"]) {
         const p0 = new URLSearchParams({ state, limit: "100", offset: "0" });
         p0.append("includes[]", "Images");
         let r0;
