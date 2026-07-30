@@ -607,8 +607,7 @@ const needsEtsyReconnect = msg => /reconnect|permission|transactions_w|scope|for
 const PLATFORMS = [
   { key:"etsy",          label:"Etsy",         icon:"🏷️", color:"#F56400", priceField:"price_etsy",         currency:"INR" },
   { key:"shopify_earth", label:"Earth Ed.",    icon:"🌍", color:"#2A6845", priceField:"price_shopify_earth", currency:"USD" },
-  // Atyahara Shopify store removed for now — re-add to bring back its tab, toggles and pricing.
-  // { key:"shopify_aty",   label:"Atyahara",     icon:"💫", color:"#6B3FA0", priceField:"price_shopify_aty",  currency:"INR" },
+  { key:"shopify_aty",   label:"Atyahara",     icon:"💫", color:"#6B3FA0", priceField:"price_shopify_aty",  currency:"INR" },
   { key:"ebay",          label:"eBay",         icon:"🔨", color:"#0064D2", priceField:"price_ebay",          currency:"USD" },
 ];
 
@@ -2254,6 +2253,72 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       setCustomsRows(tokens);
       setCustomsShapes([...new Set(tokens.map(t => t.shape))]);
     });
+  }, []);
+  // Shopify order sync — Shopify has no webhook wired here, so poll each store's
+  // recent orders on load and mirror them into the shared Orders store, exactly like
+  // the eBay sync. Manual/ERP edits on a row are preserved; live fields are refreshed.
+  const shopifyOrdersSyncedRef = useRef(false);
+  useEffect(() => {
+    if (shopifyOrdersSyncedRef.current) return;
+    shopifyOrdersSyncedRef.current = true;
+    const STORES = [
+      { store_key: "atyahara", platform: "shopify_aty",   prefix: "ATY"   },
+      { store_key: "earth",    platform: "shopify_earth", prefix: "EARTH" },
+    ];
+    (async () => {
+      for (const s of STORES) {
+        try {
+          const r = await fetch("/api/shopify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "get_orders", store_key: s.store_key, days: 90 }),
+          });
+          if (!r.ok) continue; // creds/scope not set for this store — skip silently
+          const d = await r.json();
+          const rows = d.results || [];
+          if (!rows.length) continue;
+          const current = await loadK(ORDERS_KEY) || [];
+          const prevById = new Map((current || []).map(o => [o.id, o]));
+          for (const so of rows) {
+            if (!so?.orderId) continue;
+            const id = `${s.platform}-${so.orderId}`;
+            const norm = {
+              id, platform: s.platform,
+              order_number:      `${s.prefix}-${so.order_number || so.orderId}`,
+              platform_order_id: String(so.orderId),
+              listing_title:     so.title || so.items?.[0]?.title || `Shopify order ${so.orderId}`,
+              listing_sku:       so.sku || so.items?.[0]?.sku || "",
+              buyer_name:        so.buyer || "",
+              buyer_email:       so.email || "",
+              buyer_country:     so.ship?.country || "",
+              ship_name:         so.ship?.name || "",
+              ship_address1:     so.ship?.address1 || "",
+              ship_address2:     so.ship?.address2 || "",
+              ship_city:         so.ship?.city || "",
+              ship_state:        so.ship?.province || "",
+              ship_postcode:     so.ship?.zip || "",
+              ship_country:      so.ship?.country || "",
+              ship_phone:        so.ship?.phone || "",
+              sale_price:        +so.total || 0,
+              order_total:       +so.total || 0,
+              currency:          so.currency || "USD",
+              status:            so.cancelled_at ? "cancelled" : so.fulfilled ? "shipped" : "sold",
+              cancelled_at:      so.cancelled_at || "",
+              tracking_code:     so.tracking_number || "",
+              tracking_number:   so.tracking_number || "",
+              carrier_name:      so.carrier_name || "",
+              date:              (so.created || "").slice(0, 10) || undefined,
+              created_at:        so.created || undefined,
+              notes:             so.note || "",
+              source:            `shopify-${s.store_key}-sync`,
+            };
+            const prev = prevById.get(id);
+            const merged = { ...norm, ...prev, status: norm.status || prev?.status, cancelled_at: norm.cancelled_at || prev?.cancelled_at, sale_price: norm.sale_price, order_total: norm.order_total };
+            if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) await upsertItemK(ORDERS_KEY, merged, { prepend: true });
+          }
+        } catch {}
+      }
+    })();
   }, []);
   const patchOrder = async (order, patch) => {
     const current = await loadK(ORDERS_KEY) || [];

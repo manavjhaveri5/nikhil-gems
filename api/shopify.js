@@ -302,6 +302,56 @@ export default async function handler(req, res) {
 
   const sr = (method, path, b) => shopifyReq(SHOP, TOKEN, method, path, b);
 
+  if (action === "get_orders") {
+    const daysBack = parseInt(body.days, 10) || 90;
+    const sinceISO = new Date(Date.now() - daysBack * 86400000).toISOString();
+    const qs = new URLSearchParams({
+      status: "any",
+      limit: "250",
+      created_at_min: sinceISO,
+      fields: "id,name,order_number,created_at,processed_at,cancelled_at,financial_status,fulfillment_status,currency,current_total_price,total_price,customer,email,line_items,shipping_address,note,fulfillments",
+    });
+    const result = await shopifyGetAll(sr, `/orders.json?${qs.toString()}`, "orders");
+    // read_orders scope missing (or older than 60 days without read_all_orders) → surface, don't 500
+    if (!result.ok) return res.status(400).json({ error: result.error, store_key: store_key || "" });
+    const orders = (result.rows || []).map(o => {
+      const addr = o.shipping_address || {};
+      const cust = o.customer || {};
+      const li   = o.line_items || [];
+      const first = li[0] || {};
+      const fulfilments = o.fulfillments || [];
+      const track   = fulfilments.map(f => f.tracking_number).filter(Boolean)[0] || "";
+      const carrier = fulfilments.map(f => f.tracking_company).filter(Boolean)[0] || "";
+      const fulfilled = o.fulfillment_status === "fulfilled" || o.fulfillment_status === "partial";
+      return {
+        orderId: String(o.id),
+        name: o.name || `#${o.order_number}`,
+        order_number: o.order_number,
+        created: o.created_at || o.processed_at || "",
+        cancelled_at: o.cancelled_at || "",
+        financial_status: o.financial_status || "",
+        fulfillment_status: o.fulfillment_status || "",
+        fulfilled,
+        currency: o.currency || "USD",
+        total: +(o.current_total_price ?? o.total_price ?? 0),
+        buyer: [cust.first_name, cust.last_name].filter(Boolean).join(" ") || addr.name || "",
+        email: o.email || cust.email || "",
+        title: first.title || "",
+        sku: first.sku || "",
+        items: li.map(l => ({ title: l.title, sku: l.sku || "", qty: l.quantity, price: +l.price || 0, variant: l.variant_title || "" })),
+        ship: {
+          name: addr.name || "", address1: addr.address1 || "", address2: addr.address2 || "",
+          city: addr.city || "", province: addr.province || "", zip: addr.zip || "",
+          country: addr.country_code || addr.country || "", phone: addr.phone || "",
+        },
+        note: o.note || "",
+        tracking_number: track,
+        carrier_name: carrier,
+      };
+    });
+    return res.json({ success: true, shop: SHOP, store_key: store_key || "", results: orders });
+  }
+
   if (action === "list_products") {
     const cleanLimit = Math.min(Math.max(parseInt(limit, 10) || 250, 1), 250);
     const qs = new URLSearchParams({
