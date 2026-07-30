@@ -6277,6 +6277,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const platKey   = STORE === "atyahara" ? "shopify_aty" : "shopify_earth";
   const CREDS_KEY = STORE === "atyahara" ? "ng-shopify-creds-atyahara" : "ng-shopify-creds-earth";
   const CACHE_KEY = `ng-shopify-${STORE}-products-cache-v1`;
+  const storeName = STORE === "atyahara" ? "Atyahara" : "Earth Editions";
   const platform = PLATFORMS.find(p => p.key === platKey);
   const [products, setProducts] = useState([]);
   const [collections, setCollections] = useState([]);
@@ -6284,6 +6285,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const [storeInput, setStoreInput] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   const [statusFilter, setStatusFilter] = useState("active");
+  const [sortBy, setSortBy] = useState("created"); // created (recently added) | updated | title
   const [tagFilter, setTagFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
@@ -6466,7 +6468,10 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
     .filter(p => !typeFilter || p.product_type === typeFilter)
     .filter(collectionMatchesProduct)
     .filter(p => !search || [p.title, p.handle, productTags(p).join(" "), p.product_type, firstVariant(p).sku].join(" ").toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
+    .sort((a, b) =>
+      sortBy === "title"   ? String(a.title || "").localeCompare(String(b.title || ""))
+    : sortBy === "updated" ? new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
+    :                        new Date(b.created_at || b.updated_at) - new Date(a.created_at || a.updated_at)); // "created" = recently added
 
   const counts = {
     all: products.length,
@@ -6481,7 +6486,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
       <div style={{ background: platform.color + "12", border: `1.5px solid ${platform.color}35`, borderRadius: 12, padding: "16px 18px", marginBottom: 14, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ fontSize: 34 }}>{platform.icon}</div>
         <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 21, fontWeight: 750, color: platform.color }}>Earth Editions Shopify</div>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 21, fontWeight: 750, color: platform.color }}>{storeName} Shopify</div>
           <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3 }}>
             {loading ? "Loading Shopify..." : `${products.length} Shopify products · ${counts.active} active · ${counts.draft} drafts`}
             {creds?.store ? ` · ${creds.store}` : ""}
@@ -6493,13 +6498,13 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
         </button>
       </div>
 
-      {!!error && /credential|token|store|domain|unauthor|401|403|not set/i.test(String(error)) && (
+      {!!error && !products.length && /credential|token|store|domain|unauthor|401|403|not set/i.test(String(error)) && (
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
-          <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: platform.color, marginBottom: 10 }}>Connect Earth Editions <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: C.inkFaint }}>· override (defaults to server credentials)</span></div>
+          <div style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: platform.color, marginBottom: 10 }}>Connect {storeName} <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: C.inkFaint }}>· override (defaults to server credentials)</span></div>
           <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr auto", gap: 10, alignItems: "end" }}>
             <div>
               <Label>Store Domain</Label>
-              <input value={storeInput} onChange={e => setStoreInput(e.target.value)} placeholder="eartheditions.myshopify.com" style={FI()} />
+              <input value={storeInput} onChange={e => setStoreInput(e.target.value)} placeholder={STORE === "atyahara" ? "7b7b96-29.myshopify.com" : "eartheditions.myshopify.com"} style={FI()} />
             </div>
             <div>
               <Label>Admin API Token</Label>
@@ -6510,7 +6515,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
         </div>
       )}
 
-      {error && (
+      {error && !products.length && (
         <div style={{ background: C.redBg, border: `1px solid ${C.red}35`, color: C.red, borderRadius: 9, padding: "9px 12px", fontSize: 12, marginBottom: 12 }}>{String(error)}</div>
       )}
 
@@ -6525,6 +6530,14 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
                 <option value="active">Active ({counts.active})</option>
                 <option value="draft">Draft ({counts.draft})</option>
                 <option value="archived">Archived ({counts.archived})</option>
+              </select>
+            </div>
+            <div>
+              <Label>Sort</Label>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={FI()}>
+                <option value="created">Recently added</option>
+                <option value="updated">Recently updated</option>
+                <option value="title">Title (A–Z)</option>
               </select>
             </div>
             <div>
