@@ -32,7 +32,6 @@ const AT_INVOICES_KEY = "at-invoices-v1";
 const AT_BUYERS_KEY   = "at-buyers-v1";
 const NG_INVOICES_KEY = "ng-invoices-v2";
 const NG_BUYERS_KEY   = "ng-buyers-v2";
-const SHOPIFY_EARTH_CACHE_KEY = "ng-shopify-earth-products-cache-v1";
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
 const listingOrderId = () => `NG-LST-${new Date().getFullYear()}-${uid().slice(-6).toUpperCase()}`;
 const ensureListingOrderId = listing => listing.listing_order_id ? listing : { ...listing, listing_order_id: listingOrderId() };
@@ -2299,6 +2298,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
               platform_order_id: String(so.orderId),
               listing_title:     so.title || so.items?.[0]?.title || `Shopify order ${so.orderId}`,
               listing_sku:       so.sku || so.items?.[0]?.sku || "",
+              listing_image:     so.image || "",
               buyer_name:        so.buyer || "",
               buyer_email:       so.email || "",
               buyer_country:     so.ship?.country || "",
@@ -2324,7 +2324,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
               source:            `shopify-${s.store_key}-sync`,
             };
             const prev = prevById.get(id);
-            const merged = { ...norm, ...prev, status: norm.status || prev?.status, cancelled_at: norm.cancelled_at || prev?.cancelled_at, sale_price: norm.sale_price, order_total: norm.order_total };
+            const merged = { ...norm, ...prev, status: norm.status || prev?.status, cancelled_at: norm.cancelled_at || prev?.cancelled_at, sale_price: norm.sale_price, order_total: norm.order_total, listing_image: norm.listing_image || prev?.listing_image || "" };
             if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) await upsertItemK(ORDERS_KEY, merged, { prepend: true });
           }
         } catch {}
@@ -6172,8 +6172,13 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
   );
 }
 
-function ShopifyEarthView({ listings, onEditLocal }) {
-  const platform = PLATFORMS.find(p => p.key === "shopify_earth");
+function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
+  // storeKey: "earth" | "atyahara" — one component, either Shopify store.
+  const STORE     = storeKey;
+  const platKey   = STORE === "atyahara" ? "shopify_aty" : "shopify_earth";
+  const CREDS_KEY = STORE === "atyahara" ? "ng-shopify-creds-atyahara" : "ng-shopify-creds-earth";
+  const CACHE_KEY = `ng-shopify-${STORE}-products-cache-v1`;
+  const platform = PLATFORMS.find(p => p.key === platKey);
   const [products, setProducts] = useState([]);
   const [collections, setCollections] = useState([]);
   const [creds, setCreds] = useState(null);
@@ -6203,14 +6208,14 @@ function ShopifyEarthView({ listings, onEditLocal }) {
   const productTags = p => Array.isArray(p.tags) ? p.tags : String(p.tags || "").split(",").map(t => t.trim()).filter(Boolean);
   const readProductCache = () => {
     try {
-      const cached = JSON.parse(localStorage.getItem(SHOPIFY_EARTH_CACHE_KEY) || "null");
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
       if (cached && Array.isArray(cached.products)) return cached;
     } catch {}
     return null;
   };
   const saveProductCache = data => {
     try {
-      localStorage.setItem(SHOPIFY_EARTH_CACHE_KEY, JSON.stringify({
+      localStorage.setItem(CACHE_KEY, JSON.stringify({
         products: data.products || [],
         collections: data.collections || [],
         shop: data.shop || "",
@@ -6221,7 +6226,10 @@ function ShopifyEarthView({ listings, onEditLocal }) {
   };
 
   const loadCreds = async () => {
-    const saved = await loadK("ng-shopify-creds-v1");
+    // Per-store creds. Atyahara falls back to the legacy single slot (which holds the
+    // token captured by the in-app OAuth connect); Earth does NOT — that slot may now
+    // hold another store's token, so Earth relies on its SHOPIFY_EARTH_* env instead.
+    const saved = (await loadK(CREDS_KEY)) || (STORE === "atyahara" ? await loadK("ng-shopify-creds-v1") : null);
     if (saved?.store && saved?.token) {
       const normalized = { store: saved.store, token: saved.token };
       setCreds(normalized);
@@ -6243,7 +6251,7 @@ function ShopifyEarthView({ listings, onEditLocal }) {
           action: "list_products",
           status: "any",
           limit: 250,
-          store_key: "earth",
+          store_key: STORE,
           ...(nextCollection ? { collection_id: nextCollection } : {}),
           // Manual creds (if the user saved an override) win; otherwise the
           // server uses the SHOPIFY_EARTH_* env creds — same as Image Library.
@@ -6279,7 +6287,7 @@ function ShopifyEarthView({ listings, onEditLocal }) {
     const token = tokenInput.trim();
     if (!store || !token) { setError("Enter store domain and Admin API token"); return; }
     const next = { store, token };
-    await saveK("ng-shopify-creds-v1", next);
+    await saveK(CREDS_KEY, next);
     setCreds(next);
     setTokenInput("");
     fetchProducts(next);
@@ -6312,7 +6320,7 @@ function ShopifyEarthView({ listings, onEditLocal }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "update_product",
-          store_key: "earth",
+          store_key: STORE,
           ...(creds?.token ? { shopStore: creds.store, shopToken: creds.token } : {}),
           product: editP,
         }),
@@ -6321,7 +6329,7 @@ function ShopifyEarthView({ listings, onEditLocal }) {
       if (!r.ok || !d.success) throw new Error(d.error || "Shopify update failed");
       setProducts(prev => prev.map(p => String(p.id) === String(d.product.id) ? d.product : p));
       setEditP(null);
-      showToast("✓ Earth Editions product updated");
+      showToast(`✓ ${platform?.label || "Store"} product updated`);
     } catch (e) {
       setError(e.message || "Shopify update failed");
     } finally {
@@ -6334,7 +6342,7 @@ function ShopifyEarthView({ listings, onEditLocal }) {
     const norm = s => String(s || "").trim().toLowerCase();
     const match = listings.find(l =>
       (v.sku && norm(l.sku) === norm(v.sku)) ||
-      (l.platforms?.shopify_earth?.product_id && String(l.platforms.shopify_earth.product_id) === String(p.id)) ||
+      (l.platforms?.[platKey]?.product_id && String(l.platforms[platKey].product_id) === String(p.id)) ||
       norm(l.title) === norm(p.title)
     );
     if (match) onEditLocal(match);
@@ -6471,7 +6479,7 @@ function ShopifyEarthView({ listings, onEditLocal }) {
           {visible.map(p => {
             const v = firstVariant(p);
             const img = firstImage(p);
-            const localMatch = listings.find(l => String(l.platforms?.shopify_earth?.product_id || "") === String(p.id) || (v.sku && l.sku === v.sku));
+            const localMatch = listings.find(l => String(l.platforms?.[platKey]?.product_id || "") === String(p.id) || (v.sku && l.sku === v.sku));
             return (
               <div key={p.id} style={{ background: C.surface, border: `1.5px solid ${platform.color}25`, borderRadius: 11, overflow: "hidden" }}>
                 <div style={{ height: 138, background: C.card, position: "relative", overflow: "hidden" }}>
@@ -7150,12 +7158,20 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         {tab === "etsy" && <EtsyLiveView />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
-          <ShopifyEarthView
+          <ShopifyStoreView
+            storeKey="earth"
             listings={listings}
             onEditLocal={l => { setEditing(l); setShowForm(true); }}
           />
         )}
-        {activePlatform && tab !== "etsy" && tab !== "ebay" && tab !== "shopify_earth" && (
+        {tab === "shopify_aty" && (
+          <ShopifyStoreView
+            storeKey="atyahara"
+            listings={listings}
+            onEditLocal={l => { setEditing(l); setShowForm(true); }}
+          />
+        )}
+        {activePlatform && tab !== "etsy" && tab !== "ebay" && tab !== "shopify_earth" && tab !== "shopify_aty" && (
           <PlatformView
             platform={activePlatform}
             listings={listings}

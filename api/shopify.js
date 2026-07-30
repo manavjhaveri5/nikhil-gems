@@ -344,6 +344,8 @@ export default async function handler(req, res) {
         email: o.email || cust.email || "",
         title: first.title || "",
         sku: first.sku || "",
+        productId: first.product_id ? String(first.product_id) : "",
+        image: "",
         items: li.map(l => ({ title: l.title, sku: l.sku || "", qty: l.quantity, price: +l.price || 0, variant: l.variant_title || "" })),
         ship: {
           name: addr.name || "", address1: addr.address1 || "", address2: addr.address2 || "",
@@ -355,6 +357,18 @@ export default async function handler(req, res) {
         carrier_name: carrier,
       };
     });
+    // Shopify order line items carry no image, so the order thumbnail comes back blank.
+    // Fetch each first-item product's image in one bulk call and attach it.
+    const productIds = [...new Set(orders.map(o => o.productId).filter(Boolean))].slice(0, 250);
+    if (productIds.length) {
+      const pQs = new URLSearchParams({ ids: productIds.join(","), fields: "id,image,images", limit: "250" });
+      const pRes = await sr("GET", `/products.json?${pQs.toString()}`);
+      if (pRes.ok) {
+        const imgById = {};
+        for (const p of (pRes.data?.products || [])) imgById[String(p.id)] = p.image?.src || p.images?.[0]?.src || "";
+        for (const o of orders) if (o.productId && imgById[o.productId]) o.image = imgById[o.productId];
+      }
+    }
     return res.json({ success: true, shop: SHOP, store_key: store_key || "", results: orders });
   }
 
