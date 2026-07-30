@@ -303,6 +303,21 @@ export default async function handler(req, res) {
   const SHOP  = shopStore || process.env[storeEnvKey] || process.env.SHOPIFY_STORE;
   const TOKEN = shopToken  || process.env[tokenEnvKey] || process.env.SHOPIFY_ACCESS_TOKEN;
 
+  // Build a Shopify OAuth authorize URL for a one-click in-app "Connect" button.
+  // Runs before the SHOP/TOKEN guards below (a disconnected store has neither yet).
+  if (action === "oauth_url") {
+    const shop = String(body.shop || "").trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!shop) return res.status(400).json({ error: "shop domain required" });
+    const clientId = store_key === "atyahara" ? (process.env.SHOPIFY_ATY_CLIENT_ID || process.env.SHOPIFY_CLIENT_ID)
+                   : store_key === "earth"    ? (process.env.SHOPIFY_EARTH_CLIENT_ID || process.env.SHOPIFY_CLIENT_ID)
+                   : process.env.SHOPIFY_CLIENT_ID;
+    if (!clientId) return res.status(400).json({ error: `No Shopify client id configured (SHOPIFY_CLIENT_ID / SHOPIFY_${store_key === "atyahara" ? "ATY" : "EARTH"}_CLIENT_ID)` });
+    const scope = "read_products,write_products,read_orders,read_all_orders";
+    const redirect = `${REDIRECT_BASE}/api/shopify`;
+    const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&redirect_uri=${encodeURIComponent(redirect)}`;
+    return res.json({ success: true, url });
+  }
+
   if (!SHOP)  return res.status(400).json({ error: "Store domain required" });
   if (!TOKEN) return res.status(400).json({ error: "Shopify access token required" });
 

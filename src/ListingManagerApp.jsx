@@ -6430,6 +6430,24 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
     loadCreds().then(c => fetchProducts(c, !!cached, ""));
   }, []);
 
+  // One-click OAuth connect: ask the server for this store's authorize URL (it holds
+  // the client id) and redirect. On return, the callback saves the token to this
+  // store's own slot (ng-shopify-creds-<store>).
+  const connectOAuth = async () => {
+    const def = STORE === "atyahara" ? "7b7b96-29.myshopify.com" : "eartheditions.myshopify.com";
+    const shop = String(storeInput.trim() || creds?.store || window.prompt(`${storeName}: enter the .myshopify.com domain to connect`, def) || "")
+      .trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!shop) return;
+    try {
+      const r = await fetch("/api/shopify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "oauth_url", store_key: STORE, shop }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d.url) window.location.href = d.url;
+      else setError(d.error || "Could not start Shopify connect");
+    } catch (e) { setError(e.message || "Could not start Shopify connect"); }
+  };
   const saveCreds = async () => {
     const store = storeInput.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
     const token = tokenInput.trim();
@@ -6570,10 +6588,17 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
             {creds?.store ? ` · ${creds.store}` : ""}
           </div>
         </div>
-        <button onClick={() => fetchProducts(creds, false, collectionFilter)}
-          style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", color: C.ink }}>
-          Refresh
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={connectOAuth}
+            title={`Reconnect ${storeName} to Shopify (fixes "credentials not set")`}
+            style={{ background: platform.color, border: "none", color: "#fff", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+            🔗 Connect
+          </button>
+          <button onClick={() => fetchProducts(creds, false, collectionFilter)}
+            style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", color: C.ink }}>
+            Refresh
+          </button>
+        </div>
       </div>
 
       {!!error && !products.length && /credential|token|store|domain|unauthor|401|403|not set/i.test(String(error)) && (
