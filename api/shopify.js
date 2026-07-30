@@ -415,14 +415,17 @@ export default async function handler(req, res) {
     if (status && status !== "any" && status !== "all") qs.set("status", status);
     let collections = [];
     try {
+      // Paginate both collection types — a single 250 page dropped collections
+      // (e.g. smart collections like "Mini Hearts") on stores with many categories.
       const [custom, smart] = await Promise.all([
-        sr("GET", "/custom_collections.json?limit=250&fields=id,title,handle"),
-        sr("GET", "/smart_collections.json?limit=250&fields=id,title,handle"),
+        shopifyGetAll(sr, "/custom_collections.json?limit=250&fields=id,title,handle", "custom_collections"),
+        shopifyGetAll(sr, "/smart_collections.json?limit=250&fields=id,title,handle", "smart_collections"),
       ]);
       collections = [
-        ...(custom.ok ? custom.data.custom_collections || [] : []),
-        ...(smart.ok ? smart.data.smart_collections || [] : []),
-      ].map(c => ({ id: String(c.id), title: c.title || "", handle: c.handle || "" }));
+        ...(custom.ok ? custom.rows || [] : []),
+        ...(smart.ok ? smart.rows || [] : []),
+      ].map(c => ({ id: String(c.id), title: c.title || "", handle: c.handle || "" }))
+       .sort((a, b) => a.title.localeCompare(b.title));
     } catch (_) {}
 
     const productPath = collection_id
@@ -444,6 +447,30 @@ export default async function handler(req, res) {
       collections,
       collection_id: collection_id ? String(collection_id) : "",
     });
+  }
+
+  if (action === "bulk_tag") {
+    // Add and/or remove tags across many products, touching ONLY the tags field
+    // (fetch current tags, merge, PUT) so nothing else on the product is disturbed.
+    const ids  = [...new Set((body.product_ids || []).map(String).filter(Boolean))].slice(0, 100);
+    const addT = String(body.add_tags || "").split(",").map(t => t.trim()).filter(Boolean);
+    const rmT  = String(body.remove_tags || "").split(",").map(t => t.trim()).filter(Boolean);
+    if (!ids.length) return res.status(400).json({ error: "No products selected" });
+    if (!addT.length && !rmT.length) return res.status(400).json({ error: "No tags to add or remove" });
+    const rmLower = new Set(rmT.map(t => t.toLowerCase()));
+    const results = [];
+    for (const id of ids) {
+      const g = await sr("GET", `/products/${id}.json?fields=id,tags`);
+      if (!g.ok) { results.push({ id, ok: false, error: g.error }); continue; }
+      const cur = String(g.data?.product?.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+      const seen = new Set(cur.map(t => t.toLowerCase()));
+      let next = cur.filter(t => !rmLower.has(t.toLowerCase()));
+      for (const t of addT) if (!seen.has(t.toLowerCase())) { next.push(t); seen.add(t.toLowerCase()); }
+      const p = await sr("PUT", `/products/${id}.json`, { product: { id: Number(id), tags: next.join(", ") } });
+      results.push({ id, ok: p.ok, tags: p.ok ? (p.data?.product?.tags || "") : "", error: p.ok ? "" : p.error });
+    }
+    const updated = results.filter(r => r.ok).length;
+    return res.json({ success: true, updated, total: ids.length, results });
   }
 
   if (action === "update_product") {

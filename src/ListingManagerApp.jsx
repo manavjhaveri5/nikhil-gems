@@ -6286,6 +6286,9 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const [tokenInput, setTokenInput] = useState("");
   const [statusFilter, setStatusFilter] = useState("active");
   const [sortBy, setSortBy] = useState("created"); // created (recently added) | updated | title
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [bulkTagInput, setBulkTagInput] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
@@ -6438,6 +6441,37 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
     }
   };
 
+  const toggleSelect = id => setSelectedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const clearSelection = () => setSelectedIds(new Set());
+  const runBulkTag = async op => {
+    const tag = bulkTagInput.trim();
+    if (!tag) { showToast("Enter a tag first"); return; }
+    const ids = [...selectedIds];
+    if (!ids.length) { showToast("Select products first"); return; }
+    setBulkBusy(true);
+    try {
+      const r = await fetch("/api/shopify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "bulk_tag",
+          store_key: STORE,
+          product_ids: ids,
+          ...(op === "remove" ? { remove_tags: tag } : { add_tags: tag }),
+          ...(creds?.token ? { shopStore: creds.store, shopToken: creds.token } : {}),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.error || "Bulk tag failed");
+      showToast(`${op === "remove" ? "Removed" : "Added"} “${tag}” ${op === "remove" ? "from" : "to"} ${d.updated}/${d.total} products`);
+      clearSelection();
+      fetchProducts(creds, true, collectionFilter); // background refresh so tags reflect
+    } catch (e) {
+      showToast(e.message || "Bulk tag failed");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
   const linkLocal = p => {
     const v = firstVariant(p);
     const norm = s => String(s || "").trim().toLowerCase();
@@ -6578,13 +6612,23 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
               style={{ ...FI(), width: mob() ? "100%" : 360, marginLeft: "auto", borderRadius: 10 }} />
           </div>
 
+      {selectedIds.size > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: platform.color + "14", border: `1.5px solid ${platform.color}45`, borderRadius: 10, padding: "10px 12px", marginBottom: 10, position: "sticky", top: 6, zIndex: 5 }}>
+          <span style={{ fontSize: 12, fontWeight: 850, color: platform.color }}>{selectedIds.size} selected</span>
+          <input value={bulkTagInput} onChange={e => setBulkTagInput(e.target.value)} placeholder="tag e.g. mini-hearts" style={{ ...FI(), width: 200 }} />
+          <button disabled={bulkBusy} onClick={() => runBulkTag("add")} style={{ background: platform.color, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>{bulkBusy ? "Working…" : "Add tag"}</button>
+          <button disabled={bulkBusy} onClick={() => runBulkTag("remove")} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 800, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>Remove tag</button>
+          <button onClick={() => setSelectedIds(new Set(visible.map(x => String(x.id))))} style={{ background: "transparent", color: C.inkMid, border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Select all {visible.length}</button>
+          <button onClick={clearSelection} style={{ background: "transparent", color: C.inkMid, border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Clear</button>
+        </div>
+      )}
       {loading ? (
-        <div style={{ padding: "50px 0", textAlign: "center", color: C.inkFaint }}><Spinner /> Loading Earth Editions...</div>
+        <div style={{ padding: "50px 0", textAlign: "center", color: C.inkFaint }}><Spinner /> Loading {storeName}...</div>
       ) : visible.length === 0 ? (
         <div style={{ padding: "55px 0", textAlign: "center", color: C.inkFaint }}>
           <div style={{ fontSize: 34, marginBottom: 8 }}>🌍</div>
           <div style={{ fontWeight: 750, color: C.inkMid }}>No Shopify products found</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>Check the Earth Editions credentials or change the status filter.</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Check the {storeName} credentials or change the status filter.</div>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(4,minmax(0,1fr))", gap: 10 }}>
@@ -6598,6 +6642,9 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
                   {img ? <img src={img} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
                     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>🌍</div>}
                   <span style={{ position: "absolute", top: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, textTransform: "uppercase", background: p.status === "active" ? C.greenBg : C.card, color: p.status === "active" ? C.green : C.inkMid, border: `1px solid ${C.border}` }}>{p.status}</span>
+                  <label onClick={e => e.stopPropagation()} title="Select for bulk tagging" style={{ position: "absolute", top: 6, right: 6, display: "grid", placeItems: "center", width: 26, height: 26, borderRadius: 7, background: selectedIds.has(String(p.id)) ? platform.color : "rgba(255,255,255,.9)", border: `1.5px solid ${selectedIds.has(String(p.id)) ? platform.color : C.border}`, cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,.15)" }}>
+                    <input type="checkbox" checked={selectedIds.has(String(p.id))} onChange={() => toggleSelect(String(p.id))} style={{ width: 15, height: 15, cursor: "pointer", accentColor: platform.color }} />
+                  </label>
                 </div>
                 <div style={{ padding: 10 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, lineHeight: 1.25, minHeight: 32 }}>{p.title}</div>
@@ -6631,7 +6678,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
           <div style={{ width: "min(760px,100%)", maxHeight: "88vh", overflow: "auto", background: C.surface, borderRadius: 14, boxShadow: "0 24px 80px rgba(0,0,0,.32)" }}>
             <div style={{ padding: "15px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
-                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: .8, color: platform.color, fontWeight: 850 }}>Earth Editions</div>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: .8, color: platform.color, fontWeight: 850 }}>{storeName}</div>
                 <div style={{ fontSize: 18, fontWeight: 800, color: C.ink }}>Edit Shopify Product</div>
               </div>
               <button onClick={() => setEditP(null)} style={{ background: "none", border: "none", fontSize: 24, color: C.inkFaint, cursor: "pointer" }}>×</button>
