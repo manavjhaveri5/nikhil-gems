@@ -2207,7 +2207,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                       <button onClick={() => handleUnpublish(p.key)} disabled={!!busy}
                         style={{ padding: "6px 12px", background: C.redBg, border: `1px solid ${C.red}40`,
                           borderRadius: 6, fontSize: 11, color: C.red, cursor: "pointer", fontWeight: 600 }}>
-                        {busy === "removing" ? <><Spinner /> Removing…</> : "Delete from Etsy"}
+                        {busy === "removing" ? <><Spinner /> Removing…</> : `Delete from ${p.label}`}
                       </button>
                     </div>
                   ) : (
@@ -6991,8 +6991,12 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   // Image Library / the Earth tab), NOT in Vercel env vars. Attach them to the
   // listing so the API uses them instead of the (unset) SHOPIFY_EARTH_* env vars.
   const withShopifyCreds = async (listing, storeKey) => {
-    if (storeKey !== "earth") return listing;
-    const c = await loadK("ng-shopify-creds-v1");
+    if (storeKey !== "earth" && storeKey !== "atyahara") return listing;
+    // Per-store creds ONLY. Earth must never fall back to the shared legacy slot
+    // (ng-shopify-creds-v1) — it now holds Atyahara's OAuth token, and embedding it
+    // made Earth publishes land in the Atyahara store. Atyahara may use that slot (its
+    // own OAuth token lives there); otherwise both fall through to the store's env creds.
+    const c = (await loadK(`ng-shopify-creds-${storeKey}`)) || (storeKey === "atyahara" ? await loadK("ng-shopify-creds-v1") : null);
     if (c?.store && c?.token) return { ...listing, shopify_store: c.store, shopify_token: c.token };
     return listing;
   };
