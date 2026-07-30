@@ -7,9 +7,15 @@ async function handleOAuthCallback(req, res) {
   const redir = (err) => res.redirect(`${REDIRECT_BASE}/#shopify-error=${encodeURIComponent(err)}`);
   if (error) return redir("Shopify denied: " + error);
   if (!code || !shop) return redir("Missing code or shop from Shopify callback");
-  const clientId     = process.env.SHOPIFY_CLIENT_ID;
-  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return redir("SHOPIFY_CLIENT_ID or SHOPIFY_CLIENT_SECRET not set in Vercel");
+  // Store-aware OAuth creds: each Shopify store is its own app with its own client
+  // id/secret. Match the authorizing shop to a per-store credential pair, falling back
+  // to the generic SHOPIFY_CLIENT_ID/SECRET so existing (Earth Ed.) wiring is untouched.
+  const shopHost = String(shop || "").toLowerCase();
+  const isAty   = shopHost && shopHost === String(process.env.SHOPIFY_ATY_STORE   || "").toLowerCase();
+  const isEarth = shopHost && shopHost === String(process.env.SHOPIFY_EARTH_STORE || "").toLowerCase();
+  const clientId     = (isAty && process.env.SHOPIFY_ATY_CLIENT_ID)     || (isEarth && process.env.SHOPIFY_EARTH_CLIENT_ID)     || process.env.SHOPIFY_CLIENT_ID;
+  const clientSecret = (isAty && process.env.SHOPIFY_ATY_CLIENT_SECRET) || (isEarth && process.env.SHOPIFY_EARTH_CLIENT_SECRET) || process.env.SHOPIFY_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return redir(`No Shopify client id/secret set for ${shopHost || "this shop"} (checked SHOPIFY_ATY_* / SHOPIFY_EARTH_* / SHOPIFY_CLIENT_*)`);
   const r = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
