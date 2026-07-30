@@ -17899,13 +17899,11 @@ export default function Root({onSignOut}){
       const token=params.get("shopify-auth");
       const shop=params.get("shopify-shop");
       if(token&&shop){
-        // Save per-store (so connecting one store never clobbers the other's creds),
-        // plus the legacy single slot for back-compat.
+        // Save ONLY to the per-store slot. Writing the shared legacy slot too meant
+        // reconnecting one store clobbered the other's creds there — so a store is
+        // isolated to ng-shopify-creds-<store> and never overwrites the shared slot.
         const storeKey=/7b7b96-29/.test(shop)?"atyahara":"earth";
-        Promise.all([
-          saveK("ng-shopify-creds-v1",{store:shop,token}),
-          saveK(`ng-shopify-creds-${storeKey}`,{store:shop,token}),
-        ]).then(()=>{
+        saveK(`ng-shopify-creds-${storeKey}`,{store:shop,token}).then(()=>{
           window.history.replaceState(null,"",window.location.pathname);
           // Navigate to stock so user can push
           setMod("stock");setScreen("app");localStorage.setItem("ng-last-mod","stock");
