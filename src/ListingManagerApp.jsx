@@ -2668,7 +2668,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     const sym = currency === "INR" ? "₹" : currency === "USD" ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : currency === "JPY" ? "¥" : currency;
     return `${sym}${fmt(amount)}`;
   };
-  const isShipped = o => ["shipped", "completed", "fulfilled"].includes(String(o.status || "").toLowerCase()) || !!o.shipped_at;
+  const isShipped = o => !o._shipStepUndone && (["shipped", "completed", "fulfilled"].includes(String(o.status || "").toLowerCase()) || !!o.shipped_at);
   const isCancelled = o => !!o?.cancelled || ["canceled", "cancelled", "fully_refunded"].includes(String(o?.status || "").toLowerCase());
   const orderDate = o => o.date || o.created_at || new Date().toISOString().slice(0, 10);
   // Cancelling keeps the order (for stats/accounting) but marks it fully refunded — not deleted.
@@ -2761,6 +2761,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         ship_cost: draft.shipCost === "" ? (x.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         etsy_completed_at: now,
+        _shipStepUndone: false,
       } : x);
       const changedOrders = next.filter(x => sameReceipt(x));
       for (const order of changedOrders) await upsertItemK(ORDERS_KEY, order, { prepend: false });
@@ -2771,6 +2772,24 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       updateTrackingDraft(o, { loading: false, error: e.message || "Could not complete Etsy order", success: "" });
       return false;
     }
+  };
+  const undoShipStep = async o => {
+    if (!window.confirm("Undo step 1 locally?\n\nThis will move the fulfillment step back to Ship on Etsy. It will not undo shipment inside Etsy.")) return;
+    const receiptId = etsyReceiptId(o);
+    const current = await loadK(ORDERS_KEY);
+    const sameReceipt = x => isEtsyOrder(x) && String(etsyReceiptId(x)) === String(receiptId);
+    const next = (current || orders || []).map(x => sameReceipt(x) ? {
+      ...x,
+      status: x.status === "shipped" || x.status === "completed" || x.status === "fulfilled" ? "sold" : x.status,
+      shipped_at: "",
+      etsy_completed_at: "",
+      etsy_live_is_shipped: false,
+      _shipStepUndone: true,
+    } : x);
+    const changedOrders = next.filter(x => sameReceipt(x));
+    for (const order of changedOrders) await upsertItemK(ORDERS_KEY, order, { prepend: false });
+    window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+    updateTrackingDraft(o, { success: "Step 1 undone locally", error: "" });
   };
   const createAtyaharaInvoiceForOrder = async (order, invNoOverride = "", productDescOverride = "") => {
     const receiptId = String(etsyReceiptId(order) || "");
@@ -3727,6 +3746,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                                 <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>✓ {order.tracking_code || order.tracking_number || "Tracking sent"}</span>
                                 {/^https?:\/\//i.test(order.tracking_url || "") && <a href={order.tracking_url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, fontSize: 12, fontWeight: 750, textDecoration: "none" }}>Open tracking link</a>}
                                 <button onClick={() => setTrackingModalOrder(order)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Update tracking</button>
+                                <button onClick={() => undoShipStep(order)} title="Undo step 1 locally; does not change Etsy" style={{ background: "transparent", color: C.inkFaint, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 750, cursor: "pointer" }}>Undo</button>
                               </>
                             : <button onClick={() => setTrackingModalOrder(order)} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking & ship</button>}
                           {trackingDraft(order).error && needsEtsyReconnect(trackingDraft(order).error) && <button onClick={reconnectEtsy} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Reconnect Etsy</button>}
@@ -4598,6 +4618,12 @@ function EtsyLiveView() {
   const shopCcy    = firstOrder?.grandtotal?.currency_code || "USD";
   const ccySym     = shopCcy==="USD"?"$":shopCcy==="GBP"?"£":shopCcy==="EUR"?"€":shopCcy==="INR"?"₹":shopCcy;
   const gmv        = orders.reduce((s,o) => s+(o.grandtotal?.amount||0)/(o.grandtotal?.divisor||100), 0);
+  const listingMatchesStatus = (l, filter = stFilter) => {
+    if (filter === "all") return true;
+    if (filter === "inactive") return l.state === "inactive";
+    return l.state === filter;
+  };
+  const listingCount = filter => listings.filter(l => listingMatchesStatus(l, filter)).length;
 
   // Top tags by frequency (sidebar filter)
   const topTags = Object.entries(
@@ -4605,8 +4631,7 @@ function EtsyLiveView() {
   ).sort((a,b)=>b[1]-a[1]).slice(0,22);
 
   const visListings = listings.filter(l => {
-    if (stFilter==="active"   && l.state!=="active")   return false;
-    if (stFilter==="inactive" && l.state==="active")   return false;
+    if (!listingMatchesStatus(l)) return false;
     if (filterSection !== null && l.shop_section_id !== filterSection) return false;
     if (filterTags.size>0 && !l.tags?.some(t=>filterTags.has(t))) return false;
     if (search && !l.title?.toLowerCase().includes(search.toLowerCase())) return false;
@@ -4671,6 +4696,7 @@ function EtsyLiveView() {
         <div style={{display:"flex",gap:28,textAlign:"center",flexWrap:"wrap"}}>
           {[
             {label:"Active",  val:listings.filter(l=>l.state==="active").length, color:"#F56400"},
+            {label:"Drafts",  val:listings.filter(l=>l.state==="draft").length, color:C.amber},
             {label:"Orders",  val:orders.length,   color:C.green},
           ].map(s=>(
             <div key={s.label}>
@@ -4763,9 +4789,10 @@ function EtsyLiveView() {
               <div style={{marginBottom:20}}>
                 <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Status</div>
                 {[
-                  {k:"active",   label:"Active",   n:listings.filter(l=>l.state==="active").length},
-                  {k:"inactive", label:"Inactive", n:listings.filter(l=>l.state!=="active").length},
-                  {k:"all",      label:"All",      n:listings.length},
+                  {k:"active",   label:"Active",   n:listingCount("active")},
+                  {k:"draft",    label:"Draft",    n:listingCount("draft")},
+                  {k:"inactive", label:"Inactive", n:listingCount("inactive")},
+                  {k:"all",      label:"All",      n:listingCount("all")},
                 ].map(f=>(
                   <div key={f.k} onClick={()=>setStFilter(f.k)} style={{
                     display:"flex",alignItems:"center",justifyContent:"space-between",
@@ -4795,13 +4822,13 @@ function EtsyLiveView() {
                   }}>
                     <span style={{fontSize:13,fontWeight:filterSection===null?700:400,color:filterSection===null?"#F56400":C.ink}}>All</span>
                     <span style={{fontSize:11,color:filterSection===null?"#F56400":C.inkFaint,background:filterSection===null?"#F5640020":C.card,borderRadius:10,padding:"1px 7px"}}>
-                      {listings.filter(l=>stFilter==="active"?l.state==="active":stFilter==="inactive"?l.state!=="active":true).length}
+                      {listings.filter(l=>listingMatchesStatus(l)).length}
                     </span>
                   </div>
                   {sections.map(sec=>{
                     const cnt = listings.filter(l =>
                       l.shop_section_id===sec.shop_section_id &&
-                      (stFilter==="active"?l.state==="active":stFilter==="inactive"?l.state!=="active":true)
+                      listingMatchesStatus(l)
                     ).length;
                     const sel = filterSection===sec.shop_section_id;
                     return (
@@ -4888,17 +4915,18 @@ function EtsyLiveView() {
                       const price  = l.price ? fmtCur(rawAmt,rawDiv,rawCode) : "—";
                       const salePrice = bestPct>0 ? listedPrice*(1-bestPct/100) : null;
                       const active = l.state==="active";
+                      const draft = l.state==="draft";
                       return (
                         <div key={l.listing_id} style={{background:C.surface,
-                          border:`1.5px solid ${active?C.border:"#F5640025"}`,
+                          border:`1.5px solid ${active ? C.border : draft ? C.amber : "#F5640025"}`,
                           borderRadius:10,overflow:"hidden",display:"flex",flexDirection:"column",
-                          opacity:active?1:0.75}}>
+                          opacity:active || draft ? 1 : 0.75}}>
                           <div style={{height:148,background:C.card,overflow:"hidden",position:"relative"}}>
                             {imgUrl
                               ? <img src={imgUrl} alt={l.title} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
                               : <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>🏷️</div>}
                             <div style={{position:"absolute",top:6,left:6,
-                              background:active?"rgba(34,197,94,.85)":"rgba(0,0,0,.55)",
+                              background:active ? "rgba(34,197,94,.85)" : draft ? "rgba(180,83,9,.88)" : "rgba(0,0,0,.55)",
                               color:"#fff",borderRadius:4,fontSize:8,fontWeight:700,
                               padding:"2px 6px",textTransform:"uppercase",letterSpacing:.5}}>
                               {l.state}
