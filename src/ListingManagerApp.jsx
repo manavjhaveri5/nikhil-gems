@@ -1219,6 +1219,43 @@ function ListingForm({ initial, stock, onSave, onClose }) {
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  // AI-fill the Shopify override for repeatable wholesale listings: a simple title
+  // plus a "Pieces / Location / Size" block. Size & pieces-per-kg are inferred from
+  // the title/description; Location is left blank for the user. Fully editable after.
+  const [aiFillingShopify, setAiFillingShopify] = useState(false);
+  const [aiFillError, setAiFillError] = useState("");
+  const aiFillShopify = async () => {
+    if (!form.title?.trim() && !form.description?.trim()) { setAiFillError("Add a title or description first"); return; }
+    setAiFillingShopify(true); setAiFillError("");
+    try {
+      const prompt = `You prepare wholesale Shopify listings for a crystal & mineral business from its retail (Etsy) listing.
+
+Retail title: "${form.title || ""}"
+Retail description: "${String(form.description || "").slice(0, 1200)}"
+
+Return ONLY JSON (no markdown), with:
+- "simple_title": a short clean product name — drop size prefixes and marketing suffixes (e.g. "20-25mm Chiastolite Mini Heart - Natural Cross Matrix" -> "Chiastolite Mini Heart")
+- "size": the physical size if stated or clearly inferable from the title/description (e.g. "20-25mm"), else ""
+- "pieces_per_kg": an estimated pieces-per-kilogram range for a wholesale lot of this size/type (e.g. "80-100"), else ""
+
+JSON: {"simple_title":"...","size":"...","pieces_per_kg":"..."}`;
+      const res = await fetch("/api/claude", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 300, temperature: 0, messages: [{ role: "user", content: prompt }] }),
+      });
+      if (!res.ok) throw new Error(`AI error ${res.status}`);
+      const d = await res.json();
+      const txt = (d.content || []).map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(txt);
+      const desc = `Pieces : per kg ${parsed.pieces_per_kg || "___"}\nLocation : ___\nSize : ${parsed.size || "___"}`;
+      setForm(f => ({ ...f, shopify_title: parsed.simple_title || f.shopify_title || "", shopify_description: desc }));
+    } catch (e) {
+      setAiFillError(e.message || "Could not generate");
+    } finally {
+      setAiFillingShopify(false);
+    }
+  };
+
   // When category changes, update shape + productType so the API still works
   const applyCategory = val => {
     setCategory(val);
@@ -1359,13 +1396,19 @@ function ListingForm({ initial, stock, onSave, onClose }) {
                 <Label style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12, background: C.greenBg, color: C.green, borderRadius: 4, padding: "1px 7px", fontWeight: 700 }}>Shopify</span>
                   Title override
+                  <button type="button" onClick={aiFillShopify} disabled={aiFillingShopify}
+                    title="Fill a simple title + Pieces/Location/Size block from the main title & description"
+                    style={{ marginLeft: "auto", background: aiFillingShopify ? C.card : C.green, color: aiFillingShopify ? C.inkMid : "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 11, fontWeight: 800, cursor: aiFillingShopify ? "wait" : "pointer" }}>
+                    {aiFillingShopify ? "Filling…" : "✨ AI fill"}
+                  </button>
                 </Label>
                 <input value={form.shopify_title || ""} onChange={e => set("shopify_title", e.target.value)}
                   placeholder={form.title || "Same as main title"} style={FI()} />
                 <Label style={{ marginTop: 10 }}>Description override</Label>
                 <textarea value={form.shopify_description || ""} onChange={e => set("shopify_description", e.target.value)}
-                  rows={3} placeholder="Same as main description"
+                  rows={4} placeholder="Same as main description"
                   style={{ ...FI(), resize: "vertical" }} />
+                {aiFillError && <div style={{ fontSize: 11, color: C.red, marginTop: 4 }}>{aiFillError}</div>}
               </div>
             </div>
           </Section>
