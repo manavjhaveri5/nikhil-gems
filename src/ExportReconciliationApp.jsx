@@ -128,6 +128,71 @@ const ACCEPT_DOCS= "application/pdf,image/jpeg,image/jpg,image/png";
 // Store as JSON envelope {b64, mime} so we can handle both PDFs and images
 const packDoc    = (b64,mime) => mime&&mime!=="application/pdf" ? JSON.stringify({b64,mime}) : b64;
 const unpackDoc  = raw => { if(!raw) return null; try{ const p=JSON.parse(raw); if(p.b64&&p.mime) return p; }catch{} return {b64:raw,mime:"application/pdf"}; };
+const safeZipName = s => String(s || "file").replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim().replace(/^-+|-+$/g, "").slice(0, 120) || "file";
+const extFromDoc = (att, fallback = "pdf") => {
+  const name = String(att?.fileName || att?.name || "");
+  const m = name.match(/\.([a-z0-9]{2,8})(?:$|\?)/i);
+  if (m) return m[1].toLowerCase();
+  const type = String(att?.type || "");
+  if (/png/i.test(type)) return "png";
+  if (/jpe?g/i.test(type)) return "jpg";
+  if (/pdf/i.test(type)) return "pdf";
+  return fallback;
+};
+const blobToU8 = async blob => new Uint8Array(await blob.arrayBuffer());
+const textU8 = s => new TextEncoder().encode(String(s || ""));
+const crcTable = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+const crc32 = bytes => {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+const dosDateTime = (d = new Date()) => ({
+  time: ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | ((Math.floor(d.getSeconds() / 2)) & 31),
+  date: (((d.getFullYear() - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31),
+});
+const u16 = n => { const b = new Uint8Array(2); new DataView(b.buffer).setUint16(0, n, true); return b; };
+const u32 = n => { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, n >>> 0, true); return b; };
+const concatU8 = chunks => {
+  const total = chunks.reduce((s, c) => s + c.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  chunks.forEach(c => { out.set(c, off); off += c.length; });
+  return out;
+};
+const makeZipBlob = files => {
+  const locals = [], centrals = [];
+  let offset = 0;
+  const { time, date } = dosDateTime();
+  files.forEach(file => {
+    const name = textU8(file.name);
+    const data = file.data instanceof Uint8Array ? file.data : textU8(file.data);
+    const crc = crc32(data);
+    const local = concatU8([
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(time), u16(date), u32(crc),
+      u32(data.length), u32(data.length), u16(name.length), u16(0), name, data,
+    ]);
+    locals.push(local);
+    centrals.push(concatU8([
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(time), u16(date), u32(crc),
+      u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(offset), name,
+    ]));
+    offset += local.length;
+  });
+  const centralOffset = offset;
+  const central = concatU8(centrals);
+  const end = concatU8([u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length), u32(central.length), u32(centralOffset), u16(0)]);
+  return new Blob([...locals, central, end], { type: "application/zip" });
+};
 
 /* ══ CLOUD DOCUMENT STORE ════════════════════════════════════════
    Documents were previously only in this browser's IndexedDB, so
@@ -805,6 +870,8 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
   const [remittances, setRemittances] = useState([]);
   const [remitModal, setRemitModal] = useState(null); // { inv } while the picker is open
   const [remitBusy, setRemitBusy] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const fileRef = useRef(null);
   const bankFileRef = useRef(null);
   const remitFileRef = useRef(null);
@@ -855,6 +922,23 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
       bankSubmittedAt: status === "submitted" ? (latest.bankSubmittedAt || ts) : latest.bankSubmittedAt,
       reconDone: status === "done",
       reconDoneAt: status === "done" ? ts : null,
+    }));
+  };
+
+  const submittedDateValue = inv => {
+    const raw = inv.bankSubmittedAt || inv.submittedToBankAt || "";
+    return raw ? String(raw).slice(0, 10) : "";
+  };
+  const setSubmittedDate = async (inv, date) => {
+    if (!date) return;
+    const prev = inv.bankSubmittedAt || "";
+    const time = String(prev).includes("T") ? String(prev).slice(10) : "T12:00:00.000Z";
+    await saveInvoicePatch(inv.id, latest => ({
+      ...latest,
+      bankStatus: "submitted",
+      bankSubmittedAt: `${date}${time}`,
+      reconDone: false,
+      reconDoneAt: null,
     }));
   };
 
@@ -1232,6 +1316,94 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
     } finally { setBusy(null); }
   };
 
+  const downloadBankSubmissionPack = async () => {
+    const targets = selectedRows;
+    if (!targets.length) { setMsg({ ok: false, text: "Select invoice rows first." }); return; }
+    setBulkBusy(true); setMsg(null);
+    const files = [];
+    const indexRows = [];
+    const todayStr = new Date().toISOString().slice(0, 10);
+    let packetOk = 0, packetFail = 0, remittanceFiles = 0;
+    const csvCell = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    try {
+      for (const { inv, bySlot } of targets) {
+        const rem = linkedRemit(inv);
+        const folder = safeZipName(inv.invNo || inv.id);
+        const packetMissing = missingPacketDocs(bySlot);
+        let packetFile = "", remFile = "", note = packetMissing.length ? `Missing: ${packetMissing.join(", ")}` : "";
+        try {
+          const { blob, autoInvoice, missing } = await buildPacketBlob(inv, bySlot);
+          packetFile = `${folder}/01-packet-${safeZipName(inv.invNo || inv.id)}.pdf`;
+          files.push({ name: packetFile, data: await blobToU8(blob) });
+          packetOk++;
+          if (autoInvoice) note = [note, "Invoice rendered from invoice module"].filter(Boolean).join("; ");
+          if (missing.length === 1) note = [note, `Packet allowed with missing ${missing[0]}`].filter(Boolean).join("; ");
+        } catch (err) {
+          packetFail++;
+          note = [note, `Packet not built: ${err?.message || "missing documents"}`].filter(Boolean).join("; ");
+        }
+        if (rem?.attachment?.url) {
+          try {
+            const res = await fetch(rem.attachment.url);
+            if (!res.ok) throw new Error("remittance fetch failed");
+            const blob = await res.blob();
+            remFile = `${folder}/02-remittance-${safeZipName(rem.irt || rem.attachment.fileName || "remittance")}.${extFromDoc(rem.attachment)}`;
+            files.push({ name: remFile, data: await blobToU8(blob) });
+            remittanceFiles++;
+          } catch (err) {
+            note = [note, `Remittance file not included: ${err?.message || "fetch failed"}`].filter(Boolean).join("; ");
+          }
+        } else if (rem) {
+          note = [note, "Remittance linked but no file attached"].filter(Boolean).join("; ");
+        } else {
+          note = [note, "No remittance linked"].filter(Boolean).join("; ");
+        }
+        indexRows.push({
+          invoice: inv.invNo || "",
+          buyer: buyerName(inv),
+          date: inv.date || "",
+          currency: inv.currency || "",
+          invoiceAmount: +inv.totalAmt || 0,
+          paidAmount: +inv.paidAmount || (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0) || 0,
+          remittanceIrt: rem?.irt || inv._remittanceIrt || "",
+          remittanceDate: rem?.date || rem?.dateRaw || "",
+          remittanceAmount: rem?.amount || "",
+          remittanceCurrency: rem?.currency || inv._remittanceCurrency || "",
+          allocated: inv._remittanceAlloc || "",
+          shippingBill: inv.sbNo || "",
+          status: NG_BANK_STATUS[ngStatusOf(inv)]?.label || ngStatusOf(inv),
+          packetFile,
+          remittanceFile: remFile,
+          notes: note,
+        });
+      }
+      const headers = ["invoice", "buyer", "date", "currency", "invoiceAmount", "paidAmount", "remittanceIrt", "remittanceDate", "remittanceAmount", "remittanceCurrency", "allocated", "shippingBill", "status", "packetFile", "remittanceFile", "notes"];
+      const csv = [headers.map(csvCell).join(","), ...indexRows.map(r => headers.map(h => csvCell(r[h])).join(","))].join("\n");
+      const htmlRows = indexRows.map(r => `<tr>${headers.map(h => `<td>${String(r[h] ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))}</td>`).join("")}</tr>`).join("");
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Bank Submission Index</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#1a1308}h1{font-size:20px;margin:0 0 6px}.sub{font-size:12px;color:#666;margin-bottom:18px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:6px 8px;font-size:11px;vertical-align:top}th{background:#f3efe6;text-transform:uppercase;font-size:10px;text-align:left}</style></head><body><h1>Nikhil Gems Bank Submission Index</h1><div class="sub">${todayStr} · ${indexRows.length} invoice(s) selected · ${remittanceFiles} remittance file(s)</div><table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${htmlRows}</tbody></table></body></html>`;
+      files.unshift({ name: "00-bank-submission-index.csv", data: textU8(csv) });
+      files.unshift({ name: "00-bank-submission-index.html", data: textU8(html) });
+      const zip = makeZipBlob(files);
+      const url = URL.createObjectURL(zip);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Bank_Submission_${todayStr}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      if (window.confirm(`Downloaded bank submission pack for ${targets.length} invoice(s).\n\nMark selected rows as Submitted to bank?`)) {
+        for (const { inv } of targets) await setBankStatus(inv, "submitted");
+      }
+      setMsg({ ok: packetFail === 0, text: `Bank submission ZIP ready — ${packetOk} packet(s), ${remittanceFiles} remittance file(s), ${packetFail ? `${packetFail} packet(s) skipped; see index notes.` : "all packets included."}` });
+      setSelectedIds(new Set());
+    } catch (err) {
+      setMsg({ ok: false, text: `Bank submission pack failed: ${err?.message || "check documents"}` });
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const cycleStatus = async inv => {
     const next = NG_BANK_STATUS[ngStatusOf(inv)].next;
     try {
@@ -1318,6 +1490,21 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
   const completeCount = rows.filter(r => r.missing.length === 0).length;
   const paidCount = rows.filter(r => payInfo(r.inv).t === "✓ Received").length;
   const doneCount = rows.filter(r => ngStatusOf(r.inv) === "done").length;
+  const visibleIds = new Set(rows.map(r => r.inv.id));
+  const selectedRows = rows.filter(r => selectedIds.has(r.inv.id));
+  const allSelected = rows.length > 0 && rows.every(r => selectedIds.has(r.inv.id));
+  const toggleRowSelected = id => setSelectedIds(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const toggleAllSelected = () => setSelectedIds(prev => allSelected ? new Set() : new Set([...prev, ...rows.map(r => r.inv.id)]));
+  useEffect(() => {
+    setSelectedIds(prev => {
+      const next = new Set([...prev].filter(id => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [rows.map(r => r.inv.id).join("|")]);
 
   // Which of the bank's outstanding SBs do we already hold? Matched on the
   // AI-read SB number, or on digit runs in shipping-bill file names (no AI).
@@ -1543,6 +1730,11 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
             <input type="checkbox" checked={missingOnly} onChange={e => setMissingOnly(e.target.checked)} />
             Missing docs only
           </label>
+          <button onClick={downloadBankSubmissionPack} disabled={bulkBusy || selectedRows.length === 0}
+            title={selectedRows.length ? "Download a ZIP with packet PDFs, remittance files, and an invoice/remittance index" : "Select invoice rows first"}
+            style={{ background: selectedRows.length ? C.blueBg : C.card, border: `1px solid ${selectedRows.length ? C.blue : C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12, fontWeight: 800, color: selectedRows.length ? C.blue : C.inkFaint, cursor: bulkBusy || selectedRows.length === 0 ? "default" : "pointer", whiteSpace: "nowrap", opacity: bulkBusy ? .7 : 1 }}>
+            {bulkBusy ? "Building ZIP..." : `Bank submission ZIP${selectedRows.length ? ` (${selectedRows.length})` : ""}`}
+          </button>
           <button onClick={() => setManualOpen(o => !o)}
             style={{ background: manualOpen ? C.goldLight : C.surface, border: `1px solid ${manualOpen ? C.gold : C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 12, fontWeight: 700, color: manualOpen ? C.amber : C.inkMid, cursor: "pointer", whiteSpace: "nowrap" }}>
             + Manual entry
@@ -1649,6 +1841,9 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
           <thead>
             <tr>
+              <th style={{ ...th, width: 34 }}>
+                <input type="checkbox" checked={allSelected} onChange={toggleAllSelected} title={allSelected ? "Clear selected rows" : "Select all visible rows"} />
+              </th>
               <th style={th}>Invoice</th>
               <th style={th}>Buyer</th>
               <th style={th}>Amount</th>
@@ -1659,7 +1854,7 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={5 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
+              <tr><td colSpan={6 + NG_DOC_SLOTS.length} style={{ ...td, textAlign: "center", padding: 40, color: C.inkFaint }}>
                 {invoices.length === 0 ? "Loading invoices…" : "No invoices match"}
               </td></tr>
             )}
@@ -1672,6 +1867,9 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
               const printBusy = busy === `${inv.id}:print`;
               return (
                 <tr key={inv.id} style={{ background: done || (missing.length === 0 && pay.t === "✓ Received") ? C.greenBg : "transparent", opacity: done ? .72 : 1 }}>
+                  <td style={{ ...td, width: 34 }}>
+                    <input type="checkbox" checked={selectedIds.has(inv.id)} onChange={() => toggleRowSelected(inv.id)} title={`Select ${inv.invNo || "invoice"}`} />
+                  </td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <div style={{ fontWeight: 700 }}>{inv.invNo || "—"}</div>
                     <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>{inv.date || ""}</div>
@@ -1713,6 +1911,14 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
                             style={{ background: tone.bg, border: `1px solid ${tone.c}`, color: tone.c, borderRadius: 999, padding: "3px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                             <span key={st}>{NG_BANK_STATUS[st].label}</span>
                           </button>
+                          {st === "submitted" && (
+                            <label title="Submitted-to-bank date"
+                              style={{ display: "inline-flex", alignItems: "center", gap: 4, marginLeft: 2, fontSize: 10, color: C.inkFaint, opacity: .62, cursor: "pointer" }}>
+                              <span>{submittedDateValue(inv) || "date"}</span>
+                              <input type="date" value={submittedDateValue(inv)} onChange={e => setSubmittedDate(inv, e.target.value)}
+                                style={{ width: 18, height: 18, opacity: .18, border: "none", padding: 0, background: "transparent", color: C.inkFaint, cursor: "pointer" }} />
+                            </label>
+                          )}
                           {done && <DocCell inv={inv} slot={{ key: "brc", label: "BRC" }} atts={bySlot.brc} />}
                         </div>
                       );
@@ -1731,11 +1937,6 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
                   ))}
                   <td style={{ ...td, whiteSpace: "nowrap" }}>
                     <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-                      <button onClick={() => handlePacketClick(inv, bySlot)} disabled={packetBusy || printBusy || packetMissing.length > 1}
-                        title={packetMissing.length > 1 ? `Missing: ${packetMissing.join(", ")}` : packetMissing.length === 1 ? `Download anyway. Missing: ${packetMissing[0]}` : st === "packet_downloaded" ? "Mark this packet as submitted to bank" : "Download combined PDF: invoice from the existing invoice record + shipping label + shipping bill + BOI declaration"}
-                        style={{ background: packetMissing.length > 1 ? C.card : C.ink, border: `1px solid ${packetMissing.length > 1 ? C.border : C.ink}`, borderRadius: 7, padding: "4px 9px", fontSize: 10.5, fontWeight: 800, color: packetMissing.length > 1 ? C.inkFaint : "#fff", cursor: packetBusy || printBusy || packetMissing.length > 1 ? "default" : "pointer", whiteSpace: "nowrap", opacity: packetBusy ? .65 : 1 }}>
-                        {packetBusy ? "Building..." : st === "packet_downloaded" ? "Submit to bank" : "Download packet"}
-                      </button>
                       <button onClick={() => printPacket(inv, bySlot)} disabled={packetBusy || printBusy || packetMissing.length > 1}
                         title={packetMissing.length > 1 ? `Missing: ${packetMissing.join(", ")}` : packetMissing.length === 1 ? `Print anyway. Missing: ${packetMissing[0]}` : "Print packet without downloading"}
                         style={{ background: packetMissing.length > 1 ? C.card : C.surface, border: `1px solid ${packetMissing.length > 1 ? C.border : C.ink}`, borderRadius: 7, padding: "4px 8px", fontSize: 10.5, fontWeight: 800, color: packetMissing.length > 1 ? C.inkFaint : C.ink, cursor: packetBusy || printBusy || packetMissing.length > 1 ? "default" : "pointer", whiteSpace: "nowrap", opacity: printBusy ? .65 : 1 }}>
