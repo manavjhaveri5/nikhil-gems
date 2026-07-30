@@ -372,6 +372,40 @@ export default async function handler(req, res) {
     return res.json({ success: true, shop: SHOP, store_key: store_key || "", results: orders });
   }
 
+  if (action === "fulfill_order") {
+    // Marks a Shopify order fulfilled with tracking (Step 1 "Ship" for Shopify stores).
+    // Modern flow: list the order's fulfillment orders, then create a fulfillment
+    // against the open one(s), optionally notifying the customer.
+    const orderId = String(body.order_id || body.orderId || "").replace(/[^0-9]/g, "");
+    if (!orderId) return res.status(400).json({ error: "order_id required" });
+    const foRes = await sr("GET", `/orders/${orderId}/fulfillment_orders.json`);
+    if (!foRes.ok) return res.status(400).json({ error: foRes.error || "Could not read fulfillment orders", store_key: store_key || "" });
+    const openFOs = (foRes.data?.fulfillment_orders || []).filter(fo => ["open", "in_progress", "scheduled"].includes(fo.status));
+    if (!openFOs.length) return res.json({ success: true, already_fulfilled: true, store_key: store_key || "" });
+    const trackingInfo = {};
+    if (body.tracking_number) trackingInfo.number  = String(body.tracking_number);
+    if (body.tracking_company) trackingInfo.company = String(body.tracking_company);
+    if (body.tracking_url)    trackingInfo.url     = String(body.tracking_url);
+    const payload = {
+      fulfillment: {
+        line_items_by_fulfillment_order: openFOs.map(fo => ({ fulfillment_order_id: fo.id })),
+        notify_customer: body.notify !== false,
+        ...(Object.keys(trackingInfo).length ? { tracking_info: trackingInfo } : {}),
+      },
+    };
+    const fRes = await sr("POST", `/fulfillments.json`, payload);
+    if (!fRes.ok) return res.status(400).json({ error: fRes.error || "Fulfillment failed", store_key: store_key || "" });
+    const f = fRes.data?.fulfillment || {};
+    return res.json({
+      success: true,
+      store_key: store_key || "",
+      fulfillment_id: f.id || null,
+      status: f.status || "",
+      tracking_number: f.tracking_number || body.tracking_number || "",
+      tracking_url: (f.tracking_urls && f.tracking_urls[0]) || body.tracking_url || "",
+    });
+  }
+
   if (action === "list_products") {
     const cleanLimit = Math.min(Math.max(parseInt(limit, 10) || 250, 1), 250);
     const qs = new URLSearchParams({
