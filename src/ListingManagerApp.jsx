@@ -2343,6 +2343,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
               listing_title:     so.title || so.items?.[0]?.title || `Shopify order ${so.orderId}`,
               listing_sku:       so.sku || so.items?.[0]?.sku || "",
               listing_image:     so.image || "",
+              qty:               +so.qty || so.items?.reduce((s, i) => s + (+i.qty || 0), 0) || 1,
+              variations:        (so.items?.[0]?.variant ? [{ name: "Variant", value: so.items[0].variant }] : []),
               buyer_name:        so.buyer || "",
               buyer_email:       so.email || "",
               buyer_country:     so.ship?.country || "",
@@ -2368,7 +2370,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
               source:            `shopify-${s.store_key}-sync`,
             };
             const prev = prevById.get(id);
-            const merged = { ...norm, ...prev, status: norm.status || prev?.status, cancelled_at: norm.cancelled_at || prev?.cancelled_at, sale_price: norm.sale_price, order_total: norm.order_total, listing_image: norm.listing_image || prev?.listing_image || "" };
+            const merged = { ...norm, ...prev, status: norm.status || prev?.status, cancelled_at: norm.cancelled_at || prev?.cancelled_at, sale_price: norm.sale_price, order_total: norm.order_total, qty: norm.qty, listing_image: norm.listing_image || prev?.listing_image || "" };
             if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) await upsertItemK(ORDERS_KEY, merged, { prepend: true });
           }
         } catch {}
@@ -3696,6 +3698,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       <span style={{ fontSize: 14, fontWeight: 750, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                         {order.listing_title}
                       </span>
+                      {+order.qty > 1 && <span style={{ flexShrink: 0, fontSize: 11, fontWeight: 850, color: p.color || C.gold, background: (p.color || C.gold) + "1e", borderRadius: 6, padding: "1px 7px" }}>× {order.qty}</span>}
                     </div>
                     <div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {[order.buyer_name, order.buyer_email, order.listing_sku || order.etsy_transaction_id || order.platform_order_id]

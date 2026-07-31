@@ -363,6 +363,8 @@ export default async function handler(req, res) {
         email: o.email || cust.email || "",
         title: first.title || "",
         sku: first.sku || "",
+        qty: li.reduce((s, l) => s + (+l.quantity || 0), 0) || 1,
+        variant: first.variant_title || "",
         productId: first.product_id ? String(first.product_id) : "",
         image: "",
         items: li.map(l => ({ title: l.title, sku: l.sku || "", qty: l.quantity, price: +l.price || 0, variant: l.variant_title || "" })),
