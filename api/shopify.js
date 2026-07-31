@@ -492,6 +492,18 @@ export default async function handler(req, res) {
     return res.json({ success: true, updated, total: ids.length, results });
   }
 
+  if (action === "bulk_delete") {
+    // Permanently delete products from the store (used by the store view's bulk bar).
+    const ids = [...new Set((body.product_ids || []).map(String).filter(Boolean))].slice(0, 100);
+    if (!ids.length) return res.status(400).json({ error: "No products selected" });
+    const results = [];
+    for (const id of ids) {
+      const r = await sr("DELETE", `/products/${id}.json`);
+      results.push({ id, ok: r.ok, error: r.ok ? "" : r.error });
+    }
+    return res.json({ success: true, deleted: results.filter(r => r.ok).length, total: ids.length, results });
+  }
+
   if (action === "update_product") {
     if (!product?.id) return res.status(400).json({ error: "product.id required" });
     const updatePayload = {

@@ -6535,6 +6535,30 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
       setBulkBusy(false);
     }
   };
+  const runBulkDelete = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) { showToast("Select products first"); return; }
+    if (!window.confirm(`Permanently delete ${ids.length} product${ids.length === 1 ? "" : "s"} from the ${storeName} Shopify store?\n\nThis removes them from the live store and cannot be undone.`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await fetch("/api/shopify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "bulk_delete", store_key: STORE, product_ids: ids,
+          ...(creds?.token ? { shopStore: creds.store, shopToken: creds.token } : {}),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.error || "Bulk delete failed");
+      showToast(`Deleted ${d.deleted}/${d.total} from ${storeName}`);
+      clearSelection();
+      fetchProducts(creds, true, collectionFilter);
+    } catch (e) {
+      showToast(e.message || "Bulk delete failed");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
   const linkLocal = p => {
     const v = firstVariant(p);
     const norm = s => String(s || "").trim().toLowerCase();
@@ -6705,6 +6729,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
           <input value={bulkTagInput} onChange={e => setBulkTagInput(e.target.value)} placeholder="tag e.g. mini-hearts" style={{ ...FI(), width: 200 }} />
           <button disabled={bulkBusy} onClick={() => runBulkTag("add")} style={{ background: platform.color, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>{bulkBusy ? "Working…" : "Add tag"}</button>
           <button disabled={bulkBusy} onClick={() => runBulkTag("remove")} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 800, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>Remove tag</button>
+          <button disabled={bulkBusy} onClick={runBulkDelete} title="Permanently delete the selected products from the Shopify store" style={{ background: C.redBg, color: C.red, border: `1px solid ${C.red}55`, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>🗑 Delete</button>
           <button onClick={() => setSelectedIds(new Set(visible.map(x => String(x.id))))} style={{ background: "transparent", color: C.inkMid, border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Select all {visible.length}</button>
           <button onClick={clearSelection} style={{ background: "transparent", color: C.inkMid, border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Clear</button>
         </div>
