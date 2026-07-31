@@ -6598,7 +6598,15 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
     .filter(p => !tagFilter || productTags(p).includes(tagFilter))
     .filter(p => !typeFilter || p.product_type === typeFilter)
     .filter(collectionMatchesProduct)
-    .filter(p => !search || [p.title, p.handle, productTags(p).join(" "), p.product_type, firstVariant(p).sku].join(" ").toLowerCase().includes(search.toLowerCase()))
+    .filter(p => {
+      // Word-based (AND) match, like Shopify's own search: every typed word must appear
+      // somewhere — so "mini heart" also matches "Mini Thulite Heart", not just the
+      // literal "mini heart" substring.
+      const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+      if (!terms.length) return true;
+      const hay = [p.title, p.handle, productTags(p).join(" "), p.product_type, firstVariant(p).sku].join(" ").toLowerCase();
+      return terms.every(t => hay.includes(t));
+    })
     .sort((a, b) =>
       sortBy === "title"   ? String(a.title || "").localeCompare(String(b.title || ""))
     : sortBy === "updated" ? new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
