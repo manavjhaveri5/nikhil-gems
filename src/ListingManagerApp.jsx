@@ -6328,6 +6328,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const CREDS_KEY = STORE === "atyahara" ? "ng-shopify-creds-atyahara" : "ng-shopify-creds-earth";
   const CACHE_KEY = `ng-shopify-${STORE}-products-cache-v1`;
   const storeName = STORE === "atyahara" ? "Atyahara" : "Earth Editions";
+  const ccySym = platform?.currency === "INR" ? "₹" : platform?.currency === "GBP" ? "£" : platform?.currency === "EUR" ? "€" : "$";
   const platform = PLATFORMS.find(p => p.key === platKey);
   const [products, setProducts] = useState([]);
   const [collections, setCollections] = useState([]);
@@ -6787,7 +6788,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
                     </div>
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-                    <div style={{ fontSize: 15, fontWeight: 850, color: platform.color }}>{v.price ? `$${fmt(v.price)}` : "No price"}</div>
+                    <div style={{ fontSize: 15, fontWeight: 850, color: platform.color }}>{v.price ? `${ccySym}${fmt(v.price)}` : "No price"}</div>
                     <div style={{ fontSize: 11, color: C.inkFaint }}>{v.inventory_quantity ?? 0} in stock</div>
                   </div>
                   <div style={{ display: "flex", gap: 5, marginTop: 9 }}>
