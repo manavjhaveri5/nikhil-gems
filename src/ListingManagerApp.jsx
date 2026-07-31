@@ -7054,7 +7054,13 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       if (listing.etsy_description) ai.etsy_description = listing.etsy_description;
     } else if (pkey === "shopify_aty" || pkey === "shopify_earth") {
       if (listing.shopify_title)       ai.shopify_title       = listing.shopify_title;
-      if (listing.shopify_description) ai.shopify_description = listing.shopify_description;
+      if (listing.shopify_description) {
+        // Shopify body_html is HTML, so a plain-text override (e.g. the AI-filled
+        // "Pieces / Location / Size" block) loses its line breaks. Convert newlines
+        // to <br> when the text isn't already HTML.
+        const d = listing.shopify_description;
+        ai.shopify_description = /<[a-z][\s\S]*>/i.test(d) ? d : d.replace(/\r?\n/g, "<br>\n");
+      }
     }
     listing = ensureListingOrderId({ ...listing, _ai: ai });
 
