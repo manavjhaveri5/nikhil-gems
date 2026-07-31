@@ -11026,7 +11026,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
     currency:"USD",portLading:"Mumbai, India",portDischarge:"",
 	    terms:"T/T in advance",lutArn:activeCO.lutArn,
     items:[newInvItem()],
-    shippingCost:0,discountAmt:0,
+    shippingCost:0,discountAmt:0,showDiscount:true,
     notes:"Certificate of Origin included with shipment.",
     termsText:"Supply Meant For Export Under Bond Or Letter of Undertaking\nWithout Payment Of Intergated Tax(IGST).",
     status:"draft",paidAmount:0,payments:[],
@@ -12006,6 +12006,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             </div>
           </div>
           <div style={{display:"flex",justifyContent:"flex-end",gap:12,alignItems:"center",marginBottom:8}}>
+            {(+draft.discountAmt>0)&&<label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.inkMid,cursor:"pointer",marginRight:"auto",marginLeft:8}} title="Show the discount as a line on the final invoice"><input type="checkbox" checked={draft.showDiscount!==false} onChange={e=>setDraft(d=>({...d,showDiscount:e.target.checked}))}/>Show on invoice</label>}
             <label style={{fontSize:10,fontWeight:700,color:C.red,textTransform:"uppercase",whiteSpace:"nowrap"}}>Discount</label>
             <div style={{display:"flex",alignItems:"center",gap:4}}>
               <span style={{fontSize:11,color:C.inkMid}}>{draft.currency}</span>
@@ -12543,6 +12544,7 @@ ${gstMode!=="none"&&totalTax>0?`<table style="width:100%;margin-bottom:3px;font-
       <table style="margin-left:auto">
         <tr><td style="padding:2px 10px">Sub Total</td><td style="text-align:right;padding:2px 0">${inv.currency} ${subTotal.toFixed(2)}</td></tr>
         ${freight>0?`<tr><td style="padding:2px 10px">Shipping &amp; Freight</td><td style="text-align:right;padding:2px 0">${inv.currency} ${freight.toFixed(2)}</td></tr>`:""}
+        ${(inv.showDiscount!==false&&discount>0)?`<tr><td style="padding:2px 10px">Discount</td><td style="text-align:right;padding:2px 0">- ${inv.currency} ${discount.toFixed(2)}</td></tr>`:""}
         <tr><td style="padding:2px 10px"><b>Total</b></td><td style="text-align:right;padding:2px 0;font-weight:700">${inv.currency} ${total.toFixed(2)}</td></tr>
       </table>
     </td>
@@ -12696,6 +12698,7 @@ async function renderBasicInvoicePacketPdf(inv,buyers,company){
   line("--------------------------------------------------------------------------------",40,8);
   line(`Sub Total: ${inv.currency||""} ${subTotal.toFixed(2)}`,360,10,bold);
   if(+inv.shippingCost>0)line(`Shipping/Freight: ${inv.currency||""} ${(+inv.shippingCost).toFixed(2)}`,360,9);
+  if(inv.showDiscount!==false&&+inv.discountAmt>0)line(`Discount: - ${inv.currency||""} ${(+inv.discountAmt).toFixed(2)}`,360,9);
   line(`Total: ${inv.currency||""} ${(+total||0).toFixed(2)}`,360,12,bold);
   y-=10;
   line(`Total in words: ${(inv.currency||"")} ${numToWords(Math.round((+total||0)*100)/100)}`,40,9);
