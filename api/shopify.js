@@ -312,9 +312,13 @@ export default async function handler(req, res) {
                    : store_key === "earth"    ? (process.env.SHOPIFY_EARTH_CLIENT_ID || process.env.SHOPIFY_CLIENT_ID)
                    : process.env.SHOPIFY_CLIENT_ID;
     if (!clientId) return res.status(400).json({ error: `No Shopify client id configured (SHOPIFY_CLIENT_ID / SHOPIFY_${store_key === "atyahara" ? "ATY" : "EARTH"}_CLIENT_ID)` });
-    const scope = "read_products,write_products,read_orders,read_all_orders";
-    const redirect = `${REDIRECT_BASE}/api/shopify`;
-    const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&redirect_uri=${encodeURIComponent(redirect)}`;
+    // Match each store's app: Earth's ERP-2 app whitelists /api/shopify-auth (routed to
+    // /api/shopify by a rewrite) and only has product scopes; Atyahara's whitelists
+    // /api/shopify with order scopes. Requesting scopes the app lacks fails the authorize.
+    const isEarth = store_key === "earth";
+    const scope = isEarth ? "read_products,write_products" : "read_products,write_products,read_orders,read_all_orders";
+    const redirect = `${REDIRECT_BASE}${isEarth ? "/api/shopify-auth" : "/api/shopify"}`;
+    const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&redirect_uri=${encodeURIComponent(redirect)}&state=erp`;
     return res.json({ success: true, url });
   }
 

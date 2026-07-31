@@ -15,7 +15,8 @@
   },
   "rewrites": [
     { "source": "/api/openai", "destination": "/api/claude?_ai=openai" },
-    { "source": "/api/embed", "destination": "/api/claude?_ai=embed" }
+    { "source": "/api/embed", "destination": "/api/claude?_ai=embed" },
+    { "source": "/api/shopify-auth", "destination": "/api/shopify" }
   ],
   "headers": [
     {
