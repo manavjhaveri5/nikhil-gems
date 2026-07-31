@@ -6331,6 +6331,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const [statusFilter, setStatusFilter] = useState("active");
   const [sortBy, setSortBy] = useState("created"); // created (recently added) | updated | title
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [misplacedOnly, setMisplacedOnly] = useState(false);
   const [bulkTagInput, setBulkTagInput] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
   const [tagFilter, setTagFilter] = useState("");
@@ -6558,7 +6559,17 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
     const haystack = [p.title, p.handle, p.product_type, productTags(p).join(" ")].join(" ").toLowerCase();
     return expanded.some(t => haystack.includes(t));
   };
+  // Misrouted-product detector: while the shared-credential bug was live, Earth Ed.
+  // publishes were created in the Atyahara store but recorded under each listing's
+  // shopify_earth link. So an Atyahara-store product whose id matches a listing's
+  // shopify_earth product_id was almost certainly published here by mistake.
+  const earthLinkedIds = STORE === "atyahara"
+    ? new Set((listings || []).map(l => String(l.platforms?.shopify_earth?.product_id || "")).filter(Boolean))
+    : new Set();
+  const isMisplaced = p => STORE === "atyahara" && earthLinkedIds.has(String(p.id));
+  const misplacedCount = STORE === "atyahara" ? products.filter(isMisplaced).length : 0;
   const visible = products
+    .filter(p => !misplacedOnly || isMisplaced(p))
     .filter(p => statusFilter === "all" || p.status === statusFilter)
     .filter(p => !tagFilter || productTags(p).includes(tagFilter))
     .filter(p => !typeFilter || p.product_type === typeFilter)
@@ -6681,6 +6692,13 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
               style={{ ...FI(), width: mob() ? "100%" : 360, marginLeft: "auto", borderRadius: 10 }} />
           </div>
 
+      {misplacedCount > 0 && (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", background: C.redBg, border: `1.5px solid ${C.red}55`, borderRadius: 10, padding: "10px 13px", marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 850, color: C.red }}>⚠ {misplacedCount} product{misplacedCount === 1 ? "" : "s"} here look misrouted from Earth Ed.</span>
+          <span style={{ fontSize: 11.5, color: C.inkMid }}>These are linked to Earth Ed. listings in the ERP but sit in the Atyahara store (the old publish bug). Review and delete them from Atyahara.</span>
+          <button onClick={() => setMisplacedOnly(v => !v)} style={{ marginLeft: "auto", background: misplacedOnly ? C.red : C.surface, color: misplacedOnly ? "#fff" : C.red, border: `1px solid ${C.red}55`, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap" }}>{misplacedOnly ? "Show all" : "Show only these"}</button>
+        </div>
+      )}
       {selectedIds.size > 0 && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: platform.color + "14", border: `1.5px solid ${platform.color}45`, borderRadius: 10, padding: "10px 12px", marginBottom: 10, position: "sticky", top: 6, zIndex: 5 }}>
           <span style={{ fontSize: 12, fontWeight: 850, color: platform.color }}>{selectedIds.size} selected</span>
@@ -6711,6 +6729,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
                   {img ? <img src={img} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
                     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>🌍</div>}
                   <span style={{ position: "absolute", top: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, textTransform: "uppercase", background: p.status === "active" ? C.greenBg : C.card, color: p.status === "active" ? C.green : C.inkMid, border: `1px solid ${C.border}` }}>{p.status}</span>
+                  {isMisplaced(p) && <span title="Linked to an Earth Ed. listing — likely misrouted here" style={{ position: "absolute", bottom: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, background: C.red, color: "#fff" }}>⚠ from Earth Ed.</span>}
                   <label onClick={e => e.stopPropagation()} title="Select for bulk tagging" style={{ position: "absolute", top: 6, right: 6, display: "grid", placeItems: "center", width: 26, height: 26, borderRadius: 7, background: selectedIds.has(String(p.id)) ? platform.color : "rgba(255,255,255,.9)", border: `1.5px solid ${selectedIds.has(String(p.id)) ? platform.color : C.border}`, cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,.15)" }}>
                     <input type="checkbox" checked={selectedIds.has(String(p.id))} onChange={() => toggleSelect(String(p.id))} style={{ width: 15, height: 15, cursor: "pointer", accentColor: platform.color }} />
                   </label>
