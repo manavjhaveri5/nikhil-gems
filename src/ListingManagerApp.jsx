@@ -4453,22 +4453,30 @@ function EtsyLiveView() {
       const oauth = !!pd.has_oauth_token;
       setHasOAuth(oauth);
 
-      // parse listings — fallback to plain `listings` if listings_all errors or returns 0
-      let newListings = [];
+      // Listings: listings_all covers every state but can time out on a big shop and
+      // silently cap (~100). So take whatever it returns, then ALSO paginate active
+      // listings client-side — each page is its own quick request, immune to the 60s
+      // function timeout — and merge, deduped by listing_id. Guarantees the full
+      // active catalog loads (fixes "only 100 of ~785 showed").
+      const byId = new Map();
       if (lr.ok) {
         const ld = await lr.json();
-        newListings = ld.results || [];
+        (ld.results || []).forEach(l => byId.set(String(l.listing_id), l));
         if (ld.stateErrors?.length) {
           const msgs = ld.stateErrors.map(e => `${e.state}: ${e.error}`).join(" · ");
           setListingErr(`Some listing states failed — ${msgs}`);
         }
       }
-      // if listings_all returned nothing, try the plain active listings endpoint as fallback
-      if (newListings.length === 0) {
-        const fb = await fetch("/api/etsy?action=listings&limit=100", { headers: authHdr });
-        if (fb.ok) { const fbd = await fb.json(); newListings = fbd.results || []; }
-        else { const fbe = await fb.json(); setListingErr(fbe.error || "Listings fetch failed"); }
-      }
+      try {
+        for (let offset = 0; offset < 5000; offset += 100) {
+          const fb = await fetch(`/api/etsy?action=listings&limit=100&offset=${offset}`, { headers: authHdr });
+          if (!fb.ok) { if (!byId.size && offset === 0) { const fbe = await fb.json().catch(() => ({})); setListingErr(fbe.error || "Listings fetch failed"); } break; }
+          const batch = (await fb.json()).results || [];
+          batch.forEach(l => { if (!byId.has(String(l.listing_id))) byId.set(String(l.listing_id), l); });
+          if (batch.length < 100) break; // last page reached
+        }
+      } catch { /* keep whatever listings_all gave us */ }
+      const newListings = [...byId.values()];
       setListings(newListings);
 
       let newOrders = orders;
