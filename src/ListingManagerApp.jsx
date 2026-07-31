@@ -4242,7 +4242,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
 ══════════════════════════════════════════════════════════════════════════ */
 const ETSY_CACHE = "ng-etsy-v3";
 
-function EtsyLiveView() {
+function EtsyLiveView({ onCrossPost }) {
   const loadCache = () => { try { return JSON.parse(localStorage.getItem(ETSY_CACHE)||"{}"); } catch { return {}; } };
   const c0 = loadCache();
 
@@ -5445,6 +5445,15 @@ function EtsyLiveView() {
                     : <span style={{marginLeft:8,color:C.amber,fontWeight:600}}>● Inactive</span>}
                 </div>
               </div>
+              {onCrossPost && (
+                <select defaultValue="" title="Cross-post this listing to a Shopify store"
+                  onChange={e=>{ const v=e.target.value; if(v){ onCrossPost(editL, v); setEditL(null); setShowCalc(false); } e.target.value=""; }}
+                  style={{fontSize:11,fontWeight:700,color:"#6B3FA0",background:"#6B3FA010",border:"1px solid #6B3FA050",borderRadius:7,padding:"5px 8px",flexShrink:0,cursor:"pointer"}}>
+                  <option value="" disabled>Cross-post →</option>
+                  <option value="earth">→ Earth Ed.</option>
+                  <option value="atyahara">→ Atyahara</option>
+                </select>
+              )}
               <a href={`https://www.etsy.com/listing/${editL.listing_id}`} target="_blank" rel="noreferrer"
                 style={{fontSize:11,color:"#F56400",fontWeight:600,textDecoration:"none",
                   padding:"5px 10px",border:"1px solid #F5640050",borderRadius:7,flexShrink:0}}>
@@ -7009,6 +7018,55 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
     return next;
   };
 
+  // Cross-post an Etsy listing to a Shopify store: build a repeatable ERP listing from
+  // the Etsy data, AI-fill the Shopify title + wholesale description, save it, then open
+  // the editor so the user sets the Shopify price (left blank) and publishes.
+  const aiShopifyFields = async (title, description) => {
+    try {
+      const prompt = `You prepare wholesale Shopify listings for a crystal & mineral business from its retail (Etsy) listing.
+
+Retail title: "${title || ""}"
+Retail description: "${String(description || "").slice(0, 1200)}"
+
+Return ONLY JSON (no markdown), with:
+- "simple_title": a short clean product name (drop size prefixes and marketing suffixes)
+- "size": the physical size if stated or inferable (e.g. "20-25mm"), else ""
+- "pieces_per_kg": an estimated pieces-per-kilogram range for a wholesale lot (e.g. "80-100"), else ""
+- "location": a DETAILED mine/source location (locality, province, country); prefer any origin in the description, otherwise the stone's known primary source, else ""
+
+JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}`;
+      const res = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 300, temperature: 0, messages: [{ role: "user", content: prompt }] }) });
+      if (!res.ok) return null;
+      const d = await res.json();
+      const txt = (d.content || []).map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
+      return JSON.parse(txt);
+    } catch { return null; }
+  };
+  const crossPostEtsyToShopify = async (l, storeKey) => {
+    showToast?.("Cross-posting… AI-filling the Shopify listing");
+    const images = (l.images ? [...l.images].sort((a, b) => (a.rank || 0) - (b.rank || 0)) : [])
+      .map(img => img.url_fullxfull || img.url_570xN || img.url_170x135 || img.url_75x75 || "").filter(Boolean);
+    const price = l.price ? (l.price.amount / (l.price.divisor || 100)) : 0;
+    const sku = l.sku || (Array.isArray(l.skus) ? l.skus[0] : "") || "";
+    const ai = await aiShopifyFields(l.title, l.description);
+    const shopifyDesc = ai ? `Pieces : per kg ${ai.pieces_per_kg || "___"}\nLocation : ${ai.location || "___"}\nSize : ${ai.size || "___"}` : "";
+    const listing = ensureListingOrderId({
+      id: uid(),
+      title: l.title || "", description: l.description || "",
+      material: "", shape: "Mineral", origin: ai?.location || "", size: ai?.size || "", weight: "",
+      sku, productType: "Lapidary", type: "repeatable", qty: 1, linked_stock_id: "", officeLocation: "",
+      tags: [...(l.tags || [])], images, video: "",
+      price_etsy: price ? String(price.toFixed(2)) : "",
+      price_shopify_earth: "", price_shopify_aty: "", price_ebay: "",
+      shopify_title: ai?.simple_title || l.title || "", shopify_description: shopifyDesc,
+      platforms: { etsy: { listing_id: l.listing_id, status: l.state || "active" }, shopify_earth: {}, shopify_aty: {}, ebay: {} },
+      variations: [], created_at: now(), _crossPostStore: storeKey,
+    });
+    await saveListingItem(listing, { prepend: true });
+    setEditing(listing); setShowForm(true); setTab("all");
+    showToast?.(`Ready — set the ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} price, then publish`);
+  };
+
   const removeListingItem = async id => {
     const next = await deleteItemK(LIST_KEY, id);
     if (Array.isArray(next)) setListings(next);
@@ -7479,7 +7537,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} />}
 
         {/* ══ PLATFORM TABS ══ */}
-        {tab === "etsy" && <EtsyLiveView />}
+        {tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
           <ShopifyStoreView
