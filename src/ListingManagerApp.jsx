@@ -4749,7 +4749,12 @@ function EtsyLiveView() {
     if (!listingMatchesStatus(l)) return false;
     if (filterSection !== null && l.shop_section_id !== filterSection) return false;
     if (filterTags.size>0 && !l.tags?.some(t=>filterTags.has(t))) return false;
-    if (search && !l.title?.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search) {
+      // Word-based search across title, tags, sku and description — not title only.
+      const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+      const hay = [l.title, l.sku, l.description, (Array.isArray(l.tags) ? l.tags.join(" ") : l.tags)].filter(Boolean).join(" ").toLowerCase();
+      if (!terms.every(t => hay.includes(t))) return false;
+    }
     return true;
   });
 
@@ -6772,6 +6777,14 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
                   <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {[p.product_type, v.sku && `SKU ${v.sku}`].filter(Boolean).join(" · ") || p.handle}
                   </div>
+                  {productTags(p).length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6, maxHeight: 44, overflow: "hidden" }} title={productTags(p).join(", ")}>
+                      {productTags(p).slice(0, 6).map((t, i) => (
+                        <span key={i} onClick={() => setTagFilter(t)} style={{ fontSize: 9.5, fontWeight: 700, color: platform.color, background: platform.color + "14", border: `1px solid ${platform.color}30`, borderRadius: 5, padding: "1px 6px", whiteSpace: "nowrap", cursor: "pointer" }}>{t}</span>
+                      ))}
+                      {productTags(p).length > 6 && <span style={{ fontSize: 9.5, color: C.inkFaint, fontWeight: 700 }}>+{productTags(p).length - 6}</span>}
+                    </div>
+                  )}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
                     <div style={{ fontSize: 15, fontWeight: 850, color: platform.color }}>{v.price ? `$${fmt(v.price)}` : "No price"}</div>
                     <div style={{ fontSize: 11, color: C.inkFaint }}>{v.inventory_quantity ?? 0} in stock</div>
@@ -7253,8 +7266,15 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       if (filter === "repeatable") return l.type === "repeatable";
       return true;
     })
-    .filter(l => !search || [l.title, l.material, l.shape, l.sku, l.origin]
-      .join(" ").toLowerCase().includes(search.toLowerCase()));
+    .filter(l => {
+      // Word-based (AND) search across all the text on a listing, not just the title.
+      const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+      if (!terms.length) return true;
+      const hay = [l.title, l.material, l.shape, l.sku, l.origin, l.description, l.productType,
+        l.category, l.etsy_title, l.shopify_title, (Array.isArray(l.tags) ? l.tags.join(" ") : l.tags)]
+        .filter(Boolean).join(" ").toLowerCase();
+      return terms.every(t => hay.includes(t));
+    });
 
   /* summary counts */
   const liveTotal  = listings.filter(l => PLATFORMS.some(p => l.platforms?.[p.key]?.status === "active")).length;
