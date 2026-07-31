@@ -4441,6 +4441,16 @@ function EtsyLiveView({ onCrossPost }) {
       const tok = await getToken();
       const authHdr = tok ? { "X-Etsy-Token": tok } : {};
 
+      // Fast first paint (only when there's nothing cached to show): grab the first
+      // active page and render it immediately, clearing the blocking spinner, while the
+      // full throttled catalog + orders keep loading below and replace it.
+      if (!bg) {
+        try {
+          const r0 = await fetch("/api/etsy?action=listings&limit=100", { headers: authHdr });
+          if (r0.ok) { const d0 = await r0.json(); if (d0.results?.length) { setListings(d0.results); setLoading(false); setSyncing(true); } }
+        } catch {}
+      }
+
       // Decide incremental vs full sync for orders. Incremental only when we already have
       // cached orders, this isn't a forced full refresh, and we've done a full resync recently.
       const cache = loadCache();
@@ -4506,7 +4516,7 @@ function EtsyLiveView({ onCrossPost }) {
       }
       saveCache(newListings, newOrders, ordersFullSynced);
     } catch (e) { setError(e.message); }
-    bg ? setSyncing(false) : setLoading(false);
+    setLoading(false); setSyncing(false);
   };
 
   useEffect(() => {
@@ -6374,6 +6384,17 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
 
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3200); };
   const firstImage = p => p.image?.src || p.images?.[0]?.src || "";
+  // Shopify CDN thumbnails: insert _WxH before the extension so cards download a ~400px
+  // image (~30KB) instead of the full 1-2MB original — the grid's biggest speed win.
+  const shopifyThumb = (url, size = 400) => {
+    if (!url || !/cdn\.shopify\.com/.test(url)) return url;
+    try {
+      const [base, query] = url.split("?");
+      const dot = base.lastIndexOf(".");
+      if (dot < 0) return url;
+      return `${base.slice(0, dot)}_${size}x${size}${base.slice(dot)}${query ? "?" + query : ""}`;
+    } catch { return url; }
+  };
   const firstVariant = p => p.variants?.[0] || {};
   const adminUrl = p => p.admin_graphql_api_id
     ? `https://${creds?.store || ""}/admin/products/${p.id}`
@@ -6785,9 +6806,9 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
             const img = firstImage(p);
             const localMatch = listings.find(l => String(l.platforms?.[platKey]?.product_id || "") === String(p.id) || (v.sku && l.sku === v.sku));
             return (
-              <div key={p.id} style={{ background: C.surface, border: `1.5px solid ${platform.color}25`, borderRadius: 11, overflow: "hidden" }}>
+              <div key={p.id} style={{ background: C.surface, border: `1.5px solid ${platform.color}25`, borderRadius: 11, overflow: "hidden", contentVisibility: "auto", containIntrinsicSize: "260px" }}>
                 <div style={{ height: 138, background: C.card, position: "relative", overflow: "hidden" }}>
-                  {img ? <img src={img} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
+                  {img ? <img src={shopifyThumb(img)} alt="" loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> :
                     <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>🌍</div>}
                   <span style={{ position: "absolute", top: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, textTransform: "uppercase", background: p.status === "active" ? C.greenBg : C.card, color: p.status === "active" ? C.green : C.inkMid, border: `1px solid ${C.border}` }}>{p.status}</span>
                   {isMisplaced(p) && <span title="Linked to an Earth Ed. listing — likely misrouted here" style={{ position: "absolute", bottom: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, background: C.red, color: "#fff" }}>⚠ from Earth Ed.</span>}
