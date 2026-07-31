@@ -468,15 +468,17 @@ export default async function handler(req, res) {
         const total = d0.count || 0;
         if (total > 100) {
           const pageCount = Math.ceil((total - 100) / 100);
-          const fetches = Array.from({ length: pageCount }, (_, i) => {
-            const p = new URLSearchParams({ state, limit: "100", offset: String((i + 1) * 100) });
+          // Sequential + throttled — parallel page fetches tripped Etsy's per-second
+          // rate limit (10 req/s), which failed the whole load. ~4 req/s is safe.
+          for (let i = 1; i <= pageCount; i++) {
+            await new Promise(r => setTimeout(r, 250));
+            const p = new URLSearchParams({ state, limit: "100", offset: String(i * 100) });
             p.append("includes[]", "Images");
-            return etsyFetch(`https://openapi.etsy.com/v3/application/shops/${sid}/listings?${p}`)
-              .then(r => r.ok ? r.json() : { results: [] })
-              .catch(() => ({ results: [] }));
-          });
-          const pages = await Promise.all(fetches);
-          pages.forEach(d => results.push(...(d.results || [])));
+            try {
+              const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${sid}/listings?${p}`);
+              if (r.ok) { const d = await r.json(); results.push(...(d.results || [])); }
+            } catch { /* skip a failed page, keep going */ }
+          }
         }
       }
       return res.json({ count: results.length, results, stateErrors: stateErrors.length ? stateErrors : undefined });
