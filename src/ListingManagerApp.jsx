@@ -6328,7 +6328,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const CREDS_KEY = STORE === "atyahara" ? "ng-shopify-creds-atyahara" : "ng-shopify-creds-earth";
   const CACHE_KEY = `ng-shopify-${STORE}-products-cache-v1`;
   const storeName = STORE === "atyahara" ? "Atyahara" : "Earth Editions";
-  const ccySym = platform?.currency === "INR" ? "₹" : platform?.currency === "GBP" ? "£" : platform?.currency === "EUR" ? "€" : "$";
+  const ccySym = STORE === "atyahara" ? "₹" : "$"; // Atyahara = INR, Earth Ed. = USD
   const platform = PLATFORMS.find(p => p.key === platKey);
   const [products, setProducts] = useState([]);
   const [collections, setCollections] = useState([]);
