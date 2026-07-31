@@ -4416,9 +4416,18 @@ function EtsyLiveView() {
       });
     });
     if (!normalized.length) return;
+    // Preserve ERP-local fulfilment state that the Etsy receipt doesn't carry —
+    // stock allocation, sales/NG invoice links, ship cost, shape, etc. Merge fresh
+    // Etsy data OVER the existing order instead of replacing it, so completed steps
+    // don't get wiped every time this re-syncs (was: steps reverting to 0/4).
+    const existingById = new Map((erpOrders || []).map(o => [o.id, o]));
     const importedIds = new Set(normalized.map(o => o.id));
-    const next = [...normalized, ...(erpOrders || []).filter(o => !importedIds.has(o.id))];
-    for (const order of normalized) await upsertItemK(ORDERS_KEY, order, { prepend: true });
+    const mergedRows = normalized.map(o => {
+      const prev = existingById.get(o.id);
+      return prev ? { ...prev, ...o } : o;
+    });
+    const next = [...mergedRows, ...(erpOrders || []).filter(o => !importedIds.has(o.id))];
+    for (const order of mergedRows) await upsertItemK(ORDERS_KEY, order, { prepend: true });
     window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
   };
 
