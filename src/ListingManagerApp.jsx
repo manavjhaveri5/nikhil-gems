@@ -810,6 +810,49 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const videoRef = useRef(null);
   const dragSrc = useRef(null);
 
+  // Click-to-view a selected photo + run the Canva white-background remover on it.
+  // Same 3-step flow as the Background Remover module: send → edit in Canva → pull back.
+  const [viewIdx, setViewIdx] = useState(null);
+  const [bgBusy, setBgBusy]     = useState("");
+  const [bgDesign, setBgDesign] = useState(null);
+  const [bgResult, setBgResult] = useState("");
+  const [bgErr, setBgErr]       = useState("");
+  const openView = i => { setViewIdx(i); setBgDesign(null); setBgResult(""); setBgErr(""); };
+  const dataURLToBlob = durl => { const [h, b] = durl.split(","); const mime = (h.match(/:(.*?);/) || [])[1] || "image/png"; const bin = atob(b); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i); return new Blob([arr], { type: mime }); };
+  const urlToImageData = async url => {
+    const img = await new Promise((res, rej) => { const im = new Image(); im.crossOrigin = "anonymous"; im.onload = () => res(im); im.onerror = () => rej(new Error("Could not load image")); im.src = url; });
+    const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight; c.getContext("2d").drawImage(img, 0, 0);
+    return { dataURL: c.toDataURL("image/jpeg", 0.9), width: img.naturalWidth, height: img.naturalHeight };
+  };
+  const bgSend = async () => {
+    setBgBusy("send"); setBgErr(""); setBgResult("");
+    try {
+      const { dataURL, width, height } = await urlToImageData(selectedUrls[viewIdx]);
+      const r = await fetch("/api/canva", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create", image: dataURL, width, height, name: `Listing photo ${Date.now()}` }) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.needsAuth ? "Connect Canva first — Home → Background Remover → Connect, then retry." : (d.error || "Canva error"));
+      setBgDesign(d); if (d.edit_url) window.open(d.edit_url, "_blank");
+    } catch (e) { setBgErr(e.message); } finally { setBgBusy(""); }
+  };
+  const bgPull = async () => {
+    if (!bgDesign?.design_id) return;
+    setBgBusy("pull"); setBgErr("");
+    try {
+      const r = await fetch("/api/canva", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "export", design_id: bgDesign.design_id }) });
+      const d = await r.json(); if (!r.ok) throw new Error(d.error || "Export failed");
+      setBgResult(d.image);
+    } catch (e) { setBgErr(e.message); } finally { setBgBusy(""); }
+  };
+  const bgUse = async () => {
+    setBgBusy("save"); setBgErr("");
+    try {
+      const file = new File([dataURLToBlob(bgResult)], `cutout-${Date.now()}.png`, { type: "image/png" });
+      const newUrl = await uploadToStorage(`bg-canva/${uid()}.png`, file);
+      onChange(selectedUrls.map((u, j) => j === viewIdx ? newUrl : u));
+      setViewIdx(null);
+    } catch (e) { setBgErr(e.message); } finally { setBgBusy(""); }
+  };
+
   // Load ALL library images once
   useEffect(() => {
     loadK(IMG_KEY).then(imgs => {
@@ -919,19 +962,56 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                 onDragStart={e => onImgDragStart(i, e)}
                 onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
                 onDrop={e => { e.preventDefault(); onImgDrop(i); }}
+                onClick={() => openView(i)}
+                title="Click to view · remove background"
                 style={{ width: 72, height: 72, borderRadius: 8, overflow: "hidden", flexShrink: 0, position: "relative",
-                  border: `2.5px solid ${i === 0 ? C.gold : C.border}`, cursor: "grab" }}>
+                  border: `2.5px solid ${i === 0 ? C.gold : C.border}`, cursor: "pointer" }}>
                 <img src={url} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }} />
                 {i === 0 && (
                   <div style={{ position: "absolute", top: 3, left: 3, background: C.gold, color: "#fff",
                     borderRadius: 4, fontSize: 8, fontWeight: 700, padding: "1px 5px", letterSpacing: .3 }}>COVER</div>
                 )}
+                <div style={{ position: "absolute", bottom: 3, left: 3, background: "rgba(0,0,0,.55)", color: "#fff", borderRadius: 4, fontSize: 9, padding: "0 4px", pointerEvents: "none" }}>✂️</div>
                 <button onClick={e => { e.stopPropagation(); onChange(selectedUrls.filter((_, j) => j !== i)); }}
                   style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,.65)", color: "#fff",
                     border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer",
                     display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, lineHeight: 1 }}>×</button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Photo viewer + Canva white-background remover ── */}
+      {viewIdx != null && selectedUrls[viewIdx] && (
+        <div onMouseDown={() => setViewIdx(null)} style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(20,15,8,.72)", display: "grid", placeItems: "center", padding: 20 }}>
+          <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(560px,100%)", background: C.surface, borderRadius: 14, overflow: "hidden", boxShadow: "0 24px 80px rgba(0,0,0,.4)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>Photo {viewIdx + 1} of {selectedUrls.length}</div>
+              <button onClick={() => setViewIdx(null)} style={{ background: "none", border: "none", fontSize: 22, color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
+            </div>
+            <div style={{ padding: 16 }}>
+              <div style={{ width: "100%", aspectRatio: "1", background: "repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 50%/20px 20px", borderRadius: 10, overflow: "hidden", display: "grid", placeItems: "center", border: `1px solid ${C.border}` }}>
+                <img src={bgResult || selectedUrls[viewIdx]} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+              </div>
+              {bgErr && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "8px 10px" }}>{bgErr}</div>}
+              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {!bgResult ? <>
+                  {!bgDesign
+                    ? <button onClick={bgSend} disabled={!!bgBusy} style={{ background: "#7B3FF2", color: "#fff", border: "none", borderRadius: 8, padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: bgBusy ? "wait" : "pointer" }}>{bgBusy === "send" ? "Opening Canva…" : "✂️ Remove background (Canva)"}</button>
+                    : <>
+                        <span style={{ fontSize: 12, color: C.inkMid }}>Removed the background in Canva? Pull it back:</span>
+                        <button onClick={bgPull} disabled={!!bgBusy} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: bgBusy ? "wait" : "pointer" }}>{bgBusy === "pull" ? "Pulling…" : "⬇ Get result"}</button>
+                        <button onClick={bgSend} disabled={!!bgBusy} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Reopen Canva</button>
+                      </>}
+                </> : <>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>✓ Background removed</span>
+                  <button onClick={bgUse} disabled={!!bgBusy} style={{ background: C.green, color: "#fff", border: "none", borderRadius: 8, padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: bgBusy ? "wait" : "pointer" }}>{bgBusy === "save" ? "Saving…" : "Use this photo"}</button>
+                  <button onClick={() => setBgResult("")} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Discard</button>
+                </>}
+              </div>
+              <div style={{ marginTop: 10, fontSize: 11, color: C.inkFaint, lineHeight: 1.4 }}>Opens the photo in Canva to erase the background, then pulls the clean cutout back and replaces this photo. Needs Canva connected (Home → Background Remover).</div>
+            </div>
           </div>
         </div>
       )}
