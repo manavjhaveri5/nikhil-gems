@@ -831,7 +831,13 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
       const r = await fetch("/api/canva", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "create", image: dataURL, width, height, name: `Listing photo ${Date.now()}` }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.needsAuth ? "Connect Canva first — Home → Background Remover → Connect, then retry." : (d.error || "Canva error"));
-      setBgDesign(d); if (d.edit_url) window.open(d.edit_url, "_blank");
+      setBgDesign(d);
+      if (d.edit_url) {
+        // Popup window (not a new browser tab) so the app stays visible behind it.
+        const w = 1180, h = 820;
+        const left = Math.max(0, (window.screen.width - w) / 2), top = Math.max(0, (window.screen.height - h) / 2);
+        window.open(d.edit_url, "canva-bg-remove", `width=${w},height=${h},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+      }
     } catch (e) { setBgErr(e.message); } finally { setBgBusy(""); }
   };
   const bgPull = async () => {
