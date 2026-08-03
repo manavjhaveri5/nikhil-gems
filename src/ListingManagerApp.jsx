@@ -231,7 +231,9 @@ async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {} }) {
       updatedAt: new Date().toISOString(),
     };
     if (JSON.stringify(patched) !== JSON.stringify(existing)) {
-      await saveK(AT_BUYERS_KEY, [patched, ...buyers.filter(b => b.id !== patched.id)]);
+      // Atomic per-item upsert (like the invoice write below) so a concurrent
+      // Etsy import can't clobber this row via an overlapping whole-array PUT.
+      await upsertItemK(AT_BUYERS_KEY, patched, { prepend: false });
     }
     return patched;
   }
@@ -253,7 +255,7 @@ async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {} }) {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
-  await saveK(AT_BUYERS_KEY, [created, ...buyers]);
+  await upsertItemK(AT_BUYERS_KEY, created, { prepend: true });
   return created;
 }
 
