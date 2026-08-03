@@ -11095,7 +11095,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
     if(invTypeF!=="all"&&inv.type!==invTypeF)return false;
     if(invCurrF!=="all"&&inv.currency!==invCurrF)return false;
     if(invBuyerF!=="all"&&inv.buyerId!==invBuyerF)return false;
-    if(searchQ){const b=buyers.find(b=>b.id===inv.buyerId);const s=`${inv.invNo} ${b?.name||""}`.toLowerCase();if(!s.includes(searchQ.toLowerCase()))return false;}
+    if(searchQ){const b=buyers.find(b=>b.id===inv.buyerId);const s=`${inv.invNo} ${b?.name||inv.buyerName||inv.buyer||""}`.toLowerCase();if(!s.includes(searchQ.toLowerCase()))return false;}
     return true;
   }).sort((a,b)=>{
     // Numeric-aware invNo compare: NG-9 before NG-10, tolerant of the mixed
@@ -11106,7 +11106,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
     if(invSortBy==="date"){cmp=(a.date||"").localeCompare(b.date||"");if(cmp===0)cmp=cmpInvNo(a,b);if(cmp===0)cmp=(a.createdAt||"").localeCompare(b.createdAt||"");}
     else if(invSortBy==="invNo")cmp=cmpInvNo(a,b);
     else if(invSortBy==="amount")cmp=(+a.totalAmt||0)-(+b.totalAmt||0);
-    else if(invSortBy==="buyer"){const bA=buyers.find(x=>x.id===a.buyerId)?.name||"";const bB=buyers.find(x=>x.id===b.buyerId)?.name||"";cmp=bA.localeCompare(bB);}
+    else if(invSortBy==="buyer"){const bA=buyers.find(x=>x.id===a.buyerId)?.name||a.buyerName||a.buyer||"";const bB=buyers.find(x=>x.id===b.buyerId)?.name||b.buyerName||b.buyer||"";cmp=bA.localeCompare(bB);}
     return invSortDir==="asc"?cmp:-cmp;
   });
 
@@ -11249,7 +11249,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                         </div>
                         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:15,color:C.ink,flexShrink:0}}>{inv.totalAmt?`${inv.currency} ${(+inv.totalAmt).toLocaleString("en-IN",{minimumFractionDigits:2})}`:"—"}</div>
                       </div>
-                      <div style={{fontSize:12,color:C.inkMid,marginBottom:7}}>{buyer?.name||"—"} · {fmtDate(inv.date)}</div>
+                      <div style={{fontSize:12,color:C.inkMid,marginBottom:7}}>{buyer?.name||inv.buyerName||inv.buyer||"—"} · {fmtDate(inv.date)}</div>
                       <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                         <span style={{fontSize:9,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"2px 6px",flexShrink:0}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span>
                         <span style={{fontSize:9,fontWeight:600,color:inv.status==="paid"?C.green:inv.status==="partial"?C.amber:C.inkMid,background:C.card,borderRadius:3,padding:"2px 6px",border:`1px solid ${C.border}`,flexShrink:0}}>{inv.status?.toUpperCase()||"DRAFT"}</span>
@@ -11307,7 +11307,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                       <div onClick={e=>e.stopPropagation()}><input type="checkbox" style={{cursor:"pointer"}} checked={isSel} onChange={()=>toggleInvSel(inv.id)}/></div>
                       <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:13}}>{inv.invNo}</div>
                       <div><span style={{fontSize:10,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"1px 6px"}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span></div>
-                      <div style={{fontSize:13}}>{buyer?.name||"—"}</div>
+                      <div style={{fontSize:13}}>{buyer?.name||inv.buyerName||inv.buyer||"—"}</div>
                       <div style={{fontSize:11,color:C.inkMid}}>{fmtDate(inv.date)}</div>
                       <div>
                         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:13,fontWeight:500}}>{inv.totalAmt?`${inv.currency} ${(+inv.totalAmt).toLocaleString("en-IN",{minimumFractionDigits:2})}`:""}</div>
