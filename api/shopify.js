@@ -506,6 +506,35 @@ export default async function handler(req, res) {
     return res.json({ success: true, deleted: results.filter(r => r.ok).length, total: ids.length, results });
   }
 
+  if (action === "add_to_deals" || action === "remove_from_deals") {
+    // Add/remove existing products to the store's "Deals" collection (the daily-deals
+    // section). Used by the ERP store view's "Add to Deals" flow + the expiry popup.
+    const ids = [...new Set((body.product_ids || []).map(String).filter(Boolean))].slice(0, 100);
+    if (!ids.length) return res.status(400).json({ error: "No products selected" });
+    const cr = await sr("GET", "/custom_collections.json?title=Deals&limit=1");
+    const collection = cr.ok ? cr.data?.custom_collections?.[0] : null;
+    if (!collection) return res.status(400).json({ error: "Deals collection not found on this store" });
+    const results = [];
+    for (const id of ids) {
+      try {
+        if (action === "add_to_deals") {
+          // Skip if already collected, so re-adding doesn't error/duplicate.
+          const fr = await sr("GET", `/collects.json?product_id=${id}&collection_id=${collection.id}&limit=1`);
+          if (fr.ok && fr.data?.collects?.[0]) { results.push({ id, ok: true }); continue; }
+          const r = await sr("POST", "/collects.json", { collect: { product_id: id, collection_id: collection.id } });
+          results.push({ id, ok: r.ok, error: r.ok ? "" : r.error });
+        } else {
+          const fr = await sr("GET", `/collects.json?product_id=${id}&collection_id=${collection.id}&limit=1`);
+          const collect = fr.ok ? fr.data?.collects?.[0] : null;
+          if (!collect) { results.push({ id, ok: true }); continue; }
+          const dr = await sr("DELETE", `/collects/${collect.id}.json`);
+          results.push({ id, ok: dr.ok, error: dr.ok ? "" : dr.error });
+        }
+      } catch (e) { results.push({ id, ok: false, error: e.message }); }
+    }
+    return res.json({ success: true, collectionId: String(collection.id), done: results.filter(r => r.ok).length, total: ids.length, results });
+  }
+
   if (action === "update_product") {
     if (!product?.id) return res.status(400).json({ error: "product.id required" });
     const updatePayload = {

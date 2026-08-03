@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, deleteItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
@@ -32,6 +32,10 @@ const AT_INVOICES_KEY = "at-invoices-v1";
 const AT_BUYERS_KEY   = "at-buyers-v1";
 const NG_INVOICES_KEY = "ng-invoices-v2";
 const NG_BUYERS_KEY   = "ng-buyers-v2";
+// Deals tracker: products featured in a store's "Deals" collection, each with an
+// expiry so the ERP can pop a reminder when a deal is due to come down.
+const dealsKeyFor = store => store === "atyahara" ? "ng-deals-atyahara" : "ng-deals-earth";
+const DEAL_STORES = ["earth", "atyahara"];
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
 const listingOrderId = () => `NG-LST-${new Date().getFullYear()}-${uid().slice(-6).toUpperCase()}`;
 const ensureListingOrderId = listing => listing.listing_order_id ? listing : { ...listing, listing_order_id: listingOrderId() };
@@ -6469,6 +6473,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [editP, setEditP] = useState(null);
+  const [dealModal, setDealModal] = useState(null); // { items:[{id,title,url}], days:7, customDate:"" }
 
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3200); };
   const firstImage = p => p.image?.src || p.images?.[0]?.src || "";
@@ -6696,6 +6701,56 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
       setBulkBusy(false);
     }
   };
+  const openDealModal = () => {
+    const ids = [...selectedIds];
+    if (!ids.length) { showToast("Select products first"); return; }
+    const byId = new Map(products.map(p => [String(p.id), p]));
+    const items = ids.map(id => {
+      const p = byId.get(String(id));
+      return { id: String(id), title: p?.title || `Product ${id}`, url: p ? storefrontUrl(p) : "", handle: p?.handle || "" };
+    });
+    setDealModal({ items, days: 7, customDate: "" });
+  };
+  const confirmAddToDeals = async () => {
+    if (!dealModal) return;
+    const { items, days, customDate } = dealModal;
+    const expiry = customDate
+      ? new Date(customDate + "T23:59:59").toISOString()
+      : new Date(Date.now() + (+days || 7) * 86400000).toISOString();
+    setBulkBusy(true);
+    try {
+      const ids = items.map(i => i.id);
+      const r = await fetch("/api/shopify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add_to_deals", store_key: STORE, product_ids: ids,
+          ...(creds?.token ? { shopStore: creds.store, shopToken: creds.token } : {}),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.error || "Add to Deals failed");
+      // Record/refresh the timers in the per-store deals registry.
+      const key = dealsKeyFor(STORE);
+      const existing = (await loadKFresh(key).catch(() => [])) || [];
+      const base = Array.isArray(existing) ? existing : [];
+      const now = new Date().toISOString();
+      const kept = base.filter(e => !ids.includes(String(e.productId)));
+      const rows = items.map(i => ({
+        id: `deal-${STORE}-${i.id}`, store: STORE, productId: i.id,
+        title: i.title, url: i.url, handle: i.handle,
+        addedAt: now, expiryDate: expiry, status: "active",
+      }));
+      await saveK(key, [...rows, ...kept]);
+      showToast(`⭐ ${d.done}/${d.total} added to Deals`);
+      setDealModal(null);
+      clearSelection();
+      fetchProducts(creds, true, collectionFilter);
+    } catch (e) {
+      showToast(e.message || "Add to Deals failed");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
   const linkLocal = p => {
     const v = firstVariant(p);
     const norm = s => String(s || "").trim().toLowerCase();
@@ -6874,9 +6929,31 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
           <input value={bulkTagInput} onChange={e => setBulkTagInput(e.target.value)} placeholder="tag e.g. mini-hearts" style={{ ...FI(), width: 200 }} />
           <button disabled={bulkBusy} onClick={() => runBulkTag("add")} style={{ background: platform.color, color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>{bulkBusy ? "Working…" : "Add tag"}</button>
           <button disabled={bulkBusy} onClick={() => runBulkTag("remove")} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 800, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>Remove tag</button>
+          <button disabled={bulkBusy} onClick={openDealModal} title="Add the selected products to the Deals collection with a remind-me-to-delete timer" style={{ background: "#C89020", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>⭐ Add to Deals…</button>
           <button disabled={bulkBusy} onClick={runBulkDelete} title="Permanently delete the selected products from the Shopify store" style={{ background: C.redBg, color: C.red, border: `1px solid ${C.red}55`, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 850, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>🗑 Delete</button>
           <button onClick={() => setSelectedIds(new Set(visible.map(x => String(x.id))))} style={{ background: "transparent", color: C.inkMid, border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Select all {visible.length}</button>
           <button onClick={clearSelection} style={{ background: "transparent", color: C.inkMid, border: "none", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Clear</button>
+        </div>
+      )}
+      {dealModal && (
+        <div onClick={() => !bulkBusy && setDealModal(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "grid", placeItems: "center", zIndex: 60, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, width: "min(440px, 96vw)", boxShadow: "0 12px 40px rgba(0,0,0,.25)" }}>
+            <div style={{ fontSize: 16, fontWeight: 850, color: C.ink, marginBottom: 4 }}>⭐ Add to Deals</div>
+            <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 14 }}>{dealModal.items.length} product{dealModal.items.length === 1 ? "" : "s"} → {storeName} Deals. Remind me to take {dealModal.items.length === 1 ? "it" : "them"} down after:</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+              {[["3 days", 3], ["1 week", 7], ["2 weeks", 14], ["1 month", 30]].map(([label, n]) => (
+                <button key={n} onClick={() => setDealModal(m => ({ ...m, days: n, customDate: "" }))} style={{ background: !dealModal.customDate && dealModal.days === n ? "#C89020" : C.card, color: !dealModal.customDate && dealModal.days === n ? "#fff" : C.ink, border: `1px solid ${!dealModal.customDate && dealModal.days === n ? "#C89020" : C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{label}</button>
+              ))}
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, marginBottom: 18 }}>
+              Or exact date:
+              <input type="date" value={dealModal.customDate} min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} onChange={e => setDealModal(m => ({ ...m, customDate: e.target.value }))} style={{ ...FI(), width: 170 }} />
+            </label>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button disabled={bulkBusy} onClick={() => setDealModal(null)} style={{ background: "transparent", color: C.inkMid, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Cancel</button>
+              <button disabled={bulkBusy} onClick={confirmAddToDeals} style={{ background: "#C89020", color: "#fff", border: "none", borderRadius: 8, padding: "8px 18px", fontSize: 12, fontWeight: 850, cursor: bulkBusy ? "wait" : "pointer", opacity: bulkBusy ? .6 : 1 }}>{bulkBusy ? "Adding…" : "Add to Deals"}</button>
+            </div>
+          </div>
         </div>
       )}
       {loading ? (
@@ -7008,6 +7085,81 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* Deals reminder: when a product added to a store's Deals collection passes its
+   expiry, pop a modal so the user can delete it, push the timer a week, or ignore. */
+function DealsDuePopup() {
+  const [due, setDue] = useState([]);      // [{...deal, store}]
+  const [busy, setBusy] = useState("");    // deal id currently acting on
+  const load = useCallback(async () => {
+    const rows = [];
+    for (const store of DEAL_STORES) {
+      const list = (await loadK(dealsKeyFor(store)).catch(() => [])) || [];
+      if (Array.isArray(list)) rows.push(...list.filter(e => e && e.status === "active"));
+    }
+    const now = Date.now();
+    setDue(rows.filter(e => e.expiryDate && new Date(e.expiryDate).getTime() <= now));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => onCacheRefresh(keys => { if (DEAL_STORES.some(s => keys.includes(dealsKeyFor(s)))) load(); }), [load]);
+  if (!due.length) return null;
+  const patch = async (deal, mutate) => {
+    const key = dealsKeyFor(deal.store);
+    const list = (await loadKFresh(key).catch(() => [])) || [];
+    const next = mutate(Array.isArray(list) ? list : []);
+    await saveK(key, next);
+    load();
+  };
+  const snooze = deal => patch(deal, list => list.map(e => e.productId === deal.productId ? { ...e, expiryDate: new Date(Date.now() + 7 * 86400000).toISOString(), status: "active" } : e));
+  const ignore = deal => patch(deal, list => list.map(e => e.productId === deal.productId ? { ...e, status: "ignored" } : e));
+  const del = async deal => {
+    if (!window.confirm(`Permanently delete “${deal.title}” from the ${deal.store === "atyahara" ? "Atyahara" : "Earth Editions"} Shopify store?\n\nThis removes it from the live store and cannot be undone.`)) return;
+    setBusy(deal.id);
+    try {
+      const creds = (await loadK(deal.store === "atyahara" ? "ng-shopify-creds-atyahara" : "ng-shopify-creds-earth").catch(() => null)) || null;
+      const r = await fetch("/api/shopify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "bulk_delete", store_key: deal.store, product_ids: [deal.productId],
+          ...(creds?.store && creds?.token ? { shopStore: creds.store, shopToken: creds.token } : {}),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) throw new Error(d.error || "Delete failed");
+      await patch(deal, list => list.filter(e => e.productId !== deal.productId));
+    } catch (e) {
+      alert(e.message || "Delete failed");
+    } finally {
+      setBusy("");
+    }
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "grid", placeItems: "center", zIndex: 90, padding: 16 }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, width: "min(520px, 96vw)", maxHeight: "86vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(0,0,0,.3)" }}>
+        <div style={{ fontSize: 17, fontWeight: 850, color: C.ink, marginBottom: 3 }}>⏰ Deals due to come down</div>
+        <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 14 }}>{due.length} deal{due.length === 1 ? "" : "s"} reached the timer you set. Delete, push a week, or ignore.</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {due.map(deal => {
+            const overdue = Math.max(0, Math.floor((Date.now() - new Date(deal.expiryDate).getTime()) / 86400000));
+            return (
+              <div key={deal.id} style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 13px", background: C.card }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>{deal.url ? <a href={deal.url} target="_blank" rel="noreferrer" style={{ color: C.ink }}>{deal.title}</a> : deal.title}</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: C.inkFaint, whiteSpace: "nowrap" }}>{deal.store === "atyahara" ? "Atyahara" : "Earth Ed."}{overdue > 0 ? ` · ${overdue}d ago` : " · today"}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
+                  <button disabled={busy === deal.id} onClick={() => del(deal)} style={{ background: C.redBg, color: C.red, border: `1px solid ${C.red}55`, borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 850, cursor: busy === deal.id ? "wait" : "pointer" }}>{busy === deal.id ? "Deleting…" : "🗑 Delete"}</button>
+                  <button disabled={busy === deal.id} onClick={() => snooze(deal)} style={{ background: "#C89020", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 850, cursor: "pointer" }}>↦ Push 1 week</button>
+                  <button disabled={busy === deal.id} onClick={() => ignore(deal)} style={{ background: "transparent", color: C.inkMid, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Ignore</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -7477,6 +7629,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     <div style={{ fontFamily: "'Figtree',system-ui,sans-serif", background: C.bg, minHeight: "100vh", color: C.ink }}>
       <style>{`@keyframes lm-spin { to { transform: rotate(360deg); } }`}</style>
       <Toast msg={toast} />
+      <DealsDuePopup />
 
       {/* ── sticky header ── */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.border}` }}>
