@@ -10362,6 +10362,19 @@ const COMPANIES={nikhil:CO,atyahara:CO_ATYAHARA};
 const companyProfileFromKey=company=>company==="at"||company==="atyahara"?CO_ATYAHARA:CO;
 const companySlugFromKey=company=>company==="at"||company==="atyahara"?"atyahara":"nikhil";
 const signatureForCompany=company=>companySlugFromKey(company)==="atyahara"?"/atyahara-sign-stamp.jpg":SIG_SRC;
+// Resolve buyer details for display/printing: prefer the linked buyer record, but
+// fall back to the buyer/consignee fields stored on the invoice itself so a buyers
+// list that hasn't synced yet never blanks out the name + address. Etsy-sourced
+// invoices always carry buyerName + a consignee address. Returns the real record
+// unchanged when found, so nothing changes for normally-linked invoices.
+const effectiveBuyer=(rec,inv={})=>{
+  if(rec)return rec;
+  const name=inv.buyerName||inv.buyer||inv.consigneeName||"";
+  if(!name&&!inv.consigneeAddress&&!inv.buyerAddress)return null;
+  const addr=inv.buyerAddress||inv.consigneeAddress||"";
+  const country=inv.buyerCountry||inv.consigneeCountry||"";
+  return{id:inv.buyerId||"",name,contactName:inv.buyerContactName||"",billingAddress:addr,address:addr,shippingAddress:inv.consigneeAddress||addr,shippingSameAsBilling:true,country,email:inv.buyerEmail||"",port:inv.portDischarge||country,_synthetic:true};
+};
 const cleanInvoiceNotes=notes=>String(notes||"")
   .split(/\s*·\s*|\n+/)
   .map(s=>s.trim())
@@ -11668,6 +11681,9 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     setAcctPicker(null);setAcctPreview(null);setAcctDeduct("");
   };
   const buyer=buyers.find(b=>b.id===draft.buyerId);
+  // Display buyer: real record if loaded, else reconstructed from the invoice so
+  // the card/select still show a name when the buyers list hasn't synced.
+  const effBuyer=effectiveBuyer(buyer,draft);
   // Auto-fill portDischarge from buyer
   useEffect(()=>{
     if(!buyer)return;
@@ -11889,10 +11905,11 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           <Field label="Select Buyer">
             <select value={draft.buyerId||""} onChange={e=>set("buyerId",e.target.value)} style={{...FI,cursor:"pointer",marginBottom:8}}>
               <option value="">— Select buyer —</option>
+              {!buyer&&draft.buyerId&&effBuyer&&<option value={draft.buyerId}>{effBuyer.name}</option>}
               {[...buyers].sort((a,b)=>(a.name||"").localeCompare(b.name||"")).map(b=><option key={b.id} value={b.id}>{b.name}{b.contactName?` · ${b.contactName}`:""}</option>)}
             </select>
           </Field>
-          {buyer&&<div style={{fontSize:12,color:C.inkMid,lineHeight:1.7,background:C.card,borderRadius:5,padding:"8px 11px",whiteSpace:"pre-line"}}><strong>{buyer.name}</strong>{buyer.contactName&&<span style={{fontWeight:400,color:C.inkFaint}}>{"\n"}👤 {buyer.contactName}</span>}{"\n"}{buyer.billingAddress||buyer.address||""}{"\n"}{buyer.country}</div>}
+          {effBuyer&&<div style={{fontSize:12,color:C.inkMid,lineHeight:1.7,background:C.card,borderRadius:5,padding:"8px 11px",whiteSpace:"pre-line"}}><strong>{effBuyer.name}</strong>{effBuyer.contactName&&<span style={{fontWeight:400,color:C.inkFaint}}>{"\n"}👤 {effBuyer.contactName}</span>}{"\n"}{effBuyer.billingAddress||effBuyer.address||""}{"\n"}{effBuyer.country}</div>}
         </div>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"15px 17px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
@@ -11903,7 +11920,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             </label>
           </div>
           {draft.consigneeSameAsBuyer
-            ?buyer?<div style={{fontSize:12,color:C.inkMid,lineHeight:1.7,background:C.card,borderRadius:5,padding:"8px 11px",whiteSpace:"pre-line"}}><strong>{buyer.name}</strong>{"\n"}{buyer.shippingSameAsBilling!==false?(buyer.billingAddress||buyer.address||""):(buyer.shippingAddress||buyer.billingAddress||buyer.address||"")}{"\n"}{buyer.country}</div>
+            ?effBuyer?<div style={{fontSize:12,color:C.inkMid,lineHeight:1.7,background:C.card,borderRadius:5,padding:"8px 11px",whiteSpace:"pre-line"}}><strong>{effBuyer.name}</strong>{"\n"}{effBuyer.shippingSameAsBilling!==false?(effBuyer.billingAddress||effBuyer.address||""):(effBuyer.shippingAddress||effBuyer.billingAddress||effBuyer.address||"")}{"\n"}{effBuyer.country}</div>
               :<div style={{fontSize:12,color:C.inkFaint}}>Select buyer above</div>
             :<div style={{display:"grid",gap:9}}>
               <Field label="Name"><input value={draft.consigneeName||""} onChange={e=>set("consigneeName",e.target.value)} style={FI} placeholder="Company name"/></Field>
@@ -12458,7 +12475,7 @@ const printOrderInvItems=items=>[...(items||[])].sort((a,b)=>{
 function buildInvBodyHTML(inv,buyers,company="ng"){
   const co=companyProfileFromKey(company);
   const sigSrc=signatureForCompany(company);
-  const buyer=buyers.find(b=>b.id===inv.buyerId);
+  const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv);
   const buyerAddr=buyer?.billingAddress||buyer?.address||"";
   const shipAddr=buyer?.shippingSameAsBilling!==false?(buyer?.billingAddress||buyer?.address||""):(buyer?.shippingAddress||buyer?.billingAddress||buyer?.address||"");
   const consignee=inv.consigneeSameAsBuyer?{name:buyer?.name,address:shipAddr,country:buyer?.country}:{name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
@@ -12651,7 +12668,7 @@ async function renderBasicInvoicePacketPdf(inv,buyers,company){
   const font=await pdf.embedFont(StandardFonts.Helvetica);
   const bold=await pdf.embedFont(StandardFonts.HelveticaBold);
   const co=companyProfileFromKey(company);
-  const buyer=buyers.find(b=>b.id===inv.buyerId)||{};
+  const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv)||{};
   const buyerAddr=buyer.billingAddress||buyer.address||inv.consigneeAddress||"";
   const consignee=inv.consigneeSameAsBuyer
     ? {name:buyer.name||inv.consigneeName,address:buyerAddr,country:buyer.country||inv.consigneeCountry}
@@ -12778,7 +12795,7 @@ async function attachInvoiceToExportReconPacket(inv,buyers,company){
 function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
   const co=companyProfileFromKey(company);
   const sigSrc=signatureForCompany(company);
-  const buyer=buyers.find(b=>b.id===inv.buyerId);
+  const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv);
   const buyerAddr=buyer?.billingAddress||buyer?.address||"";
   const shipAddr=buyer?.shippingSameAsBilling!==false?(buyer?.billingAddress||buyer?.address||""):(buyer?.shippingAddress||buyer?.billingAddress||buyer?.address||"");
   const consignee=inv.consigneeSameAsBuyer?{name:buyer?.name,address:shipAddr,country:buyer?.country}:{name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
