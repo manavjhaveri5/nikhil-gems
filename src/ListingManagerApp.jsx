@@ -110,8 +110,11 @@ const monthLabel = value => new Date(`${toIsoDate(value)}T12:00:00`).toLocaleStr
 
 const moneyAmount = m => (m?.amount || 0) / (m?.divisor || 100);
 const cleanInvoiceText = v => String(v || "").replace(/\s+/g, " ").trim();
-const etsyBuyerName = name => {
-  const base = cleanInvoiceText(name) || "Etsy Buyer";
+// Only Etsy orders get the "via Etsy" suffix. Atyahara's own Shopify (or manual)
+// orders flow through the same invoice path but must keep the plain buyer name.
+const etsyBuyerName = (name, viaEtsy = true) => {
+  const base = cleanInvoiceText(name) || (viaEtsy ? "Etsy Buyer" : "Buyer");
+  if (!viaEtsy) return base;
   return /\bvia\s+etsy\b/i.test(base) ? base : `${base} via Etsy`;
 };
 const buyerMatchKey = value => String(value || "").toLowerCase().replace(/\bvia\s+etsy\b/g, "").replace(/[^a-z0-9]/g, "");
@@ -209,8 +212,8 @@ const matchShapeInTitle = (tokens, title) => {
   return best;
 };
 
-async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {} }) {
-  const displayName = etsyBuyerName(buyer.name || address.name || "");
+async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {}, viaEtsy = true }) {
+  const displayName = etsyBuyerName(buyer.name || address.name || "", viaEtsy);
   const addressText = compactAddress(address);
   const country = cleanInvoiceText(buyer.country || address.country || "");
   const email = cleanInvoiceText(buyer.email || "");
@@ -218,13 +221,17 @@ async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {} }) {
   const buyers = Array.isArray(fresh) ? fresh : [];
   const displayKey = buyerMatchKey(displayName);
   const emailKey = email.toLowerCase();
-  const existing = buyers.find(b => buyerMatchKey(b.name) === displayKey && /\bvia\s+etsy\b/i.test(String(b.name || "")))
-    || (emailKey ? buyers.find(b => String(b.email || "").trim().toLowerCase() === emailKey && /\bvia\s+etsy\b/i.test(String(b.name || ""))) : null);
+  // Match within the right pool: Etsy sales reuse "via Etsy" buyer records, non-Etsy
+  // sales reuse plain records — never cross over, so a walk-in never lands on an Etsy buyer.
+  const isEtsyRec = b => /\bvia\s+etsy\b/i.test(String(b.name || ""));
+  const poolOk = b => viaEtsy ? isEtsyRec(b) : !isEtsyRec(b);
+  const existing = buyers.find(b => buyerMatchKey(b.name) === displayKey && poolOk(b))
+    || (emailKey ? buyers.find(b => String(b.email || "").trim().toLowerCase() === emailKey && poolOk(b)) : null);
 
   if (existing) {
     const patched = {
       ...existing,
-      name: /\bvia\s+etsy\b/i.test(existing.name || "") ? existing.name : displayName,
+      name: viaEtsy ? (isEtsyRec(existing) ? existing.name : displayName) : (existing.name || displayName),
       email: existing.email || email,
       country: existing.country || country,
       billingAddress: existing.billingAddress || existing.address || addressText,
@@ -255,7 +262,7 @@ async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {} }) {
     email,
     phone: cleanInvoiceText(address.phone || ""),
     port: country,
-    notes: `Auto-created from Etsy buyer${buyer.name ? ` ${buyer.name}` : ""}`,
+    notes: viaEtsy ? `Auto-created from Etsy buyer${buyer.name ? ` ${buyer.name}` : ""}` : `Auto-created from Atyahara order${buyer.name ? ` — ${buyer.name}` : ""}`,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -315,9 +322,9 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
   });
 }
 
-async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null, invNoOverride = "" }) {
+async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null, invNoOverride = "", viaEtsy = true }) {
   const sourceReceiptId = String(receiptId || "");
-  if (!sourceReceiptId) throw new Error("Missing Etsy receipt id");
+  if (!sourceReceiptId) throw new Error("Missing order receipt id");
   const fresh = await loadKFresh(AT_INVOICES_KEY).catch(() => []);
   const existing = Array.isArray(fresh) ? fresh : [];
   const existingInv = existing.find(inv =>
@@ -329,8 +336,8 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
   const overrideTaken = overrideNo && existing.some(inv => inv.id !== existingInv?.id && String(inv.invNo || "") === overrideNo);
 
   const date = toIsoDate(orderDate);
-  const buyerRecord = await ensureAtyaharaEtsyBuyer({ buyer, address });
-  const displayBuyerName = buyerRecord?.name || etsyBuyerName(buyer.name || address.name || "");
+  const buyerRecord = await ensureAtyaharaEtsyBuyer({ buyer, address, viaEtsy });
+  const displayBuyerName = buyerRecord?.name || etsyBuyerName(buyer.name || address.name || "", viaEtsy);
   const shapeTokens = await loadCustomsShapeTokens();
   const invoiceItems = await aiEnhanceInvoiceItems(items, { receiptId: sourceReceiptId, buyerCountry: buyer.country || address.country || "" }, shapeTokens);
   const totalAmt = Number(invoiceItems.reduce((s, item) => s + (+item.qty || 0) * (+item.rate || 0), 0).toFixed(2));
@@ -343,7 +350,7 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
     date,
     dueDate: existingInv?.dueDate || date,
     buyerId: buyerRecord?.id || existingInv?.buyerId || "",
-    buyerName: displayBuyerName || existingInv?.buyerName || "Etsy Buyer via Etsy",
+    buyerName: displayBuyerName || existingInv?.buyerName || (viaEtsy ? "Etsy Buyer via Etsy" : "Buyer"),
     buyerEmail: buyer.email || buyerRecord?.email || existingInv?.buyerEmail || "",
     buyerCountry: buyer.country || address.country || buyerRecord?.country || existingInv?.buyerCountry || "",
     consigneeSameAsBuyer: true,
@@ -353,15 +360,15 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
     currency,
     portLading: existingInv?.portLading || "Mumbai, India",
     portDischarge: existingInv?.portDischarge || "",
-    terms: existingInv?.terms || "Etsy order",
+    terms: existingInv?.terms || (viaEtsy ? "Etsy order" : "Sale"),
     items: invoiceItems,
     totalAmt,
     shippingCost: shippingCost != null ? shippingCost : (existingInv?.shippingCost || 0),
-    notes: notes || `Etsy order #${sourceReceiptId}`,
+    notes: notes || `${viaEtsy ? "Etsy" : "Atyahara"} order #${sourceReceiptId}`,
     status: existingInv?.status || "draft",
     paidAmount: existingInv?.paidAmount || 0,
     payments: existingInv?.payments || [],
-    source: "listing-manager-etsy",
+    source: viaEtsy ? "listing-manager-etsy" : "listing-manager-atyahara",
     sourceOrderIds: [sourceReceiptId],
     _etsyReceiptId: sourceReceiptId,
     _aiAutofilled: invoiceItems.some(i => i._aiAutofilled),
@@ -3042,9 +3049,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         },
         currency,
         items,
-        notes: `Created from Listing Manager Etsy receipt #${receiptId}`,
+        notes: `Created from Listing Manager ${isEtsyOrder(order) ? "Etsy receipt" : "Atyahara order"} #${receiptId}`,
         shippingCost: 0,
         invNoOverride,
+        viaEtsy: isEtsyOrder(order),
       });
       await patchOrder(order, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now(), _atProductDesc: productDesc });
       // Refresh the local invoice list so the next order's suggested number increments.
