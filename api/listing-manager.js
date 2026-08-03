@@ -445,6 +445,71 @@ function buildShopifyVariants(listing) {
   return { options, variants };
 }
 
+/* ── Shopify: upload ONE listing video (staged upload → productCreateMedia) ─────
+   Shopify won't ingest a raw MP4 URL directly: the file must be pushed to a staged
+   target first, then attached. Mirrors api/shopify.js's pushVideo. Best-effort —
+   returns {ok,error} instead of throwing, so a video hiccup never fails the publish. */
+async function pushShopifyVideo(store, token, productId, videoUrl) {
+  if (!videoUrl || typeof videoUrl !== "string" || !videoUrl.startsWith("http")) return { ok: false, skipped: true };
+  const cleanUrl = videoUrl.split("?")[0];
+  const filename = cleanUrl.split("/").pop() || "video.mp4";
+  const ext = filename.split(".").pop().toLowerCase();
+  const mimeType = ext === "mov" ? "video/quicktime" : ext === "webm" ? "video/webm" : "video/mp4";
+  const gqlUrl = `https://${store}/admin/api/2024-04/graphql.json`;
+  const gqlHeaders = { "Content-Type": "application/json", "X-Shopify-Access-Token": token };
+  try {
+    const headRes = await fetch(cleanUrl, { method: "HEAD" });
+    const fileSize = headRes.headers.get("content-length") || "0";
+    const stagedRes = await fetch(gqlUrl, {
+      method: "POST", headers: gqlHeaders,
+      body: JSON.stringify({
+        query: `mutation stagedUploadsCreate($input:[StagedUploadInput!]!){stagedUploadsCreate(input:$input){stagedTargets{url resourceUrl parameters{name value}}userErrors{field message}}}`,
+        variables: { input: [{ filename, mimeType, resource: "VIDEO", httpMethod: "POST", fileSize }] },
+      }),
+    });
+    const stagedData = await stagedRes.json();
+    const ue = stagedData?.data?.stagedUploadsCreate?.userErrors;
+    if (ue?.length) throw new Error("Staged init: " + ue.map(e => e.message).join(", "));
+    const target = stagedData?.data?.stagedUploadsCreate?.stagedTargets?.[0];
+    if (!target?.url) throw new Error("No staged URL returned");
+    const videoRes = await fetch(cleanUrl);
+    if (!videoRes.ok) throw new Error(`Fetching video failed: ${videoRes.status}`);
+    const videoBlob = await videoRes.blob();
+    const form = new FormData();
+    for (const { name, value } of target.parameters) form.append(name, value);
+    form.append("file", videoBlob, filename);
+    const up = await fetch(target.url, { method: "POST", body: form });
+    if (!up.ok) throw new Error(`Staging upload failed ${up.status}: ${(await up.text()).slice(0, 200)}`);
+    const resourceUrl = target.resourceUrl || target.url;
+    const mediaRes = await fetch(gqlUrl, {
+      method: "POST", headers: gqlHeaders,
+      body: JSON.stringify({
+        query: `mutation productCreateMedia($productId:ID!,$media:[CreateMediaInput!]!){productCreateMedia(productId:$productId,media:$media){media{mediaContentType status}mediaUserErrors{field message}}}`,
+        variables: { productId: `gid://shopify/Product/${productId}`, media: [{ mediaContentType: "VIDEO", originalSource: resourceUrl }] },
+      }),
+    });
+    const md = await mediaRes.json();
+    const me = md?.data?.productCreateMedia?.mediaUserErrors;
+    if (me?.length) throw new Error(me.map(e => e.message).join(", "));
+    return { ok: true };
+  } catch (e) {
+    console.error("Shopify listing video push failed:", e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+async function shopifyProductHasVideo(store, token, productId) {
+  try {
+    const r = await fetch(`https://${store}/admin/api/2024-04/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+      body: JSON.stringify({ query: `query{product(id:"gid://shopify/Product/${productId}"){media(first:25){nodes{mediaContentType}}}}` }),
+    });
+    const d = await r.json();
+    return (d?.data?.product?.media?.nodes || []).some(n => n.mediaContentType === "VIDEO");
+  } catch { return false; }
+}
+
 async function publishShopify(store, token, listing, ai) {
   const { title, qty = 0, type = "repeatable", price_shopify, productType, material, images = [] } = listing;
 
@@ -483,6 +548,13 @@ async function publishShopify(store, token, listing, ai) {
   const product = data.product;
   const imageSync = await syncShopifyImages(store, token, product.id, images);
 
+  // Video (one per listing) — best-effort, never fails the publish.
+  let videoQueued = false, videoErr = "";
+  if (listing.video) {
+    const v = await pushShopifyVideo(store, token, product.id, listing.video);
+    videoQueued = v.ok; videoErr = v.error || "";
+  }
+
   // SEO
   try {
     const seoTitle = ai?.seo_title || shopTitle;
@@ -503,6 +575,8 @@ async function publishShopify(store, token, listing, ai) {
     storefront_url: `https://${store.replace(".myshopify.com", "")}.com/products/${product.handle}`,
     status: "active",
     images_uploaded: imageSync.uploaded,
+    videoQueued,
+    videoErr,
   };
 }
 
@@ -771,7 +845,15 @@ export default async function handler(req, res) {
         const d = await r.json();
         if (!r.ok) throw new Error(`Shopify update: ${JSON.stringify(d.errors || d)}`);
         const imageSync = await syncShopifyImages(store, token, existingId, listing.images || []);
-        result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded };
+        // Video: add it only if the product doesn't already carry one (avoids dupes on re-sync).
+        let videoQueued = false, videoErr = "";
+        if (listing.video && typeof listing.video === "string" && listing.video.startsWith("http")) {
+          if (!(await shopifyProductHasVideo(store, token, existingId))) {
+            const v = await pushShopifyVideo(store, token, existingId, listing.video);
+            videoQueued = v.ok; videoErr = v.error || "";
+          }
+        }
+        result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded, videoQueued, videoErr };
       } else {
         if (syncOnly && !allowCreate) {
           return res.status(409).json({ ok: false, error: `Skipped ${platformKey} sync: no existing product_id` });

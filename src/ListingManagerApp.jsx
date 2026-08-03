@@ -1302,6 +1302,7 @@ function ListingForm({ initial, stock, onSave, onClose }) {
   const [generating,  setGenerating]  = useState(false);
   const [errors,      setErrors]      = useState({});
   const [publishTo,   setPublishTo]   = useState({});
+  const [dealOpt,     setDealOpt]     = useState(() => initial?._dealOnPublish ? { enabled: true, days: initial._dealOnPublish.days || 7, customDate: initial._dealOnPublish.customDate || "" } : { enabled: false, days: 7, customDate: "" });
   const [showOptional,setShowOptional]= useState(false);
   const [etsyShippingProfiles, setEtsyShippingProfiles] = useState([]);
   const [etsyReturnPolicies,   setEtsyReturnPolicies]   = useState([]);
@@ -1426,7 +1427,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   const handleSave = () => {
     if (!validate()) return;
-    onSave(ensureListingOrderId({ ...form, tags, _ai: form._ai || null, updated_at: now() }), publishTo);
+    onSave(ensureListingOrderId({ ...form, tags, _ai: form._ai || null, _dealOnPublish: dealOpt.enabled ? { days: dealOpt.days, customDate: dealOpt.customDate } : null, updated_at: now() }), publishTo);
   };
 
   const catLabel = ETSY_CATEGORIES.find(c => c.value === category)?.label || "—";
@@ -2039,6 +2040,22 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 </div>
               );
             })()}
+            {/* ⭐ Deal: when this listing publishes to a Shopify store, also drop it into
+                the store's Deals collection with a remind-to-delete timer. */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", background: dealOpt.enabled ? "#C8902015" : C.card, border: `1.5px solid ${dealOpt.enabled ? "#C89020" : C.border}`, borderRadius: 8, padding: "4px 10px", userSelect: "none" }}>
+                <input type="checkbox" checked={dealOpt.enabled} onChange={e => setDealOpt(d => ({ ...d, enabled: e.target.checked }))} style={{ accentColor: "#C89020", width: 12, height: 12 }} />
+                <span style={{ fontSize: 12 }}>⭐</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: dealOpt.enabled ? "#9A6200" : C.inkMid }}>Add to Deals</span>
+              </label>
+              {dealOpt.enabled && <>
+                <span style={{ fontSize: 10, color: C.inkFaint }}>remove after</span>
+                {[["3d", 3], ["1wk", 7], ["2wk", 14], ["1mo", 30]].map(([label, n]) => (
+                  <button key={n} type="button" onClick={() => setDealOpt(d => ({ ...d, days: n, customDate: "" }))} style={{ background: !dealOpt.customDate && dealOpt.days === n ? "#C89020" : C.card, color: !dealOpt.customDate && dealOpt.days === n ? "#fff" : C.ink, border: `1px solid ${!dealOpt.customDate && dealOpt.days === n ? "#C89020" : C.border}`, borderRadius: 7, padding: "4px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>{label}</button>
+                ))}
+                <input type="date" value={dealOpt.customDate} min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} onChange={e => setDealOpt(d => ({ ...d, customDate: e.target.value }))} style={{ ...FI(), width: 150, fontSize: 11, padding: "4px 8px" }} />
+              </>}
+            </div>
           </div>
 
           <div style={{ padding: "10px 24px 14px", display: "flex", gap: 10 }}>
@@ -7492,6 +7509,36 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "Publishing failed");
       result = d.result;
+      if (listing.video && result?.videoErr) showToast(`⚠ ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} video: ${result.videoErr}`);
+      // ⭐ Deal-on-publish: drop the just-published product into the store's Deals
+      // collection and start its remind-to-delete timer.
+      if (listing._dealOnPublish && result?.product_id && (storeKey === "earth" || storeKey === "atyahara")) {
+        try {
+          const creds = (await loadK(storeKey === "atyahara" ? "ng-shopify-creds-atyahara" : "ng-shopify-creds-earth").catch(() => null)) || null;
+          const dr = await fetch("/api/shopify", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "add_to_deals", store_key: storeKey, product_ids: [String(result.product_id)], ...(creds?.store && creds?.token ? { shopStore: creds.store, shopToken: creds.token } : {}) }),
+          });
+          const dd = await dr.json().catch(() => ({}));
+          if (dr.ok && dd.success) {
+            const key = dealsKeyFor(storeKey);
+            const list = (await loadKFresh(key).catch(() => [])) || [];
+            const arr = Array.isArray(list) ? list : [];
+            const existing = arr.find(e => String(e.productId) === String(result.product_id));
+            // Don't reset an already-running timer on re-sync; only start one if there isn't one.
+            if (!existing || existing.status !== "active") {
+              const expiry = listing._dealOnPublish.customDate
+                ? new Date(listing._dealOnPublish.customDate + "T23:59:59").toISOString()
+                : new Date(Date.now() + (+listing._dealOnPublish.days || 7) * 86400000).toISOString();
+              const others = arr.filter(e => String(e.productId) !== String(result.product_id));
+              await saveK(key, [{ id: `deal-${storeKey}-${result.product_id}`, store: storeKey, productId: String(result.product_id), title: listing.title || "", url: result.storefront_url || "", addedAt: new Date().toISOString(), expiryDate: expiry, status: "active" }, ...others]);
+              showToast(`⭐ Added to ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} Deals`);
+            }
+          } else {
+            showToast(`⚠ Deal add failed: ${dd.error || "unknown"}`);
+          }
+        } catch (e) { showToast("⚠ Deal add failed: " + (e.message || "")); }
+      }
     }
 
     await patchListingItem(listing, current => ({
