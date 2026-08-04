@@ -12995,6 +12995,10 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
           <div style={{textAlign:"right",fontSize:12}}>
             <div style={{display:"flex",justifyContent:"space-between",gap:32,marginBottom:3}}><span>Sub Total</span><span>{subTotal.toFixed(2)}</span></div>
             {freight>0&&<div style={{display:"flex",justifyContent:"space-between",gap:32,marginBottom:3}}><span>Shipping &amp; Freight</span><span>{freight.toFixed(2)}</span></div>}
+            {/* Same condition as the print/PDF renderers, so the preview matches what
+                actually prints. Unticking "Show on invoice" hides the line but the
+                discount stays in the total. */}
+            {inv.showDiscount!==false&&discount>0&&<div style={{display:"flex",justifyContent:"space-between",gap:32,marginBottom:3}}><span>Discount</span><span>- {discount.toFixed(2)}</span></div>}
             <div style={{display:"flex",justifyContent:"space-between",gap:32,fontWeight:700,fontSize:14,borderTop:"2px solid #000",paddingTop:4}}><span>Total</span><span>{inv.currency} {total.toFixed(2)}</span></div>
           </div>
         </div>
