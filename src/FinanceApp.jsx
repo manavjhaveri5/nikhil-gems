@@ -2405,9 +2405,16 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
     return d >= Math.min(...stmtTimes) - 2 * 86400000 && d <= Math.max(...stmtTimes) + 2 * 86400000;
   }) : [];
 
+  // Opening balance: offer to set the account's opening balance to the statement's
+  // opening so the running balance ties out. Default ON only when the account has no
+  // ledger entries on/before the statement start — otherwise we'd clobber real history.
+  const stmtStart = txns.length ? txns.map(t => t.date).sort()[0] : "";
+  const hasPriorHistory = accTxns.some(l => l.date && stmtStart && l.date <= stmtStart);
+  const canSetOpening = openingBalance != null;
   // Default: select only unmatched transactions
   const [sel, setSel] = useState(() => new Set(enriched.map((t, i) => t.matched ? -1 : i).filter(i => i >= 0)));
   const [selRm, setSelRm] = useState(new Set());
+  const [setOpening, setSetOpening] = useState(() => canSetOpening && !hasPriorHistory);
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const toggleRm = id => setSelRm(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -2459,7 +2466,7 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
       createdAt: new Date().toISOString(),
     }));
     const toRemove = extras.filter(x => selRm.has(x.id)).map(x => x.id);
-    await onApply({ add: toAdd, removeIds: toRemove });
+    await onApply({ add: toAdd, removeIds: toRemove, openingBalance: setOpening && canSetOpening ? +openingBalance : null, accountId: acc?.id });
     setSaving(false);
     setDone(true);
     setTimeout(onClose, 1400);
@@ -2617,6 +2624,19 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
           )}
         </div>
 
+        {/* ── Opening-balance option: makes the running balance tie out to the bank ── */}
+        {!done && canSetOpening && (
+          <div style={{ padding: "10px 20px 0", flexShrink: 0, background: "#fff" }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", background: setOpening ? "#f0f7f2" : "#faf9f7", border: `1px solid ${setOpening ? "#bfe0cc" : "#ede9e3"}`, borderRadius: 10, padding: "10px 12px" }}>
+              <input type="checkbox" checked={setOpening} onChange={e => setSetOpening(e.target.checked)} style={{ width: 14, height: 14, accentColor: "#2d7a4f", cursor: "pointer", marginTop: 1 }} />
+              <div style={{ fontSize: 12, color: "#444", lineHeight: 1.45 }}>
+                Set <strong>{acc?.name}</strong> opening balance to <strong>{sym}{f2(openingBalance)}</strong> (as of {stmtStart || stmtStartDate}) so the ledger balance ties out to the bank.
+                {hasPriorHistory && <div style={{ color: "#c0392b", fontWeight: 700, marginTop: 3 }}>⚠ This account already has entries on/before that date — turning this on overwrites its current opening balance.</div>}
+              </div>
+            </label>
+          </div>
+        )}
+
         {/* ── Footer ── */}
         {!done && (
           <div style={{ padding: "14px 20px", borderTop: "1px solid #ede9e3", flexShrink: 0, background: "#fff", display: "flex", gap: 10, alignItems: "center" }}>
@@ -2625,10 +2645,12 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
                 ? <>{sel.size} selected · {matchedCount} already in ledger{selRm.size > 0 ? <> · <span style={{ color: "#c0392b", fontWeight: 700 }}>{selRm.size} to remove</span></> : null}{importDiff != null ? ` · ${Math.abs(importDiff) < 1 ? "statement closes" : `remaining ${importDiff >= 0 ? "+" : ""}${sym}${f2(importDiff)}`}` : ""}</>
                 : <>{newCount} new · {matchedCount} already matched{extras.length > 0 ? ` · ${extras.length} not on bank` : ""}</>}
             </div>
-            <button onClick={handleAdd} disabled={saving || (sel.size === 0 && selRm.size === 0)}
-              style={{ background: "#1a1a1a", color: "#fff", border: "none", borderRadius: 10, padding: "11px 24px", fontSize: 13, fontWeight: 700, cursor: (sel.size === 0 && selRm.size === 0) ? "not-allowed" : "pointer", opacity: (sel.size === 0 && selRm.size === 0) ? .35 : 1, whiteSpace: "nowrap" }}>
-              {saving ? "Applying…" : (sel.size === 0 && selRm.size === 0) ? "Nothing to apply" : `${sel.size > 0 ? `Add ${sel.size}` : ""}${sel.size > 0 && selRm.size > 0 ? " · " : ""}${selRm.size > 0 ? `Remove ${selRm.size}` : ""} →`}
+            {(() => { const obOnly = setOpening && canSetOpening; const nothing = sel.size === 0 && selRm.size === 0 && !obOnly; return (
+            <button onClick={handleAdd} disabled={saving || nothing}
+              style={{ background: "#1a1a1a", color: "#fff", border: "none", borderRadius: 10, padding: "11px 24px", fontSize: 13, fontWeight: 700, cursor: nothing ? "not-allowed" : "pointer", opacity: nothing ? .35 : 1, whiteSpace: "nowrap" }}>
+              {saving ? "Applying…" : nothing ? "Nothing to apply" : `${sel.size > 0 ? `Add ${sel.size}` : ""}${sel.size > 0 && selRm.size > 0 ? " · " : ""}${selRm.size > 0 ? `Remove ${selRm.size}` : ""}${(sel.size > 0 || selRm.size > 0) && obOnly ? " · " : ""}${obOnly ? "Set opening bal" : ""} →`}
             </button>
+            ); })()}
           </div>
         )}
       </div>
@@ -3534,7 +3556,7 @@ export default function FinanceApp({ onHome }) {
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onAdjustBalance={adjustBalance} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
           {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} onUpdate={updateTxn} />}
-          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [] }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank"); }} />}
+          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [], openingBalance = null, accountId = null }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); let obMsg = ""; if (openingBalance != null && accountId) { const accs = accounts.map(a => a.id === accountId ? { ...a, openingBal: +openingBalance } : a); setAccounts(accs); await saveK(companyKeys(company).accounts, accs); obMsg = ` · opening bal ₹${(+openingBalance).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`; } showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank" + obMsg); }} />}
         </>
       }
       {/* Inline classify after manual entry */}
