@@ -10364,6 +10364,9 @@ const CO={
   swift:"BKIDINBBCMB",
   ifsc:"BKID0000064",
   lutArn:"AD270326086706O",
+  // Heading above the bank details on invoices. Lives on the company profile so the
+  // print, preview and PDF renderers can never drift apart.
+  bankNote:"Payment in advance ONLY in:",
 };
 const CO_ATYAHARA={
   name:"Atyahara",
@@ -10379,6 +10382,7 @@ const CO_ATYAHARA={
   swift:"BKIDINBBCMB",
   ifsc:"BKID0000064",
   lutArn:"AD270326080365Y",
+  bankNote:"Payment in advance ONLY in:",
 };
 const COMPANIES={nikhil:CO,atyahara:CO_ATYAHARA};
 const companyProfileFromKey=company=>company==="at"||company==="atyahara"?CO_ATYAHARA:CO;
@@ -12608,7 +12612,7 @@ ${gstMode!=="none"&&totalTax>0?`<table style="width:100%;margin-bottom:3px;font-
   <tr>
     <td style="width:58%;vertical-align:top;padding-right:12px">
       <p><b>Total In Words</b><br/><i>${currWords[inv.currency]||inv.currency} ${totalWords}</i></p>
-	      <p><b>Payment within 180 days ONLY in:</b><br/>${co.bank}<br/>${co.bankBranch.replace(/\n/g,"<br/>")}<br/>A/C No. - ${co.bankAcc}<br/>Swift Code - ${co.swift}; IFSC Code - ${co.ifsc}</p>
+	      <p><b>${co.bankNote||"Payment in advance ONLY in:"}</b><br/>${co.bank}<br/>${co.bankBranch.replace(/\n/g,"<br/>")}<br/>A/C No. - ${co.bankAcc}<br/>Swift Code - ${co.swift}; IFSC Code - ${co.ifsc}</p>
     </td>
     <td style="vertical-align:top;text-align:right">
       <table style="margin-left:auto">
@@ -12987,7 +12991,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
           <div style={{flex:1,paddingRight:24,fontSize:11,lineHeight:1.8}}>
             <div><b>Total In Words</b></div>
             <div style={{fontStyle:"italic"}}>{currWords[inv.currency]||inv.currency} {totalWords}</div>
-            <div style={{marginTop:10}}><b>Payment within 180 days ONLY in:</b><br/>
+            <div style={{marginTop:10}}><b>{co.bankNote||"Payment in advance ONLY in:"}</b><br/>
 	            {co.bank}<br/>{co.bankBranch.split("\n").join(", ")}<br/>
 	            A/C No. - {co.bankAcc}<br/>
 	            Swift Code - {co.swift}; IFSC Code - {co.ifsc}</div>

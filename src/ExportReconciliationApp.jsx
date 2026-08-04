@@ -666,6 +666,7 @@ const NG_CO = {
   swift: "BKIDINBBCMB",
   ifsc: "BKID0000064",
   lutArn: "AD270326086706O",
+  bankNote: "Payment in advance ONLY in:",
 };
 // Compact "amount in words" for the invoice total (mirrors numToWords in nikhil-gems-v6.jsx).
 const ngNumToWords = n => {
@@ -831,7 +832,7 @@ async function renderNgInvoicePdf(inv, buyers) {
   if (freight > 0) { draw("Shipping & Freight", totalsX, y, 8); drawRight(ngMoney(freight), right, y, 8); }
   draw("Total", totalsX, y - 14, 10, bold); drawRight(`${inv.currency || ""} ${ngMoney(total)}`, right, y - 14, 10, bold);
   y -= 40;
-  draw("Payment within 180 days ONLY in:", left, y, 8, bold);
+  draw(co.bankNote || "Payment in advance ONLY in:", left, y, 8, bold);
   y -= 12;
   [co.bank, co.bankBranch, `A/C No. - ${co.bankAcc}`, `Swift Code - ${co.swift}; IFSC Code - ${co.ifsc}`].forEach(t => { draw(t, left, y, 7.5); y -= 12; });
   y -= 8;
