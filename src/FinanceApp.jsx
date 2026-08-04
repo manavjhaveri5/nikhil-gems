@@ -3251,6 +3251,34 @@ If nothing is missing, output <missing_json>[]</missing_json>.`;
 }
 
 // ─── Main Finance App ─────────────────────────────────────────────────────────
+// One-time reconciliation cleanup (Atyahara / IndusInd): 6 pre-existing ledger
+// entries that aren't on the uploaded bank statement — a wrong-direction copy of a
+// Nikhil Gems payment plus a few inter-company / duplicate records. Removing them
+// makes the IndusInd ledger tie out to the bank. The Fix button only shows while
+// these still exist, so it disappears for good once clicked.
+const ATYAHARA_RECON_FIX = [
+  { date: "2026-07-20", type: "credit", amount: 172569, match: "nikhil gems" },
+  { date: "2026-06-28", type: "credit", amount: 100000, match: "nikhil gems" },
+  { date: "2026-07-17", type: "credit", amount: 76074,  match: "atyahara" },
+  { date: "2026-07-29", type: "credit", amount: 5000,   match: "ship global" },
+  { date: "2026-06-15", type: "debit",  amount: 3074,   match: "ikea" },
+  { date: "2026-06-26", type: "debit",  amount: 788,    match: "subko" },
+];
+function findReconFixIds(txns = []) {
+  const ids = [];
+  for (const t of ATYAHARA_RECON_FIX) {
+    const hit = txns.find(x =>
+      !ids.includes(x.id) &&
+      x.type === t.type &&
+      Math.abs((+x.amount || 0) - t.amount) < 0.5 &&
+      String(x.date || "").slice(0, 10) === t.date &&
+      String(x.payee || "").toLowerCase().includes(t.match)
+    );
+    if (hit) ids.push(hit.id);
+  }
+  return ids;
+}
+
 export default function FinanceApp({ onHome }) {
   const [company,       setCompanyState]  = useState(() => localStorage.getItem("ng-active-company") || "ng");
   const [view,          setView]          = useState("dashboard");
@@ -3550,6 +3578,28 @@ export default function FinanceApp({ onHome }) {
       {!loaded
         ? <div style={{ textAlign: "center", padding: "60px 20px", color: C.inkFaint, fontSize: 14 }}>Loading financial data…</div>
         : <>
+          {(() => {
+            const fixIds = company === "at" ? findReconFixIds(txns) : [];
+            if (!fixIds.length) return null;
+            const runFix = async () => {
+              if (!window.confirm(`Remove ${fixIds.length} entries that aren't on your IndusInd bank statement (wrong-direction / inter-company / duplicate records)?\n\nThis makes the ledger match the bank. It can't be undone from here, but you can re-add any entry manually.`)) return;
+              const rm = new Set(fixIds);
+              const list = txns.filter(t => !rm.has(t.id));
+              setTxns(list);
+              await saveK(companyKeys(company).transactions, list);
+              showToast(`✓ Removed ${rm.size} non-bank entr${rm.size === 1 ? "y" : "ies"} — IndusInd now matches the statement`);
+            };
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "#fff8e6", border: "1px solid #f0dfae", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
+                <div style={{ flex: 1, minWidth: 240, fontSize: 13, color: "#8a6d1a", lineHeight: 1.5 }}>
+                  🔧 <strong>{fixIds.length} entr{fixIds.length === 1 ? "y is" : "ies are"} inflating IndusInd</strong> — records in the ERP that aren't on your uploaded bank statement (incl. a ₹1,72,569 Nikhil Gems payment logged as a credit). Clear them so the ledger ties out to the bank.
+                </div>
+                <button onClick={runFix} style={{ background: "#1a1a1a", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  Fix reconciliation →
+                </button>
+              </div>
+            );
+          })()}
           {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} />}
           {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
