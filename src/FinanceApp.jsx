@@ -349,6 +349,7 @@ function FShell({ title, view, setView, onHome, masked, toggleMask, company, set
 
   const VIEWS = [
     { id: "dashboard", label: mob ? "📊" : "Dashboard", title: "Dashboard" },
+    { id: "flow",      label: mob ? "💸" : "Money Flow", title: "Money Flow" },
     { id: "assets",    label: mob ? "🧾" : "Assets",    title: "Personal Assets" },
     { id: "ledger",    label: mob ? "📋" : "Ledger",    title: "Ledger" },
     { id: "classify",  label: mob ? "🏷" : "Classify",  title: "Classify Expenses" },
@@ -3251,6 +3252,260 @@ If nothing is missing, output <missing_json>[]</missing_json>.`;
 }
 
 // ─── Main Finance App ─────────────────────────────────────────────────────────
+// ─── Money Flow ───────────────────────────────────────────────────────────────
+// Cash-basis view of where money actually comes from and goes. Buckets are
+// resolved from the explicit category first, then payee/notes keywords; anything
+// unresolvable lands in "Uncategorised" — surfaced loudly, with inline classify
+// so the unknown share shrinks as you use it. Credit-card bill payments and
+// internal conversions are transfers, not spend (they'd double-count the card's
+// own transactions), so they're excluded from buckets and footnoted instead.
+const FLOW_INCOME = [
+  { id: "payouts",  label: "Marketplace payouts",     sub: "Etsy · Payoneer",        icon: "🛍", color: "#2D7A4F", kw: ["payoneer"] },
+  { id: "wires",    label: "Export wire remittances", sub: "Inward · SWIFT",         icon: "🌍", color: "#3F8FA8", kw: ["inward", "irm0", "cre001", "remittance"] },
+  { id: "domestic", label: "Domestic & direct sales", sub: "Razorpay · Paytm · UPI", icon: "🇮🇳", color: "#7A5EA8", kw: ["razorpay", "paytm", "sales receipt", "customer_receipt", "payment received", "receipt"] },
+  { id: "otherIn",  label: "Other income",            sub: "Refunds · adjustments",  icon: "↩️", color: "#8A8A5E", kw: [] },
+];
+const FLOW_EXPENSE = [
+  { id: "shipping",  label: "Shipping & couriers",   icon: "📦", color: "#4A7DB5", cats: ["air freight", "sea freight", "freight", "courier / local delivery", "land freight / courier", "shipping"], kw: ["ship", "delhiv", "porter", "courier", "bigfoot", "bigf", "bluedart", "dtdc", "fedex", "dhl", "department of posts", "nandan"] },
+  { id: "stock",     label: "Stock & vendor payments", icon: "💎", color: "#7A5EA8", cats: ["vendor payment"], kw: ["nikhil gems", "indbh", "emporium"] },
+  { id: "team",      label: "Team & owner",          icon: "👤", color: "#B5764A", cats: ["salary", "staff / labour"], kw: ["salary", "madiha", "manav jhaveri"] },
+  { id: "marketing", label: "Marketing & ads",       icon: "📢", color: "#C24E6A", cats: ["marketing"], kw: ["facebook", "face/", "meta ads", "instagram"] },
+  { id: "software",  label: "Software & subs",       icon: "💻", color: "#3F8FA8", cats: ["software", "ai", "subscription", "payment"], kw: ["openai", "open ai", "shopify", "apple", "google", "canva", "adobe", "zoho", "subscription"] },
+  { id: "office",    label: "Office, rent & utilities", icon: "🏢", color: "#8A8A5E", cats: ["utilities", "internet", "electricity", "rent", "repairs & maintenance"], kw: ["jio", "airtel", "electricity"] },
+  { id: "food",      label: "Food & lifestyle",      icon: "🍽", color: "#C99A3C", cats: ["food", "food & dining", "groceries", "movies", "entertainment"], kw: ["blinkit", "swiggy", "zomato", "zoma", "cafe", "coffee", "restaurant", "neuma", "nutcracker", "gourmet", "book my show", "benne", "subko"] },
+  { id: "shopping",  label: "Shopping & supplies",   icon: "🛒", color: "#A87456", cats: ["shopping", "packaging & supplies", "packaging", "equipment"], kw: ["amazon", "flipkart", "ikea", "furnitur"] },
+  { id: "travel",    label: "Travel & shows",        icon: "✈️", color: "#5EA88A", cats: ["show — hotel", "show — travel", "show — booth fee", "travel", "transport"], kw: ["goibibo", "makemytrip", "hotel", "irctc", "uber", "ola", "flight"] },
+  { id: "bank",      label: "Bank & card charges",   icon: "🏦", color: "#79553D", cats: ["bank charges"], kw: ["bank charge", " fee", "annual charge"] },
+  { id: "taxes",     label: "Taxes & government",    icon: "🏛", color: "#6B6B6B", cats: ["gst / tax payment", "tax"], kw: ["gst payment", "income tax", "customs duty"] },
+  { id: "misc",      label: "Misc (classified)",     icon: "🗂", color: "#9A9A9A", cats: ["petty cash", "business", "health"], kw: [] },
+];
+const FLOW_METHOD_CATS = new Set(["upi", "neft", "imps", "atm", "transfer", "other", ""]);
+function flowBucketOf(t) {
+  const cat = String(t.category || "").toLowerCase().trim();
+  const hay = `${t.payee || ""} ${t.notes || ""}`.toLowerCase();
+  if (t.type === "conversion" || t.classifiedAs === "cc_payment" || cat === "cc_payment" || cat === "credit card") return { side: "transfer" };
+  if (t.type === "credit") {
+    for (const b of FLOW_INCOME) if (b.kw.some(k => hay.includes(k) || cat.includes(k))) return { side: "in", bucket: b };
+    if (cat === "customer_receipt" || cat.includes("sales") || cat.includes("receipt")) return { side: "in", bucket: FLOW_INCOME[2] };
+    return { side: "in", bucket: FLOW_INCOME[3] };
+  }
+  // Debit: explicit category wins when it's a real category (not a payment method)
+  if (!FLOW_METHOD_CATS.has(cat)) {
+    for (const b of FLOW_EXPENSE) if (b.cats.includes(cat)) return { side: "out", bucket: b };
+  }
+  for (const b of FLOW_EXPENSE) if (b.kw.length && b.kw.some(k => hay.includes(k))) return { side: "out", bucket: b };
+  if (!FLOW_METHOD_CATS.has(cat)) return { side: "out", bucket: FLOW_EXPENSE.find(b => b.id === "misc") };
+  return { side: "out", bucket: null }; // Uncategorised
+}
+// Chip → canonical category string (resolves back to the same bucket)
+const FLOW_CHIPS = [
+  ["📦 Shipping", "Courier / Local Delivery"], ["💎 Vendor", "Vendor Payment"], ["👤 Staff", "Staff / Labour"],
+  ["📢 Marketing", "Marketing"], ["💻 Software", "Software"], ["🍽 Food", "Food"], ["🏢 Utilities", "Utilities"],
+  ["🛒 Shopping", "Shopping"], ["✈️ Travel", "Travel"], ["🏦 Bank", "Bank Charges"], ["🏛 Tax", "GST / Tax Payment"],
+];
+
+function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
+  const masked = useMasked();
+  const m = makeMask(masked);
+  const [months, setMonths] = useState(6);
+  const [expanded, setExpanded] = useState(null); // bucket id | "uncat" | income id
+  const [q, setQ] = useState("");
+
+  const toINR = t => (+t.amount || 0) * (t.currency && t.currency !== "INR" ? (+rates?.[t.currency] || 1) : 1);
+  const fmtL = n => {
+    const a = Math.abs(n);
+    return "₹" + (a >= 1e5 ? (a / 1e5).toLocaleString("en-IN", { maximumFractionDigits: 1 }) + "L" : a >= 1e3 ? Math.round(a / 1e3).toLocaleString("en-IN") + "k" : Math.round(a).toLocaleString("en-IN"));
+  };
+  const cutoff = months ? new Date(Date.now() - months * 30.44 * 86400000).toISOString().slice(0, 10) : "";
+  const ql = q.toLowerCase();
+  const scoped = (transactions || [])
+    .filter(t => (t.date || "") >= cutoff)
+    .filter(t => !ql || `${t.payee || ""} ${t.notes || ""} ${t.category || ""}`.toLowerCase().includes(ql));
+
+  // ── Engine: single pass → buckets, months, transfers ──
+  const inB = new Map(), outB = new Map(), byMonth = new Map();
+  let totalIn = 0, totalOut = 0, transferAmt = 0, transferN = 0;
+  const uncat = { amt: 0, txns: [] };
+  for (const t of scoped) {
+    const amt = toINR(t);
+    if (!amt) continue;
+    const r = flowBucketOf(t);
+    const mo = (t.date || "").slice(0, 7);
+    if (!byMonth.has(mo)) byMonth.set(mo, { in: 0, out: 0 });
+    if (r.side === "transfer") { transferAmt += amt; transferN++; continue; }
+    if (r.side === "in") {
+      totalIn += amt; byMonth.get(mo).in += amt;
+      const e = inB.get(r.bucket.id) || { bucket: r.bucket, amt: 0, txns: [] };
+      e.amt += amt; e.txns.push(t); inB.set(r.bucket.id, e);
+    } else {
+      totalOut += amt; byMonth.get(mo).out += amt;
+      if (!r.bucket) { uncat.amt += amt; uncat.txns.push(t); }
+      else { const e = outB.get(r.bucket.id) || { bucket: r.bucket, amt: 0, txns: [] }; e.amt += amt; e.txns.push(t); outB.set(r.bucket.id, e); }
+    }
+  }
+  const net = totalIn - totalOut;
+  const moKeys = [...byMonth.keys()].sort();
+  const nMo = Math.max(1, moKeys.length);
+  const avgNet = net / nMo;
+  const runway = avgNet < 0 && totalINR > 0 ? totalINR / -avgNet : null;
+  const knownPct = totalOut > 0 ? (1 - uncat.amt / totalOut) * 100 : 100;
+  const inRows = [...inB.values()].sort((a, b) => b.amt - a.amt);
+  const outRows = [...outB.values()].sort((a, b) => b.amt - a.amt);
+  const maxIn = inRows[0]?.amt || 1, maxOut = Math.max(outRows[0]?.amt || 0, uncat.amt) || 1;
+
+  const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: mob ? "16px 14px" : "20px 22px" };
+  const label = { fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: 0.8 };
+  const serif = { fontFamily: "'Cormorant Garamond',Georgia,serif" };
+
+  // Inline transaction list for an expanded bucket, with one-tap reclassify
+  const TxnList = ({ txns, classify }) => (
+    <div style={{ marginTop: 10, borderTop: `1px solid ${C.border}`, maxHeight: 320, overflowY: "auto" }}>
+      {[...txns].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(t => (
+        <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 2px", borderBottom: `1px solid ${C.border}40` }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.payee || t.notes || "—"}</div>
+            <div style={{ fontSize: 10, color: C.inkFaint }}>{fmtDate(t.date)}{t.category && !FLOW_METHOD_CATS.has(String(t.category).toLowerCase()) ? ` · ${t.category}` : ""}</div>
+          </div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: t.type === "credit" ? C.green : C.ink, flexShrink: 0 }}>{m((t.type === "credit" ? "+" : "−") + fmtL(toINR(t)))}</div>
+          {classify && (
+            <select value="" onChange={e => e.target.value && onUpdate(t.id, { category: e.target.value })}
+              style={{ fontSize: 10, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 4px", background: C.card, color: C.inkMid, cursor: "pointer", maxWidth: 92, flexShrink: 0 }}>
+              <option value="">tag ▾</option>
+              {FLOW_CHIPS.map(([lab, cat]) => <option key={cat} value={cat}>{lab}</option>)}
+            </select>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
+  const Bar = ({ row, max, total, side }) => {
+    const b = row.bucket;
+    const open = expanded === `${side}:${b.id}`;
+    return (
+      <div key={b.id} style={{ padding: "7px 0", cursor: "pointer" }} onClick={() => setExpanded(open ? null : `${side}:${b.id}`)}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+          <span style={{ fontSize: 13 }}>{b.icon}</span>
+          <span style={{ fontSize: 12.5, fontWeight: open ? 700 : 500, color: C.ink, flex: 1 }}>
+            {b.label}
+            {b.sub && <span style={{ fontSize: 10, color: C.inkFaint, fontWeight: 400 }}> · {b.sub}</span>}
+            <span style={{ fontSize: 10, color: C.inkFaint, fontWeight: 400 }}> · {row.txns.length}</span>
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 650, color: C.ink }}>{m(fmtL(row.amt))}</span>
+          <span style={{ fontSize: 10, color: C.inkFaint, width: 34, textAlign: "right" }}>{total ? Math.round(row.amt / total * 100) : 0}%</span>
+        </div>
+        <div style={{ height: 7, background: C.card, borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${Math.max(2, row.amt / max * 100)}%`, background: b.color, borderRadius: 4, transition: "width .4s cubic-bezier(.4,0,.2,1)" }} />
+        </div>
+        {open && <TxnList txns={row.txns} classify={side === "out"} />}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ maxWidth: 980, display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* ── Controls ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 2, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 3 }}>
+          {[["3M", 3], ["6M", 6], ["12M", 12], ["All", 0]].map(([lab, v]) => (
+            <button key={lab} onClick={() => setMonths(v)} style={{ background: months === v ? C.ink : "transparent", color: months === v ? "#FAF0DC" : C.inkMid, border: "none", borderRadius: 6, padding: "5px 13px", fontSize: 12, fontWeight: months === v ? 700 : 400, cursor: "pointer" }}>{lab}</button>
+          ))}
+        </div>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search payee — e.g. shiprocket…"
+          style={{ flex: 1, minWidth: 170, border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 12, background: C.surface, color: C.ink }} />
+      </div>
+
+      {/* ── Hero: the answer ── */}
+      <div style={{ ...card, background: C.ink, border: "none", color: "#FAF0DC" }}>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1.2fr", gap: mob ? 14 : 10 }}>
+          <div>
+            <div style={{ ...label, color: "#FAF0DC66" }}>Money in</div>
+            <div style={{ ...serif, fontSize: mob ? 24 : 30, fontWeight: 600, color: "#8FCBA8" }}>{m(fmtL(totalIn))}</div>
+            <div style={{ fontSize: 10.5, color: "#FAF0DC55" }}>{m(fmtL(totalIn / nMo))}/mo avg</div>
+          </div>
+          <div>
+            <div style={{ ...label, color: "#FAF0DC66" }}>Money out</div>
+            <div style={{ ...serif, fontSize: mob ? 24 : 30, fontWeight: 600, color: "#E8A0A0" }}>{m(fmtL(totalOut))}</div>
+            <div style={{ fontSize: 10.5, color: "#FAF0DC55" }}>{m(fmtL(totalOut / nMo))}/mo avg</div>
+          </div>
+          <div>
+            <div style={{ ...label, color: "#FAF0DC66" }}>Net cash flow</div>
+            <div style={{ ...serif, fontSize: mob ? 24 : 30, fontWeight: 600, color: net >= 0 ? "#8FCBA8" : "#E8A0A0" }}>{m((net >= 0 ? "+" : "−") + fmtL(net))}</div>
+            <div style={{ fontSize: 10.5, color: "#FAF0DC88", fontWeight: 600 }}>
+              {net >= 0 ? `Building ${m(fmtL(avgNet))}/mo` : runway ? `Burning ${m(fmtL(-avgNet))}/mo · ~${runway.toFixed(1)} mo runway` : `Burning ${m(fmtL(-avgNet))}/mo`}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Monthly rhythm ── */}
+      {moKeys.length > 1 && (
+        <div style={card}>
+          <div style={{ ...label, marginBottom: 12 }}>Monthly rhythm — in vs out</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: mob ? 6 : 12, height: 130, overflowX: "auto", paddingBottom: 2 }}>
+            {moKeys.map(mo => {
+              const d = byMonth.get(mo);
+              const peak = Math.max(...moKeys.map(k => Math.max(byMonth.get(k).in, byMonth.get(k).out)), 1);
+              const moNet = d.in - d.out;
+              return (
+                <div key={mo} title={`${mo}\nIn ${fmtL(d.in)} · Out ${fmtL(d.out)}\nNet ${moNet >= 0 ? "+" : "−"}${fmtL(moNet)}`}
+                  style={{ flex: 1, minWidth: 46, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                  <div style={{ fontSize: 9.5, fontWeight: 700, color: moNet >= 0 ? C.green : C.red }}>{m((moNet >= 0 ? "+" : "−") + fmtL(moNet))}</div>
+                  <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 84 }}>
+                    <div style={{ width: mob ? 10 : 16, height: Math.max(3, d.in / peak * 84), background: "var(--c-green)", opacity: .85, borderRadius: "3px 3px 0 0", transition: "height .4s" }} />
+                    <div style={{ width: mob ? 10 : 16, height: Math.max(3, d.out / peak * 84), background: "var(--c-red)", opacity: .75, borderRadius: "3px 3px 0 0", transition: "height .4s" }} />
+                  </div>
+                  <div style={{ fontSize: 9.5, color: C.inkFaint }}>{new Date(mo + "-15").toLocaleDateString("en-IN", { month: "short" })}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Sources & uses ── */}
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1.15fr", gap: 14, alignItems: "start" }}>
+        <div style={card}>
+          <div style={{ ...label, marginBottom: 8 }}>Where it comes from</div>
+          {inRows.length === 0 && <div style={{ fontSize: 12, color: C.inkFaint, padding: "12px 0" }}>No income in this period.</div>}
+          {inRows.map(r => <Bar key={r.bucket.id} row={r} max={maxIn} total={totalIn} side="in" />)}
+        </div>
+        <div style={card}>
+          <div style={{ ...label, marginBottom: 8 }}>Where it goes</div>
+          {/* Uncategorised — pinned on top when it exists: the biggest lie in any P&L */}
+          {uncat.amt > 0 && (
+            <div style={{ margin: "2px 0 10px", padding: "10px 12px", background: C.amberBg, border: `1px solid ${C.amber}45`, borderRadius: 10, cursor: "pointer" }}
+              onClick={() => setExpanded(expanded === "uncat" ? null : "uncat")}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <span style={{ fontSize: 13 }}>🕳</span>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: C.amber, flex: 1 }}>Uncategorised · {uncat.txns.length} payments</span>
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: C.amber }}>{m(fmtL(uncat.amt))}</span>
+                <span style={{ fontSize: 10, color: C.amber, width: 34, textAlign: "right" }}>{Math.round(uncat.amt / (totalOut || 1) * 100)}%</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <div style={{ flex: 1, height: 5, background: "#00000012", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${knownPct}%`, background: C.green, borderRadius: 3, transition: "width .5s" }} />
+                </div>
+                <span style={{ fontSize: 10, fontWeight: 700, color: C.inkMid }}>{Math.round(knownPct)}% of spend explained</span>
+              </div>
+              <div style={{ fontSize: 10.5, color: C.inkMid, marginTop: 4 }}>Tap to open · tag each payment and watch this shrink.</div>
+              {expanded === "uncat" && <div onClick={e => e.stopPropagation()}><TxnList txns={uncat.txns} classify /></div>}
+            </div>
+          )}
+          {outRows.map(r => <Bar key={r.bucket.id} row={r} max={maxOut} total={totalOut} side="out" />)}
+        </div>
+      </div>
+
+      {(transferN > 0 || !months) && (
+        <div style={{ fontSize: 10.5, color: C.inkFaint, padding: "0 4px" }}>
+          {transferN > 0 && <>Excluded from spend: {transferN} internal transfer{transferN > 1 ? "s" : ""} / credit-card bill payment{transferN > 1 ? "s" : ""} totalling {m(fmtL(transferAmt))} — counting them would double-count the card's own transactions. </>}
+          All figures cash-basis, converted to INR at current rates.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // One-time reconciliation cleanup (Atyahara / IndusInd): 6 pre-existing ledger
 // entries that aren't on the uploaded bank statement — a wrong-direction copy of a
 // Nikhil Gems payment plus a few inter-company / duplicate records. Removing them
@@ -3606,6 +3861,7 @@ export default function FinanceApp({ onHome }) {
             );
           })()}
           {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} />}
+          {view === "flow"       && <MoneyFlowView transactions={txns} accounts={accounts} rates={rates} totalINR={totalINR} onUpdate={updateTxn} />}
           {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
