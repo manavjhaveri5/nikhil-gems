@@ -2681,14 +2681,25 @@ const EXPENSE_CATS = [
 const METHOD_CATS = new Set(["UPI","NEFT","IMPS","ATM","Transfer","Bank Charges","Interest","Salary"]);
 const isUnclassified = t => !t.category || t.category === "Other" || METHOD_CATS.has(t.category);
 
-function ExpenseSplitView({ transactions, accounts, onUpdate }) {
+// Classify queue. Runs the SAME structured classifier as the Accounting Journal
+// (ClassifyTransactionModal) — so a payment classified here is fully linked to its
+// bill / invoice / vendor / card, not just tagged with a loose category. What this
+// view adds on top is throughput: a filtered queue, one-key Save & next, and a
+// progress read-out, so hundreds of imported bank rows can be worked through fast.
+function ExpenseSplitView({ transactions, accounts, vendors = [], purchases = [], invoices = [], buyers = [], rates, company = "ng", onClassify }) {
   const [selected,     setSelected]     = useState(null);
   const [tab,          setTab]          = useState("unclassified");
   const [filterAcc,    setFilterAcc]    = useState("");
   const [filterMonth,  setFilterMonth]  = useState("");
-  const [customCat,    setCustomCat]    = useState("");
   const [saving,       setSaving]       = useState(false);
+  const [canSave,      setCanSave]      = useState(false);
+  const [mobPanel,     setMobPanel]     = useState(false);
+  const classifyRef = useRef();
   const listRef = useRef();
+
+  // "Unclassified" here means *not structurally classified* — a bank-import category
+  // like "UPI" is not an accounting classification.
+  const needsClassify = t => !t.classifiedAs;
 
   const months = [...new Set(transactions.map(t => t.date?.slice(0,7)).filter(Boolean))].sort().reverse();
   const getAcc = id => accounts.find(a => a.id === id);
@@ -2697,18 +2708,14 @@ function ExpenseSplitView({ transactions, accounts, onUpdate }) {
     .filter(t => {
       if (filterAcc && t.accountFrom !== filterAcc && t.accountTo !== filterAcc) return false;
       if (filterMonth && !(t.date||"").startsWith(filterMonth)) return false;
-      if (tab === "unclassified" && !isUnclassified(t)) return false;
+      if (tab === "unclassified" && !needsClassify(t)) return false;
       return true;
     })
-    .sort((a, b) => {
-      if (tab === "unclassified") {
-        const au = isUnclassified(a), bu = isUnclassified(b);
-        if (au !== bu) return au ? -1 : 1;
-      }
-      return b.date.localeCompare(a.date);
-    });
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
-  const unclassCount = transactions.filter(isUnclassified).length;
+  const unclassCount = transactions.filter(needsClassify).length;
+  const doneCount = transactions.length - unclassCount;
+  const pct = transactions.length ? Math.round(doneCount / transactions.length * 100) : 100;
   const selIdx   = filtered.findIndex(t => t.id === selected);
   const selTxn   = transactions.find(t => t.id === selected);
 
@@ -2722,15 +2729,19 @@ function ExpenseSplitView({ transactions, accounts, onUpdate }) {
   const goTo = idx => {
     if (idx >= 0 && idx < filtered.length) setSelected(filtered[idx].id);
   };
+  const pick = id => { setSelected(id); if (mob) setMobPanel(true); };
 
-  const classify = async (cat) => {
-    if (!selTxn || saving) return;
+  // Save the structured classification, then jump to the next in the queue. The
+  // saved row leaves the "unclassified" list, so the next id is captured up front.
+  const saveAndNext = async () => {
+    if (!selTxn || saving || !classifyRef.current?.submit) return;
+    const nextId = filtered[selIdx + 1]?.id || null;
     setSaving(true);
-    await onUpdate(selTxn.id, { category: cat });
-    setSaving(false);
-    // Auto-advance to next
-    const next = selIdx + 1;
-    if (next < filtered.length) setSelected(filtered[next].id);
+    try {
+      await classifyRef.current.submit();
+      if (nextId) setSelected(nextId);
+      else if (mob) setMobPanel(false);
+    } finally { setSaving(false); }
   };
 
   const FI = { background: C.surface, border: `1px solid ${C.border}`, color: C.ink, borderRadius: 6, padding: "5px 9px", fontSize: 12, fontFamily: "inherit" };
@@ -2739,16 +2750,23 @@ function ExpenseSplitView({ transactions, accounts, onUpdate }) {
     <div style={{ display: "flex", height: "calc(100vh - 148px)", borderRadius: 14, border: `1px solid ${C.border}`, overflow: "hidden", background: C.surface }}>
 
       {/* ── LEFT: list ── */}
-      <div style={{ width: mob ? "100%" : 340, flexShrink: 0, borderRight: `1px solid ${C.border}`, display: "flex", flexDirection: "column", background: C.surface }}>
+      <div style={{ width: mob ? "100%" : 340, flexShrink: 0, borderRight: `1px solid ${C.border}`, display: mob && mobPanel ? "none" : "flex", flexDirection: "column", background: C.surface }}>
         {/* Filters */}
         <div style={{ padding: "12px 12px 10px", borderBottom: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             {[
               { id: "unclassified", label: `Unclassified${unclassCount > 0 ? ` (${unclassCount})` : ""}` },
               { id: "all",          label: "All" },
             ].map(t => (
               <button key={t.id} onClick={() => setTab(t.id)} style={{ fontSize: 11, padding: "5px 12px", borderRadius: 20, border: "none", cursor: "pointer", fontWeight: 600, background: tab === t.id ? C.ink : C.card, color: tab === t.id ? "#fff" : C.inkMid }}>{t.label}</button>
             ))}
+          </div>
+          {/* Progress — linked, not just tagged */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, height: 5, background: C.card, borderRadius: 3, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${pct}%`, background: pct === 100 ? C.green : C.gold, borderRadius: 3, transition: "width .4s" }} />
+            </div>
+            <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, whiteSpace: "nowrap" }}>{doneCount}/{transactions.length} linked</span>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <select value={filterMonth} onChange={e => setFilterMonth(e.target.value)} style={{ ...FI, flex: 1 }}>
@@ -2771,11 +2789,11 @@ function ExpenseSplitView({ transactions, accounts, onUpdate }) {
           )}
           {filtered.map((t, i) => {
             const isSel = t.id === selected;
-            const unclass = isUnclassified(t);
-            const cat = EXPENSE_CATS.find(c => c.label === t.category);
+            const unclass = needsClassify(t);
+            const meta = CLASSIFY_META[t.classifiedAs];
             const accName = getAcc(t.accountFrom || t.accountTo)?.name || "";
             return (
-              <div key={t.id} onClick={() => setSelected(t.id)}
+              <div key={t.id} onClick={() => pick(t.id)}
                 style={{ padding: "10px 12px", borderBottom: `1px solid ${C.border}`, cursor: "pointer", transition: "background .1s",
                   background: isSel ? "#eeedf8" : C.surface,
                   borderLeft: `3px solid ${isSel ? "#6366f1" : "transparent"}` }}>
@@ -2790,8 +2808,8 @@ function ExpenseSplitView({ transactions, accounts, onUpdate }) {
                     <div style={{ fontSize: 12, fontWeight: 700, color: t.type === "credit" ? C.green : C.red }}>
                       {t.type === "credit" ? "+" : "−"}₹{(+t.amount).toLocaleString("en-IN")}
                     </div>
-                    <div style={{ fontSize: 10, marginTop: 2, color: cat ? cat.color : C.inkFaint, fontWeight: cat ? 600 : 400 }}>
-                      {cat ? `${cat.icon} ${t.category}` : unclass ? "· unclassified" : t.category}
+                    <div style={{ fontSize: 10, marginTop: 2, color: meta ? meta.color : C.inkFaint, fontWeight: meta ? 700 : 400 }}>
+                      {meta ? meta.label : unclass ? "· unclassified" : t.category}
                     </div>
                   </div>
                 </div>
@@ -2801,64 +2819,80 @@ function ExpenseSplitView({ transactions, accounts, onUpdate }) {
         </div>
       </div>
 
-      {/* ── RIGHT: classify panel ── */}
-      {!mob && (
-        <div style={{ flex: 1, overflowY: "auto", padding: "20px 24px", background: "#fafaf8" }}>
+      {/* ── RIGHT: classify panel — the real, fully-linked classifier ── */}
+      {(!mob || mobPanel) && (
+        <div style={{ flex: 1, minHeight: 0, background: "#fafaf8", display: "flex", flexDirection: "column" }}>
           {!selTxn ? (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: C.inkFaint, fontSize: 14 }}>
               Select a transaction to classify
             </div>
           ) : (
             <>
+            {/* Scroll area — the action bar below stays pinned, never covering content */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: mob ? "14px 14px" : "20px 24px" }}>
               {/* Nav */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 20, alignItems: "center" }}>
-                <button onClick={() => goTo(selIdx - 1)} disabled={selIdx <= 0} style={{ ...FI, cursor: selIdx > 0 ? "pointer" : "default", opacity: selIdx > 0 ? 1 : .4 }}>← Prev</button>
-                <button onClick={() => goTo(selIdx + 1)} disabled={selIdx >= filtered.length - 1} style={{ ...FI, cursor: selIdx < filtered.length - 1 ? "pointer" : "default", opacity: selIdx < filtered.length - 1 ? 1 : .4 }}>Next →</button>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+                {mob && <button onClick={() => setMobPanel(false)} style={{ ...FI, cursor: "pointer" }}>← List</button>}
+                {!mob && <>
+                  <button onClick={() => goTo(selIdx - 1)} disabled={selIdx <= 0} style={{ ...FI, cursor: selIdx > 0 ? "pointer" : "default", opacity: selIdx > 0 ? 1 : .4 }}>← Prev</button>
+                  <button onClick={() => goTo(selIdx + 1)} disabled={selIdx >= filtered.length - 1} style={{ ...FI, cursor: selIdx < filtered.length - 1 ? "pointer" : "default", opacity: selIdx < filtered.length - 1 ? 1 : .4 }}>Next →</button>
+                </>}
                 <div style={{ fontSize: 11, color: C.inkFaint, marginLeft: "auto" }}>{selIdx + 1} / {filtered.length}</div>
               </div>
 
               {/* Txn card */}
-              <div style={{ background: C.surface, borderRadius: 14, padding: "18px 20px", marginBottom: 24, border: `1px solid ${C.border}` }}>
+              <div style={{ background: C.surface, borderRadius: 14, padding: "16px 20px", marginBottom: 16, border: `1px solid ${C.border}` }}>
                 <div style={{ fontSize: 11, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 6 }}>
                   {fmtDate(selTxn.date)} · {getAcc(selTxn.accountFrom || selTxn.accountTo)?.name || ""}
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, marginBottom: 10, wordBreak: "break-word" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, marginBottom: 8, wordBreak: "break-word" }}>
                   {selTxn.payee || selTxn.notes || "—"}
                 </div>
-                <div style={{ fontSize: 32, fontWeight: 800, color: selTxn.type === "credit" ? C.green : C.red, fontFamily: "'Cormorant Garamond', serif" }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: selTxn.type === "credit" ? C.green : C.red, fontFamily: "'Cormorant Garamond', serif" }}>
                   {selTxn.type === "credit" ? "+" : "−"}₹{(+selTxn.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
                 </div>
-                {selTxn.category && !isUnclassified(selTxn) && (
-                  <div style={{ marginTop: 10, fontSize: 12, background: C.card, display: "inline-block", padding: "3px 10px", borderRadius: 20, color: C.inkMid }}>
-                    {EXPENSE_CATS.find(c => c.label === selTxn.category)?.icon || "📋"} {selTxn.category}
+                {selTxn.classifiedAs && (
+                  <div style={{ marginTop: 10, fontSize: 11, fontWeight: 700, background: (CLASSIFY_META[selTxn.classifiedAs]?.color || C.inkFaint) + "22", border: `1px solid ${CLASSIFY_META[selTxn.classifiedAs]?.color || C.border}`, color: CLASSIFY_META[selTxn.classifiedAs]?.color || C.inkMid, display: "inline-block", padding: "3px 10px", borderRadius: 20 }}>
+                    ✓ {CLASSIFY_META[selTxn.classifiedAs]?.label || selTxn.classifiedAs}{selTxn.classifiedRef?.cat ? ` · ${selTxn.classifiedRef.cat}` : ""}
                   </div>
                 )}
               </div>
 
-              {/* Category grid */}
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .7, marginBottom: 10 }}>Pick category</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 16 }}>
-                {EXPENSE_CATS.map(cat => {
-                  const active = selTxn.category === cat.label;
-                  return (
-                    <button key={cat.label} onClick={() => classify(cat.label)} disabled={saving}
-                      style={{ padding: "10px 6px", borderRadius: 10, border: `1.5px solid ${active ? cat.color : C.border}`, background: active ? cat.color + "22" : C.surface, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 5, transition: "all .12s", opacity: saving ? .6 : 1 }}>
-                      <span style={{ fontSize: 22 }}>{cat.icon}</span>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: active ? cat.color : C.ink, textAlign: "center", lineHeight: 1.2 }}>{cat.label}</span>
-                    </button>
-                  );
-                })}
+              {/* The shared classifier — identical logic to the Accounting Journal */}
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: mob ? "14px 14px" : "18px 20px" }}>
+                <ClassifyTransactionModal
+                  inline
+                  key={selTxn.id}
+                  ref={classifyRef}
+                  txn={selTxn}
+                  accounts={accounts}
+                  vendors={vendors}
+                  purchases={purchases}
+                  ledgerTxns={transactions}
+                  invoices={invoices}
+                  buyers={buyers}
+                  rates={rates}
+                  company={company}
+                  expenseCats={EXP_CATS}
+                  onValidityChange={setCanSave}
+                  onSave={result => onClassify(selTxn.id, result)}
+                  onClose={() => {}}
+                />
               </div>
+            </div>
 
-              {/* Custom */}
-              <div style={{ display: "flex", gap: 8 }}>
-                <input value={customCat} onChange={e => setCustomCat(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter" && customCat.trim()) { classify(customCat.trim()); setCustomCat(""); } }}
-                  placeholder="Custom category…"
-                  style={{ flex: 1, fontSize: 13, padding: "9px 12px", borderRadius: 9, border: `1.5px solid ${C.border}`, background: C.surface, color: C.ink, fontFamily: "inherit" }} />
-                <button onClick={() => { if (customCat.trim()) { classify(customCat.trim()); setCustomCat(""); } }}
-                  style={{ padding: "9px 18px", borderRadius: 9, border: "none", background: C.ink, color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>Save</button>
-              </div>
+            {/* Action bar — pinned below the scroll area, the throughput this view exists for */}
+            <div style={{ flexShrink: 0, display: "flex", gap: 10, alignItems: "center", background: C.surface, borderTop: `1px solid ${C.border}`, padding: mob ? "10px 14px" : "12px 24px", boxShadow: "0 -4px 14px rgba(26,19,8,.05)" }}>
+              <div style={{ fontSize: 11, color: C.inkFaint, whiteSpace: "nowrap" }}>{!canSave && "Pick a type to continue"}</div>
+              <div style={{ flex: 1 }} />
+              {selIdx < filtered.length - 1 && (
+                <button onClick={() => goTo(selIdx + 1)} style={{ ...FI, padding: "11px 16px", cursor: "pointer" }}>Skip</button>
+              )}
+              <button onClick={saveAndNext} disabled={!canSave || saving}
+                style={{ minWidth: mob ? 150 : 200, background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 10, padding: "12px 18px", fontSize: 13.5, fontWeight: 700, cursor: (!canSave || saving) ? "not-allowed" : "pointer", opacity: (!canSave || saving) ? .4 : 1 }}>
+                {saving ? "Saving…" : selIdx < filtered.length - 1 ? "Save & next →" : "Save classification"}
+              </button>
+            </div>
             </>
           )}
         </div>
@@ -3869,7 +3903,7 @@ export default function FinanceApp({ onHome }) {
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onAdjustBalance={adjustBalance} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
-          {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} onUpdate={updateTxn} />}
+          {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} vendors={vendors} purchases={purchases} invoices={invoices} buyers={buyers} rates={rates} company={company} onClassify={handleClassify} />}
           {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [], openingBalance = null, accountId = null }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); let obMsg = ""; if (openingBalance != null && accountId) { const accs = accounts.map(a => a.id === accountId ? { ...a, openingBal: +openingBalance } : a); setAccounts(accs); await saveK(companyKeys(company).accounts, accs); obMsg = ` · opening bal ₹${(+openingBalance).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`; } showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank" + obMsg); }} />}
         </>
       }
