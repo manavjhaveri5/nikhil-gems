@@ -3257,12 +3257,17 @@ If nothing is missing, output <missing_json>[]</missing_json>.`;
 // makes the IndusInd ledger tie out to the bank. The Fix button only shows while
 // these still exist, so it disappears for good once clicked.
 const ATYAHARA_RECON_FIX = [
-  { date: "2026-07-20", type: "credit", amount: 172569, match: "nikhil gems" },
-  { date: "2026-06-28", type: "credit", amount: 100000, match: "nikhil gems" },
-  { date: "2026-07-17", type: "credit", amount: 76074,  match: "atyahara" },
-  { date: "2026-07-29", type: "credit", amount: 5000,   match: "ship global" },
-  { date: "2026-06-15", type: "debit",  amount: 3074,   match: "ikea" },
-  { date: "2026-06-26", type: "debit",  amount: 788,    match: "subko" },
+  { date: "2026-07-20", type: "credit", amount: 172569,  match: "nikhil gems" },
+  { date: "2026-06-28", type: "credit", amount: 100000,  match: "nikhil gems" },
+  { date: "2026-07-17", type: "credit", amount: 76074,   match: "atyahara" },
+  { date: "2026-07-29", type: "credit", amount: 5000,    match: "ship global" },
+  { date: "2026-06-15", type: "debit",  amount: 3074,    match: "ikea" },
+  { date: "2026-06-26", type: "debit",  amount: 788,     match: "subko" },
+  // Penny-perfect: 3 mis-imported rows not on the statement (a duplicate 11-May
+  // ShipGlobal credit + two debits the bank never carried).
+  { date: "2026-05-11", type: "credit", amount: 2536.32, match: "ship" },
+  { date: "2026-06-01", type: "debit",  amount: 1456.66, match: "ship" },
+  { date: "2026-05-28", type: "debit",  amount: 297.98,  match: "zoma" },
 ];
 function findReconFixIds(txns = []) {
   const ids = [];
@@ -3592,7 +3597,7 @@ export default function FinanceApp({ onHome }) {
             return (
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", background: "#fff8e6", border: "1px solid #f0dfae", borderRadius: 12, padding: "12px 16px", marginBottom: 16 }}>
                 <div style={{ flex: 1, minWidth: 240, fontSize: 13, color: "#8a6d1a", lineHeight: 1.5 }}>
-                  🔧 <strong>{fixIds.length} entr{fixIds.length === 1 ? "y is" : "ies are"} inflating IndusInd</strong> — records in the ERP that aren't on your uploaded bank statement (incl. a ₹1,72,569 Nikhil Gems payment logged as a credit). Clear them so the ledger ties out to the bank.
+                  🔧 <strong>{fixIds.length} entr{fixIds.length === 1 ? "y is" : "ies are"} inflating IndusInd</strong> — records in the ERP that aren't on your uploaded bank statement (wrong-direction, inter-company, or duplicate entries). Clear them so the ledger ties out to the bank to the paisa.
                 </div>
                 <button onClick={runFix} style={{ background: "#1a1a1a", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                   Fix reconciliation →
