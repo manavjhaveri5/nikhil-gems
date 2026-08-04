@@ -446,9 +446,9 @@ function buildShopifyVariants(listing) {
 }
 
 /* ── Shopify: upload ONE listing video (staged upload → productCreateMedia) ─────
-   Shopify won't ingest a raw MP4 URL directly: the file must be pushed to a staged
-   target first, then attached. Mirrors api/shopify.js's pushVideo. Best-effort —
-   returns {ok,error} instead of throwing, so a video hiccup never fails the publish. */
+   Shopify ingests the file through a staged target before it is attached to the
+   product. Best-effort — returns {ok,error} so a video hiccup never fails the
+   product publish itself. */
 async function pushShopifyVideo(store, token, productId, videoUrl) {
   if (!videoUrl || typeof videoUrl !== "string" || !videoUrl.startsWith("http")) return { ok: false, skipped: true };
   const cleanUrl = videoUrl.split("?")[0];
@@ -458,8 +458,19 @@ async function pushShopifyVideo(store, token, productId, videoUrl) {
   const gqlUrl = `https://${store}/admin/api/2024-04/graphql.json`;
   const gqlHeaders = { "Content-Type": "application/json", "X-Shopify-Access-Token": token };
   try {
+    // Some public storage/CDN HEAD responses omit content-length. Shopify rejects
+    // a staged VIDEO upload with fileSize=0, so fetch once up front when needed and
+    // reuse that blob for the multipart upload below.
     const headRes = await fetch(cleanUrl, { method: "HEAD" });
-    const fileSize = headRes.headers.get("content-length") || "0";
+    let fileSize = +(headRes.headers.get("content-length") || 0);
+    let videoBlob = null;
+    if (!Number.isFinite(fileSize) || fileSize <= 0) {
+      const videoRes = await fetch(cleanUrl);
+      if (!videoRes.ok) throw new Error(`Fetching video failed: ${videoRes.status}`);
+      videoBlob = await videoRes.blob();
+      fileSize = videoBlob.size;
+    }
+    if (!fileSize) throw new Error("Video file is empty or its size could not be determined");
     const stagedRes = await fetch(gqlUrl, {
       method: "POST", headers: gqlHeaders,
       body: JSON.stringify({
@@ -468,13 +479,16 @@ async function pushShopifyVideo(store, token, productId, videoUrl) {
       }),
     });
     const stagedData = await stagedRes.json();
+    if (stagedData?.errors?.length) throw new Error(stagedData.errors.map(e => e.message).join(", "));
     const ue = stagedData?.data?.stagedUploadsCreate?.userErrors;
     if (ue?.length) throw new Error("Staged init: " + ue.map(e => e.message).join(", "));
     const target = stagedData?.data?.stagedUploadsCreate?.stagedTargets?.[0];
     if (!target?.url) throw new Error("No staged URL returned");
-    const videoRes = await fetch(cleanUrl);
-    if (!videoRes.ok) throw new Error(`Fetching video failed: ${videoRes.status}`);
-    const videoBlob = await videoRes.blob();
+    if (!videoBlob) {
+      const videoRes = await fetch(cleanUrl);
+      if (!videoRes.ok) throw new Error(`Fetching video failed: ${videoRes.status}`);
+      videoBlob = await videoRes.blob();
+    }
     const form = new FormData();
     for (const { name, value } of target.parameters) form.append(name, value);
     form.append("file", videoBlob, filename);
@@ -489,25 +503,69 @@ async function pushShopifyVideo(store, token, productId, videoUrl) {
       }),
     });
     const md = await mediaRes.json();
+    if (md?.errors?.length) throw new Error(md.errors.map(e => e.message).join(", "));
     const me = md?.data?.productCreateMedia?.mediaUserErrors;
     if (me?.length) throw new Error(me.map(e => e.message).join(", "));
-    return { ok: true };
+    const media = md?.data?.productCreateMedia?.media?.[0] || null;
+    return { ok: true, mediaId: media?.id || "", status: media?.status || "" };
   } catch (e) {
     console.error("Shopify listing video push failed:", e.message);
     return { ok: false, error: e.message };
   }
 }
 
-async function shopifyProductHasVideo(store, token, productId) {
+function normalizeShopifyVideoNode(node) {
+  if (!node) return null;
+  const sources = Array.isArray(node.sources) ? node.sources : [];
+  const source = sources.find(s => s?.url && /mp4/i.test(s?.mimeType || s?.format || s?.url)) || sources.find(s => s?.url) || null;
+  return {
+    mediaId: node.id || "",
+    videoStatus: node.status || "",
+    videoUrl: source?.url || "",
+    videoMimeType: source?.mimeType || "",
+    videoPreviewUrl: node.preview?.image?.url || "",
+  };
+}
+
+async function getShopifyVideoStatus(store, token, productId) {
   try {
     const r = await fetch(`https://${store}/admin/api/2024-04/graphql.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-      body: JSON.stringify({ query: `query{product(id:"gid://shopify/Product/${productId}"){media(first:25){nodes{mediaContentType}}}}` }),
+      body: JSON.stringify({
+        query: `query productVideo($id:ID!){
+          product(id:$id){
+            media(first:25){
+              nodes{
+                id
+                mediaContentType
+                status
+                preview{image{url}}
+                ... on Video{
+                  sources{url mimeType format width height}
+                }
+              }
+            }
+          }
+        }`,
+        variables: { id: `gid://shopify/Product/${productId}` },
+      }),
     });
     const d = await r.json();
-    return (d?.data?.product?.media?.nodes || []).some(n => n.mediaContentType === "VIDEO");
-  } catch { return false; }
+    if (d?.errors?.length) throw new Error(d.errors.map(e => e.message).join(", "));
+    const node = (d?.data?.product?.media?.nodes || []).find(n => n.mediaContentType === "VIDEO");
+    const video = normalizeShopifyVideoNode(node);
+    return video || { videoStatus: "NONE", videoUrl: "" };
+  } catch (e) {
+    return { videoStatus: "UNKNOWN", videoUrl: "", videoErr: e.message || "Could not check Shopify video" };
+  }
+}
+
+async function shopifyProductHasVideo(store, token, productId) {
+  const video = await getShopifyVideoStatus(store, token, productId);
+  // A FAILED media record must be retryable. Only an existing upload or an
+  // actively processing/ready media item should block a new attempt.
+  return !!video.mediaId && ["UPLOADED", "PROCESSING", "READY"].includes(String(video.videoStatus || "").toUpperCase());
 }
 
 async function publishShopify(store, token, listing, ai) {
@@ -554,6 +612,7 @@ async function publishShopify(store, token, listing, ai) {
     const v = await pushShopifyVideo(store, token, product.id, listing.video);
     videoQueued = v.ok; videoErr = v.error || "";
   }
+  const video = listing.video ? await getShopifyVideoStatus(store, token, product.id) : {};
 
   // SEO
   try {
@@ -577,6 +636,7 @@ async function publishShopify(store, token, listing, ai) {
     images_uploaded: imageSync.uploaded,
     videoQueued,
     videoErr,
+    ...video,
   };
 }
 
@@ -846,14 +906,15 @@ export default async function handler(req, res) {
         if (!r.ok) throw new Error(`Shopify update: ${JSON.stringify(d.errors || d)}`);
         const imageSync = await syncShopifyImages(store, token, existingId, listing.images || []);
         // Video: add it only if the product doesn't already carry one (avoids dupes on re-sync).
-        let videoQueued = false, videoErr = "";
+        let videoQueued = false, videoErr = "", video = {};
         if (listing.video && typeof listing.video === "string" && listing.video.startsWith("http")) {
           if (!(await shopifyProductHasVideo(store, token, existingId))) {
             const v = await pushShopifyVideo(store, token, existingId, listing.video);
             videoQueued = v.ok; videoErr = v.error || "";
           }
+          video = await getShopifyVideoStatus(store, token, existingId);
         }
-        result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded, videoQueued, videoErr };
+        result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded, videoQueued, videoErr, ...video };
       } else {
         if (syncOnly && !allowCreate) {
           return res.status(409).json({ ok: false, error: `Skipped ${platformKey} sync: no existing product_id` });
@@ -862,6 +923,20 @@ export default async function handler(req, res) {
         result = await publishShopify(store, token, { ...listing, price_shopify: listing[priceField] || listing.price_shopify }, ai);
       }
       return res.json({ ok: true, platform: store_key, result });
+    }
+
+    /* ── CHECK SHOPIFY VIDEO STATUS ──────────────────────────────────────── */
+    if (action === "check_shopify_video") {
+      const storeEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_STORE" : "SHOPIFY_EARTH_STORE";
+      const tokenEnvKey = store_key === "atyahara" ? "SHOPIFY_ATY_TOKEN" : "SHOPIFY_EARTH_TOKEN";
+      const store = listing?.shopify_store || process.env[storeEnvKey] || process.env.SHOPIFY_STORE;
+      const token = listing?.shopify_token || process.env[tokenEnvKey] || process.env.SHOPIFY_ACCESS_TOKEN;
+      const platformKey = store_key === "atyahara" ? "shopify_aty" : "shopify_earth";
+      const productId = listing?.platforms?.[platformKey]?.product_id || listing?.product_id;
+      if (!store || !token) return res.status(400).json({ error: `Shopify credentials not set for store "${store_key}".` });
+      if (!productId) return res.status(400).json({ error: `No ${platformKey} product_id` });
+      const result = await getShopifyVideoStatus(store, token, productId);
+      return res.json({ ok: true, platform: store_key, result: { product_id: productId, ...result } });
     }
 
     /* ── UNPUBLISH FROM SHOPIFY ──────────────────────────────────────────── */

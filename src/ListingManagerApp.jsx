@@ -764,6 +764,75 @@ function PlatformChip({ pkey, status }) {
   );
 }
 
+function ShopifyVideoBadge({ platformState, compact = false, onRefresh, onRetry }) {
+  const st = String(platformState?.videoStatus || (platformState?.videoQueued ? "PROCESSING" : "")).toUpperCase();
+  const url = platformState?.videoUrl || "";
+  const hasLocalVideo = !!platformState?.hasLocalVideo;
+  const hasProduct = !!platformState?.product_id;
+  const processing = st === "UPLOADED" || st === "PROCESSING";
+  const since = platformState?.videoStatusStartedAt || "";
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    if (!processing || !since) return undefined;
+    const timer = setInterval(() => setClock(v => v + 1), 30000);
+    return () => clearInterval(timer);
+  }, [processing, since]);
+  if (!st && !url && !hasLocalVideo) return null;
+  const ready = st === "READY" && url;
+  const failed = st === "FAILED";
+  const none = st === "NONE" || (!st && hasLocalVideo && !hasProduct);
+  const unknown = st === "UNKNOWN";
+  const bg = ready ? C.greenBg : failed ? C.redBg : C.amberBg;
+  const color = ready ? C.green : failed ? C.red : C.amber;
+  const badgeText = ready ? "Video live" : failed ? "Video upload failed" : none ? (hasProduct ? "Video not on Shopify" : "Video local only") : unknown ? "Video check failed" : st ? "Video processing" : "Video not checked";
+  const elapsed = processing && since ? formatVideoElapsed(since) : "";
+  return (
+    <span onClick={e => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+      <span style={{ fontSize: compact ? 10 : 11, borderRadius: 20, padding: compact ? "1px 7px" : "2px 8px",
+        fontWeight: 800, background: bg, color, border: `1px solid ${color}40`, textTransform: "uppercase", letterSpacing: .35 }}>
+        {processing && <Spinner />}
+        {badgeText}
+        {elapsed && <span style={{ fontWeight: 600, textTransform: "none", letterSpacing: 0 }}> · {elapsed}</span>}
+      </span>
+      {ready && (
+        <a href={url} target="_blank" rel="noreferrer"
+          style={{ fontSize: compact ? 10 : 11, fontWeight: 800, color, textDecoration: "none" }}>
+          View
+        </a>
+      )}
+      {onRefresh && (
+        <button type="button" onClick={onRefresh} title="Refresh Shopify video status"
+          style={{ border: `1px solid ${color}40`, background: bg, color, borderRadius: 6,
+            padding: compact ? "1px 6px" : "2px 7px", fontSize: compact ? 10 : 11,
+            fontWeight: 800, cursor: "pointer", lineHeight: 1.2 }}>
+          {st ? "Refresh" : "Check"}
+        </button>
+      )}
+      {onRetry && (failed || none || unknown) && (
+        <button type="button" onClick={onRetry} title="Retry uploading the video to Shopify"
+          style={{ border: `1px solid ${C.red}40`, background: C.redBg, color: C.red, borderRadius: 6,
+            padding: compact ? "1px 6px" : "2px 7px", fontSize: compact ? 10 : 11,
+            fontWeight: 800, cursor: "pointer", lineHeight: 1.2 }}>
+          Retry upload
+        </button>
+      )}
+      {!compact && platformState?.videoErr && (
+        <span title={platformState.videoErr} style={{ fontSize: 10, color: C.red }}>Error</span>
+      )}
+    </span>
+  );
+}
+
+function formatVideoElapsed(value) {
+  const started = new Date(value).getTime();
+  if (!Number.isFinite(started)) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 function Toast({ msg }) {
   if (!msg) return null;
   return (
@@ -2080,7 +2149,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING CARD
 ══════════════════════════════════════════════════════════════════════════ */
-function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold }) {
+function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo }) {
   const [expanded,   setExpanded]   = useState(false);
   const [publishing, setPublishing] = useState({});
   const [toast,      setToast]      = useState("");
@@ -2091,6 +2160,9 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
   const img             = listing.images?.[0];
   const salesCount      = (orders || []).filter(o => o.listing_id === listing.id).length;
   const liveOn          = PLATFORMS.filter(p => listing.platforms?.[p.key]?.status === "active");
+  const shopifyVideoPlatformKey = ["shopify_aty", "shopify_earth"]
+    .find(k => listing.platforms?.[k]?.product_id || listing.platforms?.[k]?.videoUrl || listing.platforms?.[k]?.videoStatus || listing.platforms?.[k]?.videoQueued);
+  const shopifyVideoState = shopifyVideoPlatformKey ? listing.platforms?.[shopifyVideoPlatformKey] : null;
   // Storage location: explicit field first, fall back to linked stock's location
   const storageLocation = listing.officeLocation || linkedStock?.location || "";
 
@@ -2121,6 +2193,31 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
     } catch (e) { showToast(`⚠ ${e.message}`); }
     finally { setPublishing(p => ({ ...p, [pkey]: false })); }
   };
+
+  const refreshVideo = async (pkey, notify = true) => {
+    setPublishing(p => ({ ...p, [`${pkey}_video`]: true }));
+    try {
+      const result = await onRefreshShopifyVideo(listing, pkey);
+      const st = String(result?.videoStatus || "").toUpperCase();
+      if (notify) showToast(st === "READY" && result?.videoUrl ? "✓ Video live on Shopify" : `Video ${st ? st.toLowerCase() : "checked"}`);
+      return result;
+    } catch (e) { if (notify) showToast(`⚠ ${e.message}`); }
+    finally { setPublishing(p => ({ ...p, [`${pkey}_video`]: false })); }
+  };
+
+  const handleRefreshVideo = pkey => refreshVideo(pkey, true);
+
+  // Shopify transcodes asynchronously. Keep the ERP status current while a
+  // listing is processing so the user does not have to keep pressing Refresh.
+  useEffect(() => {
+    if (!onRefreshShopifyVideo) return undefined;
+    const pkey = ["shopify_aty", "shopify_earth"].find(k =>
+      ["UPLOADED", "PROCESSING"].includes(String(listing.platforms?.[k]?.videoStatus || "").toUpperCase())
+    );
+    if (!pkey) return undefined;
+    const timer = setInterval(() => refreshVideo(pkey, false), 8000);
+    return () => clearInterval(timer);
+  }, [listing.id, listing.platforms?.shopify_aty?.videoStatus, listing.platforms?.shopify_earth?.videoStatus]);
 
   const displayQty = linkedStock
     ? `${linkedStock.qty} ${linkedStock.unit || "pcs"}`
@@ -2158,6 +2255,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
             {listing.video && <span style={{ fontSize: 10, borderRadius: 20, padding: "1px 8px", fontWeight: 700,
               textTransform: "uppercase", letterSpacing: .4, background: C.amberBg, color: C.gold,
               border: `1px solid ${C.gold}40` }}>Video</span>}
+            {listing.video && shopifyVideoState && <ShopifyVideoBadge platformState={{ ...shopifyVideoState, hasLocalVideo: true }} compact />}
             {salesCount > 0 && <span style={{ fontSize: 11, color: C.inkFaint }}>· {salesCount} sold</span>}
           </div>
 
@@ -2264,6 +2362,15 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                         </span>
                       )}
                     </div>
+                    {listing.video && (p.key === "shopify_aty" || p.key === "shopify_earth") && (
+                      <div style={{ marginTop: 5 }}>
+                        <ShopifyVideoBadge
+                          platformState={{ ...ps, hasLocalVideo: true }}
+                          onRefresh={ps.product_id ? () => handleRefreshVideo(p.key) : undefined}
+                          onRetry={ps.product_id ? () => handlePublish(p.key) : undefined}
+                        />
+                      </div>
+                    )}
                   </div>
                   {p.coming ? (
                     <span style={{ fontSize: 11, color: C.inkFaint, fontStyle: "italic" }}>Coming soon</span>
@@ -2835,6 +2942,17 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   const isShipped = o => !o._shipStepUndone && (["shipped", "completed", "fulfilled"].includes(String(o.status || "").toLowerCase()) || !!o.shipped_at);
   const isCancelled = o => !!o?.cancelled || ["canceled", "cancelled", "fully_refunded"].includes(String(o?.status || "").toLowerCase());
   const orderDate = o => o.date || o.created_at || new Date().toISOString().slice(0, 10);
+  const orderTimeLabel = o => {
+    const raw = String(o?.created_at || "").trim();
+    if (!raw || /^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
+    const d = new Date(raw);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+  };
+  const orderDateTimeLabel = o => {
+    const date = new Date(orderDate(o)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    const time = orderTimeLabel(o);
+    return time ? `${date} · ${time}` : date;
+  };
   // Cancelling keeps the order (for stats/accounting) but marks it fully refunded — not deleted.
   const cancelOrder = async order => {
     if (!window.confirm("Mark this order as cancelled and fully refunded? It stays in your records for stats and accounting, but counts as ₹0 revenue.")) return;
@@ -3846,7 +3964,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                   </div>
                   <div style={{ display: mob() ? "none" : "block" }}>
                     <div style={{ fontSize: 11, color: p.color, fontWeight: 750 }}>{p.icon} {p.label}</div>
-                    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{new Date(orderDate(order)).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</div>
+                    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{orderDateTimeLabel(order)}</div>
                   </div>
                   <div style={{ textAlign: mob() ? "left" : "right", gridColumn: mob() ? "2 / 3" : "auto" }}>
                     <div style={{ fontSize: 16, fontWeight: 850, color: cancelled ? C.inkFaint : C.green, textDecoration: cancelled ? "line-through" : "none" }}>{money(order.sale_price, order.currency)}</div>
@@ -4276,7 +4394,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       {[
                         ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
                         ["Transaction",   order.etsy_transaction_id || "—"],
-                        ["Date",          new Date(orderDate(order)).toLocaleDateString("en-GB")],
+                        ["Date & time",   orderDateTimeLabel(order)],
                         ["Buyer",         order.buyer_name || "—"],
                         ["Email",         order.buyer_email || "—"],
                         ["Country",       order.buyer_country || "—"],
@@ -4297,7 +4415,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         ["Reference",     order.order_number || "—"],
                         ["Material",      order.listing_material || "—"],
                         ["Shape",         "__shape_select__"],
-                        ["Created",       order.created_at ? new Date(order.created_at).toLocaleDateString("en-GB") : "—"],
+                        ["Created",       order.created_at ? orderDateTimeLabel(order) : "—"],
                       ].map(([k, v]) => (
                         <div key={k} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
                           <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: .5, color: C.inkFaint, marginBottom: 3 }}>
@@ -6469,7 +6587,7 @@ function PlatformView({ platform, listings, orders, stock, onEdit, onPublish, on
   );
 }
 
-function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
+function ShopifyStoreView({ listings, onEditLocal, onPublish, onRefreshShopifyVideo, storeKey = "earth" }) {
   // storeKey: "earth" | "atyahara" — one component, either Shopify store.
   const STORE     = storeKey;
   const platKey   = STORE === "atyahara" ? "shopify_aty" : "shopify_earth";
@@ -6495,6 +6613,7 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [videoBusy, setVideoBusy] = useState({});
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [editP, setEditP] = useState(null);
@@ -6788,6 +6907,30 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
     else showToast("No matching local Listing Manager row found");
   };
 
+  const checkLocalVideo = async localMatch => {
+    if (!localMatch || !onRefreshShopifyVideo) return;
+    const key = String(localMatch.id);
+    setVideoBusy(s => ({ ...s, [key]: "checking" }));
+    try {
+      const result = await onRefreshShopifyVideo(localMatch, platKey);
+      const status = String(result?.videoStatus || "").toUpperCase();
+      showToast(status === "READY" && result?.videoUrl ? "✓ Video live on Shopify" : `Video ${status ? status.toLowerCase() : "checked"}`);
+    } catch (e) { showToast(`⚠ ${e.message}`); }
+    finally { setVideoBusy(s => ({ ...s, [key]: false })); }
+  };
+
+  const retryLocalVideo = async localMatch => {
+    if (!localMatch || !onPublish) return;
+    const key = String(localMatch.id);
+    setVideoBusy(s => ({ ...s, [key]: "uploading" }));
+    try {
+      await onPublish(localMatch, platKey);
+      showToast("✓ Video upload retried");
+      await fetchProducts(creds, true, collectionFilter);
+    } catch (e) { showToast(`⚠ ${e.message}`); }
+    finally { setVideoBusy(s => ({ ...s, [key]: false })); }
+  };
+
   const tagOptions = [...new Set(products.flatMap(productTags))].filter(Boolean).sort((a,b)=>a.localeCompare(b));
   const typeOptions = [...new Set(products.map(p => p.product_type).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const selectedCollection = collections.find(c => String(c.id) === String(collectionFilter));
@@ -6995,6 +7138,8 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
             const v = firstVariant(p);
             const img = firstImage(p);
             const localMatch = listings.find(l => String(l.platforms?.[platKey]?.product_id || "") === String(p.id) || (v.sku && l.sku === v.sku));
+            const localVideoState = localMatch?.platforms?.[platKey] || {};
+            const localVideoBusy = videoBusy[String(localMatch?.id || "")];
             return (
               <div key={p.id} style={{ background: C.surface, border: `1.5px solid ${platform.color}25`, borderRadius: 11, overflow: "hidden", contentVisibility: "auto", containIntrinsicSize: "260px" }}>
                 <div style={{ height: 138, background: C.card, position: "relative", overflow: "hidden" }}>
@@ -7008,6 +7153,16 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
                 </div>
                 <div style={{ padding: 10 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, lineHeight: 1.25, minHeight: 32 }}>{p.title}</div>
+                  {localMatch?.video && (
+                    <div style={{ marginTop: 6 }}>
+                      <ShopifyVideoBadge
+                        platformState={{ ...localVideoState, product_id: p.id, hasLocalVideo: true }}
+                        onRefresh={localVideoBusy ? undefined : () => checkLocalVideo(localMatch)}
+                        onRetry={localVideoBusy ? undefined : () => retryLocalVideo(localMatch)}
+                      />
+                      {localVideoBusy && <span style={{ fontSize: 10, color: C.inkFaint, marginLeft: 4 }}>{localVideoBusy === "uploading" ? "Uploading…" : "Checking…"}</span>}
+                    </div>
+                  )}
                   <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {[p.product_type, v.sku && `SKU ${v.sku}`].filter(Boolean).join(" · ") || p.handle}
                   </div>
@@ -7027,8 +7182,8 @@ function ShopifyStoreView({ listings, onEditLocal, storeKey = "earth" }) {
                     <button onClick={() => openEdit(p)} style={{ flex: 1, background: platform.color, color: "#fff", border: "none", borderRadius: 7, padding: "7px 0", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Edit</button>
                     <a href={storefrontUrl(p) || adminUrl(p)} target="_blank" rel="noreferrer"
                       style={{ flex: 1, textAlign: "center", textDecoration: "none", background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 0", fontSize: 11, fontWeight: 800, color: C.ink }}>View</a>
-                    <button onClick={() => linkLocal(p)} style={{ background: localMatch ? C.greenBg : C.surface, color: localMatch ? C.green : C.inkMid, border: `1px solid ${localMatch ? C.green + "45" : C.border}`, borderRadius: 7, padding: "7px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
-                      {localMatch ? "Local" : "Link"}
+                    <button onClick={() => linkLocal(p)} title={localMatch ? "Linked to a local ERP listing" : "Link this Shopify product to a local ERP listing"} style={{ background: localMatch ? C.greenBg : C.surface, color: localMatch ? C.green : C.inkMid, border: `1px solid ${localMatch ? C.green + "45" : C.border}`, borderRadius: 7, padding: "7px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                      {localMatch ? "ERP linked" : "Link ERP"}
                     </button>
                   </div>
                 </div>
@@ -7544,7 +7699,53 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     await patchListingItem(listing, current => ({
       ...current,
       listing_order_id: current.listing_order_id || listing.listing_order_id,
-      platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], status: result.status || "active", ...result } },
+      platforms: { ...current.platforms, [pkey]: {
+        ...current.platforms?.[pkey],
+        status: result.status || "active",
+        ...result,
+        ...(result.videoStatus ? {
+          videoStatusStartedAt: current.platforms?.[pkey]?.videoStatus === result.videoStatus
+            ? (current.platforms?.[pkey]?.videoStatusStartedAt || now())
+            : now(),
+        } : {}),
+      } },
+      updated_at: now(),
+    }));
+    return result;
+  };
+
+  const handleRefreshShopifyVideo = async (listing, pkey) => {
+    let storeKey;
+    if (pkey === "shopify_aty") storeKey = "atyahara";
+    else if (pkey === "shopify_earth") storeKey = "earth";
+    else throw new Error("Video status is only available for Shopify listings");
+
+    const r = await fetch("/api/listing-manager", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "check_shopify_video",
+        listing: await withShopifyCreds(listing, storeKey),
+        store_key: storeKey,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "Could not check Shopify video");
+    const result = d.result || {};
+    await patchListingItem(listing, current => ({
+      ...current,
+      platforms: {
+        ...current.platforms,
+        [pkey]: {
+          ...current.platforms?.[pkey],
+          product_id: result.product_id || current.platforms?.[pkey]?.product_id,
+          ...result,
+          ...(result.videoStatus ? {
+            videoStatusStartedAt: current.platforms?.[pkey]?.videoStatus === result.videoStatus
+              ? (current.platforms?.[pkey]?.videoStatusStartedAt || now())
+              : now(),
+          } : {}),
+        },
+      },
       updated_at: now(),
     }));
     return result;
@@ -7843,6 +8044,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
                     onMarkSold={setSoldModal}
+                    onRefreshShopifyVideo={handleRefreshShopifyVideo}
                   />
                 ))}
               </div>
@@ -7861,6 +8063,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             storeKey="earth"
             listings={listings}
             onEditLocal={l => { setEditing(l); setShowForm(true); }}
+            onPublish={handlePublish}
+            onRefreshShopifyVideo={handleRefreshShopifyVideo}
           />
         )}
         {tab === "shopify_aty" && (
@@ -7868,6 +8072,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             storeKey="atyahara"
             listings={listings}
             onEditLocal={l => { setEditing(l); setShowForm(true); }}
+            onPublish={handlePublish}
+            onRefreshShopifyVideo={handleRefreshShopifyVideo}
           />
         )}
         {activePlatform && tab !== "etsy" && tab !== "ebay" && tab !== "shopify_earth" && tab !== "shopify_aty" && (
