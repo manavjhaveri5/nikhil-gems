@@ -3267,7 +3267,7 @@ const FLOW_INCOME = [
 ];
 const FLOW_EXPENSE = [
   { id: "shipping",  label: "Shipping & couriers",   icon: "📦", color: "#4A7DB5", cats: ["air freight", "sea freight", "freight", "courier / local delivery", "land freight / courier", "shipping"], kw: ["ship", "delhiv", "porter", "courier", "bigfoot", "bigf", "bluedart", "dtdc", "fedex", "dhl", "department of posts", "nandan"] },
-  { id: "stock",     label: "Stock & vendor payments", icon: "💎", color: "#7A5EA8", cats: ["vendor payment"], kw: ["nikhil gems", "indbh", "emporium"] },
+  { id: "stock",     label: "Stock & vendor payments", icon: "💎", color: "#7A5EA8", cats: ["vendor payment", "vendor_bill", "vendor_po"], kw: ["nikhil gems", "indbh", "emporium"] },
   { id: "team",      label: "Team & owner",          icon: "👤", color: "#B5764A", cats: ["salary", "staff / labour"], kw: ["salary", "madiha", "manav jhaveri"] },
   { id: "marketing", label: "Marketing & ads",       icon: "📢", color: "#C24E6A", cats: ["marketing"], kw: ["facebook", "face/", "meta ads", "instagram"] },
   { id: "software",  label: "Software & subs",       icon: "💻", color: "#3F8FA8", cats: ["software", "ai", "subscription", "payment"], kw: ["openai", "open ai", "shopify", "apple", "google", "canva", "adobe", "zoho", "subscription"] },
@@ -3717,7 +3717,10 @@ export default function FinanceApp({ onHome }) {
   const handleClassify = async (txnId, { classifiedAs, classifiedRef, sideEffects = {} }, baseTxns = txns) => {
     const _accountPatch = sideEffects.txnPatch;
     const keys = companyKeys(company);
-    const newTxns = baseTxns.map(t => t.id === txnId ? { ...t, classifiedAs, classifiedRef, classifiedAt: new Date().toISOString(), ...(_accountPatch || {}) } : t);
+    // Keep the simple `category` field in step with the structured classification —
+    // the Accounting Journal already does this, and without it a txn classified from
+    // the Ledger still reads as "unclassified" in Classify / Money Flow.
+    const newTxns = baseTxns.map(t => t.id === txnId ? { ...t, category: classifiedAs === "expense" ? (classifiedRef?.cat || t.category) : classifiedAs, classifiedAs, classifiedRef, classifiedAt: new Date().toISOString(), ...(_accountPatch || {}) } : t);
     setTxns(newTxns);
     await saveK(keys.transactions, newTxns);
 
