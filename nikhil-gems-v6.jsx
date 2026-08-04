@@ -4421,7 +4421,14 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       const bn=otherBuyerNameOf(inv).toLowerCase();
       if(!selfToks.some(t=>bn.includes(t)))return false;
       const st=String(inv.status||"").toLowerCase();
-      return st!=="paid"&&st!=="cancelled";
+      if(st==="cancelled")return false;
+      if(st!=="paid")return true;
+      // Flagged paid but still carrying a balance — e.g. the invoice was edited up
+      // after it was settled. Hiding it makes the payment that clears the rest
+      // impossible to link, so surface it whenever real money is still due.
+      const total=+inv.totalAmt||(inv.items||[]).reduce((s,i)=>s+(+i.amt||0),0);
+      const paid=(+inv.paidAmount||0)+(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0);
+      return total-paid>0.01;
     });
     return {active,otherKey,otherName,selfName,invoicesKey:accountingCompanyKeys(otherKey).invoices,invoices,buyers:otherBuyers};
   };
