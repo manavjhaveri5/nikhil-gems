@@ -50,6 +50,7 @@ function botCtx(isAT) {
     finTxns:  `${p}-fin-txns-v1`,
     invoices: isAT ? "at-invoices-v1"  : "ng-invoices-v2",
     buyers:   isAT ? "at-buyers-v1"    : "ng-buyers-v2",
+    listings: "ng-listings-v1",
     purchases:isAT ? "at-purch-v1"     : "ng-purch-v5",
     vendors:  isAT ? "at-vendors-v1"   : "ng-vendors-v5",
     expenses: isAT ? "at-expenses-v1"  : "ng-expenses-v1",
@@ -1319,6 +1320,138 @@ async function execAddStockItems({ items }) {
   return { success: true, added_count: created.length, items: created.map(c => ({ id: c.id, material: c.material, shape: c.shape, qty: c.qty, unit: c.unit, ...(c.size ? { size: c.size } : {}) })) };
 }
 
+function parseTelegramFlatCaption(caption = "") {
+  const raw = String(caption || "").replace(/\s+/g, " ").trim();
+  const weightMatch = raw.match(/(\d+(?:\.\d+)?)\s*(kg|kgs|g|gm|gms|gram|grams)\b/i);
+  const pcsMatch = raw.match(/(\d+)\s*(?:pcs?|pieces?|nos?\.?|units?)\b/i);
+  const boxMatch = raw.match(/(?:box|stk|stock|location)\s*#?\s*([a-z0-9-]+)|#\s*([a-z0-9-]+)/i);
+  const weight = weightMatch ? `${weightMatch[1]} ${weightMatch[2].toLowerCase()}` : "";
+  const pcs = pcsMatch ? pcsMatch[1] : "";
+  const box = boxMatch ? (boxMatch[1] || boxMatch[2] || "") : "";
+  const stoneName = raw
+    .replace(/(?:box|stk|stock|location)\s*#?\s*[a-z0-9-]+/ig, "")
+    .replace(/#\s*[a-z0-9-]+/g, "")
+    .replace(/\d+(?:\.\d+)?\s*(?:kg|kgs|g|gm|gms|gram|grams)\b/ig, "")
+    .replace(/\d+\s*(?:pcs?|pieces?|nos?\.?|units?)\b/ig, "")
+    .replace(/\bmineral\b/ig, "")
+    .replace(/[,:|]+/g, " ")
+    .replace(/\s+-\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || "Flat stone";
+  const titleTail = [weight, pcs && `${pcs} pcs`, box && `#${box}`].filter(Boolean).join(" ");
+  return { raw, stoneName, weight, pcs, box, title: `${stoneName} Mineral${titleTail ? ` - ${titleTail}` : ""}` };
+}
+
+function weightToGrams(weight) {
+  const m = String(weight || "").match(/([\d.]+)\s*(kg|kgs|g|gm|gms|gram|grams)\b/i);
+  if (!m) return "";
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return "";
+  const grams = /kg/i.test(m[2]) ? n * 1000 : n;
+  return String(Math.round(grams * 1000) / 1000);
+}
+
+// A Telegram video of a flat is an Earth Editions ERP draft. The price stays blank
+// so the user can fill it in Listing Manager before publishing to Shopify. The local
+// copy is deleted only after Shopify reports READY and returns a CDN source URL.
+async function createTelegramVideoListing(caption = "") {
+  const listings = (await loadK(_ctx.listings)) || [];
+  const stock = (await loadK(_ctx.stock)) || [];
+  const id = uid();
+  const media = await storePendingFile(`listing-${id}`);
+  if (!media) return { success: false, error: "I could not download the Telegram video. Please resend it." };
+
+  const parsed = parseTelegramFlatCaption(caption);
+  const title = parsed.title;
+  const listingOrderId = `NG-LST-${new Date().getFullYear()}-${id.slice(-6).toUpperCase()}`;
+  const stockId = `telegram-stock-${id}`;
+  const stockItem = {
+    id: stockId,
+    material: parsed.stoneName,
+    shape: "Mineral",
+    origin: "",
+    size: "",
+    grade: "",
+    hsn: "7103",
+    qty: parsed.pcs || "1",
+    unit: "pcs",
+    qty2: "",
+    unit2: "kg",
+    weightGm: weightToGrams(parsed.weight),
+    costPrice: "",
+    listPrice: "",
+    location: parsed.box,
+    boxNumber: parsed.box,
+    market: [],
+    productType: "Lapidary",
+    photographed: false,
+    postedShopify: true,
+    postedShopifyEarth: true,
+    postedShopifyAtyahara: false,
+    postedWix: false,
+    postedEtsy: false,
+    postedEbay: false,
+    photo: "",
+    photos: [],
+    video: media.url,
+    notes: parsed.raw || "Flat video uploaded from Telegram",
+    addedDate: todayStr(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    source: "telegram-video",
+    sku: "",
+    vendor: "",
+    files: [],
+    linked_listing_id: id,
+  };
+  const listing = {
+    id,
+    listing_order_id: listingOrderId,
+    title,
+    description: parsed.raw || "Video flat uploaded from Telegram. Add product details and price in Listing Manager.",
+    material: parsed.stoneName.replace(/\s+mineral$/i, "").trim(),
+    shape: "Mineral",
+    origin: "",
+    size: "",
+    weight: parsed.weight,
+    sku: "",
+    productType: "Lapidary",
+    type: "unique",
+    qty: parsed.pcs || 1,
+    unit: "pcs",
+    boxNumber: parsed.box,
+    linked_stock_id: stockId,
+    officeLocation: "",
+    tags: ["deal", "flat"],
+    images: [],
+    video: media.url,
+    price_etsy: "",
+    price_shopify_earth: "",
+    price_shopify_aty: "",
+    price_ebay: "",
+    platforms: {
+      etsy: {},
+      shopify_earth: { status: "draft", source: "telegram-video" },
+      shopify_aty: {},
+      ebay: {},
+    },
+    variations: [],
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    source: "telegram-video",
+    videoFileName: media.name,
+    originalVideoUrl: media.url,
+    sourceVideoUrl: media.url,
+    retainVideo: false,
+    videoStoragePolicy: "delete_after_shopify_ready",
+    shopifyPricePending: true,
+  };
+  await saveK(_ctx.stock, [stockItem, ...stock]);
+  await saveK(_ctx.listings, [listing, ...listings]);
+  await logActivity({ user: "Telegram", action: "created", module: "listing", label: `Video flat listing: ${title}`, targetId: id, targetMod: "listing" });
+  return { success: true, listing_id: id, stock_id: stockId, listing_order_id: listingOrderId, title, video_url: media.url, platform: "Earth Editions", price_pending: true };
+}
+
 async function execUpdateStockItems({ updates }) {
   const stock = (await loadK(_ctx.stock)) || [];
   let changed = 0;
@@ -1588,6 +1721,8 @@ export default async function handler(req, res) {
       const chatId = message.chat?.id;
       const hasPhoto = Array.isArray(message.photo) && message.photo.length > 0;
       const doc = message.document || null;
+      const video = message.video || message.video_note || (doc && /^video\//i.test(doc.mime_type || "") ? doc : null);
+      const hasVideo = !!video;
       const caption  = (message.caption || "").trim();
       // Vision enabled for BOTH bots — they can read payment screenshots / receipts,
       // log the transaction, and attach the image to it.
@@ -1599,10 +1734,12 @@ export default async function handler(req, res) {
       }
       // The file (PDF/photo) sent this message — auto-attached when a payment is logged,
       // or attachable to an existing transaction on request.
-      if (doc) _pendingFile = { fileId: doc.file_id, name: doc.file_name || "document", mime: doc.mime_type || "application/octet-stream" };
+      if (video) _pendingFile = { fileId: video.file_id, name: video.file_name || `flat-${Date.now()}.mp4`, mime: video.mime_type || "video/mp4" };
+      else if (doc) _pendingFile = { fileId: doc.file_id, name: doc.file_name || "document", mime: doc.mime_type || "application/octet-stream" };
       else if (hasPhoto) _pendingFile = { fileId: message.photo[message.photo.length - 1].file_id, name: `payment-${Date.now()}.jpg`, mime: "image/jpeg" };
       const text = (message.text || caption || (
-        doc ? `[file attached: ${doc.file_name || "document"}]`
+        video ? "[video attached]"
+        : doc ? `[file attached: ${doc.file_name || "document"}]`
         : wantsVision ? (imageUrl ? "[image attached]" : "[image attached but could not be loaded — ask the user to resend or describe it]")
         : hasPhoto ? "[image sent — describe what you need]" : ""
       )).trim();
@@ -1658,6 +1795,20 @@ export default async function handler(req, res) {
         const facts = await getMemory();
         if (!facts.length) { await send(chatId, "Nothing saved yet."); return; }
         await send(chatId, `<b>Memory (${facts.length} facts)</b>\n\n` + facts.map(f => `• <b>${f.key}</b>: ${f.value}`).join("\n"));
+        return;
+      }
+
+      // Videos of flats go straight into the shared Listing Manager as Shopify drafts.
+      // The Telegram caption becomes the working title; price and product details remain
+      // editable in the ERP and no live Shopify product is created at this stage.
+      if (hasVideo) {
+        const result = await createTelegramVideoListing(caption);
+        await saveSession(chatId, { ...session, lastUpdateId: updateId });
+        if (!result.success) {
+          await send(chatId, `⚠️ ${result.error}`);
+          return;
+        }
+        await send(chatId, `✓ Added to Shopify ERP as a draft: <b>${esc(result.title)}</b>\nVideo retained in ERP media storage. Price is pending — open Listing Manager, add the price, fill any details, choose the Shopify store, then publish.`);
         return;
       }
 

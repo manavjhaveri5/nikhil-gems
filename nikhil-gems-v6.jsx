@@ -714,7 +714,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   const showQsToast=m=>{setQsToast(m);setTimeout(()=>setQsToast(""),5000);};
   const addQsNewStockAndSelect=async()=>{
     if(!qsAddMat.trim())return;
-    const newItem={id:uid(),material:qsAddMat.trim(),shape:qsAddShape,origin:"",size:"",grade:"",hsn:"7103",qty:qsAddQty||"0",unit:qsAddUnit,qty2:"",unit2:"kg",weightGm:"",costPrice:"",location:qsAddLoc,market:[],productType:SHAPE_TO_PRODUCT_TYPE[qsAddShape]||"",photographed:false,postedShopify:false,postedWix:false,postedEtsy:false,photo:"",photos:[],notes:"",addedDate:today(),source:"manual",sku:"",vendor:""};
+    const newItem={id:uid(),material:qsAddMat.trim(),shape:qsAddShape,origin:"",size:"",grade:"",hsn:"7103",qty:qsAddQty||"0",unit:qsAddUnit,qty2:"",unit2:"kg",weightGm:"",costPrice:"",location:qsAddLoc,market:[],productType:SHAPE_TO_PRODUCT_TYPE[qsAddShape]||"",photographed:false,postedShopify:false,postedShopifyAtyahara:false,postedShopifyEarth:false,postedWix:false,postedEtsy:false,photo:"",photos:[],notes:"",addedDate:today(),source:"manual",sku:"",vendor:""};
     const updStock=[newItem,...qsFullStock];
     setQsFullStock(updStock);
     try{await saveStockK(updStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}
@@ -2835,6 +2835,8 @@ function BulkAddStockModal({ vendors, existingMaterials, onSave, onClose }) {
       productType: SHAPE_TO_PRODUCT_TYPE[r.shape] || "",
       photographed: false,
       postedShopify: false,
+      postedShopifyAtyahara: false,
+      postedShopifyEarth: false,
       postedWix: false,
       postedEtsy: false,
       photo: "",
@@ -3982,6 +3984,12 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const visibleAccounts=accounts.filter(a=>!hiddenCashAccountIds.has(a.id));
   const isFutureTxn=t=>(t.date||"")>today();
   const visibleTxns=txns.filter(t=>!isHiddenCashTxn(t));
+  const searchText=search.toLowerCase().trim();
+  const numericSearchText=searchText.replace(/[₹,\s]/g,"");
+  const numericSearch=/^\d+(?:\.\d+)?$/.test(numericSearchText)?+numericSearchText:null;
+  // Prefer an exact amount match for numeric queries so digits in a bank reference
+  // do not hide the transaction whose actual amount the user searched for.
+  const hasExactAmountSearch=numericSearch!=null&&txns.some(t=>Math.abs((+t.amount||0)-numericSearch)<0.005);
   const filtered=[...txns].filter(t=>{
     if(isHiddenCashTxn(t))return false;
     if(tab==="unclassified"&&!isUnclassified(t))return false;
@@ -3993,8 +4001,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     if(!search&&!(t.date||"").startsWith(month))return false;
     if(accountFilter.length&&!accountFilter.includes(t.accountFrom)&&!accountFilter.includes(t.accountTo))return false;
     if(search){
-      const q=search.toLowerCase();
-      if(!`${t.payee||""} ${t.category||""} ${t.notes||""}`.toLowerCase().includes(q))return false;
+      const textMatch=`${t.payee||""} ${t.category||""} ${t.notes||""} ${t.rawPayee||""} ${t.rawNotes||""}`.toLowerCase().includes(searchText);
+      const amountMatch=numericSearch!=null&&Math.abs((+t.amount||0)-numericSearch)<0.005;
+      if(hasExactAmountSearch?!amountMatch:!textMatch&&!amountMatch)return false;
     }
     return true;
   }).sort((a,b)=>(b.date||"").localeCompare(a.date||"")||(b.createdAt||"").localeCompare(a.createdAt||""));
@@ -4258,15 +4267,10 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
       const next=base.map(inv=>map[inv.id]?{...inv,...map[inv.id]}:inv);
       setInvoices(next);await saveK(keys.invoices,next);
     }
-    // Inter-company: mark the OTHER company's invoice paid in THEIR books.
-    if(sideEffects.interCoInvoiceUpdates?.updates?.length){
-      const {invoicesKey,updates}=sideEffects.interCoInvoiceUpdates;
-      const map=Object.fromEntries(updates.map(u=>[u.id,u]));
-      const fresh=await loadKFresh(invoicesKey);
-      const base=Array.isArray(fresh)?fresh:otherInvoices;
-      const next=base.map(inv=>map[inv.id]?{...inv,...map[inv.id]}:inv);
-      setOtherInvoices(next);await saveK(invoicesKey,next);
-    }
+    // Inter-company is deliberately LINK-ONLY: a company's invoices are only ever
+    // updated by that company's own ledger, when it classifies the receipt. Writing
+    // into the other company's books from the payer's side would record the same
+    // money twice, so there is intentionally no cross-company invoice write here.
 	    setClassifyOpen(false);
 	    showToast?.("✓ Classified");
 	  };
@@ -4417,20 +4421,20 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
     const selfToks=company==="ng"?["nikhil"]:["atyahara"];
     const payeeL=`${txn.payee||""} ${txn.notes||""}`.toLowerCase();
     const active=txn.type!=="credit"&&otherToks.some(t=>payeeL.includes(t));
-    const invoices=(otherInvoices||[]).filter(inv=>{
+    const matchedInvoices=(otherInvoices||[]).filter(inv=>{
       const bn=otherBuyerNameOf(inv).toLowerCase();
       if(!selfToks.some(t=>bn.includes(t)))return false;
       const st=String(inv.status||"").toLowerCase();
-      if(st==="cancelled")return false;
-      if(st!=="paid")return true;
-      // Flagged paid but still carrying a balance — e.g. the invoice was edited up
-      // after it was settled. Hiding it makes the payment that clears the rest
-      // impossible to link, so surface it whenever real money is still due.
+      return st!=="cancelled";
+    });
+    const invoiceDue=inv=>{
       const total=+inv.totalAmt||(inv.items||[]).reduce((s,i)=>s+(+i.amt||0),0);
       const paid=(+inv.paidAmount||0)+(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0);
-      return total-paid>0.01;
-    });
-    return {active,otherKey,otherName,selfName,invoicesKey:accountingCompanyKeys(otherKey).invoices,invoices,buyers:otherBuyers};
+      return Math.max(0,total-paid);
+    };
+    const invoices=matchedInvoices.filter(inv=>invoiceDue(inv)>0.01);
+    const settledInvoices=matchedInvoices.filter(inv=>invoiceDue(inv)<=0.01);
+    return {active,otherKey,otherName,selfName,invoicesKey:accountingCompanyKeys(otherKey).invoices,invoices,settledInvoices,buyers:otherBuyers};
   };
   useEffect(()=>{
     if(!loaded)return;
@@ -4507,7 +4511,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
               </>
             )}
           </div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search payee, category..." style={{...inputS,width:mob?"100%":220}}/>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search payee, amount, notes..." style={{...inputS,width:mob?"100%":220}}/>
         </div>
       </div>
 
@@ -6122,7 +6126,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [shopifyStoreInput,setShopifyStoreInput]=useState("");
   const [shopifyTokenInput,setShopifyTokenInput]=useState("");
   const [shopifyModal,setShopifyModal]=useState(null); // {name,price,creds}
-  const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedWix:null,postedEbay:null});
+  const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   const [formQueue,setFormQueue]=useState([]); // items queued in multi-add mode
   const [customsDescs,setCustomsDescs]=useState([]);
   const shapeToAcctDesc=shape=>{if(!shape)return"";const hit=customsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.desc:"";};
@@ -6147,6 +6151,9 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
       if(u.shape&&SHAPE_TO_PRODUCT_TYPE[u.shape]&&!newPTSet.has(u.productType)){u.productType=SHAPE_TO_PRODUCT_TYPE[u.shape];changed=true;}
       // 4. Map any remaining old productType strings to new categories
       if(u.productType&&!newPTSet.has(u.productType)&&OLD_PT_MAP[u.productType]!==undefined){u.productType=OLD_PT_MAP[u.productType];changed=true;}
+      // Legacy generic Shopify rows were historically published to Earth Editions.
+      // Preserve the old flag while giving the split platform UI a concrete owner.
+      if(u.postedShopify&&!u.postedShopifyEarth&&!u.postedShopifyAtyahara){u.postedShopifyEarth=true;changed=true;}
       return u;
     });
     // Deduplicate stock by id — keeps first occurrence (newest, since we prepend on save)
@@ -6199,7 +6206,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     return()=>{clearInterval(id);window.removeEventListener("focus",onVisible);document.removeEventListener("visibilitychange",onVisible);};
   },[refreshStockFromCloud]);
   useEffect(()=>{if(!openFilter)return;const close=e=>{if(filterBarRef.current&&!filterBarRef.current.contains(e.target))setOpenFilter(null);};document.addEventListener('mousedown',close);return()=>document.removeEventListener('mousedown',close);},[openFilter]);
-  const blank={id:uid(),material:"",shape:"",origin:"",size:"",grade:"",hsn:"7103",qty:"",unit:"pcs",weightGm:"",costPrice:"",listPrice:"",location:"",market:[],productType:"",photographed:false,postedShopify:false,postedWix:false,postedEtsy:false,photo:"",photos:[],video:"",notes:"",addedDate:today(),source:"manual",sku:"",vendor:"",files:[]};
+  const blank={id:uid(),material:"",shape:"",origin:"",size:"",grade:"",hsn:"7103",qty:"",unit:"pcs",weightGm:"",costPrice:"",listPrice:"",location:"",market:[],productType:"",photographed:false,postedShopify:false,postedShopifyAtyahara:false,postedShopifyEarth:false,postedWix:false,postedEtsy:false,photo:"",photos:[],video:"",notes:"",addedDate:today(),source:"manual",sku:"",vendor:"",files:[]};
   const generateSKU=(mat,shp)=>{
     const m=(mat||"").toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,3).padEnd(3,"X");
     const s=(shp||"").toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,3).padEnd(3,"X");
@@ -6225,7 +6232,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     try{await saveStockK(list);}catch(e){showToast("⚠ Saved locally — sync failed: "+e.message);}
     all.forEach(i=>{const isNew=!existingIds.has(i.id);logActivity({user:"Admin",action:isNew?"created":"updated",module:"stock",label:`${isNew?"Added":"Updated"}: ${i.material||"item"}${i.shape?" "+i.shape:""}${i.qty?" · "+i.qty+" "+(i.unit||"pcs"):""}`,targetId:i.id,targetMod:"stock"});});
   };
-  const queueAndNext=item=>{setFormQueue(q=>[...q,normalizeItemPhotos(item)]);const b={id:uid(),material:item.material||"",shape:item.shape||"",origin:item.origin||"",size:item.size||"",grade:item.grade||"",hsn:item.hsn||"7103",qty:"",unit:item.unit||"pcs",weightGm:"",costPrice:"",location:item.location||"",market:Array.isArray(item.market)?[...item.market]:[],productType:item.productType||"",photographed:false,postedShopify:false,postedWix:false,postedEtsy:false,photo:"",photos:[],notes:"",addedDate:today(),createdAt:new Date().toISOString(),source:"manual",sku:"",vendor:item.vendor||"",files:[]};setForm(b);showToast("Item queued — fill next");};
+  const queueAndNext=item=>{setFormQueue(q=>[...q,normalizeItemPhotos(item)]);const b={id:uid(),material:item.material||"",shape:item.shape||"",origin:item.origin||"",size:item.size||"",grade:item.grade||"",hsn:item.hsn||"7103",qty:"",unit:item.unit||"pcs",weightGm:"",costPrice:"",location:item.location||"",market:Array.isArray(item.market)?[...item.market]:[],productType:item.productType||"",photographed:false,postedShopify:false,postedShopifyAtyahara:false,postedShopifyEarth:false,postedWix:false,postedEtsy:false,photo:"",photos:[],notes:"",addedDate:today(),createdAt:new Date().toISOString(),source:"manual",sku:"",vendor:item.vendor||"",files:[]};setForm(b);showToast("Item queued — fill next");};
   const removeFromQueue=id=>setFormQueue(q=>q.filter(x=>x.id!==id));
   // When editing an existing item: if qty2 is missing but weightGm is set, backfill qty2 from weightGm
   const openEditForm=s=>{const f=normalizeItemPhotos({...s});if((!f.qty2||f.qty2===""||+f.qty2===0)&&+f.weightGm>0){f.qty2=(+f.weightGm/1000).toFixed(3).replace(/\.?0+$/,"");f.unit2="kg";}setForm(f);setFormType("physical");};
@@ -6469,6 +6476,8 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
       if(fields.photographed!==null)upd.photographed=fields.photographed;
       if(fields.postedEtsy!==null)upd.postedEtsy=fields.postedEtsy;
       if(fields.postedShopify!==null)upd.postedShopify=fields.postedShopify;
+      if(fields.postedShopifyAtyahara!==null)upd.postedShopifyAtyahara=fields.postedShopifyAtyahara;
+      if(fields.postedShopifyEarth!==null)upd.postedShopifyEarth=fields.postedShopifyEarth;
       if(fields.postedWix!==null)upd.postedWix=fields.postedWix;
       if(fields.postedEbay!==null)upd.postedEbay=fields.postedEbay;
       upd.updatedAt=new Date().toISOString();
@@ -6477,7 +6486,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     setStock(list);
     try{await saveStockK(list);showToast(`Updated ${ids.size} item${ids.size>1?"s":""}`);}
     catch(e){showToast("Update failed: "+e.message);}
-    setBulkEditOpen(false);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedWix:null,postedEbay:null});
+    setBulkEditOpen(false);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   };
   const fixFutureDates=async()=>{const todayStr=today();const fixed=stock.map(s=>{if(!s.addedDate)return s;const t=new Date(s.addedDate).getTime();if(isNaN(t)||s.addedDate<=todayStr)return s;// subtract 1 year
     const d=new Date(s.addedDate);d.setFullYear(d.getFullYear()-1);return{...s,addedDate:d.toISOString().slice(0,10)};});const count=fixed.filter((s,i)=>s.addedDate!==stock[i].addedDate).length;setStock(fixed);try{await saveStockK(fixed);showToast(`Fixed ${count} items — dates moved back 1 year`);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
@@ -6567,7 +6576,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const typ=fsTypes.size===0||fsTypes.has(s.productType);
     const unit=fsUnits.size===0||fsUnits.has(s.unit);
     const pfP=fPhoto==="Any"||(fPhoto==="Yes"&&s.photographed)||(fPhoto==="No"&&!s.photographed);
-    const platP=fsPlats.size===0||[["Shopify",s.postedShopify],["Wix",s.postedWix],["Etsy",s.postedEtsy],["Ebay",s.postedEbay]].some(([p,v])=>fsPlats.has(p)&&v);
+    const platP=fsPlats.size===0||[["Atyahara",s.postedShopifyAtyahara||s.postedShopifyAty],["Earth Editions",s.postedShopifyEarth||s.postedShopifyEarthEditions||s.postedShopify],["Wix",s.postedWix],["Etsy",s.postedEtsy],["Ebay",s.postedEbay]].some(([p,v])=>fsPlats.has(p)&&v);
     const vendorP=fsVendors.size===0||fsVendors.has(s.vendor||"");
     const primaryQty=parseFloat(s.qty);
     const secondaryQty=parseFloat(s.qty2);
@@ -7041,7 +7050,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         const allMats=[...new Set(stock.map(s=>s.material).filter(Boolean))].sort();
         const strFilled=[bef.material,bef.vendor,bef.location,bef.shape,bef.costPrice].filter(v=>v&&v.trim()).length;
         const marketFilled=bef.market.length>0?1:0;
-        const boolFilled=[bef.photographed,bef.postedEtsy,bef.postedShopify,bef.postedWix,bef.postedEbay].filter(v=>v!==null).length;
+        const boolFilled=[bef.photographed,bef.postedEtsy,bef.postedShopifyAtyahara,bef.postedShopifyEarth,bef.postedWix,bef.postedEbay].filter(v=>v!==null).length;
         const filledCount=strFilled+marketFilled+boolFilled;
         // tri-state toggle: null → true → false → null
         const triToggle=(k)=>{const cur=bef[k];set(k,cur===null?true:cur===true?false:null);};
@@ -7100,8 +7109,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       <button onClick={()=>triToggle("postedEtsy")} style={triStyle(bef.postedEtsy)}>{triLabel(bef.postedEtsy)} Etsy</button>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-                      <div style={{fontSize:10,color:C.inkFaint}}>Shopify</div>
-                      <button onClick={()=>triToggle("postedShopify")} style={triStyle(bef.postedShopify)}>{triLabel(bef.postedShopify)} Shopify</button>
+                      <div style={{fontSize:10,color:C.inkFaint}}>Atyahara</div>
+                      <button onClick={()=>triToggle("postedShopifyAtyahara")} style={triStyle(bef.postedShopifyAtyahara)}>{triLabel(bef.postedShopifyAtyahara)} Atyahara</button>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                      <div style={{fontSize:10,color:C.inkFaint}}>Earth Editions</div>
+                      <button onClick={()=>triToggle("postedShopifyEarth")} style={triStyle(bef.postedShopifyEarth)}>{triLabel(bef.postedShopifyEarth)} Earth</button>
                     </div>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
                       <div style={{fontSize:10,color:C.inkFaint}}>Wix</div>
@@ -7276,7 +7289,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         <div style={{...DDBox,minWidth:170}}>
                           <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:9}}>Listed on</div>
                           <div style={{display:"flex",flexDirection:"column"}}>
-                            {[["Etsy","🟠"],["Shopify","🟢"],["Wix","🔵"],["Ebay","🟡"]].map(([p,icon])=>(
+                            {[["Etsy","🟠"],["Atyahara","🟣"],["Earth Editions","🌍"],["Wix","🔵"],["Ebay","🟡"]].map(([p,icon])=>(
                               <CRow key={p} label={`${icon} ${p}`} checked={fsPlats.has(p)} onToggle={()=>togSet(setFsPlats,p)}/>
                             ))}
                           </div>
@@ -7328,8 +7341,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   {selectedIds.size===2&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#0369A1",borderColor:"#0369A1",background:"#E0F2FE"}} onClick={()=>{setMergeOpen(v=>!v);const [id1]=([...selectedIds]);setMergeKeepId(id1);}}>⇌ Merge</button>}
                   {!mob&&<><button className="bs" style={{fontSize:12}} disabled={selectedIds.size===0} onClick={()=>swapQtyBulk(selectedIds)}>⇄ Swap Qty</button>
                   <button className="bs" style={{fontSize:12,color:C.green,borderColor:C.green,background:C.greenBg}} disabled={selectedIds.size===0} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button>
-                  <button className="bs" style={{fontSize:12,color:C.blue,borderColor:C.blue,background:C.blueBg}} disabled={selectedIds.size===0} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedWix:null,postedEbay:null});}}>✏ Edit</button></>}
-                  {mob&&selectedIds.size>0&&<><button className="bs" style={{fontSize:13,minHeight:40,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedWix:null,postedEbay:null});}}>✏ Edit</button>
+                  <button className="bs" style={{fontSize:12,color:C.blue,borderColor:C.blue,background:C.blueBg}} disabled={selectedIds.size===0} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button></>}
+                  {mob&&selectedIds.size>0&&<><button className="bs" style={{fontSize:13,minHeight:40,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button>
                   <button className="bs" style={{fontSize:13,minHeight:40,color:C.green,borderColor:C.green,background:C.greenBg}} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button></>}
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:C.red,borderColor:C.red,background:C.redBg}} disabled={selectedIds.size===0} onClick={()=>{if(window.confirm(`Delete ${selectedIds.size} item${selectedIds.size>1?"s":""}? This cannot be undone.`))delBulk(selectedIds);}}>🗑 Delete</button>
                   {onCreateInvoiceFromStock&&selectedIds.size>0&&<button className="bp" style={{fontSize:12}} onClick={()=>{const sel=stock.filter(s=>selectedIds.has(s.id));const items=sel.map(s=>({id:uid(),acctDesc:shapeToAcctDesc(s.shape),customDesc:[s.material,s.shape,s.origin,s.size].filter(Boolean).join(" · "),hsn:shapeToHsn(s.shape),qty:String(s.qty||""),unit:s.unit||"pcs",rate:"",igst:0,amt:0,stockId:s.id,acctStockId:"",ready:false,readyDate:""}));const draft={id:uid(),invNo:"",type:"commercial",date:today(),dueDate:"",currency:"USD",buyerId:"",items,status:"draft",goodsShipped:false,payments:[],paidAmount:0,notes:"",terms:"T/T in advance",portLading:"Mumbai, India",portDischarge:"",consigneeSameAsBuyer:true,consigneeName:"",consigneeAddress:"",consigneeCountry:"",totalAmt:0,createdAt:new Date().toISOString()};onCreateInvoiceFromStock(draft);}}>📄 Create Invoice ({selectedIds.size})</button>}
@@ -7406,7 +7419,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     const isFutureDate=age!=null&&age<0;
                     const ageCol=isFutureDate?C.amber:age>180?C.red:age>60?C.amber:C.green;
                     const qty=+s.qty||0;
-                    const listed=s.postedShopify||s.postedWix||s.postedEtsy||s.postedEbay;
+                    const listed=s.postedShopifyAtyahara||s.postedShopifyEarth||s.postedShopify||s.postedWix||s.postedEtsy||s.postedEbay;
                     const cover=stockCover(s);
                     return(
                     <div key={s.id}
@@ -7475,7 +7488,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           // Marketplace listing badges — brand-colored when listed, faded grey placeholder when not
                           const STOCK_PLATFORMS=[
                             {key:"etsy",   label:"Etsy",   short:"E",  color:"#F56400", listed:!!s.postedEtsy},
-                            {key:"shopify",label:"Shopify",short:"S",  color:"#008060", listed:!!s.postedShopify},
+                            {key:"shopify_atyahara",label:"Atyahara",short:"AT",color:"#6B3FA0", listed:!!(s.postedShopifyAtyahara||s.postedShopifyAty)},
+                            {key:"shopify_earth",label:"Earth Editions",short:"EE",color:"#2A6845", listed:!!(s.postedShopifyEarth||s.postedShopifyEarthEditions||s.postedShopify)},
                             {key:"ebay",   label:"eBay",   short:"eB", color:"#0064D2", listed:!!s.postedEbay},
                             {key:"wix",    label:"Wix",    short:"W",  color:"#7B2FF7", listed:!!s.postedWix},
                           ];
@@ -7585,10 +7599,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       </div>
                       <div style={{display:"flex",gap:5,marginBottom:14,flexWrap:"wrap"}}>
                         {selected.photographed&&<span style={{fontSize:11,background:"#E8F5E9",color:"#2E7D32",borderRadius:4,padding:"3px 9px",fontWeight:600}}>📸 Photographed</span>}
-                        {selected.postedShopify&&selected.shopifyProductId&&<a href={`https://admin.shopify.com/products/${selected.shopifyProductId}`} target="_blank" rel="noreferrer" style={{fontSize:11,background:"#E3F2FD",color:"#1565C0",borderRadius:4,padding:"3px 9px",fontWeight:600,textDecoration:"none"}}>Shopify ✓ ↗</a>}
+                        {(selected.postedShopifyEarth||selected.postedShopify)&&selected.shopifyProductId&&<a href={`https://admin.shopify.com/products/${selected.shopifyProductId}`} target="_blank" rel="noreferrer" style={{fontSize:11,background:"#E8F5E9",color:"#2A6845",borderRadius:4,padding:"3px 9px",fontWeight:600,textDecoration:"none"}}>Earth Editions ✓ ↗</a>}
+                        {selected.postedShopifyAtyahara&&<span style={{fontSize:11,background:"#F3E5F5",color:"#6B3FA0",borderRadius:4,padding:"3px 9px",fontWeight:600}}>Atyahara ✓</span>}
                         {selected.postedWix&&<span style={{fontSize:11,background:"#F3E5F5",color:"#6A1B9A",borderRadius:4,padding:"3px 9px",fontWeight:600}}>Wix ✓</span>}
                         {selected.postedEtsy&&<span style={{fontSize:11,background:"#FFF3E0",color:"#BF360C",borderRadius:4,padding:"3px 9px",fontWeight:600}}>Etsy ✓</span>}
-                        {!selected.photographed&&!selected.postedShopify&&!selected.postedWix&&!selected.postedEtsy&&<span style={{fontSize:11,color:C.inkFaint}}>Not photographed · Not listed anywhere</span>}
+                        {!selected.photographed&&!selected.postedShopify&&!selected.postedShopifyEarth&&!selected.postedShopifyAtyahara&&!selected.postedWix&&!selected.postedEtsy&&<span style={{fontSize:11,color:C.inkFaint}}>Not photographed · Not listed anywhere</span>}
                       </div>
                       {(()=>{const lm=lmForBox(selected.location);if(!lm)return null;const total=Object.values(lm.counts).reduce((a,b)=>a+b,0);return(
                         <div style={{background:"#FFF3E0",border:"1px solid #F0C890",borderRadius:8,padding:"9px 12px",marginBottom:14}}>
@@ -7941,7 +7956,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <Tag>Markets</Tag><div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>{DEFAULT_MARKETS.filter(m=>m!=="Unassigned").map(m=>{const cur=Array.isArray(form.market)?form.market:[];const on=cur.includes(m);return <button type="button" key={m} onClick={()=>setForm(f=>{const c=Array.isArray(f.market)?f.market:[];return{...f,market:on?c.filter(x=>x!==m):[...c,m]};})  } style={{fontSize:11,padding:"3px 9px",borderRadius:4,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:"transparent",color:on?C.ink:C.inkMid,cursor:"pointer",transition:"all .1s"}}>{m}</button>;})} </div>
                 </div>
                 <div style={{marginTop:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[["photographed","📸 Photographed"],["postedShopify","Shopify"],["postedWix","Wix"],["postedEtsy","Etsy"]].map(([key,label])=>(
+                  {[["photographed","📸 Photographed"],["postedShopifyAtyahara","Atyahara"],["postedShopifyEarth","Earth Editions"],["postedWix","Wix"],["postedEtsy","Etsy"]].map(([key,label])=>(
                     <label key={key} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"7px 10px",borderRadius:6,border:`1px solid ${form[key]?C.green:C.border}`,background:form[key]?"#E8F5E9":"transparent",transition:"all .1s"}}>
                       <input type="checkbox" checked={!!form[key]} onChange={e=>setForm(f=>({...f,[key]:e.target.checked}))} style={{accentColor:C.green,width:14,height:14,cursor:"pointer"}}/>
                       <span style={{fontSize:12,fontWeight:form[key]?600:400,color:form[key]?"#2E7D32":C.inkMid}}>{label}</span>
@@ -10467,7 +10482,7 @@ async function findLiveListingsForStock(affectedItems,allStock){
   // directly). Only the items actually being deducted/moved — flagging every
   // listed item that merely shares a box drowns the alert in noise.
   items.forEach(s=>{
-    const plats=[s.postedEtsy&&"Etsy",s.postedShopify&&"Shopify",s.postedWix&&"Wix",s.postedEbay&&"eBay"].filter(Boolean);
+    const plats=[s.postedEtsy&&"Etsy",s.postedShopifyAtyahara&&"Atyahara",(s.postedShopifyEarth||s.postedShopify)&&"Earth Editions",s.postedWix&&"Wix",s.postedEbay&&"eBay"].filter(Boolean);
     if(!plats.length)return;
     out.push({title:`${s.material||"Stock item"}${s.shape?` · ${s.shape}`:""}`,plats:plats.join("/"),box:s.location||""});
   });
@@ -10619,6 +10634,35 @@ function InvBulkView({queue,idx,setIdx,buyers,company="ng",extractInvoice,onSave
   );
 }
 
+// Money actually received against an invoice, and what's still owed.
+const invPaidAmt=inv=>(+inv?.paidAmount||0)+((inv?.payments||[]).reduce((s,p)=>s+(+p.amount||0),0));
+const invTotalAmt=inv=>+inv?.totalAmt||((inv?.items||[]).reduce((s,i)=>s+(+i.amt||0),0));
+// An invoice flagged "paid" whose recorded payments no longer cover the total —
+// the state you land in when the amount is edited upward after settlement. The
+// balance then becomes invisible (and unpayable, since pickers skip paid invoices).
+const invUnderpaid=inv=>{
+  if(String(inv?.status||"").toLowerCase()!=="paid")return 0;
+  const total=invTotalAmt(inv);
+  if(!(total>0))return 0;
+  const due=total-invPaidAmt(inv);
+  return due>0.01?due:0;
+};
+// Re-derive the status from money actually received, so a raised total can't stay "paid".
+const reconcileInvoiceStatus=inv=>{
+  if(!invUnderpaid(inv))return inv;
+  return {...inv,status:invPaidAmt(inv)>0.01?"partial":(inv.goodsShipped?"shipped":"sent")};
+};
+const reconcileInvoiceList=list=>{
+  const rows=Array.isArray(list)?list:[];
+  let changed=false;
+  const next=rows.map(inv=>{
+    const fixed=reconcileInvoiceStatus(inv);
+    if(fixed!==inv)changed=true;
+    return fixed;
+  });
+  return {next,changed};
+};
+
 function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   const t=useT();
   // Company-scoped: Nikhil Gems and Atyahara keep separate invoices / buyers / acc-stock.
@@ -10755,7 +10799,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
     await saveK(INV_KEYS.buyers,list);
     return{draft:{...draftWithDischarge,buyerId:buyer.id,consigneeSameAsBuyer:true},buyers:list};
   };
-  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadKFresh(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];setInvoices(i||[]);setBuyers(loadedBuyers);setAccStock(a||[]);setStock((s||[]).map(normalizeStockRecord));setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=i||[];const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");if(prepared.draft.autoAttach&&prepared.draft.sourceSbId)setAutoAttachId(prepared.draft.id);}});},[company]);
+  useEffect(()=>{setDraft(null);setView("list");Promise.all([loadK(INV_KEYS.invoices),loadK(INV_KEYS.buyers),loadK(KEYS.accStock),KEYS.stock?loadK(KEYS.stock):Promise.resolve([]),loadK(KEYS.purchases),loadKFresh(vk.transactions),loadK("ng-customs-descs-v1")]).then(async([i,b,a,s,p,ft,cd])=>{let loadedBuyers=Array.isArray(b)?b:[];const reconciled=reconcileInvoiceList(i);const loadedInvoices=reconciled.next;setInvoices(loadedInvoices);if(reconciled.changed)await saveK(INV_KEYS.invoices,loadedInvoices);setBuyers(loadedBuyers);setAccStock(a||[]);setStock((s||[]).map(normalizeStockRecord));setPurchases(p||[]);setFinTxns(ft||[]);setCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]);setLoaded(true);if(startDraft){const allInvs=loadedInvoices;const y1=new Date().getFullYear(),y2=y1+1;const fy=`${String(y1).slice(-2)}-${String(y2).slice(-2)}`;const extractNum=n=>{const m=(n||"").match(new RegExp(`^${invPrefix}-0*(\\d+)[-\\/]`));return m?+m[1]:0;};const isCurrFY=n=>{const s=n||"";return s.includes(`/${fy}`)||s.includes(`-${y1}/`)||s.includes(`/${y1}-`);};const maxNum=allInvs.filter(x=>x.type!=="proforma"&&isCurrFY(x.invNo)).reduce((mx,x)=>Math.max(mx,extractNum(x.invNo)),0);const nextNo=`${invPrefix}-${String(maxNum+1).padStart(2,"0")}/${fy}`;const prepared=await ensureBuyerForSbDraft({...startDraft,invNo:nextNo},loadedBuyers);loadedBuyers=prepared.buyers;setBuyers(loadedBuyers);setDraft(prepared.draft);setView("form");if(prepared.draft.autoAttach&&prepared.draft.sourceSbId)setAutoAttachId(prepared.draft.id);}});},[company]);
   // Keep stock/acct stock live: realtime invalidations land here (items added in
   // the Stock module, stock journal, or another device while Invoicing is open).
   useEffect(()=>onCacheRefresh(keys=>{
@@ -10836,6 +10880,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
 
   const saveInvoice=async (inv,{navigateAway=true}={})=>{
     inv=await persistInvoiceShipmentAttachments(inv,company);
+    inv=reconcileInvoiceStatus(inv);
     setDraft(d=>d?.id===inv.id?inv:d);
     const openedVersion=Number.isFinite(+inv._version)?+inv._version:0;
     const latestForVersion=await loadKFresh(INV_KEYS.invoices).catch(()=>invoices);
@@ -11097,6 +11142,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   const unpaid=invoices.filter(i=>["draft","sent","partial"].includes(i.status)).length;
   const quickSave=async(inv)=>{
     try{
+      inv=reconcileInvoiceStatus(inv);
       const list=await upsertVersionedItemK(INV_KEYS.invoices,inv,{prepend:false,user:"Admin"});
       setInvoices(list);
       showToast("Saved");
@@ -11257,7 +11303,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                 {filteredInvoices.map(inv=>{
                   const buyer=buyers.find(b=>b.id===inv.buyerId);
                   const totalPaidAmt=(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+inv.paidAmount||0);
-                  const isPaid=inv.status==="paid";
+                  const isPaid=totalPaidAmt>=((+inv.totalAmt||0)-0.01)&&(+inv.totalAmt||0)>0;
                   const rowStyle=invRowColor(inv);
                   const isSel=selectedInvIds.has(inv.id);
                   return(
@@ -11319,7 +11365,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                 {filteredInvoices.map((inv,i)=>{
                   const buyer=buyers.find(b=>b.id===inv.buyerId);
                   const totalPaidAmt=(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+inv.paidAmount||0);
-                  const isPaid=inv.status==="paid";
+                  const isPaid=totalPaidAmt>=((+inv.totalAmt||0)-0.01)&&(+inv.totalAmt||0)>0;
                   const rowStyle=invRowColor(inv);
                   const isSel=selectedInvIds.has(inv.id);
                   return(
@@ -12275,7 +12321,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                   const afterQty=checked?Math.max(0,(+s.qty||0)-(+allocQty||0)):null;
                   const afterQty2=checked&&s.qty2!=null&&s.qty2!==""?Math.max(0,(+s.qty2||0)-(+allocQty2||0)):null;
                   const deficit=checked&&(+allocQty||0)>(+s.qty||0);
-                  const platforms=[s.postedShopify&&"Shopify",s.postedWix&&"Wix",s.postedEtsy&&"Etsy",s.postedEbay&&"eBay"].filter(Boolean);
+                  const platforms=[s.postedShopifyAtyahara&&"Atyahara",(s.postedShopifyEarth||s.postedShopify)&&"Earth Editions",s.postedWix&&"Wix",s.postedEtsy&&"Etsy",s.postedEbay&&"eBay"].filter(Boolean);
                   const markets=Array.isArray(s.market)?s.market:s.market?[s.market]:[];
                   return(
                     <div key={s.id} style={{border:`1.5px solid ${checked?C.blue:C.border}`,background:checked?C.blueBg:C.surface,borderRadius:10,marginBottom:8,overflow:"hidden",transition:"all .12s",boxShadow:checked?"0 2px 8px rgba(26,19,8,.08)":"none"}}>

@@ -2609,8 +2609,11 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     return updated;
   };
   const setOrderShape = (order, shape) => patchOrder(order, { listing_shape: shape });
-  const ngDraft = o => ngState[o.id] || { qty: String(o._ngAllocatedQty || o._ngDeductedQty || o._ngPlanQty || ""), qty2: String(o._ngAllocatedQty2 || o._ngDeductedQty2 || o._ngPlanQty2 || ""), shipCost: o.ship_cost != null && o.ship_cost !== "" ? String(o.ship_cost) : "", costMode: "earned", multiplier: "2", rate: "", loading: false, error: "", success: "" };
-  const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...ngDraft(o), ...patch } }));
+  const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty || o._ngPlanQty || ""), qty2: String(o._ngAllocatedQty2 || o._ngDeductedQty2 || o._ngPlanQty2 || ""), shipCost: o.ship_cost != null && o.ship_cost !== "" ? String(o.ship_cost) : "", costMode: "earned", multiplier: "2", rate: "", loading: false, error: "", success: "" });
+  const ngDraft = o => ({ ...defaultNgDraft(o), ...(ngState[o.id] || {}) });
+  // Merge from the latest updater state, not the render's older ngState closure.
+  // This keeps number inputs stable while several keystrokes are being batched.
+  const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...defaultNgDraft(o), ...(s[o.id] || {}), ...patch } }));
   const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
   const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
   const saveOrderShipCost = (order, value) => {
@@ -7733,6 +7736,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const result = d.result || {};
     await patchListingItem(listing, current => ({
       ...current,
+      ...(result.videoStorageDeleted && result.videoUrl ? {
+        originalVideoUrl: current.originalVideoUrl || current.video,
+        sourceVideoUrl: current.sourceVideoUrl || current.video,
+        video: result.videoUrl,
+        retainVideo: false,
+        videoStoragePolicy: "deleted_after_shopify_ready",
+      } : {}),
       platforms: {
         ...current.platforms,
         [pkey]: {

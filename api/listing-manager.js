@@ -7,6 +7,58 @@
  */
 
 import { getEtsyAccessToken } from "./etsy-auth.js";
+import { createClient } from "@supabase/supabase-js";
+
+const MEDIA_BUCKET = "ng-media";
+
+function mediaStoragePath(url) {
+  if (typeof url !== "string" || !url) return "";
+  const marker = `/storage/v1/object/public/${MEDIA_BUCKET}/`;
+  const index = url.indexOf(marker);
+  if (index < 0) return "";
+  return decodeURIComponent(url.slice(index + marker.length).split("?")[0]);
+}
+
+async function deleteSourceVideo(url) {
+  const path = mediaStoragePath(url);
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!path) return { deleted: false, skipped: true, reason: "not_erp_media_url" };
+  if (!supabaseUrl || !serviceKey) {
+    return { deleted: false, skipped: true, reason: "SUPABASE_SERVICE_ROLE_KEY_missing" };
+  }
+  const client = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { error } = await client.storage.from(MEDIA_BUCKET).remove([path]);
+  if (error) return { deleted: false, error: error.message };
+  return { deleted: true, path };
+}
+
+// Days the ERP keeps its own copy after Shopify first reports READY. Deleting makes
+// Shopify the ONLY copy, so the grace window covers a rejected transcode or the
+// product being unpublished/deleted (e.g. a Deals item coming down) soon after.
+const VIDEO_GRACE_DAYS = 7;
+
+async function cleanupReadyVideo(listing, result, platformKey) {
+  if (
+    String(result?.videoStatus || "").toUpperCase() !== "READY" ||
+    !result?.videoUrl ||
+    listing?.videoStoragePolicy !== "delete_after_shopify_ready" ||
+    !listing?.video ||
+    listing.video === result.videoUrl
+  ) return result;
+  const prevReadyAt = listing?.platforms?.[platformKey]?.videoReadyAt || listing?.videoReadyAt || "";
+  const readyMs = prevReadyAt ? Date.parse(prevReadyAt) : NaN;
+  if (!Number.isFinite(readyMs)) {
+    // First confirmed READY — start the clock, delete nothing yet.
+    return { ...result, videoReadyAt: new Date().toISOString(), videoStorageCleanup: { deleted: false, skipped: true, reason: "grace_started", graceDays: VIDEO_GRACE_DAYS } };
+  }
+  const ageDays = (Date.now() - readyMs) / 86400000;
+  if (ageDays < VIDEO_GRACE_DAYS) {
+    return { ...result, videoReadyAt: prevReadyAt, videoStorageCleanup: { deleted: false, skipped: true, reason: "within_grace", daysLeft: Math.max(0, +(VIDEO_GRACE_DAYS - ageDays).toFixed(1)) } };
+  }
+  const cleanup = await deleteSourceVideo(listing.video);
+  return { ...result, videoReadyAt: prevReadyAt, videoStorageDeleted: cleanup.deleted, videoStorageCleanup: cleanup };
+}
 
 /* ── Etsy constants ────────────────────────────────────────────────────────── */
 const ETSY_SHOP_ID   = process.env.ETSY_SHOP_ID   || "21113006";
@@ -922,6 +974,7 @@ export default async function handler(req, res) {
         const priceField = store_key === "atyahara" ? "price_shopify_aty" : "price_shopify_earth";
         result = await publishShopify(store, token, { ...listing, price_shopify: listing[priceField] || listing.price_shopify }, ai);
       }
+      result = await cleanupReadyVideo(listing, result, platformKey);
       return res.json({ ok: true, platform: store_key, result });
     }
 
@@ -935,7 +988,10 @@ export default async function handler(req, res) {
       const productId = listing?.platforms?.[platformKey]?.product_id || listing?.product_id;
       if (!store || !token) return res.status(400).json({ error: `Shopify credentials not set for store "${store_key}".` });
       if (!productId) return res.status(400).json({ error: `No ${platformKey} product_id` });
-      const result = await getShopifyVideoStatus(store, token, productId);
+      // One deletion path only — cleanupReadyVideo enforces the READY check, the
+      // opt-in policy flag, and the grace window before anything is removed.
+      const status = await getShopifyVideoStatus(store, token, productId);
+      const result = await cleanupReadyVideo(listing, status, platformKey);
       return res.json({ ok: true, platform: store_key, result: { product_id: productId, ...result } });
     }
 

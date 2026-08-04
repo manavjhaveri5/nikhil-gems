@@ -142,12 +142,15 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   // Inter-company: pick the OTHER company's invoice this payment settles. Pre-select the
   // one whose number appears in the notes/payee (e.g. "Payment against NG-04-2026/27").
   const interInvs = interCo?.invoices || [];
+  const interSettledInvs = interCo?.settledInvoices || [];
+  const interPickerInvs = [...interInvs, ...interSettledInvs];
   const interInvNo = inv => String(inv.invNo || inv.invNumber || inv.number || "");
   const guessedInterId = (() => {
     const hay = `${txn.notes || ""} ${txn.payee || ""}`.toLowerCase().replace(/\s+/g, "");
-    return interInvs.find(inv => { const n = interInvNo(inv).toLowerCase().replace(/\s+/g, ""); return n && hay.includes(n); })?.id || "";
+    return interPickerInvs.find(inv => { const n = interInvNo(inv).toLowerCase().replace(/\s+/g, ""); return n && hay.includes(n); })?.id || "";
   })();
   const [interCoInvId, setInterCoInvId] = useState(txn.classifiedRef?.interCoInvoiceId || guessedInterId);
+  const [showSettledInter, setShowSettledInter] = useState(false);
   const [selectedInvIds, setSelectedInvIds] = useState(() => new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : [])));
   const [linkedInvId, setLinkedInvId] = useState(txn.classifiedRef?.linkedInvoiceId || "");
   const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "advance");
@@ -496,15 +499,13 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
       const pNew = (expParty || "").trim();
       if (pNew && pNew !== (txn.payee || "")) sideEffects.txnPatch = { ...(sideEffects.txnPatch || {}), payee: pNew, ...(txn.rawPayee == null ? { rawPayee: txn.payee || "" } : {}) };
     } else if (classType === "vendor_bill" && interCoInvId && interCo) {
-      // Inter-company settlement: this payment to the other company pays down THEIR invoice
-      // (the one they issued to us). Mark it paid in their books and attach it on the right.
-      const inv = interInvs.find(i => i.id === interCoInvId);
+      // Inter-company: LINK ONLY, never a settlement. Each company's own ledger owns its
+      // invoices — the payee marks the invoice paid when they classify the *receipt* in
+      // their books. Writing it from the payer's side too would record the same money
+      // twice (once here, once when they classify it), so this only records the link.
+      const inv = interPickerInvs.find(i => i.id === interCoInvId);
       const total = invTotal(inv), already = invPaid(inv), due = Math.max(0, total - already);
-      const applied = Math.min(due || txnAmt, txnAmt);
-      const newPaid = already + applied;
-      const newStatus = total > 0 && newPaid >= total - 0.01 ? "paid" : "partial";
-      classifiedRef = { interCo: true, interCoKey: interCo.otherKey, interCoCompany: interCo.otherName, interCoInvoiceId: inv.id, invNumber: interInvNo(inv), vendorName: interCo.otherName, paymentAmount: txnAmt, paymentCurrency: cur };
-      sideEffects.interCoInvoiceUpdates = { invoicesKey: interCo.invoicesKey, updates: [{ id: inv.id, paidAmount: newPaid, status: newStatus, paidDate: txn.date }] };
+      classifiedRef = { interCo: true, linkOnly: true, interCoKey: interCo.otherKey, interCoCompany: interCo.otherName, interCoInvoiceId: inv.id, invNumber: interInvNo(inv), vendorName: interCo.otherName, paymentAmount: txnAmt, paymentCurrency: cur, invoiceTotal: total, invoiceDue: due, ...(due <= 0.01 ? { settledLinkOnly: true } : {}) };
     } else if (classType === "vendor_bill") {
       let remaining = txnAmt;
       const billUpdates = [];
@@ -714,20 +715,31 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
           <Field label="Notes"><input value={expNotes} onChange={e => { setExpNotes(e.target.value); setNotesTouched(true); }} placeholder="Statement month, card ending, reference..." style={SI} /></Field>
         </div>}
         {(classType === "vendor_bill" || classType === "vendor_po") && <div style={{ display: "grid", gap: 12 }}>
-          {classType === "vendor_bill" && interCo?.active && interInvs.length > 0 && (
+          {classType === "vendor_bill" && interCo?.active && (interInvs.length > 0 || interSettledInvs.length > 0) && (
             <div style={{ padding: "10px 12px", background: C.tealBg, border: `1px solid ${C.teal}66`, borderRadius: 9 }}>
               <div style={{ fontSize: 12, fontWeight: 900, color: C.ink }}>✨ Paying {interCo.otherName}</div>
-              <div style={{ fontSize: 11, color: C.inkMid, margin: "2px 0 8px" }}>Settle a {interCo.otherName} invoice billed to {interCo.selfName}. It will be marked paid in {interCo.otherName} and shown on the right.</div>
+              <div style={{ fontSize: 11, color: C.inkMid, margin: "2px 0 8px" }}>Link this payment to the {interCo.otherName} invoice it pays — reference only. {interCo.otherName}'s invoice is marked paid when the receipt is classified in {interCo.otherName}'s own ledger.</div>
               <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 6 }}>
                 {interInvs.map(inv => {
-                  const sel = interCoInvId === inv.id, due = invDue(inv), likely = guessedInterId === inv.id;
+                  const sel = interCoInvId === inv.id, total = invTotal(inv), paid = invPaid(inv), due = Math.max(0, total - paid), likely = guessedInterId === inv.id;
                   const buyerName = interCo.buyers?.find(b => b.id === inv.buyerId)?.name || inv.buyerName || inv.buyer || interCo.selfName;
                   return <button key={inv.id} onClick={() => setInterCoInvId(sel ? "" : inv.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", background: sel ? C.card : C.surface, border: `1.5px solid ${sel ? C.teal : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}>
                     <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${sel ? C.teal : C.border}`, background: sel ? C.teal : "transparent", flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{interInvNo(inv) || "(no number)"}{likely && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 900, color: C.teal }}>✨ LIKELY</span>}</div><div style={{ fontSize: 11, color: C.inkFaint }}>{buyerName} · {fmtDate(inv.date)} · {inv.status || "-"}</div></div>
-                    <div style={{ textAlign: "right", flexShrink: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.red }}>₹{due.toLocaleString("en-IN", { minimumFractionDigits: 2 })} due</div></div>
+                    <div style={{ textAlign: "right", flexShrink: 0, minWidth: 128 }}><div style={{ fontSize: 10, color: C.inkFaint }}>Invoice ₹{total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div><div style={{ fontSize: 10, color: C.inkFaint }}>Paid ₹{paid.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div><div style={{ fontSize: 12, fontWeight: 800, color: C.red }}>Due ₹{due.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div></div>
                   </button>;
                 })}
+                {interSettledInvs.length > 0 && <button type="button" onClick={() => setShowSettledInter(v => !v)} style={{ border: `1px solid ${C.border}`, background: C.surface, color: C.inkMid, borderRadius: 7, padding: "8px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer", textAlign: "left" }}>{showSettledInter ? "Hide" : "Show"} {interSettledInvs.length} settled/closed invoice{interSettledInvs.length === 1 ? "" : "s"}</button>}
+                {showSettledInter && interSettledInvs.map(inv => {
+                  const sel = interCoInvId === inv.id, total = invTotal(inv), paid = invPaid(inv), likely = guessedInterId === inv.id;
+                  const buyerName = interCo.buyers?.find(b => b.id === inv.buyerId)?.name || inv.buyerName || inv.buyer || interCo.selfName;
+                  return <button key={inv.id} type="button" onClick={() => setInterCoInvId(sel ? "" : inv.id)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px", background: sel ? C.card : C.surface, border: `1.5px solid ${sel ? C.teal : C.border}`, borderRadius: 7, cursor: "pointer", textAlign: "left" }}>
+                    <div style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${sel ? C.teal : C.border}`, background: sel ? C.teal : "transparent", flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{interInvNo(inv) || "(no number)"}{likely && <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 900, color: C.teal }}>✨ LIKELY</span>}</div><div style={{ fontSize: 11, color: C.inkFaint }}>{buyerName} · {fmtDate(inv.date)} · {inv.status || "closed"}</div></div>
+                    <div style={{ textAlign: "right", flexShrink: 0, minWidth: 128 }}><div style={{ fontSize: 10, color: C.inkFaint }}>Invoice ₹{total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div><div style={{ fontSize: 10, color: C.inkFaint }}>Paid ₹{paid.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div><div style={{ fontSize: 11, fontWeight: 800, color: C.green || C.teal }}>Already settled · link only</div></div>
+                  </button>;
+                })}
+                {showSettledInter && interSettledInvs.some(inv => inv.id === interCoInvId) && <div style={{ padding: "7px 9px", background: C.goldLight, border: `1px solid ${C.gold}66`, borderRadius: 7, fontSize: 11, color: C.ink }}>This invoice is already settled in {interCo.otherName}; selecting it links this payment without adding it again.</div>}
               </div>
             </div>
           )}
