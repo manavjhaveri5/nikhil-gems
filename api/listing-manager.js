@@ -6,7 +6,7 @@
  *          publish_shopify, unpublish_shopify
  */
 
-import { getEtsyAccessToken } from "./etsy-auth.js";
+import { getEtsyAccessToken } from "../lib/etsy-auth.js";
 import { createClient } from "@supabase/supabase-js";
 
 const MEDIA_BUCKET = "ng-media";

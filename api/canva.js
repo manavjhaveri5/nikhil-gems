@@ -13,7 +13,7 @@
  * Background removal itself stays a manual click inside Canva — the
  * Connect API does not expose it. This just removes the file shuffle.
  */
-import { getCanvaAccessToken } from "./canva-auth.js";
+import { getCanvaAccessToken, canvaAuthHandler } from "../lib/canva-auth.js";
 
 export const config = { api: { bodyParser: { sizeLimit: "25mb" } }, maxDuration: 120 };
 
@@ -41,6 +41,9 @@ async function pollJob(token, path, { tries = 63, delay = 1500 } = {}) {
 }
 
 export default async function handler(req, res) {
+  // /api/canva-auth is rewritten here (vercel.json) so the Canva OAuth redirect URI
+  // keeps working while costing one serverless function instead of two.
+  if (req.query?._oauth !== undefined) return canvaAuthHandler(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   const token = await getCanvaAccessToken();

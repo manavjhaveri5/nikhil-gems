@@ -16,7 +16,9 @@
   "rewrites": [
     { "source": "/api/openai", "destination": "/api/claude?_ai=openai" },
     { "source": "/api/embed", "destination": "/api/claude?_ai=embed" },
-    { "source": "/api/shopify-auth", "destination": "/api/shopify" }
+    { "source": "/api/shopify-auth", "destination": "/api/shopify" },
+    { "source": "/api/canva-auth", "destination": "/api/canva?_oauth=1" },
+    { "source": "/api/etsy-auth", "destination": "/api/etsy?_oauth=1" }
   ],
   "headers": [
     {

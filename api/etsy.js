@@ -1,4 +1,4 @@
-import { getEtsyAccessToken } from "./etsy-auth.js";
+import { getEtsyAccessToken, etsyAuthHandler } from "../lib/etsy-auth.js";
 
 export const maxDuration = 45; // Vercel Pro: allow up to 45s for multi-page listing fetches
 
@@ -7,6 +7,11 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Etsy-Token");
   if (req.method === "OPTIONS") return res.status(200).end();
+  // /api/etsy-auth is rewritten here (vercel.json) so the Etsy OAuth redirect URI and
+  // every existing /api/etsy-auth?action=… caller keep working, on one function
+  // instead of two. Checked before this file's own `action` routing so the two
+  // action namespaces can never collide.
+  if (req.query?._oauth !== undefined) return etsyAuthHandler(req, res);
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   // x-api-key must be keystring:sharedsecret for Etsy API v3
