@@ -16512,7 +16512,9 @@ function BoiRemittanceForm({showToast}){
   // sum — picking a second invoice used to overwrite it with just that one's total.
   // Only invoices in the remittance currency are summed; a mismatch is flagged rather
   // than silently added to a total in the wrong currency.
-  const boiLinked=form.invoices.map(ref=>resolveBoiInvoice(ref,ngInvoices)).filter(Boolean);
+  // Dedupe by invoice id: if the same invoice ends up in two rows (typed by hand, or
+  // a legacy form), it must still count once — otherwise the total silently doubles.
+  const boiLinked=(()=>{const seen=new Set(),out=[];for(const ref of form.invoices){const hit=resolveBoiInvoice(ref,ngInvoices);if(hit&&!seen.has(hit.id)){seen.add(hit.id);out.push(hit);}}return out;})();
   const boiSameCcy=boiLinked.filter(inv=>!inv.currency||inv.currency===form.currency);
   const boiTotal=+boiSameCcy.reduce((s,inv)=>s+(+inv.totalAmt||0),0).toFixed(2);
   const boiMixedCcy=boiLinked.some(inv=>inv.currency&&inv.currency!==form.currency);
@@ -16695,7 +16697,14 @@ function BoiRemittanceForm({showToast}){
             </div>
             {form.invoices.map((inv,i)=>{
               const q=(inv.no||"").toLowerCase();
-              const matches=ngInvoices.filter(ni=>!q||(ni.invNo||"").toLowerCase().includes(q)||(ni.buyerName||ni.buyer||"").toLowerCase().includes(q));
+              // An invoice already sitting in another row must not be offered again —
+              // linking it twice would double it in the remittance total.
+              const takenId=new Set(),takenNo=new Set();
+              form.invoices.forEach((r,j)=>{if(j===i)return;if(r.srcId)takenId.add(r.srcId);const n=normalizeInvoiceNo(r.no);if(n)takenNo.add(n);});
+              const matches=ngInvoices.filter(ni=>
+                (!q||(ni.invNo||"").toLowerCase().includes(q)||(ni._resolvedBuyer||ni.buyerName||ni.buyer||"").toLowerCase().includes(q))
+                &&!takenId.has(ni.id)&&!takenNo.has(normalizeInvoiceNo(ni.invNo))
+              );
               return(
                 <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"start"}}>
                   <div style={{position:"relative"}}>
