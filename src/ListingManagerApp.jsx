@@ -2487,6 +2487,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   const [trackingModalOrder, setTrackingModalOrder] = useState(null);
   const [detailsOpen, setDetailsOpen] = useState({});
   const [stepSel, setStepSel] = useState({}); // per-order: which fulfilment step panel is open (overrides the auto-active one)
+  const [openGroups, setOpenGroups] = useState(() => new Set()); // expanded multi-item receipts
   const [allocEdit, setAllocEdit] = useState({}); // per-order: allow editing a saved physical stock allocation
   const [stockModalOrder, setStockModalOrder] = useState(null); // order whose stock-picker modal is open
   const [atInvoices, setAtInvoices] = useState([]); // Atyahara invoices, for matching/linking existing invoices to orders
@@ -3674,6 +3675,48 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       .join(" ").toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => new Date(b.created_at || b.date) - new Date(a.created_at || a.date));
 
+  /* One Etsy receipt = one parcel to one buyer, but it arrives as a row per line
+     item. Group those under a single header (combined value, overall progress) so
+     the list reads as orders, not fragments. Steps 1 & 3 (Shipped / Sales invoice)
+     already apply receipt-wide; steps 2 & 4 (stock, NG invoice) are genuinely
+     per-item, which is why members are still individually workable when expanded.
+     Single-line orders render exactly as before. */
+  const orderGroups = (() => {
+    const byKey = new Map(); const out = [];
+    for (const o of filtered) {
+      const rid = isEtsyOrder(o) ? etsyReceiptId(o) : "";
+      const key = rid ? `r:${rid}` : `o:${o.id}`;
+      if (!byKey.has(key)) { const g = { key, orders: [] }; byKey.set(key, g); out.push(g); }
+      byKey.get(key).orders.push(o);
+    }
+    return out;
+  })();
+  const groupSummary = g => {
+    const first = g.orders[0] || {};
+    const total = g.orders.reduce((s, o) => s + (isCancelled(o) ? 0 : +o.sale_price || 0), 0);
+    const stepsDone = o => [isShipped(o), !!o.linked_stock_id, !!o._atInvoiceNo, !!o._ngInvoiceNo].filter(Boolean).length;
+    return {
+      buyer: first.buyer_name || "—",
+      date: first.date || first.created_at || "",
+      currency: first.currency,
+      platform: first.platform,
+      total,
+      count: g.orders.length,
+      complete: g.orders.filter(o => stepsDone(o) === 4).length,
+      allShipped: g.orders.every(o => isShipped(o) || isCancelled(o)),
+      cancelled: g.orders.every(isCancelled),
+    };
+  };
+  // Flatten to render rows: a group header, plus its members only when expanded.
+  const displayRows = orderGroups.flatMap(g =>
+    g.orders.length === 1
+      ? [{ type: "order", order: g.orders[0], key: g.orders[0].id }]
+      : [
+          { type: "group", g, key: g.key },
+          ...(openGroups.has(g.key) ? g.orders.map(o => ({ type: "order", order: o, key: o.id, inGroup: true })) : []),
+        ]
+  );
+
   const revenueByCurrency = filtered.reduce((m, o) => {
     if (isCancelled(o)) return m; // cancelled/refunded orders don't count toward revenue
     const c = o.currency || "INR";
@@ -3897,7 +3940,40 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {filtered.map(order => {
+          {displayRows.map(row => {
+            if (row.type === "group") {
+              const g = row.g, s = groupSummary(g), open = openGroups.has(g.key);
+              const gp = PLATFORMS.find(x => x.key === s.platform) || { label: "Manual", icon: "✏️", color: C.inkMid };
+              return (
+                <div key={row.key} onClick={() => setOpenGroups(prev => { const n = new Set(prev); n.has(g.key) ? n.delete(g.key) : n.add(g.key); return n; })}
+                  style={{ background: C.surface, border: `1.5px solid ${open ? gp.color + "66" : C.border}`, borderRadius: 12, padding: mob() ? "11px 12px" : "12px 15px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 13, color: C.inkFaint, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {s.buyer} <span style={{ fontWeight: 600, color: gp.color }}>· {s.count} items</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>
+                      {gp.icon} {gp.label} · one order · {new Date(s.date).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 800, borderRadius: 20, padding: "3px 9px", background: s.complete === s.count ? C.greenBg : C.card, color: s.complete === s.count ? C.green : C.inkMid, border: `1px solid ${s.complete === s.count ? C.green + "55" : C.border}` }}>
+                      {s.complete}/{s.count} complete
+                    </span>
+                    {s.cancelled
+                      ? <span style={{ fontSize: 10.5, fontWeight: 800, color: C.inkFaint }}>CANCELLED</span>
+                      : s.allShipped && <span style={{ fontSize: 10.5, fontWeight: 800, color: C.green }}>SHIPPED</span>}
+                    <div style={{ fontSize: 15, fontWeight: 850, color: s.cancelled ? C.inkFaint : C.green, textDecoration: s.cancelled ? "line-through" : "none" }}>
+                      {money(s.total, s.currency)}
+                    </div>
+                  </div>
+                  <div style={{ width: "100%", fontSize: 11, color: C.inkFaint }}>
+                    {open ? "Tap to collapse — items below are worked individually." : "Tap to open the individual items."}
+                  </div>
+                </div>
+              );
+            }
+            const order = row.order;
             const p = PLATFORMS.find(x => x.key === order.platform) || { label: "Manual", icon: "✏️", color: C.inkMid };
             const isExp = expanded === order.id;
             const shipped = isShipped(order);
@@ -3913,7 +3989,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
             const image = findOrderImage(order);
             return (
               <div key={order.id}
-                style={{ background: C.surface, border: `1.5px solid ${isExp ? p.color || C.gold : C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: isExp ? "0 8px 28px rgba(0,0,0,.08)" : "0 1px 5px rgba(0,0,0,.04)" }}>
+                style={{ background: C.surface, border: `1.5px solid ${isExp ? p.color || C.gold : C.border}`, borderRadius: 12, overflow: "hidden", boxShadow: isExp ? "0 8px 28px rgba(0,0,0,.08)" : "0 1px 5px rgba(0,0,0,.04)",
+                  // Members of a grouped receipt sit indented under their header.
+                  ...(row.inGroup ? { marginLeft: mob() ? 10 : 26, borderLeft: `3px solid ${(p.color || C.gold) + "55"}` } : {}) }}>
                 {/* row */}
                 <div style={{
                   display: "grid",
@@ -6975,6 +7053,30 @@ function ShopifyStoreView({ listings, onEditLocal, onPublish, onRefreshShopifyVi
     : sortBy === "updated" ? new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
     :                        new Date(b.created_at || b.updated_at) - new Date(a.created_at || a.updated_at)); // "created" = recently added
 
+  const localDrafts = (listings || [])
+    .filter(l => l.platforms?.[platKey]?.status === "draft" && !l.platforms?.[platKey]?.product_id)
+    .filter(l => {
+      const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+      if (!terms.length) return true;
+      const hay = [l.title, l.material, l.shape, l.sku, l.listing_order_id, l.description, l.video ? "video" : ""].join(" ").toLowerCase();
+      return terms.every(t => hay.includes(t));
+    })
+    .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0));
+
+  const publishLocalDraft = async listing => {
+    const key = String(listing.id);
+    setVideoBusy(s => ({ ...s, [key]: "publishing" }));
+    try {
+      await onPublish(listing, platKey);
+      showToast(`✓ Published to ${storeName}`);
+      await fetchProducts(creds, true, collectionFilter);
+    } catch (e) {
+      showToast(`⚠ ${e.message}`);
+    } finally {
+      setVideoBusy(s => ({ ...s, [key]: false }));
+    }
+  };
+
   const counts = {
     all: products.length,
     active: products.filter(p => p.status === "active").length,
@@ -6990,7 +7092,7 @@ function ShopifyStoreView({ listings, onEditLocal, onPublish, onRefreshShopifyVi
         <div style={{ flex: 1, minWidth: 220 }}>
           <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 21, fontWeight: 750, color: platform.color }}>{storeName} Shopify</div>
           <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3 }}>
-            {loading ? "Loading Shopify..." : `${products.length} Shopify products · ${counts.active} active · ${counts.draft} drafts`}
+            {loading ? "Loading Shopify..." : `${products.length} Shopify products · ${counts.active} active · ${counts.draft} Shopify drafts · ${localDrafts.length} ERP drafts`}
             {creds?.store ? ` · ${creds.store}` : ""}
           </div>
         </div>
@@ -7086,6 +7188,53 @@ function ShopifyStoreView({ listings, onEditLocal, onPublish, onRefreshShopifyVi
               placeholder="Search Shopify title, SKU, tags..."
               style={{ ...FI(), width: mob() ? "100%" : 360, marginLeft: "auto", borderRadius: 10 }} />
           </div>
+
+      {localDrafts.length > 0 && (
+        <div style={{ background: platform.color + "10", border: `1.5px solid ${platform.color}35`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 850, color: platform.color }}>ERP drafts waiting for {storeName}</div>
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>Telegram flat videos and saved drafts appear here before they exist on Shopify.</div>
+            </div>
+            <span style={{ fontSize: 11, color: C.inkFaint, fontWeight: 800 }}>{localDrafts.length} draft{localDrafts.length === 1 ? "" : "s"}</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(3,minmax(0,1fr))", gap: 10 }}>
+            {localDrafts.map(l => {
+              const price = l[platform.priceField];
+              const hasPrice = +price > 0;
+              const busy = videoBusy[String(l.id)];
+              const media = l.images?.[0] || l.video || "";
+              return (
+                <div key={l.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ height: 128, background: C.card, position: "relative", overflow: "hidden" }}>
+                    {l.images?.[0]
+                      ? <img src={l.images[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      : l.video
+                        ? <video src={l.video} muted playsInline preload="metadata" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", background: "#000" }} />
+                        : <div style={{ height: "100%", display: "grid", placeItems: "center", fontSize: 32 }}>🌍</div>}
+                    <span style={{ position: "absolute", top: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, textTransform: "uppercase", background: C.amberBg, color: C.amber, border: `1px solid ${C.amber}55` }}>ERP draft</span>
+                    {l.video && <span style={{ position: "absolute", bottom: 8, left: 8, borderRadius: 20, padding: "3px 8px", fontSize: 10, fontWeight: 850, background: "rgba(0,0,0,.68)", color: "#fff" }}>Video</span>}
+                  </div>
+                  <div style={{ padding: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 850, color: C.ink, lineHeight: 1.25, minHeight: 32 }}>{l.title || "Untitled draft"}</div>
+                    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {[l.material, l.shape, l.boxNumber && `Box ${l.boxNumber}`].filter(Boolean).join(" · ") || l.listing_order_id}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 8 }}>
+                      <div style={{ fontSize: 14, fontWeight: 850, color: hasPrice ? platform.color : C.amber }}>{hasPrice ? `${ccySym}${fmt(price)}` : "Price pending"}</div>
+                      <button onClick={() => onEditLocal(l)} style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 9px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Edit</button>
+                    </div>
+                    <button onClick={() => publishLocalDraft(l)} disabled={!hasPrice || !!busy}
+                      style={{ width: "100%", marginTop: 8, background: hasPrice ? platform.color : C.card, color: hasPrice ? "#fff" : C.inkFaint, border: `1px solid ${hasPrice ? platform.color : C.border}`, borderRadius: 7, padding: "7px 0", fontSize: 11, fontWeight: 850, cursor: hasPrice && !busy ? "pointer" : "not-allowed", opacity: busy ? .65 : 1 }}>
+                      {busy === "publishing" ? "Publishing..." : hasPrice ? `Publish to ${storeName}` : "Set price first"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {misplacedCount > 0 && (
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", background: C.redBg, border: `1.5px solid ${C.red}55`, borderRadius: 10, padding: "10px 13px", marginBottom: 10 }}>
@@ -8118,7 +8267,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     { key: "orders",   label: "Orders",       count: orders.length,  color: C.green },
     ...PLATFORMS.filter(p => !p.coming).map(p => ({
       key: p.key, label: p.label, icon: p.icon, color: p.color,
-      count: listings.filter(l => l.platforms?.[p.key]?.status === "active").length,
+      count: listings.filter(l => ["active", "draft"].includes(l.platforms?.[p.key]?.status)).length,
     })),
   ];
 
