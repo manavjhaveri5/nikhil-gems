@@ -16467,6 +16467,7 @@ function BoiRemittanceForm({showToast}){
     sigDate:today(),sigPlace:"Mumbai",
   });
   const [generating,setGenerating]=useState(false);
+  const [amountTouched,setAmountTouched]=useState(false); // user typed their own figure
   const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
   const addInv=()=>setForm(f=>({...f,invoices:[...f.invoices,blankInv()]}));
   const removeInv=i=>setForm(f=>({...f,invoices:f.invoices.filter((_,j)=>j!==i)}));
@@ -16485,7 +16486,8 @@ function BoiRemittanceForm({showToast}){
         ...f,
         invoices:invs,
         currency:ni.currency||f.currency,
-        amount:ni.totalAmt?String(parseFloat((+ni.totalAmt).toFixed(2))):f.amount,
+        // Amount is derived from ALL linked invoices (see boiTotal) — setting it to
+        // this one invoice's total here is what made 3 linked invoices show 1 total.
         remName:bn||f.remName,
       };
     });
@@ -16505,6 +16507,22 @@ function BoiRemittanceForm({showToast}){
   };
 
   const accountNo=form.accType==="eefc"?EEFC_ACC:INR_ACC;
+
+  // The remittance covers every invoice listed on the form, so the amount is their
+  // sum — picking a second invoice used to overwrite it with just that one's total.
+  // Only invoices in the remittance currency are summed; a mismatch is flagged rather
+  // than silently added to a total in the wrong currency.
+  const boiLinked=form.invoices.map(ref=>resolveBoiInvoice(ref,ngInvoices)).filter(Boolean);
+  const boiSameCcy=boiLinked.filter(inv=>!inv.currency||inv.currency===form.currency);
+  const boiTotal=+boiSameCcy.reduce((s,inv)=>s+(+inv.totalAmt||0),0).toFixed(2);
+  const boiMixedCcy=boiLinked.some(inv=>inv.currency&&inv.currency!==form.currency);
+  const boiTotalStr=String(boiTotal);
+  // Keep the amount in step with the linked invoices until the user types their own
+  // figure (part-payments, bank charges), after which it is left alone.
+  useEffect(()=>{
+    if(amountTouched)return;
+    if(boiTotal>0&&form.amount!==boiTotalStr)setF("amount",boiTotalStr);
+  },[boiTotal,amountTouched]);
 
   const generate=async()=>{
     if(!form.remName.trim()){showToast("Enter remitter name");return;}
@@ -16617,7 +16635,17 @@ function BoiRemittanceForm({showToast}){
             </select>
           </Field>
           <Field label="Amount *">
-            <input type="number" value={form.amount} onChange={e=>setF("amount",e.target.value)} style={FI} placeholder="26700" min="0" step="0.01"/>
+            <input type="number" value={form.amount} onChange={e=>{setAmountTouched(true);setF("amount",e.target.value);}} style={FI} placeholder="26700" min="0" step="0.01"/>
+            {boiSameCcy.length>0&&(
+              <div style={{fontSize:11,color:C.inkFaint,marginTop:4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                <span>Σ {boiSameCcy.length} linked invoice{boiSameCcy.length>1?"s":""}: <strong style={{color:C.ink}}>{form.currency} {boiTotal.toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></span>
+                {Math.abs((+form.amount||0)-boiTotal)>0.005&&(
+                  <button type="button" onClick={()=>{setAmountTouched(false);setF("amount",boiTotalStr);}}
+                    style={{border:`1px solid ${C.gold}`,background:C.amberBg,color:C.gold,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,cursor:"pointer"}}>Use total</button>
+                )}
+              </div>
+            )}
+            {boiMixedCcy&&<div style={{fontSize:11,color:C.red,marginTop:4}}>⚠ Some linked invoices aren't in {form.currency} — they're excluded from the total.</div>}
           </Field>
           <Field label="Credit to">
             <select value={form.accType} onChange={e=>setF("accType",e.target.value)} style={{...FI,cursor:"pointer"}}>
