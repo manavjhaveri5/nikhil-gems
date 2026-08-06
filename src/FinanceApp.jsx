@@ -3373,6 +3373,215 @@ const FLOW_CHIPS = [
   ["🛒 Shopping", "Shopping"], ["✈️ Travel", "Travel"], ["🏦 Bank", "Bank Charges"], ["🏛 Tax", "GST / Tax Payment"],
 ];
 
+// ─── Balance trajectory ───────────────────────────────────────────────────────
+// The one chart the eye goes to first: total balance across all accounts as a
+// continuous line, reconstructed backwards from today's known balance through
+// each day's net flow. Beneath it, a daily flow lane — inflows grow up, outflows
+// grow down — so every rise and dip in the curve has its cause directly under it.
+// Hover anywhere for the day's balance, money in, and money out.
+function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m }) {
+  const wrapRef = useRef(null);
+  const [w, setW] = useState(0);
+  const [hover, setHover] = useState(null); // index into days
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setW(el.clientWidth));
+    ro.observe(el); setW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+
+  const toINR = t => (+t.amount || 0) * (t.currency && t.currency !== "INR" ? (+rates?.[t.currency] || 1) : 1);
+  const sfmt = v => (v < 0 ? "−" : "") + fmtL(v); // fmtL drops the sign; balances can go negative
+
+  // ── Reconstruct the daily series ──
+  const { days, flows } = (() => {
+    const today = new Date(); today.setHours(12, 0, 0, 0);
+    const txns = (transactions || []).filter(t => t.date);
+    const first = txns.reduce((a, t) => (!a || t.date < a ? t.date : a), null);
+    const start = months
+      ? new Date(today.getTime() - months * 30.44 * 86400000)
+      : (first ? new Date(first + "T12:00:00") : today);
+    const net = new Map(), inA = new Map(), outA = new Map();
+    for (const t of txns) {
+      const amt = toINR(t);
+      if (!amt) continue;
+      const d = t.date.slice(0, 10);
+      if (t.type === "credit") { net.set(d, (net.get(d) || 0) + amt); inA.set(d, (inA.get(d) || 0) + amt); }
+      else { net.set(d, (net.get(d) || 0) - amt); outA.set(d, (outA.get(d) || 0) + amt); }
+    }
+    const days = [];
+    for (let d = new Date(start); d <= today; d = new Date(d.getTime() + 86400000))
+      days.push(d.toISOString().slice(0, 10));
+    // Walk backwards from today's known total
+    const bal = new Array(days.length);
+    let b = totalINR;
+    for (let i = days.length - 1; i >= 0; i--) { bal[i] = b; b -= net.get(days[i]) || 0; }
+    return {
+      days: days.map((d, i) => ({ d, bal: bal[i], in: inA.get(d) || 0, out: outA.get(d) || 0 })),
+      flows: Math.max(...days.map(d => Math.max(inA.get(d) || 0, outA.get(d) || 0)), 1),
+    };
+  })();
+
+  if (!days.length || w < 120) return <div ref={wrapRef} />;
+
+  // ── Geometry ──
+  const H = mob ? 220 : 264, LANE = mob ? 30 : 38, GAP = 14, XLBL = 18;
+  const M = { t: 16, r: mob ? 12 : 86, b: XLBL + LANE + GAP, l: 10 };
+  const pw = Math.max(10, w - M.l - M.r), ph = H - M.t - M.b;
+  const lo0 = Math.min(...days.map(p => p.bal)), hi0 = Math.max(...days.map(p => p.bal));
+  const pad = Math.max((hi0 - lo0) * 0.12, hi0 * 0.02, 1);
+  const lo = lo0 - pad, hi = hi0 + pad;
+  const X = i => M.l + (days.length < 2 ? pw / 2 : i / (days.length - 1) * pw);
+  const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * ph;
+  const laneY = M.t + ph + GAP + LANE / 2;            // flow-lane midline
+  const laneAmp = v => Math.sqrt(v / flows) * (LANE / 2 - 1); // sqrt so small days stay visible
+
+  // Nice y ticks (3 clean values)
+  const rawStep = (hi - lo) / 3;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const step = [1, 2, 2.5, 5, 10].map(x => x * mag).find(s => s >= rawStep) || rawStep;
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) ticks.push(v);
+
+  // Month boundaries for x labels + the drill-selection band
+  const moStarts = days.reduce((acc, p, i) => { if (i === 0 || p.d.slice(0, 7) !== days[i - 1].d.slice(0, 7)) acc.push(i); return acc; }, []);
+  const selRange = selMo ? [days.findIndex(p => p.d.slice(0, 7) === selMo), days.map(p => p.d.slice(0, 7)).lastIndexOf(selMo)] : null;
+
+  const path = days.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.bal).toFixed(1)}`).join("");
+  const area = `${path}L${X(days.length - 1).toFixed(1)},${(M.t + ph).toFixed(1)}L${X(0).toFixed(1)},${(M.t + ph).toFixed(1)}Z`;
+  const iHi = days.reduce((b2, p, i) => p.bal > days[b2].bal ? i : b2, 0);
+  const iLo = days.reduce((b2, p, i) => p.bal < days[b2].bal ? i : b2, 0);
+  const last = days[days.length - 1], firstBal = days[0].bal;
+  const delta = last.bal - firstBal;
+  const hovP = hover != null ? days[hover] : null;
+  const niceDate = d => new Date(d + "T12:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: undefined });
+
+  const onMove = e => {
+    const r = wrapRef.current.querySelector("svg").getBoundingClientRect();
+    const x = e.clientX - r.left;
+    setHover(Math.max(0, Math.min(days.length - 1, Math.round((x - M.l) / pw * (days.length - 1)))));
+  };
+
+  // Tooltip placement: flip side past the midpoint
+  const tipLeft = hovP ? (X(hover) < w / 2 ? X(hover) + 14 : undefined) : 0;
+  const tipRight = hovP && X(hover) >= w / 2 ? w - X(hover) + 14 : undefined;
+
+  const serif = { fontFamily: "'Cormorant Garamond',Georgia,serif" };
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: mob ? "16px 14px 10px" : "20px 22px 12px" }}>
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap", marginBottom: 4 }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: 0.8 }}>Balance trajectory</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ ...serif, fontSize: mob ? 27 : 33, fontWeight: 600, color: C.ink, lineHeight: 1.25 }}>{m(sfmt(last.bal))}</span>
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: delta >= 0 ? C.green : C.red }}>
+              {delta >= 0 ? "▲" : "▼"} {m(fmtL(delta))} <span style={{ color: C.inkFaint, fontWeight: 400 }}>since {niceDate(days[0].d)}</span>
+            </span>
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: C.inkFaint, textAlign: "right", lineHeight: 1.7, paddingTop: 4 }}>
+          High {m(sfmt(days[iHi].bal))} · {niceDate(days[iHi].d)}<br />
+          Low&nbsp; {m(sfmt(days[iLo].bal))} · {niceDate(days[iLo].d)}
+        </div>
+      </div>
+
+      <div ref={wrapRef} style={{ position: "relative" }}>
+        <svg width={w} height={H} style={{ display: "block", cursor: "crosshair" }}
+          onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          <defs>
+            <linearGradient id="balFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--c-gold)" stopOpacity=".16" />
+              <stop offset="100%" stopColor="var(--c-gold)" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+
+          {/* selected-month band (drill state) */}
+          {selRange && selRange[0] >= 0 && (
+            <rect x={X(selRange[0])} y={M.t - 6} width={X(selRange[1]) - X(selRange[0])} height={ph + LANE + GAP + 12}
+              fill="var(--c-goldLight)" opacity=".55" rx="6" />
+          )}
+
+          {/* gridlines + inside tick labels */}
+          {ticks.map(v => (
+            <g key={v}>
+              <line x1={M.l} x2={M.l + pw} y1={Y(v)} y2={Y(v)} stroke={C.border} strokeWidth="1" />
+              <text x={M.l + 2} y={Y(v) - 4} fontSize="9.5" fill={C.inkFaint}>{m(sfmt(v))}</text>
+            </g>
+          ))}
+
+          {/* area + line */}
+          <path d={area} fill="url(#balFill)" />
+          <path d={path} fill="none" stroke="var(--c-gold)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+
+          {/* high / low markers */}
+          {[iHi, iLo].map(i => i !== days.length - 1 && (
+            <circle key={i} cx={X(i)} cy={Y(days[i].bal)} r="3.4" fill="var(--c-gold)" stroke={C.surface} strokeWidth="2" />
+          ))}
+
+          {/* endpoint: dot + direct label */}
+          <circle cx={X(days.length - 1)} cy={Y(last.bal)} r="4.5" fill="var(--c-gold)" stroke={C.surface} strokeWidth="2" />
+          {!mob && <>
+            <text x={X(days.length - 1) + 10} y={Y(last.bal) + 1} fontSize="12" fontWeight="600" fill={C.ink}>{m(sfmt(last.bal))}</text>
+            <text x={X(days.length - 1) + 10} y={Y(last.bal) + 13} fontSize="9" fill={C.inkFaint}>today</text>
+          </>}
+
+          {/* daily flow lane: in grows up, out grows down */}
+          <line x1={M.l} x2={M.l + pw} y1={laneY} y2={laneY} stroke={C.border} strokeWidth="1" />
+          {days.map((p, i) => (p.in > 0 || p.out > 0) && (
+            <g key={p.d}>
+              {p.in > 0 && <rect x={X(i) - 1} y={laneY - laneAmp(p.in)} width="2" height={laneAmp(p.in)} fill="var(--c-green)" opacity=".75" />}
+              {p.out > 0 && <rect x={X(i) - 1} y={laneY} width="2" height={laneAmp(p.out)} fill="var(--c-red)" opacity=".65" />}
+            </g>
+          ))}
+          <text x={M.l + 2} y={laneY - LANE / 2 + 2} fontSize="8.5" fill={C.inkFaint} letterSpacing=".08em">IN ↑</text>
+          <text x={M.l + 2} y={laneY + LANE / 2 + 1} fontSize="8.5" fill={C.inkFaint} letterSpacing=".08em">OUT ↓</text>
+
+          {/* x labels at month starts */}
+          {moStarts.map(i => (pw / moStarts.length > 26) && (
+            <text key={i} x={X(i)} y={H - 4} fontSize="9.5" fill={C.inkFaint}>
+              {new Date(days[i].d + "T12:00:00").toLocaleDateString("en-IN", { month: "short" })}
+            </text>
+          ))}
+
+          {/* crosshair */}
+          {hovP && <>
+            <line x1={X(hover)} x2={X(hover)} y1={M.t} y2={laneY + LANE / 2} stroke={C.inkMid} strokeWidth="1" opacity=".45" />
+            <circle cx={X(hover)} cy={Y(hovP.bal)} r="4.5" fill="var(--c-gold)" stroke={C.surface} strokeWidth="2" />
+          </>}
+        </svg>
+
+        {/* tooltip */}
+        {hovP && (
+          <div style={{ position: "absolute", top: M.t + 2, left: tipLeft, right: tipRight, pointerEvents: "none",
+            background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px",
+            boxShadow: "0 6px 22px rgba(26,19,8,.12)", minWidth: 128 }}>
+            <div style={{ fontSize: 9.5, color: C.inkFaint, marginBottom: 1 }}>{niceDate(hovP.d)}</div>
+            <div style={{ ...serif, fontSize: 19, fontWeight: 600, color: C.ink, lineHeight: 1.15 }}>{m(sfmt(hovP.bal))}</div>
+            {(hovP.in > 0 || hovP.out > 0) ? (
+              <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+                {hovP.in > 0 && <div style={{ fontSize: 10.5, color: C.inkMid, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 10, height: 2, background: "var(--c-green)", borderRadius: 1 }} />
+                  <b style={{ color: C.ink }}>{m("+" + fmtL(hovP.in))}</b>&nbsp;in
+                </div>}
+                {hovP.out > 0 && <div style={{ fontSize: 10.5, color: C.inkMid, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 10, height: 2, background: "var(--c-red)", borderRadius: 1 }} />
+                  <b style={{ color: C.ink }}>{m("−" + fmtL(hovP.out))}</b>&nbsp;out
+                </div>}
+              </div>
+            ) : <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 3 }}>No movement</div>}
+          </div>
+        )}
+      </div>
+
+      <div style={{ fontSize: 9.5, color: C.inkFaint, padding: "4px 2px 2px" }}>
+        Reconstructed backwards from today's balance through each day's recorded flows · all accounts, INR at current rates
+      </div>
+    </div>
+  );
+}
+
 // "+18% vs Jul" — coloured by whether the direction is good for that metric.
 function Delta({ now, was, prevLabel, good }) {
   if (was === undefined || was === null) return <span>No {prevLabel || "prior"} comparison</span>;
@@ -3713,6 +3922,9 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
           </div>
         </div>
       </div>
+
+      {/* ── Balance trajectory ── */}
+      <BalanceChart transactions={transactions} months={months} rates={rates} totalINR={totalINR} selMo={monthOn ? selMo : null} fmtL={fmtL} m={m} />
 
       {/* ── Monthly rhythm — click a month to drill the whole page into it ── */}
       {moKeys.length > 1 && (
