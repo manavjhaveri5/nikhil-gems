@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useRef, createContext, useContext, Fragment } from "react";
 import { supabase } from "./supabase.js";
 import { loadK, loadKFresh, saveK, onCacheRefresh } from "./utils.js";
 import ClassifyTransactionModal from "./ClassifyTransaction.jsx";
@@ -367,6 +367,7 @@ function FShell({ title, view, setView, onHome, masked, toggleMask, company, set
         input:focus,select:focus,textarea:focus{outline:none;border-color:var(--c-goldBright)!important;box-shadow:0 0 0 3px rgba(154,98,0,.1);}
         .fbp{background:var(--c-ink);color:#FAF0DC;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;white-space:nowrap;font-family:inherit;transition:all .18s;}
         .fbp:hover{opacity:.88;}
+        .fl-row:hover{background:var(--c-card);}
         .fbp:disabled{opacity:.4;cursor:not-allowed;}
         .fbs{background:var(--c-surface);color:var(--c-ink);border:1.5px solid var(--c-border);padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:400;white-space:nowrap;font-family:inherit;transition:all .18s;}
         .fbs:hover{border-color:var(--c-inkMid);}
@@ -3314,6 +3315,40 @@ const FLOW_EXPENSE = [
   { id: "misc",      label: "Misc (classified)",     icon: "🗂", color: "#9A9A9A", cats: ["petty cash", "business", "health"], kw: [] },
 ];
 const FLOW_METHOD_CATS = new Set(["upi", "neft", "imps", "atm", "transfer", "other", ""]);
+
+// Bank narration → something a human can scan.
+// "IMPS/P2A/609716723034/BARB/MADIHA MOHAME" → { name:"Madiha Mohame",
+//  via:"IMPS", ref:"…723034" }. Anything we can't confidently parse is passed
+// through untouched rather than mangled.
+const NARRATION_NOISE = new Set(["p2a", "p2m", "p2p", "tpt", "mmt", "nft", "chq", "ib", "inb", "mb", "ecom", "cms", "bil", "bulk", "ft", "dr", "cr", "ach", "sb", "ca"]);
+const NARRATION_VIA   = new Set(["imps", "neft", "rtgs", "upi", "ach", "atm", "pos", "nach", "ecs", "swift"]);
+const titleCase = s => s.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase());
+function prettyPayee(raw = "") {
+  const s = String(raw).trim();
+  if (!s) return { name: "—", via: "", ref: "" };
+  const parts = s.split(/[/|\\]+/).map(x => x.trim()).filter(Boolean);
+  if (parts.length < 3) return { name: /^[A-Z0-9 .&'-]+$/.test(s) ? titleCase(s) : s, via: "", ref: "" };
+
+  const via  = NARRATION_VIA.has(parts[0].toLowerCase()) ? parts[0].toUpperCase() : "";
+  const digits = parts.filter(p => /^\d{6,}$/.test(p)).sort((a, b) => b.length - a.length)[0] || "";
+  const words = parts.filter(p => {
+    const l = p.toLowerCase();
+    return /[a-z]/i.test(p) && !NARRATION_NOISE.has(l) && !NARRATION_VIA.has(l) && !/^\d+$/.test(p);
+  });
+  // Bank IFSC-ish codes (BARB, BKID, HDFC…) are exactly 4 caps with no space.
+  // Among what's left, the real name is the wordiest token — a full name beats a
+  // handle, and on a tie the earlier token wins (UPI puts the merchant first,
+  // trailing tokens are usually handles like "paytmqr").
+  const named = words.filter(p => !/^[A-Z]{4}$/.test(p) && p.replace(/[^a-z]/gi, "").length > 3);
+  const score = p => p.replace(/[^a-z]/gi, "").length + (/\s/.test(p) ? 8 : 0);
+  const pick  = named.reduce((best, p) => (best === null || score(p) > score(best) ? p : best), null);
+  if (!pick) return { name: s, via, ref: "" };
+  return {
+    name: /^[A-Z0-9 .&'-]+$/.test(pick) ? titleCase(pick) : pick,
+    via,
+    ref: digits ? "…" + digits.slice(-6) : "",
+  };
+}
 function flowBucketOf(t) {
   const cat = String(t.category || "").toLowerCase().trim();
   const hay = `${t.payee || ""} ${t.notes || ""}`.toLowerCase();
@@ -3338,12 +3373,154 @@ const FLOW_CHIPS = [
   ["🛒 Shopping", "Shopping"], ["✈️ Travel", "Travel"], ["🏦 Bank", "Bank Charges"], ["🏛 Tax", "GST / Tax Payment"],
 ];
 
+// "+18% vs Jul" — coloured by whether the direction is good for that metric.
+function Delta({ now, was, prevLabel, good }) {
+  if (was === undefined || was === null) return <span>No {prevLabel || "prior"} comparison</span>;
+  if (!was) return now
+    ? <span style={{ color: good === "up" ? "#8FCBA8" : "#E8A0A0", fontWeight: 600 }}>▲ new vs {prevLabel}</span>
+    : <span>Nothing in {prevLabel}</span>;
+  const pct = (now - was) / was * 100;
+  const up = pct >= 0;
+  const ok = good === "up" ? up : !up;
+  if (Math.abs(pct) < 0.5) return <span>Flat vs {prevLabel}</span>;
+  return <span style={{ color: ok ? "#8FCBA8" : "#E8A0A0", fontWeight: 600 }}>
+    {up ? "▲" : "▼"} {Math.abs(pct).toFixed(0)}% vs {prevLabel}
+  </span>;
+}
+
+// Detail panel for one selected month: day-by-day rhythm, what moved against the
+// previous month, and the payments that actually drove the number.
+function MonthDetail({ moKey, agg, prev, prevKey, moKeys, onPick, fmtL, m, moName, moShort, toINR, card, label, serif }) {
+  const idx  = moKeys.indexOf(moKey);
+  const back = moKeys[idx - 1], fwd = moKeys[idx + 1];
+  const net  = agg.in - agg.out;
+
+  // Day-by-day in/out inside the month
+  const days = new Date(+moKey.slice(0, 4), +moKey.slice(5, 7), 0).getDate();
+  const daily = Array.from({ length: days }, () => ({ in: 0, out: 0 }));
+  for (const t of agg.txns) {
+    const d = +String(t.date || "").slice(8, 10);
+    if (!d || d > days) continue;
+    const amt = toINR(t);
+    if (t.type === "credit") daily[d - 1].in += amt; else daily[d - 1].out += amt;
+  }
+  const dayPeak = Math.max(...daily.map(d => Math.max(d.in, d.out)), 1);
+  const busiest = daily.reduce((best, d, i) => (d.in + d.out) > (daily[best].in + daily[best].out) ? i : best, 0);
+
+  // What moved vs the previous month, by bucket (spend + income together)
+  const bucketAmts = a => {
+    const map = new Map();
+    if (!a) return map;
+    for (const e of a.outB.values()) map.set(e.bucket.label, { amt: e.amt, icon: e.bucket.icon, out: true });
+    for (const e of a.inB.values())  map.set(e.bucket.label, { amt: e.amt, icon: e.bucket.icon, out: false });
+    if (a.uncat.amt) map.set("Uncategorised", { amt: a.uncat.amt, icon: "🕳", out: true });
+    return map;
+  };
+  const nowMap = bucketAmts(agg), prevMap = bucketAmts(prev);
+  const movers = prev ? [...new Set([...nowMap.keys(), ...prevMap.keys()])]
+    .map(k => ({ k, icon: (nowMap.get(k) || prevMap.get(k)).icon, out: (nowMap.get(k) || prevMap.get(k)).out,
+                 now: nowMap.get(k)?.amt || 0, was: prevMap.get(k)?.amt || 0 }))
+    .map(r => ({ ...r, d: r.now - r.was }))
+    .filter(r => Math.abs(r.d) > 1)
+    .sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 5) : [];
+
+  const top = [...agg.txns].sort((a, b) => toINR(b) - toINR(a)).slice(0, 6);
+
+  const stat = (k, v, tone) => (
+    <div>
+      <div style={{ ...label, marginBottom: 2 }}>{k}</div>
+      <div style={{ fontSize: 13.5, fontWeight: 650, color: tone || C.ink }}>{v}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ ...card, borderColor: C.gold + "55", boxShadow: "0 2px 14px rgba(0,0,0,.05)" }}>
+      {/* header + month stepper */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div style={{ ...serif, fontSize: 22, fontWeight: 600, color: C.ink, flex: 1 }}>{moName(moKey)}</div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button disabled={!back} onClick={() => onPick(back)} title={back ? moName(back) : ""}
+            style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: back ? "pointer" : "default", opacity: back ? 1 : .35, color: C.ink }}>‹ {back ? moShort(back) : ""}</button>
+          <button disabled={!fwd} onClick={() => onPick(fwd)} title={fwd ? moName(fwd) : ""}
+            style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 10px", fontSize: 12, cursor: fwd ? "pointer" : "default", opacity: fwd ? 1 : .35, color: C.ink }}>{fwd ? moShort(fwd) : ""} ›</button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+        {stat("In", m(fmtL(agg.in)), C.green)}
+        {stat("Out", m(fmtL(agg.out)), C.red)}
+        {stat("Net", m((net >= 0 ? "+" : "−") + fmtL(net)), net >= 0 ? C.green : C.red)}
+        {stat("Transactions", `${agg.txns.length}${agg.transferN ? ` · ${agg.transferN} transfer${agg.transferN > 1 ? "s" : ""}` : ""}`)}
+      </div>
+
+      {/* day-by-day */}
+      <div style={{ ...label, marginBottom: 7 }}>Day by day · busiest {busiest + 1} {moShort(moKey)}</div>
+      {/* money in grows above the hairline, money out below it */}
+      <div style={{ position: "relative", display: "flex", alignItems: "stretch", gap: 2, height: 56, marginBottom: 4 }}>
+        <div style={{ position: "absolute", left: 0, right: 0, top: "50%", height: 1, background: C.border }} />
+        {daily.map((d, i) => (
+          <div key={i} title={`${i + 1} ${moShort(moKey)} · in ${fmtL(d.in)} · out ${fmtL(d.out)}`}
+            style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%" }}>
+            <div style={{ flex: 1, display: "flex", alignItems: "flex-end" }}>
+              <div style={{ width: "100%", height: d.in / dayPeak * 27, background: "var(--c-green)", opacity: .85, borderRadius: "2px 2px 0 0", minHeight: d.in ? 2 : 0 }} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ width: "100%", height: d.out / dayPeak * 27, background: "var(--c-red)", opacity: .7, borderRadius: "0 0 2px 2px", minHeight: d.out ? 2 : 0 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, color: C.inkFaint, marginBottom: 16 }}>
+        <span>1</span><span>{Math.round(days / 2)}</span><span>{days}</span>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 18 }}>
+        {/* movers */}
+        <div>
+          <div style={{ ...label, marginBottom: 8 }}>{prev ? `What moved vs ${moShort(prevKey)}` : "No earlier month in range"}</div>
+          {movers.length === 0 && <div style={{ fontSize: 11.5, color: C.inkFaint }}>{prev ? "Nothing shifted materially." : "Widen the range to compare."}</div>}
+          {movers.map(r => {
+            const worse = r.out ? r.d > 0 : r.d < 0;
+            return (
+              <div key={r.k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: `1px solid ${C.border}40` }}>
+                <span style={{ fontSize: 12 }}>{r.icon}</span>
+                <span style={{ fontSize: 12, color: C.ink, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.k}</span>
+                <span style={{ fontSize: 10.5, color: C.inkFaint }}>{m(fmtL(r.was))} → {m(fmtL(r.now))}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: worse ? C.red : C.green, width: 62, textAlign: "right" }}>
+                  {r.d >= 0 ? "+" : "−"}{m(fmtL(r.d))}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        {/* biggest movements */}
+        <div>
+          <div style={{ ...label, marginBottom: 8 }}>Biggest movements this month</div>
+          {top.length === 0 && <div style={{ fontSize: 11.5, color: C.inkFaint }}>No transactions.</div>}
+          {top.map(t => (
+            <div key={t.id} className="fl-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", borderBottom: `1px solid ${C.border}40`, borderRadius: 6 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{prettyPayee(t.payee || t.notes || "").name}</div>
+                <div style={{ fontSize: 10, color: C.inkFaint }}>{fmtDate(t.date)}{t.category ? ` · ${t.category}` : ""}</div>
+              </div>
+              <div style={{ fontSize: 12.5, fontWeight: 650, color: t.type === "credit" ? C.green : C.ink, flexShrink: 0 }}>
+                {m((t.type === "credit" ? "+" : "−") + fmtL(toINR(t)))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
   const masked = useMasked();
   const m = makeMask(masked);
   const [months, setMonths] = useState(6);
   const [expanded, setExpanded] = useState(null); // bucket id | "uncat" | income id
   const [q, setQ] = useState("");
+  const [selMo, setSelMo] = useState(null);       // "YYYY-MM" — drills every panel into one month
 
   const toINR = t => (+t.amount || 0) * (t.currency && t.currency !== "INR" ? (+rates?.[t.currency] || 1) : 1);
   const fmtL = n => {
@@ -3357,61 +3534,120 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
     .filter(t => !ql || `${t.payee || ""} ${t.notes || ""} ${t.category || ""}`.toLowerCase().includes(ql));
 
   // ── Engine: single pass → buckets, months, transfers ──
-  const inB = new Map(), outB = new Map(), byMonth = new Map();
-  let totalIn = 0, totalOut = 0, transferAmt = 0, transferN = 0;
-  const uncat = { amt: 0, txns: [] };
+  // Every transaction is added twice: once to the whole-period aggregate and once
+  // to its own month, so drilling into a month is a lookup rather than a re-scan.
+  const mkAgg = () => ({ in: 0, out: 0, inB: new Map(), outB: new Map(), uncat: { amt: 0, txns: [] }, transferAmt: 0, transferN: 0, txns: [] });
+  const addTo = (agg, t, amt, r) => {
+    if (r.side === "transfer") { agg.transferAmt += amt; agg.transferN++; return; }
+    agg.txns.push(t);
+    if (r.side === "in") {
+      agg.in += amt;
+      const e = agg.inB.get(r.bucket.id) || { bucket: r.bucket, amt: 0, txns: [] };
+      e.amt += amt; e.txns.push(t); agg.inB.set(r.bucket.id, e);
+    } else {
+      agg.out += amt;
+      if (!r.bucket) { agg.uncat.amt += amt; agg.uncat.txns.push(t); }
+      else { const e = agg.outB.get(r.bucket.id) || { bucket: r.bucket, amt: 0, txns: [] }; e.amt += amt; e.txns.push(t); agg.outB.set(r.bucket.id, e); }
+    }
+  };
+  const all = mkAgg(), byMonth = new Map();
   for (const t of scoped) {
     const amt = toINR(t);
     if (!amt) continue;
     const r = flowBucketOf(t);
     const mo = (t.date || "").slice(0, 7);
-    if (!byMonth.has(mo)) byMonth.set(mo, { in: 0, out: 0 });
-    if (r.side === "transfer") { transferAmt += amt; transferN++; continue; }
-    if (r.side === "in") {
-      totalIn += amt; byMonth.get(mo).in += amt;
-      const e = inB.get(r.bucket.id) || { bucket: r.bucket, amt: 0, txns: [] };
-      e.amt += amt; e.txns.push(t); inB.set(r.bucket.id, e);
-    } else {
-      totalOut += amt; byMonth.get(mo).out += amt;
-      if (!r.bucket) { uncat.amt += amt; uncat.txns.push(t); }
-      else { const e = outB.get(r.bucket.id) || { bucket: r.bucket, amt: 0, txns: [] }; e.amt += amt; e.txns.push(t); outB.set(r.bucket.id, e); }
-    }
+    if (!byMonth.has(mo)) byMonth.set(mo, mkAgg());
+    addTo(all, t, amt, r);
+    addTo(byMonth.get(mo), t, amt, r);
   }
-  const net = totalIn - totalOut;
   const moKeys = [...byMonth.keys()].sort();
-  const nMo = Math.max(1, moKeys.length);
+  const monthOn = selMo && byMonth.has(selMo);
+  const agg     = monthOn ? byMonth.get(selMo) : all;
+  const prevKey = monthOn ? moKeys[moKeys.indexOf(selMo) - 1] : null;
+  const prev    = prevKey ? byMonth.get(prevKey) : null;
+
+  const totalIn = agg.in, totalOut = agg.out;
+  const { uncat, transferAmt, transferN } = agg;
+  const net = totalIn - totalOut;
+  const nMo = monthOn ? 1 : Math.max(1, moKeys.length);
   const avgNet = net / nMo;
   const runway = avgNet < 0 && totalINR > 0 ? totalINR / -avgNet : null;
   const knownPct = totalOut > 0 ? (1 - uncat.amt / totalOut) * 100 : 100;
-  const inRows = [...inB.values()].sort((a, b) => b.amt - a.amt);
-  const outRows = [...outB.values()].sort((a, b) => b.amt - a.amt);
+  const inRows = [...agg.inB.values()].sort((a, b) => b.amt - a.amt);
+  const outRows = [...agg.outB.values()].sort((a, b) => b.amt - a.amt);
   const maxIn = inRows[0]?.amt || 1, maxOut = Math.max(outRows[0]?.amt || 0, uncat.amt) || 1;
+  const moName = k => k ? new Date(k + "-15").toLocaleDateString("en-IN", { month: "long", year: "numeric" }) : "";
+  const moShort = k => k ? new Date(k + "-15").toLocaleDateString("en-IN", { month: "short" }) : "";
+  const scopeLabel = monthOn ? `in ${moShort(selMo)}` : months ? `last ${months} months` : "all time";
 
   const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: mob ? "16px 14px" : "20px 22px" };
   const label = { fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: 0.8 };
   const serif = { fontFamily: "'Cormorant Garamond',Georgia,serif" };
 
-  // Inline transaction list for an expanded bucket, with one-tap reclassify
-  const TxnList = ({ txns, classify }) => (
-    <div style={{ marginTop: 10, borderTop: `1px solid ${C.border}`, maxHeight: 320, overflowY: "auto" }}>
-      {[...txns].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(t => (
-        <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 2px", borderBottom: `1px solid ${C.border}40` }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 12, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.payee || t.notes || "—"}</div>
-            <div style={{ fontSize: 10, color: C.inkFaint }}>{fmtDate(t.date)}{t.category && !FLOW_METHOD_CATS.has(String(t.category).toLowerCase()) ? ` · ${t.category}` : ""}</div>
-          </div>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: t.type === "credit" ? C.green : C.ink, flexShrink: 0 }}>{m((t.type === "credit" ? "+" : "−") + fmtL(toINR(t)))}</div>
-          {classify && (
-            <select value="" onChange={e => e.target.value && onUpdate(t.id, { category: e.target.value })}
-              style={{ fontSize: 10, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 4px", background: C.card, color: C.inkMid, cursor: "pointer", maxWidth: 92, flexShrink: 0 }}>
-              <option value="">tag ▾</option>
-              {FLOW_CHIPS.map(([lab, cat]) => <option key={cat} value={cat}>{lab}</option>)}
-            </select>
-          )}
+  // Inline transaction list for an expanded bucket, with one-tap reclassify.
+  // Bank narration is unreadable raw ("IMPS/P2A/609716.../BARB/MADIHA MOHAME"),
+  // so rows lead with the human name and keep the reference as quiet sub-text,
+  // grouped by month with a running subtotal.
+  const TxnList = ({ txns, classify }) => {
+    const sorted = [...txns].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const total = sorted.reduce((s, t) => s + toINR(t), 0);
+    let lastMo = null;
+    return (
+      <div style={{ marginTop: 10, borderTop: `1px solid ${C.border}` }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 2px 5px" }}>
+          <span style={{ ...label, flex: 1 }}>{sorted.length} payment{sorted.length === 1 ? "" : "s"}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: C.inkMid }}>{m(fmtL(total))}</span>
         </div>
-      ))}
-    </div>
-  );
+        <div style={{ maxHeight: 340, overflowY: "auto", paddingRight: 2 }}>
+          {sorted.map(t => {
+            const mo = (t.date || "").slice(0, 7);
+            const head = mo !== lastMo ? mo : null;
+            lastMo = mo;
+            const monthSum = head ? sorted.filter(x => (x.date || "").slice(0, 7) === mo).reduce((s, x) => s + toINR(x), 0) : 0;
+            const p = prettyPayee(t.payee || t.notes || "");
+            const cat = t.category && !FLOW_METHOD_CATS.has(String(t.category).toLowerCase()) ? t.category : null;
+            return (
+              <Fragment key={t.id}>
+                {head && (
+                  <div style={{ position: "sticky", top: 0, zIndex: 1, display: "flex", alignItems: "center", gap: 8,
+                    background: C.surface, padding: "6px 2px 4px", borderBottom: `1px solid ${C.border}` }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: .6, color: C.inkMid, textTransform: "uppercase" }}>
+                      {new Date(head + "-15").toLocaleDateString("en-IN", { month: "long", year: "numeric" })}
+                    </span>
+                    <span style={{ flex: 1, height: 1, background: C.border }} />
+                    <span style={{ fontSize: 10, color: C.inkFaint }}>{m(fmtL(monthSum))}</span>
+                  </div>
+                )}
+                <div className="fl-row" style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 4px", borderBottom: `1px solid ${C.border}40`, borderRadius: 6 }}>
+                  <div style={{ width: 34, flexShrink: 0, textAlign: "center" }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, lineHeight: 1 }}>{(t.date || "").slice(8, 10)}</div>
+                    <div style={{ fontSize: 9, color: C.inkFaint, textTransform: "uppercase" }}>{moShort((t.date || "").slice(0, 7))}</div>
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, color: C.ink, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                    <div style={{ fontSize: 9.5, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {[p.via, p.ref, cat].filter(Boolean).join(" · ") || fmtDate(t.date)}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12.5, fontWeight: 650, color: t.type === "credit" ? C.green : C.ink, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                    {m((t.type === "credit" ? "+" : "−") + fmtL(toINR(t)))}
+                  </div>
+                  {classify && (
+                    <select value="" onChange={e => e.target.value && onUpdate(t.id, { category: e.target.value })}
+                      title="Tag this payment"
+                      style={{ fontSize: 10.5, border: `1px solid ${C.border}`, borderRadius: 20, padding: "3px 6px", background: C.card, color: C.inkMid, cursor: "pointer", width: 66, flexShrink: 0, appearance: "none", textAlign: "center" }}>
+                      <option value="">🏷 tag</option>
+                      {FLOW_CHIPS.map(([lab, cat2]) => <option key={cat2} value={cat2}>{lab}</option>)}
+                    </select>
+                  )}
+                </div>
+              </Fragment>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const Bar = ({ row, max, total, side }) => {
     const b = row.bucket;
@@ -3442,7 +3678,7 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <div style={{ display: "flex", gap: 2, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 3 }}>
           {[["3M", 3], ["6M", 6], ["12M", 12], ["All", 0]].map(([lab, v]) => (
-            <button key={lab} onClick={() => setMonths(v)} style={{ background: months === v ? C.ink : "transparent", color: months === v ? "#FAF0DC" : C.inkMid, border: "none", borderRadius: 6, padding: "5px 13px", fontSize: 12, fontWeight: months === v ? 700 : 400, cursor: "pointer" }}>{lab}</button>
+            <button key={lab} onClick={() => { setMonths(v); setSelMo(null); setExpanded(null); }} style={{ background: months === v ? C.ink : "transparent", color: months === v ? "#FAF0DC" : C.inkMid, border: "none", borderRadius: 6, padding: "5px 13px", fontSize: 12, fontWeight: months === v ? 700 : 400, cursor: "pointer" }}>{lab}</button>
           ))}
         </div>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search payee — e.g. shiprocket…"
@@ -3455,57 +3691,90 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
           <div>
             <div style={{ ...label, color: "#FAF0DC66" }}>Money in</div>
             <div style={{ ...serif, fontSize: mob ? 24 : 30, fontWeight: 600, color: "#8FCBA8" }}>{m(fmtL(totalIn))}</div>
-            <div style={{ fontSize: 10.5, color: "#FAF0DC55" }}>{m(fmtL(totalIn / nMo))}/mo avg</div>
+            <div style={{ fontSize: 10.5, color: "#FAF0DC55" }}>
+              {monthOn ? <Delta now={totalIn} was={prev?.in} prevLabel={moShort(prevKey)} good="up" /> : `${m(fmtL(totalIn / nMo))}/mo avg`}
+            </div>
           </div>
           <div>
             <div style={{ ...label, color: "#FAF0DC66" }}>Money out</div>
             <div style={{ ...serif, fontSize: mob ? 24 : 30, fontWeight: 600, color: "#E8A0A0" }}>{m(fmtL(totalOut))}</div>
-            <div style={{ fontSize: 10.5, color: "#FAF0DC55" }}>{m(fmtL(totalOut / nMo))}/mo avg</div>
+            <div style={{ fontSize: 10.5, color: "#FAF0DC55" }}>
+              {monthOn ? <Delta now={totalOut} was={prev?.out} prevLabel={moShort(prevKey)} good="down" /> : `${m(fmtL(totalOut / nMo))}/mo avg`}
+            </div>
           </div>
           <div>
             <div style={{ ...label, color: "#FAF0DC66" }}>Net cash flow</div>
             <div style={{ ...serif, fontSize: mob ? 24 : 30, fontWeight: 600, color: net >= 0 ? "#8FCBA8" : "#E8A0A0" }}>{m((net >= 0 ? "+" : "−") + fmtL(net))}</div>
             <div style={{ fontSize: 10.5, color: "#FAF0DC88", fontWeight: 600 }}>
-              {net >= 0 ? `Building ${m(fmtL(avgNet))}/mo` : runway ? `Burning ${m(fmtL(-avgNet))}/mo · ~${runway.toFixed(1)} mo runway` : `Burning ${m(fmtL(-avgNet))}/mo`}
+              {monthOn
+                ? `${moName(selMo)} · ${agg.txns.length} transaction${agg.txns.length === 1 ? "" : "s"}`
+                : net >= 0 ? `Building ${m(fmtL(avgNet))}/mo` : runway ? `Burning ${m(fmtL(-avgNet))}/mo · ~${runway.toFixed(1)} mo runway` : `Burning ${m(fmtL(-avgNet))}/mo`}
             </div>
           </div>
         </div>
       </div>
 
-      {/* ── Monthly rhythm ── */}
+      {/* ── Monthly rhythm — click a month to drill the whole page into it ── */}
       {moKeys.length > 1 && (
         <div style={card}>
-          <div style={{ ...label, marginBottom: 12 }}>Monthly rhythm — in vs out</div>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: mob ? 6 : 12, height: 130, overflowX: "auto", paddingBottom: 2 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <div style={label}>Monthly rhythm — in vs out</div>
+            <div style={{ fontSize: 10.5, color: C.inkFaint, flex: 1 }}>
+              {monthOn ? `Showing ${moName(selMo)} only` : "Click any month to drill in"}
+            </div>
+            {monthOn && (
+              <button onClick={() => { setSelMo(null); setExpanded(null); }}
+                style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 7, padding: "4px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                ✕ All months
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: mob ? 6 : 12, height: 138, overflowX: "auto", paddingBottom: 2 }}>
             {moKeys.map(mo => {
               const d = byMonth.get(mo);
               const peak = Math.max(...moKeys.map(k => Math.max(byMonth.get(k).in, byMonth.get(k).out)), 1);
               const moNet = d.in - d.out;
+              const on = selMo === mo, dim = monthOn && !on;
               return (
-                <div key={mo} title={`${mo}\nIn ${fmtL(d.in)} · Out ${fmtL(d.out)}\nNet ${moNet >= 0 ? "+" : "−"}${fmtL(moNet)}`}
-                  style={{ flex: 1, minWidth: 46, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                <button key={mo} onClick={() => { setSelMo(on ? null : mo); setExpanded(null); }}
+                  title={`${moName(mo)}\nIn ${fmtL(d.in)} · Out ${fmtL(d.out)}\nNet ${moNet >= 0 ? "+" : "−"}${fmtL(moNet)}\n${d.txns.length} transactions`}
+                  style={{
+                    flex: 1, minWidth: 46, maxWidth: 108, display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                    background: on ? C.card : "transparent", border: `1px solid ${on ? C.border : "transparent"}`,
+                    borderRadius: 10, padding: "6px 2px", cursor: "pointer", opacity: dim ? .42 : 1,
+                    transition: "opacity .2s, background .2s, transform .12s", font: "inherit",
+                  }}>
                   <div style={{ fontSize: 9.5, fontWeight: 700, color: moNet >= 0 ? C.green : C.red }}>{m((moNet >= 0 ? "+" : "−") + fmtL(moNet))}</div>
                   <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 84 }}>
                     <div style={{ width: mob ? 10 : 16, height: Math.max(3, d.in / peak * 84), background: "var(--c-green)", opacity: .85, borderRadius: "3px 3px 0 0", transition: "height .4s" }} />
                     <div style={{ width: mob ? 10 : 16, height: Math.max(3, d.out / peak * 84), background: "var(--c-red)", opacity: .75, borderRadius: "3px 3px 0 0", transition: "height .4s" }} />
                   </div>
-                  <div style={{ fontSize: 9.5, color: C.inkFaint }}>{new Date(mo + "-15").toLocaleDateString("en-IN", { month: "short" })}</div>
-                </div>
+                  <div style={{ fontSize: 9.5, fontWeight: on ? 700 : 400, color: on ? C.ink : C.inkFaint }}>{moShort(mo)}</div>
+                </button>
               );
             })}
           </div>
         </div>
       )}
 
+      {/* ── Month detail: only when a month is selected ── */}
+      {monthOn && (
+        <MonthDetail
+          moKey={selMo} agg={agg} prev={prev} prevKey={prevKey}
+          moKeys={moKeys} onPick={k => { setSelMo(k); setExpanded(null); }}
+          fmtL={fmtL} m={m} moName={moName} moShort={moShort} toINR={toINR} card={card} label={label} serif={serif}
+        />
+      )}
+
       {/* ── Sources & uses ── */}
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1.15fr", gap: 14, alignItems: "start" }}>
         <div style={card}>
-          <div style={{ ...label, marginBottom: 8 }}>Where it comes from</div>
+          <div style={{ ...label, marginBottom: 8 }}>Where it comes from · <span style={{ color: monthOn ? C.gold : C.inkFaint }}>{scopeLabel}</span></div>
           {inRows.length === 0 && <div style={{ fontSize: 12, color: C.inkFaint, padding: "12px 0" }}>No income in this period.</div>}
           {inRows.map(r => <Bar key={r.bucket.id} row={r} max={maxIn} total={totalIn} side="in" />)}
         </div>
         <div style={card}>
-          <div style={{ ...label, marginBottom: 8 }}>Where it goes</div>
+          <div style={{ ...label, marginBottom: 8 }}>Where it goes · <span style={{ color: monthOn ? C.gold : C.inkFaint }}>{scopeLabel}</span></div>
           {/* Uncategorised — pinned on top when it exists: the biggest lie in any P&L */}
           {uncat.amt > 0 && (
             <div style={{ margin: "2px 0 10px", padding: "10px 12px", background: C.amberBg, border: `1px solid ${C.amber}45`, borderRadius: 10, cursor: "pointer" }}
