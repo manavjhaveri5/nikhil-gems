@@ -97,6 +97,25 @@ export const DEMO_DATA = {
     { id:"ft-3", date:d(15), type:"credit", amount:"1600",   currency:"EUR", accountFrom:"fa-boi-0451", payee:"Sophie Laurent",  notes:"Partial payment NG-003", classifiedRef:null },
     { id:"ft-4", date:d(35), type:"credit", amount:"145000", currency:"INR", accountFrom:"fa-boi-0451", payee:"Priya Mehta",     notes:"Full payment NG-004",    classifiedRef:null },
     { id:"ft-5", date:d(45), type:"debit",  amount:"67000",  currency:"INR", accountFrom:"fa-boi-0451", payee:"Himalayan Stone Works", notes:"Bill HSW-2024-112", classifiedRef:null },
+    // Payoneer deposits — the bank end of the Etsy → Payoneer pipeline
+    { id:"ft-6", date:d(6),  type:"credit", amount:"88400",  currency:"INR", accountFrom:"fa-boi-0451", payee:"PAYONEER INC PAYOUT",  notes:"Etsy settlement", classifiedRef:null },
+    { id:"ft-7", date:d(38), type:"credit", amount:"104200", currency:"INR", accountFrom:"fa-boi-0451", payee:"PAYONEER INC PAYOUT",  notes:"Etsy settlement", classifiedRef:null },
+    { id:"ft-8", date:d(68), type:"credit", amount:"61900",  currency:"INR", accountFrom:"fa-boi-0451", payee:"PAYONEER INC PAYOUT",  notes:"Etsy settlement", classifiedRef:null },
+  ],
+
+  // ── ETSY / MARKETPLACE ORDERS (Orders tab) ───────────────────────────────
+  "ng-orders-v1": [
+    { id:"eo-1", platform:"etsy", order_number:"ETSY-3400001", etsy_receipt_id:3400001, platform_order_id:"3400001", date:d(4),  currency:"INR", order_total:38500,  etsy_fees:4300,  etsy_net:34200,  listing_title:"Amethyst cluster — AAA", buyer_name:"Hana K." },
+    { id:"eo-2", platform:"etsy", order_number:"ETSY-3400002", etsy_receipt_id:3400002, platform_order_id:"3400002", date:d(11), currency:"INR", order_total:52800,  etsy_fees:6100,  etsy_net:46700,  listing_title:"Labradorite freeform",   buyer_name:"Marcus T." },
+    // multi-item receipt: two lines share one receipt — gross must count once
+    { id:"eo-3a", platform:"etsy", order_number:"ETSY-3400003-1", etsy_receipt_id:3400003, platform_order_id:"3400003", date:d(16), currency:"INR", order_total:41200, etsy_fees:2600, etsy_net:22300, listing_title:"Rose quartz sphere", buyer_name:"Elin S." },
+    { id:"eo-3b", platform:"etsy", order_number:"ETSY-3400003-2", etsy_receipt_id:3400003, platform_order_id:"3400003", date:d(16), currency:"INR", order_total:41200, etsy_fees:1900, etsy_net:14400, listing_title:"Clear quartz point",  buyer_name:"Elin S." },
+    { id:"eo-4", platform:"etsy", order_number:"ETSY-3400004", etsy_receipt_id:3400004, platform_order_id:"3400004", date:d(33), currency:"INR", order_total:64100,  etsy_fees:7300,  etsy_net:56800,  listing_title:"Ocean jasper pair",      buyer_name:"Louis P." },
+    { id:"eo-5", platform:"etsy", order_number:"ETSY-3400005", etsy_receipt_id:3400005, platform_order_id:"3400005", date:d(41), currency:"INR", order_total:55600,  etsy_fees:6200,  etsy_net:49400,  listing_title:"Fluorite tower — teal",  buyer_name:"Aki M." },
+    { id:"eo-6", platform:"etsy", order_number:"ETSY-3400006", etsy_receipt_id:3400006, platform_order_id:"3400006", date:d(64), currency:"INR", order_total:47300,  etsy_fees:5400,  etsy_net:41900,  listing_title:"Moss agate slab",        buyer_name:"Petra V." },
+    { id:"eo-7", platform:"etsy", order_number:"ETSY-3400007", etsy_receipt_id:3400007, platform_order_id:"3400007", date:d(70), currency:"INR", order_total:29800,  etsy_fees:3400,  etsy_net:26400,  listing_title:"Carnelian palm stones ×3", buyer_name:"Jonas W." },
+    // cancelled — must be excluded from the rollup
+    { id:"eo-8", platform:"etsy", order_number:"ETSY-3400008", etsy_receipt_id:3400008, platform_order_id:"3400008", date:d(9),  currency:"INR", order_total:18900,  etsy_fees:0, etsy_net:0, status:"cancelled", listing_title:"Selenite lamp", buyer_name:"Refunded" },
   ],
 
   // ── FINANCE ACCOUNTS ──────────────────────────────────────────────────────

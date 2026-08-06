@@ -3582,6 +3582,115 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
   );
 }
 
+// ─── Etsy → bank reconciliation ───────────────────────────────────────────────
+// Bridges the two ends of the marketplace pipeline that the app records
+// independently: individual Etsy sales in the Orders store (ng-orders-v1,
+// written by the Listing Manager) and the lump-sum Payoneer deposits the flow
+// engine buckets as "Marketplace payouts". Per month: what Etsy sold, what's
+// left after Etsy's cut, and what actually reached the bank. Rows are receipt-
+// level (order_total is duplicated across a multi-item receipt's lines, so
+// gross is deduped by receipt; etsy_fees/etsy_net are share-allocated per line
+// and sum cleanly).
+function EtsyReconCard({ months, selMo, onPick, payoutByMo, rates, fmtL, m, card, label, serif }) {
+  const [orders, setOrders] = useState(null); // null = loading
+  useEffect(() => { let on = true; loadK("ng-orders-v1").then(v => { if (on) setOrders(Array.isArray(v) ? v : []); }); return () => { on = false; }; }, []);
+
+  const cutoff = months ? new Date(Date.now() - months * 30.44 * 86400000).toISOString().slice(0, 10) : "";
+  const toINR = (amt, cur) => (+amt || 0) * (cur && cur !== "INR" ? (+rates?.[cur] || 1) : 1);
+
+  // Receipt-level rollup per month
+  const byMo = new Map();
+  const seen = new Set();
+  for (const o of orders || []) {
+    const isEtsy = o.platform === "etsy" || !!o.etsy_receipt_id || String(o.order_number || "").startsWith("ETSY-");
+    if (!isEtsy || o.cancelled_at || String(o.status || "").toLowerCase() === "cancelled") continue;
+    const d = String(o.date || o.created_at || "").slice(0, 10);
+    if (!d || d < cutoff) continue;
+    const mo = d.slice(0, 7);
+    if (!byMo.has(mo)) byMo.set(mo, { gross: 0, fees: 0, net: 0, n: 0 });
+    const e = byMo.get(mo);
+    const rid = String(o.etsy_receipt_id || o.platform_order_id || o.order_number || o.id);
+    if (!seen.has(rid)) { seen.add(rid); e.gross += toINR(o.order_total, o.currency); e.n++; }
+    e.fees += toINR(o.etsy_fees, o.currency);       // per-line, share-allocated → sums cleanly
+    e.net  += toINR(o.etsy_net,  o.currency);
+  }
+  for (const e of byMo.values()) if (!e.net) e.net = Math.max(0, e.gross - e.fees);
+
+  const moKeys = [...new Set([...byMo.keys(), ...Object.keys(payoutByMo)])].sort();
+  if (orders === null) return null;                       // still loading — no flash
+  const totSales = [...byMo.values()].reduce((s, e) => s + e.gross, 0);
+  const totPaid  = moKeys.reduce((s, k) => s + (payoutByMo[k] || 0), 0);
+  if (!totSales && !totPaid) return null;                 // nothing to reconcile in range
+  const totNet  = [...byMo.values()].reduce((s, e) => s + e.net, 0);
+  const totFees = Math.max(0, totSales - totNet);
+  const inTransit = Math.max(0, totNet - totPaid);
+  const maxBar = Math.max(...moKeys.map(k => Math.max(byMo.get(k)?.gross || 0, payoutByMo[k] || 0)), 1);
+  const moShort = k => new Date(k + "-15").toLocaleDateString("en-IN", { month: "short", year: k.slice(0, 4) !== String(new Date().getFullYear()) ? "2-digit" : undefined });
+
+  const num = { fontSize: 12, fontWeight: 650, color: C.ink, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
+  const th  = { ...label, fontSize: 9, textAlign: "right", paddingBottom: 6 };
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 2 }}>
+        <div style={label}>Etsy sales → bank</div>
+        <div style={{ fontSize: 10.5, color: C.inkFaint, flex: 1 }}>from the Orders tab vs Payoneer deposits in the books</div>
+      </div>
+
+      {/* summary strip */}
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, margin: "10px 0 14px" }}>
+        {[["Etsy sold", totSales, C.ink], ["Etsy kept", -totFees, C.red], ["Reached bank", totPaid, C.green], ["Not yet landed", inTransit, C.amber]].map(([k, v, tone]) => (
+          <div key={k}>
+            <div style={{ ...label, marginBottom: 2 }}>{k}</div>
+            <div style={{ ...serif, fontSize: mob ? 19 : 22, fontWeight: 600, color: tone, lineHeight: 1.1 }}>
+              {m((v < 0 ? "−" : "") + fmtL(v))}
+            </div>
+            {k === "Etsy kept" && totSales > 0 && <div style={{ fontSize: 9.5, color: C.inkFaint }}>{Math.round(totFees / totSales * 100)}% of sales</div>}
+            {k === "Reached bank" && totNet > 0 && <div style={{ fontSize: 9.5, color: C.inkFaint }}>{Math.round(Math.min(100, totPaid / totNet * 100))}% of expected</div>}
+          </div>
+        ))}
+      </div>
+
+      {/* month table: sales bar vs received bar */}
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto auto", columnGap: mob ? 8 : 14, rowGap: 0, alignItems: "center" }}>
+        <div />{/* month */}
+        <div />{/* bars */}
+        <div style={th}>Sold</div>
+        <div style={th}>{mob ? "Net" : "After fees"}</div>
+        <div style={th}>{mob ? "Bank" : "Reached bank"}</div>
+        {moKeys.map(k => {
+          const e = byMo.get(k) || { gross: 0, net: 0, n: 0 };
+          const paid = payoutByMo[k] || 0;
+          const on = selMo === k;
+          return (
+            <Fragment key={k}>
+              <button onClick={() => onPick && onPick(on ? null : k)}
+                style={{ background: "none", border: "none", padding: "7px 0", cursor: onPick ? "pointer" : "default", font: "inherit",
+                  fontSize: 11.5, fontWeight: on ? 700 : 500, color: on ? C.gold : C.inkMid, textAlign: "left", whiteSpace: "nowrap" }}>
+                {moShort(k)}{e.n ? <span style={{ color: C.inkFaint, fontWeight: 400 }}> · {e.n}</span> : ""}
+              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, opacity: selMo && !on ? .45 : 1 }}>
+                <div title={`Sold ${fmtL(e.gross)}`}   style={{ height: 6, width: `${Math.max(e.gross / maxBar * 100, e.gross ? 2 : 0)}%`, background: "var(--c-gold)", borderRadius: 3, opacity: .85 }} />
+                <div title={`Reached bank ${fmtL(paid)}`} style={{ height: 6, width: `${Math.max(paid / maxBar * 100, paid ? 2 : 0)}%`, background: "var(--c-green)", borderRadius: 3, opacity: .8 }} />
+              </div>
+              <div style={{ ...num, opacity: selMo && !on ? .45 : 1 }}>{m(fmtL(e.gross))}</div>
+              <div style={{ ...num, color: C.inkMid, opacity: selMo && !on ? .45 : 1 }}>{m(fmtL(e.net))}</div>
+              <div style={{ ...num, color: paid ? C.green : C.inkFaint, opacity: selMo && !on ? .45 : 1 }}>{m(fmtL(paid))}</div>
+            </Fragment>
+          );
+        })}
+      </div>
+
+      {/* legend + caveat */}
+      <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 12, fontSize: 9.5, color: C.inkFaint }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 5, background: "var(--c-gold)", borderRadius: 3, opacity: .85 }} />Etsy sold</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 14, height: 5, background: "var(--c-green)", borderRadius: 3, opacity: .8 }} />Reached bank (Payoneer)</span>
+        <span style={{ flex: 1 }} />
+        <span>Payouts lag sales — a late-month order usually lands next month.</span>
+      </div>
+    </div>
+  );
+}
+
 // "+18% vs Jul" — coloured by whether the direction is good for that metric.
 function Delta({ now, was, prevLabel, good }) {
   if (was === undefined || was === null) return <span>No {prevLabel || "prior"} comparison</span>;
@@ -4010,6 +4119,12 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
           {outRows.map(r => <Bar key={r.bucket.id} row={r} max={maxOut} total={totalOut} side="out" />)}
         </div>
       </div>
+
+      {/* ── Etsy sales ↔ bank payouts ── */}
+      <EtsyReconCard months={months} selMo={monthOn ? selMo : null}
+        onPick={k => { setSelMo(k); setExpanded(null); }}
+        payoutByMo={Object.fromEntries([...byMonth].map(([mo, a]) => [mo, a.inB.get("payouts")?.amt || 0]))}
+        rates={rates} fmtL={fmtL} m={m} card={card} label={label} serif={serif} />
 
       {(transferN > 0 || !months) && (
         <div style={{ fontSize: 10.5, color: C.inkFaint, padding: "0 4px" }}>
