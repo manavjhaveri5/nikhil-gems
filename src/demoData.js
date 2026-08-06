@@ -97,6 +97,18 @@ export const DEMO_DATA = {
     { id:"ft-3", date:d(15), type:"credit", amount:"1600",   currency:"EUR", accountFrom:"fa-boi-0451", payee:"Sophie Laurent",  notes:"Partial payment NG-003", classifiedRef:null },
     { id:"ft-4", date:d(35), type:"credit", amount:"145000", currency:"INR", accountFrom:"fa-boi-0451", payee:"Priya Mehta",     notes:"Full payment NG-004",    classifiedRef:null },
     { id:"ft-5", date:d(45), type:"debit",  amount:"67000",  currency:"INR", accountFrom:"fa-boi-0451", payee:"Himalayan Stone Works", notes:"Bill HSW-2024-112", classifiedRef:null },
+    // Recurring rhythms — feeds the Recurring card + balance projection
+    { id:"ft-r1", date:d(2),   type:"debit", amount:"1999",  currency:"INR", accountFrom:"fa-boi-0451", payee:"OPENAI *CHATGPT SUBSCR", notes:"", classifiedRef:null },
+    { id:"ft-r2", date:d(32),  type:"debit", amount:"1999",  currency:"INR", accountFrom:"fa-boi-0451", payee:"OPENAI *CHATGPT SUBSCR", notes:"", classifiedRef:null },
+    { id:"ft-r3", date:d(63),  type:"debit", amount:"1699",  currency:"INR", accountFrom:"fa-boi-0451", payee:"OPENAI *CHATGPT SUBSCR", notes:"", classifiedRef:null },
+    { id:"ft-r4", date:d(93),  type:"debit", amount:"1699",  currency:"INR", accountFrom:"fa-boi-0451", payee:"OPENAI *CHATGPT SUBSCR", notes:"", classifiedRef:null },
+    { id:"ft-r5", date:d(5),   type:"debit", amount:"32000", currency:"INR", accountFrom:"fa-boi-0451", payee:"IMPS/P2A/609716723034/BARB/MADIHA MOHAME", notes:"Salary", classifiedRef:null },
+    { id:"ft-r6", date:d(36),  type:"debit", amount:"32000", currency:"INR", accountFrom:"fa-boi-0451", payee:"IMPS/P2A/608618024713/BARB/MADIHA MOHAME", notes:"Salary", classifiedRef:null },
+    { id:"ft-r7", date:d(66),  type:"debit", amount:"30000", currency:"INR", accountFrom:"fa-boi-0451", payee:"IMPS/P2A/607710126715/BARB/MADIHA MOHAME", notes:"Salary", classifiedRef:null },
+    { id:"ft-r8", date:d(97),  type:"debit", amount:"30000", currency:"INR", accountFrom:"fa-boi-0451", payee:"IMPS/P2A/606913603078/BARB/MADIHA MOHAME", notes:"Salary", classifiedRef:null },
+    { id:"ft-r9", date:d(10),  type:"debit", amount:"1499",  currency:"INR", accountFrom:"fa-boi-0451", payee:"JIO FIBER RECHARGE", notes:"", classifiedRef:null },
+    { id:"ft-r10",date:d(41),  type:"debit", amount:"1199",  currency:"INR", accountFrom:"fa-boi-0451", payee:"JIO FIBER RECHARGE", notes:"", classifiedRef:null },
+    { id:"ft-r11",date:d(71),  type:"debit", amount:"1199",  currency:"INR", accountFrom:"fa-boi-0451", payee:"JIO FIBER RECHARGE", notes:"", classifiedRef:null },
     // Payoneer deposits — the bank end of the Etsy → Payoneer pipeline
     { id:"ft-6", date:d(6),  type:"credit", amount:"88400",  currency:"INR", accountFrom:"fa-boi-0451", payee:"PAYONEER INC PAYOUT",  notes:"Etsy settlement", classifiedRef:null },
     { id:"ft-7", date:d(38), type:"credit", amount:"104200", currency:"INR", accountFrom:"fa-boi-0451", payee:"PAYONEER INC PAYOUT",  notes:"Etsy settlement", classifiedRef:null },

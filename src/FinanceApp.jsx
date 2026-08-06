@@ -3373,13 +3373,115 @@ const FLOW_CHIPS = [
   ["🛒 Shopping", "Shopping"], ["✈️ Travel", "Travel"], ["🏦 Bank", "Bank Charges"], ["🏛 Tax", "GST / Tax Payment"],
 ];
 
+// ─── Recurring-payment detection ──────────────────────────────────────────────
+// Finds payees that bill on a rhythm (subscriptions, salaries, rent) from the
+// debit history alone: group by cleaned payee name, merge same-day batches into
+// one event, then test whether the gaps between events cluster around a known
+// cadence. Powers both the Recurring card and the cash-flow forecast.
+const RECUR_CADENCES = [
+  [7, "Weekly", 6, 8], [14, "Fortnightly", 12, 16], [30.44, "Monthly", 24, 37],
+  [61, "Bi-monthly", 52, 70], [91, "Quarterly", 80, 102], [365, "Yearly", 340, 390],
+];
+function detectRecurring(transactions, toINR) {
+  const now = Date.now();
+  const groups = new Map();
+  for (const t of transactions || []) {
+    if (t.type !== "debit" || !t.date) continue;
+    const amt = toINR(t);
+    if (amt <= 0) continue;
+    const name = prettyPayee(t.payee || t.notes || "").name;
+    const key = name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!key || key === "—") continue;
+    if (!groups.has(key)) groups.set(key, { name, events: new Map(), txns: [] });
+    const g = groups.get(key);
+    const d = t.date.slice(0, 10);
+    g.events.set(d, (g.events.get(d) || 0) + amt); // same-day batch = one event
+    g.txns.push({ date: d, amt });
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    const evs = [...g.events.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+      .filter(([d]) => now - new Date(d + "T12:00:00").getTime() < 400 * 86400000);
+    if (evs.length < 3) continue;
+    const days = evs.map(([d]) => new Date(d + "T12:00:00").getTime() / 86400000);
+    const gaps = days.slice(1).map((v, i) => v - days[i]).filter(x => x >= 2);
+    if (gaps.length < 2) continue;
+    const med = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)];
+    const cad = RECUR_CADENCES.find(([, , lo, hi]) => med >= lo && med <= hi);
+    if (!cad) continue;
+    if (gaps.filter(x => Math.abs(x - med) <= Math.max(4, med * 0.3)).length / gaps.length < 0.6) continue;
+    const amts = evs.map(([, a]) => a);
+    const lastAmt = amts[amts.length - 1];
+    const prevAvg = amts.slice(0, -1).reduce((s, a) => s + a, 0) / (amts.length - 1);
+    const avg = amts.reduce((s, a) => s + a, 0) / amts.length;
+    const lastDate = evs[evs.length - 1][0];
+    // double charge: two similar amounts on different days < 5 days apart, recently
+    const rt = g.txns.filter(t => now - new Date(t.date + "T12:00:00").getTime() < 45 * 86400000);
+    let dbl = false;
+    for (let i = 0; i < rt.length && !dbl; i++)
+      for (let j = i + 1; j < rt.length; j++) {
+        const dd = Math.abs(new Date(rt[i].date) - new Date(rt[j].date)) / 86400000;
+        if (rt[i].date !== rt[j].date && dd < 5 && dd < cad[0] * 0.5 &&
+            Math.abs(rt[i].amt - rt[j].amt) <= Math.max(2, rt[i].amt * 0.02)) { dbl = true; break; }
+      }
+    out.push({
+      name: g.name, cadence: cad[1], cadenceDays: cad[0], events: evs.length,
+      avg, lastAmt, lastDate, monthly: avg * 30.44 / cad[0],
+      next: new Date(new Date(lastDate + "T12:00:00").getTime() + cad[0] * 86400000).toISOString().slice(0, 10),
+      creep: lastAmt > prevAvg * 1.12 && lastAmt - prevAvg > 100, dbl,
+    });
+  }
+  return out.sort((a, b) => b.monthly - a.monthly);
+}
+
+// ─── Forecast events ──────────────────────────────────────────────────────────
+// Future dated cash events for the projection: recurring outflows repeated on
+// their cadence, unpaid invoices landing on their due date (or invoice date
+// +45d; overdue → assumed ~a week out), and unpaid vendor bills going out ~30d
+// from now. Proformas are excluded — not yet a sale. Returns date → {net,
+// in, out, labels[]}.
+function buildForecastEvents({ recurring, invoices, purchases, rates, horizon = 90 }) {
+  const events = new Map();
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  const iso = dt => dt.toISOString().slice(0, 10);
+  const addDays = (base, n) => new Date(new Date(base).getTime() + n * 86400000);
+  const end = addDays(today, horizon);
+  const cvt = (amt, cur) => (+amt || 0) * (cur && cur !== "INR" ? (+rates?.[cur] || 1) : 1);
+  const add = (d, amt, label) => {
+    if (!events.has(d)) events.set(d, { net: 0, in: 0, out: 0, labels: [] });
+    const e = events.get(d);
+    e.net += amt; if (amt >= 0) e.in += amt; else e.out += -amt;
+    e.labels.push(label);
+  };
+  for (const r of recurring || []) {
+    let t = new Date(r.next + "T12:00:00");
+    while (t <= today) t = addDays(t, r.cadenceDays); // overdue cycle → assume next one still comes
+    for (; t <= end; t = addDays(t, r.cadenceDays)) add(iso(t), -r.avg, `${r.name} (${r.cadence.toLowerCase()})`);
+  }
+  for (const inv of invoices || []) {
+    if (["paid", "draft"].includes(inv.status || "") || inv.type === "proforma") continue;
+    const paid = (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0) + (+inv.paidAmount || 0);
+    const due = cvt(Math.max(0, (+inv.totalAmt || 0) - paid), inv.currency || "USD");
+    if (!due) continue;
+    let d = inv.dueDate || (inv.date ? iso(addDays(inv.date + "T12:00:00", 45)) : iso(addDays(today, 30)));
+    if (d <= iso(today)) d = iso(addDays(today, 7));
+    if (d <= iso(end)) add(d, due, `${inv.invNo || "Invoice"} · ${inv.buyerName || "receivable"}`);
+  }
+  for (const p of purchases || []) {
+    if (p.type !== "bill" || !["pending", "confirmed", "partial"].includes(p.status || "")) continue;
+    const due = cvt(Math.max(0, (+p.totalAmount || 0) - (+p.paidAmount || 0)), p.currency || "INR");
+    if (due) add(iso(addDays(today, 30)), -due, `${p.billNo || p.vendorName || "Vendor bill"}`);
+  }
+  return events;
+}
+
 // ─── Balance trajectory ───────────────────────────────────────────────────────
 // The one chart the eye goes to first: total balance across all accounts as a
 // continuous line, reconstructed backwards from today's known balance through
 // each day's net flow. Beneath it, a daily flow lane — inflows grow up, outflows
 // grow down — so every rise and dip in the curve has its cause directly under it.
 // Hover anywhere for the day's balance, money in, and money out.
-function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m }) {
+function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m, future }) {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   const [hover, setHover] = useState(null); // index into days
@@ -3425,17 +3527,32 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
 
   if (!days.length || w < 120) return <div ref={wrapRef} />;
 
+  // ── Projection: continue the curve through dated future events ──
+  const fut = [];
+  if (future) {
+    let b = days[days.length - 1].bal;
+    const t0 = new Date(); t0.setHours(12, 0, 0, 0);
+    for (let i = 1; i <= 90; i++) {
+      const d = new Date(t0.getTime() + i * 86400000).toISOString().slice(0, 10);
+      const e = future.get(d);
+      b += e ? e.net : 0;
+      fut.push({ d, bal: b, in: e?.in || 0, out: e?.out || 0, labels: e?.labels || [], proj: true });
+    }
+  }
+  const pts = [...days, ...fut];
+
   // ── Geometry ──
   const H = mob ? 220 : 264, LANE = mob ? 30 : 38, GAP = 14, XLBL = 18;
   const M = { t: 16, r: mob ? 12 : 86, b: XLBL + LANE + GAP, l: 10 };
   const pw = Math.max(10, w - M.l - M.r), ph = H - M.t - M.b;
-  const lo0 = Math.min(...days.map(p => p.bal)), hi0 = Math.max(...days.map(p => p.bal));
+  const lo0 = Math.min(...pts.map(p => p.bal)), hi0 = Math.max(...pts.map(p => p.bal));
   const pad = Math.max((hi0 - lo0) * 0.12, hi0 * 0.02, 1);
   const lo = lo0 - pad, hi = hi0 + pad;
-  const X = i => M.l + (days.length < 2 ? pw / 2 : i / (days.length - 1) * pw);
+  const X = i => M.l + (pts.length < 2 ? pw / 2 : i / (pts.length - 1) * pw);
   const Y = v => M.t + (1 - (v - lo) / (hi - lo)) * ph;
   const laneY = M.t + ph + GAP + LANE / 2;            // flow-lane midline
-  const laneAmp = v => Math.sqrt(v / flows) * (LANE / 2 - 1); // sqrt so small days stay visible
+  const flowsAll = Math.max(flows, ...fut.map(p => Math.max(p.in, p.out)));
+  const laneAmp = v => Math.sqrt(v / flowsAll) * (LANE / 2 - 1); // sqrt so small days stay visible
 
   // Nice y ticks (3 clean values)
   const rawStep = (hi - lo) / 3;
@@ -3445,8 +3562,8 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
   for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) ticks.push(v);
 
   // Month boundaries for x labels + the drill-selection band
-  const moStarts = days.reduce((acc, p, i) => { if (i === 0 || p.d.slice(0, 7) !== days[i - 1].d.slice(0, 7)) acc.push(i); return acc; }, []);
-  const selRange = selMo ? [days.findIndex(p => p.d.slice(0, 7) === selMo), days.map(p => p.d.slice(0, 7)).lastIndexOf(selMo)] : null;
+  const moStarts = pts.reduce((acc, p, i) => { if (i === 0 || p.d.slice(0, 7) !== pts[i - 1].d.slice(0, 7)) acc.push(i); return acc; }, []);
+  const selRange = selMo ? [pts.findIndex(p => p.d.slice(0, 7) === selMo), pts.map(p => p.d.slice(0, 7)).lastIndexOf(selMo)] : null;
 
   const path = days.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(p.bal).toFixed(1)}`).join("");
   const area = `${path}L${X(days.length - 1).toFixed(1)},${(M.t + ph).toFixed(1)}L${X(0).toFixed(1)},${(M.t + ph).toFixed(1)}Z`;
@@ -3454,13 +3571,18 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
   const iLo = days.reduce((b2, p, i) => p.bal < days[b2].bal ? i : b2, 0);
   const last = days[days.length - 1], firstBal = days[0].bal;
   const delta = last.bal - firstBal;
-  const hovP = hover != null ? days[hover] : null;
+  const projPath = fut.length
+    ? `M${X(days.length - 1).toFixed(1)},${Y(last.bal).toFixed(1)}` + fut.map((p, j) => `L${X(days.length + j).toFixed(1)},${Y(p.bal).toFixed(1)}`).join("")
+    : "";
+  const projEnd = fut[fut.length - 1];
+  const firstDry = last.bal >= 0 ? fut.find(p => p.bal < 0) : null; // projected dip below zero
+  const hovP = hover != null ? pts[hover] : null;
   const niceDate = d => new Date(d + "T12:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: undefined });
 
   const onMove = e => {
     const r = wrapRef.current.querySelector("svg").getBoundingClientRect();
     const x = e.clientX - r.left;
-    setHover(Math.max(0, Math.min(days.length - 1, Math.round((x - M.l) / pw * (days.length - 1)))));
+    setHover(Math.max(0, Math.min(pts.length - 1, Math.round((x - M.l) / pw * (pts.length - 1)))));
   };
 
   // Tooltip placement: flip side past the midpoint
@@ -3515,22 +3637,43 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
           <path d={area} fill="url(#balFill)" />
           <path d={path} fill="none" stroke="var(--c-gold)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
 
+          {/* projection: dashed continuation through dated future events */}
+          {fut.length > 0 && <>
+            <line x1={X(days.length - 1)} x2={X(days.length - 1)} y1={M.t - 4} y2={laneY + LANE / 2}
+              stroke={C.inkFaint} strokeWidth="1" strokeDasharray="2 4" opacity=".55" />
+            <path d={projPath} fill="none" stroke="var(--c-gold)" strokeWidth="2" strokeDasharray="4 5"
+              strokeLinejoin="round" strokeLinecap="round" opacity=".8" />
+            {Y(0) > M.t && Y(0) < M.t + ph && (lo0 < 0 || firstDry) &&
+              <line x1={M.l} x2={M.l + pw} y1={Y(0)} y2={Y(0)} stroke={C.red} strokeWidth="1" opacity=".35" />}
+            {firstDry && <>
+              <circle cx={X(days.length + fut.indexOf(firstDry))} cy={Y(0)} r="4" fill="var(--c-red)" stroke={C.surface} strokeWidth="2" />
+              <text x={Math.min(X(days.length + fut.indexOf(firstDry)) + 7, M.l + pw - 60)} y={Y(0) - 7}
+                fontSize="9.5" fontWeight="700" fill={C.red}>dry ~{niceDate(firstDry.d)}</text>
+            </>}
+            <circle cx={X(pts.length - 1)} cy={Y(projEnd.bal)} r="4" fill={C.surface} stroke="var(--c-gold)" strokeWidth="2" />
+            {!mob && <>
+              <text x={X(pts.length - 1) + 8} y={Y(projEnd.bal) + 1} fontSize="11.5" fontWeight="600" fill={C.inkMid}>≈ {m(sfmt(projEnd.bal))}</text>
+              <text x={X(pts.length - 1) + 8} y={Y(projEnd.bal) + 13} fontSize="9" fill={C.inkFaint}>in 90 days</text>
+            </>}
+          </>}
+
           {/* high / low markers */}
           {[iHi, iLo].map(i => i !== days.length - 1 && (
             <circle key={i} cx={X(i)} cy={Y(days[i].bal)} r="3.4" fill="var(--c-gold)" stroke={C.surface} strokeWidth="2" />
           ))}
 
-          {/* endpoint: dot + direct label */}
+          {/* endpoint: dot + direct label (value label yields to the projection when present) */}
           <circle cx={X(days.length - 1)} cy={Y(last.bal)} r="4.5" fill="var(--c-gold)" stroke={C.surface} strokeWidth="2" />
-          {!mob && <>
+          {!mob && !fut.length && <>
             <text x={X(days.length - 1) + 10} y={Y(last.bal) + 1} fontSize="12" fontWeight="600" fill={C.ink}>{m(sfmt(last.bal))}</text>
             <text x={X(days.length - 1) + 10} y={Y(last.bal) + 13} fontSize="9" fill={C.inkFaint}>today</text>
           </>}
+          {fut.length > 0 && <text x={X(days.length - 1)} y={M.t + 4} fontSize="8.5" fill={C.inkFaint} textAnchor="middle" letterSpacing=".06em">TODAY</text>}
 
           {/* daily flow lane: in grows up, out grows down */}
           <line x1={M.l} x2={M.l + pw} y1={laneY} y2={laneY} stroke={C.border} strokeWidth="1" />
-          {days.map((p, i) => (p.in > 0 || p.out > 0) && (
-            <g key={p.d}>
+          {pts.map((p, i) => (p.in > 0 || p.out > 0) && (
+            <g key={p.d} opacity={p.proj ? .4 : 1}>
               {p.in > 0 && <rect x={X(i) - 1} y={laneY - laneAmp(p.in)} width="2" height={laneAmp(p.in)} fill="var(--c-green)" opacity=".75" />}
               {p.out > 0 && <rect x={X(i) - 1} y={laneY} width="2" height={laneAmp(p.out)} fill="var(--c-red)" opacity=".65" />}
             </g>
@@ -3540,8 +3683,8 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
 
           {/* x labels at month starts */}
           {moStarts.map(i => (pw / moStarts.length > 26) && (
-            <text key={i} x={X(i)} y={H - 4} fontSize="9.5" fill={C.inkFaint}>
-              {new Date(days[i].d + "T12:00:00").toLocaleDateString("en-IN", { month: "short" })}
+            <text key={i} x={X(i)} y={H - 4} fontSize="9.5" fill={C.inkFaint} opacity={pts[i].proj ? .6 : 1}>
+              {new Date(pts[i].d + "T12:00:00").toLocaleDateString("en-IN", { month: "short" })}
             </text>
           ))}
 
@@ -3557,8 +3700,19 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
           <div style={{ position: "absolute", top: M.t + 2, left: tipLeft, right: tipRight, pointerEvents: "none",
             background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "8px 12px",
             boxShadow: "0 6px 22px rgba(26,19,8,.12)", minWidth: 128 }}>
-            <div style={{ fontSize: 9.5, color: C.inkFaint, marginBottom: 1 }}>{niceDate(hovP.d)}</div>
+            <div style={{ fontSize: 9.5, color: C.inkFaint, marginBottom: 1 }}>
+              {niceDate(hovP.d)}
+              {hovP.proj && <span style={{ marginLeft: 6, padding: "1px 5px", borderRadius: 4, background: C.goldLight, color: C.gold, fontWeight: 700, fontSize: 8.5, letterSpacing: ".05em" }}>PROJECTED</span>}
+            </div>
             <div style={{ ...serif, fontSize: 19, fontWeight: 600, color: C.ink, lineHeight: 1.15 }}>{m(sfmt(hovP.bal))}</div>
+            {hovP.proj && hovP.labels.length > 0 && (
+              <div style={{ marginTop: 3, display: "flex", flexDirection: "column", gap: 1 }}>
+                {hovP.labels.slice(0, 3).map((l, i) => (
+                  <div key={i} style={{ fontSize: 9.5, color: C.inkMid, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{l}</div>
+                ))}
+                {hovP.labels.length > 3 && <div style={{ fontSize: 9, color: C.inkFaint }}>+{hovP.labels.length - 3} more</div>}
+              </div>
+            )}
             {(hovP.in > 0 || hovP.out > 0) ? (
               <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
                 {hovP.in > 0 && <div style={{ fontSize: 10.5, color: C.inkMid, display: "flex", alignItems: "center", gap: 6 }}>
@@ -3577,6 +3731,127 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
 
       <div style={{ fontSize: 9.5, color: C.inkFaint, padding: "4px 2px 2px" }}>
         Reconstructed backwards from today's balance through each day's recorded flows · all accounts, INR at current rates
+        {fut.length > 0 && <> · dashed = 90-day projection from unpaid invoices, vendor bills (≈30d) and detected recurring payments</>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Recurring payments radar ─────────────────────────────────────────────────
+function RecurringCard({ recurring, fmtL, m, card, label }) {
+  const [showAll, setShowAll] = useState(false);
+  if (!recurring.length) return null;
+  const totalMo = recurring.reduce((s, r) => s + r.monthly, 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = showAll ? recurring : recurring.slice(0, 8);
+  const nice = d => new Date(d + "T12:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  const inDays = d => Math.round((new Date(d + "T12:00:00") - new Date(today + "T12:00:00")) / 86400000);
+  const chip = (bg, fg, text) => <span style={{ fontSize: 8.5, fontWeight: 700, background: bg, color: fg, borderRadius: 4, padding: "2px 5px", letterSpacing: ".03em", whiteSpace: "nowrap" }}>{text}</span>;
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+        <div style={{ ...label, flex: 1 }}>Recurring payments</div>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{m(fmtL(totalMo))}<span style={{ fontSize: 10, fontWeight: 500, color: C.inkFaint }}>/mo committed</span></span>
+      </div>
+      {rows.map(r => {
+        const dn = inDays(r.next);
+        return (
+          <div key={r.name} className="fl-row" style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 4px", borderBottom: `1px solid ${C.border}40`, borderRadius: 6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+                <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                {r.creep && chip(C.amberBg, C.amber, "↑ CREEPING")}
+                {r.dbl && chip(C.redBg, C.red, "⚠ CHARGED TWICE?")}
+              </div>
+              <div style={{ fontSize: 9.5, color: C.inkFaint }}>
+                {r.cadence} · {r.events}× · next {dn <= 0 ? "any day" : dn === 1 ? "tomorrow" : `~${nice(r.next)}`}
+              </div>
+            </div>
+            <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 650, color: C.ink, fontVariantNumeric: "tabular-nums" }}>{m(fmtL(r.monthly))}<span style={{ fontSize: 9, color: C.inkFaint, fontWeight: 400 }}>/mo</span></div>
+              {Math.abs(r.avg - r.monthly) > 1 && <div style={{ fontSize: 9, color: C.inkFaint }}>{m(fmtL(r.avg))} per charge</div>}
+            </div>
+          </div>
+        );
+      })}
+      {recurring.length > 8 && (
+        <button onClick={() => setShowAll(s => !s)} style={{ background: "none", border: "none", color: C.gold, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: "8px 4px 2px", font: "inherit" }}>
+          {showAll ? "Show less" : `Show all ${recurring.length}`}
+        </button>
+      )}
+      <div style={{ fontSize: 9.5, color: C.inkFaint, marginTop: 8 }}>
+        Detected from payment rhythm — 3+ charges on a steady cadence. These also drive the balance projection.
+      </div>
+    </div>
+  );
+}
+
+// ─── True margin per platform ─────────────────────────────────────────────────
+// Joins the Orders store with the ledger's courier spend: revenue per platform
+// (receipt-deduped), minus recorded marketplace fees (Etsy only — Shopify/eBay
+// fees aren't captured), minus a courier share allocated by order count.
+const MARGIN_PLATFORMS = [
+  { key: "etsy",          label: "Etsy",        icon: "🏷" },
+  { key: "shopify_aty",   label: "Atyahara",    icon: "💫" },
+  { key: "shopify_earth", label: "Earth Ed.",   icon: "🌍" },
+  { key: "ebay",          label: "eBay",        icon: "🔨" },
+  { key: "other",         label: "Direct",      icon: "🧾" },
+];
+function PlatformMarginCard({ orders, months, selMo, shippingTotal, rates, fmtL, m, card, label }) {
+  if (orders === null) return null;
+  const cutoff = months ? new Date(Date.now() - months * 30.44 * 86400000).toISOString().slice(0, 10) : "";
+  const cvt = (amt, cur) => (+amt || 0) * (cur && cur !== "INR" ? (+rates?.[cur] || 1) : 1);
+  const agg = new Map(); // platform -> {rev, fees, n}
+  const seen = new Set();
+  for (const o of orders || []) {
+    if (o.cancelled_at || String(o.status || "").toLowerCase() === "cancelled") continue;
+    const d = String(o.date || o.created_at || "").slice(0, 10);
+    if (!d || d < cutoff || (selMo && d.slice(0, 7) !== selMo)) continue;
+    const key = MARGIN_PLATFORMS.some(p => p.key === o.platform) ? o.platform : "other";
+    if (!agg.has(key)) agg.set(key, { rev: 0, fees: 0, n: 0 });
+    const e = agg.get(key);
+    const rid = `${key}:${o.etsy_receipt_id || o.platform_order_id || o.order_number || o.id}`;
+    if (!seen.has(rid)) { seen.add(rid); e.rev += cvt(o.order_total, o.currency); e.n++; }
+    e.fees += cvt(o.etsy_fees, o.currency);
+  }
+  const rows = MARGIN_PLATFORMS.map(p => ({ ...p, ...(agg.get(p.key) || { rev: 0, fees: 0, n: 0 }) })).filter(r => r.rev > 0);
+  if (!rows.length) return null;
+  const totalN = rows.reduce((s, r) => s + r.n, 0);
+  for (const r of rows) { r.ship = totalN ? shippingTotal * r.n / totalN : 0; r.net = r.rev - r.fees - r.ship; }
+  rows.sort((a, b) => b.rev - a.rev);
+  const maxNet = Math.max(...rows.map(r => Math.max(r.net, 0)), 1);
+  const num = { fontSize: 12, fontWeight: 650, color: C.ink, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+        <div style={{ ...label, flex: 1 }}>What each platform really nets</div>
+        <span style={{ fontSize: 10.5, color: C.inkFaint }}>{selMo ? "selected month" : months ? `last ${months} months` : "all time"}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto auto", columnGap: mob ? 8 : 12, alignItems: "center" }}>
+        <div /><div />
+        <div style={{ ...label, fontSize: 9, textAlign: "right", paddingBottom: 6 }}>Revenue</div>
+        <div style={{ ...label, fontSize: 9, textAlign: "right", paddingBottom: 6 }}>{mob ? "Costs" : "Fees + ship"}</div>
+        <div style={{ ...label, fontSize: 9, textAlign: "right", paddingBottom: 6 }}>Net</div>
+        {rows.map(r => (
+          <Fragment key={r.key}>
+            <div style={{ fontSize: 11.5, fontWeight: 500, color: C.ink, padding: "7px 0", whiteSpace: "nowrap" }}>
+              {r.icon} {r.label} <span style={{ color: C.inkFaint }}>· {r.n}</span>
+            </div>
+            <div title={`Net ${fmtL(r.net)} of ${fmtL(r.rev)} revenue`}
+              style={{ height: 7, borderRadius: 4, background: C.card, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${Math.max(0, r.net) / maxNet * 100}%`, background: "var(--c-green)", opacity: .8, borderRadius: 4 }} />
+            </div>
+            <div style={num}>{m(fmtL(r.rev))}</div>
+            <div style={{ ...num, color: C.red, fontWeight: 500 }}>−{m(fmtL(r.fees + r.ship))}</div>
+            <div style={{ ...num, color: r.net >= 0 ? C.green : C.red }}>
+              {m(fmtL(r.net))}
+              <span style={{ fontSize: 9, color: C.inkFaint, fontWeight: 400 }}> {r.rev ? Math.round(r.net / r.rev * 100) : 0}%</span>
+            </div>
+          </Fragment>
+        ))}
+      </div>
+      <div style={{ fontSize: 9.5, color: C.inkFaint, marginTop: 10 }}>
+        Marketplace fees are recorded for Etsy only. Courier spend ({m(fmtL(shippingTotal))} from the ledger) is split across platforms by order count — an estimate, not an attribution.
       </div>
     </div>
   );
@@ -3591,10 +3866,7 @@ function BalanceChart({ transactions, months, rates, totalINR, selMo, fmtL, m })
 // level (order_total is duplicated across a multi-item receipt's lines, so
 // gross is deduped by receipt; etsy_fees/etsy_net are share-allocated per line
 // and sum cleanly).
-function EtsyReconCard({ months, selMo, onPick, payoutByMo, rates, fmtL, m, card, label, serif }) {
-  const [orders, setOrders] = useState(null); // null = loading
-  useEffect(() => { let on = true; loadK("ng-orders-v1").then(v => { if (on) setOrders(Array.isArray(v) ? v : []); }); return () => { on = false; }; }, []);
-
+function EtsyReconCard({ orders, months, selMo, onPick, payoutByMo, rates, fmtL, m, card, label, serif }) {
   const cutoff = months ? new Date(Date.now() - months * 30.44 * 86400000).toISOString().slice(0, 10) : "";
   const toINR = (amt, cur) => (+amt || 0) * (cur && cur !== "INR" ? (+rates?.[cur] || 1) : 1);
 
@@ -3832,13 +4104,15 @@ function MonthDetail({ moKey, agg, prev, prevKey, moKeys, onPick, fmtL, m, moNam
   );
 }
 
-function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
+function MoneyFlowView({ transactions, accounts, rates, totalINR, invoices, purchases, onUpdate }) {
   const masked = useMasked();
   const m = makeMask(masked);
   const [months, setMonths] = useState(6);
   const [expanded, setExpanded] = useState(null); // bucket id | "uncat" | income id
   const [q, setQ] = useState("");
   const [selMo, setSelMo] = useState(null);       // "YYYY-MM" — drills every panel into one month
+  const [orders, setOrders] = useState(null);     // ng-orders-v1 (Orders tab) — null = loading
+  useEffect(() => { let on = true; loadK("ng-orders-v1").then(v => { if (on) setOrders(Array.isArray(v) ? v : []); }); return () => { on = false; }; }, []);
 
   const toINR = t => (+t.amount || 0) * (t.currency && t.currency !== "INR" ? (+rates?.[t.currency] || 1) : 1);
   const fmtL = n => {
@@ -3897,6 +4171,10 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
   const moName = k => k ? new Date(k + "-15").toLocaleDateString("en-IN", { month: "long", year: "numeric" }) : "";
   const moShort = k => k ? new Date(k + "-15").toLocaleDateString("en-IN", { month: "short" }) : "";
   const scopeLabel = monthOn ? `in ${moShort(selMo)}` : months ? `last ${months} months` : "all time";
+
+  // Recurring payments — detected over the full ledger (not the window), since
+  // a 3M view still wants a subscription's rhythm from before the cutoff.
+  const recurring = detectRecurring(transactions, toINR);
 
   const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: mob ? "16px 14px" : "20px 22px" };
   const label = { fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: 0.8 };
@@ -4032,8 +4310,9 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
         </div>
       </div>
 
-      {/* ── Balance trajectory ── */}
-      <BalanceChart transactions={transactions} months={months} rates={rates} totalINR={totalINR} selMo={monthOn ? selMo : null} fmtL={fmtL} m={m} />
+      {/* ── Balance trajectory + 90-day projection ── */}
+      <BalanceChart transactions={transactions} months={months} rates={rates} totalINR={totalINR} selMo={monthOn ? selMo : null} fmtL={fmtL} m={m}
+        future={buildForecastEvents({ recurring, invoices, purchases, rates })} />
 
       {/* ── Monthly rhythm — click a month to drill the whole page into it ── */}
       {moKeys.length > 1 && (
@@ -4121,10 +4400,18 @@ function MoneyFlowView({ transactions, accounts, rates, totalINR, onUpdate }) {
       </div>
 
       {/* ── Etsy sales ↔ bank payouts ── */}
-      <EtsyReconCard months={months} selMo={monthOn ? selMo : null}
+      <EtsyReconCard orders={orders} months={months} selMo={monthOn ? selMo : null}
         onPick={k => { setSelMo(k); setExpanded(null); }}
         payoutByMo={Object.fromEntries([...byMonth].map(([mo, a]) => [mo, a.inB.get("payouts")?.amt || 0]))}
         rates={rates} fmtL={fmtL} m={m} card={card} label={label} serif={serif} />
+
+      {/* ── Recurring commitments + platform margins ── */}
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1.1fr", gap: 14, alignItems: "start" }}>
+        <RecurringCard recurring={recurring} fmtL={fmtL} m={m} card={card} label={label} />
+        <PlatformMarginCard orders={orders} months={months} selMo={monthOn ? selMo : null}
+          shippingTotal={agg.outB.get("shipping")?.amt || 0}
+          rates={rates} fmtL={fmtL} m={m} card={card} label={label} />
+      </div>
 
       {(transferN > 0 || !months) && (
         <div style={{ fontSize: 10.5, color: C.inkFaint, padding: "0 4px" }}>
@@ -4494,7 +4781,7 @@ export default function FinanceApp({ onHome }) {
             );
           })()}
           {view === "dashboard"  && <Dashboard accounts={accounts} transactions={txns} rates={rates} invoices={invoices} purchases={purchases} balances={balances} totalINR={totalINR} onAddTxn={() => setView("add")} />}
-          {view === "flow"       && <MoneyFlowView transactions={txns} accounts={accounts} rates={rates} totalINR={totalINR} onUpdate={updateTxn} />}
+          {view === "flow"       && <MoneyFlowView transactions={txns} accounts={accounts} rates={rates} totalINR={totalINR} invoices={invoices} purchases={purchases} onUpdate={updateTxn} />}
           {view === "assets"     && <AssetDashboard assets={assets} rates={rates} onSave={saveAsset} onDelete={deleteAsset} />}
           {view === "ledger"     && <LedgerView transactions={txns} accounts={accounts} rates={rates} onDelete={deleteTxn} onUpdate={updateTxn} vendors={vendors} purchases={purchases} expenses={expenses} invoices={invoices} buyers={buyers} onClassify={handleClassify} />}
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
