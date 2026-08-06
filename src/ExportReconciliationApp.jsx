@@ -2006,11 +2006,12 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
   const [genId, setGenId]       = useState(null);
   const [pdfModal, setPdfModal]     = useState(null);  // kept for packet download
   const [docViewer, setDocViewer]   = useState(null);  // {url, name, mime} for inline view
+  const [viewerW, setViewerW]       = useState(() => { const n=+localStorage.getItem("er-viewerW"); return n>=380?n:560; });
+  const [viewerMax, setViewerMax]   = useState(false);
   const [exportModal, setExportModal] = useState(null); // raw JSON string fallback for blocked downloads
   const [cloudSync, setCloudSync] = useState({unsynced:0, running:false, done:0, total:0, lastMsg:null});
 
   useEffect(()=>{ dataRef.current=data; },[data]);
-
   // Count docs that live only in THIS browser (not yet pushed to the cloud)
   const refreshUnsynced = useCallback(async()=>{
     try{ const keys=await idb.keys(); setCloudSync(s=>({...s,unsynced:keys.filter(k=>!docs.hasCloud(k)).length})); }catch{}
@@ -2401,7 +2402,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
       )}
 
       {/* ── Main content ── */}
-      <div style={{...S.content, transition:"margin-right .25s var(--ease,ease)", marginRight: docViewer&&!mob ? 500 : 0}}>
+      <div style={{...S.content, transition:"margin-right .25s var(--ease,ease)", marginRight: docViewer&&!mob&&!viewerMax ? viewerW : 0}}>
         {(cloudSync.running || cloudSync.unsynced>0 || cloudSync.lastMsg) && (
           <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",
             background:cloudSync.running?C.blueBg:cloudSync.unsynced>0?C.amberBg:C.greenBg,
@@ -2437,7 +2438,9 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
       {/* ── Inline document viewer (fixed right panel) ── */}
       {docViewer&&(
         <DocViewerPanel doc={docViewer} pdfJs={pdfJs}
-          onClose={()=>{ URL.revokeObjectURL(docViewer.url); setDocViewer(null); }}/>
+          width={viewerW} onWidth={w=>{ setViewerW(w); localStorage.setItem("er-viewerW",String(w)); }}
+          maximized={viewerMax} onMaximize={()=>setViewerMax(m=>!m)}
+          onClose={()=>{ URL.revokeObjectURL(docViewer.url); setDocViewer(null); setViewerMax(false); }}/>
       )}
 
       {/* ── Right-side sheet panel ── */}
@@ -4651,143 +4654,363 @@ function HowItWorks({ setView }){
 }
 function Warn({text}){return <span style={{color:C.amber,fontSize:13}}>{text}</span>;}
 
-/* ══ DOCUMENT VIEWER PANEL ═══════════════════════════════════════ */
-function DocViewerPanel({ doc, pdfJs, onClose }) {
+/* ══ DOCUMENT VIEWER PANEL ═══════════════════════════════════════
+   Continuous-scroll PDF/image viewer: lazy per-page rendering at device
+   pixel ratio, thumbnail rail, fit-width/fit-page zoom, rotation,
+   drag-to-resize, maximise, and keyboard shortcuts.                */
+const DPR = () => Math.min(window.devicePixelRatio||1, 2);
+
+/* One lazily-rendered PDF page. Renders only once it scrolls near view. */
+function PdfPage({ pdf, num, zoom, rotation, base, scrollRef, onRef }) {
+  const wrapRef  = useRef(null);
+  const canvasRef= useRef(null);
+  const [vis,setVis] = useState(false);
+  const [done,setDone] = useState(false);
+  const swap = rotation % 180 !== 0;
+  const w = Math.round((swap ? base.h : base.w) * zoom);
+  const h = Math.round((swap ? base.w : base.h) * zoom);
+
+  useEffect(() => {
+    const el = wrapRef.current; if (!el) return;
+    const io = new IntersectionObserver(
+      es => { if (es.some(e=>e.isIntersecting)) setVis(true); },
+      { root: scrollRef.current, rootMargin: "600px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [scrollRef]);
+
+  useEffect(() => {
+    if (!vis) return;
+    let cancelled = false, task = null;
+    setDone(false);
+    (async () => {
+      try {
+        const page = await pdf.getPage(num);
+        if (cancelled) return;
+        const dpr = DPR();
+        const vp  = page.getViewport({ scale: zoom*dpr, rotation });
+        const cv  = canvasRef.current; if (!cv) return;
+        cv.width  = Math.round(vp.width);
+        cv.height = Math.round(vp.height);
+        task = page.render({ canvasContext: cv.getContext("2d"), viewport: vp });
+        await task.promise;
+        if (!cancelled) setDone(true);
+      } catch { /* cancelled render or page error — leave placeholder */ }
+    })();
+    return () => { cancelled = true; try { task && task.cancel(); } catch {} };
+  }, [vis, zoom, rotation, num, pdf]);
+
+  return (
+    <div ref={el=>{ wrapRef.current=el; onRef(num, el); }} data-page={num}
+      style={{position:"relative",width:w,height:h,flexShrink:0,
+        borderRadius:6,overflow:"hidden",background:"#fff",
+        boxShadow:"0 6px 26px rgba(0,0,0,.45)"}}>
+      <canvas ref={canvasRef} style={{width:"100%",height:"100%",display:"block",
+        opacity:done?1:0,transition:"opacity .18s ease"}}/>
+      {!done && <div className="dv-skeleton" style={{position:"absolute",inset:0}}/>}
+      <div style={{position:"absolute",right:8,bottom:8,padding:"2px 7px",borderRadius:6,
+        background:"rgba(0,0,0,.55)",color:"#fff",fontSize:10,fontWeight:600,letterSpacing:".02em",
+        pointerEvents:"none"}}>{num}</div>
+    </div>
+  );
+}
+
+/* Small thumbnail in the left rail. */
+function PdfThumb({ pdf, num, active, onClick }) {
+  const cvRef = useRef(null);
+  const btnRef= useRef(null);
+  useEffect(() => { if (active && btnRef.current) btnRef.current.scrollIntoView({ block:"nearest" }); }, [active]);
+  useEffect(() => {
+    let cancelled=false, task=null;
+    (async () => {
+      try {
+        const page = await pdf.getPage(num);
+        if (cancelled) return;
+        const vp = page.getViewport({ scale: 1 });
+        const s  = 82 / vp.width;
+        const v2 = page.getViewport({ scale: s*DPR() });
+        const cv = cvRef.current; if (!cv) return;
+        cv.width = Math.round(v2.width); cv.height = Math.round(v2.height);
+        cv.style.width = "82px"; cv.style.height = Math.round(vp.height*s)+"px";
+        task = page.render({ canvasContext: cv.getContext("2d"), viewport: v2 });
+        await task.promise;
+      } catch {}
+    })();
+    return () => { cancelled=true; try{ task&&task.cancel(); }catch{} };
+  }, [pdf, num]);
+  return (
+    <button ref={btnRef} onClick={onClick} className="dv-thumb" data-active={active?"1":""}
+      style={{display:"block",background:"none",border:"none",padding:0,cursor:"pointer",width:"100%"}}>
+      <canvas ref={cvRef} style={{display:"block",borderRadius:4,background:"#fff",width:82}}/>
+      <div style={{fontSize:10,marginTop:3,color:active?"#fff":"rgba(255,255,255,.4)",fontWeight:active?700:500}}>{num}</div>
+    </button>
+  );
+}
+
+function DocViewerPanel({ doc, pdfJs, onClose, width=560, onWidth, maximized, onMaximize }) {
   const { url, name, mime, downloadName } = doc;
   const isImage = IMG_MIMES.has(mime||"");
-  const canvasRef = useRef([]);
-  const [numPages,  setNumPages]  = useState(0);
-  const [curPage,   setCurPage]   = useState(1);
-  const [scale,     setScale]     = useState(1.4);
-  const [loading,   setLoading]   = useState(!isImage);
-  const [err,       setErr]       = useState(null);
-  const pdfDocRef = useRef(null);
-  const renderingRef = useRef(false);
 
-  // Load PDF when url/scale changes
+  const scrollRef = useRef(null);
+  const pageEls   = useRef({});
+  const pdfRef    = useRef(null);
+
+  const [bases,    setBases]    = useState([]);   // per-page {w,h} at scale 1
+  const [curPage,  setCurPage]  = useState(1);
+  const [zoom,     setZoom]     = useState(1);
+  const [fit,      setFit]      = useState("width"); // "width" | "page" | null
+  const [rotation, setRotation] = useState(0);
+  const [rail,     setRail]     = useState(false);
+  const [loading,  setLoading]  = useState(!isImage);
+  const [err,      setErr]      = useState(null);
+  const [boxW,     setBoxW]     = useState(0);
+  const [boxH,     setBoxH]     = useState(0);
+  const [pan,      setPan]      = useState({x:0,y:0}); // image drag
+  const numPages = bases.length;
+
+  /* ── load the PDF & measure every page ── */
   useEffect(() => {
     if (isImage) return;
     const lib = pdfJs?.current;
     if (!lib) { setErr("PDF viewer not loaded yet — try again in a moment"); setLoading(false); return; }
-    setLoading(true); setErr(null); setNumPages(0); setCurPage(1);
     let cancelled = false;
+    setLoading(true); setErr(null); setBases([]); setCurPage(1);
     (async () => {
       try {
-        const task = lib.getDocument(url);
-        const pdf  = await task.promise;
+        const pdf = await lib.getDocument(url).promise;
         if (cancelled) return;
-        pdfDocRef.current = pdf;
-        setNumPages(pdf.numPages);
-        setCurPage(1);
-        setLoading(false);
-      } catch(e) {
-        if (!cancelled) { setErr(e.message); setLoading(false); }
-      }
+        pdfRef.current = pdf;
+        const dims = [];
+        for (let i=1;i<=pdf.numPages;i++) {
+          const vp = (await pdf.getPage(i)).getViewport({ scale: 1 });
+          dims.push({ w: vp.width, h: vp.height });
+        }
+        if (cancelled) return;
+        setBases(dims); setLoading(false);
+      } catch(e) { if (!cancelled) { setErr(e.message||String(e)); setLoading(false); } }
     })();
     return () => { cancelled = true; };
-  }, [url, isImage]);
+  }, [url, isImage, pdfJs]);
 
-  // Render current page onto canvas
+  /* ── track the scroll box size (drives fit modes) ── */
   useEffect(() => {
-    if (isImage || !pdfDocRef.current || numPages === 0) return;
-    if (renderingRef.current) return;
-    renderingRef.current = true;
-    (async () => {
-      try {
-        const page     = await pdfDocRef.current.getPage(curPage);
-        const viewport = page.getViewport({ scale });
-        const canvas   = canvasRef.current[0];
-        if (!canvas) return;
-        canvas.width  = viewport.width;
-        canvas.height = viewport.height;
-        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-      } catch(e) { setErr(e.message); }
-      renderingRef.current = false;
-    })();
-  }, [numPages, curPage, scale, isImage]);
+    const el = scrollRef.current; if (!el || typeof ResizeObserver==="undefined") return;
+    const ro = new ResizeObserver(() => { setBoxW(el.clientWidth); setBoxH(el.clientHeight); });
+    ro.observe(el); setBoxW(el.clientWidth); setBoxH(el.clientHeight);
+    return () => ro.disconnect();
+  }, [isImage, loading]);
+
+  /* ── apply the active fit mode ── */
+  useEffect(() => {
+    if (!fit || !bases.length || !boxW) return;
+    const b = bases[Math.min(curPage,bases.length)-1] || bases[0];
+    const swap = rotation % 180 !== 0;
+    const pw = swap ? b.h : b.w, ph = swap ? b.w : b.h;
+    const z = fit==="width" ? (boxW-56)/pw : Math.min((boxW-56)/pw, (boxH-40)/ph);
+    setZoom(Math.max(.15, Math.min(6, z)));
+  }, [fit, bases, boxW, boxH, rotation]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── which page is under the middle of the viewport ── */
+  const onScroll = useCallback(() => {
+    const box = scrollRef.current; if (!box) return;
+    const mid = box.getBoundingClientRect().top + box.clientHeight*0.4;
+    let best = 1, bestD = Infinity;
+    for (const [n,el] of Object.entries(pageEls.current)) {
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      const d = r.top > mid ? r.top-mid : (r.bottom < mid ? mid-r.bottom : 0);
+      if (d < bestD) { bestD = d; best = +n; }
+    }
+    setCurPage(best);
+  }, []);
+
+  const goto = useCallback(n => {
+    const el = pageEls.current[n];
+    if (el) el.scrollIntoView({ behavior:"smooth", block:"start" });
+    setCurPage(n);
+  }, []);
+
+  const bump = useCallback(d => { setFit(null); setZoom(z => Math.max(.2, Math.min(6, +(z*(d>0?1.2:1/1.2)).toFixed(3)))); }, []);
+
+  /* ── keyboard shortcuts ── */
+  useEffect(() => {
+    const onKey = e => {
+      if (e.target && /input|textarea|select/i.test(e.target.tagName)) return;
+      const k = e.key;
+      if (k === "Escape")                    { onClose(); }
+      else if (k === "+" || k === "=")       { e.preventDefault(); bump(1); }
+      else if (k === "-" || k === "_")       { e.preventDefault(); bump(-1); }
+      else if (k === "0")                    { setFit("width"); }
+      else if (k === "1")                    { setFit("page"); }
+      else if (k === "r" || k === "R")       { setRotation(r => (r+90)%360); }
+      else if (k === "f" || k === "F")       { onMaximize && onMaximize(); }
+      else if (k === "ArrowDown" || k === "PageDown" || k === " ") { if(!isImage&&numPages>1){ e.preventDefault(); goto(Math.min(numPages, curPage+1)); } }
+      else if (k === "ArrowUp"   || k === "PageUp")                { if(!isImage&&numPages>1){ e.preventDefault(); goto(Math.max(1, curPage-1)); } }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, bump, goto, curPage, numPages, isImage, onMaximize]);
+
+  /* ── ctrl/⌘ + wheel to zoom ── */
+  const onWheel = useCallback(e => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    bump(e.deltaY < 0 ? 1 : -1);
+  }, [bump]);
+
+  /* ── drag the left edge to resize ── */
+  const startResize = useCallback(e => {
+    if (mob || maximized || !onWidth) return;
+    e.preventDefault();
+    const move = ev => {
+      const w = Math.round(Math.min(window.innerWidth-240, Math.max(380, window.innerWidth - ev.clientX)));
+      onWidth(w);
+    };
+    const up = () => { window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",up); document.body.style.cursor=""; document.body.style.userSelect=""; };
+    window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+    document.body.style.cursor="col-resize"; document.body.style.userSelect="none";
+  }, [maximized, onWidth]);
+
+  /* ── image pan ── */
+  const startPan = useCallback(e => {
+    if (zoom <= 1) return;
+    e.preventDefault();
+    const sx = e.clientX - pan.x, sy = e.clientY - pan.y;
+    const move = ev => setPan({ x: ev.clientX-sx, y: ev.clientY-sy });
+    const up = () => { window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",up); };
+    window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+  }, [pan, zoom]);
+  useEffect(() => { if (zoom<=1) setPan({x:0,y:0}); }, [zoom]);
+
+  const panelStyle = maximized || mob
+    ? { position:"fixed", inset:0, width:"100%" }
+    : { position:"fixed", top:0, right:0, bottom:0, width };
 
   return (
-    <div style={{
-      position:"fixed", top:0, right:0, bottom:0, width:500,
-      background:"#1c1c1e", zIndex:250, display:"flex", flexDirection:"column",
-      boxShadow:"-8px 0 40px rgba(0,0,0,0.35)",
+    <div className="dv-panel" style={{
+      ...panelStyle, zIndex:250, display:"flex", flexDirection:"column",
+      background:"linear-gradient(180deg,#17171a 0%,#101012 100%)",
+      boxShadow:"-14px 0 60px rgba(0,0,0,.42)",
     }}>
-      {/* Header */}
-      <div style={{
-        display:"flex", alignItems:"center", justifyContent:"space-between",
-        padding:"12px 16px", borderBottom:"1px solid rgba(255,255,255,0.1)", flexShrink:0,
-        background:"#2a2a2e",
-      }}>
-        <div style={{flex:1,minWidth:0,marginRight:10}}>
-          <div style={{color:"#fff",fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{name}</div>
-          {!isImage && numPages>0 && (
-            <div style={{color:"rgba(255,255,255,0.45)",fontSize:11,marginTop:2}}>
-              {numPages} page{numPages!==1?"s":""}
-            </div>
-          )}
+      {/* resize grip */}
+      {!mob && !maximized && <div className="dv-grip" onMouseDown={startResize} title="Drag to resize"/>}
+
+      {/* ── header ── */}
+      <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",flexShrink:0,
+        borderBottom:"1px solid rgba(255,255,255,.09)",
+        background:"rgba(255,255,255,.045)",backdropFilter:"blur(12px)"}}>
+        <div style={{width:30,height:30,borderRadius:8,flexShrink:0,display:"flex",alignItems:"center",
+          justifyContent:"center",fontSize:14,background:isImage?"rgba(96,165,250,.16)":"rgba(248,113,113,.16)"}}>
+          {isImage?"🖼":"📄"}
         </div>
-        <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
-          {/* Zoom controls for PDF */}
-          {!isImage && numPages>0 && <>
-            <button onClick={()=>setScale(s=>Math.max(0.6,+(s-0.2).toFixed(1)))} title="Zoom out"
-              style={vBtn}>−</button>
-            <span style={{color:"rgba(255,255,255,0.6)",fontSize:11,minWidth:32,textAlign:"center"}}>{Math.round(scale*100)}%</span>
-            <button onClick={()=>setScale(s=>Math.min(3,+(s+0.2).toFixed(1)))} title="Zoom in"
-              style={vBtn}>+</button>
-            <div style={{width:1,height:20,background:"rgba(255,255,255,0.15)",margin:"0 4px"}}/>
-          </>}
-          <a href={url} download={downloadName||name} title="Download"
-            style={{...vBtn, textDecoration:"none", display:"flex", alignItems:"center", justifyContent:"center"}}>⬇</a>
-          <button onClick={onClose} title="Close" style={{...vBtn, fontWeight:700}}>✕</button>
+        <div style={{flex:1,minWidth:0}}>
+          <div title={name} style={{color:"#fff",fontSize:13,fontWeight:600,overflow:"hidden",
+            textOverflow:"ellipsis",whiteSpace:"nowrap",letterSpacing:"-.01em"}}>{name}</div>
+          <div style={{color:"rgba(255,255,255,.42)",fontSize:11,marginTop:1}}>
+            {isImage ? "Image" : numPages ? `${numPages} page${numPages!==1?"s":""}` : loading ? "Loading…" : "PDF"}
+            {" · "}{Math.round(zoom*100)}%
+          </div>
+        </div>
+        <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+          {!isImage && numPages>1 &&
+            <button className="dv-btn" data-on={rail?"1":""} onClick={()=>setRail(r=>!r)} title="Page thumbnails">▦</button>}
+          <a className="dv-btn" href={url} download={downloadName||name} title="Download">⬇</a>
+          {!mob && onMaximize &&
+            <button className="dv-btn" onClick={onMaximize} title={maximized?"Exit full screen (F)":"Full screen (F)"}>{maximized?"⤡":"⤢"}</button>}
+          <button className="dv-btn" onClick={onClose} title="Close (Esc)" style={{fontWeight:700}}>✕</button>
         </div>
       </div>
 
-      {/* Viewer area */}
-      <div style={{flex:1,overflowY:"auto",overflowX:"auto",display:"flex",flexDirection:"column",alignItems:"center",padding:16,gap:12}}>
-        {isImage ? (
-          <img src={url} alt={name}
-            style={{maxWidth:"100%",borderRadius:6,boxShadow:"0 4px 24px rgba(0,0,0,0.5)"}}/>
-        ) : loading ? (
-          <div style={{color:"rgba(255,255,255,0.5)",marginTop:80,fontSize:14}}>
-            <span className="spin" style={{marginRight:8}}>⟳</span>Loading…
+      {/* ── toolbar ── */}
+      {!err && (
+      <div style={{display:"flex",alignItems:"center",gap:6,padding:"8px 12px",flexShrink:0,
+        borderBottom:"1px solid rgba(255,255,255,.07)",background:"rgba(255,255,255,.02)"}}>
+        <button className="dv-btn" onClick={()=>bump(-1)} title="Zoom out (−)">−</button>
+        <button className="dv-btn" onClick={()=>bump(1)}  title="Zoom in (+)">+</button>
+        <button className="dv-btn" data-on={fit==="width"?"1":""} onClick={()=>setFit("width")} title="Fit width (0)">↔ Fit</button>
+        {!isImage && <button className="dv-btn" data-on={fit==="page"?"1":""} onClick={()=>setFit("page")} title="Fit page (1)">⤢ Page</button>}
+        <button className="dv-btn" onClick={()=>setRotation(r=>(r+90)%360)} title="Rotate (R)">⟳</button>
+        <div style={{flex:1}}/>
+        {!isImage && numPages>1 && (
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <button className="dv-btn" onClick={()=>goto(Math.max(1,curPage-1))} disabled={curPage===1} title="Previous page">‹</button>
+            <input className="dv-page" value={curPage}
+              onChange={e=>{ const n=+e.target.value.replace(/\D/g,""); if(n>=1&&n<=numPages) goto(n); }}/>
+            <span style={{color:"rgba(255,255,255,.4)",fontSize:11}}>/ {numPages}</span>
+            <button className="dv-btn" onClick={()=>goto(Math.min(numPages,curPage+1))} disabled={curPage===numPages} title="Next page">›</button>
           </div>
-        ) : err ? (
-          <div style={{color:"#f87171",marginTop:60,textAlign:"center",padding:24,fontSize:13}}>
-            <div style={{fontSize:32,marginBottom:12}}>⚠</div>
-            {err}
-            <div style={{marginTop:16}}>
-              <a href={url} download={downloadName||name}
-                style={{color:C.gold,fontSize:13}}>Download instead ⬇</a>
-            </div>
-          </div>
-        ) : (
-          <canvas ref={el=>canvasRef.current[0]=el}
-            style={{borderRadius:4,boxShadow:"0 4px 24px rgba(0,0,0,0.5)",maxWidth:"100%"}}/>
         )}
       </div>
+      )}
 
-      {/* Page nav for multi-page PDFs */}
-      {!isImage && numPages>1 && (
-        <div style={{
-          display:"flex",alignItems:"center",justifyContent:"center",gap:12,
-          padding:"10px 16px",borderTop:"1px solid rgba(255,255,255,0.08)",
-          background:"#2a2a2e",flexShrink:0,
-        }}>
-          <button onClick={()=>setCurPage(p=>Math.max(1,p-1))} disabled={curPage===1} style={vBtn}>‹ Prev</button>
-          <span style={{color:"rgba(255,255,255,0.7)",fontSize:12,minWidth:80,textAlign:"center"}}>
-            Page {curPage} of {numPages}
-          </span>
-          <button onClick={()=>setCurPage(p=>Math.min(numPages,p+1))} disabled={curPage===numPages} style={vBtn}>Next ›</button>
+      {/* ── body ── */}
+      <div style={{flex:1,minHeight:0,display:"flex"}}>
+        {/* thumbnail rail */}
+        {!isImage && rail && numPages>1 && (
+          <div className="dv-scroll" style={{width:110,flexShrink:0,overflowY:"auto",padding:"12px 0",
+            display:"flex",flexDirection:"column",alignItems:"center",gap:10,
+            borderRight:"1px solid rgba(255,255,255,.07)",background:"rgba(0,0,0,.25)"}}>
+            {bases.map((_,i)=>(
+              <PdfThumb key={i} pdf={pdfRef.current} num={i+1} active={curPage===i+1} onClick={()=>goto(i+1)}/>
+            ))}
+          </div>
+        )}
+
+        <div ref={scrollRef} className="dv-scroll" data-viewer-scroll onScroll={onScroll} onWheel={onWheel}
+          style={{flex:1,minWidth:0,overflow:"auto",padding:20,display:"flex",flexDirection:"column",
+            alignItems:"center",gap:16}}>
+          {isImage ? (() => {
+            const b = bases[0];
+            const swap = rotation % 180 !== 0;
+            const iw = b ? b.w*zoom : 0, ih = b ? b.h*zoom : 0;
+            return (
+              <div style={{position:"relative",flexShrink:0,
+                width: b ? (swap?ih:iw) : "100%", height: b ? (swap?iw:ih) : "auto",
+                transform:`translate(${pan.x}px,${pan.y}px)`}}>
+                <img src={url} alt={name} draggable={false} onMouseDown={startPan}
+                  onDoubleClick={()=>{ setFit("width"); setPan({x:0,y:0}); }}
+                  onLoad={e=>{ if(!bases.length) setBases([{w:e.target.naturalWidth,h:e.target.naturalHeight}]); }}
+                  style={{ position: b?"absolute":"static", left:"50%", top:"50%",
+                    width: b ? iw : "100%", height: b ? ih : "auto", maxWidth:"none",
+                    borderRadius:8, background:"#fff", boxShadow:"0 6px 30px rgba(0,0,0,.5)",
+                    transform: b ? `translate(-50%,-50%) rotate(${rotation}deg)` : "none",
+                    cursor: zoom>1 ? "grab" : "default" }}/>
+              </div>
+            );
+          })() : loading ? (
+            <div style={{color:"rgba(255,255,255,.5)",marginTop:90,fontSize:13,textAlign:"center"}}>
+              <span className="spin" style={{marginRight:8}}>⟳</span>Opening document…
+            </div>
+          ) : err ? (
+            <div style={{color:"#f87171",marginTop:70,textAlign:"center",padding:24,fontSize:13}}>
+              <div style={{fontSize:32,marginBottom:12}}>⚠</div>
+              {err}
+              <div style={{marginTop:16}}>
+                <a href={url} download={downloadName||name} style={{color:C.gold,fontSize:13}}>Download instead ⬇</a>
+              </div>
+            </div>
+          ) : bases.map((b,i)=>(
+            <PdfPage key={i} pdf={pdfRef.current} num={i+1} zoom={zoom} rotation={rotation} base={b}
+              scrollRef={scrollRef} onRef={(n,el)=>{ pageEls.current[n]=el; }}/>
+          ))}
+        </div>
+      </div>
+
+      {/* ── footer hint ── */}
+      {!err && !loading && (
+        <div style={{flexShrink:0,padding:"7px 14px",borderTop:"1px solid rgba(255,255,255,.07)",
+          background:"rgba(0,0,0,.28)",color:"rgba(255,255,255,.32)",fontSize:10.5,
+          display:"flex",gap:14,flexWrap:"wrap"}}>
+          <span><b style={{color:"rgba(255,255,255,.5)"}}>⌘/Ctrl+scroll</b> zoom</span>
+          <span><b style={{color:"rgba(255,255,255,.5)"}}>0</b> fit</span>
+          <span><b style={{color:"rgba(255,255,255,.5)"}}>R</b> rotate</span>
+          {!mob && <span><b style={{color:"rgba(255,255,255,.5)"}}>F</b> full screen</span>}
+          <span><b style={{color:"rgba(255,255,255,.5)"}}>Esc</b> close</span>
         </div>
       )}
     </div>
   );
 }
-const vBtn={
-  background:"rgba(255,255,255,0.1)",color:"#fff",border:"none",
-  borderRadius:6,padding:"5px 10px",fontSize:12,cursor:"pointer",
-  fontFamily:"inherit",
-};
 
 /* ══ STYLES ══════════════════════════════════════════════════════ */
 const CSS=`
@@ -4833,6 +5056,31 @@ const CSS=`
   .nav-item:hover{background:var(--c-card);color:var(--c-ink);}
   .nav-item.active{background:${C.greenBg};color:var(--c-ink);font-weight:700;box-shadow:var(--e-1);}
   .nav-item.active::before{content:"";position:absolute;left:0;top:18%;bottom:18%;width:3px;background:${C.gold};border-radius:0 3px 3px 0;}
+  /* ── Document viewer ── */
+  .dv-panel{animation:dvIn .26s var(--ease-spring,cubic-bezier(.34,1.56,.64,1));}
+  @keyframes dvIn{from{opacity:0;transform:translateX(28px)}to{opacity:1;transform:none}}
+  .dv-grip{position:absolute;left:0;top:0;bottom:0;width:7px;cursor:col-resize;z-index:2;background:transparent;transition:background .15s ease;}
+  .dv-grip:hover,.dv-grip:active{background:linear-gradient(90deg,${C.gold},transparent);}
+  .dv-btn{background:rgba(255,255,255,.09);color:#fff;border:1px solid rgba(255,255,255,.06);border-radius:7px;
+    min-width:28px;height:28px;padding:0 8px;font-size:12px;line-height:1;cursor:pointer;font-family:inherit;
+    display:inline-flex;align-items:center;justify-content:center;text-decoration:none;
+    transition:background .14s ease,transform .12s ease,opacity .14s ease;}
+  .dv-btn:hover{background:rgba(255,255,255,.17);}
+  .dv-btn:active{transform:scale(.93);}
+  .dv-btn:disabled{opacity:.28;cursor:default;transform:none;}
+  .dv-btn[data-on="1"]{background:${C.gold};border-color:transparent;color:#fff;font-weight:600;}
+  .dv-page{width:42px;height:28px;text-align:center;border-radius:7px;border:1px solid rgba(255,255,255,.12);
+    background:rgba(0,0,0,.35);color:#fff;font-size:12px;font-family:inherit;}
+  .dv-page:focus{outline:none;border-color:${C.gold};}
+  .dv-scroll::-webkit-scrollbar{width:10px;height:10px;}
+  .dv-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:8px;border:3px solid transparent;background-clip:content-box;}
+  .dv-scroll::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.32);background-clip:content-box;}
+  .dv-scroll::-webkit-scrollbar-track{background:transparent;}
+  .dv-thumb{opacity:.8;border-radius:6px;padding:3px !important;transition:opacity .15s ease,box-shadow .15s ease,transform .15s ease;}
+  .dv-thumb:hover{opacity:.9;transform:translateY(-1px);}
+  .dv-thumb[data-active="1"]{opacity:1;box-shadow:0 0 0 2px ${C.gold};}
+  .dv-skeleton{background:linear-gradient(100deg,#f1f1f3 30%,#e2e2e6 50%,#f1f1f3 70%);background-size:220% 100%;animation:dvShim 1.15s linear infinite;}
+  @keyframes dvShim{from{background-position:120% 0}to{background-position:-120% 0}}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
   .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
 `;
