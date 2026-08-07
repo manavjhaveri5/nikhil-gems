@@ -6139,12 +6139,26 @@ function EbayLiveView() {
               order_number: `EBAY-${eo.orderId}`, platform_order_id: String(eo.orderId),
               listing_title: eo.items?.[0]?.title || `eBay order ${eo.orderId}`,
               buyer_name: eo.buyer || "", sale_price: +eo.total || 0, order_total: +eo.total || 0,
+              buyer_email:   eo.buyerEmail || "",
+              ship_name:     eo.ship?.name || "",
+              ship_address1: eo.ship?.address1 || "",
+              ship_address2: eo.ship?.address2 || "",
+              ship_city:     eo.ship?.city || "",
+              ship_state:    eo.ship?.state || "",
+              ship_postcode: eo.ship?.postcode || "",
+              ship_country:  eo.ship?.country || "",
+              ship_phone:    eo.ship?.phone || "",
               currency: eo.currency || "USD", status: eo.status || "",
               date: (eo.created || "").slice(0, 10) || undefined, created_at: eo.created || undefined,
               source: "ebay-sync",
             };
             const prev = prevById.get(norm.id);
             const merged = { ...norm, ...prev, status: norm.status || prev?.status, sale_price: norm.sale_price, order_total: norm.order_total };
+            // Freshly synced address/contact beats a stale empty value (eBay masks
+            // addresses on old orders, so keep whichever side actually has data).
+            for (const k of ["buyer_email","ship_name","ship_address1","ship_address2","ship_city","ship_state","ship_postcode","ship_country","ship_phone"]) {
+              if (norm[k]) merged[k] = norm[k];
+            }
             if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) await upsertItemK(ORDERS_KEY, merged, { prepend: true });
           }
         } catch {}

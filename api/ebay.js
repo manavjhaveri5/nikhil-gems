@@ -270,15 +270,31 @@ function parseOrder(block) {
   const total    = xmlTag("Total", block);
   // Buyer is nested under <CheckoutStatus><eBayUserID> or <BuyerUserID>
   const buyer    = xmlTag("BuyerUserID", block) || xmlTag("eBayUserID", xmlBlock("CheckoutStatus", block));
+  // Shipping address — eBay masks fields with "Invalid Request" once the order
+  // is old enough (~14 days), so filter that sentinel out.
+  const clean     = v => (!v || /invalid request/i.test(v)) ? "" : v;
+  const shipBlock = xmlBlock("ShippingAddress", block);
+  const ship = shipBlock ? {
+    name:     clean(xmlTag("Name", shipBlock)),
+    address1: clean(xmlTag("Street1", shipBlock)),
+    address2: clean(xmlTag("Street2", shipBlock)),
+    city:     clean(xmlTag("CityName", shipBlock)),
+    state:    clean(xmlTag("StateOrProvince", shipBlock)),
+    postcode: clean(xmlTag("PostalCode", shipBlock)),
+    country:  clean(xmlTag("CountryName", shipBlock)) || clean(xmlTag("Country", shipBlock)),
+    phone:    clean(xmlTag("Phone", shipBlock)),
+  } : null;
   // Line items
   const txnBlock = xmlBlock("TransactionArray", block);
+  const emailRaw = xmlTag("Email", xmlBlock("Buyer", xmlBlock("Transaction", txnBlock)));
+  const buyerEmail = clean(emailRaw).includes("@") ? clean(emailRaw) : "";
   const items    = xmlAll("Transaction", txnBlock).map(t => ({
     title:  xmlTag("Title", xmlBlock("Item", t)),
     itemId: xmlTag("ItemID", xmlBlock("Item", t)),
     qty:    parseInt(xmlTag("QuantityPurchased", t) || "1", 10),
     price:  parseFloat(xmlTag("TransactionPrice", t) || "0"),
   }));
-  return { orderId, buyer, total: parseFloat(total || "0"), currency: "USD", created, status, items };
+  return { orderId, buyer, buyerEmail, ship, total: parseFloat(total || "0"), currency: "USD", created, status, items };
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
