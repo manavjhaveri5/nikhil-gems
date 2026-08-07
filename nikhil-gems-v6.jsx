@@ -10445,10 +10445,18 @@ const effectiveBuyer=(rec,inv={})=>{
   const country=inv.buyerCountry||inv.consigneeCountry||"";
   return{id:inv.buyerId||"",name,contactName:inv.buyerContactName||"",billingAddress:addr,address:addr,shippingAddress:inv.consigneeAddress||addr,shippingSameAsBilling:true,country,email:inv.buyerEmail||"",port:inv.portDischarge||country,_synthetic:true};
 };
+// Internal breadcrumbs: stored on the invoice so the record keeps its provenance,
+// but stripped from anything a customer sees. Filtering happens at print time, so
+// invoices created before a pattern was added are cleaned too.
+const INTERNAL_NOTE_PATTERNS=[
+  /^from\s+shipping\s+bill\b/i,
+  /^buyer\s*\(from\s+sb\)\s*:/i,
+  /^created\s+from\s+listing\s+manager\b/i,
+];
 const cleanInvoiceNotes=notes=>String(notes||"")
   .split(/\s*·\s*|\n+/)
   .map(s=>s.trim())
-  .filter(s=>s&&!/^from\s+shipping\s+bill\b/i.test(s)&&!/^buyer\s*\(from\s+sb\)\s*:/i.test(s))
+  .filter(s=>s&&!INTERNAL_NOTE_PATTERNS.some(re=>re.test(s)))
   .join("\n");
 const invoicePortDischarge=(inv,buyer,consignee)=>(inv?.portDischarge||buyer?.port||consignee?.country||buyer?.country||inv?.consigneeCountry||"").trim();
 
