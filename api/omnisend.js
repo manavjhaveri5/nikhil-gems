@@ -114,7 +114,8 @@ export default async function handler(req, res) {
 
     /* Audiences to send to. */
     if (action === "segments") {
-      const r = await omni("GET", "/segments?limit=100");
+      // Omnisend rejects limit > 50 outright ("Must be between 1 and 50").
+      const r = await omni("GET", "/segments?limit=50");
       if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
       const rows = r.data?.segments || r.data?.data || (Array.isArray(r.data) ? r.data : []);
       return res.json({
