@@ -48,6 +48,68 @@ const pickId = o =>
 
 const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+const qs = o => Object.entries(o)
+  .filter(([, v]) => v !== "" && v != null)
+  .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+
+/* Omnisend caps page size per resource and rejects anything larger outright
+   (segments max out at 50, for instance) rather than clamping. The cap isn't
+   documented per-endpoint, so read it back off the error and retry once. */
+async function omniList(path, params = {}) {
+  let r = await omni("GET", `${path}?${qs(params)}`);
+  const cap = !r.ok && /between\s+1\s+and\s+(\d+)/i.exec(r.error || "");
+  if (cap && +cap[1] > 0 && +params.limit > +cap[1]) r = await omni("GET", `${path}?${qs({ ...params, limit: +cap[1] })}`);
+  return r;
+}
+
+const rowsOf = (data, key) => data?.[key] || data?.data || (Array.isArray(data) ? data : []);
+
+/* Contact shape differs between Omnisend API versions: older responses carry a
+   flat `email`/`status`, newer ones nest everything under `identifiers`. Flatten
+   both into one row the ERP can render, edit and export. */
+function normalizeContact(c = {}) {
+  const ids = Array.isArray(c.identifiers) ? c.identifiers : [];
+  const emailId = ids.find(i => i.type === "email");
+  const phoneId = ids.find(i => i.type === "phone");
+  const email = emailId?.id || c.email || "";
+  const phone = phoneId?.id || c.phone || "";
+  const status = emailId?.channels?.email?.status || c.status || c.emailStatus || "";
+  return {
+    id: c.contactID || c.contactId || c.id || "",
+    email,
+    phone,
+    status,
+    firstName: c.firstName || "",
+    lastName: c.lastName || "",
+    country: c.country || c.countryCode || "",
+    city: c.city || "",
+    tags: Array.isArray(c.tags) ? c.tags : [],
+    createdAt: c.createdAt || c.created_at || "",
+    optInDate: emailId?.channels?.email?.statusDate || "",
+  };
+}
+
+/* The write shape always uses `identifiers` — that is what current API versions
+   accept, and older ones tolerate the extra top-level fields we send alongside. */
+function contactPayload(b = {}) {
+  const email = String(b.email || "").trim();
+  const status = b.status === "unsubscribed" ? "unsubscribed" : "subscribed";
+  return {
+    ...(email ? {
+      identifiers: [{
+        type: "email",
+        id: email,
+        channels: { email: { status, statusDate: new Date().toISOString() } },
+      }],
+    } : {}),
+    ...(b.firstName ? { firstName: String(b.firstName).slice(0, 100) } : {}),
+    ...(b.lastName ? { lastName: String(b.lastName).slice(0, 100) } : {}),
+    ...(b.country ? { country: String(b.country).slice(0, 100) } : {}),
+    ...(b.city ? { city: String(b.city).slice(0, 100) } : {}),
+    ...(Array.isArray(b.tags) && b.tags.length ? { tags: b.tags.map(t => String(t).slice(0, 60)).slice(0, 25) } : {}),
+  };
+}
+
 /* ── Email HTML ──────────────────────────────────────────────────────────────
    Table-based two-column layout — the only thing that renders reliably across
    Outlook/Gmail. Inline styles for the same reason (no <style> support in Gmail
@@ -122,6 +184,73 @@ export default async function handler(req, res) {
         ok: true,
         segments: rows.map(s => ({ id: s.segmentID || s.segmentId || s.id, name: s.name || s.title || "(unnamed)", count: s.contactsCount ?? s.count ?? null })),
       });
+    }
+
+    /* Past + draft campaigns, newest first. */
+    if (action === "campaigns") {
+      const r = await omniList("/campaigns", { limit: +body.limit || 50, offset: +body.offset || 0 });
+      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+      const rows = rowsOf(r.data, "campaigns").map(c => ({
+        id: c.campaignID || c.campaignId || c.id || "",
+        name: c.name || "(untitled)",
+        subject: c.content?.email?.subject || c.subject || "",
+        senderName: c.content?.email?.senderName || "",
+        status: c.status || "",
+        type: c.type || "",
+        createdAt: c.createdAt || "",
+        sentAt: c.sentAt || c.sendAt || c.scheduledAt || "",
+        // Stats keys vary by version; take whichever is present.
+        sent: c.statistics?.sent ?? c.stats?.sent ?? null,
+        opened: c.statistics?.opened ?? c.stats?.opened ?? null,
+        clicked: c.statistics?.clicked ?? c.stats?.clicked ?? null,
+      }));
+      return res.json({ ok: true, campaigns: rows, paging: r.data?.paging || null });
+    }
+
+    /* One campaign, for the detail drawer. */
+    if (action === "campaign") {
+      const id = String(body.campaignId || "").trim();
+      if (!id) return res.status(400).json({ error: "campaignId required" });
+      const r = await omni("GET", `/campaigns/${encodeURIComponent(id)}`);
+      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+      return res.json({ ok: true, campaign: r.data });
+    }
+
+    /* Subscriber list — one page at a time; the ERP loops for CSV export. */
+    if (action === "contacts") {
+      const params = { limit: +body.limit || 100, offset: +body.offset || 0 };
+      if (body.status) params.status = body.status;
+      if (body.email) params.email = String(body.email).trim();
+      if (body.segmentId) params.segmentID = body.segmentId;
+      const r = await omniList("/contacts", params);
+      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+      const raw = rowsOf(r.data, "contacts");
+      return res.json({ ok: true, contacts: raw.map(normalizeContact), count: raw.length, paging: r.data?.paging || null });
+    }
+
+    /* Add a subscriber, or edit one when contactId is supplied. */
+    if (action === "contact_save") {
+      const contactId = String(body.contactId || "").trim();
+      const email = String(body.email || "").trim();
+      if (!contactId && !email) return res.status(400).json({ error: "Email is required" });
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: `"${email}" is not a valid email address` });
+      const payload = contactPayload(body);
+      let r;
+      if (contactId) {
+        r = await omni("PATCH", `/contacts/${encodeURIComponent(contactId)}`, payload);
+        if (!r.ok && (r.status === 404 || r.status === 405)) r = await omni("PUT", `/contacts/${encodeURIComponent(contactId)}`, payload);
+      } else {
+        r = await omni("POST", "/contacts", payload);
+        // Already on the list: patch the existing record instead of failing.
+        if (!r.ok && (r.status === 409 || /exist|duplicate/i.test(r.error || ""))) {
+          const found = await omniList("/contacts", { email, limit: 1 });
+          const hit = rowsOf(found.data, "contacts")[0];
+          const hitId = hit && (hit.contactID || hit.contactId || hit.id);
+          if (hitId) r = await omni("PATCH", `/contacts/${encodeURIComponent(hitId)}`, payload);
+        }
+      }
+      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+      return res.json({ ok: true, contact: normalizeContact(r.data?.contact || r.data || {}), updated: !!contactId });
     }
 
     /* Preview only — render the same HTML the campaign would use. */
