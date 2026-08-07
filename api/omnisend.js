@@ -52,63 +52,53 @@ const qs = o => Object.entries(o)
   .filter(([, v]) => v !== "" && v != null)
   .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
 
-/* Omnisend caps page size per resource and rejects anything larger outright
-   (segments max out at 50, for instance) rather than clamping. The cap isn't
-   documented per-endpoint, so read it back off the error and retry once. */
+/* Omnisend pages with opaque cursors (?after=<cursor>), not offset/page — those
+   are rejected as "Unknown parameter". Page size caps at 250 and larger values
+   are rejected rather than clamped, so read the cap back off the error and retry. */
+const PAGE_MAX = 250;
 async function omniList(path, params = {}) {
   let r = await omni("GET", `${path}?${qs(params)}`);
   const cap = !r.ok && /between\s+1\s+and\s+(\d+)/i.exec(r.error || "");
   if (cap && +cap[1] > 0 && +params.limit > +cap[1]) r = await omni("GET", `${path}?${qs({ ...params, limit: +cap[1] })}`);
   return r;
 }
+const pagingOf = data => ({
+  hasMore: !!data?.paging?.hasMore,
+  after: data?.paging?.cursors?.after || "",
+});
+const clampLimit = n => Math.min(PAGE_MAX, Math.max(1, +n || 100));
 
 const rowsOf = (data, key) => data?.[key] || data?.data || (Array.isArray(data) ? data : []);
 
-/* Contact shape differs between Omnisend API versions: older responses carry a
-   flat `email`/`status`, newer ones nest everything under `identifiers`. Flatten
-   both into one row the ERP can render, edit and export. */
+/* Contacts come back flat (email/status at the top level) with an `identifiers`
+   array alongside; `phone` is an array, not a string. Read both so the row stays
+   correct if the account is ever moved to a different API version. */
 function normalizeContact(c = {}) {
-  const ids = Array.isArray(c.identifiers) ? c.identifiers : [];
-  const emailId = ids.find(i => i.type === "email");
-  const phoneId = ids.find(i => i.type === "phone");
-  const email = emailId?.id || c.email || "";
-  const phone = phoneId?.id || c.phone || "";
-  const status = emailId?.channels?.email?.status || c.status || c.emailStatus || "";
+  const emailId = (Array.isArray(c.identifiers) ? c.identifiers : []).find(i => i.type === "email");
+  const phone = Array.isArray(c.phone) ? (c.phone[0]?.phone || c.phone[0] || "") : (c.phone || "");
   return {
     id: c.contactID || c.contactId || c.id || "",
-    email,
-    phone,
-    status,
+    email: c.email || emailId?.id || "",
+    phone: typeof phone === "string" ? phone : "",
+    status: c.status || emailId?.channels?.email?.status || "",
     firstName: c.firstName || "",
     lastName: c.lastName || "",
     country: c.country || c.countryCode || "",
     city: c.city || "",
     tags: Array.isArray(c.tags) ? c.tags : [],
-    createdAt: c.createdAt || c.created_at || "",
-    optInDate: emailId?.channels?.email?.statusDate || "",
+    segments: Array.isArray(c.segments) ? c.segments : [],
+    createdAt: c.createdAt || "",
+    optInDate: emailId?.channels?.email?.statusChangedAt || "",
   };
 }
 
-/* The write shape always uses `identifiers` — that is what current API versions
-   accept, and older ones tolerate the extra top-level fields we send alongside. */
-function contactPayload(b = {}) {
-  const email = String(b.email || "").trim();
-  const status = b.status === "unsubscribed" ? "unsubscribed" : "subscribed";
-  return {
-    ...(email ? {
-      identifiers: [{
-        type: "email",
-        id: email,
-        channels: { email: { status, statusDate: new Date().toISOString() } },
-      }],
-    } : {}),
-    ...(b.firstName ? { firstName: String(b.firstName).slice(0, 100) } : {}),
-    ...(b.lastName ? { lastName: String(b.lastName).slice(0, 100) } : {}),
-    ...(b.country ? { country: String(b.country).slice(0, 100) } : {}),
-    ...(b.city ? { city: String(b.city).slice(0, 100) } : {}),
-    ...(Array.isArray(b.tags) && b.tags.length ? { tags: b.tags.map(t => String(t).slice(0, 60)).slice(0, 25) } : {}),
-  };
-}
+const contactFields = b => ({
+  ...(b.firstName != null ? { firstName: String(b.firstName).slice(0, 100) } : {}),
+  ...(b.lastName != null ? { lastName: String(b.lastName).slice(0, 100) } : {}),
+  ...(b.country ? { country: String(b.country).slice(0, 100) } : {}),
+  ...(b.city ? { city: String(b.city).slice(0, 100) } : {}),
+  ...(Array.isArray(b.tags) && b.tags.length ? { tags: b.tags.map(t => String(t).slice(0, 60)).slice(0, 25) } : {}),
+});
 
 /* ── Email HTML ──────────────────────────────────────────────────────────────
    Table-based two-column layout — the only thing that renders reliably across
@@ -186,37 +176,30 @@ export default async function handler(req, res) {
       });
     }
 
-    /* TEMPORARY: read-only shape probe, whitelisted GET paths, removed once the
-       campaign/contact endpoints are pinned down. */
-    if (action === "__probe") {
-      const path = String(body.path || "");
-      if (!/^\/(campaigns|contacts|segments)(\/[\w-]+)?(\?[\w=&%.@-]*)?$/.test(path)) return res.status(400).json({ error: "path not allowed" });
-      const r = await omni("GET", path);
-      return res.json({ ok: r.ok, status: r.status, error: r.error || "", sample: JSON.stringify(r.data).slice(0, 1400) });
-    }
-
-    /* Past + draft campaigns, newest first. */
+    /* Campaigns, newest first. Omnisend exposes no open/click stats on this
+       resource, so the ERP links out for reporting rather than inventing numbers. */
     if (action === "campaigns") {
-      const r = await omniList("/campaigns", { limit: +body.limit || 50, offset: +body.offset || 0 });
+      const r = await omniList("/campaigns", { limit: clampLimit(body.limit || 100), after: body.after || undefined });
       if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
       const rows = rowsOf(r.data, "campaigns").map(c => ({
-        id: c.campaignID || c.campaignId || c.id || "",
+        id: c.id || c.campaignID || "",
         name: c.name || "(untitled)",
-        subject: c.content?.email?.subject || c.subject || "",
+        subject: c.content?.email?.subject || "",
+        preheader: c.content?.email?.preheader || "",
         senderName: c.content?.email?.senderName || "",
+        senderEmail: c.content?.email?.senderEmail || "",
         status: c.status || "",
         type: c.type || "",
+        channel: c.channel || "",
+        segmentIds: c.audience?.includedSegmentIDs || [],
         createdAt: c.createdAt || "",
-        sentAt: c.sentAt || c.sendAt || c.scheduledAt || "",
-        // Stats keys vary by version; take whichever is present.
-        sent: c.statistics?.sent ?? c.stats?.sent ?? null,
-        opened: c.statistics?.opened ?? c.stats?.opened ?? null,
-        clicked: c.statistics?.clicked ?? c.stats?.clicked ?? null,
+        sentAt: c.startedAt || "",
+        endedAt: c.endedAt || "",
       }));
-      return res.json({ ok: true, campaigns: rows, paging: r.data?.paging || null });
+      return res.json({ ok: true, campaigns: rows, ...pagingOf(r.data) });
     }
 
-    /* One campaign, for the detail drawer. */
+    /* One campaign, for the detail panel. */
     if (action === "campaign") {
       const id = String(body.campaignId || "").trim();
       if (!id) return res.status(400).json({ error: "campaignId required" });
@@ -225,37 +208,56 @@ export default async function handler(req, res) {
       return res.json({ ok: true, campaign: r.data });
     }
 
-    /* Subscriber list — one page at a time; the ERP loops for CSV export. */
+    /* Subscribers, one cursor page at a time; the ERP loops this for CSV export. */
     if (action === "contacts") {
-      const params = { limit: +body.limit || 100, offset: +body.offset || 0 };
+      const params = { limit: clampLimit(body.limit || 100) };
+      if (body.after) params.after = body.after;
       if (body.status) params.status = body.status;
       if (body.email) params.email = String(body.email).trim();
       if (body.segmentId) params.segmentID = body.segmentId;
       const r = await omniList("/contacts", params);
       if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
       const raw = rowsOf(r.data, "contacts");
-      return res.json({ ok: true, contacts: raw.map(normalizeContact), count: raw.length, paging: r.data?.paging || null });
+      return res.json({ ok: true, contacts: raw.map(normalizeContact), count: raw.length, ...pagingOf(r.data) });
     }
 
-    /* Add a subscriber, or edit one when contactId is supplied. */
+    /* Add a subscriber, or edit one when contactId is supplied.
+       Writes are attempted in the `identifiers` shape first (what current API
+       versions document) and retried flat, since the read side returns both and
+       the accepted write shape is not advertised anywhere in the response. */
     if (action === "contact_save") {
       const contactId = String(body.contactId || "").trim();
       const email = String(body.email || "").trim();
+      const status = body.status === "unsubscribed" ? "unsubscribed" : "subscribed";
       if (!contactId && !email) return res.status(400).json({ error: "Email is required" });
       if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: `"${email}" is not a valid email address` });
-      const payload = contactPayload(body);
+
+      const withIdentifiers = {
+        ...contactFields(body),
+        ...(email ? { identifiers: [{ type: "email", id: email, channels: { email: { status } } }] } : {}),
+      };
+      const flat = { ...contactFields(body), ...(email ? { email, status } : {}) };
+
+      const attempt = async (method, path) => {
+        let r = await omni(method, path, withIdentifiers);
+        if (!r.ok && (r.status === 400 || r.status === 422)) {
+          const alt = await omni(method, path, flat);
+          if (alt.ok) return alt;
+        }
+        return r;
+      };
+
       let r;
       if (contactId) {
-        r = await omni("PATCH", `/contacts/${encodeURIComponent(contactId)}`, payload);
-        if (!r.ok && (r.status === 404 || r.status === 405)) r = await omni("PUT", `/contacts/${encodeURIComponent(contactId)}`, payload);
+        r = await attempt("PATCH", `/contacts/${encodeURIComponent(contactId)}`);
+        if (!r.ok && (r.status === 404 || r.status === 405)) r = await attempt("PUT", `/contacts/${encodeURIComponent(contactId)}`);
       } else {
-        r = await omni("POST", "/contacts", payload);
-        // Already on the list: patch the existing record instead of failing.
+        r = await attempt("POST", "/contacts");
+        // Already on the list — patch that record rather than reporting a failure.
         if (!r.ok && (r.status === 409 || /exist|duplicate/i.test(r.error || ""))) {
           const found = await omniList("/contacts", { email, limit: 1 });
-          const hit = rowsOf(found.data, "contacts")[0];
-          const hitId = hit && (hit.contactID || hit.contactId || hit.id);
-          if (hitId) r = await omni("PATCH", `/contacts/${encodeURIComponent(hitId)}`, payload);
+          const hitId = rowsOf(found.data, "contacts")[0]?.id;
+          if (hitId) r = await attempt("PATCH", `/contacts/${encodeURIComponent(hitId)}`);
         }
       }
       if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
