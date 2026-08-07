@@ -3185,12 +3185,38 @@ function JobWorkApp({onHome}){
 const JOURNAL_KEY="ng-journal-v1";
 const JOURNAL_EXIT_REASONS=["Job work","Sale of goods","Consignment"];
 const JOURNAL_ENTRY_REASONS=["Purchase received","Selection received","Return received","Consignment received"];
-const journalLine=(seed={})=>({id:uid(),vendorId:seed.vendorId||"",vendorName:seed.vendorName||"",material:"",shape:"",qty:"",unit:"kg",qty2:"",unit2:"pcs",notes:""});
+const journalLine=(seed={})=>({id:uid(),vendorId:seed.vendorId||"",vendorName:seed.vendorName||"",material:"",shape:"",qty:"",unit:"kg",qty2:"",unit2:"pcs",retQty:"",retUnit:"kg",retQty2:"",retUnit2:"pcs",notes:""});
 const journalLines=e=>Array.isArray(e?.items)&&e.items.length
   ?e.items.map(it=>({...it,vendorId:it.vendorId||e?.vendorId||"",vendorName:it.vendorName||e?.vendorName||""}))
   :[{id:"legacy",vendorId:e?.vendorId||"",vendorName:e?.vendorName||"",material:e?.material||"",shape:e?.shape||"",qty:e?.qty||"",unit:e?.unit||"pcs",qty2:e?.qty2||"",unit2:e?.unit2||"kg",notes:e?.itemNotes||e?.lineNotes||e?.grade||""}];
 const journalParty=e=>e?.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):[...new Set(journalLines(e).map(it=>it.vendorName).filter(Boolean))].join(", ")||e?.vendorName||"";
-const journalQtyText=it=>[it.qty?`${it.qty} ${it.unit||"pcs"}`:"",it.qty2?`${it.qty2} ${it.unit2||"kg"}`:""].filter(Boolean).join(" / ");
+const jnum=v=>{const n=parseFloat(v);return Number.isFinite(n)?n:0;};
+const jfmt=n=>String(Math.round(n*1000)/1000);
+const journalReturns=it=>[[jnum(it?.retQty),it?.retUnit||"kg"],[jnum(it?.retQty2),it?.retUnit2||"pcs"]].filter(([q])=>q>0);
+const journalQtyText=it=>{
+  const rets=journalReturns(it);
+  const used=rets.map(()=>false);
+  const parts=[];
+  [[it.qty,it.unit||"pcs"],[it.qty2,it.unit2||"kg"]].forEach(([qty,unit])=>{
+    if(!qty)return;
+    let ret=0;rets.forEach((r,i)=>{if(!used[i]&&r[1]===unit){ret+=r[0];used[i]=true;}});
+    parts.push(ret>0?`${jfmt(jnum(qty)-ret)} ${unit} kept (${qty} in − ${jfmt(ret)} ret)`:`${qty} ${unit}`);
+  });
+  rets.forEach((r,i)=>{if(!used[i])parts.push(`−${jfmt(r[0])} ${r[1]} ret`);});
+  return parts.join(" / ");
+};
+const journalNetText=it=>{
+  const rets=journalReturns(it);
+  const used=rets.map(()=>false);
+  const parts=[];
+  [[it.qty,it.unit||"pcs"],[it.qty2,it.unit2||"kg"]].forEach(([qty,unit])=>{
+    if(!qty)return;
+    let ret=0;rets.forEach((r,i)=>{if(!used[i]&&r[1]===unit){ret+=r[0];used[i]=true;}});
+    parts.push(`${jfmt(jnum(qty)-ret)} ${unit}`);
+  });
+  rets.forEach((r,i)=>{if(!used[i])parts.push(`−${jfmt(r[0])} ${r[1]}`);});
+  return parts.join(" · ");
+};
 const journalItemText=it=>`${[it.material,it.shape].filter(Boolean).join(" · ")||"Item"}${journalQtyText(it)?` · ${journalQtyText(it)}`:""}`;
 const journalSummary=e=>journalLines(e).map(journalItemText).join(" | ");
 const normalizeJournalForm=e=>({...e,items:journalLines(e),photos:e.photos||[],reason:e.reason||e.exitReason||"",customerName:e.type==="exit"?(e.customerName||e.buyerName||e.vendorName||""):(e.customerName||""),courier:e.courier||"",boxCount:e.boxCount||"",boxWeight:e.boxWeight||"",boxWeightUnit:e.boxWeightUnit||"kg"});
@@ -5360,7 +5386,7 @@ ${vendorBlocks}
     return(
       <Shell title="Accounting Journal" crumb={isEdit?"Journal Entry · Edit":"Journal Entry · New"} onHome={onHome} onBack={()=>setView("list")}>
         <Toast msg={toast}/>
-        <div style={{maxWidth:1180,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
+        <div style={{maxWidth:1320,margin:"0 auto",display:"flex",flexDirection:"column",gap:14}}>
           {/* Section 1: Type + Date + Vendor */}
           <div style={{...glass,padding:"18px 20px"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
@@ -5389,7 +5415,7 @@ ${vendorBlocks}
           <div style={{...glass,padding:"18px 20px"}}>
             <div style={sectionTitle}>Items</div>
             {items.map((it,idx)=>(
-              <div key={it.id||idx} style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"44px minmax(150px,1.05fr) minmax(170px,1.2fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(170px,1.05fr) 30px":"44px minmax(190px,1.3fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(190px,1.3fr) 30px",gap:10,alignItems:"end",padding:"10px 0",borderTop:idx?`1px solid ${C.border}`:"none"}}>
+              <div key={it.id||idx} style={{display:"grid",gridTemplateColumns:mob?"1fr":form.type==="entry"?"44px minmax(135px,1fr) minmax(150px,1.1fr) minmax(120px,.9fr) minmax(180px,.9fr) minmax(180px,.9fr) minmax(170px,.95fr) minmax(130px,.95fr) 30px":"44px minmax(190px,1.3fr) minmax(140px,1fr) minmax(210px,.95fr) minmax(210px,.95fr) minmax(190px,1.3fr) 30px",gap:10,alignItems:"end",padding:"10px 0",borderTop:idx?`1px solid ${C.border}`:"none"}}>
                 {(()=>{const src=stoneImageFor(it.material,it.shape);return src?<img src={src} alt="" title={[it.material,it.shape].filter(Boolean).join(" · ")} style={{width:40,height:40,borderRadius:8,objectFit:"cover",border:`1px solid ${C.border}`,alignSelf:"end"}}/>:<span/>;})()}
                 {form.type==="entry"&&(
                   <Field label={idx===0?"Vendor":""}>
@@ -5414,6 +5440,24 @@ ${vendorBlocks}
                     <select value={it.unit2||"kg"} onChange={e=>setItem(idx,"unit2",e.target.value)} style={qtyUnitS}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
                   </div>
                 </Field>
+                {form.type==="entry"&&(
+                  <Field label={idx===0?"Return":""}>
+                    <div style={{display:"grid",gridTemplateColumns:"minmax(80px,1fr) 72px",gap:6}}>
+                      <input type="number" inputMode="decimal" value={it.retQty||""} onChange={e=>setItem(idx,"retQty",e.target.value)} style={qtyInputS} placeholder="Qty"/>
+                      <select value={it.retUnit||"kg"} onChange={e=>setItem(idx,"retUnit",e.target.value)} style={qtyUnitS}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                    </div>
+                    {(it.ret2On||it.retQty2)?(
+                      <div style={{display:"grid",gridTemplateColumns:"minmax(80px,1fr) 72px 18px",gap:6,marginTop:6,alignItems:"center"}}>
+                        <input type="number" inputMode="decimal" value={it.retQty2||""} onChange={e=>setItem(idx,"retQty2",e.target.value)} style={qtyInputS} placeholder="Qty"/>
+                        <select value={it.retUnit2||"pcs"} onChange={e=>setItem(idx,"retUnit2",e.target.value)} style={qtyUnitS}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                        <button onClick={()=>{setItem(idx,"retQty2","");setItem(idx,"ret2On",false);}} title="Remove second return" style={{border:"none",background:"none",color:C.red,cursor:"pointer",fontSize:15,lineHeight:1,padding:0}}>×</button>
+                      </div>
+                    ):(
+                      <button onClick={()=>setItem(idx,"ret2On",true)} style={{marginTop:4,border:"none",background:"none",color:"#6B7280",fontSize:10,fontWeight:700,cursor:"pointer",padding:0,textAlign:"left",fontFamily:"inherit"}}>+ pcs returned</button>
+                    )}
+                    {(jnum(it.retQty)>0||jnum(it.retQty2)>0)&&<div style={{fontSize:10,fontWeight:700,color:"#059669",marginTop:4,whiteSpace:"nowrap"}}>Kept: {journalNetText(it)}</div>}
+                  </Field>
+                )}
                 <Field label={idx===0?"Notes":""}>
                   <input value={it.notes||""} onChange={e=>setItem(idx,"notes",e.target.value)} style={inputS} placeholder="Quality, grade, lot, condition"/>
                 </Field>
