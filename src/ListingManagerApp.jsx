@@ -481,6 +481,80 @@ async function addOrderToNikhilGemsInvoice({ order, stockItem, qty, qty2, deduct
   return { invNo: invoice.invNo, lineNo, lineId: line.id, deductedQty: q, deductedQty2: q2, remaining, remaining2, rate };
 }
 
+/* ── eBay → shared Orders store ────────────────────────────────────────────────
+   eBay orders are fetched by the eBay tab, but the Orders tab reads the shared
+   store. Mirroring lives here so both screens can drive it: eBay masks a buyer's
+   address ~14 days after the sale, so waiting for someone to open the eBay tab
+   loses addresses permanently. Pass already-fetched data to avoid a second call. */
+async function syncEbayOrdersIntoStore({ orders = null, listings = null } = {}) {
+  let ebayOrders = orders, ebayListings = listings;
+  try {
+    if (!ebayOrders) {
+      const r = await fetch("/api/ebay?action=get_orders");
+      if (!r.ok) return { synced: 0, addresses: 0 };
+      ebayOrders = (await r.json()).results || [];
+    }
+    if (!ebayListings) {
+      const lr = await fetch("/api/ebay?action=get_listings").catch(() => null);
+      ebayListings = lr?.ok ? ((await lr.json()).results || []) : [];
+    }
+  } catch { return { synced: 0, addresses: 0 }; }
+  if (!Array.isArray(ebayOrders) || !ebayOrders.length) return { synced: 0, addresses: 0 };
+
+  // eBay's GetOrders carries no picture, so borrow it from the live listing.
+  const imageByItemId = new Map();
+  for (const l of ebayListings || []) if (l?.itemId && l.imageUrls?.[0]) imageByItemId.set(String(l.itemId), l.imageUrls[0]);
+
+  const current = (await loadK(ORDERS_KEY)) || [];
+  const prevById = new Map(current.map(o => [o.id, o]));
+  // Synced fields only overwrite when eBay actually returned a value, so a later
+  // sync of an old (masked) order can't wipe an address captured while it was fresh.
+  const preferFresh = ["buyer_email", "buyer_country", "listing_image", "listing_sku", "transaction_id",
+    "ship_name", "ship_address1", "ship_address2", "ship_city", "ship_state", "ship_postcode", "ship_country", "ship_phone"];
+  let synced = 0, addresses = 0;
+  for (const eo of ebayOrders) {
+    if (!eo?.orderId) continue;
+    const line = eo.items?.[0] || {};
+    const itemId = line.itemId ? String(line.itemId) : "";
+    const norm = {
+      id: `ebay-${eo.orderId}`, platform: "ebay",
+      order_number: `EBAY-${eo.orderId}`, platform_order_id: String(eo.orderId),
+      listing_title: line.title || `eBay order ${eo.orderId}`,
+      listing_id: itemId, ebay_item_id: itemId,
+      listing_sku: line.sku || "",
+      listing_image: imageByItemId.get(itemId) || "",
+      transaction_id: line.transactionId || "",
+      buyer_name: eo.buyer || "", sale_price: +eo.total || 0, order_total: +eo.total || 0,
+      buyer_email: eo.buyerEmail || "",
+      buyer_country: eo.ship?.country || "",
+      ship_name: eo.ship?.name || "",
+      ship_address1: eo.ship?.address1 || "",
+      ship_address2: eo.ship?.address2 || "",
+      ship_city: eo.ship?.city || "",
+      ship_state: eo.ship?.state || "",
+      ship_postcode: eo.ship?.postcode || "",
+      ship_country: eo.ship?.country || "",
+      ship_phone: eo.ship?.phone || "",
+      currency: eo.currency || "USD", status: eo.status || "",
+      date: (eo.created || "").slice(0, 10) || undefined, created_at: eo.created || undefined,
+      source: "ebay-sync",
+    };
+    const prev = prevById.get(norm.id);
+    const merged = { ...norm, ...prev, status: norm.status || prev?.status, sale_price: norm.sale_price, order_total: norm.order_total };
+    for (const k of preferFresh) if (norm[k]) merged[k] = norm[k];
+    if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) {
+      await upsertItemK(ORDERS_KEY, merged, { prepend: true });
+      synced++;
+      if (norm.ship_address1 && !prev?.ship_address1) addresses++;
+    }
+  }
+  if (synced) {
+    const next = (await loadK(ORDERS_KEY)) || [];
+    window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
+  }
+  return { synced, addresses };
+}
+
 async function applyOrderStockAllocation({ order, stockItem, qty, qty2 }) {
   const q = Math.max(0, +qty || 0);
   const q2 = Math.max(0, +qty2 || 0);
@@ -4618,7 +4692,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       return <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
                       {[
                         ["Platform ID",   order.platform_order_id || order.etsy_receipt_id || "—"],
-                        ["Transaction",   order.etsy_transaction_id || "—"],
+                        ["Transaction",   order.etsy_transaction_id || order.transaction_id || "—"],
                         ["Date & time",   orderDateTimeLabel(order)],
                         ["Buyer",         order.buyer_name || "—"],
                         ["Email",         order.buyer_email || "—"],
@@ -6218,7 +6292,9 @@ function EtsyLiveView({ onCrossPost }) {
 /* ══════════════════════════════════════════════════════════════════════════
    EBAY SHOP MANAGER
 ══════════════════════════════════════════════════════════════════════════ */
-const EBAY_CACHE = "ng-ebay-v1";
+// v2: v1 caches predate address/image capture, and a warm cache skips the fetch
+// that would populate them. Bumping forces one fresh sync per browser.
+const EBAY_CACHE = "ng-ebay-v2";
 
 function EbayLiveView() {
   const loadCache = () => { try { return JSON.parse(localStorage.getItem(EBAY_CACHE)||"{}"); } catch { return {}; } };
@@ -6270,42 +6346,8 @@ function EbayLiveView() {
       if (lr.ok) { const ld = await lr.json(); newListings = ld.results || []; setListings(newListings); }
       if (or_.ok) {
         const od = await or_.json(); newOrders = od.results || []; setOrders(newOrders);
-        // Mirror eBay orders into the shared Orders store so they show in the Orders module.
-        // Keyed by a stable ebay-<id>; manual/ERP edits on the row are preserved, only the
-        // live synced fields (status, total) are refreshed.
-        try {
-          const current = await loadK(ORDERS_KEY) || [];
-          const prevById = new Map(current.map(o => [o.id, o]));
-          for (const eo of newOrders) {
-            if (!eo?.orderId) continue;
-            const norm = {
-              id: `ebay-${eo.orderId}`, platform: "ebay",
-              order_number: `EBAY-${eo.orderId}`, platform_order_id: String(eo.orderId),
-              listing_title: eo.items?.[0]?.title || `eBay order ${eo.orderId}`,
-              buyer_name: eo.buyer || "", sale_price: +eo.total || 0, order_total: +eo.total || 0,
-              buyer_email:   eo.buyerEmail || "",
-              ship_name:     eo.ship?.name || "",
-              ship_address1: eo.ship?.address1 || "",
-              ship_address2: eo.ship?.address2 || "",
-              ship_city:     eo.ship?.city || "",
-              ship_state:    eo.ship?.state || "",
-              ship_postcode: eo.ship?.postcode || "",
-              ship_country:  eo.ship?.country || "",
-              ship_phone:    eo.ship?.phone || "",
-              currency: eo.currency || "USD", status: eo.status || "",
-              date: (eo.created || "").slice(0, 10) || undefined, created_at: eo.created || undefined,
-              source: "ebay-sync",
-            };
-            const prev = prevById.get(norm.id);
-            const merged = { ...norm, ...prev, status: norm.status || prev?.status, sale_price: norm.sale_price, order_total: norm.order_total };
-            // Freshly synced address/contact beats a stale empty value (eBay masks
-            // addresses on old orders, so keep whichever side actually has data).
-            for (const k of ["buyer_email","ship_name","ship_address1","ship_address2","ship_city","ship_state","ship_postcode","ship_country","ship_phone"]) {
-              if (norm[k]) merged[k] = norm[k];
-            }
-            if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) await upsertItemK(ORDERS_KEY, merged, { prepend: true });
-          }
-        } catch {}
+        // Mirror into the shared Orders store so the Orders tab sees these rows.
+        await syncEbayOrdersIntoStore({ orders: newOrders, listings: newListings });
       }
       try { localStorage.setItem(EBAY_CACHE, JSON.stringify({ listings: newListings, orders: newOrders, syncedAt: Date.now() })); } catch {}
     } catch (e) { setError(e.message); }
@@ -7951,6 +7993,9 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       const normalized = await normalizeListingIds(l);
       setListings(normalized); setOrders(o || []); setStock(s || []); setLoaded(true);
       reconcileEtsyStates(normalized);
+      // Pull eBay in the background. eBay strips buyer addresses ~14 days after the
+      // sale, so this must not wait for someone to open the eBay tab.
+      syncEbayOrdersIntoStore().catch(() => {});
     });
     const onOrdersUpdated = e => {
       if (Array.isArray(e.detail)) setOrders(e.detail);

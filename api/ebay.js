@@ -291,6 +291,8 @@ function parseOrder(block) {
   const items    = xmlAll("Transaction", txnBlock).map(t => ({
     title:  xmlTag("Title", xmlBlock("Item", t)),
     itemId: xmlTag("ItemID", xmlBlock("Item", t)),
+    sku:    clean(xmlTag("SKU", xmlBlock("Item", t))),
+    transactionId: xmlTag("TransactionID", t),
     qty:    parseInt(xmlTag("QuantityPurchased", t) || "1", 10),
     price:  parseFloat(xmlTag("TransactionPrice", t) || "0"),
   }));
