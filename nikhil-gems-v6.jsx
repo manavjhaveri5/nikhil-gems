@@ -17935,6 +17935,12 @@ function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssign
         <button onClick={dismissNewTasks} style={{background:"rgba(255,255,255,.25)",border:"none",color:"#fff",borderRadius:5,padding:"5px 13px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>{t("Dismiss")} ×</button>
       </div>
     )}
+    {/* These bars are fixed to the top of the viewport, so without a spacer they
+        sit on top of whatever module is open — covering its header and swallowing
+        clicks on controls like "← Home". Reserve the same height in normal flow. */}
+    {(updateReady||!isOnline||syncingCount>0||newAssignedTasks.length>0)&&(
+      <div aria-hidden style={{height:(updateReady?44:0)+(!isOnline||syncingCount>0?38:0)+(newAssignedTasks.length>0?42:0),flexShrink:0,transition:"height .2s ease"}}/>
+    )}
   </>;
 }
 
