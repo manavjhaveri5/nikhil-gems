@@ -2490,6 +2490,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   const [openGroups, setOpenGroups] = useState(() => new Set()); // expanded multi-item receipts
   const [allocEdit, setAllocEdit] = useState({}); // per-order: allow editing a saved physical stock allocation
   const [stockModalOrder, setStockModalOrder] = useState(null); // order whose stock-picker modal is open
+  const [groupBusy, setGroupBusy] = useState({}); // per receipt-group key: "alloc" | "ng" while a group-wide action runs
   const [atInvoices, setAtInvoices] = useState([]); // Atyahara invoices, for matching/linking existing invoices to orders
   const [ngInvoices, setNgInvoices] = useState([]);
   const [ngBuyers, setNgBuyers] = useState([]);
@@ -2814,15 +2815,19 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     setStepSel(s => ({ ...s, [order.id]: 2 }));
   };
   // Deduct the linked NG stock and add a line to Atyahara's inter-company NG invoice.
-  const addOrderToNg = async order => {
+  // forcedTargetInvNo pins the line onto a specific draft (used by the group flow so
+  // every item of a multi-item receipt lands on the same invoice). Returns the invoice
+  // number on success, false on failure.
+  const addOrderToNg = async (order, forcedTargetInvNo = "") => {
     const draft = ngDraft(order);
     const stockItem = stock.find(s => s.id === order.linked_stock_id);
-    if (!stockItem) { updNg(order, { error: "Link a physical stock item first." }); return; }
+    if (!stockItem) { updNg(order, { error: "Link a physical stock item first." }); return false; }
     const qty = Math.max(0, +draft.qty || +order._ngAllocatedQty || +order._ngDeductedQty || 0);
     const qty2 = Math.max(0, +draft.qty2 || 0);
-    if (qty <= 0) { updNg(order, { error: "Enter invoice quantity in step 2.", success: "" }); return; }
+    if (qty <= 0) { updNg(order, { error: "Enter invoice quantity in step 2.", success: "" }); return false; }
+    const forced = String(forcedTargetInvNo || "").trim();
     const target = latestAtyaharaNgDraft(orderDate(order));
-    const mode = ngInvoiceMode[order.id] || (target ? "latest" : "new");
+    const mode = forced ? "latest" : (ngInvoiceMode[order.id] || (target ? "latest" : "new"));
     const productDesc = cleanInvoiceText(productDescDraft[order.id] || order._ngProductDesc || order._atProductDesc || suggestEtsyProductDesc(order));
     const rate = ngInvoiceRate(order, stockItem, qty, draft);
     // Customs desc comes from the shape → customs-description table, the same source
@@ -2839,8 +2844,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       }
       const { invNo, lineNo, lineId, deductedQty, deductedQty2, remaining, remaining2 } = await addOrderToNikhilGemsInvoice({
         order, stockItem, qty, qty2, deductStock: false,
-        targetInvNo: mode === "latest" ? target?.invNo || "" : "",
-        createNew: mode === "new",
+        targetInvNo: forced || (mode === "latest" ? target?.invNo || "" : ""),
+        createNew: forced ? false : mode === "new",
         productDesc,
         shapeOverride: order.listing_shape || stockItem.shape || "",
         rateOverride: rate,
@@ -2872,9 +2877,49 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       updNg(order, { loading: false, success: `Added to ${invNo} line ${lineNo} · −${deductedQty} ${stockItem.unit || "pcs"} (${remaining} left)${secondaryNote}` });
       refreshNgInvoices();
       showToast?.(`✓ ${invNo} updated · stock deducted`);
+      return invNo;
     } catch (e) {
       updNg(order, { loading: false, error: e.message || "Could not add to NG invoice" });
+      return false;
     }
+  };
+  // ── Group-level fulfilment: run steps 2 and 4 once for every item of a
+  // multi-item receipt. Step 1 (ship) already covers the whole receipt via
+  // completeEtsyOrder; step 3 (sales invoice) covers it via
+  // createAtyaharaInvoiceForOrder. These loops reuse the per-order machinery so
+  // per-item errors surface on their own rows.
+  const groupAllocSaved = m => !!(m._ngStockAllocatedAt || m._ngAllocatedQty || m._ngDeductedQty);
+  const groupSaveAllocations = async g => {
+    const members = g.orders.filter(o => !isCancelled(o));
+    setGroupBusy(s => ({ ...s, [g.key]: "alloc" }));
+    try {
+      let saved = 0, skipped = 0;
+      for (const m of members) {
+        if (!m.linked_stock_id) { skipped++; continue; }
+        if (groupAllocSaved(m) && !allocEdit[m.id]) continue;
+        const draft = ngDraft(m);
+        if (!(+draft.qty > 0 || +draft.qty2 > 0)) { skipped++; continue; }
+        await saveAllocation(m);
+        saved++;
+      }
+      showToast?.(saved
+        ? `Stock deducted for ${saved} item${saved !== 1 ? "s" : ""}${skipped ? ` · ${skipped} still need stock or a quantity` : ""}`
+        : "Nothing to deduct — pick stock and enter quantities first");
+    } finally { setGroupBusy(s => ({ ...s, [g.key]: "" })); }
+  };
+  const groupCreateNgInvoice = async g => {
+    const members = g.orders.filter(o => !isCancelled(o));
+    setGroupBusy(s => ({ ...s, [g.key]: "ng" }));
+    try {
+      let target = members.find(m => m._ngInvoiceNo)?._ngInvoiceNo || "";
+      let added = 0, failed = 0;
+      for (const m of members) {
+        if (m._ngInvoiceNo) continue;
+        const invNo = await addOrderToNg(m, target);
+        if (invNo) { target = invNo; added++; } else failed++;
+      }
+      if (added || failed) showToast?.(`${added ? `Added ${added} item${added !== 1 ? "s" : ""} to ${target}` : "No items added"}${failed ? ` · ${failed} failed — see the item rows in step 2` : ""}`);
+    } finally { setGroupBusy(s => ({ ...s, [g.key]: "" })); }
   };
   const saveNgInvoiceEdits = async order => {
     const stockItem = stock.find(s => s.id === order.linked_stock_id || s.id === order._ngStockId || s.id === order._ngAllocatedStockId);
@@ -3193,7 +3238,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         invNoOverride,
         viaEtsy: isEtsyOrder(order),
       });
-      await patchOrder(order, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now(), _atProductDesc: productDesc });
+      // The invoice covers every line of the receipt, so mark step 3 done on all
+      // sibling rows — one click completes the sales invoice for the whole order.
+      for (const row of sourceRows) await patchOrder(row, { _atInvoiceNo: invoice.invNo, _atInvoicedAt: now(), _atProductDesc: productDesc });
       // Refresh the local invoice list so the next order's suggested number increments.
       loadKFresh(AT_INVOICES_KEY).then(d => Array.isArray(d) && setAtInvoices(d)).catch(() => {});
       // Persist AI-inferred shapes back onto the order rows so the Shape field fills in
@@ -3944,8 +3991,26 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
             if (row.type === "group") {
               const g = row.g, s = groupSummary(g), open = openGroups.has(g.key);
               const gp = PLATFORMS.find(x => x.key === s.platform) || { label: "Manual", icon: "✏️", color: C.inkMid };
+              const members = g.orders.filter(o => !isCancelled(o));
+              const allEtsy = members.length > 0 && members.every(isEtsyOrder);
+              const busy = groupBusy[g.key] || "";
+              const receiptId = allEtsy ? etsyReceiptId(members[0]) : "";
+              const g1 = members.length > 0 && members.every(isShipped);
+              const g2 = members.length > 0 && members.every(m => m.linked_stock_id && groupAllocSaved(m));
+              const g3 = members.length > 0 && members.every(m => m._atInvoiceNo);
+              const g4 = members.length > 0 && members.every(m => m._ngInvoiceNo);
+              const invState = invoiceState[receiptId] || {};
+              const GE = "#F56400";
+              const stageIcon = done => <span style={{ width: 22, height: 22, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: done ? C.green : C.card, color: done ? "#fff" : C.inkFaint, fontSize: 11, fontWeight: 900, border: done ? "none" : `1px solid ${C.border}` }}>{done ? "✓" : "•"}</span>;
+              const stageTitle = { fontSize: 13, fontWeight: 850, color: C.ink };
+              const stageNote = { fontSize: 11, color: C.inkMid, marginTop: 2, lineHeight: 1.4 };
+              const gBtn = (bg, disabled) => ({ background: bg, color: "#fff", border: "none", borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 850, cursor: disabled ? "wait" : "pointer", opacity: disabled ? .6 : 1, whiteSpace: "nowrap", flexShrink: 0 });
+              const gGhost = { background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 11px", fontSize: 11, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 };
+              const gTiny = { background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7, padding: "5px 9px", fontSize: 10.5, fontWeight: 800, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 };
+              const gRow = { display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderTop: `1px solid ${C.border}` };
               return (
-                <div key={row.key} onClick={() => setOpenGroups(prev => { const n = new Set(prev); n.has(g.key) ? n.delete(g.key) : n.add(g.key); return n; })}
+                <div key={row.key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div onClick={() => setOpenGroups(prev => { const n = new Set(prev); n.has(g.key) ? n.delete(g.key) : n.add(g.key); return n; })}
                   style={{ background: C.surface, border: `1.5px solid ${open ? gp.color + "66" : C.border}`, borderRadius: 12, padding: mob() ? "11px 12px" : "12px 15px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 13, color: C.inkFaint, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>
                   <div style={{ minWidth: 0, flex: 1 }}>
@@ -3968,8 +4033,87 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                     </div>
                   </div>
                   <div style={{ width: "100%", fontSize: 11, color: C.inkFaint }}>
-                    {open ? "Tap to collapse — items below are worked individually." : "Tap to open the individual items."}
+                    {open ? (allEtsy ? "Fulfil the whole order once below — or open an item to work it individually." : "Tap to collapse — items below are worked individually.") : "Tap to open the individual items."}
                   </div>
+                </div>
+                {open && allEtsy && !s.cancelled && (
+                  <div style={{ marginLeft: mob() ? 10 : 26, background: C.surface, border: `1.5px solid ${GE}44`, borderLeft: `4px solid ${g1 && g2 && g3 && g4 ? C.green : GE}`, borderRadius: 12, padding: mob() ? "10px 12px" : "12px 15px" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: .7, color: C.inkFaint }}>Fulfil whole order at once · receipt #{receiptId}</span>
+                      <span style={{ fontSize: 11, fontWeight: 850, color: g1 && g2 && g3 && g4 ? C.green : C.inkMid }}>{[g1, g2, g3, g4].filter(Boolean).length} of 4 done</span>
+                    </div>
+                    {/* 1 · Ship once */}
+                    <div style={{ ...gRow, borderTop: "none" }}>
+                      {stageIcon(g1)}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={stageTitle}>1 · Ship once on Etsy</div>
+                        <div style={stageNote}>{g1 ? `Shipped · ${members[0].tracking_code || members[0].tracking_number || "tracking sent"} — all ${members.length} items marked.` : "One tracking number marks the entire receipt shipped and emails the buyer."}</div>
+                      </div>
+                      <button onClick={() => setTrackingModalOrder(members.find(m => !isShipped(m)) || members[0])} style={g1 ? gGhost : gBtn(GE)}>{g1 ? "Update tracking" : "Add tracking & ship all"}</button>
+                    </div>
+                    {/* 2 · Deduct stock for every item */}
+                    <div style={{ ...gRow, alignItems: "flex-start" }}>
+                      {stageIcon(g2)}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={stageTitle}>2 · Deduct stock — all items in one place</div>
+                        <div style={stageNote}>Pick the stock each item came from and how much it used, then save once.</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                          {members.map(m => {
+                            const linked = stock.find(x => x.id === m.linked_stock_id);
+                            const saved = groupAllocSaved(m);
+                            const editable = linked && (!saved || allocEdit[m.id]);
+                            const img = findOrderImage(m);
+                            const draft = ngDraft(m);
+                            return (
+                              <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, background: C.bg, border: `1px solid ${saved ? C.green + "55" : C.border}`, borderRadius: 8, padding: "6px 8px", flexWrap: "wrap" }}>
+                                {img ? <img src={img} alt="" loading="lazy" style={{ width: 30, height: 30, borderRadius: 6, objectFit: "cover", border: `1px solid ${C.border}`, flexShrink: 0 }} /> : <span style={{ width: 30, height: 30, borderRadius: 6, background: C.card, display: "grid", placeItems: "center", flexShrink: 0, fontSize: 13 }}>💎</span>}
+                                <div style={{ minWidth: 0, flex: "1 1 160px" }}>
+                                  <div style={{ fontSize: 11.5, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.listing_title || m.order_number}</div>
+                                  <div style={{ fontSize: 10, color: linked ? C.inkMid : C.amber, fontWeight: linked ? 500 : 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {linked ? `${linked.material || linked.desc || "Stock"}${linked.shape ? ` · ${linked.shape}` : ""} · ${linked.qty} ${linked.unit || "pcs"} left` : "No stock linked yet"}
+                                  </div>
+                                </div>
+                                {editable && (
+                                  <div style={{ position: "relative", flexShrink: 0 }}>
+                                    <input type="number" min={0} step="any" value={draft.qty} onChange={e => updNg(m, { qty: e.target.value })} placeholder="Qty" style={{ ...FI(), width: 96, fontSize: 12, padding: "6px 34px 6px 8px", borderRadius: 7 }} />
+                                    <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 10, fontWeight: 800, color: C.inkFaint }}>{linked.unit || "pcs"}</span>
+                                  </div>
+                                )}
+                                {saved && !allocEdit[m.id] && <span style={{ fontSize: 10.5, fontWeight: 800, color: C.green, whiteSpace: "nowrap" }}>✓ −{m._ngAllocatedQty || m._ngDeductedQty} {linked?.unit || "pcs"}</span>}
+                                <button onClick={() => { setStockSearch(x => ({ ...x, [m.id]: "" })); setStockModalOrder(m); }} style={gTiny}>{linked ? "Change" : "Pick stock"}</button>
+                                {saved && !allocEdit[m.id] && <button onClick={() => setAllocEdit(x => ({ ...x, [m.id]: true }))} style={gTiny}>Edit qty</button>}
+                                {draft.error && <span style={{ fontSize: 10, color: C.red, fontWeight: 700, flexBasis: "100%" }}>{draft.error}</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {!g2 && <button disabled={busy === "alloc"} onClick={() => groupSaveAllocations(g)} style={{ ...gBtn(C.green, busy === "alloc"), marginTop: 8 }}>{busy === "alloc" ? "Saving…" : "Save all & deduct stock"}</button>}
+                      </div>
+                    </div>
+                    {/* 3 · One sales invoice */}
+                    <div style={gRow}>
+                      {stageIcon(g3)}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={stageTitle}>3 · One sales invoice for all {members.length} items</div>
+                        <div style={{ ...stageNote, ...(invState.error ? { color: C.red, fontWeight: 700 } : {}) }}>
+                          {invState.error || (g3 ? `Atyahara invoice ${members[0]._atInvoiceNo} bills the buyer for every item.` : "Creates a single Atyahara invoice with one line per item.")}
+                        </div>
+                      </div>
+                      {g3
+                        ? <button onClick={() => onViewInvoicePdf?.({ company: "at", invNo: members[0]._atInvoiceNo, receiptId })} style={gGhost}>View PDF</button>
+                        : <button disabled={!!invState.loading} onClick={() => createAtyaharaInvoiceForOrder(members[0])} style={gBtn(C.green, !!invState.loading)}>{invState.loading ? "Creating…" : "Create sales invoice"}</button>}
+                    </div>
+                    {/* 4 · One NG (purchase) invoice */}
+                    <div style={gRow}>
+                      {stageIcon(g4)}
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={stageTitle}>4 · One NG invoice — all items at cost</div>
+                        <div style={stageNote}>{g4 ? `All items on ${members[0]._ngInvoiceNo}.` : g2 ? "Adds one line per item to the same NG inter-company invoice." : "Finish step 2 first — each item needs its stock allocation."}</div>
+                      </div>
+                      {!g4 && <button disabled={busy === "ng" || !g2} onClick={() => groupCreateNgInvoice(g)} style={gBtn(C.green, busy === "ng" || !g2)}>{busy === "ng" ? "Adding…" : "Add all to NG invoice"}</button>}
+                    </div>
+                  </div>
+                )}
                 </div>
               );
             }
