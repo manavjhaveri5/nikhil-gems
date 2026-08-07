@@ -7878,9 +7878,9 @@ function CampaignComposer({ listings = [], onClose, showToast }) {
   const lab = { fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
 
   return (
-    <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 80, display: "flex", alignItems: "stretch", justifyContent: "center", padding: mob() ? 0 : 20 }}>
-      <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
+    <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
+      <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>📣 New-products campaign</div>
           <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size} selected</div>
           <div style={{ flex: 1 }} />
@@ -7888,7 +7888,7 @@ function CampaignComposer({ listings = [], onClose, showToast }) {
         </div>
 
         {configured === false && (
-          <div style={{ margin: 14, padding: "12px 14px", background: "#fff8e6", border: "1px solid #f0dfae", borderRadius: 10, fontSize: 12.5, color: "#8a6d1a", lineHeight: 1.55 }}>
+          <div style={{ margin: 14, padding: "12px 14px", background: "#fff8e6", border: "1px solid #f0dfae", borderRadius: 10, fontSize: 12.5, color: "#8a6d1a", lineHeight: 1.55, flexShrink: 0 }}>
             <strong>Omnisend isn't connected yet.</strong> Create an API key in Omnisend → <em>API Keys</em>, then add it in Vercel → Settings → Environment Variables as <code>OMNISEND_API_KEY</code> and redeploy. {err && <div style={{ marginTop: 6, color: C.red }}>{err}</div>}
           </div>
         )}

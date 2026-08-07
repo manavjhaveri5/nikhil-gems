@@ -17903,7 +17903,9 @@ function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssign
   const t=useT();
   return<>
     {updateReady&&(
-      <div style={{position:"fixed",top:0,left:0,right:0,zIndex:10000,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
+      // z-index sits below the app's modal layer (900+): this is a passive nudge, and at
+      // 10000 it painted over open dialogs and hid their titles and Close buttons.
+      <div style={{position:"fixed",top:0,left:0,right:0,zIndex:800,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
         <span style={{fontSize:15,flexShrink:0}}>🚀</span>
         <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff",lineHeight:1.3}}>{t("A new version is available")}</span>
         <button onClick={reloadForUpdatePreservingScreen} style={{background:"#fff",border:"none",color:"#1C4A2E",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0,fontFamily:"inherit"}}>{t("Update now")}</button>
