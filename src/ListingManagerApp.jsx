@@ -507,6 +507,24 @@ async function syncEbayOrdersIntoStore({ orders = null, listings = null } = {}) 
 
   const current = (await loadK(ORDERS_KEY)) || [];
   const prevById = new Map(current.map(o => [o.id, o]));
+
+  // One-of-a-kind pieces leave the active list the moment they sell, so most sold
+  // items resolve to no image above. GetItem still has them — look those up, but
+  // cap the batch: images persist once stored, so a backlog drains over a few syncs.
+  const needImage = [...new Set(ebayOrders
+    .filter(eo => eo?.orderId && !prevById.get(`ebay-${eo.orderId}`)?.listing_image)
+    .map(eo => eo.items?.[0]?.itemId).filter(Boolean).map(String)
+    .filter(id => !imageByItemId.has(id)))].slice(0, 10);
+  if (needImage.length) {
+    await Promise.all(needImage.map(async id => {
+      try {
+        const r = await fetch(`/api/ebay?action=get_item&item_id=${encodeURIComponent(id)}`);
+        if (!r.ok) return;
+        const full = await r.json();
+        if (full?.imageUrls?.[0]) imageByItemId.set(id, full.imageUrls[0]);
+      } catch {}
+    }));
+  }
   // Synced fields only overwrite when eBay actually returned a value, so a later
   // sync of an old (masked) order can't wipe an address captured while it was fresh.
   const preferFresh = ["buyer_email", "buyer_country", "listing_image", "listing_sku", "transaction_id",
