@@ -389,6 +389,34 @@ async function handleEbay(req, res) {
     return res.json({ results: orderBlocks.map(parseOrder), total: orderBlocks.length });
   }
 
+  // ── complete_sale — CompleteSale: mark shipped + push tracking to eBay ────
+  // eBay emails the buyer and shows the tracking number on the order. Carrier must
+  // be one of eBay's recognised ShippingCarrier tokens; anything else becomes Other.
+  if (action === "complete_sale" && req.method === "POST") {
+    if (!USER_TOKEN) return res.status(401).json({ error: "EBAY_USER_TOKEN not set" });
+    const body = req.body || {};
+    const orderId = String(body.order_id || "").trim();
+    const tracking = String(body.tracking_code || "").trim();
+    if (!orderId) return res.status(400).json({ error: "order_id required" });
+    if (!tracking) return res.status(400).json({ error: "tracking_code required" });
+    const CARRIERS = { usps: "USPS", fedex: "FedEx", ups: "UPS", dhl: "DHL", "dhl-ecommerce": "DHLGlobalMail",
+      "india-post": "IndiaPost", bluedart: "BlueDart", aramex: "Aramex" };
+    const carrier = CARRIERS[String(body.carrier_name || "").toLowerCase()] || "Other";
+    const { ok, xml } = await trading("CompleteSale", `
+      <OrderID>${esc(orderId)}</OrderID>
+      <Shipped>true</Shipped>
+      <Shipment>
+        <ShipmentTrackingDetails>
+          <ShipmentTrackingNumber>${esc(tracking)}</ShipmentTrackingNumber>
+          <ShippingCarrierUsed>${esc(carrier)}</ShippingCarrierUsed>
+        </ShipmentTrackingDetails>
+      </Shipment>`);
+    if (!ok) {
+      return res.status(500).json({ ok: false, error: xmlTag("LongMessage", xml) || xmlTag("ShortMessage", xml) || "CompleteSale failed" });
+    }
+    return res.json({ ok: true, orderId, tracking, carrier });
+  }
+
   // ── get_item — GetItem (full details for edit modal) ──────────────────────
   if (action === "get_item") {
     if (!USER_TOKEN) return res.status(401).json({ error: "EBAY_USER_TOKEN not set" });

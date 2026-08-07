@@ -128,6 +128,8 @@ export const DEMO_DATA = {
     { id:"eo-7", platform:"etsy", order_number:"ETSY-3400007", etsy_receipt_id:3400007, platform_order_id:"3400007", date:d(70), currency:"INR", order_total:29800,  etsy_fees:3400,  etsy_net:26400,  listing_title:"Carnelian palm stones ×3", buyer_name:"Jonas W." },
     // cancelled — must be excluded from the rollup
     { id:"eo-8", platform:"etsy", order_number:"ETSY-3400008", etsy_receipt_id:3400008, platform_order_id:"3400008", date:d(9),  currency:"INR", order_total:18900,  etsy_fees:0, etsy_net:0, status:"cancelled", listing_title:"Selenite lamp", buyer_name:"Refunded" },
+    // eBay — same 4-step fulfilment flow as Etsy, buyer invoiced "via eBay"
+    { id:"ebay-24-14983-65086", platform:"ebay", order_number:"EBAY-24-14983-65086", platform_order_id:"24-14983-65086", date:d(3), currency:"USD", order_total:11.14, sale_price:11.14, listing_title:"53gm Red Hematoid Quartz Cluster - Deep Red Inclusions", buyer_name:"supermoon516", buyer_email:"buyer@members.ebay.com", buyer_country:"United States", ship_name:"Sam Moon", ship_address1:"41 Willow Creek Rd", ship_city:"Austin", ship_state:"TX", ship_postcode:"78701", ship_country:"United States", source:"ebay-sync" },
   ],
 
   // ── FINANCE ACCOUNTS ──────────────────────────────────────────────────────

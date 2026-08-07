@@ -110,14 +110,18 @@ const monthLabel = value => new Date(`${toIsoDate(value)}T12:00:00`).toLocaleStr
 
 const moneyAmount = m => (m?.amount || 0) / (m?.divisor || 100);
 const cleanInvoiceText = v => String(v || "").replace(/\s+/g, " ").trim();
-// Only Etsy orders get the "via Etsy" suffix. Atyahara's own Shopify (or manual)
-// orders flow through the same invoice path but must keep the plain buyer name.
-const etsyBuyerName = (name, viaEtsy = true) => {
-  const base = cleanInvoiceText(name) || (viaEtsy ? "Etsy Buyer" : "Buyer");
-  if (!viaEtsy) return base;
-  return /\bvia\s+etsy\b/i.test(base) ? base : `${base} via Etsy`;
+// Marketplace orders carry a "via <channel>" suffix so the invoice shows where the
+// sale came from; Atyahara's own Shopify (or manual) orders pass channel "" and keep
+// the plain buyer name. Channel is the display spelling, e.g. "Etsy" or "eBay".
+const MARKETPLACE_CHANNELS = ["Etsy", "eBay"];
+const buyerChannelOf = name => MARKETPLACE_CHANNELS.find(c => new RegExp(`\\bvia\\s+${c}\\b`, "i").test(String(name || ""))) || "";
+const marketplaceBuyerName = (name, channel = "Etsy") => {
+  const base = cleanInvoiceText(name) || (channel ? `${channel} Buyer` : "Buyer");
+  if (!channel) return base;
+  return buyerChannelOf(base) === channel ? base : `${base} via ${channel}`;
 };
-const buyerMatchKey = value => String(value || "").toLowerCase().replace(/\bvia\s+etsy\b/g, "").replace(/[^a-z0-9]/g, "");
+const buyerMatchKey = value => String(value || "").toLowerCase()
+  .replace(/\bvia\s+(etsy|ebay)\b/g, "").replace(/[^a-z0-9]/g, "");
 const compactAddress = address => [
   address?.line1,
   address?.line2,
@@ -212,8 +216,8 @@ const matchShapeInTitle = (tokens, title) => {
   return best;
 };
 
-async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {}, viaEtsy = true }) {
-  const displayName = etsyBuyerName(buyer.name || address.name || "", viaEtsy);
+async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {}, viaEtsy = true, channel = viaEtsy ? "Etsy" : "" }) {
+  const displayName = marketplaceBuyerName(buyer.name || address.name || "", channel);
   const addressText = compactAddress(address);
   const country = cleanInvoiceText(buyer.country || address.country || "");
   const email = cleanInvoiceText(buyer.email || "");
@@ -221,17 +225,17 @@ async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {}, viaEtsy = tru
   const buyers = Array.isArray(fresh) ? fresh : [];
   const displayKey = buyerMatchKey(displayName);
   const emailKey = email.toLowerCase();
-  // Match within the right pool: Etsy sales reuse "via Etsy" buyer records, non-Etsy
-  // sales reuse plain records — never cross over, so a walk-in never lands on an Etsy buyer.
-  const isEtsyRec = b => /\bvia\s+etsy\b/i.test(String(b.name || ""));
-  const poolOk = b => viaEtsy ? isEtsyRec(b) : !isEtsyRec(b);
+  // Match within the right pool: each channel reuses only its own "via <channel>"
+  // records and plain sales reuse plain records — never cross over, so a walk-in
+  // never lands on an Etsy buyer and an eBay buyer never lands on an Etsy one.
+  const poolOk = b => buyerChannelOf(b.name) === channel;
   const existing = buyers.find(b => buyerMatchKey(b.name) === displayKey && poolOk(b))
     || (emailKey ? buyers.find(b => String(b.email || "").trim().toLowerCase() === emailKey && poolOk(b)) : null);
 
   if (existing) {
     const patched = {
       ...existing,
-      name: viaEtsy ? (isEtsyRec(existing) ? existing.name : displayName) : (existing.name || displayName),
+      name: channel ? (buyerChannelOf(existing.name) === channel ? existing.name : displayName) : (existing.name || displayName),
       email: existing.email || email,
       country: existing.country || country,
       billingAddress: existing.billingAddress || existing.address || addressText,
@@ -262,7 +266,7 @@ async function ensureAtyaharaEtsyBuyer({ buyer = {}, address = {}, viaEtsy = tru
     email,
     phone: cleanInvoiceText(address.phone || ""),
     port: country,
-    notes: viaEtsy ? `Auto-created from Etsy buyer${buyer.name ? ` ${buyer.name}` : ""}` : `Auto-created from Atyahara order${buyer.name ? ` — ${buyer.name}` : ""}`,
+    notes: channel ? `Auto-created from ${channel} buyer${buyer.name ? ` ${buyer.name}` : ""}` : `Auto-created from Atyahara order${buyer.name ? ` — ${buyer.name}` : ""}`,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -322,7 +326,7 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
   });
 }
 
-async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null, invNoOverride = "", viaEtsy = true }) {
+async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null, invNoOverride = "", viaEtsy = true, channel = viaEtsy ? "Etsy" : "" }) {
   const sourceReceiptId = String(receiptId || "");
   if (!sourceReceiptId) throw new Error("Missing order receipt id");
   const fresh = await loadKFresh(AT_INVOICES_KEY).catch(() => []);
@@ -336,8 +340,8 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
   const overrideTaken = overrideNo && existing.some(inv => inv.id !== existingInv?.id && String(inv.invNo || "") === overrideNo);
 
   const date = toIsoDate(orderDate);
-  const buyerRecord = await ensureAtyaharaEtsyBuyer({ buyer, address, viaEtsy });
-  const displayBuyerName = buyerRecord?.name || etsyBuyerName(buyer.name || address.name || "", viaEtsy);
+  const buyerRecord = await ensureAtyaharaEtsyBuyer({ buyer, address, channel });
+  const displayBuyerName = buyerRecord?.name || marketplaceBuyerName(buyer.name || address.name || "", channel);
   const shapeTokens = await loadCustomsShapeTokens();
   const invoiceItems = await aiEnhanceInvoiceItems(items, { receiptId: sourceReceiptId, buyerCountry: buyer.country || address.country || "" }, shapeTokens);
   const totalAmt = Number(invoiceItems.reduce((s, item) => s + (+item.qty || 0) * (+item.rate || 0), 0).toFixed(2));
@@ -350,7 +354,7 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
     date,
     dueDate: existingInv?.dueDate || date,
     buyerId: buyerRecord?.id || existingInv?.buyerId || "",
-    buyerName: displayBuyerName || existingInv?.buyerName || (viaEtsy ? "Etsy Buyer via Etsy" : "Buyer"),
+    buyerName: displayBuyerName || existingInv?.buyerName || (channel ? `${channel} Buyer via ${channel}` : "Buyer"),
     buyerEmail: buyer.email || buyerRecord?.email || existingInv?.buyerEmail || "",
     buyerCountry: buyer.country || address.country || buyerRecord?.country || existingInv?.buyerCountry || "",
     consigneeSameAsBuyer: true,
@@ -360,15 +364,15 @@ async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {},
     currency,
     portLading: existingInv?.portLading || "Mumbai, India",
     portDischarge: existingInv?.portDischarge || "",
-    terms: existingInv?.terms || (viaEtsy ? "Etsy order" : "Sale"),
+    terms: existingInv?.terms || (channel ? `${channel} order` : "Sale"),
     items: invoiceItems,
     totalAmt,
     shippingCost: shippingCost != null ? shippingCost : (existingInv?.shippingCost || 0),
-    notes: notes || `${viaEtsy ? "Etsy" : "Atyahara"} order #${sourceReceiptId}`,
+    notes: notes || `${channel || "Atyahara"} order #${sourceReceiptId}`,
     status: existingInv?.status || "draft",
     paidAmount: existingInv?.paidAmount || 0,
     payments: existingInv?.payments || [],
-    source: viaEtsy ? "listing-manager-etsy" : "listing-manager-atyahara",
+    source: channel ? `listing-manager-${channel.toLowerCase()}` : "listing-manager-atyahara",
     sourceOrderIds: [sourceReceiptId],
     _etsyReceiptId: sourceReceiptId,
     _aiAutofilled: invoiceItems.some(i => i._aiAutofilled),
@@ -3127,7 +3131,16 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   // Atyahara Shopify orders get the same 4-step fulfilment as Etsy. etsyReceiptId falls
   // back to platform_order_id, so it doubles as the stable invoice key for these too.
   const isAtyahOrder  = o => o.platform === "shopify_aty";
-  const isFulfilOrder = o => isEtsyOrder(o) || isAtyahOrder(o);
+  const isEbayOrder   = o => o.platform === "ebay" || String(o.order_number || "").startsWith("EBAY-");
+  const isFulfilOrder = o => isEtsyOrder(o) || isAtyahOrder(o) || isEbayOrder(o);
+  // Marketplace label used on invoices and buyer records ("… via Etsy" / "… via eBay").
+  const orderChannel  = o => isEtsyOrder(o) ? "Etsy" : isEbayOrder(o) ? "eBay" : "";
+  // Per-platform step-1 wording and accent, so one set of panels serves all three.
+  const shipMeta = o => isAtyahOrder(o)
+    ? { name: "Shopify", color: PLATFORMS.find(x => x.key === "shopify_aty")?.color || "#6B3FA0", verb: "Fulfil & notify buyer", done: "Fulfilled on Shopify" }
+    : isEbayOrder(o)
+      ? { name: "eBay", color: "#0064D2", verb: "Send to eBay & complete", done: "Shipped on eBay" }
+      : { name: "Etsy", color: "#F56400", verb: "Send to Etsy & complete", done: "Shipped on Etsy" };
   const etsyReceiptId = o => o.etsy_receipt_id || o.platform_order_id || String(o.order_number || "").replace(/^ETSY-/, "").split("-")[0];
   const invoiceDraft = o => invoiceState[etsyReceiptId(o)] || { loading: false, error: "", success: "" };
   const trackingDraft = o => etsyTracking[o.id] || {
@@ -3142,6 +3155,43 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   };
   const updateTrackingDraft = (o, patch) => {
     setEtsyTracking(s => ({ ...s, [o.id]: { ...trackingDraft(o), ...patch } }));
+  };
+  // Step 1 for eBay: CompleteSale pushes tracking, marks the order shipped on eBay
+  // and emails the buyer. Mirrors completeEtsyOrder; eBay orders are one row each,
+  // so there are no sibling rows to update.
+  const completeEbayOrder = async o => {
+    const orderId = String(o.platform_order_id || "").trim() || String(o.order_number || "").replace(/^EBAY-/, "");
+    const draft = trackingDraft(o);
+    const trackingCode = String(draft.tracking_code || "").trim();
+    const carrierName = String(draft.carrier_name || "other").trim() || "other";
+    if (!orderId) { updateTrackingDraft(o, { error: "Missing eBay order id.", success: "" }); return false; }
+    if (!trackingCode) { updateTrackingDraft(o, { error: "Add a tracking number first.", success: "" }); return false; }
+    updateTrackingDraft(o, { loading: true, error: "", success: "" });
+    try {
+      const r = await fetch("/api/ebay?action=complete_sale", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId, tracking_code: trackingCode, carrier_name: carrierName }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.error || "Could not complete eBay order");
+      await patchOrder(o, {
+        status: "shipped",
+        shipped_at: o.shipped_at || now(),
+        tracking_code: trackingCode,
+        tracking_number: trackingCode,
+        carrier_name: carrierName,
+        ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
+        ebay_completed_at: now(),
+        _shipStepUndone: false,
+      });
+      updateTrackingDraft(o, { loading: false, error: "", success: "Completed on eBay", tracking_code: trackingCode, carrier_name: carrierName });
+      return true;
+    } catch (e) {
+      updateTrackingDraft(o, { loading: false, error: e.message || "Could not complete eBay order", success: "" });
+      return false;
+    }
   };
   const completeEtsyOrder = async o => {
     const receiptId = etsyReceiptId(o);
@@ -3274,7 +3324,8 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     }
     setInvoiceState(s => ({ ...s, [receiptId]: { loading: true, error: "", success: "" } }));
     try {
-      const rows = (orders || []).filter(o => isEtsyOrder(o) && String(etsyReceiptId(o)) === receiptId);
+      const samePlatform = o => isEtsyOrder(order) ? isEtsyOrder(o) : o.platform === order.platform;
+      const rows = (orders || []).filter(o => samePlatform(o) && String(etsyReceiptId(o)) === receiptId);
       const sourceRows = rows.length ? rows : [order];
       const currency = sourceRows.find(o => o.currency)?.currency || order.currency || "USD";
       const productDesc = cleanInvoiceText(productDescOverride || productDescDraft[order.id] || order._atProductDesc || suggestEtsyProductDesc(order));
@@ -3325,10 +3376,10 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         },
         currency,
         items,
-        notes: `Created from Listing Manager ${isEtsyOrder(order) ? "Etsy receipt" : "Atyahara order"} #${receiptId}`,
+        notes: `Created from Listing Manager ${orderChannel(order) ? `${orderChannel(order)} order` : "Atyahara order"} #${receiptId}`,
         shippingCost: 0,
         invNoOverride,
-        viaEtsy: isEtsyOrder(order),
+        channel: orderChannel(order),
       });
       // The invoice covers every line of the receipt, so mark step 3 done on all
       // sibling rows — one click completes the sales invoice for the whole order.
@@ -3895,7 +3946,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
           <div onMouseDown={() => setTrackingModalOrder(null)} style={{ position: "fixed", inset: 0, zIndex: 900, display: "grid", placeItems: "center", padding: 18, background: "rgba(24,19,12,.46)" }}>
             <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(100%, 520px)", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 24px 70px rgba(0,0,0,.24)", padding: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 14, alignItems: "flex-start", marginBottom: 18 }}>
-                <div><div style={{ fontSize: 18, fontWeight: 850, color: C.ink }}>{isAtyahOrder(order) ? "Ship & fulfil on Shopify" : "Ship on Etsy"}</div><div style={{ marginTop: 4, fontSize: 12, color: C.inkMid }}>{isAtyahOrder(order) ? "Shopify will mark this order fulfilled and email the buyer tracking." : "Etsy will mark this receipt shipped and email the buyer."}</div></div>
+                <div><div style={{ fontSize: 18, fontWeight: 850, color: C.ink }}>{isAtyahOrder(order) ? "Ship & fulfil on Shopify" : `Ship on ${shipMeta(order).name}`}</div><div style={{ marginTop: 4, fontSize: 12, color: C.inkMid }}>{isAtyahOrder(order) ? "Shopify will mark this order fulfilled and email the buyer tracking." : `${shipMeta(order).name} will mark this order shipped and email the buyer.`}</div></div>
                 <button onClick={() => setTrackingModalOrder(null)} aria-label="Close" style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
               </div>
               <div style={{ display: "grid", gap: 11 }}>
@@ -3904,13 +3955,13 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 44px 10px 11px" }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-18%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking link <span style={{ fontWeight: 500 }}>(optional, internal reference)</span><input value={draft.tracking_url} onChange={e => updateTrackingDraft(order, { tracking_url: e.target.value })} onBlur={e => setOrderTrackingUrl(order, e.target.value)} placeholder="https://…" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Note to buyer <span style={{ fontWeight: 500 }}>(optional)</span><input value={draft.note_to_buyer || ""} onChange={e => updateTrackingDraft(order, { note_to_buyer: e.target.value })} placeholder="A short shipping note" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}><input type="checkbox" checked={!!draft.send_bcc} onChange={e => updateTrackingDraft(order, { send_bcc: e.target.checked })} /> Send me Etsy's shipping email too</label>
+                {isEtsyOrder(order) && <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}><input type="checkbox" checked={!!draft.send_bcc} onChange={e => updateTrackingDraft(order, { send_bcc: e.target.checked })} /> Send me Etsy's shipping email too</label>}
               </div>
-              <div style={{ marginTop: 12, padding: "8px 10px", borderRadius: 7, background: C.card, color: C.inkMid, fontSize: 11, lineHeight: 1.45 }}>This does not buy a label or confirm a carrier scan. The tracking link above stays in this app; Etsy receives the carrier and tracking number.</div>
+              <div style={{ marginTop: 12, padding: "8px 10px", borderRadius: 7, background: C.card, color: C.inkMid, fontSize: 11, lineHeight: 1.45 }}>This does not buy a label or confirm a carrier scan. The tracking link above stays in this app; {shipMeta(order).name} receives the carrier and tracking number.</div>
               {draft.error && <div style={{ marginTop: 12, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{draft.error}</div>}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, marginTop: 18 }}>
                 <button onClick={() => setTrackingModalOrder(null)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7, padding: "9px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Cancel</button>
-                <button onClick={async () => { if (await (isAtyahOrder(order) ? completeShopifyOrder(order) : completeEtsyOrder(order))) setTrackingModalOrder(null); }} disabled={!!draft.loading} style={{ background: isAtyahOrder(order) ? (PLATFORMS.find(x => x.key === "shopify_aty")?.color || "#6B3FA0") : "#F56400", color: "#fff", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 12, fontWeight: 850, cursor: draft.loading ? "wait" : "pointer", opacity: draft.loading ? .7 : 1 }}>{draft.loading ? "Sending…" : isAtyahOrder(order) ? "Fulfil & notify buyer" : "Send to Etsy & complete"}</button>
+                <button onClick={async () => { if (await (isAtyahOrder(order) ? completeShopifyOrder(order) : isEbayOrder(order) ? completeEbayOrder(order) : completeEtsyOrder(order))) setTrackingModalOrder(null); }} disabled={!!draft.loading} style={{ background: shipMeta(order).color, color: "#fff", border: "none", borderRadius: 7, padding: "9px 14px", fontSize: 12, fontWeight: 850, cursor: draft.loading ? "wait" : "pointer", opacity: draft.loading ? .7 : 1 }}>{draft.loading ? "Sending…" : shipMeta(order).verb}</button>
               </div>
             </div>
           </div>
@@ -4263,7 +4314,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                     )}
                     {isFulfilOrder(order) && !cancelled && (() => {
                       const steps = [
-                        ["🚚", isAtyahOrder(order) ? "Shipped" : "Shipped on Etsy", shipped],
+                        ["🚚", `Shipped on ${shipMeta(order).name}`, shipped],
                         ["📦", "Stock allocated", !!order.linked_stock_id],
                         ["🧾", "Sales invoice", !!order._atInvoiceNo],
                         ["🏷️", "NG invoice", !!order._ngInvoiceNo],
@@ -4303,11 +4354,11 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                     )}
                     {!cancelled && isFulfilOrder(order) && (
                       (() => {
-                        const ETSY = isAtyahOrder(order) ? (p.color || "#6B3FA0") : "#F56400";
+                        const ETSY = shipMeta(order).color;
                         const stages = [
-                          [isAtyahOrder(order) ? "Ship on Shopify" : "Ship on Etsy", "Send carrier + tracking", shipped],
+                          [`Ship on ${shipMeta(order).name}`, "Send carrier + tracking", shipped],
                           ["Allocate stock", "Choose item & quantity", !!order.linked_stock_id],
-                          ["Sales invoice", isAtyahOrder(order) ? "Invoice the buyer" : "Invoice the Etsy buyer", !!order._atInvoiceNo],
+                          ["Sales invoice", orderChannel(order) ? `Invoice the ${orderChannel(order)} buyer` : "Invoice the buyer", !!order._atInvoiceNo],
                           ["NG invoice", "Record stock at cost", !!order._ngInvoiceNo],
                         ];
                         const firstOpen = stages.findIndex(stage => !stage[2]);
@@ -4401,12 +4452,13 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         </div>
                       </div>
                     )}
-                    {!cancelled && isAtyahOrder(order) && selStep === 0 && (
-                      <div style={{ background: C.surface, border: `1.5px solid ${shipped ? C.green : (p.color || "#6B3FA0")}`, borderLeft: `4px solid ${shipped ? C.green : (p.color || "#6B3FA0")}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                    {/* Shopify and eBay share this panel — both push tracking to the platform. */}
+                    {!cancelled && (isAtyahOrder(order) || isEbayOrder(order)) && selStep === 0 && (() => { const sm = shipMeta(order); return (
+                      <div style={{ background: C.surface, border: `1.5px solid ${shipped ? C.green : sm.color}`, borderLeft: `4px solid ${shipped ? C.green : sm.color}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{shipped ? "Fulfilled on Shopify" : "Ship & fulfil on Shopify"}</div>
-                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{shipped ? "Marked fulfilled on Shopify; the buyer was emailed tracking." : "Add a carrier & tracking number — Shopify marks it fulfilled and emails the buyer."}</div>
+                            <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{shipped ? sm.done : `Ship this order on ${sm.name}`}</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{shipped ? `${sm.name} has this order marked shipped and the buyer notified.` : `Add a carrier & tracking number — ${sm.name} marks it shipped and emails the buyer.`}</div>
                           </div>
                           <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>{order.order_number}</div>
                         </div>
@@ -4418,11 +4470,11 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                                 {/^https?:\/\//i.test(order.tracking_url || "") && <a href={order.tracking_url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, fontSize: 12, fontWeight: 750, textDecoration: "none" }}>Open tracking link</a>}
                                 <button onClick={() => setTrackingModalOrder(order)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Update tracking</button>
                               </>
-                            : <button onClick={() => setTrackingModalOrder(order)} style={{ background: (p.color || "#6B3FA0"), color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking & ship</button>}
+                            : <button onClick={() => setTrackingModalOrder(order)} style={{ background: sm.color, color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking & ship</button>}
                         </div>
                         {trackingDraft(order).error && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{trackingDraft(order).error}</div>}
                       </div>
-                    )}
+                    ); })()}
                     {/* Step 2 stays lightweight: allocation only. The invoice commits the stock movement later. */}
                     {!cancelled && isFulfilOrder(order) && selStep === 1 && (
                       <div style={{ background: C.surface, border: `1.5px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderLeft: `4px solid ${order.linked_stock_id ? C.green : "#F56400"}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
@@ -4522,7 +4574,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{order._atInvoiceNo ? "Sales invoice created" : "Create sales invoice"}</div>
-                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._atInvoiceNo ? `Atyahara invoice ${order._atInvoiceNo} bills the Etsy buyer.` : "Bill the Etsy buyer from Atyahara. Pick the customs shape if auto-detect is off."}</div>
+                            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>{order._atInvoiceNo ? `Atyahara invoice ${order._atInvoiceNo} bills the ${orderChannel(order) || ""} buyer.`.replace("  ", " ") : `Bill the ${orderChannel(order) || ""} buyer from Atyahara. Pick the customs shape if auto-detect is off.`.replace("  ", " ")}</div>
                             <div style={{ marginTop: 10, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", background: C.card }}>
                               <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1.6fr 1.1fr .62fr .55fr .55fr .7fr .8fr", gap: 0, alignItems: "stretch" }}>
                                 {[
@@ -4704,7 +4756,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       </div>
                       );
                     })()}
-                    {!cancelled && isFulfilOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · {isAtyahOrder(order) ? "Shipped" : "Etsy shipped"} · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
+                    {!cancelled && isFulfilOrder(order) && order._ngInvoiceNo && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderRadius: 10, background: C.greenBg, border: `1.5px solid ${C.green}`, color: C.green, fontSize: 13, fontWeight: 800, marginBottom: 10 }}><span style={{ fontSize: 18, lineHeight: 1 }}>✓</span><span>Fulfilment complete · {shipMeta(order).done} · {order._atInvoiceNo || "Atyahara invoice"} · {order._ngInvoiceNo}</span></div>}
                     {detailsOpen[order.id] && (() => {
                       const earnings = deriveEtsyEarnings(order);
                       return <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10 }}>
