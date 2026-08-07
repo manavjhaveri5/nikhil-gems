@@ -186,6 +186,15 @@ export default async function handler(req, res) {
       });
     }
 
+    /* TEMPORARY: read-only shape probe, whitelisted GET paths, removed once the
+       campaign/contact endpoints are pinned down. */
+    if (action === "__probe") {
+      const path = String(body.path || "");
+      if (!/^\/(campaigns|contacts|segments)(\/[\w-]+)?(\?[\w=&%.@-]*)?$/.test(path)) return res.status(400).json({ error: "path not allowed" });
+      const r = await omni("GET", path);
+      return res.json({ ok: r.ok, status: r.status, error: r.error || "", sample: JSON.stringify(r.data).slice(0, 1400) });
+    }
+
     /* Past + draft campaigns, newest first. */
     if (action === "campaigns") {
       const r = await omniList("/campaigns", { limit: +body.limit || 50, offset: +body.offset || 0 });
