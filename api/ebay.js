@@ -55,6 +55,31 @@ async function loadEbayTokens() {
     return rows?.[0]?.value || null;
   } catch { return null; }
 }
+/* Generic app_data read/write, so the scheduled sync can persist orders without
+   a browser. Writing app_data alone is not enough — open clients only refresh
+   when a row lands in app_data_versions, so bump that too. */
+async function loadAppData(key) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/app_data?key=eq.${encodeURIComponent(key)}&select=value`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    if (!r.ok) return null;
+    const rows = await r.json();
+    return rows?.[0]?.value ?? null;
+  } catch { return null; }
+}
+async function saveAppData(key, value) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error("Supabase is not configured for this function");
+  const H = { "Content-Type": "application/json", apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, Prefer: "resolution=merge-duplicates" };
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, { method: "POST", headers: H, body: JSON.stringify({ key, value }) });
+  if (!r.ok) throw new Error(`app_data write failed (${r.status}) ${(await r.text().catch(() => "")).slice(0, 160)}`);
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/app_data_versions`, {
+      method: "POST", headers: H, body: JSON.stringify({ key, ts: new Date().toISOString() }),
+    });
+  } catch {}
+}
+
 async function saveEbayTokens(tokens) {
   if (!SUPABASE_URL || !SUPABASE_KEY) return;
   try {
@@ -415,6 +440,95 @@ async function handleEbay(req, res) {
       return res.status(500).json({ ok: false, error: xmlTag("LongMessage", xml) || xmlTag("ShortMessage", xml) || "CompleteSale failed" });
     }
     return res.json({ ok: true, orderId, tracking, carrier });
+  }
+
+  // ── sync_orders — scheduled capture of eBay orders into the shared store ──
+  // eBay masks a buyer's address about two weeks after the sale, so relying on
+  // someone opening the ERP loses addresses permanently. This runs headless from
+  // a Vercel cron and writes the same ng-orders-v1 rows the browser mirror does.
+  if (action === "sync_orders") {
+    if (!USER_TOKEN) return res.status(401).json({ error: "EBAY_USER_TOKEN not set" });
+    // Vercel cron sends this header; a shared secret is honoured too when set.
+    const secret = process.env.CRON_SECRET;
+    const authed = req.headers["x-vercel-cron"]
+      || (secret && (req.headers.authorization === `Bearer ${secret}` || url.searchParams.get("secret") === secret))
+      || !secret;
+    if (!authed) return res.status(401).json({ error: "Unauthorized" });
+
+    const daysBack = Math.min(90, Math.max(1, parseInt(url.searchParams.get("days") || "30", 10)));
+    const from = new Date(Date.now() - daysBack * 86400000).toISOString();
+    const { ok, xml } = await trading("GetOrders", `
+      <CreateTimeFrom>${esc(from)}</CreateTimeFrom>
+      <CreateTimeTo>${esc(new Date().toISOString())}</CreateTimeTo>
+      <OrderRole>Seller</OrderRole>
+      <OrderStatus>All</OrderStatus>
+      <Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>1</PageNumber></Pagination>`);
+    if (!ok) return res.status(500).json({ error: xmlTag("LongMessage", xml) || "GetOrders failed" });
+    const orders = xmlAll("Order", xmlBlock("OrderArray", xml)).map(parseOrder);
+
+    // Active listings give images for anything still on sale; sold one-offs are
+    // left to the browser, which backfills them via GetItem.
+    const imageByItemId = new Map();
+    try {
+      const lr = await trading("GetMyeBaySelling", `
+        <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>1</PageNumber></Pagination></ActiveList>
+        <GranularityLevel>Fine</GranularityLevel>`);
+      if (lr.ok) {
+        for (const b of xmlAll("Item", xmlBlock("ItemArray", xmlBlock("ActiveList", lr.xml)))) {
+          const it = parseItem(b);
+          if (it.itemId && it.imageUrls?.[0]) imageByItemId.set(String(it.itemId), it.imageUrls[0]);
+        }
+      }
+    } catch {}
+
+    const current = (await loadAppData("ng-orders-v1")) || [];
+    const rows = Array.isArray(current) ? current : [];
+    const byId = new Map(rows.map(o => [o?.id, o]));
+    // Only overwrite with values eBay actually returned, so a later sync of an
+    // old (masked) order cannot wipe an address captured while it was fresh.
+    const preferFresh = ["buyer_email", "buyer_country", "listing_image", "listing_sku", "transaction_id",
+      "ship_name", "ship_address1", "ship_address2", "ship_city", "ship_state", "ship_postcode", "ship_country", "ship_phone"];
+
+    let added = 0, updated = 0, addressesCaptured = 0;
+    for (const eo of orders) {
+      if (!eo?.orderId) continue;
+      const line = eo.items?.[0] || {};
+      const itemId = line.itemId ? String(line.itemId) : "";
+      const norm = {
+        id: `ebay-${eo.orderId}`, platform: "ebay",
+        order_number: `EBAY-${eo.orderId}`, platform_order_id: String(eo.orderId),
+        listing_title: line.title || `eBay order ${eo.orderId}`,
+        listing_id: itemId, ebay_item_id: itemId,
+        listing_sku: line.sku || "",
+        listing_image: imageByItemId.get(itemId) || "",
+        transaction_id: line.transactionId || "",
+        buyer_name: eo.buyer || "", sale_price: +eo.total || 0, order_total: +eo.total || 0,
+        buyer_email: eo.buyerEmail || "", buyer_country: eo.ship?.country || "",
+        ship_name: eo.ship?.name || "", ship_address1: eo.ship?.address1 || "",
+        ship_address2: eo.ship?.address2 || "", ship_city: eo.ship?.city || "",
+        ship_state: eo.ship?.state || "", ship_postcode: eo.ship?.postcode || "",
+        ship_country: eo.ship?.country || "", ship_phone: eo.ship?.phone || "",
+        currency: eo.currency || "USD", status: eo.status || "",
+        date: (eo.created || "").slice(0, 10) || undefined, created_at: eo.created || undefined,
+        source: "ebay-cron",
+      };
+      const prev = byId.get(norm.id);
+      const merged = { ...norm, ...prev, status: norm.status || prev?.status, sale_price: norm.sale_price, order_total: norm.order_total };
+      for (const k of preferFresh) if (norm[k]) merged[k] = norm[k];
+      if (!prev) { byId.set(norm.id, merged); added++; if (norm.ship_address1) addressesCaptured++; }
+      else if (JSON.stringify(prev) !== JSON.stringify(merged)) {
+        byId.set(norm.id, merged); updated++;
+        if (norm.ship_address1 && !prev.ship_address1) addressesCaptured++;
+      }
+    }
+
+    const changed = added + updated;
+    if (changed) {
+      // Newest first, matching how the browser prepends.
+      const next = [...byId.values()].sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")));
+      await saveAppData("ng-orders-v1", next);
+    }
+    return res.json({ ok: true, scanned: orders.length, added, updated, addressesCaptured, daysBack, wrote: changed > 0 });
   }
 
   // ── get_item — GetItem (full details for edit modal) ──────────────────────

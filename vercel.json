@@ -14,11 +14,26 @@
     }
   },
   "rewrites": [
-    { "source": "/api/openai", "destination": "/api/claude?_ai=openai" },
-    { "source": "/api/embed", "destination": "/api/claude?_ai=embed" },
-    { "source": "/api/shopify-auth", "destination": "/api/shopify" },
-    { "source": "/api/canva-auth", "destination": "/api/canva?_oauth=1" },
-    { "source": "/api/etsy-auth", "destination": "/api/etsy?_oauth=1" }
+    {
+      "source": "/api/openai",
+      "destination": "/api/claude?_ai=openai"
+    },
+    {
+      "source": "/api/embed",
+      "destination": "/api/claude?_ai=embed"
+    },
+    {
+      "source": "/api/shopify-auth",
+      "destination": "/api/shopify"
+    },
+    {
+      "source": "/api/canva-auth",
+      "destination": "/api/canva?_oauth=1"
+    },
+    {
+      "source": "/api/etsy-auth",
+      "destination": "/api/etsy?_oauth=1"
+    }
   ],
   "headers": [
     {
@@ -47,6 +62,12 @@
           "value": "no-store, no-cache, must-revalidate"
         }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/ebay?action=sync_orders&days=30",
+      "schedule": "0 2 * * *"
     }
   ]
 }
