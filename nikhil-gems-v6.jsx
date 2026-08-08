@@ -6696,45 +6696,129 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     return hasActualQty||(!isMovementRow&&hasBlankQty);
   };
 
-  const doPush=async(creds,customName,customPrice,itemOverride)=>{
+  /* Mirror a pushed stock item into the Listing Manager store so the product is
+     visible and editable there instead of only existing on Shopify. Matched on
+     linked_stock_id so repeat pushes update one listing rather than piling up.
+     Best-effort: a failure here must never make a successful Shopify push look
+     like it failed. */
+  const syncPushedItemToListings=async(item,storeKey,customName,customPrice,shopifyProductId)=>{
+    const pkey=storeKey==="atyahara"?"shopify_aty":"shopify_earth";
+    const priceField=storeKey==="atyahara"?"price_shopify_aty":"price_shopify_earth";
+    const nowIso=new Date().toISOString();
+    const listings=(await loadK("ng-listings-v1").catch(()=>[]))||[];
+    const existing=listings.find(l=>String(l.linked_stock_id||"")===String(item.id));
+    const photos=stockPhotos(item);
+    const base=existing||{
+      id:uid(),created_at:nowIso,
+      description:"",tags:[],variations:[],
+      price_etsy:"",price_shopify_earth:"",price_shopify_aty:"",price_ebay:"",
+      platforms:{etsy:{},shopify_earth:{},shopify_aty:{},ebay:{}},
+      productType:item.productType||"Lapidary",type:"unique",
+    };
+    const listing={
+      ...base,
+      title:customName||base.title||[item.material,item.shape].filter(Boolean).join(" · "),
+      material:item.material||base.material||"",
+      shape:item.shape||base.shape||"Mineral",
+      origin:item.origin||base.origin||"",
+      size:item.size||base.size||"",
+      weight:item.weight||base.weight||"",
+      sku:item.sku||base.sku||"",
+      qty:+item.qty||base.qty||1,
+      linked_stock_id:item.id,
+      officeLocation:item.location||base.officeLocation||"",
+      images:photos.length?photos:(base.images||[]),
+      video:item.video||base.video||"",
+      [priceField]:customPrice||base[priceField]||"",
+      platforms:{...base.platforms,[pkey]:{
+        ...(base.platforms?.[pkey]||{}),
+        product_id:shopifyProductId,status:"active",pushed_at:nowIso,
+      }},
+      updated_at:nowIso,
+    };
+    await upsertItemK("ng-listings-v1",listing,{prepend:!existing});
+    window.dispatchEvent(new CustomEvent("ng-listings-updated"));
+    return !existing;
+  };
+
+  const doPush=async(creds,customName,customPrice,itemOverride,storeKey)=>{
     setShopifyPushing(true);
     const itemToPush=itemOverride||selected;
     try{
+      if(!creds?.store||!creds?.token)throw new Error("Shopify isn't connected — tap reconnect and authorise the store");
       const res=await fetch("/api/shopify",{
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:customName,shopifyPrice:customPrice}),
       });
       const d=await res.json();
       if(!res.ok)throw new Error(d.error||"Shopify error");
-      const upd=stock.map(s=>s.id===itemToPush.id?{...s,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
+      const upd=stock.map(s=>s.id===itemToPush.id?{...s,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
       setStock(upd);
-      setSelected(prev=>({...prev,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true}));
+      setSelected(prev=>({...prev,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||prev?.shopifyStore}));
       await saveStockK(upd);
-      showToast(`✓ ${d.action==="created"?"Created":"Updated"} on Shopify${d.videoQueued?" · video queued":itemToPush.video?` · video failed: ${d.videoErr||"unknown error"}`:""}`);
+      let listingNote="";
+      try{
+        const created=await syncPushedItemToListings(itemToPush,storeKey||"earth",customName,customPrice,d.shopifyProductId);
+        listingNote=created?" · added to Listing Manager":" · Listing Manager updated";
+      }catch(e){listingNote=" · ⚠ Listing Manager link failed";}
+      showToast(`✓ ${d.action==="created"?"Created":"Updated"} on Shopify${listingNote}${d.videoQueued?" · video queued":itemToPush.video?` · video failed: ${d.videoErr||"unknown error"}`:""}`);
     }catch(e){showToast("❌ "+e.message);}
     finally{setShopifyPushing(false);}
   };
+  // Shopify creds live in per-store slots (ng-shopify-creds-earth / -atyahara).
+  // The OAuth callback deliberately stopped writing the shared legacy slot, because
+  // reconnecting one store clobbered the other's token there — but this screen was
+  // still reading only the legacy slot, so connecting a store and then pressing the
+  // push button found nothing and silently reopened the setup dialog.
+  const SHOPIFY_STORES=[
+    {key:"earth",label:"Earth Editions",slot:"ng-shopify-creds-earth"},
+    {key:"atyahara",label:"Atyahara",slot:"ng-shopify-creds-atyahara"},
+  ];
+  const loadShopifyCreds=async()=>{
+    const out={};
+    for(const st of SHOPIFY_STORES){
+      const c=await loadK(st.slot).catch(()=>null);
+      if(c?.store&&c?.token)out[st.key]={...c,...st};
+    }
+    // Legacy slot held Atyahara's token before the per-store split.
+    if(!out.atyahara){
+      const legacy=await loadK("ng-shopify-creds-v1").catch(()=>null);
+      if(legacy?.store&&legacy?.token)out.atyahara={...legacy,...SHOPIFY_STORES[1]};
+    }
+    return out;
+  };
   const pushToShopify=async()=>{
-    const creds=await loadK("ng-shopify-creds-v1")||{};
-    if(!creds.store||!creds.token){setShopifyStoreInput(creds.store||"");setShopifyTokenInput("");setShopifySetup(true);return;}
+    const connected=await loadShopifyCreds();
+    const keys=Object.keys(connected);
+    if(!keys.length){setShopifyStoreInput("");setShopifyTokenInput("");setShopifySetup(true);return;}
+    // Remember the last store used so repeat pushes are one click.
+    const preferred=localStorage.getItem("ng-shopify-last-store");
+    const storeKey=connected[preferred]?preferred:keys[0];
     // Auto-fill name: material in sentence case + box number
     const mat=(selected.material||"");
     const sentenceMat=mat.length>0?mat.charAt(0).toUpperCase()+mat.slice(1).toLowerCase():mat;
     const autoName=[sentenceMat,selected.location?`#${selected.location}`:null].filter(Boolean).join(" — ");
-    setShopifyModal({name:autoName,price:selected.listPrice||"",creds});
+    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey]});
   };
   const confirmShopifyPush=async()=>{
     if(!shopifyModal)return;
-    const{creds,name,price,qty,qty2}=shopifyModal;
+    const{connected,storeKey,name,price,qty,qty2}=shopifyModal;
+    const creds=connected?.[storeKey]||shopifyModal.creds;
     const overrides={};
     if(qty!=null&&qty!=="")overrides.qty=String(qty);
     if(qty2!=null&&qty2!=="")overrides.qty2=String(qty2);
     const itemToPush={...(selected||{}),...overrides};
     setShopifyModal(null);
-    await doPush(creds,name,price,itemToPush);
+    if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
+    await doPush(creds,name,price,itemToPush,storeKey);
   };
   const reconnectShopify=async()=>{
-    await saveK("ng-shopify-creds-v1",null);
+    // Clear every slot, not just the legacy one, or the stale per-store token
+    // survives and the re-auth appears to do nothing.
+    await Promise.all([
+      saveK("ng-shopify-creds-v1",null),
+      ...SHOPIFY_STORES.map(st=>saveK(st.slot,null)),
+    ]);
     setShopifySetup(true);
   };
   const saveShopifyCreds=async()=>{
@@ -6944,7 +7028,19 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div style={{background:C.surface,borderRadius:14,padding:"22px 20px",width:"min(420px,100%)",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
             <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>🛍 Push to Shopify</div>
-            <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>Review details before publishing</div>
+            <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>Review details before publishing — this also creates the listing in Listing Manager</div>
+
+            {Object.keys(shopifyModal.connected||{}).length>1&&(<>
+              <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Store</div>
+              <div style={{display:"flex",gap:6,marginBottom:12}}>
+                {Object.values(shopifyModal.connected).map(st=>(
+                  <button key={st.key} onClick={()=>setShopifyModal(m=>({...m,storeKey:st.key,creds:m.connected[st.key]}))}
+                    style={{flex:1,background:shopifyModal.storeKey===st.key?"#008060":C.card,color:shopifyModal.storeKey===st.key?"#fff":C.ink,border:`1px solid ${shopifyModal.storeKey===st.key?"#008060":C.border}`,borderRadius:7,padding:"8px 10px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </>)}
 
             <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Product Name</div>
             <input value={shopifyModal.name} onChange={e=>setShopifyModal(m=>({...m,name:e.target.value}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box",fontSize:14}}/>
@@ -7614,7 +7710,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               {selected&&(()=>{
                 const bill=purchases.find(p=>p.id===selected.billId);
                 return(
-                  <div style={{position:"fixed",top:0,right:0,bottom:0,width:mob?"100%":380,background:C.surface,borderLeft:mob?"none":`1px solid ${C.border}`,zIndex:200,overflowY:"auto",boxShadow:"-4px 0 20px rgba(0,0,0,.08)"}}>
+                  <div style={{position:"fixed",top:0,right:0,bottom:0,width:mob?"100%":380,background:C.surface,borderLeft:mob?"none":`1px solid ${C.border}`,zIndex:1000,overflowY:"auto",boxShadow:"-4px 0 20px rgba(0,0,0,.08)"}}>
                     <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                       <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:17,fontWeight:600,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{selected.material}{selected.shape?` ${selected.shape}`:""}</div>
                       <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,flexShrink:0}}>
