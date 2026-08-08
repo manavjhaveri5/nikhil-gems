@@ -6741,7 +6741,26 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     return !existing;
   };
 
-  const doPush=async(creds,customName,customPrice,itemOverride,storeKey)=>{
+  /* Register the deal timer in the same per-store registry the Listing Manager
+     store view writes, so items pushed from Stock appear in the existing
+     "deals due to come down" reminder instead of sitting in the section forever. */
+  const registerDealTimer=async(storeKey,item,d,customName,deal)=>{
+    const key=storeKey==="atyahara"?"ng-deals-atyahara":"ng-deals-earth";
+    const expiry=deal.customDate
+      ? new Date(deal.customDate+"T23:59:59").toISOString()
+      : new Date(Date.now()+(+deal.days||7)*86400000).toISOString();
+    const existing=(await loadKFresh(key).catch(()=>[]))||[];
+    const base=Array.isArray(existing)?existing:[];
+    const pid=String(d.shopifyProductId);
+    await saveK(key,[{
+      id:`deal-${storeKey}-${pid}`,store:storeKey,productId:pid,
+      title:customName||[item.material,item.shape].filter(Boolean).join(" · "),
+      url:d.storefrontUrl||d.shopifyUrl||"",handle:d.handle||"",
+      addedAt:new Date().toISOString(),expiryDate:expiry,status:"active",
+    },...base.filter(e=>String(e.productId)!==pid)]);
+  };
+
+  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal)=>{
     setShopifyPushing(true);
     const itemToPush=itemOverride||selected;
     try{
@@ -6761,7 +6780,24 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         const created=await syncPushedItemToListings(itemToPush,storeKey||"earth",customName,customPrice,d.shopifyProductId);
         listingNote=created?" · added to Listing Manager":" · Listing Manager updated";
       }catch(e){listingNote=" · ⚠ Listing Manager link failed";}
-      showToast(`✓ ${d.action==="created"?"Created":"Updated"} on Shopify${listingNote}${d.videoQueued?" · video queued":itemToPush.video?` · video failed: ${d.videoErr||"unknown error"}`:""}`);
+
+      // The API always collects the product into the storefront's Deals section;
+      // the timer is only recorded when a duration was chosen here.
+      let dealNote="";
+      if(d.dealAdded){
+        if(deal?.enabled){
+          try{
+            await registerDealTimer(storeKey||"earth",itemToPush,d,customName,deal);
+            const until=deal.customDate||`${deal.days||7} days`;
+            dealNote=` · ⭐ in Deals (${deal.customDate?`until ${until}`:`${until}`})`;
+          }catch(e){dealNote=" · ⭐ in Deals (timer not saved)";}
+        }else dealNote=" · ⭐ in Deals";
+      }else if(d.dealError){
+        dealNote=` · ⚠ Deals: ${d.dealError}`;
+      }
+
+      const videoNote=d.videoQueued?" · 🎥 video queued":itemToPush.video?` · ⚠ video failed: ${d.videoErr||"unknown error"}`:"";
+      showToast(`✓ ${d.action==="created"?"Created":"Updated"} on Shopify${dealNote}${listingNote}${videoNote}`);
     }catch(e){showToast("❌ "+e.message);}
     finally{setShopifyPushing(false);}
   };
@@ -6792,13 +6828,15 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const keys=Object.keys(connected);
     if(!keys.length){setShopifyStoreInput("");setShopifyTokenInput("");setShopifySetup(true);return;}
     // Remember the last store used so repeat pushes are one click.
+    // Earth Editions is the default: pushing ready stock into its Deals section
+    // is what this button is for.
     const preferred=localStorage.getItem("ng-shopify-last-store");
-    const storeKey=connected[preferred]?preferred:keys[0];
+    const storeKey=connected[preferred]?preferred:(connected.earth?"earth":keys[0]);
     // Auto-fill name: material in sentence case + box number
     const mat=(selected.material||"");
     const sentenceMat=mat.length>0?mat.charAt(0).toUpperCase()+mat.slice(1).toLowerCase():mat;
     const autoName=[sentenceMat,selected.location?`#${selected.location}`:null].filter(Boolean).join(" — ");
-    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey]});
+    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""}});
   };
   const confirmShopifyPush=async()=>{
     if(!shopifyModal)return;
@@ -6810,7 +6848,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const itemToPush={...(selected||{}),...overrides};
     setShopifyModal(null);
     if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-    await doPush(creds,name,price,itemToPush,storeKey);
+    await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal);
   };
   const reconnectShopify=async()=>{
     // Clear every slot, not just the legacy one, or the stale per-store token
@@ -7028,7 +7066,10 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div style={{background:C.surface,borderRadius:14,padding:"22px 20px",width:"min(420px,100%)",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
             <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>🛍 Push to Shopify</div>
-            <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>Review details before publishing — this also creates the listing in Listing Manager</div>
+            <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>
+              Publishes to the storefront{"'"}s <b>Deals</b> section and creates the listing in Listing Manager
+              {s.video?" · 🎥 video will be uploaded":""}
+            </div>
 
             {Object.keys(shopifyModal.connected||{}).length>1&&(<>
               <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Store</div>
@@ -7061,6 +7102,29 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 <span style={{fontSize:13,color:C.inkFaint,minWidth:32}}>{s.unit2||"kg"}</span>
               </div>
             )}
+            {(()=>{const d=shopifyModal.deal||{enabled:true,days:7,customDate:""};return(
+              <div style={{background:d.enabled?"#FFF8E6":C.card,border:`1px solid ${d.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:16}}>
+                <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                  <input type="checkbox" checked={d.enabled} onChange={e=>setShopifyModal(m=>({...m,deal:{...d,enabled:e.target.checked}}))}/>
+                  <span style={{fontSize:12,fontWeight:700,color:d.enabled?"#9A6200":C.inkMid}}>⭐ Remind me to take it out of Deals</span>
+                </label>
+                {d.enabled&&(<>
+                  <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
+                    {[3,7,14,30].map(n=>(
+                      <button key={n} type="button" onClick={()=>setShopifyModal(m=>({...m,deal:{...d,days:n,customDate:""}}))}
+                        style={{background:!d.customDate&&d.days===n?"#9A6200":C.surface,color:!d.customDate&&d.days===n?"#fff":C.ink,border:`1px solid ${!d.customDate&&d.days===n?"#9A6200":C.border}`,borderRadius:6,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                        {n}d
+                      </button>
+                    ))}
+                    <input type="date" value={d.customDate} min={new Date(Date.now()+86400000).toISOString().slice(0,10)}
+                      onChange={e=>setShopifyModal(m=>({...m,deal:{...d,customDate:e.target.value}}))}
+                      style={{...FI,flex:1,minWidth:130,fontSize:11,padding:"5px 8px",boxSizing:"border-box"}}/>
+                  </div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:7,lineHeight:1.5}}>
+                    It goes into Deals either way — this just sets when the ERP reminds you to pull it back out.
+                  </div>
+                </>)}
+              </div>);})()}
 
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{

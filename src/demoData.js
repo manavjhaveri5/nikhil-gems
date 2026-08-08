@@ -132,6 +132,11 @@ export const DEMO_DATA = {
     { id:"ebay-24-14983-65086", platform:"ebay", order_number:"EBAY-24-14983-65086", platform_order_id:"24-14983-65086", date:d(3), currency:"USD", order_total:11.14, sale_price:11.14, listing_title:"53gm Red Hematoid Quartz Cluster - Deep Red Inclusions", buyer_name:"supermoon516", buyer_email:"buyer@members.ebay.com", buyer_country:"United States", ship_name:"Sam Moon", ship_address1:"41 Willow Creek Rd", ship_city:"Austin", ship_state:"TX", ship_postcode:"78701", ship_country:"United States", source:"ebay-sync" },
   ],
 
+  // ── SHOPIFY (demo only) ───────────────────────────────────────────────────
+  // Placeholder credentials so the Stock → Shopify push flow is reachable in
+  // demo mode. Not a real store or token; pushing in demo hits no live API.
+  "ng-shopify-creds-earth": { store: "earth-editions-demo.myshopify.com", token: "demo-token-not-real" },
+
   // ── FINANCE ACCOUNTS ──────────────────────────────────────────────────────
   "ng-fin-accounts-v1": [
     { id:"fa-boi-0451", name:"Bank of India — 0451", type:"bank",   balance:682500, currency:"INR", active:true },

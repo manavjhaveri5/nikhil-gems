@@ -158,23 +158,35 @@ Return ONLY valid JSON with these fields:
   }
 }
 
+/* Pushing ready stock into the storefront's "Deals" section is the main reason
+   this endpoint is used, so the outcome is reported back rather than swallowed —
+   a missing Deals collection used to fail silently and the product would quietly
+   never appear in the section. */
 async function addToDealsCollection(shop, token, productId) {
+  const H = { "Content-Type": "application/json", "X-Shopify-Access-Token": token };
   try {
-    // Find the "Deals" collection (check both custom and smart)
-    const r = await fetch(`https://${shop}/admin/api/2024-04/custom_collections.json?title=Deals&limit=1`, {
-      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-    });
+    const r = await fetch(`https://${shop}/admin/api/2024-04/custom_collections.json?title=Deals&limit=1`, { headers: H });
     const data = await r.json();
     const collection = data?.custom_collections?.[0];
-    if (!collection) { console.log("Deals collection not found"); return; }
-    // Add product to collection
-    await fetch(`https://${shop}/admin/api/2024-04/collects.json`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+    if (!collection) return { ok: false, error: 'No collection titled "Deals" on this store' };
+
+    // Re-pushing an item must not create a duplicate collect.
+    const fr = await fetch(`https://${shop}/admin/api/2024-04/collects.json?product_id=${productId}&collection_id=${collection.id}&limit=1`, { headers: H });
+    const fd = await fr.json().catch(() => ({}));
+    if (fd?.collects?.[0]) return { ok: true, collectionId: String(collection.id), alreadyIn: true };
+
+    const cr = await fetch(`https://${shop}/admin/api/2024-04/collects.json`, {
+      method: "POST", headers: H,
       body: JSON.stringify({ collect: { product_id: productId, collection_id: collection.id } }),
     });
+    if (!cr.ok) {
+      const err = await cr.text().catch(() => "");
+      return { ok: false, error: `Deals collect failed (${cr.status}) ${err.slice(0, 140)}` };
+    }
+    return { ok: true, collectionId: String(collection.id) };
   } catch (e) {
     console.error("Add to Deals collection failed:", e.message);
+    return { ok: false, error: e.message };
   }
 }
 
@@ -652,7 +664,7 @@ export default async function handler(req, res) {
     await uploadPhoto(sr, product.id, item);
     let videoOk = true; let videoErr = "";
     if (item.video) { try { await pushVideo(SHOP, TOKEN, product.id, item.video); } catch(e) { videoOk = false; videoErr = e.message; } }
-    await Promise.all([
+    const [, dealRes] = await Promise.all([
       applySEOAndMeta(SHOP, TOKEN, product.id, seoTitle, seoDesc, item),
       addToDealsCollection(SHOP, TOKEN, product.id),
     ]);
@@ -662,6 +674,10 @@ export default async function handler(req, res) {
       action: "created",
       shopifyProductId: product.id,
       shopifyUrl: `https://${SHOP}/admin/products/${product.id}`,
+      handle: product.handle || "",
+      storefrontUrl: product.handle ? `https://${SHOP}/products/${product.handle}` : "",
+      dealAdded: !!dealRes?.ok,
+      dealError: dealRes?.ok ? undefined : dealRes?.error,
       videoQueued: videoOk && !!item.video,
       videoErr: videoErr || undefined,
     });
@@ -710,7 +726,7 @@ export default async function handler(req, res) {
     await uploadPhoto(sr, productId, item);
     let videoOk2 = true; let videoErr2 = "";
     if (item.video) { try { await pushVideo(SHOP, TOKEN, productId, item.video); } catch(e) { videoOk2 = false; videoErr2 = e.message; } }
-    await Promise.all([
+    const [, dealRes2] = await Promise.all([
       applySEOAndMeta(SHOP, TOKEN, productId, seoTitle, seoDesc, item),
       addToDealsCollection(SHOP, TOKEN, productId),
     ]);
@@ -720,6 +736,10 @@ export default async function handler(req, res) {
       action: "updated",
       shopifyProductId: product.id,
       shopifyUrl: `https://${SHOP}/admin/products/${product.id}`,
+      handle: product.handle || "",
+      storefrontUrl: product.handle ? `https://${SHOP}/products/${product.handle}` : "",
+      dealAdded: !!dealRes2?.ok,
+      dealError: dealRes2?.ok ? undefined : dealRes2?.error,
       videoQueued: videoOk2 && !!item.video,
       videoErr: videoErr2 || undefined,
     });
