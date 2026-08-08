@@ -15,7 +15,6 @@ import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from 
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
-const EtsyApp           = React.lazy(() => import("./src/EtsyApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
 const DatasetsApp       = React.lazy(() => import("./src/DatasetsApp.jsx"));
 const ImageLibraryApp   = React.lazy(() => import("./src/ImageLibraryApp.jsx"));

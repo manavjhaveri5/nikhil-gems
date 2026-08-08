@@ -8,7 +8,7 @@ import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
 /* ══ ERP THEME TOKENS ═══════════════════════════════════════════
    Mirror src/theme.css CSS variables so this module inherits the
    shared light/dark palette (the global 🌙 toggle "just works").
-   Matches the local-C pattern used by src/EtsyApp.jsx. */
+   Matches the local-C pattern used by the other module screens. */
 const C = {
   bg:"var(--c-bg)", surface:"var(--c-surface)", card:"var(--c-card)",
   border:"var(--c-border)", borderHi:"var(--c-borderHi)",
