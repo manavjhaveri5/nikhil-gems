@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, createContext, useContext, Fragment } from "react";
+import { isRemittanceAdvice, parseRemittanceAdvice, linesFromTextItems } from "./remittanceAdvice.js";
 import { supabase } from "./supabase.js";
 import { loadK, loadKFresh, saveK, onCacheRefresh } from "./utils.js";
 import ClassifyTransactionModal from "./ClassifyTransaction.jsx";
@@ -2463,8 +2464,8 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
       id: uid(), type: t.type, amount: String(t.amount), currency: CUR,
       accountFrom: t.type === "debit"  ? acc.id : null,
       accountTo:   t.type === "credit" ? acc.id : null,
-      payee: t.description || "", category: t.category || "Other",
-      date: t.date || today(), notes: "Imported from bank statement PDF",
+      payee: t.payee || t.description || "", category: t.category || "Other",
+      date: t.date || today(), notes: t.notes || "Imported from bank statement PDF",
       createdAt: new Date().toISOString(),
     }));
     const toRemove = extras.filter(x => selRm.has(x.id)).map(x => x.id);
@@ -3047,6 +3048,35 @@ function ReconcileView({ accounts, transactions, onAddTxns, onApplyTxns, company
       const pdfjsLib = await import("pdfjs-dist");
       pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+      /* A foreign inward remittance advice is a single-transaction document on a
+         fixed bank template, not a statement. Read its text layer and parse it
+         exactly — sending it to the vision model would risk mis-read amounts and
+         it has no ledger rows for the statement prompt to find. */
+      let adviceText = "";
+      for (let p = 1; p <= Math.min(pdf.numPages, 3); p++) {
+        const tc = await (await pdf.getPage(p)).getTextContent();
+        adviceText += linesFromTextItems(tc.items) + "\n";
+      }
+      if (isRemittanceAdvice(adviceText)) {
+        const adv = parseRemittanceAdvice(adviceText);
+        if (!adv?.transaction?.amount) throw new Error("Recognised a remittance advice but couldn't read its amount. Import it as a statement instead.");
+        // Booking an EEFC credit into an INR account would invent rupees that
+        // never arrived, so point at the right account rather than converting.
+        if (acc?.currency && adv.transaction.currency !== acc.currency) {
+          throw new Error(
+            `This is a ${adv.settlement === "eefc" ? "EEFC (unconverted)" : ""} remittance of ${adv.transaction.currency} ${(+adv.transaction.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })} from ${adv.remitter || "the remitter"}.\n\n` +
+            `The open account is in ${acc.currency}, so it can't be booked here — open your ${adv.transaction.currency} account and upload it there.` +
+            (adv.chargeTransaction ? `\n\nNote: the bank separately debited ${adv.chargeCurrency} ${adv.charges} of charges to the INR account.` : "")
+          );
+        }
+        setPdfStep(3);
+        const rows = [adv.transaction, ...(adv.chargeTransaction && adv.chargeTransaction.currency === acc?.currency ? [adv.chargeTransaction] : [])];
+        setPdfModal({ txns: rows, openingBalance: null, closingBalance: null, docLabel: `Inward remittance ${adv.remittanceNo}` });
+        setPdfLoading(false);
+        return;
+      }
+
       const images = [];
       const maxPages = Math.min(pdf.numPages, 6); // cap at 6 pages
       for (let p = 1; p <= maxPages; p++) {
