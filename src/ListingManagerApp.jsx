@@ -553,7 +553,11 @@ async function syncEbayOrdersIntoStore({ orders = null, listings = null } = {}) 
     const prev = prevById.get(norm.id);
     const merged = { ...norm, ...prev, status: norm.status || prev?.status, sale_price: norm.sale_price, order_total: norm.order_total };
     for (const k of preferFresh) if (norm[k]) merged[k] = norm[k];
-    if (!prev || JSON.stringify(prev) !== JSON.stringify(merged)) {
+    // Sorted-key compare: the stored row and the rebuilt one hold the same values
+    // in a different key order, which a plain stringify reports as a change and
+    // re-upserts every order on every page load.
+    const stable = o => JSON.stringify(o, Object.keys(o || {}).sort());
+    if (!prev || stable(prev) !== stable(merged)) {
       await upsertItemK(ORDERS_KEY, merged, { prepend: true });
       synced++;
       if (norm.ship_address1 && !prev?.ship_address1) addresses++;

@@ -481,6 +481,11 @@ async function handleEbay(req, res) {
       }
     } catch {}
 
+    // Key order differs between the stored row and the freshly built one, so a
+    // plain JSON.stringify comparison reports a change every run and rewrites the
+    // whole array daily. Compare with keys sorted instead.
+    const stable = o => JSON.stringify(o, Object.keys(o || {}).sort());
+
     const current = (await loadAppData("ng-orders-v1")) || [];
     const rows = Array.isArray(current) ? current : [];
     const byId = new Map(rows.map(o => [o?.id, o]));
@@ -516,7 +521,7 @@ async function handleEbay(req, res) {
       const merged = { ...norm, ...prev, status: norm.status || prev?.status, sale_price: norm.sale_price, order_total: norm.order_total };
       for (const k of preferFresh) if (norm[k]) merged[k] = norm[k];
       if (!prev) { byId.set(norm.id, merged); added++; if (norm.ship_address1) addressesCaptured++; }
-      else if (JSON.stringify(prev) !== JSON.stringify(merged)) {
+      else if (stable(prev) !== stable(merged)) {
         byId.set(norm.id, merged); updated++;
         if (norm.ship_address1 && !prev.ship_address1) addressesCaptured++;
       }
