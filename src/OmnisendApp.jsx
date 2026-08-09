@@ -81,7 +81,7 @@ export default function OmnisendApp({ onHome }) {
     loadK(LIST_KEY).then(l => setListings(Array.isArray(l) ? l : [])).catch(() => {});
   }, []);
 
-  const TABS = [["campaigns", "📣", "Campaigns"], ["subscribers", "👥", "Subscribers"]];
+  const TABS = [["campaigns", "📣", "Campaigns"], ["approvals", "✅", "Approvals"], ["subscribers", "👥", "Subscribers"]];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg }}>
@@ -121,6 +121,7 @@ export default function OmnisendApp({ onHome }) {
         )}
         {configured === null && <div style={{ color: C.inkFaint, fontSize: 13, padding: 20 }}>Checking connection…</div>}
         {configured && tab === "campaigns" && <CampaignsTab showToast={showToast} />}
+        {configured && tab === "approvals" && <ApprovalsTab showToast={showToast} />}
         {configured && tab === "subscribers" && <SubscribersTab showToast={showToast} />}
       </div>
 
@@ -311,6 +312,192 @@ function CampaignsTab({ showToast }) {
         <div style={{ flex: 1 }} />
         {hasMore && <button onClick={() => load(after)} disabled={loading} style={btn()}>{loading ? "Loading…" : "Load more"}</button>}
       </div>
+    </>
+  );
+}
+
+/* ── Approvals ─────────────────────────────────────────────────────────────────
+   Mailing-list signups land as Shopify customers with no trade access. Approving
+   is two writes that belong together: the storefront reads a tag on the Shopify
+   customer to unlock prices and login, and Omnisend reads a tag on the contact to
+   place them in the audience. Doing one without the other is the failure mode
+   this screen exists to prevent, so both are reported per row.
+
+   Shopify credentials live in Supabase per store, not in the function's env, so
+   they are read here and passed with the request — the same path the Listing
+   Manager uses. */
+const APPROVE_TAG = "approved";
+const SHOP_CREDS_KEY = "ng-shopify-creds-earth";
+
+const shopApi = async payload => {
+  const r = await fetch("/api/shopify", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.error) throw new Error(d.error || `Request failed (${r.status})`);
+  return d;
+};
+const hasApproveTag = c => (c.tags || []).some(t => String(t).toLowerCase() === APPROVE_TAG);
+
+function ApprovalsTab({ showToast }) {
+  const [creds, setCreds] = useState(undefined);   // undefined = loading, null = missing
+  const [rows, setRows] = useState([]);
+  const [omniTags, setOmniTags] = useState({});    // email → tags[] already in Omnisend
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState({});            // customer id → true
+  const [view, setView] = useState("pending");
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    loadK(SHOP_CREDS_KEY)
+      .then(c => setCreds(c?.store && c?.token ? c : null))
+      .catch(() => setCreds(null));
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!creds) return;
+    setLoading(true); setErr("");
+    try {
+      const d = await shopApi({ action: "list_customers", shopStore: creds.store, shopToken: creds.token });
+      const customers = d.customers || [];
+      setRows(customers);
+      // Cross-check Omnisend so a half-done approval is visible rather than assumed.
+      try {
+        const oc = await api({ action: "contacts", limit: PAGE });
+        const map = {};
+        for (const c of oc.contacts || []) if (c.email) map[c.email.toLowerCase()] = c.tags || [];
+        setOmniTags(map);
+      } catch {}
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }, [creds]);
+  useEffect(() => { if (creds) load(); }, [creds, load]);
+
+  const inOmnisend = c => omniTags[String(c.email || "").toLowerCase()];
+  const omniApproved = c => (inOmnisend(c) || []).some(t => String(t).toLowerCase() === APPROVE_TAG);
+
+  const approve = async (c, undo = false) => {
+    setBusy(b => ({ ...b, [c.id]: true })); setErr("");
+    const done = [];
+    try {
+      await shopApi({
+        action: "tag_customer", shopStore: creds.store, shopToken: creds.token,
+        customer_id: c.id,
+        ...(undo ? { remove_tags: [APPROVE_TAG] } : { add_tags: [APPROVE_TAG] }),
+      });
+      done.push("Shopify");
+      setRows(rs => rs.map(r => r.id === c.id ? {
+        ...r,
+        tags: undo ? (r.tags || []).filter(t => String(t).toLowerCase() !== APPROVE_TAG) : [...(r.tags || []), APPROVE_TAG],
+      } : r));
+
+      if (c.email) {
+        try {
+          const [firstName, ...rest] = String(c.name || "").split(" ");
+          const t = await api({
+            action: "contact_tag", email: c.email,
+            ...(undo ? { removeTags: [APPROVE_TAG] } : { addTags: [APPROVE_TAG] }),
+            createIfMissing: !undo, firstName: firstName || "", lastName: rest.join(" "),
+          });
+          done.push(t.created ? "added to Omnisend" : "Omnisend");
+          setOmniTags(m => ({ ...m, [c.email.toLowerCase()]: t.tags || [] }));
+        } catch (e) {
+          // Shopify already succeeded — say exactly what is left undone.
+          setErr(`Tagged in Shopify, but Omnisend failed for ${c.email}: ${e.message}`);
+        }
+      }
+      showToast?.(`${undo ? "Removed approval" : "Approved"} · ${done.join(" + ")}`);
+    } catch (e) {
+      setErr(e.message);
+    } finally { setBusy(b => ({ ...b, [c.id]: false })); }
+  };
+
+  const ql = q.trim().toLowerCase();
+  const matches = c => !ql || `${c.email} ${c.name} ${(c.tags || []).join(" ")}`.toLowerCase().includes(ql);
+  const pending = rows.filter(c => !hasApproveTag(c));
+  const approved = rows.filter(hasApproveTag);
+  const shown = (view === "pending" ? pending : view === "approved" ? approved : rows).filter(matches);
+
+  const th = { textAlign: "left", fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5, padding: "8px 10px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
+  const td = { padding: "9px 10px", fontSize: 12.5, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
+
+  if (creds === undefined) return <div style={{ color: C.inkFaint, fontSize: 13, padding: 20 }}>Loading…</div>;
+  if (creds === null) return (
+    <div style={{ ...card, background: "#fff8e6", border: "1px solid #f0dfae", padding: "13px 15px", fontSize: 12.5, color: "#8a6d1a", lineHeight: 1.6 }}>
+      <strong>Earth Editions isn't connected.</strong> Open Listing Manager → Earth Ed. and connect the store, then come back — approving writes a tag to the Shopify customer, so it needs that store's token.
+    </div>
+  );
+
+  return (
+    <>
+      <div style={{ ...card, padding: "11px 14px", marginBottom: 14, fontSize: 12, color: C.inkMid, lineHeight: 1.6 }}>
+        Approving adds the <code>{APPROVE_TAG}</code> tag to the Shopify customer — which is what unlocks trade prices and account login — and the same tag to their Omnisend contact so the audience rules pick them up. Both happen in one click.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search email, name or tag…" style={{ ...FI(), maxWidth: 280 }} />
+        <div style={{ display: "flex", gap: 4 }}>
+          {[["pending", `Pending ${pending.length}`], ["approved", `Approved ${approved.length}`], ["all", `All ${rows.length}`]].map(([k, label]) => (
+            <button key={k} onClick={() => setView(k)} style={{ ...btn(view === k ? C.ink : C.surface, view === k ? "#fff" : C.inkMid), padding: "6px 12px", fontSize: 11.5 }}>{label}</button>
+          ))}
+        </div>
+        <div style={{ flex: 1 }} />
+        <button onClick={load} disabled={loading} style={btn()}>{loading ? "Loading…" : "↻ Refresh"}</button>
+        <button
+          onClick={() => downloadCsv(`earth-editions-customers-${new Date().toISOString().slice(0, 10)}.csv`,
+            [["Email", "Name", "Approved", "In Omnisend", "Omnisend approved", "Orders", "Spent", "Tags", "Joined"],
+             ...shown.map(c => [c.email, c.name, hasApproveTag(c) ? "yes" : "no", inOmnisend(c) ? "yes" : "no",
+               omniApproved(c) ? "yes" : "no", c.ordersCount, c.totalSpent, (c.tags || []).join(" | "), c.createdAt])])}
+          disabled={!shown.length} style={btn()}>⬇ CSV</button>
+      </div>
+
+      {err && <div style={{ ...card, borderColor: C.red, background: C.redBg, color: C.red, padding: "10px 13px", fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
+
+      <div style={{ ...card, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+            <thead><tr>{["Customer", "Shopify", "Omnisend", "Orders", "Joined", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {shown.map(c => {
+                const ok = hasApproveTag(c);
+                const known = !!inOmnisend(c);
+                return (
+                  <tr key={c.id}>
+                    <td style={td}>
+                      <div style={{ fontWeight: 700 }}>{c.email || "(no email)"}</div>
+                      {c.name && <div style={{ fontSize: 11, color: C.inkFaint }}>{c.name}</div>}
+                    </td>
+                    <td style={td}><Pill>{ok ? "approved" : "pending"}</Pill></td>
+                    <td style={td}>
+                      {!known
+                        ? <span style={{ fontSize: 11, color: C.inkFaint }}>not a contact</span>
+                        : omniApproved(c)
+                          ? <span style={{ fontSize: 11.5, fontWeight: 800, color: C.green }}>✓ tagged</span>
+                          : <span style={{ fontSize: 11.5, fontWeight: 800, color: C.amber }}>untagged</span>}
+                    </td>
+                    <td style={{ ...td, color: C.inkMid }}>{c.ordersCount || 0}</td>
+                    <td style={{ ...td, color: C.inkMid, whiteSpace: "nowrap" }}>{fmtDate(c.createdAt)}</td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      <button onClick={() => approve(c, ok)} disabled={!!busy[c.id] || !c.email}
+                        title={c.email ? "" : "This customer has no email address"}
+                        style={{ ...btn(ok ? C.surface : C.green, ok ? C.ink : "#fff"), padding: "6px 12px", fontSize: 11.5, opacity: busy[c.id] || !c.email ? .6 : 1 }}>
+                        {busy[c.id] ? "…" : ok ? "Remove" : "Approve"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!shown.length && !loading && (
+                <tr><td colSpan={6} style={{ ...td, textAlign: "center", color: C.inkFaint, padding: 34 }}>
+                  {view === "pending" ? "Nothing waiting for approval." : "No customers match."}
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 12 }}>{shown.length} shown of {rows.length} customers</div>
     </>
   );
 }
