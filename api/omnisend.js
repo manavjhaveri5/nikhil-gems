@@ -176,6 +176,15 @@ export default async function handler(req, res) {
       });
     }
 
+    /* TEMPORARY: read-only shape probe (whitelisted GETs) — removed once the
+       campaign detail/preview endpoints are pinned down. */
+    if (action === "__probe") {
+      const path = String(body.path || "");
+      if (!/^\/[\w/-]+(\?[\w=&%.@,-]*)?$/.test(path)) return res.status(400).json({ error: "path not allowed" });
+      const r = await omni("GET", path);
+      return res.json({ ok: r.ok, status: r.status, error: r.error || "", sample: JSON.stringify(r.data).slice(0, 1200) });
+    }
+
     /* Campaigns, newest first. Omnisend exposes no open/click stats on this
        resource, so the ERP links out for reporting rather than inventing numbers. */
     if (action === "campaigns") {
