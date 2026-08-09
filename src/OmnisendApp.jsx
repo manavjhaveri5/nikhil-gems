@@ -130,8 +130,26 @@ export default function OmnisendApp({ onHome }) {
 }
 
 /* ── Campaigns ─────────────────────────────────────────────────────────────── */
+const relTime = iso => {
+  const t = new Date(iso).getTime();
+  if (!t || isNaN(t)) return "";
+  const d = Math.floor((Date.now() - t) / 86400000);
+  if (d < 0) return "scheduled";
+  if (d === 0) return "today";
+  if (d === 1) return "yesterday";
+  if (d < 30) return `${d}d ago`;
+  if (d < 365) return `${Math.floor(d / 30)}mo ago`;
+  return `${Math.floor(d / 365)}y ago`;
+};
+const duration = (a, b) => {
+  const ms = new Date(b).getTime() - new Date(a).getTime();
+  if (!ms || isNaN(ms) || ms < 0) return "";
+  return ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60000)}m`;
+};
+
 function CampaignsTab({ showToast }) {
   const [rows, setRows] = useState([]);
+  const [segNames, setSegNames] = useState({});   // segmentID → name
   const [after, setAfter] = useState("");
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -139,6 +157,7 @@ function CampaignsTab({ showToast }) {
   const [open, setOpen] = useState(null);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
+  const [sort, setSort] = useState("newest");
 
   const load = useCallback(async (cursor = "") => {
     setLoading(true); setErr("");
@@ -148,33 +167,75 @@ function CampaignsTab({ showToast }) {
       setAfter(d.after || ""); setHasMore(!!d.hasMore);
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
   }, []);
-  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    load();
+    // Audience is stored as segment ids; names make the list readable.
+    api({ action: "segments" })
+      .then(d => setSegNames(Object.fromEntries((d.segments || []).map(s => [String(s.id), s.name]))))
+      .catch(() => {});
+  }, [load]);
+
+  const audienceOf = c => {
+    const ids = c.segmentIds || [];
+    if (!ids.length) return "All subscribers";
+    const named = ids.map(id => segNames[String(id)]).filter(Boolean);
+    return named.length ? named.join(" + ") : `${ids.length} segment${ids.length > 1 ? "s" : ""}`;
+  };
 
   const ql = q.trim().toLowerCase();
-  const shown = rows.filter(c =>
-    (status === "all" || String(c.status).toLowerCase() === status) &&
-    (!ql || `${c.name} ${c.subject} ${c.senderName}`.toLowerCase().includes(ql)));
+  const shown = rows
+    .filter(c => (status === "all" || String(c.status).toLowerCase() === status) &&
+      (!ql || `${c.name} ${c.subject} ${c.senderName} ${audienceOf(c)}`.toLowerCase().includes(ql)))
+    .sort((a, b) => {
+      if (sort === "name") return String(a.name).localeCompare(String(b.name));
+      const at = new Date(a.sentAt || a.createdAt || 0).getTime();
+      const bt = new Date(b.sentAt || b.createdAt || 0).getTime();
+      return sort === "oldest" ? at - bt : bt - at;
+    });
 
   const statuses = ["all", ...[...new Set(rows.map(r => String(r.status || "").toLowerCase()).filter(Boolean))]];
+  const sentRows = rows.filter(r => String(r.status).toLowerCase() === "sent");
+  const lastSent = sentRows.map(r => r.sentAt).filter(Boolean).sort().pop();
+
+  const stat = (label, value, sub) => (
+    <div style={{ ...card, padding: "10px 14px", minWidth: 116, flex: "1 1 116px" }}>
+      <div style={{ fontSize: 9.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 }}>{label}</div>
+      <div style={{ fontSize: 19, fontWeight: 850, color: C.ink, marginTop: 3, lineHeight: 1.1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
 
   return (
     <>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, subject or sender…" style={{ ...FI(), maxWidth: 320 }} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {stat("Campaigns", rows.length, hasMore ? "more available" : "all loaded")}
+        {stat("Sent", sentRows.length, lastSent ? `last ${relTime(lastSent)}` : "none yet")}
+        {stat("Drafts", rows.filter(r => String(r.status).toLowerCase() === "draft").length, "not sent")}
+        {stat("Audiences", Object.keys(segNames).length || "—", "segments in account")}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, subject, sender or audience…" style={{ ...FI(), maxWidth: 300 }} />
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
           {statuses.map(s => (
             <button key={s} onClick={() => setStatus(s)} style={{
               ...btn(status === s ? C.ink : C.surface, status === s ? "#fff" : C.inkMid),
               padding: "6px 12px", fontSize: 11.5, textTransform: "capitalize",
-            }}>{s}{s === "all" ? ` ${rows.length}` : ""}</button>
+            }}>{s}{s === "all" ? ` ${rows.length}` : ` ${rows.filter(r => String(r.status).toLowerCase() === s).length}`}</button>
           ))}
         </div>
+        <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...FI(), width: "auto", cursor: "pointer", fontSize: 12, padding: "7px 9px" }}>
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="name">By name</option>
+        </select>
         <div style={{ flex: 1 }} />
         <button onClick={() => load()} disabled={loading} style={btn()}>{loading ? "Loading…" : "↻ Refresh"}</button>
         <button
           onClick={() => downloadCsv(`omnisend-campaigns-${new Date().toISOString().slice(0, 10)}.csv`,
-            [["Name", "Subject", "Status", "Sender", "Sender email", "Created", "Sent"],
-             ...shown.map(c => [c.name, c.subject, c.status, c.senderName, c.senderEmail, c.createdAt, c.sentAt])])}
+            [["Name", "Subject", "Preheader", "Status", "Audience", "Sender", "Sender email", "Created", "Sent"],
+             ...shown.map(c => [c.name, c.subject, c.preheader, c.status, audienceOf(c), c.senderName, c.senderEmail, c.createdAt, c.sentAt])])}
           disabled={!shown.length} style={btn()}>⬇ CSV</button>
       </div>
 
@@ -186,48 +247,70 @@ function CampaignsTab({ showToast }) {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {shown.map(c => (
-          <div key={c.id}>
-            <div onClick={() => setOpen(open === c.id ? null : c.id)}
-              style={{ ...card, padding: mob() ? "11px 12px" : "13px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderLeft: `4px solid ${(STATUS_TONE[String(c.status).toLowerCase()] || [C.border])[0]}` }}>
-              <div style={{ minWidth: 0, flex: "1 1 300px" }}>
-                <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
-                <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.subject || "(no subject)"}</div>
+      <div style={{ ...card, overflow: "hidden" }}>
+        {shown.map((c, i) => {
+          const isOpen = open === c.id;
+          const tone = (STATUS_TONE[String(c.status).toLowerCase()] || [C.inkFaint])[0];
+          const when = c.sentAt || c.createdAt;
+          return (
+            <div key={c.id} style={{ borderTop: i ? `1px solid ${C.border}` : "none" }}>
+              <div onClick={() => setOpen(isOpen ? null : c.id)}
+                style={{ display: "grid", gridTemplateColumns: mob() ? "1fr auto" : "minmax(0,2.2fr) minmax(0,1.1fr) 128px 84px 18px",
+                  gap: 10, alignItems: "center", padding: mob() ? "10px 12px" : "10px 14px", cursor: "pointer",
+                  borderLeft: `3px solid ${tone}`, background: isOpen ? C.card : "transparent" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
+                  <div style={{ fontSize: 11, color: C.inkMid, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.subject || "(no subject)"}</div>
+                </div>
+                {!mob() && <div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={audienceOf(c)}>👥 {audienceOf(c)}</div>}
+                {!mob() && (
+                  <div style={{ fontSize: 11, color: C.inkFaint, whiteSpace: "nowrap" }}>
+                    {c.sentAt ? "Sent " : "Created "}{fmtDate(when)}
+                    <div style={{ fontSize: 10, opacity: .75 }}>{relTime(when)}</div>
+                  </div>
+                )}
+                <Pill>{c.status}</Pill>
+                {!mob() && <span style={{ fontSize: 10, color: C.inkFaint, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▸</span>}
               </div>
-              <div style={{ fontSize: 11, color: C.inkFaint, whiteSpace: "nowrap" }}>{c.senderName || "—"}</div>
-              <div style={{ fontSize: 11, color: C.inkFaint, whiteSpace: "nowrap", minWidth: 120, textAlign: "right" }}>
-                {c.sentAt ? `Sent ${fmtDate(c.sentAt)}` : `Created ${fmtDate(c.createdAt)}`}
-              </div>
-              <Pill>{c.status}</Pill>
+
+              {isOpen && (
+                <div style={{ padding: "14px 16px 16px", background: C.card, borderTop: `1px solid ${C.border}` }}>
+                  <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(auto-fit,minmax(190px,1fr))", gap: 12 }}>
+                    {[["Subject", c.subject], ["Preheader", c.preheader],
+                      ["Audience", audienceOf(c)],
+                      ["Sender", c.senderName ? `${c.senderName}${c.senderEmail ? ` <${c.senderEmail}>` : ""}` : ""],
+                      ["Type", `${c.type || "—"}${c.channel ? ` · ${c.channel}` : ""}`],
+                      ["Created", fmtDateTime(c.createdAt)],
+                      ["Sent", c.sentAt ? fmtDateTime(c.sentAt) : "—"],
+                      ["Delivery took", duration(c.sentAt, c.endedAt)],
+                      ["Campaign ID", c.id],
+                    ].filter(([, v]) => v).map(([k, v]) => (
+                      <div key={k}>
+                        <span style={lab}>{k}</span>
+                        <div style={{ fontSize: 12.5, color: C.ink, wordBreak: "break-word" }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 13, paddingTop: 12, borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <a href="https://app.omnisend.com/campaigns" target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none", display: "inline-block" }}>Open in Omnisend ↗</a>
+                    <span style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.5, flex: "1 1 260px" }}>
+                      Open/click rates and the email preview aren't in Omnisend's API — its campaign endpoint returns no statistics and past templates aren't retrievable, so those live in Omnisend itself.
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
-            {open === c.id && (
-              <div style={{ ...card, marginTop: -2, borderTop: "none", borderRadius: "0 0 12px 12px", padding: "14px 16px", background: C.card }}>
-                <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(auto-fit,minmax(200px,1fr))", gap: 12 }}>
-                  {[["Subject", c.subject], ["Preheader", c.preheader], ["Sender", c.senderName],
-                    ["Sender email", c.senderEmail], ["Type", `${c.type || "—"}${c.channel ? ` · ${c.channel}` : ""}`],
-                    ["Audience", c.segmentIds?.length ? `${c.segmentIds.length} segment${c.segmentIds.length > 1 ? "s" : ""}` : "All subscribers"],
-                    ["Created", fmtDateTime(c.createdAt)], ["Sent", fmtDateTime(c.sentAt)]].map(([k, v]) => (
-                    <div key={k}>
-                      <span style={lab}>{k}</span>
-                      <div style={{ fontSize: 12.5, color: C.ink, wordBreak: "break-word" }}>{v || "—"}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}`, fontSize: 11, color: C.inkFaint, lineHeight: 1.6 }}>
-                  Open and click rates aren't exposed by Omnisend's campaign API — see the campaign in Omnisend for reporting.
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {hasMore && (
-        <div style={{ textAlign: "center", marginTop: 14 }}>
-          <button onClick={() => load(after)} disabled={loading} style={btn()}>{loading ? "Loading…" : "Load more"}</button>
-        </div>
-      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+        <span style={{ fontSize: 11.5, color: C.inkFaint }}>
+          {shown.length} shown{rows.length !== shown.length ? ` of ${rows.length}` : ""}
+        </span>
+        <div style={{ flex: 1 }} />
+        {hasMore && <button onClick={() => load(after)} disabled={loading} style={btn()}>{loading ? "Loading…" : "Load more"}</button>}
+      </div>
     </>
   );
 }
