@@ -264,6 +264,44 @@ export default async function handler(req, res) {
       return res.json({ ok: true, contact: normalizeContact(r.data?.contact || r.data || {}), updated: !!contactId });
     }
 
+    /* Tag a subscriber by email, creating the contact if Omnisend has never seen
+       them. Tags are merged rather than replaced — a PATCH with a tags array
+       overwrites the list, which would strip the signup's own tags
+       (form_subscriber, source: shopify, …) that the audience rules rely on. */
+    if (action === "contact_tag") {
+      const email = String(body.email || "").trim();
+      if (!email) return res.status(400).json({ error: "Email is required" });
+      const add = [...new Set((body.addTags || []).map(t => String(t).trim()).filter(Boolean))];
+      const remove = new Set((body.removeTags || []).map(t => String(t).trim().toLowerCase()).filter(Boolean));
+      if (!add.length && !remove.size) return res.status(400).json({ error: "No tags to change" });
+
+      const found = await omniList("/contacts", { email, limit: 1 });
+      const hit = rowsOf(found.data, "contacts")[0];
+
+      if (!hit) {
+        if (body.createIfMissing === false) return res.status(404).json({ error: `${email} is not in Omnisend` });
+        const created = await omni("POST", "/contacts", {
+          identifiers: [{ type: "email", id: email, channels: { email: { status: "subscribed" } } }],
+          tags: add.slice(0, 25),
+          ...(body.firstName ? { firstName: String(body.firstName).slice(0, 100) } : {}),
+          ...(body.lastName ? { lastName: String(body.lastName).slice(0, 100) } : {}),
+        });
+        if (!created.ok) return res.status(created.status || 400).json({ error: created.error });
+        return res.json({ ok: true, created: true, email, tags: add });
+      }
+
+      const existing = Array.isArray(hit.tags) ? hit.tags : [];
+      const kept = existing.filter(t => !remove.has(String(t).toLowerCase()));
+      const merged = [...kept];
+      for (const t of add) if (!merged.some(x => String(x).toLowerCase() === t.toLowerCase())) merged.push(t);
+      if (merged.length === existing.length && merged.every((t, i) => t === existing[i])) {
+        return res.json({ ok: true, unchanged: true, email, tags: merged });
+      }
+      const r = await omni("PATCH", `/contacts/${encodeURIComponent(hit.contactID || hit.contactId || hit.id)}`, { tags: merged.slice(0, 25) });
+      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+      return res.json({ ok: true, created: false, email, tags: merged });
+    }
+
     /* Preview only — render the same HTML the campaign would use. */
     if (action === "preview") {
       return res.json({ ok: true, html: buildCampaignHtml(body) });

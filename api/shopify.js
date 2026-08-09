@@ -339,6 +339,54 @@ export default async function handler(req, res) {
 
   const sr = (method, path, b) => shopifyReq(SHOP, TOKEN, method, path, b);
 
+  /* ── Wholesale approval ──────────────────────────────────────────────────
+     Mailing-list signups arrive as Shopify customers. A tag on the customer is
+     what the storefront checks to unlock trade prices and account login, so
+     approving is a tag write — never a delete, and existing tags are preserved. */
+  if (action === "list_customers") {
+    const qs = new URLSearchParams({ limit: "250", fields: "id,email,first_name,last_name,tags,state,created_at,orders_count,total_spent,accepts_marketing,email_marketing_consent,note" });
+    if (body.query) qs.set("query", String(body.query));
+    const result = await shopifyGetAll(sr, `/customers.json?${qs.toString()}`, "customers");
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    const tagOf = c => String(c.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+    const rows = (result.rows || []).map(c => ({
+      id: String(c.id),
+      email: c.email || "",
+      name: [c.first_name, c.last_name].filter(Boolean).join(" "),
+      tags: tagOf(c),
+      state: c.state || "",
+      createdAt: c.created_at || "",
+      ordersCount: +c.orders_count || 0,
+      totalSpent: +c.total_spent || 0,
+      // Newer API reports consent as an object; older stores use the boolean.
+      subscribed: c.email_marketing_consent
+        ? c.email_marketing_consent.state === "subscribed"
+        : !!c.accepts_marketing,
+      note: c.note || "",
+    }));
+    return res.json({ success: true, customers: rows, total: rows.length });
+  }
+
+  if (action === "tag_customer") {
+    const id = String(body.customer_id || "").trim();
+    const add = [...new Set((body.add_tags || []).map(t => String(t).trim()).filter(Boolean))];
+    const remove = new Set((body.remove_tags || []).map(t => String(t).trim().toLowerCase()).filter(Boolean));
+    if (!id) return res.status(400).json({ error: "customer_id required" });
+    if (!add.length && !remove.size) return res.status(400).json({ error: "Nothing to change" });
+
+    // Shopify replaces the whole tag string, so read first and merge.
+    const cur = await sr("GET", `/customers/${encodeURIComponent(id)}.json?fields=id,email,tags`);
+    if (!cur.ok) return res.status(cur.status || 400).json({ error: cur.error || "Customer not found" });
+    const existing = String(cur.data?.customer?.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+    const kept = existing.filter(t => !remove.has(t.toLowerCase()));
+    const merged = [...kept];
+    for (const t of add) if (!merged.some(x => x.toLowerCase() === t.toLowerCase())) merged.push(t);
+
+    const r = await sr("PUT", `/customers/${encodeURIComponent(id)}.json`, { customer: { id, tags: merged.join(", ") } });
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+    return res.json({ success: true, id, email: cur.data?.customer?.email || "", tags: merged });
+  }
+
   if (action === "get_orders") {
     const daysBack = parseInt(body.days, 10) || 90;
     const sinceISO = new Date(Date.now() - daysBack * 86400000).toISOString();
