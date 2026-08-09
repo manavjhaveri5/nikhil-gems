@@ -6104,6 +6104,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [fsTypes,setFsTypes]=useState(new Set());
   const [fsUnits,setFsUnits]=useState(new Set());
   const [fPhoto,setFPhoto]=useState("Any");
+  const [fVideo,setFVideo]=useState("Any");
   const [fsPlats,setFsPlats]=useState(new Set());
   const [fsVendors,setFsVendors]=useState(new Set());
   const [openFilter,setOpenFilter]=useState(null);
@@ -6621,6 +6622,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const typ=fsTypes.size===0||fsTypes.has(s.productType);
     const unit=fsUnits.size===0||fsUnits.has(s.unit);
     const pfP=fPhoto==="Any"||(fPhoto==="Yes"&&s.photographed)||(fPhoto==="No"&&!s.photographed);
+    const hasVid=!!(s.video||(Array.isArray(s.videos)&&s.videos.length));
+    const pfV=fVideo==="Any"||(fVideo==="Yes"&&hasVid)||(fVideo==="No"&&!hasVid);
     const platP=fsPlats.size===0||[["Atyahara",s.postedShopifyAtyahara||s.postedShopifyAty],["Earth Editions",s.postedShopifyEarth||s.postedShopifyEarthEditions||s.postedShopify],["Wix",s.postedWix],["Etsy",s.postedEtsy],["Ebay",s.postedEbay]].some(([p,v])=>fsPlats.has(p)&&v);
     const vendorP=fsVendors.size===0||fsVendors.has(s.vendor||"");
     const primaryQty=parseFloat(s.qty);
@@ -6631,7 +6634,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const isSold=((s.qty!=null&&s.qty!==""&&+s.qty===0)&&(!s.qty2||s.qty2===""||+s.qty2===0))||(isMovementRow&&!hasActualQty);
     const hasQty=hasActualQty||(!isMovementRow&&hasBlankQty);
     const qtyP=qtyFilter==="all"||(qtyFilter==="sold"?isSold:hasQty);
-    return q&&stone&&shape&&mkt&&typ&&unit&&pfP&&platP&&vendorP&&qtyP;
+    return q&&stone&&shape&&mkt&&typ&&unit&&pfP&&pfV&&platP&&vendorP&&qtyP;
   }).sort((a,b)=>{
     if(sortBy==="name")return(a.material||"").localeCompare(b.material||"");
     if(sortBy==="qty-desc")return(+b.qty||0)-(+a.qty||0);
@@ -6674,7 +6677,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const act=ts(a.createdAt);const bct=ts(b.createdAt);
     if(act==null&&bct==null)return 0;if(act==null)return 1;if(bct==null)return -1;
     return bct-act;
-  }),[stock,search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
+  }),[stock,search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
   // Reset page whenever the filtered set changes so we don't show a stale "Load more" offset
   useEffect(()=>{setVisibleCount(PAGE_SIZE);},[filtered]);
   const visibleStock=filtered.slice(0,visibleCount);
@@ -6683,8 +6686,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
   const markets=useMemo(()=>[...new Set(stock.flatMap(s=>Array.isArray(s.market)?s.market:[s.market||""]).filter(m=>m&&m!=="Unassigned"))].sort(),[stock]);
   const types=useMemo(()=>[...new Set(stock.map(s=>s.productType).filter(Boolean))].sort(),[stock]);
   const vendorNames=useMemo(()=>[...new Set(stock.map(s=>s.vendor).filter(Boolean))].sort(),[stock]);
-  const activeFilterCount=fsStones.size+fsShapes.size+fsMarkets.size+fsTypes.size+fsUnits.size+(fPhoto!=="Any"?1:0)+fsPlats.size+fsVendors.size;
-  const clearAllFilters=()=>{setFsStones(new Set());setFsShapes(new Set());setFsMarkets(new Set());setFsTypes(new Set());setFsUnits(new Set());setFPhoto("Any");setFsPlats(new Set());setFsVendors(new Set());};
+  const activeFilterCount=fsStones.size+fsShapes.size+fsMarkets.size+fsTypes.size+fsUnits.size+(fPhoto!=="Any"?1:0)+(fVideo!=="Any"?1:0)+fsPlats.size+fsVendors.size;
+  const clearAllFilters=()=>{setFsStones(new Set());setFsShapes(new Set());setFsMarkets(new Set());setFsTypes(new Set());setFsUnits(new Set());setFPhoto("Any");setFVideo("Any");setFsPlats(new Set());setFsVendors(new Set());};
   const togSet=(setter,val)=>setter(prev=>{const n=new Set(prev);n.has(val)?n.delete(val):n.add(val);return n;});
   const isActiveRegionStock=s=>{
     const primaryQty=parseFloat(s.qty);
@@ -7485,6 +7488,21 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         </div>
                       )}
                     </div>
+                    <div style={{position:"relative"}}>
+                      <button onClick={()=>setOpenFilter(o=>o==="video"?null:"video")} style={pillSt(fVideo!=="Any"||openFilter==="video")}>
+                        🎥 Video{fVideo!=="Any"?` · ${fVideo}`:""} <span style={{fontSize:9,opacity:.6}}>▾</span>
+                      </button>
+                      {openFilter==="video"&&(
+                        <div style={{...DDBox,minWidth:165}}>
+                          <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:9}}>Video attached?</div>
+                          <div style={{display:"flex",gap:6}}>
+                            {["Any","Yes","No"].map(v=>(
+                              <button key={v} onClick={()=>setFVideo(v)} style={{flex:1,fontSize:12,padding:"6px 0",borderRadius:6,border:`1.5px solid ${fVideo===v?C.amber:C.border}`,background:fVideo===v?C.amberBg:"transparent",color:fVideo===v?C.ink:C.inkMid,cursor:"pointer",fontWeight:fVideo===v?600:400,transition:"all .1s"}}>{v==="Any"?"All":v}</button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                     {/* Platforms pill */}
                     <div style={{position:"relative"}}>
                       <button onClick={()=>setOpenFilter(o=>o==="platforms"?null:"platforms")} style={pillSt(fsPlats.size>0||openFilter==="platforms")}>
@@ -7528,6 +7546,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   {[...fsMarkets].map(v=>chip("mkt-"+v,C.green,v,()=>setFsMarkets(s=>{const n=new Set(s);n.delete(v);return n;})))}
                   {[...fsTypes].map(v=>chip("typ-"+v,C.teal,v,()=>setFsTypes(s=>{const n=new Set(s);n.delete(v);return n;})))}
                   {fPhoto!=="Any"&&chip("photo",C.green,fPhoto==="Yes"?"Photographed":"Not Photographed",()=>setFPhoto("Any"))}
+                  {fVideo!=="Any"&&chip("video",C.blue,fVideo==="Yes"?"Has video":"No video",()=>setFVideo("Any"))}
                   {[...fsPlats].map(v=>chip("plt-"+v,C.amber,v,()=>setFsPlats(s=>{const n=new Set(s);n.delete(v);return n;})))}
                   {[...fsVendors].map(v=>chip("vnd-"+v,C.amber,v,()=>setFsVendors(s=>{const n=new Set(s);n.delete(v);return n;})))}
                 </div>

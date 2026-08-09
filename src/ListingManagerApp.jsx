@@ -24,6 +24,18 @@ const NG_BUYERS_KEY   = "ng-buyers-v2";
 // Deals tracker: products featured in a store's "Deals" collection, each with an
 // expiry so the ERP can pop a reminder when a deal is due to come down.
 const dealsKeyFor = store => store === "atyahara" ? "ng-deals-atyahara" : "ng-deals-earth";
+
+/* Where a published listing actually lives. Shopify stores both: `url` is the
+   admin page you edit on, `storefront_url` the public page you'd send a buyer.
+   Etsy and eBay only have the one, and are reconstructible from the id when an
+   older row predates the url being saved. */
+const platformUrls = (pkey, ps = {}) => {
+  const id = ps.listing_id || ps.product_id || "";
+  if (!id) return {};
+  if (pkey === "etsy") return { live: ps.url || `https://www.etsy.com/listing/${id}` };
+  if (pkey === "ebay") return { live: ps.url || `https://www.ebay.com/itm/${id}` };
+  return { live: ps.storefront_url || "", admin: ps.url || "" };
+};
 const DEAL_STORES = ["earth", "atyahara"];
 const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:") || url.startsWith("blob:"));
 const listingOrderId = () => `NG-LST-${new Date().getFullYear()}-${uid().slice(-6).toUpperCase()}`;
@@ -2437,11 +2449,25 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                     </div>
                     <div style={{ fontSize: 11, color: C.inkFaint }}>
                       {p.currency} {price ? (p.currency === "USD" ? `$${fmt(price)}` : `₹${fmt(price)}`) : "no price set"}
-                      {(isLive || isDraft) && (ps.listing_id || ps.product_id) && (
-                        <span style={{ marginLeft: 6, fontFamily: "monospace", fontSize: 10 }}>
-                          ID: {ps.listing_id || ps.product_id}
-                        </span>
-                      )}
+                      {(isLive || isDraft) && (ps.listing_id || ps.product_id) && (() => {
+                        const links = platformUrls(p.key, ps);
+                        const linkS = { fontSize: 10.5, fontWeight: 800, color: p.color, textDecoration: "none", marginLeft: 7 };
+                        return (
+                          <>
+                            <span style={{ marginLeft: 6, fontFamily: "monospace", fontSize: 10 }}>
+                              ID: {ps.listing_id || ps.product_id}
+                            </span>
+                            {links.live && (
+                              <a href={links.live} target="_blank" rel="noreferrer"
+                                onClick={e => e.stopPropagation()} style={linkS}>↗ Open listing</a>
+                            )}
+                            {links.admin && (
+                              <a href={links.admin} target="_blank" rel="noreferrer"
+                                onClick={e => e.stopPropagation()} style={{ ...linkS, color: C.inkFaint }}>Admin</a>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                     {listing.video && (p.key === "shopify_aty" || p.key === "shopify_earth") && (
                       <div style={{ marginTop: 5 }}>
