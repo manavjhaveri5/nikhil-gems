@@ -6174,6 +6174,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [shopifyStoreInput,setShopifyStoreInput]=useState("");
   const [shopifyTokenInput,setShopifyTokenInput]=useState("");
   const [shopifyModal,setShopifyModal]=useState(null); // {name,price,creds}
+  const [bulkShopify,setBulkShopify]=useState(null); // bulk push: {items,connected,storeKey,deal,running,done,results}
   const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   const [formQueue,setFormQueue]=useState([]); // items queued in multi-add mode
   const [customsDescs,setCustomsDescs]=useState([]);
@@ -6764,6 +6765,63 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     },...base.filter(e=>String(e.productId)!==pid)]);
   };
 
+  /* Bulk push. Stock is saved once at the end rather than per item, and the
+     listing/deal sync runs per item so a single failure can't abort the batch —
+     each row reports its own outcome. Items without a price are skipped up front
+     because Shopify rejects a product without one. */
+  const runBulkShopifyPush=async()=>{
+    if(!bulkShopify)return;
+    const{items,connected,storeKey,deal}=bulkShopify;
+    const creds=connected?.[storeKey];
+    if(!creds){setBulkShopify(b=>({...b,error:"That store isn't connected"}));return;}
+    setBulkShopify(b=>({...b,running:true,error:"",results:[]}));
+    localStorage.setItem("ng-shopify-last-store",storeKey);
+
+    const results=[];
+    let working=stock;
+    for(const item of items){
+      const name=(()=>{const m=item.material||"";const sent=m?m.charAt(0).toUpperCase()+m.slice(1).toLowerCase():m;return [sent,item.location?`#${item.location}`:null].filter(Boolean).join(" — ");})();
+      const price=item.listPrice||"";
+      try{
+        const res=await fetch("/api/shopify",{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:item.shopifyProductId?"update":"create",item,shopStore:creds.store,shopToken:creds.token,shopifyName:name,shopifyPrice:price}),
+        });
+        const d=await res.json();
+        if(!res.ok)throw new Error(d.error||"Shopify error");
+        working=working.map(s2=>s2.id===item.id?{...s2,shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey,updatedAt:new Date().toISOString()}:s2);
+        let note=d.action==="created"?"created":"updated";
+        try{await syncPushedItemToListings(item,storeKey,name,price,d.shopifyProductId);}catch{note+=" · listing link failed";}
+        if(d.dealAdded&&deal?.enabled){try{await registerDealTimer(storeKey,item,d,name,deal);}catch{}}
+        if(d.dealAdded)note+=" · in Deals";
+        else if(d.dealError)note+=` · Deals: ${d.dealError}`;
+        if(d.videoQueued)note+=" · video queued";
+        results.push({id:item.id,label:name||item.material||"Item",ok:true,note});
+      }catch(e){
+        results.push({id:item.id,label:name||item.material||"Item",ok:false,note:e.message||"failed"});
+      }
+      setBulkShopify(b=>b?{...b,results:[...results]}:b);
+    }
+
+    setStock(working);
+    try{await saveStockK(working);}catch(e){showToast("⚠ Pushed, but saving stock failed: "+e.message);}
+    const okN=results.filter(r=>r.ok).length;
+    setBulkShopify(b=>b?{...b,running:false,done:true}:b);
+    showToast(`${okN}/${results.length} pushed to Shopify`);
+    logActivity({user:"Admin",action:"pushed",module:"stock",label:`Bulk pushed ${okN} item${okN!==1?"s":""} to Shopify`,targetMod:"stock"});
+  };
+
+  const openBulkShopify=async()=>{
+    const sel=stock.filter(s=>selectedIds.has(s.id));
+    if(!sel.length)return;
+    const connected=await loadShopifyCreds();
+    const keys=Object.keys(connected);
+    if(!keys.length){setShopifyStoreInput("");setShopifyTokenInput("");setShopifySetup(true);return;}
+    const preferred=localStorage.getItem("ng-shopify-last-store");
+    const storeKey=connected[preferred]?preferred:(connected.earth?"earth":keys[0]);
+    setBulkShopify({items:sel,connected,storeKey,deal:{enabled:true,days:7,customDate:""},running:false,done:false,results:[],error:""});
+  };
+
   const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal)=>{
     setShopifyPushing(true);
     const itemToPush=itemOverride||selected;
@@ -7063,6 +7121,83 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           </div>
         </div>
       )}
+      {bulkShopify&&(()=>{
+        const b=bulkShopify;
+        const priced=b.items.filter(i=>String(i.listPrice||"").trim()!=="");
+        const unpriced=b.items.length-priced.length;
+        const okN=b.results.filter(r=>r.ok).length;
+        return(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:14,width:"min(560px,100%)",maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
+            <div style={{padding:"18px 20px 12px",flexShrink:0}}>
+              <div style={{fontWeight:700,fontSize:15}}>🛍 Push {b.items.length} item{b.items.length!==1?"s":""} to Shopify</div>
+              <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>Each goes to the storefront{"'"}s Deals section and gets a Listing Manager draft.</div>
+            </div>
+
+            <div style={{padding:"0 20px",overflowY:"auto",flex:1}}>
+              {!b.done&&(<>
+                {Object.keys(b.connected).length>1&&(
+                  <div style={{display:"flex",gap:6,marginBottom:12}}>
+                    {Object.values(b.connected).map(st=>(
+                      <button key={st.key} onClick={()=>setBulkShopify(x=>({...x,storeKey:st.key}))} disabled={b.running}
+                        style={{flex:1,background:b.storeKey===st.key?"#008060":C.card,color:b.storeKey===st.key?"#fff":C.ink,border:`1px solid ${b.storeKey===st.key?"#008060":C.border}`,borderRadius:7,padding:"8px 10px",fontSize:12,fontWeight:700,cursor:b.running?"default":"pointer",fontFamily:"inherit"}}>
+                        {st.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {unpriced>0&&(
+                  <div style={{background:C.amberBg,border:`1px solid ${C.amber}66`,borderRadius:9,padding:"9px 11px",marginBottom:12,fontSize:11.5,color:C.amber,fontWeight:600,lineHeight:1.5}}>
+                    {unpriced} of these {unpriced===1?"has":"have"} no list price. Shopify needs one, so {unpriced===1?"it":"they"} will be pushed at no price and shown as ₹0 until you set it.
+                  </div>
+                )}
+                <div style={{background:b.deal.enabled?"#FFF8E6":C.card,border:`1px solid ${b.deal.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
+                  <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                    <input type="checkbox" checked={b.deal.enabled} disabled={b.running} onChange={e=>setBulkShopify(x=>({...x,deal:{...x.deal,enabled:e.target.checked}}))}/>
+                    <span style={{fontSize:12,fontWeight:700,color:b.deal.enabled?"#9A6200":C.inkMid}}>⭐ Remind me to take these out of Deals</span>
+                  </label>
+                  {b.deal.enabled&&(
+                    <div style={{display:"flex",gap:6,marginTop:9,flexWrap:"wrap"}}>
+                      {[3,7,14,30].map(n=>(
+                        <button key={n} disabled={b.running} onClick={()=>setBulkShopify(x=>({...x,deal:{...x.deal,days:n,customDate:""}}))}
+                          style={{background:!b.deal.customDate&&b.deal.days===n?"#9A6200":C.surface,color:!b.deal.customDate&&b.deal.days===n?"#fff":C.ink,border:`1px solid ${!b.deal.customDate&&b.deal.days===n?"#9A6200":C.border}`,borderRadius:6,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{n}d</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>)}
+
+              {b.results.length>0&&(
+                <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:12}}>
+                  {b.results.map(r=>(
+                    <div key={r.id} style={{display:"flex",gap:8,alignItems:"baseline",fontSize:11.5,padding:"5px 8px",borderRadius:6,background:r.ok?C.greenBg:C.redBg}}>
+                      <span style={{flexShrink:0}}>{r.ok?"✓":"✕"}</span>
+                      <span style={{fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:"0 1 auto",maxWidth:190}}>{r.label}</span>
+                      <span style={{color:r.ok?C.inkMid:C.red,flex:1,overflow:"hidden",textOverflow:"ellipsis"}}>{r.note}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {b.running&&<div style={{fontSize:12,color:C.inkMid,marginBottom:12}}>Pushing {b.results.length+1} of {b.items.length}…</div>}
+              {b.error&&<div style={{fontSize:12,color:C.red,marginBottom:12}}>{b.error}</div>}
+            </div>
+
+            <div style={{display:"flex",gap:8,padding:"12px 20px 18px",flexShrink:0,borderTop:`1px solid ${C.border}`}}>
+              {!b.done?(<>
+                <button onClick={runBulkShopifyPush} disabled={b.running}
+                  style={{flex:1,background:"#008060",color:"#fff",border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:b.running?"wait":"pointer",opacity:b.running?.7:1,fontFamily:"inherit"}}>
+                  {b.running?`Pushing… ${b.results.length}/${b.items.length}`:`Push ${b.items.length} →`}
+                </button>
+                <button onClick={()=>setBulkShopify(null)} disabled={b.running} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px",fontSize:13,cursor:"pointer",color:C.inkFaint,fontFamily:"inherit"}}>Cancel</button>
+              </>):(
+                <button onClick={()=>{setBulkShopify(null);setSelectedIds(new Set());setSelectMode(false);}}
+                  style={{flex:1,background:C.ink,color:"#fff",border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  Done · {okN}/{b.results.length} pushed
+                </button>
+              )}
+            </div>
+          </div>
+        </div>);})()}
       {shopifyModal&&(()=>{
         const s=selected||{};
         const hasQty2=s.qty2!=null&&s.qty2!==""&&+s.qty2>0&&s.unit2&&s.unit2!==s.unit;
@@ -7571,6 +7706,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   {mob&&selectedIds.size>0&&<><button className="bs" style={{fontSize:13,minHeight:40,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button>
                   <button className="bs" style={{fontSize:13,minHeight:40,color:C.green,borderColor:C.green,background:C.greenBg}} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button></>}
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:C.red,borderColor:C.red,background:C.redBg}} disabled={selectedIds.size===0} onClick={()=>{if(window.confirm(`Delete ${selectedIds.size} item${selectedIds.size>1?"s":""}? This cannot be undone.`))delBulk(selectedIds);}}>🗑 Delete</button>
+                  {selectedIds.size>0&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#008060",borderColor:"#008060",background:"#E8F5F0"}} onClick={openBulkShopify}>🛍 Push to Shopify ({selectedIds.size})</button>}
                   {onCreateInvoiceFromStock&&selectedIds.size>0&&<button className="bp" style={{fontSize:12}} onClick={()=>{const sel=stock.filter(s=>selectedIds.has(s.id));const items=sel.map(s=>({id:uid(),acctDesc:shapeToAcctDesc(s.shape),customDesc:[s.material,s.shape,s.origin,s.size].filter(Boolean).join(" · "),hsn:shapeToHsn(s.shape),qty:String(s.qty||""),unit:s.unit||"pcs",rate:"",igst:0,amt:0,stockId:s.id,acctStockId:"",ready:false,readyDate:""}));const draft={id:uid(),invNo:"",type:"commercial",date:today(),dueDate:"",currency:"USD",buyerId:"",items,status:"draft",goodsShipped:false,payments:[],paidAmount:0,notes:"",terms:"T/T in advance",portLading:"Mumbai, India",portDischarge:"",consigneeSameAsBuyer:true,consigneeName:"",consigneeAddress:"",consigneeCountry:"",totalAmt:0,createdAt:new Date().toISOString()};onCreateInvoiceFromStock(draft);}}>📄 Create Invoice ({selectedIds.size})</button>}
                 </div>
               )}
