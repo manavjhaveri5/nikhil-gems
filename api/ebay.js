@@ -536,6 +536,57 @@ async function handleEbay(req, res) {
     return res.json({ ok: true, scanned: orders.length, added, updated, addressesCaptured, daysBack, wrote: changed > 0 });
   }
 
+  // ── TEMPORARY: shipping-history aggregates for the courier-recommendation
+  // feasibility check. Returns counts and averages only — no addresses, names,
+  // emails or order ids ever leave the server. Removed once the question is
+  // answered.
+  if (action === "shipping_stats") {
+    const orders = (await loadAppData("ng-orders-v1")) || [];
+    const rows = Array.isArray(orders) ? orders : [];
+    const shipped = rows.filter(o => o && (o.shipped_at || ["shipped", "completed", "fulfilled"].includes(String(o.status || "").toLowerCase())));
+    const carrierOf = o => String(o.carrier_name || "").trim().toLowerCase();
+    const costOf = o => { const n = parseFloat(o.ship_cost); return Number.isFinite(n) && n > 0 ? n : null; };
+    const countryOf = o => String(o.ship_country || o.buyer_country || "").trim() || "(unknown)";
+
+    const withCarrier = shipped.filter(o => carrierOf(o));
+    const withCost = shipped.filter(o => costOf(o) != null);
+    const usable = shipped.filter(o => carrierOf(o) && costOf(o) != null);
+
+    const byCarrier = {};
+    for (const o of usable) {
+      const k = carrierOf(o);
+      (byCarrier[k] = byCarrier[k] || { n: 0, costs: [] }).n++;
+      byCarrier[k].costs.push(costOf(o));
+    }
+    const summarise = c => {
+      const s2 = [...c.costs].sort((x, y) => x - y);
+      return { n: c.n, avg: Math.round(c.costs.reduce((a, b) => a + b, 0) / c.n), median: Math.round(s2[Math.floor(s2.length / 2)]) };
+    };
+
+    const byLane = {};
+    for (const o of usable) {
+      const k = countryOf(o);
+      (byLane[k] = byLane[k] || { n: 0, carriers: {} }).n++;
+      byLane[k].carriers[carrierOf(o)] = (byLane[k].carriers[carrierOf(o)] || 0) + 1;
+    }
+    const comparableLanes = Object.entries(byLane)
+      .filter(([, v]) => Object.keys(v.carriers).length > 1)
+      .map(([k, v]) => ({ lane: k, shipments: v.n, carriers: v.carriers }));
+
+    return res.json({
+      ok: true,
+      totalOrders: rows.length,
+      shipped: shipped.length,
+      withCarrier: withCarrier.length,
+      withCost: withCost.length,
+      usable: usable.length,
+      carriers: Object.fromEntries(Object.entries(byCarrier).map(([k, v]) => [k, summarise(v)])),
+      lanes: Object.fromEntries(Object.entries(byLane).map(([k, v]) => [k, { shipments: v.n, carriers: Object.keys(v.carriers).length }])),
+      comparableLanes,
+      destinationKnown: shipped.filter(o => String(o.ship_country || o.buyer_country || "").trim()).length,
+    });
+  }
+
   // ── get_item — GetItem (full details for edit modal) ──────────────────────
   if (action === "get_item") {
     if (!USER_TOKEN) return res.status(401).json({ error: "EBAY_USER_TOKEN not set" });
