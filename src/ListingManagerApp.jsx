@@ -4,7 +4,7 @@ import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
 import { CUSTOMS_DESCS_KEY, DEFAULT_CUSTOMS_DESCS } from "./DatasetsApp.jsx";
 import CampaignComposer from "./CampaignComposer.jsx";
-import { laneHistory, costVerdict, normalizeCarrier, carrierLabel } from "./shipping.js";
+import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
 const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(u);
@@ -3969,9 +3969,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                      the moment the courier is chosen — and because the cost box
                      below was being skipped on 97% of shipments, which is what
                      left the history too thin to learn from. */
-                  const hist = laneHistory(orders, order);
+                  const rec = recommendCarriers(orders, stock, order);
                   const cost = ngDraft(order).shipCost;
-                  const verdict = costVerdict(hist, cost);
+                  const verdict = costVerdict(rec, cost);
                   const toneCol = { high: C.red, low: C.amber, ok: C.green }[verdict?.tone] || C.inkFaint;
                   return (
                     <>
@@ -3988,7 +3988,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                       </label>
                       {cost === "" && (
                         <div style={{ fontSize: 10.5, color: C.amber, fontWeight: 700, marginTop: -4 }}>
-                          Worth filling in — it's what builds your courier cost history.
+                          Worth filling in — every cost you enter sharpens the estimates below.
                         </div>
                       )}
                       {verdict && (
@@ -3996,33 +3996,42 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                           {verdict.tone === "high" ? "⚠ " : verdict.tone === "ok" ? "✓ " : ""}{verdict.text}
                         </div>
                       )}
-                      {hist && hist.total > 0 && (
+                      {rec && rec.options.length > 0 && (
                         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 11px" }}>
                           <div style={{ fontSize: 9.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 6 }}>
-                            {hist.country} · {hist.total} past shipment{hist.total > 1 ? "s" : ""} · {hist.sampleScope}
+                            What this should cost · {rec.country}
+                            {rec.kg ? ` · ${rec.kg < 1 ? Math.round(rec.kg * 1000) + "g" : rec.kg.toFixed(2) + "kg"}` : " · weight unknown"}
                           </div>
                           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                            {hist.carriers.map((c, i) => (
-                              <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5 }}>
-                                <span style={{ fontWeight: i === 0 && hist.comparable ? 850 : 600, color: i === 0 && hist.comparable ? C.green : C.ink, flex: 1 }}>
-                                  {i === 0 && hist.comparable ? "↓ " : ""}{c.label}
+                            {rec.options.map((o, i) => (
+                              <div key={o.key} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 11.5 }}>
+                                <span style={{ fontWeight: i === 0 ? 850 : 600, color: i === 0 ? C.green : C.ink, whiteSpace: "nowrap" }}>
+                                  {i === 0 ? "↓ " : ""}{o.label}
                                 </span>
-                                <span style={{ color: C.inkMid }}>×{c.n}</span>
-                                <span style={{ fontWeight: 800, minWidth: 58, textAlign: "right" }}>₹{c.median}</span>
-                                {c.n > 1 && <span style={{ fontSize: 10, color: C.inkFaint, minWidth: 78, textAlign: "right" }}>₹{c.min}–₹{c.max}</span>}
+                                <span style={{ fontSize: 9.5, color: C.inkFaint, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {o.exact ? "" : "est · "}{o.basis}
+                                </span>
+                                <span style={{ fontWeight: 800, whiteSpace: "nowrap", color: o.exact ? C.ink : C.inkMid }}>
+                                  {o.exact ? "" : "~"}₹{o.expected}
+                                </span>
                               </div>
                             ))}
                           </div>
-                          {!hist.comparable && (
+                          {rec.canRecommend && rec.saving > 0 && (
+                            <div style={{ fontSize: 10.5, color: C.green, fontWeight: 750, marginTop: 7 }}>
+                              {rec.best.label} looks cheapest for this parcel — about ₹{rec.saving} below the dearest option.
+                            </div>
+                          )}
+                          {!rec.kg && (
                             <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 6, lineHeight: 1.5 }}>
-                              Only one courier used on this lane so far — no comparison yet. Ship a couple via another and this becomes a real recommendation.
+                              Allocate stock (step 2) and these become weight-based rather than flat averages.
                             </div>
                           )}
                         </div>
                       )}
-                      {hist && hist.total === 0 && (
+                      {rec && rec.options.length === 0 && (
                         <div style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.5 }}>
-                          First costed shipment to {hist.country} — nothing to compare against yet.
+                          No costed shipments yet — this one starts the history.
                         </div>
                       )}
                     </>
