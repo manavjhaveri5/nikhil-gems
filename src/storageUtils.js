@@ -54,3 +54,23 @@ export async function uploadToStorage(path, file) {
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
   return data.publicUrl;
 }
+
+// Public URLs look like <project>/storage/v1/object/public/<bucket>/<path>.
+// Returns the in-bucket path, or "" for anything that isn't one of our URLs.
+export function storagePathFromUrl(url) {
+  const marker = `/storage/v1/object/public/${BUCKET}/`;
+  const i = String(url || "").indexOf(marker);
+  if (i === -1) return "";
+  try { return decodeURIComponent(String(url).slice(i + marker.length).split("?")[0]); }
+  catch { return ""; }
+}
+
+// Best-effort cleanup so deleted records don't leave orphaned files behind.
+// Never throws — losing the file is worse than leaving one stray object.
+export async function removeFromStorage(urlsOrPaths) {
+  const paths = (Array.isArray(urlsOrPaths) ? urlsOrPaths : [urlsOrPaths])
+    .map(u => (String(u || "").startsWith("http") ? storagePathFromUrl(u) : String(u || "")))
+    .filter(Boolean);
+  if (!paths.length) return;
+  try { await supabase.storage.from(BUCKET).remove(paths); } catch {}
+}
