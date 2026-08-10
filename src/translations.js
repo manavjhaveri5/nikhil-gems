@@ -16,6 +16,7 @@ const translations = {
     images: "Image Library",
     misc: "Miscellaneous",
     journal: "Stock Journal",
+    documents: "Documents",
     users: "Users",
     datasets: "Datasets",
 
@@ -360,6 +361,7 @@ const translations = {
     images: "प्रतिमा लायब्ररी",
     misc: "विविध",
     journal: "स्टॉक जर्नल",
+    documents: "कागदपत्रे",
     users: "वापरकर्ते",
     datasets: "डेटासेट",
 
