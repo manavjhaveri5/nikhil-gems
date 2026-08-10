@@ -16,6 +16,15 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const [senderName, setSenderName] = useState("Nikhil Gems");
   const [senderEmail, setSenderEmail] = useState("");
   const [priceMode, setPriceMode] = useState("none");
+  /* Design lives in one object so preview and the created draft can never drift
+     apart — both are rendered from payloadBase() by the same server function. */
+  const [design, setDesign] = useState({
+    columns: 2, accent: "#9a6200", ink: "#1a1308", pageBg: "#faf7f2", cardBg: "#ffffff",
+    font: "serif", showPrice: true, showMeta: true, showCta: true, showDivider: false,
+    cornerStyle: "rounded", ctaStyle: "solid", ctaLabel: "View product",
+    headingSize: 27, headerImage: "", footer: "",
+  });
+  const [designOpen, setDesignOpen] = useState(false);
   const [segments, setSegments] = useState([]);
   const [segIds, setSegIds] = useState(() => new Set());
   const [configured, setConfigured] = useState(null); // null=checking
@@ -70,11 +79,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const visible = listings.filter(l => !ql || `${l.title || ""} ${l.material || ""} ${l.sku || ""}`.toLowerCase().includes(ql));
   const chosen = listings.filter(l => sel.has(l.id));
   const products = chosen.map(toProduct);
-  const payloadBase = () => ({ brand, heading, intro, products, footer: "" });
+  const payloadBase = () => ({ brand, heading, intro, products, ...design });
 
   const toggle = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   // Any edit invalidates the draft that's already in Omnisend.
   const invalidate = () => { setCampaignId(""); setTestedOk(false); };
+  // Any design change invalidates the draft already sitting in Omnisend.
+  const setD = (k, v) => { setDesign(d => ({ ...d, [k]: v })); invalidate(); };
 
   const doPreview = async () => {
     setBusy("preview"); setErr("");
@@ -176,6 +187,101 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                   <option value="etsy">Etsy (₹)</option>
                 </select>
               </div>
+              <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
+                <button type="button" onClick={() => setDesignOpen(o => !o)}
+                  style={{ width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 800, color: C.ink, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ transform: designOpen ? "rotate(90deg)" : "none", transition: "transform .15s", fontSize: 10 }}>▸</span>
+                  🎨 Design
+                  <span style={{ fontWeight: 500, color: C.inkFaint, fontSize: 11 }}>
+                    {design.columns === 1 ? "1 column" : "2 columns"} · {design.font === "sans" ? "sans" : "serif"} · {design.cornerStyle}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  <span style={{ width: 15, height: 15, borderRadius: 4, background: design.accent, border: `1px solid ${C.border}` }} />
+                </button>
+
+                {designOpen && (
+                  <div style={{ border: `1px solid ${C.border}`, borderTop: "none", borderRadius: "0 0 8px 8px", padding: 12, display: "grid", gap: 12 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
+                      <div>
+                        <label style={lab}>Layout</label>
+                        <select value={design.columns} onChange={e => setD("columns", +e.target.value)} style={FI()}>
+                          <option value={2}>Two columns</option>
+                          <option value={1}>One column (big)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lab}>Font</label>
+                        <select value={design.font} onChange={e => setD("font", e.target.value)} style={FI()}>
+                          <option value="serif">Serif headings</option>
+                          <option value="sans">All sans-serif</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lab}>Corners</label>
+                        <select value={design.cornerStyle} onChange={e => setD("cornerStyle", e.target.value)} style={FI()}>
+                          <option value="rounded">Rounded</option>
+                          <option value="square">Square</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lab}>Button style</label>
+                        <select value={design.ctaStyle} onChange={e => setD("ctaStyle", e.target.value)} style={FI()}>
+                          <option value="solid">Solid</option>
+                          <option value="outline">Outline</option>
+                          <option value="link">Text link</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
+                      {[["accent", "Accent"], ["ink", "Text"], ["pageBg", "Page"], ["cardBg", "Card"]].map(([k, label]) => (
+                        <div key={k}>
+                          <label style={lab}>{label}</label>
+                          <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                            <input type="color" value={design[k]} onChange={e => setD(k, e.target.value)}
+                              style={{ width: 34, height: 32, padding: 0, border: `1px solid ${C.border}`, borderRadius: 6, background: "none", cursor: "pointer", flexShrink: 0 }} />
+                            <input value={design[k]} onChange={e => setD(k, e.target.value)} style={{ ...FI(), fontSize: 11, padding: "7px 8px" }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                      {[["showPrice", "Show price"], ["showMeta", "Show details"], ["showCta", "Show button"], ["showDivider", "Divider between rows"]].map(([k, label]) => (
+                        <label key={k} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.inkMid, cursor: "pointer" }}>
+                          <input type="checkbox" checked={design[k]} onChange={e => setD(k, e.target.checked)} /> {label}
+                        </label>
+                      ))}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr 90px", gap: 10 }}>
+                      <div>
+                        <label style={lab}>Button label</label>
+                        <input value={design.ctaLabel} onChange={e => setD("ctaLabel", e.target.value)} placeholder="View product" style={FI()} />
+                      </div>
+                      <div>
+                        <label style={lab}>Logo URL <span style={{ textTransform: "none", fontWeight: 400 }}>(replaces the brand line)</span></label>
+                        <input value={design.headerImage} onChange={e => setD("headerImage", e.target.value)} placeholder="https://…" style={FI()} />
+                      </div>
+                      <div>
+                        <label style={lab}>Heading px</label>
+                        <input type="number" min={16} max={40} value={design.headingSize} onChange={e => setD("headingSize", +e.target.value)} style={FI()} />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={lab}>Footer text <span style={{ textTransform: "none", fontWeight: 400 }}>(above the unsubscribe line Omnisend adds)</span></label>
+                      <textarea value={design.footer} onChange={e => setD("footer", e.target.value)} rows={2}
+                        placeholder="Studio address, reply-to, shipping note…" style={{ ...FI(), resize: "vertical" }} />
+                    </div>
+
+                    <div style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.5 }}>
+                      Hit Preview to see changes. Email clients ignore stylesheets, so these map to inline styles and table layout — what you preview is what sends.
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
                 <label style={lab}>Audience {segments.length === 0 && <span style={{ textTransform: "none", fontWeight: 400 }}>— none loaded, will send to all subscribers</span>}</label>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

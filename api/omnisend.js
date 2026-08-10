@@ -101,47 +101,100 @@ const contactFields = b => ({
 });
 
 /* ── Email HTML ──────────────────────────────────────────────────────────────
-   Table-based two-column layout — the only thing that renders reliably across
-   Outlook/Gmail. Inline styles for the same reason (no <style> support in Gmail
-   for many clients). Images are capped and links fall back to the store URL. */
-function buildCampaignHtml({ brand = "Nikhil Gems", heading = "", intro = "", products = [], ctaLabel = "View product", footer = "" }) {
+   Table-based layout with inline styles — the only thing that renders reliably
+   across Outlook and Gmail, which strip <style> blocks and ignore flex/grid.
+   Every design option therefore has to resolve to table attributes and inline
+   CSS rather than classes.
+
+   Colours are validated because they land unescaped inside a style attribute. */
+const HEX = /^#?[0-9a-f]{3}([0-9a-f]{3})?$/i;
+const hex = (v, fallback) => {
+  const s = String(v || "").trim();
+  if (!HEX.test(s)) return fallback;
+  return s.startsWith("#") ? s : `#${s}`;
+};
+// Soften a hex toward white, for panel backgrounds derived from the accent.
+const tint = (h, amount = 0.9) => {
+  const c = hex(h, "#9a6200").slice(1);
+  const f = c.length === 3 ? c.split("").map(x => x + x).join("") : c;
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(f.slice(i, i + 2), 16));
+  const m = v => Math.round(v + (255 - v) * amount);
+  return `#${[m(r), m(g), m(b)].map(v => v.toString(16).padStart(2, "0")).join("")}`;
+};
+
+const FONTS = {
+  serif: { head: "Georgia,'Times New Roman',serif", body: "Helvetica,Arial,sans-serif" },
+  sans:  { head: "Helvetica,Arial,sans-serif",      body: "Helvetica,Arial,sans-serif" },
+};
+
+function buildCampaignHtml({
+  brand = "Nikhil Gems", heading = "", intro = "", products = [],
+  ctaLabel = "View product", footer = "",
+  // Design options — all optional, defaults reproduce the original layout.
+  columns = 2, accent = "#9a6200", ink = "#1a1308", pageBg = "#faf7f2", cardBg = "#ffffff",
+  font = "serif", showPrice = true, showMeta = true, showCta = true, showDivider = false,
+  cornerStyle = "rounded", headerImage = "", ctaStyle = "solid", headingSize = 27,
+} = {}) {
+  const cols = +columns === 1 ? 1 : 2;
+  const A = hex(accent, "#9a6200");
+  const INK = hex(ink, "#1a1308");
+  const PAGE = hex(pageBg, "#faf7f2");
+  const CARD = hex(cardBg, "#ffffff");
+  const F = FONTS[font] || FONTS.serif;
+  const radius = cornerStyle === "square" ? "0" : "8px";
+  const outerRadius = cornerStyle === "square" ? "0" : "12px";
+  const imgW = cols === 1 ? 540 : 260;
+
   const cell = p => {
     const img = p.image
-      ? `<img src="${esc(p.image)}" width="260" alt="${esc(p.title)}" style="display:block;width:100%;max-width:260px;height:auto;border:0;border-radius:8px;">`
-      : `<div style="width:100%;max-width:260px;height:180px;background:#f2efe9;border-radius:8px;"></div>`;
+      ? `<img src="${esc(p.image)}" width="${imgW}" alt="${esc(p.title)}" style="display:block;width:100%;max-width:${imgW}px;height:auto;border:0;border-radius:${radius};">`
+      : `<div style="width:100%;max-width:${imgW}px;height:${cols === 1 ? 300 : 180}px;background:${tint(A, 0.93)};border-radius:${radius};"></div>`;
     const link = p.url ? esc(p.url) : "";
     const wrap = inner => link ? `<a href="${link}" style="text-decoration:none;color:inherit;">${inner}</a>` : inner;
+    const cta = ctaStyle === "outline"
+      ? `display:inline-block;background:transparent;border:1.5px solid ${A};color:${A};`
+      : ctaStyle === "link"
+        ? `display:inline-block;color:${A};text-decoration:underline;`
+        : `display:inline-block;background:${INK};color:${CARD};`;
+    const ctaPad = ctaStyle === "link" ? "" : `padding:9px 16px;border-radius:${cornerStyle === "square" ? "0" : "6px"};`;
     return `
-      <td width="50%" valign="top" style="padding:10px;font-family:Helvetica,Arial,sans-serif;">
+      <td width="${cols === 1 ? "100%" : "50%"}" valign="top" style="padding:10px;font-family:${F.body};">
         ${wrap(img)}
-        <div style="font-size:15px;font-weight:700;color:#1a1308;margin:10px 0 2px;line-height:1.3;">${wrap(esc(p.title))}</div>
-        ${p.meta ? `<div style="font-size:12px;color:#8a7f6d;margin-bottom:4px;">${esc(p.meta)}</div>` : ""}
-        ${p.price ? `<div style="font-size:14px;font-weight:700;color:#9a6200;">${esc(p.price)}</div>` : ""}
-        ${link ? `<div style="margin-top:8px;"><a href="${link}" style="display:inline-block;background:#1a1308;color:#faf0dc;text-decoration:none;font-size:12px;font-weight:700;padding:8px 14px;border-radius:6px;">${esc(ctaLabel)}</a></div>` : ""}
+        <div style="font-size:${cols === 1 ? 18 : 15}px;font-weight:700;color:${INK};margin:10px 0 2px;line-height:1.3;">${wrap(esc(p.title))}</div>
+        ${showMeta && p.meta ? `<div style="font-size:12px;color:#8a7f6d;margin-bottom:4px;">${esc(p.meta)}</div>` : ""}
+        ${showPrice && p.price ? `<div style="font-size:14px;font-weight:700;color:${A};">${esc(p.price)}</div>` : ""}
+        ${showCta && link ? `<div style="margin-top:8px;"><a href="${link}" style="${cta}${ctaPad}text-decoration:${ctaStyle === "link" ? "underline" : "none"};font-size:12px;font-weight:700;">${esc(ctaLabel)}</a></div>` : ""}
       </td>`;
   };
 
   const rows = [];
-  for (let i = 0; i < products.length; i += 2) {
-    rows.push(`<tr>${cell(products[i])}${products[i + 1] ? cell(products[i + 1]) : '<td width="50%"></td>'}</tr>`);
+  const divider = showDivider ? `<tr><td colspan="${cols}" style="padding:4px 10px;"><div style="border-top:1px solid ${tint(A, 0.8)};"></div></td></tr>` : "";
+  for (let i = 0; i < products.length; i += cols) {
+    const cells = cols === 1
+      ? cell(products[i])
+      : `${cell(products[i])}${products[i + 1] ? cell(products[i + 1]) : '<td width="50%"></td>'}`;
+    rows.push(`<tr>${cells}</tr>`);
+    if (i + cols < products.length) rows.push(divider);
   }
 
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(heading || brand)}</title></head>
-<body style="margin:0;padding:0;background:#faf7f2;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#faf7f2;padding:24px 12px;">
+<body style="margin:0;padding:0;background:${PAGE};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${PAGE};padding:24px 12px;">
 <tr><td align="center">
-  <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:#ffffff;border-radius:12px;overflow:hidden;">
-    <tr><td style="padding:26px 24px 8px;font-family:Georgia,'Times New Roman',serif;text-align:center;">
-      <div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#9a6200;font-family:Helvetica,Arial,sans-serif;font-weight:700;">${esc(brand)}</div>
-      ${heading ? `<div style="font-size:27px;color:#1a1308;margin-top:10px;line-height:1.25;">${esc(heading)}</div>` : ""}
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:${CARD};border-radius:${outerRadius};overflow:hidden;">
+    <tr><td style="padding:26px 24px 8px;font-family:${F.head};text-align:center;">
+      ${headerImage && /^https?:\/\//i.test(headerImage)
+        ? `<img src="${esc(headerImage)}" alt="${esc(brand)}" width="150" style="display:block;margin:0 auto 12px;max-width:150px;height:auto;border:0;">`
+        : `<div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:${A};font-family:${F.body};font-weight:700;">${esc(brand)}</div>`}
+      ${heading ? `<div style="font-size:${Math.min(40, Math.max(16, +headingSize || 27))}px;color:${INK};margin-top:10px;line-height:1.25;">${esc(heading)}</div>` : ""}
     </td></tr>
-    ${intro ? `<tr><td style="padding:6px 30px 12px;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#4a4238;text-align:center;">${esc(intro).replace(/\n/g, "<br>")}</td></tr>` : ""}
+    ${intro ? `<tr><td style="padding:6px 30px 12px;font-family:${F.body};font-size:14px;line-height:1.6;color:#4a4238;text-align:center;">${esc(intro).replace(/\n/g, "<br>")}</td></tr>` : ""}
     <tr><td style="padding:6px 14px 18px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows.join("")}</table>
     </td></tr>
-    <tr><td style="padding:16px 24px 26px;font-family:Helvetica,Arial,sans-serif;font-size:11px;line-height:1.6;color:#8a7f6d;text-align:center;border-top:1px solid #eee7db;">
+    <tr><td style="padding:16px 24px 26px;font-family:${F.body};font-size:11px;line-height:1.6;color:#8a7f6d;text-align:center;border-top:1px solid ${tint(A, 0.85)};">
       ${footer ? `${esc(footer).replace(/\n/g, "<br>")}<br><br>` : ""}
       You're receiving this because you subscribed to ${esc(brand)}.
     </td></tr>
