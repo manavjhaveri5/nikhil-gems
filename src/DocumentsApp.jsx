@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { loadK, upsertItemK, deleteItemK, onCacheRefresh, readCache, uid, fmtDate, logActivity, mob } from "./utils.js";
 import { uploadToStorage, removeFromStorage } from "./storageUtils.js";
+import { classifyDocument, titleFromFileName, downloadDocuments, buildPrintPdf, openPdfBytes } from "./documentsAi.js";
 import { C, FI } from "./ui.jsx";
 
 export const DOCS_KEY = "ng-documents-v1";
@@ -243,8 +244,203 @@ function DocForm({ draft, owners, onClose, onSaved, onToast }) {
   );
 }
 
+// ── Bulk upload ───────────────────────────────────────────────────────────────
+// Pick any number of files and walk away: each one is uploaded, read by the
+// model, and filed as its own document. Every file is saved the moment it is
+// ready, so a failure late in the batch never costs the earlier ones.
+const UPLOAD_CONCURRENCY = 3;
+
+function BulkUpload({ open, onClose, onFiled, onToast }) {
+  const [jobs, setJobs] = useState([]);   // {id,name,size,stage,error,title,category}
+  const [running, setRunning] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const fileRef = useRef(null);
+
+  const patch = (id, next) => setJobs(js => js.map(j => (j.id === id ? { ...j, ...next } : j)));
+
+  const runOne = async job => {
+    const file = job.file;
+    try {
+      patch(job.id, { stage: "uploading" });
+      const docId = uid();
+      const path = `documents/${docId}/${uid()}${uid()}-${safeName(file.name)}`;
+      const url = await uploadToStorage(path, file);
+
+      patch(job.id, { stage: "reading" });
+      const ai = await classifyDocument(file);
+
+      const record = {
+        id: docId,
+        title: ai?.title || titleFromFileName(file.name),
+        category: ai?.category || "other",
+        owner: ai?.owner || "",
+        refNo: ai?.refNo || "",
+        issueDate: ai?.issueDate || "",
+        expiryDate: ai?.expiryDate || "",
+        tags: ai?.tags || [],
+        notes: ai?.notes || "",
+        files: [{ id: uid(), name: file.name, url, type: file.type || "", size: file.size || 0, uploadedAt: new Date().toISOString() }],
+        aiFiled: !!ai,
+        aiReviewed: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await upsertItemK(DOCS_KEY, record);
+      patch(job.id, { stage: ai ? "filed" : "saved", title: record.title, category: record.category });
+      onFiled(record);
+    } catch (e) {
+      patch(job.id, { stage: "failed", error: e?.message || "Upload failed" });
+    }
+  };
+
+  // Fixed-size worker pool — a phone uploading 30 scans shouldn't open 30 sockets.
+  const runQueue = async list => {
+    setRunning(true);
+    const queue = [...list];
+    const workers = Array.from({ length: Math.min(UPLOAD_CONCURRENCY, queue.length) }, async () => {
+      while (queue.length) await runOne(queue.shift());
+    });
+    await Promise.all(workers);
+    setRunning(false);
+  };
+
+  const accept = fileList => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    const added = files.map(f => ({ id: uid(), file: f, name: f.name, size: f.size, stage: "queued" }));
+    setJobs(js => [...js, ...added]);
+    runQueue(added);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const retry = job => { patch(job.id, { stage: "queued", error: "" }); runQueue([job]); };
+
+  if (!open) return null;
+
+  const stageText = { queued: "Waiting…", uploading: "Uploading…", reading: "Reading with AI…", filed: "Filed", saved: "Saved", failed: "Failed" };
+  const stageColor = { filed: C.green, saved: C.green, failed: C.red };
+  const doneCount = jobs.filter(j => j.stage === "filed" || j.stage === "saved").length;
+  const failCount = jobs.filter(j => j.stage === "failed").length;
+
+  return (
+    <div onClick={() => !running && onClose()}
+      style={{ position: "fixed", inset: 0, background: "rgba(20,14,4,.45)", zIndex: 950, display: "flex", alignItems: mob ? "flex-end" : "center", justifyContent: "center", padding: mob ? 0 : 24 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: C.surface, borderRadius: mob ? "14px 14px 0 0" : 14, width: "100%", maxWidth: 620, maxHeight: mob ? "92dvh" : "88vh", overflowY: "auto", border: `1px solid ${C.border}`, boxShadow: "0 18px 50px rgba(26,19,8,.28)" }}>
+        <div style={{ position: "sticky", top: 0, background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "14px 18px", display: "flex", alignItems: "center", gap: 10, zIndex: 2 }}>
+          <span style={{ fontSize: 18 }}>⬆️</span>
+          <div style={{ flex: 1, fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 19, fontWeight: 600, color: C.ink }}>Bulk upload</div>
+          <button onClick={onClose} disabled={running}
+            style={{ background: "none", border: "none", cursor: running ? "default" : "pointer", fontSize: 20, color: C.inkFaint, lineHeight: 1, opacity: running ? .4 : 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: "16px 18px 20px" }}>
+          <div
+            onDragOver={e => { e.preventDefault(); setDrag(true); }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={e => { e.preventDefault(); setDrag(false); accept(e.dataTransfer?.files); }}
+            onClick={() => fileRef.current?.click()}
+            style={{ border: `2px dashed ${drag ? C.gold : C.borderHi}`, background: drag ? C.goldLight : C.card, borderRadius: 12, padding: "28px 18px", textAlign: "center", cursor: "pointer", transition: "all .15s" }}>
+            <div style={{ fontSize: 30, marginBottom: 8 }}>📤</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 4 }}>Drop files here, or click to choose</div>
+            <div style={{ fontSize: 11.5, color: C.inkFaint, lineHeight: 1.55, maxWidth: 380, margin: "0 auto" }}>
+              Pick as many as you like. Each one is read automatically — title, category,
+              document number and expiry are filled in for you, then filed.
+            </div>
+          </div>
+          <input ref={fileRef} type="file" multiple accept="application/pdf,image/*"
+            onChange={e => accept(e.target.files)} style={{ display: "none" }} />
+
+          {!!jobs.length && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 8 }}>
+                {doneCount} of {jobs.length} filed{failCount ? ` · ${failCount} failed` : ""}{running ? " · working…" : ""}
+              </div>
+              {jobs.map(j => (
+                <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 9, borderBottom: `1px solid ${C.border}`, padding: "8px 2px" }}>
+                  <span style={{ fontSize: 14 }}>{fileIcon({ name: j.name })}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {j.title || j.name}
+                    </div>
+                    <div style={{ fontSize: 10, color: j.stage === "failed" ? C.red : C.inkFaint, marginTop: 2 }}>
+                      {j.stage === "failed" ? j.error : j.title ? `${catOf({ category: j.category }).label} · ${j.name}` : fmtSize(j.size)}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: stageColor[j.stage] || C.inkMid, flexShrink: 0 }}>
+                    {j.stage === "filed" ? "✓ Filed" : j.stage === "saved" ? "✓ Saved" : stageText[j.stage]}
+                  </span>
+                  {j.stage === "failed" && (
+                    <button onClick={() => retry(j)}
+                      style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 8px", fontSize: 10, color: C.inkMid, cursor: "pointer", fontFamily: "inherit" }}>Retry</button>
+                  )}
+                </div>
+              ))}
+              <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 10, lineHeight: 1.5 }}>
+                "Saved" means the file is stored but couldn't be read automatically (too large, or an
+                unsupported type) — open it and fill in the details by hand.
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+            <button onClick={onClose} disabled={running}
+              style={{ background: running ? C.border : C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "9px 22px", fontSize: 13, fontWeight: 600, cursor: running ? "default" : "pointer", fontFamily: "inherit" }}>
+              {running ? "Working…" : "Done"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── File viewer ───────────────────────────────────────────────────────────────
+// PDFs render in an iframe, images inline. Arrow keys move through every file of
+// every document currently on screen, so a stack of scans can be flipped through.
+function FileViewer({ items, index, onIndex, onClose }) {
+  const item = items[index];
+  useEffect(() => {
+    const onKey = e => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight") onIndex(Math.min(index + 1, items.length - 1));
+      if (e.key === "ArrowLeft") onIndex(Math.max(index - 1, 0));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [index, items.length, onIndex, onClose]);
+
+  if (!item) return null;
+  const { doc, file } = item;
+  const isImg = /image\//.test(file.type || "") || /\.(jpe?g|png|gif|webp)$/i.test(file.name || "");
+  const nav = { background: "rgba(255,255,255,.14)", border: "none", color: "#fff", cursor: "pointer", fontSize: 20, borderRadius: 8, padding: "8px 13px", lineHeight: 1 };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(12,9,4,.96)", zIndex: 960, display: "flex", flexDirection: "column" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", color: "#fff", flexShrink: 0 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{doc.title}</div>
+          <div style={{ fontSize: 10.5, opacity: .65 }}>{file.name} · {index + 1} of {items.length}</div>
+        </div>
+        <a href={file.url} download={file.name} style={{ ...nav, fontSize: 12, textDecoration: "none", padding: "8px 14px" }}>⬇ Download</a>
+        <a href={file.url} target="_blank" rel="noopener noreferrer" style={{ ...nav, fontSize: 12, textDecoration: "none", padding: "8px 14px" }}>↗ Open</a>
+        <button onClick={onClose} style={{ ...nav, fontSize: 22 }}>×</button>
+      </div>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, padding: "0 10px 14px", minHeight: 0 }}>
+        <button onClick={() => onIndex(Math.max(index - 1, 0))} disabled={index === 0} style={{ ...nav, opacity: index === 0 ? .25 : 1 }}>‹</button>
+        <div style={{ flex: 1, height: "100%", background: "#fff", borderRadius: 10, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {isImg
+            ? <img src={file.url} alt={file.name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+            : <iframe src={file.url} title={file.name} style={{ width: "100%", height: "100%", border: "none" }} />}
+        </div>
+        <button onClick={() => onIndex(Math.min(index + 1, items.length - 1))} disabled={index >= items.length - 1} style={{ ...nav, opacity: index >= items.length - 1 ? .25 : 1 }}>›</button>
+      </div>
+    </div>
+  );
+}
+
 // ── One row in the list ───────────────────────────────────────────────────────
-function DocRow({ doc, onEdit, onDelete, onToast }) {
+function DocRow({ doc, selected, onToggle, onEdit, onDelete, onView, onToast }) {
   const cat = catOf(doc);
   const exp = expiryState(doc);
   const files = doc.files || [];
@@ -255,12 +451,18 @@ function DocRow({ doc, onEdit, onDelete, onToast }) {
   };
 
   return (
-    <div style={{ background: C.surface, border: `1px solid ${exp?.kind === "expired" ? C.red : C.border}`, borderRadius: 11, padding: mob ? "12px 13px" : "13px 16px", marginBottom: 8 }}>
+    <div style={{ background: selected ? C.goldLight : C.surface, border: `1px solid ${selected ? C.goldBright : exp?.kind === "expired" ? C.red : C.border}`, borderRadius: 11, padding: mob ? "12px 13px" : "13px 16px", marginBottom: 8 }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
+        <input type="checkbox" checked={selected} onChange={() => onToggle(doc.id)} title="Select"
+          style={{ accentColor: C.gold, width: 16, height: 16, marginTop: 9, flexShrink: 0, cursor: "pointer" }} />
         <div style={{ width: 34, height: 34, borderRadius: 9, background: C.card, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, flexShrink: 0 }}>{cat.icon}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{doc.title}</span>
+            {doc.aiFiled && !doc.aiReviewed && (
+              <span title="Filed automatically — open Edit to confirm the details"
+                style={{ background: C.blueBg, color: C.blue, border: `1px solid ${C.blue}33`, borderRadius: 4, padding: "1px 6px", fontSize: 9, fontWeight: 700, letterSpacing: .4 }}>AI</span>
+            )}
             {exp && exp.kind !== "ok" && (
               <span style={{ background: exp.bg, color: exp.fg, border: `1px solid ${exp.fg}33`, borderRadius: 4, padding: "1px 7px", fontSize: 10, fontWeight: 700 }}>{exp.label}</span>
             )}
@@ -286,10 +488,10 @@ function DocRow({ doc, onEdit, onDelete, onToast }) {
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
               {files.map(f => (
                 <span key={f.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 9px", fontSize: 11 }}>
-                  <a href={f.url} target="_blank" rel="noopener noreferrer" title={f.name}
-                    style={{ color: C.ink, textDecoration: "none", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <button onClick={() => onView(doc, f)} title={`View ${f.name}`}
+                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit", fontSize: 11, color: C.ink, maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {fileIcon(f)} {f.name}
-                  </a>
+                  </button>
                   <button onClick={() => copyLink(f)} title="Copy link"
                     style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 11, padding: 0 }}>⧉</button>
                 </span>
@@ -319,6 +521,10 @@ export default function DocumentsApp({ onHome, currentUser }) {
   const [expFilter, setExpFilter] = useState("all"); // all | soon | expired
   const [sort, setSort] = useState("updated");       // updated | expiry | title
   const [draft, setDraft] = useState(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [sel, setSel] = useState(() => new Set());
+  const [viewer, setViewer] = useState(null); // {items,index}
+  const [busy, setBusy] = useState("");       // label shown while zipping/printing
   const [toast, setToast] = useState("");
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 2600); };
   const who = currentUser?.name || currentUser?.email || "Admin";
@@ -377,6 +583,8 @@ export default function DocumentsApp({ onHome, currentUser }) {
   }, [docs, q, cat, expFilter, sort]);
 
   const onSaved = (record, isNew) => {
+    // A human has looked at it — drop the "unreviewed AI" badge.
+    if (record.aiFiled && !record.aiReviewed) upsertItemK(DOCS_KEY, { ...record, aiReviewed: true }).catch(() => {});
     setDraft(null);
     showToast(isNew ? "Document added" : "Document saved");
     logActivity({ user: who, action: isNew ? "add" : "edit", module: "documents", label: `📁 ${record.title}`, targetMod: "documents", targetId: record.id });
@@ -394,6 +602,63 @@ export default function DocumentsApp({ onHome, currentUser }) {
     }
   };
 
+  const toggleSel = id => setSel(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+  const allVisibleSelected = visible.length > 0 && visible.every(d => sel.has(d.id));
+  const toggleSelAll = () => setSel(allVisibleSelected ? new Set() : new Set(visible.map(d => d.id)));
+  const selectedDocs = useMemo(() => docs.filter(d => sel.has(d.id)), [docs, sel]);
+
+  // Viewing walks every file currently on screen, not just the one clicked.
+  const openViewer = (doc, file) => {
+    const items = [];
+    visible.forEach(d => (d.files || []).forEach(f => items.push({ doc: d, file: f })));
+    const i = items.findIndex(x => x.file.id === file.id);
+    setViewer({ items, index: i < 0 ? 0 : i });
+  };
+
+  const downloadSelected = async () => {
+    setBusy("Preparing download…");
+    try {
+      const n = await downloadDocuments(selectedDocs, (done, total) => setBusy(`Zipping ${done}/${total}…`));
+      showToast(n === 1 ? "Downloaded" : `Downloaded ${n} files as a zip`);
+    } catch (e) {
+      showToast(e?.message || "Download failed");
+    } finally { setBusy(""); }
+  };
+
+  const printSelected = async () => {
+    // Open the tab up front — a tab opened after an await is treated as a popup.
+    const tab = window.open("", "_blank");
+    if (tab) tab.document.write("<title>Documents</title><body style='font-family:system-ui,sans-serif;padding:24px'>Building a combined PDF…</body>");
+    setBusy("Building print file…");
+    try {
+      const { bytes, skipped } = await buildPrintPdf(selectedDocs);
+      openPdfBytes(bytes, tab);
+      showToast(skipped.length ? `Ready — ${skipped.length} file(s) skipped` : "Combined PDF ready — use Print in the new tab");
+    } catch (e) {
+      if (tab) tab.document.body.innerHTML = `<pre style="font-family:system-ui,sans-serif;white-space:pre-wrap;color:#8a1f11">${String(e?.message || e)}</pre>`;
+      showToast(e?.message || "Could not build print file");
+    } finally { setBusy(""); }
+  };
+
+  const deleteSelected = async () => {
+    if (!window.confirm(`Delete ${selectedDocs.length} document(s) and their files? This cannot be undone.`)) return;
+    setBusy("Deleting…");
+    for (const doc of selectedDocs) {
+      try {
+        await deleteItemK(DOCS_KEY, doc.id);
+        removeFromStorage((doc.files || []).map(f => f.url));
+      } catch { /* keep going — the rest of the selection still deletes */ }
+    }
+    logActivity({ user: who, action: "delete", module: "documents", label: `🗑 ${selectedDocs.length} documents` });
+    setSel(new Set());
+    setBusy("");
+    showToast("Deleted");
+  };
+
   const chip = (active, extra = {}) => ({
     background: active ? C.gold : C.surface, color: active ? "#fff" : C.inkMid,
     border: `1px solid ${active ? C.gold : C.border}`, borderRadius: 20, padding: "5px 12px",
@@ -405,6 +670,13 @@ export default function DocumentsApp({ onHome, currentUser }) {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "system-ui, sans-serif", paddingBottom: mob ? 76 : 32 }}>
       <Toast msg={toast} />
       {draft && <DocForm draft={draft} owners={owners} onClose={() => setDraft(null)} onSaved={onSaved} onToast={showToast} />}
+      <BulkUpload open={bulkOpen} onClose={() => setBulkOpen(false)} onFiled={() => pull()} onToast={showToast} />
+      {viewer && <FileViewer items={viewer.items} index={viewer.index} onIndex={i => setViewer(v => ({ ...v, index: i }))} onClose={() => setViewer(null)} />}
+      {busy && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,4,.35)", zIndex: 940, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 26px", fontSize: 13, color: C.ink, boxShadow: "0 12px 40px rgba(26,19,8,.25)" }}>{busy}</div>
+        </div>
+      )}
 
       {/* Header */}
       <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: mob ? "0 12px" : "0 24px", display: "flex", alignItems: "center", height: 54, position: "sticky", top: 0, zIndex: 100, gap: 10 }}>
@@ -417,9 +689,13 @@ export default function DocumentsApp({ onHome, currentUser }) {
           style={{ ...FI, flex: 1, maxWidth: 460 }} />
         {q && <button onClick={() => setQ("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 17, padding: 0 }}>×</button>}
         <div style={{ flex: 1 }} />
-        <button onClick={() => setDraft(newDoc())}
+        <button onClick={() => setDraft(newDoc())} title="Add one document by hand"
+          style={{ background: "none", color: C.inkMid, border: `1px solid ${C.border}`, borderRadius: 8, padding: mob ? "7px 10px" : "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
+          {mob ? "+" : "+ Add by hand"}
+        </button>
+        <button onClick={() => setBulkOpen(true)} title="Upload files — they get filed automatically"
           style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: mob ? "7px 12px" : "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
-          + {mob ? "Add" : "Add document"}
+          ⬆ {mob ? "Upload" : "Upload files"}
         </button>
       </div>
 
@@ -453,7 +729,13 @@ export default function DocumentsApp({ onHome, currentUser }) {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 11, color: C.inkFaint, flex: 1 }}>
+          <div style={{ fontSize: 11, color: C.inkFaint, flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
+            {!!visible.length && (
+              <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", color: C.inkMid }}>
+                <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelAll} style={{ accentColor: C.gold, width: 14, height: 14 }} />
+                Select all
+              </label>
+            )}
             {loaded ? `${visible.length} of ${docs.length} document${docs.length === 1 ? "" : "s"}` : "Loading…"}
             {expFilter !== "all" && <button onClick={() => setExpFilter("all")} style={{ background: "none", border: "none", color: C.gold, cursor: "pointer", fontSize: 11, fontFamily: "inherit" }}>· clear expiry filter</button>}
           </div>
@@ -464,6 +746,17 @@ export default function DocumentsApp({ onHome, currentUser }) {
           </select>
         </div>
 
+        {/* Bulk actions — appears only with a selection */}
+        {sel.size > 0 && (
+          <div style={{ position: "sticky", top: 54, zIndex: 90, background: C.ink, color: "#FAF0DC", borderRadius: 10, padding: mob ? "10px 12px" : "10px 16px", marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", boxShadow: "0 6px 20px rgba(26,19,8,.22)" }}>
+            <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1 }}>{sel.size} selected</span>
+            <button onClick={downloadSelected} style={{ background: "rgba(255,255,255,.14)", color: "#fff", border: "none", borderRadius: 7, padding: "6px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>⬇ Download</button>
+            <button onClick={printSelected} style={{ background: "rgba(255,255,255,.14)", color: "#fff", border: "none", borderRadius: 7, padding: "6px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>🖨 Print</button>
+            <button onClick={deleteSelected} style={{ background: "rgba(255,255,255,.14)", color: "#FFB4A8", border: "none", borderRadius: 7, padding: "6px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
+            <button onClick={() => setSel(new Set())} style={{ background: "none", color: "rgba(250,240,220,.7)", border: "none", padding: "6px 6px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Clear</button>
+          </div>
+        )}
+
         {/* List */}
         {loaded && !docs.length && (
           <div style={{ textAlign: "center", padding: "56px 20px", color: C.inkFaint }}>
@@ -473,10 +766,11 @@ export default function DocumentsApp({ onHome, currentUser }) {
               Keep passports, ITRs, electricity bills, licences and certificates in one place —
               searchable by number, owner or tag, with expiry reminders on the ones that lapse.
             </div>
-            <button onClick={() => setDraft(newDoc())}
+            <button onClick={() => setBulkOpen(true)}
               style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-              + Add your first document
+              ⬆ Upload your documents
             </button>
+            <div style={{ fontSize: 11, marginTop: 10 }}>Just upload — each file is read and filed for you.</div>
           </div>
         )}
         {loaded && !!docs.length && !visible.length && (
@@ -485,7 +779,8 @@ export default function DocumentsApp({ onHome, currentUser }) {
           </div>
         )}
         {visible.map(d => (
-          <DocRow key={d.id} doc={d} onEdit={setDraft} onDelete={onDelete} onToast={showToast} />
+          <DocRow key={d.id} doc={d} selected={sel.has(d.id)} onToggle={toggleSel}
+            onEdit={setDraft} onDelete={onDelete} onView={openViewer} onToast={showToast} />
         ))}
       </div>
     </div>
