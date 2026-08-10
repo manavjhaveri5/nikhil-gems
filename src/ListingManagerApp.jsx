@@ -4,6 +4,7 @@ import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
 import { CUSTOMS_DESCS_KEY, DEFAULT_CUSTOMS_DESCS } from "./DatasetsApp.jsx";
 import CampaignComposer from "./CampaignComposer.jsx";
+import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
 const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(u);
@@ -3191,7 +3192,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         shipped_at: o.shipped_at || now(),
         tracking_code: trackingCode,
         tracking_number: trackingCode,
-        carrier_name: carrierName,
+        carrier_name: normalizeCarrier(carrierName) || carrierName,
         ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         ebay_completed_at: now(),
@@ -3245,7 +3246,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         shipped_at: x.shipped_at || now,
         tracking_code: trackingCode,
         tracking_number: trackingCode,
-        carrier_name: carrierName,
+        carrier_name: normalizeCarrier(carrierName) || carrierName,
         ship_cost: draft.shipCost === "" ? (x.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         etsy_completed_at: now,
@@ -3292,7 +3293,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         shipped_at: o.shipped_at || nowIso,
         tracking_code: trackingCode || o.tracking_code || "",
         tracking_number: trackingCode || o.tracking_number || "",
-        carrier_name: carrierName,
+        carrier_name: normalizeCarrier(carrierName) || carrierName,
         ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         _shipStepUndone: false,
@@ -3963,7 +3964,79 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
               <div style={{ display: "grid", gap: 11 }}>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking number<input autoFocus value={draft.tracking_code} onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })} placeholder="e.g. 1234 5678 90" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Carrier<select value={draft.carrier_name} onChange={e => updateTrackingDraft(order, { carrier_name: e.target.value })} style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px", cursor: "pointer" }}><option value="other">Other</option><option value="cirro">Cirro</option><option value="shipglobal">ShipGlobal</option><option value="dhl">DHL</option><option value="dhl-ecommerce">DHL eCommerce</option><option value="fedex">FedEx</option><option value="ups">UPS</option><option value="usps">USPS</option><option value="aramex">Aramex</option><option value="india-post">India Post</option><option value="bluedart">Blue Dart</option></select></label>
-                <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 44px 10px 11px" }} /><span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-18%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
+                {(() => {
+                  /* What this lane has actually cost. Shown here because this is
+                     the moment the courier is chosen — and because the cost box
+                     below was being skipped on 97% of shipments, which is what
+                     left the history too thin to learn from. */
+                  const rec = recommendCarriers(orders, stock, order);
+                  const cost = ngDraft(order).shipCost;
+                  const verdict = costVerdict(rec, cost);
+                  const toneCol = { high: C.red, low: C.amber, ok: C.green }[verdict?.tone] || C.inkFaint;
+                  return (
+                    <>
+                      <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Shipping you paid
+                        <div style={{ position: "relative" }}>
+                          <input type="number" min={0} step="any" value={cost}
+                            onChange={e => updNg(order, { shipCost: e.target.value })}
+                            onBlur={e => saveOrderShipCost(order, e.target.value)}
+                            placeholder="0"
+                            style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 44px 10px 11px",
+                              borderColor: cost === "" ? C.amber : (verdict?.tone === "high" ? C.red : C.border) }} />
+                          <span style={{ position: "absolute", right: 11, top: "50%", transform: "translateY(-18%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span>
+                        </div>
+                      </label>
+                      {cost === "" && (
+                        <div style={{ fontSize: 10.5, color: C.amber, fontWeight: 700, marginTop: -4 }}>
+                          Worth filling in — every cost you enter sharpens the estimates below.
+                        </div>
+                      )}
+                      {verdict && (
+                        <div style={{ fontSize: 10.5, color: toneCol, fontWeight: 700, marginTop: -4 }}>
+                          {verdict.tone === "high" ? "⚠ " : verdict.tone === "ok" ? "✓ " : ""}{verdict.text}
+                        </div>
+                      )}
+                      {rec && rec.options.length > 0 && (
+                        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 11px" }}>
+                          <div style={{ fontSize: 9.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 6 }}>
+                            What this should cost · {rec.country}
+                            {rec.kg ? ` · ${rec.kg < 1 ? Math.round(rec.kg * 1000) + "g" : rec.kg.toFixed(2) + "kg"}` : " · weight unknown"}
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                            {rec.options.map((o, i) => (
+                              <div key={o.key} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 11.5 }}>
+                                <span style={{ fontWeight: i === 0 ? 850 : 600, color: i === 0 ? C.green : C.ink, whiteSpace: "nowrap" }}>
+                                  {i === 0 ? "↓ " : ""}{o.label}
+                                </span>
+                                <span style={{ fontSize: 9.5, color: C.inkFaint, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {o.exact ? "" : "est · "}{o.basis}
+                                </span>
+                                <span style={{ fontWeight: 800, whiteSpace: "nowrap", color: o.exact ? C.ink : C.inkMid }}>
+                                  {o.exact ? "" : "~"}₹{o.expected}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                          {rec.canRecommend && rec.saving > 0 && (
+                            <div style={{ fontSize: 10.5, color: C.green, fontWeight: 750, marginTop: 7 }}>
+                              {rec.best.label} looks cheapest for this parcel — about ₹{rec.saving} below the dearest option.
+                            </div>
+                          )}
+                          {!rec.kg && (
+                            <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 6, lineHeight: 1.5 }}>
+                              Allocate stock (step 2) and these become weight-based rather than flat averages.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {rec && rec.options.length === 0 && (
+                        <div style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.5 }}>
+                          No costed shipments yet — this one starts the history.
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Tracking link <span style={{ fontWeight: 500 }}>(optional, internal reference)</span><input value={draft.tracking_url} onChange={e => updateTrackingDraft(order, { tracking_url: e.target.value })} onBlur={e => setOrderTrackingUrl(order, e.target.value)} placeholder="https://…" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid }}>Note to buyer <span style={{ fontWeight: 500 }}>(optional)</span><input value={draft.note_to_buyer || ""} onChange={e => updateTrackingDraft(order, { note_to_buyer: e.target.value })} placeholder="A short shipping note" style={{ ...FI(), width: "100%", marginTop: 5, padding: "10px 11px" }} /></label>
                 {isEtsyOrder(order) && <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.inkMid, cursor: "pointer" }}><input type="checkbox" checked={!!draft.send_bcc} onChange={e => updateTrackingDraft(order, { send_bcc: e.target.checked })} /> Send me Etsy's shipping email too</label>}
@@ -5323,7 +5396,7 @@ function EtsyLiveView({ onCrossPost }) {
         status: "completed",
         tracking_code: trackingCode,
         tracking_number: trackingCode,
-        carrier_name: carrierName,
+        carrier_name: normalizeCarrier(carrierName) || carrierName,
         shipped_at: new Date().toISOString(),
       } : x);
       setOrders(next);
