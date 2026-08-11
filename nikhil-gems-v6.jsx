@@ -9,6 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
+import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
@@ -39,6 +40,30 @@ const stockPhotos=item=>{
 };
 const stockCover=item=>stockPhotos(item)[0]||"";
 const thumbUrl=(url)=>url||"";
+const fmtStockQtyValue=v=>{
+  if(v===undefined||v===null||v==="")return"";
+  const n=Number(v);
+  if(Number.isFinite(n))return n.toLocaleString("en-IN",{maximumFractionDigits:3});
+  return String(v).trim();
+};
+const stockQtyParts=item=>{
+  const parts=[];
+  if(item?.qty!==undefined&&item.qty!==null&&item.qty!==""&&+item.qty!==0)parts.push({qty:item.qty,unit:item.unit||"pcs"});
+  if(item?.qty2!==undefined&&item.qty2!==null&&item.qty2!==""&&+item.qty2!==0)parts.push({qty:item.qty2,unit:item.unit2||"kg"});
+  return parts;
+};
+const stockQtyText=item=>stockQtyParts(item).map(p=>`${fmtStockQtyValue(p.qty)} ${p.unit}`).join(" / ");
+const stockShopifyTitle=item=>{
+  const name=[item?.material,item?.shape].filter(Boolean).join(" ").trim()||"Stone";
+  const ordered=[...stockQtyParts(item)].sort((a,b)=>{
+    const au=String(a.unit||"").toLowerCase(),bu=String(b.unit||"").toLowerCase();
+    const aw=au==="kg"||au==="kgs"?0:au==="gm"||au==="g"?1:au==="pcs"?2:3;
+    const bw=bu==="kg"||bu==="kgs"?0:bu==="gm"||bu==="g"?1:bu==="pcs"?2:3;
+    return aw-bw;
+  });
+  const qty=ordered.map(p=>`${fmtStockQtyValue(p.qty)} ${p.unit}`).join(" ");
+  return qty?`${name} - ${qty}`:name;
+};
 const pickStockAlias=(item,keys)=>keys.map(k=>item?.[k]).find(v=>v!==undefined&&v!==null&&String(v).trim()!=="");
 const normalizeStockUnit=u=>{
   const s=String(u||"").trim().toLowerCase();
@@ -6175,7 +6200,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [shopifyTokenInput,setShopifyTokenInput]=useState("");
   const [shopifyModal,setShopifyModal]=useState(null); // {name,price,creds}
   const [bulkShopify,setBulkShopify]=useState(null); // bulk push: {items,connected,storeKey,deal,running,done,results}
-  const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
+  const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   const [formQueue,setFormQueue]=useState([]); // items queued in multi-add mode
   const [customsDescs,setCustomsDescs]=useState([]);
   const shapeToAcctDesc=shape=>{if(!shape)return"";const hit=customsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.desc:"";};
@@ -6521,6 +6546,11 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
       if(fields.location&&fields.location.trim())upd.location=fields.location.trim();
       if(fields.shape&&fields.shape.trim())upd.shape=fields.shape.trim();
       if(fields.costPrice&&fields.costPrice.trim())upd.costPrice=fields.costPrice.trim();
+      if(fields.sellPriceMode==="manual"&&fields.sellPrice&&fields.sellPrice.trim())upd.listPrice=String(+parseFloat(fields.sellPrice).toFixed(2));
+      if(fields.sellPriceMode==="multiplier"&&fields.sellMultiplier&&fields.sellMultiplier.trim()){
+        const base=+upd.costPrice||0;
+        if(base>0)upd.listPrice=String(+parseFloat((base*(+fields.sellMultiplier||0)).toFixed(2)));
+      }
       if(Array.isArray(fields.market)&&fields.market.length>0)upd.market=fields.market;
       if(fields.photographed!==null)upd.photographed=fields.photographed;
       if(fields.postedEtsy!==null)upd.postedEtsy=fields.postedEtsy;
@@ -6535,7 +6565,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     setStock(list);
     try{await saveStockK(list);showToast(`Updated ${ids.size} item${ids.size>1?"s":""}`);}
     catch(e){showToast("Update failed: "+e.message);}
-    setBulkEditOpen(false);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
+    setBulkEditOpen(false);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   };
   const fixFutureDates=async()=>{const todayStr=today();const fixed=stock.map(s=>{if(!s.addedDate)return s;const t=new Date(s.addedDate).getTime();if(isNaN(t)||s.addedDate<=todayStr)return s;// subtract 1 year
     const d=new Date(s.addedDate);d.setFullYear(d.getFullYear()-1);return{...s,addedDate:d.toISOString().slice(0,10)};});const count=fixed.filter((s,i)=>s.addedDate!==stock[i].addedDate).length;setStock(fixed);try{await saveStockK(fixed);showToast(`Fixed ${count} items — dates moved back 1 year`);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
@@ -6780,7 +6810,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const results=[];
     let working=stock;
     for(const item of items){
-      const name=(()=>{const m=item.material||"";const sent=m?m.charAt(0).toUpperCase()+m.slice(1).toLowerCase():m;return [sent,item.location?`#${item.location}`:null].filter(Boolean).join(" — ");})();
+      const name=stockShopifyTitle(item);
       const price=item.listPrice||"";
       try{
         const res=await fetch("/api/shopify",{
@@ -6825,21 +6855,22 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
   const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal)=>{
     setShopifyPushing(true);
     const itemToPush=itemOverride||selected;
+    const pushName=customName||stockShopifyTitle(itemToPush);
     try{
       if(!creds?.store||!creds?.token)throw new Error("Shopify isn't connected — tap reconnect and authorise the store");
       const res=await fetch("/api/shopify",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:customName,shopifyPrice:customPrice}),
+        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice}),
       });
       const d=await res.json();
       if(!res.ok)throw new Error(d.error||"Shopify error");
-      const upd=stock.map(s=>s.id===itemToPush.id?{...s,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
+      const upd=stock.map(s=>s.id===itemToPush.id?{...s,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
       setStock(upd);
-      setSelected(prev=>({...prev,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||prev?.shopifyStore}));
+      setSelected(prev=>({...prev,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||prev?.shopifyStore}));
       await saveStockK(upd);
       let listingNote="";
       try{
-        const created=await syncPushedItemToListings(itemToPush,storeKey||"earth",customName,customPrice,d.shopifyProductId);
+        const created=await syncPushedItemToListings(itemToPush,storeKey||"earth",pushName,customPrice,d.shopifyProductId);
         listingNote=created?" · added to Listing Manager":" · Listing Manager updated";
       }catch(e){listingNote=" · ⚠ Listing Manager link failed";}
 
@@ -6849,7 +6880,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       if(d.dealAdded){
         if(deal?.enabled){
           try{
-            await registerDealTimer(storeKey||"earth",itemToPush,d,customName,deal);
+            await registerDealTimer(storeKey||"earth",itemToPush,d,pushName,deal);
             const until=deal.customDate||`${deal.days||7} days`;
             dealNote=` · ⭐ in Deals (${deal.customDate?`until ${until}`:`${until}`})`;
           }catch(e){dealNote=" · ⭐ in Deals (timer not saved)";}
@@ -6894,10 +6925,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     // is what this button is for.
     const preferred=localStorage.getItem("ng-shopify-last-store");
     const storeKey=connected[preferred]?preferred:(connected.earth?"earth":keys[0]);
-    // Auto-fill name: material in sentence case + box number
-    const mat=(selected.material||"");
-    const sentenceMat=mat.length>0?mat.charAt(0).toUpperCase()+mat.slice(1).toLowerCase():mat;
-    const autoName=[sentenceMat,selected.location?`#${selected.location}`:null].filter(Boolean).join(" — ");
+    const autoName=stockShopifyTitle(selected);
     setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""}});
   };
   const confirmShopifyPush=async()=>{
@@ -6911,6 +6939,40 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     setShopifyModal(null);
     if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
     await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal);
+  };
+  /* Manual lot re-sync. Uses sync_lot, so it touches only description, price and
+     publish state — no AI title regeneration, no image churn. Caches the variant
+     and inventory-item ids on the card so later syncs are a single call, and
+     stores the payload hash so an unchanged card can be skipped. */
+  const [lotSyncing,setLotSyncing]=useState(false);
+  const syncLotNow=async(item)=>{
+    const target=item||selected;
+    if(!target?.shopifyProductId){showToast("Push it to Shopify first");return;}
+    const connected=await loadShopifyCreds();
+    const storeKey=target.shopifyStore&&connected[target.shopifyStore]?target.shopifyStore:(connected.earth?"earth":Object.keys(connected)[0]);
+    const creds=connected[storeKey];
+    if(!creds){showToast("Shopify isn't connected — tap reconnect");return;}
+    const plan=buildLotSync(target);
+    setLotSyncing(true);
+    try{
+      const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"sync_lot",shopStore:creds.store,shopToken:creds.token,
+          product_id:target.shopifyProductId,variant_id:target.shopifyVariantId||undefined,
+          inventory_item_id:target.shopifyInventoryItemId||undefined,
+          body_html:plan.body_html,price:plan.price,status:plan.status})});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error||"Sync failed");
+      const patch={shopifyVariantId:String(d.variant_id||""),shopifyInventoryItemId:String(d.inventory_item_id||""),
+        shopifySyncHash:plan.hash,shopifySyncedAt:new Date().toISOString(),shopifySyncError:""};
+      const upd=stock.map(x=>x.id===target.id?{...x,...patch}:x);
+      setStock(upd);setSelected(prev=>prev&&prev.id===target.id?{...prev,...patch}:prev);
+      await saveStockK(upd);
+      showToast(`✓ Shopify updated · $${plan.price} · ${plan.status==="draft"?"unpublished":"live"}`);
+    }catch(e){
+      const upd=stock.map(x=>x.id===target.id?{...x,shopifySyncError:e.message||"Sync failed"}:x);
+      setStock(upd);try{await saveStockK(upd);}catch{}
+      showToast("❌ "+(e.message||"Sync failed"));
+    }finally{setLotSyncing(false);}
   };
   const reconnectShopify=async()=>{
     // Clear every slot, not just the legacy one, or the stale per-store token
@@ -7268,14 +7330,16 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{
                 if(!shopifyModal)return;
-                const{creds,name,price,qty,qty2}=shopifyModal;
+                const{connected,storeKey,creds,name,price,qty,qty2}=shopifyModal;
+                const pushCreds=connected?.[storeKey]||creds;
                 // Merge overridden qty/qty2 back into the item before pushing
                 const overrides={};
                 if(qty!=null&&qty!=="")overrides.qty=String(qty);
                 if(qty2!=null&&qty2!=="")overrides.qty2=String(qty2);
                 const itemToPush={...s,...overrides};
                 setShopifyModal(null);
-                doPush(creds,name,price,itemToPush);
+                if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
+                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal);
               }} style={{flex:1,background:"#008060",border:"none",color:"#fff",fontWeight:700,fontSize:13,padding:"11px",borderRadius:8,cursor:"pointer"}}>Push →</button>
               <button onClick={()=>setShopifyModal(null)} style={{background:"none",border:`1px solid ${C.border}`,fontSize:13,padding:"11px 18px",borderRadius:8,cursor:"pointer",color:C.inkFaint}}>Cancel</button>
             </div>
@@ -7393,7 +7457,17 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         const bef=bulkEditFields;
         const set=(k,v)=>setBulkEditFields(f=>({...f,[k]:v}));
         const allMats=[...new Set(stock.map(s=>s.material).filter(Boolean))].sort();
-        const strFilled=[bef.material,bef.vendor,bef.location,bef.shape,bef.costPrice].filter(v=>v&&v.trim()).length;
+        const sellingFilled=bef.sellPriceMode==="manual"
+          ? !!(bef.sellPrice&&bef.sellPrice.trim())
+          : !!(bef.sellMultiplier&&bef.sellMultiplier.trim());
+        const multiplierPrices=sellingFilled&&bef.sellPriceMode==="multiplier"
+          ? stock.filter(s=>selectedIds.has(s.id)).map(s=>+(+(s.costPrice||0)*(+bef.sellMultiplier||0)).toFixed(2)).filter(n=>n>0)
+          : [];
+        const multiplierPreview=multiplierPrices.length
+          ? `$${Math.min(...multiplierPrices).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}${multiplierPrices.length>1?` - $${Math.max(...multiplierPrices).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:""}`
+          : "";
+        const strFilled=[bef.material,bef.vendor,bef.location,bef.shape,bef.costPrice].filter(v=>v&&v.trim()).length+// selling price is handled separately so mode alone does not count
+          (sellingFilled?1:0);
         const marketFilled=bef.market.length>0?1:0;
         const boolFilled=[bef.photographed,bef.postedEtsy,bef.postedShopifyAtyahara,bef.postedShopifyEarth,bef.postedWix,bef.postedEbay].filter(v=>v!==null).length;
         const filledCount=strFilled+marketFilled+boolFilled;
@@ -7435,6 +7509,33 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 <div>
                   <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Cost Price (per unit)</div>
                   <input value={bef.costPrice} onChange={e=>set("costPrice",e.target.value)} placeholder="Leave blank to keep existing…" type="number" min="0" style={{...FI,width:"100%",boxSizing:"border-box"}}/>
+                </div>
+                <div style={{border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 11px",background:C.card}}>
+                  <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>Shopify Selling Price <span style={{fontWeight:400,textTransform:"none",fontSize:10}}>· USD per unit</span></div>
+                  <div style={{display:"inline-flex",gap:3,background:"rgba(118,118,128,0.12)",borderRadius:8,padding:3,marginBottom:9}}>
+                    {[["manual","Manual"],["multiplier","Multiplier"]].map(([mode,label])=>(
+                      <button key={mode} type="button" onClick={()=>set("sellPriceMode",mode)}
+                        style={{background:bef.sellPriceMode===mode?C.surface:"transparent",boxShadow:bef.sellPriceMode===mode?"0 1px 3px rgba(0,0,0,.10)":"none",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:bef.sellPriceMode===mode?700:500,color:bef.sellPriceMode===mode?C.ink:C.inkMid,cursor:"pointer"}}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {bef.sellPriceMode==="manual"?(
+                    <div style={{position:"relative"}}>
+                      <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",fontSize:12,fontWeight:700,color:C.inkFaint}}>$</span>
+                      <input value={bef.sellPrice} onChange={e=>set("sellPrice",e.target.value)} placeholder="Leave blank to keep existing…" type="number" min="0" step="0.01" style={{...FI,width:"100%",boxSizing:"border-box",paddingLeft:24}}/>
+                    </div>
+                  ):(
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <input value={bef.sellMultiplier} onChange={e=>set("sellMultiplier",e.target.value)} placeholder="e.g. 2.5" type="number" min="0" step="0.01" style={{...FI,flex:1,boxSizing:"border-box"}}/>
+                        <span style={{fontSize:12,fontWeight:700,color:C.inkMid,whiteSpace:"nowrap"}}>x cost</span>
+                      </div>
+                      <div style={{fontSize:10,color:C.inkFaint,marginTop:6,lineHeight:1.5}}>
+                        Uses each item's current cost price{multiplierPreview?` · preview ${multiplierPreview}`:""}.
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>Market <span style={{fontWeight:400,textTransform:"none",fontSize:10}}>· tap to toggle (leave none to keep existing)</span></div>
@@ -7702,8 +7803,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   {selectedIds.size===2&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#0369A1",borderColor:"#0369A1",background:"#E0F2FE"}} onClick={()=>{setMergeOpen(v=>!v);const [id1]=([...selectedIds]);setMergeKeepId(id1);}}>⇌ Merge</button>}
                   {!mob&&<><button className="bs" style={{fontSize:12}} disabled={selectedIds.size===0} onClick={()=>swapQtyBulk(selectedIds)}>⇄ Swap Qty</button>
                   <button className="bs" style={{fontSize:12,color:C.green,borderColor:C.green,background:C.greenBg}} disabled={selectedIds.size===0} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button>
-                  <button className="bs" style={{fontSize:12,color:C.blue,borderColor:C.blue,background:C.blueBg}} disabled={selectedIds.size===0} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button></>}
-                  {mob&&selectedIds.size>0&&<><button className="bs" style={{fontSize:13,minHeight:40,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button>
+                  <button className="bs" style={{fontSize:12,color:C.blue,borderColor:C.blue,background:C.blueBg}} disabled={selectedIds.size===0} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button></>}
+                  {mob&&selectedIds.size>0&&<><button className="bs" style={{fontSize:13,minHeight:40,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button>
                   <button className="bs" style={{fontSize:13,minHeight:40,color:C.green,borderColor:C.green,background:C.greenBg}} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button></>}
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:C.red,borderColor:C.red,background:C.redBg}} disabled={selectedIds.size===0} onClick={()=>{if(window.confirm(`Delete ${selectedIds.size} item${selectedIds.size>1?"s":""}? This cannot be undone.`))delBulk(selectedIds);}}>🗑 Delete</button>
                   {selectedIds.size>0&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#008060",borderColor:"#008060",background:"#E8F5F0"}} onClick={openBulkShopify}>🛍 Push to Shopify ({selectedIds.size})</button>}
@@ -7934,6 +8035,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                       <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:17,fontWeight:600,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{selected.material}{selected.shape?` ${selected.shape}`:""}</div>
                       <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2,flexShrink:0}}>
+                        {isLotCard(selected)&&selected.shopifyProductId&&(
+                          <button onClick={()=>syncLotNow(selected)} disabled={lotSyncing}
+                            title="Update price + description on Shopify from the current stock — nothing else is touched"
+                            style={{background:"#2A6845",border:"none",cursor:"pointer",fontSize:11,color:"#fff",fontWeight:700,padding:"6px 10px",borderRadius:6,minHeight:32,opacity:lotSyncing?.6:1,marginBottom:3}}>
+                            {lotSyncing?"…":`⚖️ Sync $${computeLotPrice(selected).price??""}`}
+                          </button>
+                        )}
                         <button onClick={pushToShopify} disabled={shopifyPushing} style={{background:"#008060",border:"none",cursor:"pointer",fontSize:11,color:"#fff",fontWeight:700,padding:"6px 10px",borderRadius:6,minHeight:32,opacity:shopifyPushing?.6:1}}>
                           {shopifyPushing?"…":selected.shopifyProductId?"↑ Update":"🛍 Shopify"}
                         </button>
@@ -7951,7 +8059,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     {selected.video&&<video src={selected.video} controls muted playsInline style={{width:"100%",maxHeight:200,background:"#000",display:"block"}}/>}
                     <div style={{padding:"14px 18px"}}>
                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-                        {[[selected.size,"Size"],[selected.grade,"Grade"],[selected.origin,"Origin"],[`${selected.qty||0} ${selected.unit}`,"Qty"],[selected.weightGm?`${(+selected.weightGm/1000).toFixed(2)} kg`:"—","Weight"],[selected.costPrice?inr(selected.costPrice):"—","Cost Price"],[selected.listPrice?`$${(+selected.listPrice).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—","List Price"],[fmtDate(selected.addedDate),"Date Added"],[selected.location||"—","Location"]].map(([v,l])=>(
+                        {[[selected.size,"Size"],[selected.grade,"Grade"],[selected.origin,"Origin"],[stockQtyText(selected)||"—","Qty"],[selected.weightGm?`${(+selected.weightGm/1000).toFixed(2)} kg`:"—","Weight"],[selected.costPrice?inr(selected.costPrice):"—","Cost Price"],[selected.listPrice?`$${(+selected.listPrice).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—","List Price"],[fmtDate(selected.addedDate),"Date Added"],[selected.location||"—","Location"]].map(([v,l])=>(
                           <div key={l}><div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:2}}>{l}</div><div style={{fontSize:13,color:C.ink}}>{v||"—"}</div></div>
                         ))}
                       </div>
@@ -8291,6 +8399,70 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <Field label="List Price / USD"><input type="number" value={form.listPrice||""} onChange={e=>setForm(f=>({...f,listPrice:e.target.value}))} style={FI} placeholder="Shopify selling price"/></Field>
                   <Field label="Storage Location"><input value={form.location||""} onChange={e=>setForm(f=>({...f,location:e.target.value}))} style={FI} placeholder="Bin A1, Shelf B2…" list="loc-list"/><datalist id="loc-list">{[...new Set(stock.map(s=>s.location).filter(Boolean))].map(l=><option key={l} value={l}/>)}</datalist></Field>
                 </div>
+
+                {/* ── Lot pricing ──────────────────────────────────────────
+                    Opt-in. Absent pricingMode leaves the card behaving exactly
+                    as before, which is what keeps 1,371 existing listings inert. */}
+                {(() => {
+                  const kg = resolveLotKg(form);
+                  const pcs = resolveLotPcs(form);
+                  const on = form.pricingMode === "lot_by_weight";
+                  if (kg == null && !on) return (
+                    <div style={{fontSize:10.5,color:C.inkFaint,marginTop:12,lineHeight:1.5}}>
+                      Lot pricing needs a weight on this card — add a kg or gm quantity to price it by the kilo.
+                    </div>
+                  );
+                  const sync = on ? buildLotSync(form) : null;
+                  return (
+                    <div style={{marginTop:14,background:on?"#F3F8F5":C.card,border:`1px solid ${on?"#2A684544":C.border}`,borderRadius:9,padding:"11px 13px"}}>
+                      <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                        <input type="checkbox" checked={on}
+                          onChange={e=>setForm(f=>({...f,pricingMode:e.target.checked?"lot_by_weight":"",
+                            pricePerKg:e.target.checked&&!f.pricePerKg&&+f.listPrice>0&&resolveLotKg(f)>0?String(Math.round((+f.listPrice/resolveLotKg(f))*100)/100):(f.pricePerKg||""),
+                            lotMinPrice:f.lotMinPrice||"25"}))}/>
+                        <span style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid}}>⚖️ Price this lot by weight on Earth Editions</span>
+                      </label>
+                      {on && (<>
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:10,marginTop:11}}>
+                          <Field label="Price / kg (USD)"><input type="number" value={form.pricePerKg||""} onChange={e=>setForm(f=>({...f,pricePerKg:e.target.value}))} style={FI} placeholder="125"/></Field>
+                          <Field label="Min price (USD)"><input type="number" value={form.lotMinPrice||""} onChange={e=>setForm(f=>({...f,lotMinPrice:e.target.value}))} style={FI} placeholder="25"/></Field>
+                          <Field label="When sold out">
+                            <select value={form.shopifySoldOutMode||"draft"} onChange={e=>setForm(f=>({...f,shopifySoldOutMode:e.target.value}))} style={{...FI,cursor:"pointer"}}>
+                              <option value="draft">Unpublish</option>
+                              <option value="keep">Keep published</option>
+                            </select>
+                          </Field>
+                        </div>
+                        <Field label="Description template">
+                          <textarea value={form.shopifyDescTemplate??DEFAULT_LOT_TEMPLATE} onChange={e=>setForm(f=>({...f,shopifyDescTemplate:e.target.value}))}
+                            rows={4} style={{...FI,resize:"vertical",fontFamily:"monospace",fontSize:11.5}}/>
+                        </Field>
+                        <div style={{fontSize:9.5,color:C.inkFaint,marginTop:-4,lineHeight:1.5}}>
+                          Tokens: {"{material} {shape} {kg} {pcs} {origin} {size} {grade} {price}"} — a line whose token is empty is dropped. Use {"{token?}"} to keep the line.
+                        </div>
+                        <div style={{marginTop:11,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px"}}>
+                          <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:6}}>
+                            Preview · what Shopify would show
+                          </div>
+                          <div style={{fontSize:16,fontWeight:800,color:sync.status==="draft"?C.red:"#2A6845"}}>
+                            {sync.price!=null?`$${sync.price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—"}
+                            <span style={{fontSize:10.5,fontWeight:600,color:C.inkFaint,marginLeft:8}}>
+                              {kg!=null?`${kg} kg`:""}{pcs!=null?` · ${pcs} pcs`:""}{sync.rate?` @ $${sync.rate}/kg`:""}
+                            </span>
+                          </div>
+                          {sync.status==="draft"&&(
+                            <div style={{fontSize:10.5,color:C.red,fontWeight:700,marginTop:3}}>
+                              {sync.belowFloor?`Below the $${form.lotMinPrice} floor — would unpublish rather than sell the remainder cheap.`:"Sold out — would unpublish."}
+                            </div>
+                          )}
+                          <pre style={{margin:"8px 0 0",fontSize:11,color:C.ink,whiteSpace:"pre-wrap",fontFamily:"inherit",lineHeight:1.5}}>
+                            {sync.body_html.replace(/<br>/g,"\n")||"(empty — every template line was dropped)"}
+                          </pre>
+                        </div>
+                      </>)}
+                    </div>
+                  );
+                })()}
               </div>
               {/* ── ACQUISITION ── */}
               <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px"}}>
