@@ -6809,7 +6809,10 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
 
     const results=[];
     let working=stock;
-    for(const item of items){
+    for(const raw of items){
+      // Same rule as the single push: never send a product id to another store.
+      const ownStore=resolveItemStore(raw,connected);
+      const item=(raw.shopifyProductId&&ownStore&&ownStore!==storeKey)?{...raw,shopifyProductId:""}:raw;
       const name=stockShopifyTitle(item);
       const price=item.listPrice||"";
       try{
@@ -6854,7 +6857,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
 
   const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal)=>{
     setShopifyPushing(true);
-    const itemToPush=itemOverride||selected;
+    const rawItem=itemOverride||selected;
+    /* A product id only exists on the store it was created against. If this push
+       targets a different store, the id is meaningless there — send it as a new
+       product instead of an update that would 404. */
+    const foreign=rawItem?.shopifyProductId&&rawItem?.shopifyStore&&storeKey&&rawItem.shopifyStore!==storeKey;
+    const itemToPush=foreign?{...rawItem,shopifyProductId:""}:rawItem;
     const pushName=customName||stockShopifyTitle(itemToPush);
     try{
       if(!creds?.store||!creds?.token)throw new Error("Shopify isn't connected — tap reconnect and authorise the store");
@@ -6862,8 +6870,19 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice}),
       });
-      const d=await res.json();
-      if(!res.ok)throw new Error(d.error||"Shopify error");
+      let d=await res.json();
+      /* A stored product id survives the product being deleted on Shopify, and
+         then every update 404s forever with no way back. Re-create once and
+         re-link instead of stranding the card. */
+      if(!res.ok&&itemToPush?.shopifyProductId&&/not found/i.test(String(d.error||""))){
+        const again=await fetch("/api/shopify",{
+          method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:"create",item:{...itemToPush,shopifyProductId:""},shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice}),
+        });
+        const d2=await again.json();
+        if(again.ok){d=d2;showToast("Listing was gone on Shopify — created a fresh one");}
+        else throw new Error(d2.error||d.error||"Shopify error");
+      }else if(!res.ok)throw new Error(d.error||"Shopify error");
       const upd=stock.map(s=>s.id===itemToPush.id?{...s,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
       setStock(upd);
       setSelected(prev=>({...prev,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||prev?.shopifyStore}));
@@ -6916,6 +6935,20 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     }
     return out;
   };
+  /* Which store does this card already live on? Once an item has a Shopify
+     product id, that id is only valid on the store it was created against —
+     sending it anywhere else 404s. So an existing product's store comes from the
+     card, never from the "last store used" preference, which is only a default
+     for genuinely new pushes. Older cards predate shopifyStore, so fall back to
+     the posted-* flags before guessing. */
+  const resolveItemStore=(item,connected)=>{
+    if(!item?.shopifyProductId)return null;
+    if(item.shopifyStore&&connected[item.shopifyStore])return item.shopifyStore;
+    if((item.postedShopifyAtyahara||item.postedShopifyAty)&&connected.atyahara)return "atyahara";
+    if((item.postedShopifyEarth||item.postedShopify)&&connected.earth)return "earth";
+    return null;
+  };
+
   const pushToShopify=async()=>{
     const connected=await loadShopifyCreds();
     const keys=Object.keys(connected);
@@ -6924,7 +6957,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     // Earth Editions is the default: pushing ready stock into its Deals section
     // is what this button is for.
     const preferred=localStorage.getItem("ng-shopify-last-store");
-    const storeKey=connected[preferred]?preferred:(connected.earth?"earth":keys[0]);
+    const owned=resolveItemStore(selected,connected);
+    const storeKey=owned||(connected[preferred]?preferred:(connected.earth?"earth":keys[0]));
     const autoName=stockShopifyTitle(selected);
     setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""}});
   };
@@ -6949,7 +6983,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const target=item||selected;
     if(!target?.shopifyProductId){showToast("Push it to Shopify first");return;}
     const connected=await loadShopifyCreds();
-    const storeKey=target.shopifyStore&&connected[target.shopifyStore]?target.shopifyStore:(connected.earth?"earth":Object.keys(connected)[0]);
+    const storeKey=resolveItemStore(target,connected)||(connected.earth?"earth":Object.keys(connected)[0]);
     const creds=connected[storeKey];
     if(!creds){showToast("Shopify isn't connected — tap reconnect");return;}
     const plan=buildLotSync(target);
