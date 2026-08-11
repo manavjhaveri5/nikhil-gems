@@ -108,8 +108,37 @@ async function pushVideo(shop, token, productId, videoUrl) {
   }
 }
 
+const fmtQty = v => {
+  if (v === undefined || v === null || v === "") return "";
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString("en-IN", { maximumFractionDigits: 3 }) : String(v).trim();
+};
+const qtyParts = item => {
+  const parts = [];
+  if (item?.qty !== undefined && item.qty !== null && item.qty !== "" && +item.qty !== 0) parts.push({ qty: item.qty, unit: item.unit || "pcs" });
+  if (item?.qty2 !== undefined && item.qty2 !== null && item.qty2 !== "" && +item.qty2 !== 0) parts.push({ qty: item.qty2, unit: item.unit2 || "kg" });
+  return parts;
+};
+const titleQtyParts = item => [...qtyParts(item)].sort((a, b) => {
+  const rank = u => {
+    const s = String(u || "").toLowerCase();
+    if (s === "kg" || s === "kgs") return 0;
+    if (s === "gm" || s === "g") return 1;
+    if (s === "pcs") return 2;
+    return 3;
+  };
+  return rank(a.unit) - rank(b.unit);
+});
+const fallbackShopifyTitle = item => {
+  const name = [item?.material, item?.shape].filter(Boolean).join(" ").trim() || "Stone";
+  const qty = titleQtyParts(item).map(p => `${fmtQty(p.qty)} ${p.unit}`).join(" ");
+  return qty ? `${name} - ${qty}` : name;
+};
+const availabilityString = item => qtyParts(item).map(p => `${fmtQty(p.qty)} ${p.unit}`).join(" / ");
+
 async function generateAIContent(item, title, availStr) {
   try {
+    const exactTitleFormat = fallbackShopifyTitle(item);
     const details = [
       item.material && `Material: ${item.material}`,
       item.shape    && `Shape: ${item.shape}`,
@@ -133,13 +162,16 @@ async function generateAIContent(item, title, availStr) {
         max_tokens: 600,
         messages: [{
           role: "user",
-          content: `You are an SEO copywriter for a premium gemstone wholesale business. Given the product details below, generate Shopify SEO content.
+          content: `You are an SEO copywriter for a premium gemstone wholesale business. Given the product details below, generate Shopify product content.
 
 Product: ${title}
+Required title pattern: ${exactTitleFormat}
 ${details}
 
 Return ONLY valid JSON with these fields:
 {
+  "shopifyTitle": "clean product title in this pattern: Stone Shape - kg pcs. Keep the exact quantities and units from the required title pattern. Do not add location or marketing fluff.",
+  "bodyHtml": "short Shopify HTML description, 2-4 sentences plus a compact details line. Must include exact kg and pcs if present. Include origin; use stated origin when present, otherwise infer a likely source region for the specific mineral and phrase it as likely/probable origin.",
   "seoTitle": "max 70 chars, include material + origin + grade if available, no quotes",
   "seoDesc": "max 155 chars, natural sentence, highlight quality + origin + use case",
   "tags": "15-20 comma-separated tags: include material name variants, healing/spiritual uses, chakra associations if relevant, origin country, shape, grade, crystal type, buyer intent keywords"
@@ -260,7 +292,33 @@ async function uploadPhoto(sr, productId, item) {
   } catch (_) {}
 }
 
-async function shopifyReq(shop, token, method, path, body) {
+/* Shopify's REST limit is a 2 req/s leaky bucket, and several actions here loop
+   over up to 100 products. Every call is serialised behind a minimum gap and one
+   429 is retried honouring Retry-After, so a bulk tag or a sync batch degrades
+   into "slow" rather than "half of them silently failed". */
+const SHOPIFY_MIN_GAP_MS = 550;
+let _shopifyChain = Promise.resolve();
+let _shopifyLastAt = 0;
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function shopifyReq(shop, token, method, path, body) {
+  const run = async () => {
+    const wait = SHOPIFY_MIN_GAP_MS - (Date.now() - _shopifyLastAt);
+    if (wait > 0) await _sleep(wait);
+    let out = await _shopifyFetch(shop, token, method, path, body);
+    if (out.status === 429) {
+      const after = Math.min(5, Math.max(1, +out.retryAfter || 2));
+      await _sleep(after * 1000);
+      out = await _shopifyFetch(shop, token, method, path, body);
+    }
+    _shopifyLastAt = Date.now();
+    return out;
+  };
+  _shopifyChain = _shopifyChain.then(run, run);
+  return _shopifyChain;
+}
+
+async function _shopifyFetch(shop, token, method, path, body) {
   const r = await fetch(`https://${shop}/admin/api/2024-04${path}`, {
     method,
     headers: {
@@ -271,8 +329,8 @@ async function shopifyReq(shop, token, method, path, body) {
   });
   const text = await r.text();
   let data;
-  try { data = JSON.parse(text); } catch { return { ok: false, error: text.slice(0, 300) }; }
-  if (!r.ok) return { ok: false, error: data?.errors || data?.error || text.slice(0, 300), status: r.status };
+  try { data = JSON.parse(text); } catch { return { ok: false, error: text.slice(0, 300), status: r.status }; }
+  if (!r.ok) return { ok: false, error: data?.errors || data?.error || text.slice(0, 300), status: r.status, retryAfter: r.headers.get("Retry-After") };
   return { ok: true, data, headers: r.headers };
 }
 
@@ -618,19 +676,105 @@ export default async function handler(req, res) {
     return res.json({ success: true, shop: SHOP, product: result.data.product });
   }
 
+  /* ── sync_lot ────────────────────────────────────────────────────────────
+     Keeps a lot listing's price, description and publish state in step with the
+     stock card, and touches nothing else.
+
+     Deliberately NOT the `update` path below: that one regenerates the title and
+     body via an Anthropic call, then deletes and re-uploads every product image,
+     re-asserts SEO, metafields and Deals — 12+ calls. Running that on every gram
+     sold would churn the gallery and overwrite titles. This is 1-2 calls.
+
+     Two REST details that make or break it:
+       • the variant object MUST carry its `id`, or Shopify replaces the variant
+         set instead of patching it (the existing bug at the update path), and
+       • `inventory_quantity` is ignored on a product PUT, so it is never sent —
+         a lot's inventory is the constant 1 set at create time. */
+  if (action === "sync_lot") {
+    const productId = String(body.product_id || "").trim();
+    if (!productId) return res.status(400).json({ error: "product_id required" });
+
+    let variantId = String(body.variant_id || "").trim();
+    let inventoryItemId = String(body.inventory_item_id || "").trim();
+    let current = null;
+
+    // One lookup when the ids aren't cached yet; also gives current values to diff.
+    if (!variantId || body.dry_run) {
+      const got = await sr("GET", `/products/${encodeURIComponent(productId)}.json?fields=id,status,body_html,variants`);
+      if (!got.ok) return res.status(got.status || 400).json({ error: got.error || "Product not found" });
+      const p = got.data?.product || {};
+      const v = p.variants?.[0] || {};
+      variantId = variantId || String(v.id || "");
+      inventoryItemId = inventoryItemId || String(v.inventory_item_id || "");
+      current = { body_html: p.body_html || "", price: v.price != null ? String(v.price) : "", status: p.status || "" };
+    }
+    if (!variantId) return res.status(400).json({ error: "Product has no variant to price" });
+
+    const next = {
+      body_html: String(body.body_html ?? ""),
+      price: body.price != null && body.price !== "" ? String(body.price) : "",
+      status: body.status === "draft" || body.status === "active" ? body.status : "",
+    };
+
+    if (body.dry_run) {
+      const changed = !!current && (
+        current.body_html !== next.body_html ||
+        (next.price && String(+current.price) !== String(+next.price)) ||
+        (next.status && current.status !== next.status)
+      );
+      return res.json({ success: true, dry_run: true, current, next, changed, variant_id: variantId, inventory_item_id: inventoryItemId });
+    }
+
+    const payload = { product: { id: productId, variants: [{ id: variantId }] } };
+    if (body.body_html != null) payload.product.body_html = next.body_html;
+    if (next.price) payload.product.variants[0].price = next.price;
+    if (next.status) payload.product.status = next.status;
+
+    const put = await sr("PUT", `/products/${encodeURIComponent(productId)}.json`, payload);
+    if (!put.ok) return res.status(put.status || 400).json({ error: put.error });
+
+    /* Inventory only on request. Lot mode never asks — which matters, because the
+       Earth Editions token lacks write_inventory. Reported, never swallowed. */
+    let inventory;
+    if (body.inventory != null && inventoryItemId) {
+      const loc = await sr("GET", "/locations.json");
+      const locationId = loc.ok ? loc.data?.locations?.[0]?.id : null;
+      if (!locationId) {
+        inventory = { attempted: true, ok: false, error: loc.error || "No location found" };
+      } else {
+        const setR = await sr("POST", "/inventory_levels/set.json", {
+          location_id: locationId, inventory_item_id: inventoryItemId, available: Math.max(0, parseInt(body.inventory, 10) || 0),
+        });
+        const msg = String(setR.error || "");
+        inventory = {
+          attempted: true, ok: setR.ok, error: setR.ok ? "" : msg,
+          scopeMissing: !setR.ok && (setR.status === 403 || /write_inventory|merchant approval/i.test(msg)),
+        };
+      }
+    }
+
+    const prod = put.data?.product || {};
+    return res.json({
+      success: true,
+      product_id: productId,
+      variant_id: variantId,
+      inventory_item_id: inventoryItemId,
+      status: prod.status || next.status || "",
+      price: prod.variants?.[0]?.price ?? next.price,
+      ...(inventory ? { inventory } : {}),
+    });
+  }
+
   if (!item) return res.status(400).json({ error: "item required" });
 
-  // Title: use user-confirmed name from modal, or fallback
-  const title = shopifyName || [item.material, item.location ? `#${item.location}` : null].filter(Boolean).join(" — ");
-
-  // Availability string for description
-  const avail = [];
-  if (item.qty && +item.qty > 0) avail.push(`${item.qty} ${item.unit || "pcs"}`);
-  if (item.qty2 && +item.qty2 > 0 && item.unit2 && item.unit2 !== item.unit) avail.push(`${item.qty2} ${item.unit2}`);
-  const availStr = avail.join(" / ");
+  // Title: stock pushes should read "Stone Shape - kg pcs"; AI may clean
+  // capitalization/wording, but exact quantities come from stock.
+  const requestedTitle = shopifyName || fallbackShopifyTitle(item);
+  const availStr = availabilityString(item);
 
   // AI-generated SEO + tags (runs in parallel with nothing, fast model ~1s)
-  const ai = await generateAIContent(item, title, availStr);
+  const ai = await generateAIContent(item, requestedTitle, availStr);
+  const title = ai?.shopifyTitle || requestedTitle;
 
   // Tags: AI tags merged with structured tags
   const baseTags = [
@@ -648,7 +792,7 @@ export default async function handler(req, res) {
   if (item.origin)      descParts.push(`<strong>Origin:</strong> ${item.origin}`);
   if (item.size)        descParts.push(`<strong>Size:</strong> ${item.size}`);
   if (item.notes)       descParts.push(item.notes);
-  const bodyHtml = descParts.join("<br>");
+  const bodyHtml = ai?.bodyHtml || descParts.join("<br>");
 
   // SEO fields — use AI if available, fall back to rule-based
   const seoTitle = ai?.seoTitle || title;
@@ -658,7 +802,10 @@ export default async function handler(req, res) {
   ].filter(Boolean).join(" · ");
 
   const price = shopifyPrice || item.listPrice || item.price;
-  const qty = Math.max(0, parseInt(item.qty) || 0);
+  const inventorySource = String(item.unit || "").toLowerCase() === "pcs" ? item.qty
+    : String(item.unit2 || "").toLowerCase() === "pcs" ? item.qty2
+    : item.qty;
+  const qty = Math.max(0, parseInt(inventorySource) || 0);
 
   if (action === "delete") {
     const productId = item.shopifyProductId;
