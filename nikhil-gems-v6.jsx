@@ -6855,7 +6855,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     setBulkShopify({items:sel,connected,storeKey,deal:{enabled:true,days:7,customDate:""},running:false,done:false,results:[],error:""});
   };
 
-  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal)=>{
+  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal,keepRate)=>{
     setShopifyPushing(true);
     const rawItem=itemOverride||selected;
     /* A product id only exists on the store it was created against. If this push
@@ -6883,7 +6883,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         if(again.ok){d=d2;showToast("Listing was gone on Shopify — created a fresh one");}
         else throw new Error(d2.error||d.error||"Shopify error");
       }else if(!res.ok)throw new Error(d.error||"Shopify error");
-      const upd=stock.map(s=>s.id===itemToPush.id?{...s,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
+      /* "Keep this rate" is the whole opt-in for weight pricing — derive the rate
+         from the price just entered against the lot's current weight, so there is
+         no second number to type. */
+      const lotKg=resolveLotKg(itemToPush);
+      const lotPatch=keepRate&&lotKg>0&&+customPrice>0
+        ? {pricingMode:"lot_by_weight",pricePerKg:String(Math.round((+customPrice/lotKg)*100)/100),lotMinPrice:itemToPush.lotMinPrice||"25"}
+        : (keepRate===false?{pricingMode:""}:{});
+      const upd=stock.map(s=>s.id===itemToPush.id?{...s,...lotPatch,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
       setStock(upd);
       setSelected(prev=>({...prev,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||prev?.shopifyStore}));
       await saveStockK(upd);
@@ -6960,11 +6967,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const owned=resolveItemStore(selected,connected);
     const storeKey=owned||(connected[preferred]?preferred:(connected.earth?"earth":keys[0]));
     const autoName=stockShopifyTitle(selected);
-    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""}});
+    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""},keepRate:isLotCard(selected)});
   };
   const confirmShopifyPush=async()=>{
     if(!shopifyModal)return;
-    const{connected,storeKey,name,price,qty,qty2}=shopifyModal;
+    const{connected,storeKey,name,price,qty,qty2,keepRate}=shopifyModal;
     const creds=connected?.[storeKey]||shopifyModal.creds;
     const overrides={};
     if(qty!=null&&qty!=="")overrides.qty=String(qty);
@@ -6972,7 +6979,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const itemToPush={...(selected||{}),...overrides};
     setShopifyModal(null);
     if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-    await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal);
+    await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate);
   };
   /* Manual lot re-sync. Uses sync_lot, so it touches only description, price and
      publish state — no AI title regeneration, no image churn. Caches the variant
@@ -7323,6 +7330,32 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
 
             <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Price (USD)</div>
             <input type="number" value={shopifyModal.price} onChange={e=>setShopifyModal(m=>({...m,price:e.target.value}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box"}} placeholder="0.00"/>
+
+            {(() => {
+              /* You price the lot as a whole, so the per-kg rate is derived rather
+                 than asked for. Keeping it is what lets the listing re-price itself
+                 as the lot shrinks. */
+              const kg = resolveLotKg(selected);
+              if (kg == null || !(kg > 0)) return null;
+              const rate = +shopifyModal.price > 0 ? Math.round((+shopifyModal.price / kg) * 100) / 100 : null;
+              const keep = !!shopifyModal.keepRate;
+              return (
+                <div style={{background:keep?"#F3F8F5":C.card,border:`1px solid ${keep?"#2A684544":C.border}`,borderRadius:8,padding:"9px 11px",marginBottom:12,marginTop:-4}}>
+                  <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                    <input type="checkbox" checked={keep} onChange={e=>setShopifyModal(m=>({...m,keepRate:e.target.checked}))}/>
+                    <span style={{fontSize:12,fontWeight:700,color:keep?"#2A6845":C.inkMid}}>
+                      ⚖️ Keep this rate as the lot sells
+                      {rate!=null&&<span style={{fontWeight:600,color:C.inkFaint}}> · ${rate}/kg</span>}
+                    </span>
+                  </label>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:6,lineHeight:1.5}}>
+                    {keep
+                      ? `Priced by weight. Sell a piece and ${kg} kg becomes less, so the listing re-prices itself at $${rate??"—"}/kg.`
+                      : "Fixed price — it stays at this figure however much of the lot sells."}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Quantity</div>
             <div style={{display:"flex",gap:8,marginBottom:hasQty2?8:18,alignItems:"center"}}>
