@@ -38,15 +38,46 @@ const STATUS_TONE = {
   draft: [C.amber, C.amberBg], paused: [C.amber, C.amberBg], failed: [C.red, C.redBg],
   subscribed: [C.green, C.greenBg], unsubscribed: [C.red, C.redBg], nonsubscribed: [C.inkFaint, C.card],
 };
+/* The ERP's own type scale: Figtree for the interface, Cormorant for headings and
+   the numbers that want to read as figures. Everything below borrows the weights
+   the rest of the suite uses (600–700, never 800+) so this module doesn't shout. */
+const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
+const SERIF = "'Cormorant Garamond',Georgia,serif";
+
 function Pill({ children }) {
   const key = String(children || "").toLowerCase();
   const [fg, bg] = STATUS_TONE[key] || [C.inkFaint, C.card];
-  return <span style={{ color: fg, background: bg, borderRadius: 20, padding: "3px 10px", fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" }}>{children || "—"}</span>;
+  return <span style={{ color: fg, background: bg, borderRadius: 4, padding: "2px 8px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>{children || "—"}</span>;
 }
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
-const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 8, padding: "8px 14px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
-const lab = { fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
+const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", transition: "background .15s, box-shadow .15s" });
+const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
+
+/* One table skin for both list screens — they were drifting apart by a pixel or
+   two in every cell, which is most of what made the module look unlike the ERP. */
+const TH = { textAlign: "left", fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
+const TD = { padding: "11px 12px", fontSize: 13, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
+
+/* Segmented filter — the same control the ERP dashboard uses for its view switch:
+   one recessed track, the active choice lifted onto a white chip. */
+function Segmented({ value, onChange, options }) {
+  return (
+    <div style={{ display: "flex", gap: 2, background: C.card, borderRadius: 9, padding: 3 }}>
+      {options.map(([k, label]) => (
+        <button key={k} onClick={() => onChange(k)} style={{
+          border: "none", cursor: "pointer", fontFamily: "inherit", borderRadius: 7,
+          padding: "6px 13px", fontSize: 12.5, whiteSpace: "nowrap",
+          background: value === k ? C.surface : "transparent",
+          boxShadow: value === k ? "0 1px 3px rgba(26,19,8,.10)" : "none",
+          fontWeight: value === k ? 600 : 400,
+          color: value === k ? C.ink : C.inkMid,
+          textTransform: "capitalize", transition: "all .15s",
+        }}>{label}</button>
+      ))}
+    </div>
+  );
+}
 
 /* RFC-4180 quoting: Excel mangles the file otherwise on names with commas. */
 const csvCell = v => {
@@ -84,37 +115,45 @@ export default function OmnisendApp({ onHome }) {
   const TABS = [["campaigns", "📣", "Campaigns"], ["approvals", "✅", "Approvals"], ["subscribers", "👥", "Subscribers"]];
 
   return (
-    <div style={{ minHeight: "100vh", background: C.bg }}>
-      {toast && <div style={{ position: "fixed", bottom: 22, right: 22, zIndex: 1200, background: C.ink, color: "#fff", padding: "10px 18px", borderRadius: 8, fontSize: 12.5, boxShadow: "0 8px 28px rgba(0,0,0,.18)" }}>{toast}</div>}
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: FONT, color: C.ink }}>
+      {toast && <div style={{ position: "fixed", bottom: 22, right: 22, zIndex: 1200, background: C.ink, color: "#fff", padding: "10px 18px", borderRadius: 6, fontSize: 12, boxShadow: "var(--e-2)", display: "flex", alignItems: "center", gap: 8 }}>{toast}</div>}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: mob() ? "12px 14px" : "14px 22px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexWrap: "wrap" }}>
-        <button onClick={onHome} style={btn()}>← Home</button>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 16, fontWeight: 850, color: C.ink }}>Omnisend</div>
-          <div style={{ fontSize: 11, color: C.inkFaint }}>Campaigns, subscribers and mailers</div>
+      {/* Sticky header — same two-deck shape as Listing Manager: title bar, then tabs. */}
+      <div style={{ position: "sticky", top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: mob() ? "10px 14px" : "11px 28px" }}>
+          <button onClick={onHome}
+            style={{ background: "none", border: "none", cursor: "pointer", color: C.inkMid, fontFamily: "inherit",
+              fontSize: 13, padding: "0 12px 0 0", borderRight: `1px solid ${C.border}` }}>← Home</button>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: SERIF, fontSize: 20, fontWeight: 700, lineHeight: 1 }}>Omnisend</div>
+            <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 1 }}>Campaigns, subscribers and mailers</div>
+          </div>
+          <div style={{ flex: 1 }} />
+          <button onClick={() => setComposerOpen(true)} disabled={!configured}
+            title={configured ? "" : "Connect Omnisend first"}
+            style={{ background: configured ? C.ink : C.card, color: configured ? "#FAF0DC" : C.inkFaint, border: "none",
+              borderRadius: 7, padding: "8px 18px", fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+              cursor: configured ? "pointer" : "not-allowed" }}>
+            📣 {mob() ? "" : "New campaign"}
+          </button>
         </div>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => setComposerOpen(true)} disabled={!configured}
-          title={configured ? "" : "Connect Omnisend first"}
-          style={{ ...btn(configured ? C.ink : C.card, configured ? "#fff" : C.inkFaint), cursor: configured ? "pointer" : "not-allowed" }}>
-          📣 New campaign
-        </button>
+
+        <div style={{ display: "flex", alignItems: "center", overflowX: "auto", padding: mob() ? "0 10px" : "0 28px" }}>
+          {TABS.map(([k, icon, label]) => (
+            <button key={k} onClick={() => setTab(k)} style={{
+              display: "flex", alignItems: "center", gap: 6, marginBottom: -1,
+              border: "none", background: "none", cursor: "pointer", fontFamily: "inherit",
+              padding: "11px 14px", fontSize: 13, fontWeight: tab === k ? 700 : 400, whiteSpace: "nowrap",
+              color: tab === k ? C.ink : C.inkMid,
+              borderBottom: `2.5px solid ${tab === k ? C.gold : "transparent"}`,
+            }}><span style={{ fontSize: 14 }}>{icon}</span>{label}</button>
+          ))}
+        </div>
       </div>
 
-      <div style={{ display: "flex", gap: 4, padding: mob() ? "10px 10px 0" : "12px 22px 0", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
-        {TABS.map(([k, icon, label]) => (
-          <button key={k} onClick={() => setTab(k)} style={{
-            border: "none", background: "transparent", cursor: "pointer", fontFamily: "inherit",
-            padding: "8px 14px", fontSize: 13, fontWeight: 800,
-            color: tab === k ? C.ink : C.inkFaint,
-            borderBottom: `2.5px solid ${tab === k ? C.gold : "transparent"}`,
-          }}>{icon} {label}</button>
-        ))}
-      </div>
-
-      <div style={{ padding: mob() ? 12 : 22, maxWidth: 1280, margin: "0 auto" }}>
+      <div style={{ padding: mob() ? 14 : "24px 28px", maxWidth: 1100, margin: "0 auto" }}>
         {configured === false && (
-          <div style={{ ...card, background: "#fff8e6", border: "1px solid #f0dfae", padding: "13px 15px", marginBottom: 16, fontSize: 12.5, color: "#8a6d1a", lineHeight: 1.6 }}>
+          <div style={{ ...card, background: C.goldLight, border: `1px solid ${C.borderHi}`, padding: "13px 16px", marginBottom: 16, fontSize: 13, color: C.gold, lineHeight: 1.6 }}>
             <strong>Omnisend isn't connected.</strong> Add <code>OMNISEND_API_KEY</code> in Vercel → Settings → Environment Variables, then redeploy — env vars are baked in at deploy time, so an existing deployment won't pick up a new key.
             {setupErr && <div style={{ marginTop: 6, color: C.red }}>{setupErr}</div>}
           </div>
@@ -200,10 +239,10 @@ function CampaignsTab({ showToast }) {
   const lastSent = sentRows.map(r => r.sentAt).filter(Boolean).sort().pop();
 
   const stat = (label, value, sub) => (
-    <div style={{ ...card, padding: "10px 14px", minWidth: 116, flex: "1 1 116px" }}>
-      <div style={{ fontSize: 9.5, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 }}>{label}</div>
-      <div style={{ fontSize: 19, fontWeight: 850, color: C.ink, marginTop: 3, lineHeight: 1.1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2 }}>{sub}</div>}
+    <div style={{ ...card, padding: "11px 15px", minWidth: 116, flex: "1 1 116px", boxShadow: "var(--e-1)" }}>
+      <div style={lab}>{label}</div>
+      <div className="tnum" style={{ fontFamily: SERIF, fontSize: 24, fontWeight: 700, color: C.ink, lineHeight: 1.05 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 3 }}>{sub}</div>}
     </div>
   );
 
@@ -218,14 +257,8 @@ function CampaignsTab({ showToast }) {
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, subject, sender or audience…" style={{ ...FI(), maxWidth: 300 }} />
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {statuses.map(s => (
-            <button key={s} onClick={() => setStatus(s)} style={{
-              ...btn(status === s ? C.ink : C.surface, status === s ? "#fff" : C.inkMid),
-              padding: "6px 12px", fontSize: 11.5, textTransform: "capitalize",
-            }}>{s}{s === "all" ? ` ${rows.length}` : ` ${rows.filter(r => String(r.status).toLowerCase() === s).length}`}</button>
-          ))}
-        </div>
+        <Segmented value={status} onChange={setStatus} options={statuses.map(s => [s,
+          `${s} ${s === "all" ? rows.length : rows.filter(r => String(r.status).toLowerCase() === s).length}`])} />
         <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...FI(), width: "auto", cursor: "pointer", fontSize: 12, padding: "7px 9px" }}>
           <option value="newest">Newest first</option>
           <option value="oldest">Oldest first</option>
@@ -255,12 +288,12 @@ function CampaignsTab({ showToast }) {
           const when = c.sentAt || c.createdAt;
           return (
             <div key={c.id} style={{ borderTop: i ? `1px solid ${C.border}` : "none" }}>
-              <div onClick={() => setOpen(isOpen ? null : c.id)}
+              <div onClick={() => setOpen(isOpen ? null : c.id)} className="rh"
                 style={{ display: "grid", gridTemplateColumns: mob() ? "1fr auto" : "minmax(0,2.2fr) minmax(0,1.1fr) 128px 84px 18px",
                   gap: 10, alignItems: "center", padding: mob() ? "10px 12px" : "10px 14px", cursor: "pointer",
                   borderLeft: `3px solid ${tone}`, background: isOpen ? C.card : "transparent" }}>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
                   <div style={{ fontSize: 11, color: C.inkMid, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.subject || "(no subject)"}</div>
                 </div>
                 {!mob() && <div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={audienceOf(c)}>👥 {audienceOf(c)}</div>}
@@ -418,29 +451,24 @@ function ApprovalsTab({ showToast }) {
   const approved = rows.filter(hasApproveTag);
   const shown = (view === "pending" ? pending : view === "approved" ? approved : rows).filter(matches);
 
-  const th = { textAlign: "left", fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5, padding: "8px 10px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
-  const td = { padding: "9px 10px", fontSize: 12.5, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
+  const th = TH, td = TD;
 
   if (creds === undefined) return <div style={{ color: C.inkFaint, fontSize: 13, padding: 20 }}>Loading…</div>;
   if (creds === null) return (
-    <div style={{ ...card, background: "#fff8e6", border: "1px solid #f0dfae", padding: "13px 15px", fontSize: 12.5, color: "#8a6d1a", lineHeight: 1.6 }}>
+    <div style={{ ...card, background: C.goldLight, border: `1px solid ${C.borderHi}`, padding: "13px 16px", fontSize: 13, color: C.gold, lineHeight: 1.6 }}>
       <strong>Earth Editions isn't connected.</strong> Open Listing Manager → Earth Ed. and connect the store, then come back — approving writes a tag to the Shopify customer, so it needs that store's token.
     </div>
   );
 
   return (
     <>
-      <div style={{ ...card, padding: "11px 14px", marginBottom: 14, fontSize: 12, color: C.inkMid, lineHeight: 1.6 }}>
-        Approving adds the <code>{APPROVE_TAG}</code> tag to the Shopify customer — which is what unlocks trade prices and account login — and the same tag to their Omnisend contact so the audience rules pick them up. Both happen in one click.
+      <div style={{ padding: "0 2px", marginBottom: 14, fontSize: 12, color: C.inkFaint, lineHeight: 1.6, maxWidth: 760 }}>
+        Approving adds the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{APPROVE_TAG}</code> tag to the Shopify customer — which unlocks trade prices and account login — and the same tag to their Omnisend contact, in one click.
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search email, name or tag…" style={{ ...FI(), maxWidth: 280 }} />
-        <div style={{ display: "flex", gap: 4 }}>
-          {[["pending", `Pending ${pending.length}`], ["approved", `Approved ${approved.length}`], ["all", `All ${rows.length}`]].map(([k, label]) => (
-            <button key={k} onClick={() => setView(k)} style={{ ...btn(view === k ? C.ink : C.surface, view === k ? "#fff" : C.inkMid), padding: "6px 12px", fontSize: 11.5 }}>{label}</button>
-          ))}
-        </div>
+        <Segmented value={view} onChange={setView} options={[["pending", `Pending ${pending.length}`], ["approved", `Approved ${approved.length}`], ["all", `All ${rows.length}`]]} />
         <div style={{ flex: 1 }} />
         <button onClick={load} disabled={loading} style={btn()}>{loading ? "Loading…" : "↻ Refresh"}</button>
         <button
@@ -462,25 +490,26 @@ function ApprovalsTab({ showToast }) {
                 const ok = hasApproveTag(c);
                 const known = !!inOmnisend(c);
                 return (
-                  <tr key={c.id}>
+                  <tr key={c.id} className="rh">
                     <td style={td}>
-                      <div style={{ fontWeight: 700 }}>{c.email || "(no email)"}</div>
-                      {c.name && <div style={{ fontSize: 11, color: C.inkFaint }}>{c.name}</div>}
+                      <div style={{ fontWeight: 600 }}>{c.email || "(no email)"}</div>
+                      {c.name && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 1 }}>{c.name}</div>}
                     </td>
                     <td style={td}><Pill>{ok ? "approved" : "pending"}</Pill></td>
                     <td style={td}>
                       {!known
-                        ? <span style={{ fontSize: 11, color: C.inkFaint }}>not a contact</span>
+                        ? <span style={{ fontSize: 11.5, color: C.inkFaint }}>not a contact</span>
                         : omniApproved(c)
-                          ? <span style={{ fontSize: 11.5, fontWeight: 800, color: C.green }}>✓ tagged</span>
-                          : <span style={{ fontSize: 11.5, fontWeight: 800, color: C.amber }}>untagged</span>}
+                          ? <span style={{ fontSize: 11.5, fontWeight: 600, color: C.green }}>✓ tagged</span>
+                          : <span style={{ fontSize: 11.5, fontWeight: 600, color: C.amber }}>untagged</span>}
                     </td>
-                    <td style={{ ...td, color: C.inkMid }}>{c.ordersCount || 0}</td>
-                    <td style={{ ...td, color: C.inkMid, whiteSpace: "nowrap" }}>{fmtDate(c.createdAt)}</td>
+                    <td className="tnum" style={{ ...td, color: C.inkMid }}>{c.ordersCount || 0}</td>
+                    <td className="tnum" style={{ ...td, color: C.inkMid, whiteSpace: "nowrap" }}>{fmtDate(c.createdAt)}</td>
                     <td style={{ ...td, textAlign: "right" }}>
                       <button onClick={() => approve(c, ok)} disabled={!!busy[c.id] || !c.email}
                         title={c.email ? "" : "This customer has no email address"}
-                        style={{ ...btn(ok ? C.surface : C.green, ok ? C.ink : "#fff"), padding: "6px 12px", fontSize: 11.5, opacity: busy[c.id] || !c.email ? .6 : 1 }}>
+                        style={{ ...btn(ok ? C.surface : C.greenBg, ok ? C.inkMid : C.green), padding: "6px 14px", fontSize: 12,
+                          border: `1px solid ${ok ? C.border : C.green}`, opacity: busy[c.id] || !c.email ? .5 : 1 }}>
                         {busy[c.id] ? "…" : ok ? "Remove" : "Approve"}
                       </button>
                     </td>
@@ -577,20 +606,15 @@ function SubscribersTab({ showToast }) {
   const ql = q.trim().toLowerCase();
   const shown = rows.filter(c => !ql || `${c.email} ${c.firstName} ${c.lastName} ${(c.tags || []).join(" ")}`.toLowerCase().includes(ql));
 
-  const th = { textAlign: "left", fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5, padding: "8px 10px", borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
-  const td = { padding: "9px 10px", fontSize: 12.5, color: C.ink, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
+  const th = TH, td = TD;
 
   return (
     <>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter loaded subscribers…" style={{ ...FI(), maxWidth: 280 }} />
-        <div style={{ display: "flex", gap: 4 }}>
-          {["all", "subscribed", "unsubscribed", "nonsubscribed"].map(s => (
-            <button key={s} onClick={() => setStatus(s)} style={{ ...btn(status === s ? C.ink : C.surface, status === s ? "#fff" : C.inkMid), padding: "6px 11px", fontSize: 11.5, textTransform: "capitalize" }}>{s}</button>
-          ))}
-        </div>
+        <Segmented value={status} onChange={setStatus} options={["all", "subscribed", "unsubscribed", "nonsubscribed"].map(s => [s, s])} />
         <div style={{ flex: 1 }} />
-        <button onClick={() => setEdit({ ...BLANK })} style={btn(C.green, "#fff")}>+ Add subscriber</button>
+        <button onClick={() => setEdit({ ...BLANK })} style={{ ...btn(C.greenBg, C.green), border: `1px solid ${C.green}` }}>+ Add subscriber</button>
         <button onClick={exportAll} disabled={!!exporting} style={btn()}>{exporting || "⬇ Export CSV"}</button>
         <button onClick={() => load("", status)} disabled={loading} style={btn()}>{loading ? "Loading…" : "↻"}</button>
       </div>
@@ -599,7 +623,7 @@ function SubscribersTab({ showToast }) {
 
       {edit && (
         <div style={{ ...card, padding: 16, marginBottom: 14, borderColor: C.gold }}>
-          <div style={{ fontSize: 14, fontWeight: 850, color: C.ink, marginBottom: 12 }}>{edit.contactId ? "Edit subscriber" : "Add subscriber"}</div>
+          <div style={{ fontFamily: SERIF, fontSize: 19, fontWeight: 700, color: C.ink, marginBottom: 12, lineHeight: 1 }}>{edit.contactId ? "Edit subscriber" : "Add subscriber"}</div>
           <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(auto-fit,minmax(190px,1fr))", gap: 12 }}>
             <div><span style={lab}>Email *</span><input value={edit.email} disabled={!!edit.contactId} onChange={e => setEdit(s => ({ ...s, email: e.target.value }))} placeholder="name@example.com" style={{ ...FI(), ...(edit.contactId ? { background: C.card, color: C.inkMid } : {}) }} /></div>
             <div><span style={lab}>First name</span><input value={edit.firstName} onChange={e => setEdit(s => ({ ...s, firstName: e.target.value }))} style={FI()} /></div>
@@ -630,8 +654,8 @@ function SubscribersTab({ showToast }) {
             </tr></thead>
             <tbody>
               {shown.map(c => (
-                <tr key={c.id}>
-                  <td style={{ ...td, fontWeight: 700 }}>{c.email || "—"}</td>
+                <tr key={c.id} className="rh">
+                  <td style={{ ...td, fontWeight: 600 }}>{c.email || "—"}</td>
                   <td style={td}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</td>
                   <td style={td}><Pill>{c.status}</Pill></td>
                   <td style={td}>{c.country || "—"}</td>
@@ -643,13 +667,13 @@ function SubscribersTab({ showToast }) {
                       </span>
                     ) : "—"}
                   </td>
-                  <td style={{ ...td, color: C.inkMid, whiteSpace: "nowrap" }}>{fmtDate(c.createdAt)}</td>
+                  <td className="tnum" style={{ ...td, color: C.inkMid, whiteSpace: "nowrap" }}>{fmtDate(c.createdAt)}</td>
                   <td style={{ ...td, textAlign: "right" }}>
                     <button onClick={() => setEdit({
                       contactId: c.id, email: c.email, firstName: c.firstName, lastName: c.lastName,
                       country: c.country, city: c.city, tags: (c.tags || []).join(", "),
                       status: c.status === "unsubscribed" ? "unsubscribed" : "subscribed",
-                    })} style={{ ...btn(), padding: "5px 10px", fontSize: 11 }}>Edit</button>
+                    })} style={{ ...btn(), padding: "5px 12px", fontSize: 12, color: C.inkMid }}>Edit</button>
                   </td>
                 </tr>
               ))}

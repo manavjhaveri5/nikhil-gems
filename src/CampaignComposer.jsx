@@ -120,13 +120,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   };
 
   const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14 };
-  const lab = { fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
+  const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
 
   return (
     <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
       <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>📣 New-products campaign</div>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, color: C.ink, lineHeight: 1 }}>📣 New-products campaign</div>
           <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size} selected</div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Close</button>
@@ -189,7 +189,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               </div>
               <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
                 <button type="button" onClick={() => setDesignOpen(o => !o)}
-                  style={{ width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 800, color: C.ink, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8 }}>
+                  style={{ width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, color: C.ink, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ transform: designOpen ? "rotate(90deg)" : "none", transition: "transform .15s", fontSize: 10 }}>▸</span>
                   🎨 Design
                   <span style={{ fontWeight: 500, color: C.inkFaint, fontSize: 11 }}>
@@ -307,23 +307,23 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
             {/* Draft → test → send. Each step gates the next. */}
             <div style={{ ...card, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button onClick={doPreview} disabled={!products.length || !!busy}
-                style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 800, cursor: products.length ? "pointer" : "not-allowed", opacity: products.length ? 1 : .5 }}>
+                style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: products.length ? "pointer" : "not-allowed", opacity: products.length ? 1 : .5 }}>
                 {busy === "preview" ? "Rendering…" : "Preview"}
               </button>
               <button onClick={doCreate} disabled={!products.length || !subject || !senderName || configured === false || !!busy}
-                style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: (!products.length || !subject || !senderName || configured === false) ? .4 : 1 }}>
+                style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: (!products.length || !subject || !senderName || configured === false) ? .4 : 1 }}>
                 {busy === "create" ? "Creating…" : campaignId ? "Recreate draft" : "Create draft"}
               </button>
               {campaignId && <>
                 <input value={testTo} onChange={e => setTestTo(e.target.value)} placeholder="you@example.com" style={{ ...FI(), width: 190 }} />
                 <button onClick={doTest} disabled={!testTo || !!busy}
-                  style={{ background: C.tealBg, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 800, cursor: testTo ? "pointer" : "not-allowed", opacity: testTo ? 1 : .5 }}>
+                  style={{ background: C.tealBg, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: testTo ? "pointer" : "not-allowed", opacity: testTo ? 1 : .5 }}>
                   {busy === "test" ? "Sending…" : "Send test"}
                 </button>
                 <div style={{ flex: 1 }} />
                 <button onClick={doSend} disabled={!testedOk || !!busy}
                   title={testedOk ? "" : "Send yourself a test first"}
-                  style={{ background: testedOk ? C.red : C.card, color: testedOk ? "#fff" : C.inkFaint, border: `1px solid ${testedOk ? C.red : C.border}`, borderRadius: 9, padding: "10px 20px", fontSize: 12.5, fontWeight: 850, cursor: testedOk ? "pointer" : "not-allowed" }}>
+                  style={{ background: testedOk ? C.red : C.card, color: testedOk ? "#fff" : C.inkFaint, border: `1px solid ${testedOk ? C.red : C.border}`, borderRadius: 9, padding: "10px 20px", fontSize: 12.5, fontWeight: 700, cursor: testedOk ? "pointer" : "not-allowed" }}>
                   {busy === "send" ? "Sending…" : "Send to list →"}
                 </button>
               </>}
