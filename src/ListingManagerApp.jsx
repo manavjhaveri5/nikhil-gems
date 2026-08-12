@@ -2726,6 +2726,14 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...defaultNgDraft(o), ...(s[o.id] || {}), ...patch } }));
   const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
   const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
+  /* The "Shipping you paid" box writes into ngState, not the tracking draft. The
+     ship handlers were reading `draft.shipCost` off the tracking draft, where it
+     is always undefined — so `+undefined || 0` stamped every order shipped from
+     step 1 at ₹0, overwriting the figure the blur had just saved. */
+  const shipCostPatch = o => {
+    const entered = ngDraft(o).shipCost;
+    return { ship_cost: entered == null || entered === "" ? (o.ship_cost || "") : Math.max(0, +entered || 0) };
+  };
   const saveOrderShipCost = (order, value) => {
     const shipCost = value === "" ? "" : Math.max(0, +value || 0);
     updNg(order, { shipCost: value });
@@ -3193,7 +3201,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         tracking_code: trackingCode,
         tracking_number: trackingCode,
         carrier_name: normalizeCarrier(carrierName) || carrierName,
-        ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...shipCostPatch(o),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         ebay_completed_at: now(),
         _shipStepUndone: false,
@@ -3247,7 +3255,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         tracking_code: trackingCode,
         tracking_number: trackingCode,
         carrier_name: normalizeCarrier(carrierName) || carrierName,
-        ship_cost: draft.shipCost === "" ? (x.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...shipCostPatch(x),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         etsy_completed_at: now,
         _shipStepUndone: false,
@@ -3294,7 +3302,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         tracking_code: trackingCode || o.tracking_code || "",
         tracking_number: trackingCode || o.tracking_number || "",
         carrier_name: normalizeCarrier(carrierName) || carrierName,
-        ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...shipCostPatch(o),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         _shipStepUndone: false,
       });
