@@ -346,6 +346,20 @@ function nextPagePath(linkHeader) {
   }
 }
 
+/* A token minted before a scope was requested still works for everything else, so
+   Shopify answers only the affected call with a 403 naming the scope. That reads as a
+   dead end in the UI ("[API] This action requires merchant approval for read_customers
+   scope"), when the fix is simply to reconnect the store — so name the scope and say so. */
+function missingScope(err) {
+  const msg = typeof err === "string" ? err : JSON.stringify(err ?? "");
+  return /merchant approval for (\w+) scope/i.exec(msg)?.[1] || "";
+}
+const scopeErrorBody = (scope, what) => ({
+  error: `This store's Shopify token doesn't grant ${scope}, so ${what}. Reconnect the store in Listing Manager → Earth Ed. to grant it (the Shopify app also needs protected customer data access approved).`,
+  scopeMissing: true,
+  scope,
+});
+
 async function shopifyGetAll(sr, firstPath, listKey, maxPages = 12) {
   const rows = [];
   let path = firstPath;
@@ -383,10 +397,16 @@ export default async function handler(req, res) {
                    : process.env.SHOPIFY_CLIENT_ID;
     if (!clientId) return res.status(400).json({ error: `No Shopify client id configured (SHOPIFY_CLIENT_ID / SHOPIFY_${store_key === "atyahara" ? "ATY" : "EARTH"}_CLIENT_ID)` });
     // Match each store's app: Earth's ERP-2 app whitelists /api/shopify-auth (routed to
-    // /api/shopify by a rewrite) and only has product scopes; Atyahara's whitelists
-    // /api/shopify with order scopes. Requesting scopes the app lacks fails the authorize.
+    // /api/shopify by a rewrite); Atyahara's whitelists /api/shopify and adds order scopes.
+    // Requesting scopes the app lacks fails the authorize, so these must stay in step with
+    // the app's configured scopes in the Partner dashboard. Customer scopes are needed by
+    // the Omnisend approvals screen (read the signup list, write the `approved` tag) and are
+    // protected customer data — the app must also be approved for that, or the token comes
+    // back without them and reads 403 with "requires merchant approval for read_customers".
     const isEarth = store_key === "earth";
-    const scope = isEarth ? "read_products,write_products" : "read_products,write_products,read_orders,read_all_orders";
+    const scope = isEarth
+      ? "read_products,write_products,read_customers,write_customers"
+      : "read_products,write_products,read_orders,read_all_orders,read_customers,write_customers";
     const redirect = `${REDIRECT_BASE}${isEarth ? "/api/shopify-auth" : "/api/shopify"}`;
     const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&redirect_uri=${encodeURIComponent(redirect)}&state=erp`;
     return res.json({ success: true, url });
@@ -405,7 +425,11 @@ export default async function handler(req, res) {
     const qs = new URLSearchParams({ limit: "250", fields: "id,email,first_name,last_name,tags,state,created_at,orders_count,total_spent,accepts_marketing,email_marketing_consent,note" });
     if (body.query) qs.set("query", String(body.query));
     const result = await shopifyGetAll(sr, `/customers.json?${qs.toString()}`, "customers");
-    if (!result.ok) return res.status(400).json({ error: result.error });
+    if (!result.ok) {
+      const scope = missingScope(result.error);
+      if (scope) return res.status(403).json(scopeErrorBody(scope, "the customer list can't be read"));
+      return res.status(400).json({ error: result.error });
+    }
     const tagOf = c => String(c.tags || "").split(",").map(t => t.trim()).filter(Boolean);
     const rows = (result.rows || []).map(c => ({
       id: String(c.id),
@@ -434,14 +458,22 @@ export default async function handler(req, res) {
 
     // Shopify replaces the whole tag string, so read first and merge.
     const cur = await sr("GET", `/customers/${encodeURIComponent(id)}.json?fields=id,email,tags`);
-    if (!cur.ok) return res.status(cur.status || 400).json({ error: cur.error || "Customer not found" });
+    if (!cur.ok) {
+      const scope = missingScope(cur.error);
+      if (scope) return res.status(403).json(scopeErrorBody(scope, "the tag can't be written"));
+      return res.status(cur.status || 400).json({ error: cur.error || "Customer not found" });
+    }
     const existing = String(cur.data?.customer?.tags || "").split(",").map(t => t.trim()).filter(Boolean);
     const kept = existing.filter(t => !remove.has(t.toLowerCase()));
     const merged = [...kept];
     for (const t of add) if (!merged.some(x => x.toLowerCase() === t.toLowerCase())) merged.push(t);
 
     const r = await sr("PUT", `/customers/${encodeURIComponent(id)}.json`, { customer: { id, tags: merged.join(", ") } });
-    if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+    if (!r.ok) {
+      const scope = missingScope(r.error);
+      if (scope) return res.status(403).json(scopeErrorBody(scope, "the tag can't be written"));
+      return res.status(r.status || 400).json({ error: r.error });
+    }
     return res.json({ success: true, id, email: cur.data?.customer?.email || "", tags: merged });
   }
 

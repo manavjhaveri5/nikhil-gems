@@ -334,7 +334,11 @@ const shopApi = async payload => {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok || d.error) throw new Error(d.error || `Request failed (${r.status})`);
+  if (!r.ok || d.error) {
+    const e = new Error(d.error || `Request failed (${r.status})`);
+    e.data = d;                                    // carries scopeMissing so the UI can offer a reconnect
+    throw e;
+  }
   return d;
 };
 const hasApproveTag = c => (c.tags || []).some(t => String(t).toLowerCase() === APPROVE_TAG);
@@ -345,6 +349,7 @@ function ApprovalsTab({ showToast }) {
   const [omniTags, setOmniTags] = useState({});    // email → tags[] already in Omnisend
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [needScope, setNeedScope] = useState("");  // scope the saved token is missing, if any
   const [busy, setBusy] = useState({});            // customer id → true
   const [view, setView] = useState("pending");
   const [q, setQ] = useState("");
@@ -357,7 +362,7 @@ function ApprovalsTab({ showToast }) {
 
   const load = useCallback(async () => {
     if (!creds) return;
-    setLoading(true); setErr("");
+    setLoading(true); setErr(""); setNeedScope("");
     try {
       const d = await shopApi({ action: "list_customers", shopStore: creds.store, shopToken: creds.token });
       const customers = d.customers || [];
@@ -369,15 +374,25 @@ function ApprovalsTab({ showToast }) {
         for (const c of oc.contacts || []) if (c.email) map[c.email.toLowerCase()] = c.tags || [];
         setOmniTags(map);
       } catch {}
-    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+    } catch (e) {
+      if (e.data?.scopeMissing) setNeedScope(e.data.scope || "read_customers"); else setErr(e.message);
+    } finally { setLoading(false); }
   }, [creds]);
   useEffect(() => { if (creds) load(); }, [creds, load]);
+
+  // The saved token predates the customer scopes; re-running OAuth mints one that has them.
+  const reconnect = async () => {
+    try {
+      const d = await shopApi({ action: "oauth_url", store_key: "earth", shop: creds.store });
+      if (d.url) window.location.href = d.url;
+    } catch (e) { setErr(e.message); }
+  };
 
   const inOmnisend = c => omniTags[String(c.email || "").toLowerCase()];
   const omniApproved = c => (inOmnisend(c) || []).some(t => String(t).toLowerCase() === APPROVE_TAG);
 
   const approve = async (c, undo = false) => {
-    setBusy(b => ({ ...b, [c.id]: true })); setErr("");
+    setBusy(b => ({ ...b, [c.id]: true })); setErr(""); setNeedScope("");
     const done = [];
     try {
       await shopApi({
@@ -408,7 +423,7 @@ function ApprovalsTab({ showToast }) {
       }
       showToast?.(`${undo ? "Removed approval" : "Approved"} · ${done.join(" + ")}`);
     } catch (e) {
-      setErr(e.message);
+      if (e.data?.scopeMissing) setNeedScope(e.data.scope || "write_customers"); else setErr(e.message);
     } finally { setBusy(b => ({ ...b, [c.id]: false })); }
   };
 
@@ -451,6 +466,16 @@ function ApprovalsTab({ showToast }) {
           disabled={!shown.length} style={btn()}>⬇ CSV</button>
       </div>
 
+      {needScope && (
+        <div style={{ ...card, background: "#fff8e6", border: "1px solid #f0dfae", padding: "13px 15px", fontSize: 12.5, color: "#8a6d1a", lineHeight: 1.6, marginBottom: 12 }}>
+          <strong>Earth Editions' Shopify token doesn't include <code>{needScope}</code>.</strong> It was granted before this screen existed, so Shopify refuses the customer calls. Reconnect the store to mint a token that has them.
+          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button onClick={reconnect} style={{ ...btn(C.ink, "#fff"), padding: "6px 12px", fontSize: 11.5 }}>Reconnect Earth Editions</button>
+            <span style={{ fontSize: 11 }}>Customer data is a protected scope — if the reconnect still comes back without it, approve protected customer data access for the app in the Shopify Partner dashboard first.</span>
+          </div>
+        </div>
+      )}
+
       {err && <div style={{ ...card, borderColor: C.red, background: C.redBg, color: C.red, padding: "10px 13px", fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
 
       <div style={{ ...card, overflow: "hidden" }}>
@@ -489,7 +514,8 @@ function ApprovalsTab({ showToast }) {
               })}
               {!shown.length && !loading && (
                 <tr><td colSpan={6} style={{ ...td, textAlign: "center", color: C.inkFaint, padding: 34 }}>
-                  {view === "pending" ? "Nothing waiting for approval." : "No customers match."}
+                  {needScope ? "Customer list unavailable until the store is reconnected."
+                    : view === "pending" ? "Nothing waiting for approval." : "No customers match."}
                 </td></tr>
               )}
             </tbody>
