@@ -355,6 +355,28 @@ export default async function handler(req, res) {
       return res.json({ ok: true, created: false, email, tags: merged });
     }
 
+    /* Fire a custom event so an Omnisend automation can send a real email to one
+       person. Omnisend has no transactional endpoint — campaigns go to segments,
+       not individuals — so an event plus a one-step automation is how a single
+       welcome mail gets sent. The automation lives in Omnisend, which is also
+       what keeps the template, the unsubscribe footer and the open/click stats
+       out of the ERP. Note the event only appears in Omnisend's trigger dropdown
+       after it has fired at least once. */
+    if (action === "trigger_event") {
+      const email = String(body.email || "").trim();
+      const eventName = String(body.eventName || "").trim();
+      if (!email) return res.status(400).json({ error: "Email is required" });
+      if (!eventName) return res.status(400).json({ error: "eventName is required" });
+      const r = await omni("POST", "/events", {
+        eventName: eventName.slice(0, 100),
+        origin: "api",
+        contact: { email },
+        ...(body.properties && typeof body.properties === "object" ? { properties: body.properties } : {}),
+      });
+      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+      return res.json({ ok: true, email, eventName });
+    }
+
     /* Preview only — render the same HTML the campaign would use. */
     if (action === "preview") {
       return res.json({ ok: true, html: buildCampaignHtml(body) });

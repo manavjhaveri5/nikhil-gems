@@ -351,15 +351,23 @@ function CampaignsTab({ showToast }) {
 
 /* ── Approvals ─────────────────────────────────────────────────────────────────
    Mailing-list signups land as Shopify customers with no trade access. Approving
-   is two writes that belong together: the storefront reads a tag on the Shopify
-   customer to unlock prices and login, and Omnisend reads a tag on the contact to
-   place them in the audience. Doing one without the other is the failure mode
-   this screen exists to prevent, so both are reported per row.
+   is three steps that belong together: the storefront reads a tag on the Shopify
+   customer to unlock prices and login, Omnisend reads a tag on the contact to
+   place them in the audience, and a custom event tells Omnisend to send the
+   welcome mail. A half-done approval is the failure mode this screen exists to
+   prevent, so each step is reported per row.
+
+   The email itself is not sent from here. Omnisend has no transactional endpoint,
+   and even if it did, the template, the unsubscribe footer and the open rates
+   belong in the mail tool — so the ERP fires WELCOME_EVENT and an automation in
+   Omnisend does the sending. No automation there means no email: the approval
+   still completes, which is why a failed event is reported but never fatal.
 
    Shopify credentials live in Supabase per store, not in the function's env, so
    they are read here and passed with the request — the same path the Listing
    Manager uses. */
 const APPROVE_TAG = "approved";
+const WELCOME_EVENT = "wholesale_approved";
 const SHOP_CREDS_KEY = "ng-shopify-creds-earth";
 
 const shopApi = async payload => {
@@ -376,6 +384,7 @@ function ApprovalsTab({ showToast }) {
   const [creds, setCreds] = useState(undefined);   // undefined = loading, null = missing
   const [rows, setRows] = useState([]);
   const [omniTags, setOmniTags] = useState({});    // email → tags[] already in Omnisend
+  const [mailed, setMailed] = useState({});        // email → welcome event fired this session
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState({});            // customer id → true
@@ -434,6 +443,24 @@ function ApprovalsTab({ showToast }) {
           });
           done.push(t.created ? "added to Omnisend" : "Omnisend");
           setOmniTags(m => ({ ...m, [c.email.toLowerCase()]: t.tags || [] }));
+
+          // Approving is what earns the welcome mail, so the event only fires on
+          // the way in. Un-approving can't unsend anything, so it fires nothing.
+          if (!undo) {
+            try {
+              await api({
+                action: "trigger_event", eventName: WELCOME_EVENT, email: c.email,
+                properties: {
+                  firstName: firstName || "", lastName: rest.join(" "),
+                  shopifyCustomerId: String(c.id), approvedAt: new Date().toISOString(),
+                },
+              });
+              done.push("welcome email");
+              setMailed(m => ({ ...m, [c.email.toLowerCase()]: true }));
+            } catch (e) {
+              setErr(`Approved and tagged, but the welcome email didn't trigger for ${c.email}: ${e.message}`);
+            }
+          }
         } catch (e) {
           // Shopify already succeeded — say exactly what is left undone.
           setErr(`Tagged in Shopify, but Omnisend failed for ${c.email}: ${e.message}`);
@@ -463,7 +490,7 @@ function ApprovalsTab({ showToast }) {
   return (
     <>
       <div style={{ padding: "0 2px", marginBottom: 14, fontSize: 12, color: C.inkFaint, lineHeight: 1.6, maxWidth: 760 }}>
-        Approving adds the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{APPROVE_TAG}</code> tag to the Shopify customer — which unlocks trade prices and account login — and the same tag to their Omnisend contact, in one click.
+        Approving adds the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{APPROVE_TAG}</code> tag to the Shopify customer — which unlocks trade prices and account login — adds the same tag to their Omnisend contact, and fires the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{WELCOME_EVENT}</code> event so Omnisend sends the welcome email. All three in one click.
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
@@ -502,6 +529,9 @@ function ApprovalsTab({ showToast }) {
                         : omniApproved(c)
                           ? <span style={{ fontSize: 11.5, fontWeight: 600, color: C.green }}>✓ tagged</span>
                           : <span style={{ fontSize: 11.5, fontWeight: 600, color: C.amber }}>untagged</span>}
+                      {/* Independent of the tag state: the mail either fired or it didn't. */}
+                      {mailed[String(c.email || "").toLowerCase()] &&
+                        <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>✉ welcome sent</div>}
                     </td>
                     <td className="tnum" style={{ ...td, color: C.inkMid }}>{c.ordersCount || 0}</td>
                     <td className="tnum" style={{ ...td, color: C.inkMid, whiteSpace: "nowrap" }}>{fmtDate(c.createdAt)}</td>
