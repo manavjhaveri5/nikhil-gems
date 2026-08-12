@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
-import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, lotQtyPairs, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
+import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, lotQtyPairs, lotBasisFor, LOT_RATE_BASES, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
@@ -6945,12 +6945,16 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         if(again.ok){d=d2;showToast("Listing was gone on Shopify — created a fresh one");}
         else throw new Error(d2.error||d.error||"Shopify error");
       }else if(!res.ok)throw new Error(d.error||"Shopify error");
-      /* "Keep this rate" is the whole opt-in for weight pricing — derive the rate
-         from the price just entered against the lot's current weight, so there is
-         no second number to type. */
-      const lotKg=resolveLotKg(itemToPush);
-      const lotPatch=keepRate&&lotKg>0&&+customPrice>0
-        ? {pricingMode:"lot_by_weight",pricePerKg:String(Math.round((+customPrice/lotKg)*100)/100),lotMinPrice:itemToPush.lotMinPrice||"25"}
+      /* "Keep this rate" is the whole opt-in for lot pricing — the rate comes from
+         the price just entered against the lot's current size, so there is no second
+         number to type. `keepRate` carries the basis the modal was showing (per kg
+         or per piece); a bare truthy value keeps the original weight behaviour. */
+      const basis=keepRate&&typeof keepRate==="object"
+        ? keepRate
+        : (keepRate?{pricingMode:"lot_by_weight",qty:resolveLotKg(itemToPush)}:null);
+      const basisField=basis?.pricingMode==="lot_by_count"?"pricePerPcs":"pricePerKg";
+      const lotPatch=basis&&basis.qty>0&&+customPrice>0
+        ? {pricingMode:basis.pricingMode,[basisField]:String(Math.round((+customPrice/basis.qty)*100)/100),lotMinPrice:itemToPush.lotMinPrice||"25"}
         : (keepRate===false?{pricingMode:""}:{});
       const upd=stock.map(s=>s.id===itemToPush.id?{...s,...lotPatch,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
       setStock(upd);
@@ -7390,6 +7394,22 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         const qtyPairs=lotQtyPairs(pushItem);
         const primary=resolvePrimaryQty(pushItem,shopifyModal.splitUnit);
         const lotVariants=buildLotVariants(pushItem,splits,shopifyModal.price,shopifyModal.splitUnit);
+        /* The kept rate is charged in whatever unit the lot is being sold in. Rate
+           it per kilo while offering it per piece and the re-price arithmetic runs
+           on a number nobody in the transaction is thinking about. */
+        const rateBasis=(()=>{
+          const byCount=primary?.unit==="pcs";
+          const qty=byCount?resolveLotPcs(pushItem):resolveLotKg(pushItem);
+          if(qty==null||!(qty>0))return null;
+          const price=+shopifyModal.price;
+          return{
+            pricingMode:byCount?"lot_by_count":"lot_by_weight",
+            label:byCount?"pc":"kg",
+            qtyLabel:byCount?`${fmtStockQtyValue(qty)} pcs`:`${qty} kg`,
+            qty,
+            rate:price>0?Math.round((price/qty)*100)/100:null,
+          };
+        })();
         const toggleSplit=key=>setShopifyModal(m=>{
           const cur=m.splits||["full"];
           // Full lot is the listing itself — there is always something to buy.
@@ -7438,26 +7458,27 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <input type="number" value={shopifyModal.price} onChange={e=>setShopifyModal(m=>({...m,price:e.target.value}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box"}} placeholder="0.00"/>
 
             {(() => {
-              /* You price the lot as a whole, so the per-kg rate is derived rather
-                 than asked for. Keeping it is what lets the listing re-price itself
-                 as the lot shrinks. */
-              const kg = resolveLotKg(selected);
-              if (kg == null || !(kg > 0)) return null;
-              const rate = +shopifyModal.price > 0 ? Math.round((+shopifyModal.price / kg) * 100) / 100 : null;
+              /* You price the lot as a whole, so the rate is derived rather than
+                 asked for. Keeping it is what lets the listing re-price itself as
+                 the lot shrinks. */
+              if (!rateBasis) return null;
+              const {rate,label,qtyLabel} = rateBasis;
               const keep = !!shopifyModal.keepRate;
+              const byCount = label === "pc";
               return (
                 <div style={{background:keep?"#F3F8F5":C.card,border:`1px solid ${keep?"#2A684544":C.border}`,borderRadius:8,padding:"9px 11px",marginBottom:12,marginTop:-4}}>
                   <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                     <input type="checkbox" checked={keep} onChange={e=>setShopifyModal(m=>({...m,keepRate:e.target.checked}))}/>
                     <span style={{fontSize:12,fontWeight:700,color:keep?"#2A6845":C.inkMid}}>
-                      ⚖️ Keep this rate as the lot sells
-                      {rate!=null&&<span style={{fontWeight:600,color:C.inkFaint}}> · ${rate}/kg</span>}
+                      {byCount?"🧮":"⚖️"} Keep this rate as the lot sells
+                      {rate!=null&&<span style={{fontWeight:600,color:C.inkFaint}}> · ${rate}/{label}</span>}
                     </span>
                   </label>
                   <div style={{fontSize:10,color:C.inkFaint,marginTop:6,lineHeight:1.5}}>
                     {keep
-                      ? `Priced by weight. Sell a piece and ${kg} kg becomes less, so the listing re-prices itself at $${rate??"—"}/kg.`
+                      ? `Priced ${byCount?"by the piece":"by weight"}. Sell some and ${qtyLabel} becomes less, so the listing re-prices itself at $${rate??"—"}/${label}.`
                       : "Fixed price — it stays at this figure however much of the lot sells."}
+                    {qtyPairs.length>1&&<> Follows the <b>Sell by</b> unit below.</>}
                   </div>
                 </div>
               );
@@ -7558,7 +7579,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 const itemToPush={...s,...overrides};
                 setShopifyModal(null);
                 if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate,lotVariants);
+                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate&&rateBasis?rateBasis:false,lotVariants);
               }} style={{flex:1,background:"#008060",border:"none",color:"#fff",fontWeight:700,fontSize:13,padding:"11px",borderRadius:8,cursor:"pointer"}}>Push →</button>
               <button onClick={()=>setShopifyModal(null)} style={{background:"none",border:`1px solid ${C.border}`,fontSize:13,padding:"11px 18px",borderRadius:8,cursor:"pointer",color:C.inkFaint}}>Cancel</button>
             </div>
@@ -8677,11 +8698,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               {/* ── QUANTITIES ── */}
               <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px"}}>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.blue,borderRadius:2}}/>{t("Quantities & Cost")}</div>
+                {/* The unit selects were 60px wide, which is the field padding plus
+                    the native dropdown arrow and about two characters — "gm" and
+                    "pcs" came out as "g" and "p". Wider box, tighter padding. */}
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto 1fr",gap:10,alignItems:"end"}}>
                   <Field label="Qty — Primary">
                     <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6}}>
                       <input type="number" value={form.qty||""} onChange={e=>setForm(f=>({...f,qty:e.target.value}))} style={FI} placeholder="0"/>
-                      <select value={form.unit||"pcs"} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} style={{...FI,width:60,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
+                      <select value={form.unit||"pcs"} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} style={{...FI,width:78,padding:"8px 6px",cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
                     </div>
                   </Field>
                   <button type="button" title="Swap primary and secondary quantities" onClick={()=>setForm(f=>({...f,qty:f.qty2||"",unit:f.unit2||"pcs",qty2:f.qty||"",unit2:f.unit||"pcs"}))} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:16,color:C.inkMid,marginBottom:1,flexShrink:0}}>⇄</button>
@@ -8691,7 +8715,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   </span>}>
                     <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6}}>
                       <input type="number" value={form.qty2||""} onChange={e=>{const q=e.target.value;const u=form.unit2||"kg";const wGm=q?(u==="kg"?+q*1000:u==="gm"?+q:u==="ct"?+q*0.2:undefined):undefined;setForm(f=>({...f,qty2:q,weightGm:wGm??f.weightGm}));}} style={FI} placeholder="none"/>
-                      <select value={form.unit2||"kg"} onChange={e=>{const u=e.target.value;const q=+form.qty2||0;const wGm=q?(u==="kg"?q*1000:u==="gm"?q:u==="ct"?q*0.2:undefined):undefined;setForm(f=>({...f,unit2:u,weightGm:wGm??f.weightGm}));}} style={{...FI,width:60,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
+                      <select value={form.unit2||"kg"} onChange={e=>{const u=e.target.value;const q=+form.qty2||0;const wGm=q?(u==="kg"?q*1000:u==="gm"?q:u==="ct"?q*0.2:undefined):undefined;setForm(f=>({...f,unit2:u,weightGm:wGm??f.weightGm}));}} style={{...FI,width:78,padding:"8px 6px",cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
                     </div>
                   </Field>
                   <Field label="Cost Price (₹)"><input type="number" value={form.costPrice||""} onChange={e=>setForm(f=>({...f,costPrice:e.target.value}))} style={FI} placeholder="0.00"/></Field>
@@ -8705,25 +8729,53 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 {(() => {
                   const kg = resolveLotKg(form);
                   const pcs = resolveLotPcs(form);
-                  const on = form.pricingMode === "lot_by_weight";
-                  if (kg == null && !on) return (
+                  const basis = lotBasisFor(form.pricingMode);
+                  const on = !!basis;
+                  if (kg == null && pcs == null && !on) return (
                     <div style={{fontSize:10.5,color:C.inkFaint,marginTop:12,lineHeight:1.5}}>
-                      Lot pricing needs a weight on this card — add a kg or gm quantity to price it by the kilo.
+                      Lot pricing needs a quantity on this card — add a kg, gm or pcs figure to price it by the unit.
                     </div>
                   );
+                  // Pieces are what a buyer picks, so a card with a count leads with it.
+                  const qtyFor = m => (m === "lot_by_count" ? pcs : kg);
+                  const mode = basis?.mode || (pcs != null && pcs > 0 ? "lot_by_count" : "lot_by_weight");
+                  const b = lotBasisFor(mode);
+                  const seedRate = (m, f) => {
+                    const q = m === "lot_by_count" ? resolveLotPcs(f) : resolveLotKg(f);
+                    return +f.listPrice > 0 && q > 0 ? String(Math.round((+f.listPrice / q) * 100) / 100) : "";
+                  };
                   const sync = on ? buildLotSync(form) : null;
                   return (
                     <div style={{marginTop:14,background:on?"#F3F8F5":C.card,border:`1px solid ${on?"#2A684544":C.border}`,borderRadius:9,padding:"11px 13px"}}>
                       <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                         <input type="checkbox" checked={on}
-                          onChange={e=>setForm(f=>({...f,pricingMode:e.target.checked?"lot_by_weight":"",
-                            pricePerKg:e.target.checked&&!f.pricePerKg&&+f.listPrice>0&&resolveLotKg(f)>0?String(Math.round((+f.listPrice/resolveLotKg(f))*100)/100):(f.pricePerKg||""),
+                          onChange={e=>setForm(f=>({...f,pricingMode:e.target.checked?mode:"",
+                            [b.field]:e.target.checked&&!f[b.field]?seedRate(mode,f):(f[b.field]||""),
                             lotMinPrice:f.lotMinPrice||"25"}))}/>
-                        <span style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid}}>⚖️ Price this lot by weight on Earth Editions</span>
+                        <span style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid}}>
+                          {mode==="lot_by_count"?"🧮":"⚖️"} Price this lot by the {b.label==="pc"?"piece":"kilo"} on Earth Editions
+                        </span>
                       </label>
                       {on && (<>
+                        {kg != null && pcs != null && (
+                          /* Costed per gram, sold per piece — the card has to be able
+                             to say which one the rate is charged in. */
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:10,flexWrap:"wrap"}}>
+                            <span style={{fontSize:10,color:C.inkFaint,fontWeight:700,textTransform:"uppercase",letterSpacing:.4}}>Rate per</span>
+                            {LOT_RATE_BASES.map(x=>{
+                              const active=mode===x.mode;
+                              return(
+                                <button key={x.mode} type="button" disabled={!(qtyFor(x.mode)>0)}
+                                  onClick={()=>setForm(f=>({...f,pricingMode:x.mode,[x.field]:f[x.field]||seedRate(x.mode,f)}))}
+                                  style={{background:active?"#2A6845":C.surface,color:active?"#fff":C.ink,border:`1px solid ${active?"#2A6845":C.border}`,borderRadius:6,padding:"4px 9px",fontSize:11,fontWeight:700,cursor:qtyFor(x.mode)>0?"pointer":"default",opacity:qtyFor(x.mode)>0?1:.45,fontFamily:"inherit"}}>
+                                  {x.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                         <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:10,marginTop:11}}>
-                          <Field label="Price / kg (USD)"><input type="number" value={form.pricePerKg||""} onChange={e=>setForm(f=>({...f,pricePerKg:e.target.value}))} style={FI} placeholder="125"/></Field>
+                          <Field label={`Price / ${b.label} (USD)`}><input type="number" value={form[b.field]||""} onChange={e=>setForm(f=>({...f,[b.field]:e.target.value}))} style={FI} placeholder={b.label==="pc"?"4":"125"}/></Field>
                           <Field label="Min price (USD)"><input type="number" value={form.lotMinPrice||""} onChange={e=>setForm(f=>({...f,lotMinPrice:e.target.value}))} style={FI} placeholder="25"/></Field>
                           <Field label="When sold out">
                             <select value={form.shopifySoldOutMode||"draft"} onChange={e=>setForm(f=>({...f,shopifySoldOutMode:e.target.value}))} style={{...FI,cursor:"pointer"}}>
@@ -8746,7 +8798,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           <div style={{fontSize:16,fontWeight:800,color:sync.status==="draft"?C.red:"#2A6845"}}>
                             {sync.price!=null?`$${sync.price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—"}
                             <span style={{fontSize:10.5,fontWeight:600,color:C.inkFaint,marginLeft:8}}>
-                              {kg!=null?`${kg} kg`:""}{pcs!=null?` · ${pcs} pcs`:""}{sync.rate?` @ $${sync.rate}/kg`:""}
+                              {kg!=null?`${kg} kg`:""}{pcs!=null?` · ${pcs} pcs`:""}{sync.rate?` @ $${sync.rate}/${sync.rateUnit||"kg"}`:""}
                             </span>
                           </div>
                           {sync.status==="draft"&&(
