@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
-import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
+import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, lotQtyPairs, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
@@ -7377,8 +7377,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           return next;
         });
         const splits=shopifyModal.splits||["full"];
-        const primary=resolvePrimaryQty(pushItem);
-        const lotVariants=buildLotVariants(pushItem,splits,shopifyModal.price);
+        const qtyPairs=lotQtyPairs(pushItem);
+        const primary=resolvePrimaryQty(pushItem,shopifyModal.splitUnit);
+        const lotVariants=buildLotVariants(pushItem,splits,shopifyModal.price,shopifyModal.splitUnit);
         const toggleSplit=key=>setShopifyModal(m=>{
           const cur=m.splits||["full"];
           // Full lot is the listing itself — there is always something to buy.
@@ -7467,6 +7468,23 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               return(
                 <div style={{background:on?"#F3F8F5":C.card,border:`1px solid ${on?"#2A684544":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:16}}>
                   <div style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid,marginBottom:8}}>📦 Let buyers take part of the lot</div>
+                  {qtyPairs.length>1&&(
+                    /* Costed in one unit, bought in another — 940 gm of hearts is
+                       117 pieces to whoever is ordering. The sizes below follow
+                       whichever is picked here. */
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:9,flexWrap:"wrap"}}>
+                      <span style={{fontSize:10.5,color:C.inkFaint,fontWeight:700,textTransform:"uppercase",letterSpacing:.4}}>Sell by</span>
+                      {qtyPairs.map(p=>{
+                        const active=primary?.unit===p.unit;
+                        return(
+                          <button key={p.unit} type="button" onClick={()=>setShopifyModal(m=>({...m,splitUnit:p.unit}))}
+                            style={{background:active?"#2A6845":C.surface,color:active?"#fff":C.ink,border:`1px solid ${active?"#2A6845":C.border}`,borderRadius:6,padding:"4px 9px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                            {fmtStockQtyValue(p.qty)} {p.unit}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                     {LOT_SPLITS.map(def=>{
                       const picked=def.key==="full"||splits.includes(def.key);
