@@ -2,6 +2,11 @@ export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 // ── Shopify OAuth callback (GET /api/shopify?code=xxx&shop=xxx) ───────────────
 const REDIRECT_BASE = "https://project-nine-tan-22.vercel.app";
+
+// Earth Editions' ERP-2 app. Kept identical to the Stock module's own connect button so
+// the two entry points mint interchangeable tokens — a token from one is used by every
+// screen. The customer scopes are what the Omnisend approvals tab reads and writes.
+const EARTH_SCOPES = "write_products,read_products,write_inventory,read_inventory,read_locations,read_all_orders,read_customers,write_customers,write_orders,read_orders";
 async function handleOAuthCallback(req, res) {
   const { code, shop, error } = req.query;
   const redir = (err) => res.redirect(`${REDIRECT_BASE}/#shopify-error=${encodeURIComponent(err)}`);
@@ -27,7 +32,11 @@ async function handleOAuthCallback(req, res) {
   catch { return redir(`Shopify returned non-JSON (${r.status}): ${text.slice(0, 200)}`); }
   if (!data.access_token) return redir(data.error_description || data.error || JSON.stringify(data));
   const token = data.access_token;
-  return res.redirect(`${REDIRECT_BASE}/#shopify-auth=${encodeURIComponent(token)}&shopify-shop=${encodeURIComponent(shop)}`);
+  // Shopify grants what the app is approved for, which can be less than was asked for
+  // (protected customer data needs its own approval). Carry the granted list back so a
+  // screen can say "reconnected, still no read_customers" instead of failing later.
+  const granted = String(data.scope || "");
+  return res.redirect(`${REDIRECT_BASE}/#shopify-auth=${encodeURIComponent(token)}&shopify-shop=${encodeURIComponent(shop)}&shopify-scope=${encodeURIComponent(granted)}`);
 }
 
 async function pushVideo(shop, token, productId, videoUrl) {
@@ -397,16 +406,13 @@ export default async function handler(req, res) {
                    : process.env.SHOPIFY_CLIENT_ID;
     if (!clientId) return res.status(400).json({ error: `No Shopify client id configured (SHOPIFY_CLIENT_ID / SHOPIFY_${store_key === "atyahara" ? "ATY" : "EARTH"}_CLIENT_ID)` });
     // Match each store's app: Earth's ERP-2 app whitelists /api/shopify-auth (routed to
-    // /api/shopify by a rewrite); Atyahara's whitelists /api/shopify and adds order scopes.
-    // Requesting scopes the app lacks fails the authorize, so these must stay in step with
-    // the app's configured scopes in the Partner dashboard. Customer scopes are needed by
-    // the Omnisend approvals screen (read the signup list, write the `approved` tag) and are
-    // protected customer data — the app must also be approved for that, or the token comes
-    // back without them and reads 403 with "requires merchant approval for read_customers".
+    // /api/shopify by a rewrite); Atyahara's whitelists /api/shopify and has order scopes.
+    // Requesting scopes the app lacks fails the authorize, so these stay in step with each
+    // app's configured scopes — Earth mirrors the Stock module's own ERP-2 connect button
+    // (EARTH_SCOPES), which is the same app and already asks for the customer scopes the
+    // Omnisend approvals screen needs. Atyahara is a different app and is left alone.
     const isEarth = store_key === "earth";
-    const scope = isEarth
-      ? "read_products,write_products,read_customers,write_customers"
-      : "read_products,write_products,read_orders,read_all_orders,read_customers,write_customers";
+    const scope = isEarth ? EARTH_SCOPES : "read_products,write_products,read_orders,read_all_orders";
     const redirect = `${REDIRECT_BASE}${isEarth ? "/api/shopify-auth" : "/api/shopify"}`;
     const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&redirect_uri=${encodeURIComponent(redirect)}&state=erp`;
     return res.json({ success: true, url });

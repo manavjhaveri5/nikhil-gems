@@ -388,6 +388,12 @@ function ApprovalsTab({ showToast }) {
     } catch (e) { setErr(e.message); }
   };
 
+  // A token saved since the callback started recording them carries its granted scopes.
+  // If the scope is missing from a list that exists, the merchant was asked and refused
+  // (or the app isn't approved for protected customer data) — a different fix to a stale token.
+  const refused = !!needScope && !!creds?.scopes
+    && !String(creds.scopes).split(",").map(s => s.trim()).includes(needScope);
+
   const inOmnisend = c => omniTags[String(c.email || "").toLowerCase()];
   const omniApproved = c => (inOmnisend(c) || []).some(t => String(t).toLowerCase() === APPROVE_TAG);
 
@@ -468,10 +474,14 @@ function ApprovalsTab({ showToast }) {
 
       {needScope && (
         <div style={{ ...card, background: "#fff8e6", border: "1px solid #f0dfae", padding: "13px 15px", fontSize: 12.5, color: "#8a6d1a", lineHeight: 1.6, marginBottom: 12 }}>
-          <strong>Earth Editions' Shopify token doesn't include <code>{needScope}</code>.</strong> It was granted before this screen existed, so Shopify refuses the customer calls. Reconnect the store to mint a token that has them.
+          <strong>Earth Editions' Shopify token doesn't include <code>{needScope}</code>.</strong>{" "}
+          {/* A reconnect that already came back without the scope means Shopify withheld it,
+              so sending them round the same loop again would waste their time. */}
+          {refused
+            ? <>The last reconnect asked for it and Shopify didn't grant it — customer data is protected, so the ERP-2 app needs <strong>protected customer data access</strong> approved in the Shopify Partner dashboard. Do that, then reconnect again.</>
+            : <>Shopify refuses the customer calls until the store is reconnected with the customer scopes.</>}
           <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button onClick={reconnect} style={{ ...btn(C.ink, "#fff"), padding: "6px 12px", fontSize: 11.5 }}>Reconnect Earth Editions</button>
-            <span style={{ fontSize: 11 }}>Customer data is a protected scope — if the reconnect still comes back without it, approve protected customer data access for the app in the Shopify Partner dashboard first.</span>
           </div>
         </div>
       )}

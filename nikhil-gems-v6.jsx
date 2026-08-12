@@ -18638,12 +18638,15 @@ export default function Root({onSignOut}){
       const params=new URLSearchParams(hash.replace(/^#/,""));
       const token=params.get("shopify-auth");
       const shop=params.get("shopify-shop");
+      const scopes=params.get("shopify-scope")||"";
       if(token&&shop){
         // Save ONLY to the per-store slot. Writing the shared legacy slot too meant
         // reconnecting one store clobbered the other's creds there — so a store is
         // isolated to ng-shopify-creds-<store> and never overwrites the shared slot.
+        // Keep the granted scope list with the token: screens that need a scope the
+        // merchant never approved can say so instead of surfacing a bare 403 later.
         const storeKey=/7b7b96-29/.test(shop)?"atyahara":"earth";
-        saveK(`ng-shopify-creds-${storeKey}`,{store:shop,token}).then(()=>{
+        saveK(`ng-shopify-creds-${storeKey}`,{store:shop,token,scopes}).then(()=>{
           window.history.replaceState(null,"",window.location.pathname);
           // Navigate to stock so user can push
           setMod("stock");setScreen("app");localStorage.setItem("ng-last-mod","stock");
