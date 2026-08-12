@@ -5488,16 +5488,20 @@ function EtsyLiveView({ onCrossPost }) {
     if (!name) return;
     setLibSave(s => ({ ...s, saving: true }));
     try {
-      const current = (await loadK(IMG_KEY)) || [];
       const entries = libSave.urls.map(url => ({
         id: uid(), name, category, notes: libSave.notes.trim(),
         imageUrl: url, mediaType: "image", size: 0,
         createdAt: new Date().toISOString(),
         source: `etsy-listing-${editL?.listing_id || ""}`,
       }));
-      const next = [...entries, ...current];
-      await saveK(IMG_KEY, next);
-      setLibEntries(next);
+      /* upsertItemK, not saveK of the whole array: it appends the row server-side
+         and — the part that was missing — announces the change, so the Image
+         Library screen and the stock photo picker pick it up instead of sitting on
+         a copy loaded before the save. Writing the array back did neither, which is
+         why a saved photo seemed to vanish. */
+      let next = null;
+      for (const entry of entries) next = await upsertItemK(IMG_KEY, entry, { prepend: true });
+      setLibEntries(Array.isArray(next) ? next : await loadKFresh(IMG_KEY));
       setLibSave(null);
       showToast(`✓ ${entries.length} photo${entries.length !== 1 ? "s" : ""} saved to the library`);
     } catch (e) {

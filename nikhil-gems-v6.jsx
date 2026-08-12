@@ -6668,7 +6668,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     }
     return out;
   },[libraryEntries,stock]);
-  const openPhotoLibrary=()=>setPhotoLibrary({q:form?.material||"",src:"all",sel:[]});
+  const openPhotoLibrary=()=>{
+    setPhotoLibrary({q:form?.material||"",src:"all",sel:[]});
+    // Photos get filed from Listing Manager and from other machines, so the moment
+    // the picker opens is the moment to go and look rather than trust what was
+    // loaded when this screen mounted.
+    loadKFresh(IMAGE_LIBRARY_KEY).then(d=>{if(Array.isArray(d))setLibraryEntries(d);}).catch(()=>{});
+  };
   const addPhotosFromLibrary=()=>{
     const picked=(photoLibrary?.sel||[]).filter(Boolean);
     if(!picked.length){setPhotoLibrary(null);return;}
