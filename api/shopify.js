@@ -385,8 +385,12 @@ export default async function handler(req, res) {
     // Match each store's app: Earth's ERP-2 app whitelists /api/shopify-auth (routed to
     // /api/shopify by a rewrite) and only has product scopes; Atyahara's whitelists
     // /api/shopify with order scopes. Requesting scopes the app lacks fails the authorize.
+    // Earth also needs customer scopes for the Omnisend approvals screen (read the
+    // list, write the `approved` tag). These are protected customer data, so the
+    // ERP-2 app must have them enabled in the Partner Dashboard — otherwise the
+    // authorize below is rejected before the merchant ever sees the consent screen.
     const isEarth = store_key === "earth";
-    const scope = isEarth ? "read_products,write_products" : "read_products,write_products,read_orders,read_all_orders";
+    const scope = isEarth ? "read_products,write_products,read_customers,write_customers" : "read_products,write_products,read_orders,read_all_orders";
     const redirect = `${REDIRECT_BASE}${isEarth ? "/api/shopify-auth" : "/api/shopify"}`;
     const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&redirect_uri=${encodeURIComponent(redirect)}&state=erp`;
     return res.json({ success: true, url });
@@ -401,11 +405,19 @@ export default async function handler(req, res) {
      Mailing-list signups arrive as Shopify customers. A tag on the customer is
      what the storefront checks to unlock trade prices and account login, so
      approving is a tag write — never a delete, and existing tags are preserved. */
+  // Customers are protected data: a token issued before the customer scopes were
+  // requested fails with Shopify's terse "requires merchant approval" line, which
+  // reads like a Shopify-side block rather than "this store needs reconnecting".
+  const customerScopeError = raw =>
+    /merchant approval|read_customers|write_customers|access denied/i.test(String(raw || ""))
+      ? "This store's Shopify connection doesn't include customer access. Reconnect Earth Ed. in Listing Manager to grant it (the ERP-2 app needs read_customers/write_customers and protected customer data access enabled first)."
+      : raw;
+
   if (action === "list_customers") {
     const qs = new URLSearchParams({ limit: "250", fields: "id,email,first_name,last_name,tags,state,created_at,orders_count,total_spent,accepts_marketing,email_marketing_consent,note" });
     if (body.query) qs.set("query", String(body.query));
     const result = await shopifyGetAll(sr, `/customers.json?${qs.toString()}`, "customers");
-    if (!result.ok) return res.status(400).json({ error: result.error });
+    if (!result.ok) return res.status(400).json({ error: customerScopeError(result.error), scopeMissing: customerScopeError(result.error) !== result.error });
     const tagOf = c => String(c.tags || "").split(",").map(t => t.trim()).filter(Boolean);
     const rows = (result.rows || []).map(c => ({
       id: String(c.id),
@@ -434,14 +446,14 @@ export default async function handler(req, res) {
 
     // Shopify replaces the whole tag string, so read first and merge.
     const cur = await sr("GET", `/customers/${encodeURIComponent(id)}.json?fields=id,email,tags`);
-    if (!cur.ok) return res.status(cur.status || 400).json({ error: cur.error || "Customer not found" });
+    if (!cur.ok) return res.status(cur.status || 400).json({ error: customerScopeError(cur.error) || "Customer not found" });
     const existing = String(cur.data?.customer?.tags || "").split(",").map(t => t.trim()).filter(Boolean);
     const kept = existing.filter(t => !remove.has(t.toLowerCase()));
     const merged = [...kept];
     for (const t of add) if (!merged.some(x => x.toLowerCase() === t.toLowerCase())) merged.push(t);
 
     const r = await sr("PUT", `/customers/${encodeURIComponent(id)}.json`, { customer: { id, tags: merged.join(", ") } });
-    if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+    if (!r.ok) return res.status(r.status || 400).json({ error: customerScopeError(r.error) });
     return res.json({ success: true, id, email: cur.data?.customer?.email || "", tags: merged });
   }
 
