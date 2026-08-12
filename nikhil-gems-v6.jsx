@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
-import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
+import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
@@ -6855,7 +6855,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     setBulkShopify({items:sel,connected,storeKey,deal:{enabled:true,days:7,customDate:""},running:false,done:false,results:[],error:""});
   };
 
-  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal,keepRate)=>{
+  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal,keepRate,lotVariants)=>{
     setShopifyPushing(true);
     const rawItem=itemOverride||selected;
     /* A product id only exists on the store it was created against. If this push
@@ -6868,7 +6868,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       if(!creds?.store||!creds?.token)throw new Error("Shopify isn't connected — tap reconnect and authorise the store");
       const res=await fetch("/api/shopify",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice}),
+        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[]}),
       });
       let d=await res.json();
       /* A stored product id survives the product being deleted on Shopify, and
@@ -6877,7 +6877,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       if(!res.ok&&itemToPush?.shopifyProductId&&/not found/i.test(String(d.error||""))){
         const again=await fetch("/api/shopify",{
           method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({action:"create",item:{...itemToPush,shopifyProductId:""},shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice}),
+          body:JSON.stringify({action:"create",item:{...itemToPush,shopifyProductId:""},shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[]}),
         });
         const d2=await again.json();
         if(again.ok){d=d2;showToast("Listing was gone on Shopify — created a fresh one");}
@@ -6967,7 +6967,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const owned=resolveItemStore(selected,connected);
     const storeKey=owned||(connected[preferred]?preferred:(connected.earth?"earth":keys[0]));
     const autoName=stockShopifyTitle(selected);
-    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""},keepRate:isLotCard(selected)});
+    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""},keepRate:isLotCard(selected),splits:["full"],nameEdited:false});
   };
   const confirmShopifyPush=async()=>{
     if(!shopifyModal)return;
@@ -7304,6 +7304,36 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       {shopifyModal&&(()=>{
         const s=selected||{};
         const hasQty2=s.qty2!=null&&s.qty2!==""&&+s.qty2>0&&s.unit2&&s.unit2!==s.unit;
+        /* The title carries the quantity ("… - 222 pcs"), so pushing 50 of a 222
+           lot under the old title advertises stock that isn't in the listing.
+           Editing a quantity therefore re-derives the name — until the name is
+           typed in by hand, after which it is left alone. */
+        const pushItem={
+          ...s,
+          ...(shopifyModal.qty!=null&&shopifyModal.qty!==""?{qty:shopifyModal.qty}:{}),
+          ...(shopifyModal.qty2!=null&&shopifyModal.qty2!==""?{qty2:shopifyModal.qty2}:{}),
+        };
+        const patchPush=patch=>setShopifyModal(m=>{
+          const next={...m,...patch};
+          if(!next.nameEdited){
+            next.name=stockShopifyTitle({
+              ...s,
+              ...(next.qty!=null&&next.qty!==""?{qty:next.qty}:{}),
+              ...(next.qty2!=null&&next.qty2!==""?{qty2:next.qty2}:{}),
+            });
+          }
+          return next;
+        });
+        const splits=shopifyModal.splits||["full"];
+        const primary=resolvePrimaryQty(pushItem);
+        const lotVariants=buildLotVariants(pushItem,splits,shopifyModal.price);
+        const toggleSplit=key=>setShopifyModal(m=>{
+          const cur=m.splits||["full"];
+          // Full lot is the listing itself — there is always something to buy.
+          if(key==="full")return m;
+          const next=cur.includes(key)?cur.filter(k=>k!==key):[...cur,key];
+          return{...m,splits:next};
+        });
         return(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div style={{background:C.surface,borderRadius:14,padding:"22px 20px",width:"min(420px,100%)",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
@@ -7325,8 +7355,16 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               </div>
             </>)}
 
-            <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Product Name</div>
-            <input value={shopifyModal.name} onChange={e=>setShopifyModal(m=>({...m,name:e.target.value}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box",fontSize:14}}/>
+            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:4}}>
+              <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Product Name</div>
+              {shopifyModal.nameEdited&&(
+                <button type="button" onClick={()=>setShopifyModal(m=>({...m,nameEdited:false,name:stockShopifyTitle(pushItem)}))}
+                  style={{marginLeft:"auto",background:"none",border:"none",padding:0,fontSize:10.5,color:C.inkFaint,cursor:"pointer",textDecoration:"underline",fontFamily:"inherit"}}>
+                  ↺ follow the quantity
+                </button>
+              )}
+            </div>
+            <input value={shopifyModal.name} onChange={e=>setShopifyModal(m=>({...m,name:e.target.value,nameEdited:true}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box",fontSize:14}}/>
 
             <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Price (USD)</div>
             <input type="number" value={shopifyModal.price} onChange={e=>setShopifyModal(m=>({...m,price:e.target.value}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box"}} placeholder="0.00"/>
@@ -7359,17 +7397,45 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
 
             <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Quantity</div>
             <div style={{display:"flex",gap:8,marginBottom:hasQty2?8:18,alignItems:"center"}}>
-              <input type="number" value={shopifyModal.qty??s.qty??""} onChange={e=>setShopifyModal(m=>({...m,qty:e.target.value}))}
+              <input type="number" value={shopifyModal.qty??s.qty??""} onChange={e=>patchPush({qty:e.target.value})}
                 style={{...FI,flex:1,boxSizing:"border-box"}} placeholder="0"/>
               <span style={{fontSize:13,color:C.inkFaint,minWidth:32}}>{s.unit||"pcs"}</span>
             </div>
             {hasQty2&&(
               <div style={{display:"flex",gap:8,marginBottom:18,alignItems:"center"}}>
-                <input type="number" value={shopifyModal.qty2??s.qty2??""} onChange={e=>setShopifyModal(m=>({...m,qty2:e.target.value}))}
+                <input type="number" value={shopifyModal.qty2??s.qty2??""} onChange={e=>patchPush({qty2:e.target.value})}
                   style={{...FI,flex:1,boxSizing:"border-box"}} placeholder="0"/>
                 <span style={{fontSize:13,color:C.inkFaint,minWidth:32}}>{s.unit2||"kg"}</span>
               </div>
             )}
+            {primary&&primary.qty>1&&(()=>{
+              /* Not everyone wants 222 pieces. Each extra size is a Shopify variant
+                 priced off the same total, counted in the card's own unit. */
+              const on=lotVariants.length>1;
+              return(
+                <div style={{background:on?"#F3F8F5":C.card,border:`1px solid ${on?"#2A684544":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:16}}>
+                  <div style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid,marginBottom:8}}>📦 Let buyers take part of the lot</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {LOT_SPLITS.map(def=>{
+                      const picked=def.key==="full"||splits.includes(def.key);
+                      const v=lotVariants.find(x=>x.key===def.key);
+                      const label=def.key==="unit"?`Single ${primary.unit==="pcs"?"pc":primary.unit}`:def.label;
+                      return(
+                        <button key={def.key} type="button" disabled={def.key==="full"} onClick={()=>toggleSplit(def.key)}
+                          style={{background:picked?"#2A6845":C.surface,color:picked?"#fff":C.ink,border:`1px solid ${picked?"#2A6845":C.border}`,borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:def.key==="full"?"default":"pointer",opacity:def.key==="full"?.85:1,fontFamily:"inherit"}}>
+                          {label}{v?<span style={{fontWeight:600,opacity:.85}}> · {v.price?`$${v.price}`:`${v.qty} ${v.unit}`}</span>:null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:7,lineHeight:1.5}}>
+                    {on
+                      ? `Listed as ${lotVariants.length} sizes under “Lot size”. Shopify counts each size’s stock on its own — the ERP card stays the real number and every push rewrites them all.`
+                      : `Sold whole: one buyer takes all ${fmtStockQtyValue(primary.qty)} ${primary.unit}.`}
+                  </div>
+                </div>
+              );
+            })()}
             {(()=>{const d=shopifyModal.deal||{enabled:true,days:7,customDate:""};return(
               <div style={{background:d.enabled?"#FFF8E6":C.card,border:`1px solid ${d.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:16}}>
                 <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -7397,7 +7463,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{
                 if(!shopifyModal)return;
-                const{connected,storeKey,creds,name,price,qty,qty2}=shopifyModal;
+                const{connected,storeKey,creds,name,price,qty,qty2,keepRate}=shopifyModal;
                 const pushCreds=connected?.[storeKey]||creds;
                 // Merge overridden qty/qty2 back into the item before pushing
                 const overrides={};
@@ -7406,7 +7472,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 const itemToPush={...s,...overrides};
                 setShopifyModal(null);
                 if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal);
+                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate,lotVariants);
               }} style={{flex:1,background:"#008060",border:"none",color:"#fff",fontWeight:700,fontSize:13,padding:"11px",borderRadius:8,cursor:"pointer"}}>Push →</button>
               <button onClick={()=>setShopifyModal(null)} style={{background:"none",border:`1px solid ${C.border}`,fontSize:13,padding:"11px 18px",borderRadius:8,cursor:"pointer",color:C.inkFaint}}>Cancel</button>
             </div>

@@ -807,6 +807,37 @@ export default async function handler(req, res) {
     : item.qty;
   const qty = Math.max(0, parseInt(inventorySource) || 0);
 
+  /* Part-lot variants. The client computes them (lib/lotPricing.js) so the modal
+     preview and what gets published are the same numbers; here they are only
+     mapped onto Shopify's option/variant shape. One variant is not a variant set —
+     a lone "full lot" stays the plain single-variant product it has always been. */
+  const lotVariants = (Array.isArray(body.lotVariants) ? body.lotVariants : [])
+    .filter(v => v && String(v.title || "").trim());
+  const useVariants = lotVariants.length > 1;
+  const variantSku = v => `${item.sku || item.id}${v.key ? `-${v.key}` : ""}`;
+  const variantQty = v => Math.max(0, parseInt(v.inventory) || 1);
+  const buildVariantPayload = (v, extra = {}) => ({
+    option1: String(v.title),
+    sku: variantSku(v),
+    ...(v.price ? { price: String(v.price) } : price ? { price: String(price) } : {}),
+    ...extra,
+  });
+  // Every variant that came back, levelled to what the card says it holds.
+  const setVariantInventory = async (product, want) => {
+    try {
+      const locResult = await sr("GET", "/locations.json");
+      if (!locResult.ok || !locResult.data.locations?.length) return;
+      const locationId = locResult.data.locations[0].id;
+      for (const v of product.variants || []) {
+        const inventory_item_id = v.inventory_item_id;
+        if (!inventory_item_id) continue;
+        const match = useVariants ? want.find(w => String(w.title) === String(v.option1)) : null;
+        const available = useVariants ? (match ? variantQty(match) : 0) : qty;
+        await sr("POST", "/inventory_levels/set.json", { location_id: locationId, inventory_item_id, available });
+      }
+    } catch (_) {}
+  };
+
   if (action === "delete") {
     const productId = item.shopifyProductId;
     if (!productId) return res.status(400).json({ error: "No shopifyProductId" });
@@ -824,13 +855,20 @@ export default async function handler(req, res) {
         product_type: item.productType || "Crystal",
         tags,
         status: "active",
-        variants: [{
-          sku: item.sku || item.id,
-          inventory_management: "shopify",
-          inventory_policy: "deny",
-          inventory_quantity: qty,
-          ...(price ? { price: String(price) } : {}),
-        }],
+        ...(useVariants ? { options: [{ name: "Lot size" }] } : {}),
+        variants: useVariants
+          ? lotVariants.map(v => buildVariantPayload(v, {
+              inventory_management: "shopify",
+              inventory_policy: "deny",
+              inventory_quantity: variantQty(v),
+            }))
+          : [{
+              sku: item.sku || item.id,
+              inventory_management: "shopify",
+              inventory_policy: "deny",
+              inventory_quantity: qty,
+              ...(price ? { price: String(price) } : {}),
+            }],
       },
     };
 
@@ -840,20 +878,7 @@ export default async function handler(req, res) {
     const product = result.data.product;
 
     // Set inventory quantity (requires location)
-    try {
-      const locResult = await sr("GET", "/locations.json");
-      if (locResult.ok && locResult.data.locations?.length) {
-        const locationId = locResult.data.locations[0].id;
-        const variantId = product.variants[0]?.inventory_item_id;
-        if (variantId) {
-          await sr("POST", "/inventory_levels/set.json", {
-            location_id: locationId,
-            inventory_item_id: variantId,
-            available: qty,
-          });
-        }
-      }
-    } catch (_) {}
+    await setVariantInventory(product, lotVariants);
 
     // Upload photo + video, set SEO + metafields
     await uploadPhoto(sr, product.id, item);
@@ -881,6 +906,21 @@ export default async function handler(req, res) {
     // Update existing product
     const productId = item.shopifyProductId;
 
+    /* A variant sent without its id is a new variant, and the ones left out are
+       deleted — which would break every cart and order link on a re-push. So the
+       existing set is read first and matched by option value, and only genuinely
+       new sizes arrive without an id. */
+    let existingVariants = [];
+    if (useVariants) {
+      const got = await sr("GET", `/products/${encodeURIComponent(productId)}.json?fields=id,variants`);
+      if (got.ok) existingVariants = got.data?.product?.variants || [];
+    }
+    const carryId = v => {
+      const hit = existingVariants.find(e => String(e.option1) === String(v.title))
+        || existingVariants.find(e => String(e.sku) === variantSku(v));
+      return hit?.id ? { id: hit.id } : {};
+    };
+
     const updatePayload = {
       product: {
         id: productId,
@@ -888,11 +928,14 @@ export default async function handler(req, res) {
         body_html: bodyHtml,
         product_type: item.productType || "Crystal",
         tags,
-        variants: [{
-          sku: item.sku || item.id,
-          inventory_quantity: qty,
-          ...(price ? { price: String(price) } : {}),
-        }],
+        ...(useVariants ? { options: [{ name: "Lot size" }] } : {}),
+        variants: useVariants
+          ? lotVariants.map(v => buildVariantPayload(v, carryId(v)))
+          : [{
+              sku: item.sku || item.id,
+              inventory_quantity: qty,
+              ...(price ? { price: String(price) } : {}),
+            }],
       },
     };
 
@@ -902,20 +945,7 @@ export default async function handler(req, res) {
     const product = result.data.product;
 
     // Update inventory
-    try {
-      const locResult = await sr("GET", "/locations.json");
-      if (locResult.ok && locResult.data.locations?.length) {
-        const locationId = locResult.data.locations[0].id;
-        const variantInventoryItemId = product.variants[0]?.inventory_item_id;
-        if (variantInventoryItemId) {
-          await sr("POST", "/inventory_levels/set.json", {
-            location_id: locationId,
-            inventory_item_id: variantInventoryItemId,
-            available: qty,
-          });
-        }
-      }
-    } catch (_) {}
+    await setVariantInventory(product, lotVariants);
 
     // Upload photo + video, set SEO + metafields
     await uploadPhoto(sr, productId, item);
