@@ -6623,6 +6623,58 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
   const videoXhrRef=useRef(null);
   const pendingVideoSaveRef=useRef(null); // {itemId} set when user saves while video still uploading
   const setFormPhotoList=(photos,extra={})=>setForm(f=>{const clean=photos.filter(Boolean);return{...f,photos:clean,photo:clean[0]||"",photographed:clean.length>0?true:!!f.photographed,...extra};});
+  /* Photo picker. The same parcel is shot once and then keeps turning up — a fresh
+     Rhodonite lot, a re-cut of stock already photographed — so re-uploading the
+     same file is wasted work. Two sources are offered: the Image Library module
+     (the real shoot archive) and photos already sitting on other stock cards.
+     Blob URLs are skipped; they belong to an in-flight upload on this tab and are
+     dead on the next load. Videos are the video field's business, not this one. */
+  const IMAGE_LIBRARY_KEY="ng-image-library-v1";
+  const [photoLibrary,setPhotoLibrary]=useState(null); // {q, src, sel:string[]} when open
+  const [libraryEntries,setLibraryEntries]=useState(()=>readCache(IMAGE_LIBRARY_KEY)||[]);
+  useEffect(()=>{loadK(IMAGE_LIBRARY_KEY).then(d=>{if(Array.isArray(d))setLibraryEntries(d);}).catch(()=>{});},[]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(IMAGE_LIBRARY_KEY))loadK(IMAGE_LIBRARY_KEY).then(d=>{if(Array.isArray(d))setLibraryEntries(d);}).catch(()=>{});}),[]);
+  const photoLibraryImages=useMemo(()=>{
+    const seen=new Set();
+    const out=[];
+    const push=(url,entry)=>{
+      if(!url||url.startsWith("blob:")||seen.has(url))return;
+      if(/\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(url))return;
+      seen.add(url);
+      out.push({url,...entry});
+    };
+    for(const im of libraryEntries){
+      if(im?.mediaType==="video")continue;
+      push(im?.imageUrl,{
+        src:"library",
+        label:[im?.name,im?.category].filter(Boolean).join(" · ")||"Untitled",
+        sub:im?.notes||"Image Library",
+        hay:`${im?.name||""} ${im?.category||""} ${im?.notes||""}`,
+      });
+    }
+    for(const s of stock){
+      for(const url of stockPhotos(s)){
+        push(url,{
+          src:"stock",
+          label:[s.material,s.shape].filter(Boolean).join(" · ")||"Untitled",
+          sub:[s.sku,s.location&&`🗄 ${s.location}`,s.size].filter(Boolean).join(" · "),
+          hay:`${s.material||""} ${s.shape||""} ${s.sku||""} ${s.location||""} ${s.productType||""} ${s.origin||""}`,
+        });
+      }
+    }
+    return out;
+  },[libraryEntries,stock]);
+  const openPhotoLibrary=()=>setPhotoLibrary({q:form?.material||"",src:"all",sel:[]});
+  const addPhotosFromLibrary=()=>{
+    const picked=(photoLibrary?.sel||[]).filter(Boolean);
+    if(!picked.length){setPhotoLibrary(null);return;}
+    const existing=stockPhotos(form);
+    // Already on this card is a no-op, not a duplicate tile.
+    const fresh=picked.filter(u=>!existing.includes(u));
+    setFormPhotoList([...existing,...fresh]);
+    setPhotoLibrary(null);
+    showToast(fresh.length?`✓ Added ${fresh.length} photo${fresh.length!==1?"s":""} from the library`:"Already on this item");
+  };
   const addStockPhotoFiles=async files=>{
     const picked=Array.from(files||[]).filter(Boolean);
     if(!picked.length)return;
@@ -7479,6 +7531,81 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           </div>
         </div>
         );
+      })()}
+      {photoLibrary&&(()=>{
+        const q=(photoLibrary.q||"").trim().toLowerCase();
+        const tokens=q.split(/\s+/).filter(Boolean);
+        const srcFilter=photoLibrary.src||"all";
+        const pool=srcFilter==="all"?photoLibraryImages:photoLibraryImages.filter(im=>im.src===srcFilter);
+        const matches=tokens.length
+          ? pool.filter(im=>tokens.every(t=>(im.hay||"").toLowerCase().includes(t)))
+          : pool;
+        const counts={all:photoLibraryImages.length,library:photoLibraryImages.filter(im=>im.src==="library").length,stock:photoLibraryImages.filter(im=>im.src==="stock").length};
+        const sel=photoLibrary.sel||[];
+        const onCard=stockPhotos(form);
+        return(
+        <div onMouseDown={()=>setPhotoLibrary(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div onMouseDown={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:14,width:"min(680px,100%)",maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)",overflow:"hidden"}}>
+            <div style={{padding:"18px 20px 12px",flexShrink:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontWeight:700,fontSize:15,color:C.ink}}>🖼 Photo library</div>
+                  <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>Shots from the Image Library and photos already on other stock items. Picking one reuses the same file — nothing is uploaded twice.</div>
+                </div>
+                <button onClick={()=>setPhotoLibrary(null)} aria-label="Close" style={{border:"none",background:"transparent",color:C.inkMid,fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+              </div>
+              <input autoFocus value={photoLibrary.q||""} onChange={e=>setPhotoLibrary(p=>({...p,q:e.target.value}))}
+                placeholder="Search by stone, shape, SKU or box" style={{...FI,width:"100%",marginTop:12,boxSizing:"border-box",fontSize:13}}/>
+              <div style={{display:"flex",gap:6,marginTop:9}}>
+                {[["all","Everything"],["library","🖼 Image Library"],["stock","💎 On stock items"]].map(([key,label])=>{
+                  const on=srcFilter===key;
+                  return(
+                    <button key={key} type="button" onClick={()=>setPhotoLibrary(p=>({...p,src:key}))} disabled={!counts[key]}
+                      style={{background:on?C.green:C.card,color:on?"#fff":C.ink,border:`1px solid ${on?C.green:C.border}`,borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:counts[key]?"pointer":"default",opacity:counts[key]?1:.45,fontFamily:"inherit"}}>
+                      {label} <span style={{fontWeight:600,opacity:.8}}>{counts[key]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{overflowY:"auto",flex:1,padding:"4px 20px 12px"}}>
+              {matches.length===0
+                ? <div style={{padding:"36px 12px",textAlign:"center",fontSize:12.5,color:C.inkFaint}}>{q?`No photos on items matching “${photoLibrary.q}”`:"No photos on any stock item yet."}</div>
+                : (
+                  <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+                    {matches.slice(0,120).map(im=>{
+                      const picked=sel.includes(im.url);
+                      const already=onCard.includes(im.url);
+                      return(
+                        <button key={im.url} type="button" title={already?"Already on this item":im.label}
+                          onClick={()=>setPhotoLibrary(p=>({...p,sel:picked?p.sel.filter(u=>u!==im.url):[...(p.sel||[]),im.url]}))}
+                          style={{padding:0,border:`2px solid ${picked?C.green:C.border}`,borderRadius:9,overflow:"hidden",background:C.card,cursor:"pointer",textAlign:"left",opacity:already&&!picked?.55:1,fontFamily:"inherit"}}>
+                          <div style={{position:"relative",height:96,background:C.card}}>
+                            <img src={im.url} alt="" loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                            {picked&&<span style={{position:"absolute",right:5,top:5,width:20,height:20,borderRadius:10,background:C.green,color:"#fff",fontSize:12,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center"}}>✓</span>}
+                            {already&&!picked&&<span style={{position:"absolute",left:5,top:5,background:"rgba(26,19,8,.7)",color:"#FAF0DC",borderRadius:4,padding:"1px 5px",fontSize:9,fontWeight:700}}>On this item</span>}
+                          </div>
+                          <div style={{padding:"6px 7px"}}>
+                            <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{im.label}</div>
+                            {im.sub&&<div style={{fontSize:9.5,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{im.sub}</div>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              {matches.length>120&&<div style={{fontSize:10.5,color:C.inkFaint,marginTop:10,textAlign:"center"}}>Showing the first 120 of {matches.length} — search to narrow it down.</div>}
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",padding:"12px 20px 18px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
+              <div style={{fontSize:11.5,color:C.inkMid,flex:1}}>{sel.length?`${sel.length} selected`:`${matches.length} photo${matches.length!==1?"s":""}`}</div>
+              <button onClick={()=>setPhotoLibrary(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 16px",fontSize:13,cursor:"pointer",color:C.inkFaint,fontFamily:"inherit"}}>Cancel</button>
+              <button onClick={addPhotosFromLibrary} disabled={!sel.length}
+                style={{background:sel.length?C.green:C.card,color:sel.length?"#fff":C.inkFaint,border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:700,cursor:sel.length?"pointer":"default",fontFamily:"inherit"}}>
+                Add {sel.length||""} photo{sel.length!==1?"s":""}
+              </button>
+            </div>
+          </div>
+        </div>);
       })()}
       {bulkAdd&&<BulkAddStockModal vendors={vendors} existingMaterials={stones} onSave={saveBulkItems} onClose={()=>setBulkAdd(false)}/>}
       {summaryOpen&&(()=>{
@@ -8656,7 +8783,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   ):<div style={{textAlign:"center",color:C.inkFaint}}><div style={{fontSize:20,marginBottom:3}}>📷</div><div style={{fontSize:10}}>{t("Add photos")}</div></div>}
                   {form._photoUploading&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,.3)",borderRadius:7,fontSize:11,color:"#fff"}}>Uploading…</div>}
                 </label>
-                <button className="bs" style={{width:"100%",fontSize:11,padding:"6px"}} onClick={()=>photoRef.current?.click()}>{t("+ Add More Photos")}</button>
+                <div style={{display:"flex",gap:6}}>
+                  <button className="bs" style={{flex:1,fontSize:11,padding:"6px"}} onClick={()=>photoRef.current?.click()}>{t("+ Add More Photos")}</button>
+                  <button className="bs" type="button" disabled={!photoLibraryImages.length} title={photoLibraryImages.length?"Reuse a photo already on another stock item":"No photos on any stock item yet"}
+                    onClick={openPhotoLibrary}
+                    style={{flex:1,fontSize:11,padding:"6px",opacity:photoLibraryImages.length?1:.5,cursor:photoLibraryImages.length?"pointer":"default"}}>
+                    🖼 {t("From Library")}
+                  </button>
+                </div>
                 {/* Video */}
                 <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:12}}>
                   <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>🎬 Video</div>

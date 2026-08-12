@@ -4967,6 +4967,8 @@ function EtsyLiveView({ onCrossPost }) {
   const [imgUploading, setImgUploading] = useState(false);
   const [showPicker,   setShowPicker]   = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
+  const [libSave,      setLibSave]      = useState(null); // {urls, name, category, notes, saving} when saving into the library
+  const [libEntries,   setLibEntries]   = useState([]);
   const [saving,       setSaving]       = useState(false);
   const [saveErr,      setSaveErr]      = useState(null);
   const [toast,        setToast]        = useState("");
@@ -5445,7 +5447,64 @@ function EtsyLiveView({ onCrossPost }) {
     } catch (e) { showToast("⚠ " + e.message); setImgUploading(false); }
   };
 
-  const libImages = () => { try { return JSON.parse(localStorage.getItem("ng-image-library-v1")||"[]"); } catch { return []; } };
+  /* The library is a flat array of {name, category, imageUrl} written by
+     ImageLibraryApp through saveK — not the {images:[…]} groups this used to read
+     out of localStorage, which is why the picker below came up empty however many
+     photos had been filed. Grouping into listings is this screen's own business. */
+  useEffect(() => { loadK(IMG_KEY).then(d => { if (Array.isArray(d)) setLibEntries(d); }).catch(()=>{}); }, []);
+  useEffect(() => onCacheRefresh(keys => {
+    if (keys.includes(IMG_KEY)) loadK(IMG_KEY).then(d => { if (Array.isArray(d)) setLibEntries(d); }).catch(()=>{});
+  }), []);
+  const libImages = () => {
+    const groups = new Map();
+    for (const e of libEntries) {
+      if (!e?.imageUrl || e.mediaType === "video") continue;
+      const key = `${e.name || ""}|||${e.category || ""}`;
+      if (!groups.has(key)) groups.set(key, { id: key, name: e.name || "", category: e.category || "", images: [] });
+      groups.get(key).images.push({ url: e.imageUrl, isVideo: false });
+    }
+    return [...groups.values()];
+  };
+  /* Photos live on the listing but the library is where they get reused, so the
+     trip has to work both ways. Entries are keyed by stone + category, so those
+     are asked for rather than guessed — a mis-filed shot is worse than none. */
+  const openLibSave = urls => {
+    const fresh = urls.filter(u => u && !libEntries.some(e => e.imageUrl === u));
+    if (!fresh.length) { showToast("Already in the library"); return; }
+    const known = [...new Set(libEntries.map(e => e.name).filter(Boolean))];
+    const title = String(editL?.title || "").toLowerCase();
+    setLibSave({
+      urls: fresh,
+      // A stone already in the library and named in the title is a safe guess.
+      name: known.find(n => title.includes(String(n).toLowerCase())) || "",
+      category: "",
+      notes: "",
+      saving: false,
+    });
+  };
+  const saveToLibrary = async () => {
+    if (!libSave) return;
+    const name = libSave.name.trim(), category = libSave.category.trim();
+    if (!name) return;
+    setLibSave(s => ({ ...s, saving: true }));
+    try {
+      const current = (await loadK(IMG_KEY)) || [];
+      const entries = libSave.urls.map(url => ({
+        id: uid(), name, category, notes: libSave.notes.trim(),
+        imageUrl: url, mediaType: "image", size: 0,
+        createdAt: new Date().toISOString(),
+        source: `etsy-listing-${editL?.listing_id || ""}`,
+      }));
+      const next = [...entries, ...current];
+      await saveK(IMG_KEY, next);
+      setLibEntries(next);
+      setLibSave(null);
+      showToast(`✓ ${entries.length} photo${entries.length !== 1 ? "s" : ""} saved to the library`);
+    } catch (e) {
+      setLibSave(s => ({ ...s, saving: false }));
+      showToast("⚠ " + (e.message || "Could not save to the library"));
+    }
+  };
 
   // ── derived ───────────────────────────────────────────────────────────────
   const firstOrder = orders.find(o => o.grandtotal?.currency_code);
@@ -6183,6 +6242,14 @@ function EtsyLiveView({ onCrossPost }) {
                       ({editImages.length}/10)
                     </span>
                   </span>
+                  {editImages.length>0&&(
+                    <button onClick={()=>openLibSave(editImages.map(i=>i.url_fullxfull||i.url_570xN||i.url_170x135))}
+                      title="Save every photo on this listing to the Image Library"
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 7px",
+                        fontSize:10.5,fontWeight:700,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                      🖼 To Library
+                    </button>
+                  )}
                 </div>
 
                 {/* Photo grid */}
@@ -6203,6 +6270,10 @@ function EtsyLiveView({ onCrossPost }) {
                           padding:4,gap:3}}
                           onMouseOver={e=>{e.currentTarget.style.background="rgba(0,0,0,.3)";}}
                           onMouseOut={e=>{e.currentTarget.style.background="rgba(0,0,0,0)";}}>
+                          <button onClick={()=>openLibSave([url])} title="Save this photo to the Image Library"
+                            style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",
+                              border:"none",borderRadius:4,fontSize:11,cursor:"pointer",
+                              display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>🖼</button>
                           <a href={url} download target="_blank" rel="noreferrer"
                             style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",
                               borderRadius:4,fontSize:12,textDecoration:"none",display:"flex",
@@ -6264,6 +6335,55 @@ function EtsyLiveView({ onCrossPost }) {
                   </div>
                 )}
               </div>
+
+              {/* Save-to-library dialog */}
+              {libSave && (
+                <div onMouseDown={()=>!libSave.saving&&setLibSave(null)}
+                  style={{position:"fixed",inset:0,zIndex:1100,background:"rgba(0,0,0,.5)",display:"grid",placeItems:"center",padding:18}}>
+                  <div onMouseDown={e=>e.stopPropagation()}
+                    style={{width:"min(100%,420px)",background:C.bg,border:`1.5px solid ${C.border}`,borderRadius:12,padding:20,boxShadow:"0 24px 70px rgba(0,0,0,.28)"}}>
+                    <div style={{fontSize:15,fontWeight:800,color:C.ink}}>🖼 Save to Image Library</div>
+                    <div style={{fontSize:11.5,color:C.inkMid,marginTop:4,lineHeight:1.5}}>
+                      {libSave.urls.length} photo{libSave.urls.length!==1?"s":""} from this listing. The library files by stone and shape, so both are worth getting right — that is how they are found again.
+                    </div>
+                    <div style={{display:"flex",gap:5,marginTop:12,overflowX:"auto",paddingBottom:2}}>
+                      {libSave.urls.slice(0,8).map(u=>(
+                        <img key={u} src={u} alt="" style={{width:46,height:46,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,flexShrink:0}}/>
+                      ))}
+                      {libSave.urls.length>8&&<div style={{width:46,height:46,borderRadius:6,border:`1px solid ${C.border}`,display:"grid",placeItems:"center",fontSize:11,fontWeight:700,color:C.inkMid,flexShrink:0}}>+{libSave.urls.length-8}</div>}
+                    </div>
+                    <div style={{marginTop:12}}>
+                      <label style={{color:C.inkFaint,fontSize:11,fontWeight:600,marginBottom:5,display:"block"}}>Stone / name</label>
+                      <input autoFocus list="lib-save-stones" value={libSave.name} onChange={e=>setLibSave(s=>({...s,name:e.target.value}))}
+                        placeholder="e.g. Rhodonite" style={{...IS,fontSize:13}}/>
+                      <datalist id="lib-save-stones">
+                        {[...new Set(libEntries.map(e=>e.name).filter(Boolean))].map(n=><option key={n} value={n}/>)}
+                      </datalist>
+                    </div>
+                    <div style={{marginTop:10}}>
+                      <label style={{color:C.inkFaint,fontSize:11,fontWeight:600,marginBottom:5,display:"block"}}>Shape / category</label>
+                      <input list="lib-save-cats" value={libSave.category} onChange={e=>setLibSave(s=>({...s,category:e.target.value}))}
+                        placeholder="e.g. Mini Hearts" style={{...IS,fontSize:13}}/>
+                      <datalist id="lib-save-cats">
+                        {[...new Set(libEntries.map(e=>e.category).filter(Boolean))].map(n=><option key={n} value={n}/>)}
+                      </datalist>
+                    </div>
+                    <div style={{marginTop:10}}>
+                      <label style={{color:C.inkFaint,fontSize:11,fontWeight:600,marginBottom:5,display:"block"}}>Notes <span style={{fontWeight:400}}>(optional)</span></label>
+                      <input value={libSave.notes} onChange={e=>setLibSave(s=>({...s,notes:e.target.value}))}
+                        placeholder="Shoot, batch, anything worth remembering" style={{...IS,fontSize:13}}/>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
+                      <button onClick={()=>setLibSave(null)} disabled={libSave.saving}
+                        style={{background:C.card,color:C.ink,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 14px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                      <button onClick={saveToLibrary} disabled={libSave.saving||!libSave.name.trim()}
+                        style={{background:libSave.name.trim()?"#F56400":C.card,color:libSave.name.trim()?"#fff":C.inkFaint,border:"none",borderRadius:7,padding:"9px 16px",fontSize:12,fontWeight:850,cursor:libSave.name.trim()&&!libSave.saving?"pointer":"default",fontFamily:"inherit"}}>
+                        {libSave.saving?"Saving…":`Save ${libSave.urls.length} to library`}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* RIGHT — Form */}
               <div style={{flex:1,overflowY:"auto",padding:"20px 22px",display:"flex",flexDirection:"column",gap:18}}>
