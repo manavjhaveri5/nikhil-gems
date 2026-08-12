@@ -1393,7 +1393,11 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
         </div>
         <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>{canSwitchLang&&<button onClick={()=>setLang(lang==="en"?"mr":"en")} title={lang==="en"?"Switch to Marathi":"English वर जा"} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:12,cursor:"pointer",lineHeight:1,minHeight:mob?36:32,fontFamily:"inherit",color:C.inkMid,fontWeight:600}}>{lang==="en"?"मराठी":"EN"}</button>}<button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
       </div>
-      <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":132,maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
+      {/* fadeIn, not slideIn: a transform on this wrapper makes it the containing
+          block for every position:fixed modal inside it, so "inset:0" became the
+          page's height rather than the screen's and tall modals ran off the bottom
+          with their buttons unreachable. Opacity alone creates no such block. */}
+      <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":132,maxWidth:1240,margin:"0 auto",animation:"fadeIn .18s ease",overflowX:"auto"}}>{children}</div>
     </div>
   );
 }
@@ -7389,7 +7393,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
         });
         return(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:C.surface,borderRadius:14,padding:"22px 20px",width:"min(420px,100%)",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
+          {/* The modal grew a store picker, a rate box and the part-lot sizes, and
+              on a laptop that pushed Push/Cancel off the bottom of the screen with
+              no way to scroll to them. Fixed height, scrolling body, footer that
+              stays put. */}
+          <div style={{background:C.surface,borderRadius:14,width:"min(420px,100%)",maxHeight:"92vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
+            <div style={{padding:"22px 20px 4px",overflowY:"auto",flex:1,minHeight:0}}>
             <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>🛍 Push to Shopify</div>
             <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>
               Publishes to the storefront{"'"}s <b>Deals</b> section and creates the listing in Listing Manager
@@ -7529,8 +7538,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   </div>
                 </>)}
               </div>);})()}
+            </div>
 
-            <div style={{display:"flex",gap:8}}>
+            <div style={{display:"flex",gap:8,padding:"12px 20px 18px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
               <button onClick={()=>{
                 if(!shopifyModal)return;
                 const{connected,storeKey,creds,name,price,qty,qty2,keepRate}=shopifyModal;
