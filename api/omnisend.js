@@ -127,14 +127,124 @@ const FONTS = {
   sans:  { head: "Helvetica,Arial,sans-serif",      body: "Helvetica,Arial,sans-serif" },
 };
 
+/* Two layouts, one shell.
+
+   "editorial" is the house style: masthead logo, dated left-aligned headline,
+   an optional full-width banner, then each piece large and single-file with its
+   availability, price and its own button underneath — the shape the hand-built
+   Omnisend mailers use. "cards" is the older compact grid, kept because a
+   short list of cheap items reads better tiled than as a long scroll. */
+/* The date reads as a masthead line, so it is spelled out and shouted:
+   "AUGUST 4 2026". Built from UTC to match the send, not the server's zone. */
+const MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
+const todayLine = () => {
+  const d = new Date();
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()} ${d.getUTCFullYear()}`;
+};
+
+function buildEditorialHtml({
+  brand, heading, intro, products, ctaLabel, footer, accent, ink, pageBg, cardBg, font,
+  showPrice, showMeta, showCta, cornerStyle, headerImage, headingSize,
+  dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
+  instagramUrl, addressLine,
+}) {
+  const A = hex(accent, "#9a6200");
+  const INK = hex(ink, "#1a1308");
+  const PAGE = hex(pageBg, "#e5e6e6");
+  const CARD = hex(cardBg, "#ffffff");
+  const F = FONTS[font] || FONTS.serif;
+  const radius = cornerStyle === "square" ? "0" : "6px";
+  const MUTED = "#767676";
+  const W = 540;                       // content width inside the 600px card
+  const url = v => (/^https?:\/\//i.test(String(v || "")) ? esc(v) : "");
+
+  /* Each piece is a full-width photo with its caption centred underneath —
+     name, what's left, price, and its own way in. The button repeats per
+     product on purpose: in a long scroll there is no single "the" product. */
+  const block = p => {
+    const link = url(p.url);
+    const src = url(p.image);
+    const img = src
+      ? `<img src="${src}" width="${W}" alt="${esc(p.title)}" style="display:block;width:100%;max-width:${W}px;height:auto;border:0;border-radius:${radius};">`
+      : `<div style="width:100%;max-width:${W}px;height:280px;background:${tint(A, 0.94)};border-radius:${radius};"></div>`;
+    return `
+    <tr><td align="center" style="padding:0 30px 34px;font-family:${F.body};">
+      ${link ? `<a href="${link}" style="text-decoration:none;">${img}</a>` : img}
+      <div style="font-size:12.5px;color:${INK};padding-top:12px;line-height:1.5;">${esc(p.title)}</div>
+      ${showMeta && p.available ? `<div style="font-size:12px;color:${INK};padding-top:5px;"><strong>Available:</strong> ${esc(p.available)}</div>`
+        : showMeta && p.meta ? `<div style="font-size:12px;color:${MUTED};padding-top:5px;">${esc(p.meta)}</div>` : ""}
+      ${showPrice && p.price ? `<div style="font-size:12.5px;color:${INK};padding-top:5px;">${esc(p.price)}${priceSuffix ? ` ${esc(priceSuffix)}` : ""}</div>` : ""}
+      ${showCta && link ? `<div style="padding-top:12px;">
+        <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${esc(ctaLabel)}</a>
+      </div>` : ""}
+    </td></tr>`;
+  };
+
+  /* The standing invitation to the trade site. It is the one block that isn't
+     about a single product, so it gets the inverted panel to say so. */
+  const tradePanel = (tradeLine || tradeButton) ? `
+    <tr><td style="padding:6px 30px 30px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${INK};">
+        <tr><td align="center" style="padding:26px 20px;font-family:${F.head};">
+          ${tradeEyebrow ? `<div style="font-family:${F.body};font-size:9.5px;letter-spacing:2.5px;text-transform:uppercase;color:#b6ada0;padding-bottom:8px;">${esc(tradeEyebrow)}</div>` : ""}
+          ${tradeLine ? `<div style="font-size:21px;color:#ffffff;line-height:1.3;padding-bottom:16px;">${esc(tradeLine)}</div>` : ""}
+          ${tradeButton && url(tradeUrl) ? `<a href="${url(tradeUrl)}" style="display:inline-block;background:${tint(A, 0.93)};color:${INK};text-decoration:none;font-family:${F.body};font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;padding:11px 22px;">${esc(tradeButton)}</a>` : ""}
+        </td></tr>
+      </table>
+    </td></tr>` : "";
+
+  const stamp = dateLine === false ? "" : (dateLine || todayLine());
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(heading || brand)}</title></head>
+<body style="margin:0;padding:0;background:${PAGE};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${PAGE};padding:28px 12px;">
+<tr><td align="center">
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:${CARD};">
+    ${url(headerImage)
+      ? `<tr><td align="center" style="padding:34px 30px 8px;"><img src="${url(headerImage)}" alt="${esc(brand)}" width="46" style="display:block;max-width:46px;height:auto;border:0;"></td></tr>`
+      : `<tr><td align="center" style="padding:32px 30px 6px;font-family:${F.body};font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:${A};font-weight:700;">${esc(brand)}</td></tr>`}
+    ${stamp ? `<tr><td style="padding:26px 30px 0;font-family:${F.body};font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:${MUTED};">${esc(stamp)}</td></tr>` : ""}
+    ${heading ? `<tr><td style="padding:8px 30px 0;font-family:${F.head};font-size:${Math.min(40, Math.max(16, +headingSize || 26))}px;color:${INK};line-height:1.25;">${esc(heading)}</td></tr>` : ""}
+    ${intro ? `<tr><td style="padding:12px 30px 0;font-family:${F.body};font-size:12.5px;line-height:1.75;color:#5a5a5a;">${esc(intro).replace(/\n/g, "<br>")}</td></tr>` : ""}
+    ${url(bannerImage) ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(bannerImage)}" width="${W}" alt="" style="display:block;width:100%;max-width:${W}px;height:auto;border:0;"></td></tr>` : ""}
+    <tr><td style="height:30px;line-height:30px;font-size:0;">&nbsp;</td></tr>
+    ${products.map(block).join("")}
+    ${tradePanel}
+    <tr><td align="center" style="padding:0 30px 30px;font-family:${F.body};font-size:11px;line-height:1.7;color:${MUTED};">
+      ${url(instagramUrl) ? `<div style="padding-bottom:12px;"><a href="${url(instagramUrl)}" style="color:${A};text-decoration:none;font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;">Instagram</a></div>` : ""}
+      <div>&copy; ${esc(brand)}</div>
+      ${addressLine ? `<div>${esc(addressLine).replace(/\n/g, "<br>")}</div>` : ""}
+      ${footer ? `<div style="padding-top:8px;">${esc(footer).replace(/\n/g, "<br>")}</div>` : ""}
+      <div style="padding-top:8px;">You're receiving this because you subscribed to ${esc(brand)}.</div>
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>`;
+}
+
 function buildCampaignHtml({
   brand = "Nikhil Gems", heading = "", intro = "", products = [],
   ctaLabel = "View product", footer = "",
-  // Design options — all optional, defaults reproduce the original layout.
+  // Design options — all optional.
+  layout = "editorial",
   columns = 2, accent = "#9a6200", ink = "#1a1308", pageBg = "#faf7f2", cardBg = "#ffffff",
   font = "serif", showPrice = true, showMeta = true, showCta = true, showDivider = false,
   cornerStyle = "rounded", headerImage = "", ctaStyle = "solid", headingSize = 27,
+  // Editorial-only furniture.
+  dateLine = "", bannerImage = "", priceSuffix = "",
+  tradeEyebrow = "", tradeLine = "", tradeButton = "", tradeUrl = "",
+  instagramUrl = "", addressLine = "",
 } = {}) {
+  if (layout === "editorial") {
+    return buildEditorialHtml({
+      brand, heading, intro, products, ctaLabel, footer, accent, ink, pageBg, cardBg, font,
+      showPrice, showMeta, showCta, cornerStyle, headerImage, headingSize,
+      dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
+      instagramUrl, addressLine,
+    });
+  }
   const cols = +columns === 1 ? 1 : 2;
   const A = hex(accent, "#9a6200");
   const INK = hex(ink, "#1a1308");

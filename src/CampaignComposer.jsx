@@ -19,10 +19,17 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   /* Design lives in one object so preview and the created draft can never drift
      apart — both are rendered from payloadBase() by the same server function. */
   const [design, setDesign] = useState({
-    columns: 2, accent: "#9a6200", ink: "#1a1308", pageBg: "#faf7f2", cardBg: "#ffffff",
+    layout: "editorial",
+    columns: 2, accent: "#9a6200", ink: "#1a1308", pageBg: "#e5e6e6", cardBg: "#ffffff",
     font: "serif", showPrice: true, showMeta: true, showCta: true, showDivider: false,
-    cornerStyle: "rounded", ctaStyle: "solid", ctaLabel: "View product",
-    headingSize: 27, headerImage: "", footer: "",
+    cornerStyle: "square", ctaStyle: "outline", ctaLabel: "Shop now",
+    headingSize: 26, headerImage: "", footer: "",
+    // Editorial furniture — the standing trade CTA is pre-filled because it is
+    // the same invitation on every mailer; blank the line to drop the panel.
+    bannerImage: "", priceSuffix: "", dateLine: "",
+    tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
+    tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
+    instagramUrl: "", addressLine: "",
   });
   const [designOpen, setDesignOpen] = useState(false);
   const [segments, setSegments] = useState([]);
@@ -66,11 +73,18 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     return { price: `${sym}${v.toLocaleString(currency === "INR" ? "en-IN" : "en-US")}`, priceValue: v, currency };
   };
   const linkOf = l => l.platforms?.shopify_earth?.storefront_url || l.platforms?.shopify_aty?.storefront_url || l.platforms?.etsy?.url || l.platforms?.ebay?.url || "";
+  // "Available: 269 pcs" only means something on a repeatable lot — a unique
+  // piece is always exactly one, and saying so reads like a scarcity gimmick.
+  const availableOf = l => {
+    const n = +l.qty || 0;
+    return l.type === "unique" || n < 2 ? "" : `${n} ${l.unit || "pcs"}`;
+  };
   const toProduct = l => ({
     id: l.id, title: l.title || "Untitled",
     image: (l.images || [])[0] || "",
     url: linkOf(l),
     meta: [l.material, l.shape, l.size].filter(Boolean).join(" · "),
+    available: availableOf(l),
     description: l.description || "",
     ...priceOf(l),
   });
@@ -193,7 +207,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                   <span style={{ transform: designOpen ? "rotate(90deg)" : "none", transition: "transform .15s", fontSize: 10 }}>▸</span>
                   🎨 Design
                   <span style={{ fontWeight: 500, color: C.inkFaint, fontSize: 11 }}>
-                    {design.columns === 1 ? "1 column" : "2 columns"} · {design.font === "sans" ? "sans" : "serif"} · {design.cornerStyle}
+                    {design.layout === "editorial" ? "editorial" : design.columns === 1 ? "cards · 1 column" : "cards · 2 columns"} · {design.font === "sans" ? "sans" : "serif"} · {design.cornerStyle}
                   </span>
                   <span style={{ flex: 1 }} />
                   <span style={{ width: 15, height: 15, borderRadius: 4, background: design.accent, border: `1px solid ${C.border}` }} />
@@ -204,11 +218,20 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
                       <div>
                         <label style={lab}>Layout</label>
-                        <select value={design.columns} onChange={e => setD("columns", +e.target.value)} style={FI()}>
-                          <option value={2}>Two columns</option>
-                          <option value={1}>One column (big)</option>
+                        <select value={design.layout} onChange={e => setD("layout", e.target.value)} style={FI()}>
+                          <option value="editorial">Editorial (big photos)</option>
+                          <option value="cards">Compact cards</option>
                         </select>
                       </div>
+                      {design.layout === "cards" && (
+                        <div>
+                          <label style={lab}>Columns</label>
+                          <select value={design.columns} onChange={e => setD("columns", +e.target.value)} style={FI()}>
+                            <option value={2}>Two columns</option>
+                            <option value={1}>One column (big)</option>
+                          </select>
+                        </div>
+                      )}
                       <div>
                         <label style={lab}>Font</label>
                         <select value={design.font} onChange={e => setD("font", e.target.value)} style={FI()}>
@@ -223,14 +246,16 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                           <option value="square">Square</option>
                         </select>
                       </div>
-                      <div>
-                        <label style={lab}>Button style</label>
-                        <select value={design.ctaStyle} onChange={e => setD("ctaStyle", e.target.value)} style={FI()}>
-                          <option value="solid">Solid</option>
-                          <option value="outline">Outline</option>
-                          <option value="link">Text link</option>
-                        </select>
-                      </div>
+                      {design.layout === "cards" && (
+                        <div>
+                          <label style={lab}>Button style</label>
+                          <select value={design.ctaStyle} onChange={e => setD("ctaStyle", e.target.value)} style={FI()}>
+                            <option value="solid">Solid</option>
+                            <option value="outline">Outline</option>
+                            <option value="link">Text link</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
@@ -268,6 +293,51 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                         <input type="number" min={16} max={40} value={design.headingSize} onChange={e => setD("headingSize", +e.target.value)} style={FI()} />
                       </div>
                     </div>
+
+                    {design.layout === "editorial" && (
+                      <div style={{ display: "grid", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "2fr 1fr 1fr", gap: 10 }}>
+                          <div>
+                            <label style={lab}>Banner image <span style={{ textTransform: "none", fontWeight: 400 }}>(full width, under the intro)</span></label>
+                            <input value={design.bannerImage} onChange={e => setD("bannerImage", e.target.value)} placeholder="https://…  e.g. the IN-STOCK SPECIALS strip" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Price suffix</label>
+                            <input value={design.priceSuffix} onChange={e => setD("priceSuffix", e.target.value)} placeholder="/ LOT" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Date line</label>
+                            <input value={design.dateLine} onChange={e => setD("dateLine", e.target.value)} placeholder="today's date" style={FI()} />
+                          </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10 }}>
+                          <div>
+                            <label style={lab}>Trade panel heading <span style={{ textTransform: "none", fontWeight: 400 }}>(empty removes the panel)</span></label>
+                            <input value={design.tradeLine} onChange={e => setD("tradeLine", e.target.value)} style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Trade panel eyebrow</label>
+                            <input value={design.tradeEyebrow} onChange={e => setD("tradeEyebrow", e.target.value)} style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Trade button label</label>
+                            <input value={design.tradeButton} onChange={e => setD("tradeButton", e.target.value)} style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Trade button link</label>
+                            <input value={design.tradeUrl} onChange={e => setD("tradeUrl", e.target.value)} placeholder="https://…" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Instagram link</label>
+                            <input value={design.instagramUrl} onChange={e => setD("instagramUrl", e.target.value)} placeholder="https://instagram.com/…" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Address line <span style={{ textTransform: "none", fontWeight: 400 }}>(footer)</span></label>
+                            <input value={design.addressLine} onChange={e => setD("addressLine", e.target.value)} placeholder="Jaipur, Rajasthan, India" style={FI()} />
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     <div>
                       <label style={lab}>Footer text <span style={{ textTransform: "none", fontWeight: 400 }}>(above the unsubscribe line Omnisend adds)</span></label>
