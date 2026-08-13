@@ -142,11 +142,56 @@ const todayLine = () => {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()} ${d.getUTCFullYear()}`;
 };
 
+/* The in-stock banner, drawn rather than uploaded.
+
+   It used to be a hosted graphic, which meant it only existed if someone had
+   exported one — and a JPEG of type is unreadable on a phone and invisible when
+   a client blocks images. Built from tables it scales, stays selectable, and
+   the copy is editable per campaign. Badges arrive as "Label | Caption" lines. */
+function promoBanner({ ribbon, title, subtitle, note, badges, color, font, width }) {
+  const G = hex(color, "#14331f");
+  const rows = String(badges || "").split("\n").map(l => l.trim()).filter(Boolean).slice(0, 3);
+  const cellW = rows.length ? Math.floor(100 / rows.length) : 100;
+
+  const badgeCells = rows.map((line, i) => {
+    const [label, caption = ""] = line.split("|").map(s => s.trim());
+    // Leading emoji becomes the icon; the rest is the label.
+    const m = /^(\p{Extended_Pictographic}️?)\s*(.*)$/u.exec(label || "");
+    const icon = m ? m[1] : "";
+    const text = m ? m[2] : label;
+    return `
+      <td width="${cellW}%" align="center" valign="middle" style="padding:14px 6px;${i ? `border-left:1px solid #dcdcdc;` : ""}">
+        ${icon ? `<div style="font-size:19px;line-height:38px;width:38px;height:38px;background:#e6e6e6;border-radius:19px;margin:0 auto 7px;">${esc(icon)}</div>` : ""}
+        <div style="font-size:11.5px;font-weight:700;color:#2b2b2b;letter-spacing:.3px;text-transform:uppercase;">${esc(text)}</div>
+        ${caption ? `<div style="font-size:11px;color:#6b6b6b;padding-top:2px;">${esc(caption)}</div>` : ""}
+      </td>`;
+  }).join("");
+
+  return `
+    <tr><td align="center" style="padding:24px 30px 0;font-family:${font};">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:${width}px;">
+        ${ribbon ? `<tr><td align="center" style="padding-bottom:16px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" align="center"><tr>
+            <td style="background:${G};padding:9px 22px;font-size:13px;font-weight:700;letter-spacing:.8px;color:#ffffff;text-transform:uppercase;">${esc(ribbon)}</td>
+          </tr></table>
+        </td></tr>` : ""}
+        ${title ? `<tr><td align="center" style="font-family:'Arial Black','Helvetica Neue',Helvetica,Arial,sans-serif;font-size:40px;line-height:1.05;font-weight:900;color:${G};letter-spacing:-.5px;">${esc(title)}</td></tr>` : ""}
+        ${subtitle ? `<tr><td align="center" style="padding-top:10px;font-size:16px;font-weight:700;letter-spacing:1px;color:${G};text-transform:uppercase;">${esc(subtitle)}</td></tr>` : ""}
+        ${note ? `<tr><td style="padding:16px 0 0;"><div style="border-top:1px solid #d8d8d8;"></div></td></tr>
+        <tr><td align="center" style="padding-top:14px;font-size:13.5px;color:#3a3a3a;">${esc(note)}</td></tr>` : ""}
+        ${badgeCells ? `<tr><td style="padding-top:16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;"><tr>${badgeCells}</tr></table>
+        </td></tr>` : ""}
+      </table>
+    </td></tr>`;
+}
+
 function buildEditorialHtml({
   brand, heading, intro, products, ctaLabel, footer, accent, ink, pageBg, cardBg, font,
   showPrice, showMeta, showCta, cornerStyle, headerImage, headingSize,
   dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
   instagramUrl, addressLine,
+  promoRibbon, promoTitle, promoSubtitle, promoNote, promoBadges, promoColor,
 }) {
   const A = hex(accent, "#9a6200");
   const INK = hex(ink, "#1a1308");
@@ -208,7 +253,11 @@ function buildEditorialHtml({
     ${stamp ? `<tr><td style="padding:26px 30px 0;font-family:${F.body};font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:${MUTED};">${esc(stamp)}</td></tr>` : ""}
     ${heading ? `<tr><td style="padding:8px 30px 0;font-family:${F.head};font-size:${Math.min(40, Math.max(16, +headingSize || 26))}px;color:${INK};line-height:1.25;">${esc(heading)}</td></tr>` : ""}
     ${intro ? `<tr><td style="padding:12px 30px 0;font-family:${F.body};font-size:12.5px;line-height:1.75;color:#5a5a5a;">${esc(intro).replace(/\n/g, "<br>")}</td></tr>` : ""}
-    ${url(bannerImage) ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(bannerImage)}" width="${W}" alt="" style="display:block;width:100%;max-width:${W}px;height:auto;border:0;"></td></tr>` : ""}
+    ${url(bannerImage)
+      ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(bannerImage)}" width="${W}" alt="" style="display:block;width:100%;max-width:${W}px;height:auto;border:0;"></td></tr>`
+      : (promoTitle || promoRibbon)
+        ? promoBanner({ ribbon: promoRibbon, title: promoTitle, subtitle: promoSubtitle, note: promoNote, badges: promoBadges, color: promoColor || INK, font: F.body, width: W })
+        : ""}
     <tr><td style="height:30px;line-height:30px;font-size:0;">&nbsp;</td></tr>
     ${products.map(block).join("")}
     ${tradePanel}
@@ -236,6 +285,7 @@ function buildCampaignHtml({
   dateLine = "", bannerImage = "", priceSuffix = "",
   tradeEyebrow = "", tradeLine = "", tradeButton = "", tradeUrl = "",
   instagramUrl = "", addressLine = "",
+  promoRibbon = "", promoTitle = "", promoSubtitle = "", promoNote = "", promoBadges = "", promoColor = "",
 } = {}) {
   if (layout === "editorial") {
     return buildEditorialHtml({
@@ -243,6 +293,7 @@ function buildCampaignHtml({
       showPrice, showMeta, showCta, cornerStyle, headerImage, headingSize,
       dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
       instagramUrl, addressLine,
+      promoRibbon, promoTitle, promoSubtitle, promoNote, promoBadges, promoColor,
     });
   }
   const cols = +columns === 1 ? 1 : 2;

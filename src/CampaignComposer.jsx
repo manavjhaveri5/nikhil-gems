@@ -27,6 +27,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     // Editorial furniture — the standing trade CTA is pre-filled because it is
     // the same invitation on every mailer; blank the line to drop the panel.
     bannerImage: "", priceSuffix: "", dateLine: "",
+    // The in-stock banner is drawn from these rather than uploaded as a graphic,
+    // so it stays sharp, readable on a phone, and survives blocked images.
+    promoRibbon: "Limited lots · Special pricing", promoTitle: "IN-STOCK SPECIALS",
+    promoSubtitle: "Special prices · Shipping included",
+    promoNote: "Current inventory available for immediate dispatch.",
+    promoBadges: "📦 In stock | Available now\n🚚 Ready to ship | Quick dispatch\n🌐 Shipping included | No extra charges",
+    promoColor: "#14331f",
     tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
     tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
     instagramUrl: "", addressLine: "",
@@ -296,10 +303,58 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
 
                     {design.layout === "editorial" && (
                       <div style={{ display: "grid", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                        {/* In-stock banner — built in HTML, not an uploaded image. */}
+                        <div style={{ display: "grid", gap: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <label style={{ ...lab, marginBottom: 0 }}>In-stock banner</label>
+                            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.inkMid, cursor: "pointer" }}>
+                              <input type="checkbox" checked={!!design.promoTitle || !!design.promoRibbon}
+                                onChange={e => {
+                                  if (e.target.checked) setDesign(d => ({ ...d, promoTitle: "IN-STOCK SPECIALS", promoRibbon: "Limited lots · Special pricing" }));
+                                  else setDesign(d => ({ ...d, promoTitle: "", promoRibbon: "" }));
+                                  invalidate();
+                                }} /> show
+                            </label>
+                            <span style={{ fontSize: 11, color: C.inkFaint }}>drawn in the email — no image to host</span>
+                          </div>
+                          {(design.promoTitle || design.promoRibbon) && (
+                            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10 }}>
+                              <div>
+                                <label style={lab}>Ribbon</label>
+                                <input value={design.promoRibbon} onChange={e => setD("promoRibbon", e.target.value)} style={FI()} />
+                              </div>
+                              <div>
+                                <label style={lab}>Banner title</label>
+                                <input value={design.promoTitle} onChange={e => setD("promoTitle", e.target.value)} style={FI()} />
+                              </div>
+                              <div>
+                                <label style={lab}>Sub-line</label>
+                                <input value={design.promoSubtitle} onChange={e => setD("promoSubtitle", e.target.value)} style={FI()} />
+                              </div>
+                              <div>
+                                <label style={lab}>Note under the rule</label>
+                                <input value={design.promoNote} onChange={e => setD("promoNote", e.target.value)} style={FI()} />
+                              </div>
+                              <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
+                                <label style={lab}>Badges <span style={{ textTransform: "none", fontWeight: 400 }}>— one per line, “emoji Label | caption”, up to 3</span></label>
+                                <textarea value={design.promoBadges} onChange={e => setD("promoBadges", e.target.value)} rows={3} style={{ ...FI(), resize: "vertical", fontSize: 12 }} />
+                              </div>
+                              <div>
+                                <label style={lab}>Banner colour</label>
+                                <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                                  <input type="color" value={design.promoColor} onChange={e => setD("promoColor", e.target.value)}
+                                    style={{ width: 34, height: 32, padding: 0, border: `1px solid ${C.border}`, borderRadius: 6, background: "none", cursor: "pointer", flexShrink: 0 }} />
+                                  <input value={design.promoColor} onChange={e => setD("promoColor", e.target.value)} style={{ ...FI(), fontSize: 11, padding: "7px 8px" }} />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "2fr 1fr 1fr", gap: 10 }}>
                           <div>
-                            <label style={lab}>Banner image <span style={{ textTransform: "none", fontWeight: 400 }}>(full width, under the intro)</span></label>
-                            <input value={design.bannerImage} onChange={e => setD("bannerImage", e.target.value)} placeholder="https://…  e.g. the IN-STOCK SPECIALS strip" style={FI()} />
+                            <label style={lab}>Banner image <span style={{ textTransform: "none", fontWeight: 400 }}>(overrides the drawn banner)</span></label>
+                            <input value={design.bannerImage} onChange={e => setD("bannerImage", e.target.value)} placeholder="https://…  only if you have artwork" style={FI()} />
                           </div>
                           <div>
                             <label style={lab}>Price suffix</label>
