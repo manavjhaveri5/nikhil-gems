@@ -192,6 +192,7 @@ function buildEditorialHtml({
   dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
   instagramUrl, addressLine,
   promoRibbon, promoTitle, promoSubtitle, promoNote, promoBadges, promoColor,
+  productColumns, shipIcon, shipTitle, shipNote,
 }) {
   const A = hex(accent, "#9a6200");
   const INK = hex(ink, "#1a1308");
@@ -203,27 +204,52 @@ function buildEditorialHtml({
   const W = 540;                       // content width inside the 600px card
   const url = v => (/^https?:\/\//i.test(String(v || "")) ? esc(v) : "");
 
-  /* Each piece is a full-width photo with its caption centred underneath —
-     name, what's left, price, and its own way in. The button repeats per
-     product on purpose: in a long scroll there is no single "the" product. */
-  const block = p => {
+  /* Each piece is a photo with its caption centred underneath — name, what's
+     left, price, and its own way in. The button repeats per product on purpose:
+     in a long scroll there is no single "the" product.
+
+     Two-up is the default. Paired cells are top-aligned rather than stretched,
+     because the photos are hand shots of different crops and forcing a common
+     height would letterbox them. */
+  const cols = +productColumns === 1 ? 1 : 2;
+  const imgW = cols === 1 ? W : 250;
+
+  const cell = p => {
     const link = url(p.url);
     const src = url(p.image);
     const img = src
-      ? `<img src="${src}" width="${W}" alt="${esc(p.title)}" style="display:block;width:100%;max-width:${W}px;height:auto;border:0;border-radius:${radius};">`
-      : `<div style="width:100%;max-width:${W}px;height:280px;background:${tint(A, 0.94)};border-radius:${radius};"></div>`;
+      ? `<img src="${src}" width="${imgW}" alt="${esc(p.title)}" style="display:block;width:100%;max-width:${imgW}px;height:auto;border:0;border-radius:${radius};">`
+      : `<div style="width:100%;max-width:${imgW}px;height:${cols === 1 ? 280 : 200}px;background:${tint(A, 0.94)};border-radius:${radius};"></div>`;
     return `
-    <tr><td align="center" style="padding:0 30px 34px;font-family:${F.body};">
-      ${link ? `<a href="${link}" style="text-decoration:none;">${img}</a>` : img}
-      <div style="font-size:12.5px;color:${INK};padding-top:12px;line-height:1.5;">${esc(p.title)}</div>
-      ${showMeta && p.available ? `<div style="font-size:12px;color:${INK};padding-top:5px;"><strong>Available:</strong> ${esc(p.available)}</div>`
-        : showMeta && p.meta ? `<div style="font-size:12px;color:${MUTED};padding-top:5px;">${esc(p.meta)}</div>` : ""}
-      ${showPrice && p.price ? `<div style="font-size:12.5px;color:${INK};padding-top:5px;">${esc(p.price)}${priceSuffix ? ` ${esc(priceSuffix)}` : ""}</div>` : ""}
-      ${showCta && link ? `<div style="padding-top:12px;">
-        <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${esc(ctaLabel)}</a>
-      </div>` : ""}
-    </td></tr>`;
+      <td width="${cols === 1 ? "100%" : "50%"}" align="center" valign="top" style="padding:0 ${cols === 1 ? 0 : 8}px 30px;font-family:${F.body};">
+        ${link ? `<a href="${link}" style="text-decoration:none;">${img}</a>` : img}
+        <div style="font-size:12.5px;color:${INK};padding-top:12px;line-height:1.5;">${esc(p.title)}</div>
+        ${showMeta && p.available ? `<div style="font-size:12px;color:${INK};padding-top:5px;"><strong>Available:</strong> ${esc(p.available)}</div>`
+          : showMeta && p.meta ? `<div style="font-size:12px;color:${MUTED};padding-top:5px;">${esc(p.meta)}</div>` : ""}
+        ${showPrice && p.price ? `<div style="font-size:12.5px;color:${INK};padding-top:5px;white-space:nowrap;">${esc(p.price)}${priceSuffix ? ` ${esc(priceSuffix)}` : ""}</div>` : ""}
+        ${showCta && link ? `<div style="padding-top:12px;">
+          <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${esc(ctaLabel)}</a>
+        </div>` : ""}
+      </td>`;
   };
+
+  const grid = [];
+  for (let i = 0; i < products.length; i += cols) {
+    grid.push(`<tr>${cols === 1 ? cell(products[i])
+      : `${cell(products[i])}${products[i + 1] ? cell(products[i + 1]) : '<td width="50%"></td>'}`}</tr>`);
+  }
+  const productRows = `<tr><td style="padding:0 30px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${grid.join("")}</table></td></tr>`;
+
+  /* Shipping terms are the last thing a wholesale buyer checks, so they close
+     the mailer — after the products, under the trade panel. */
+  const shipPanel = (shipTitle || shipNote) ? `
+    <tr><td align="center" style="padding:8px 34px 30px;font-family:${F.body};">
+      ${shipIcon ? (url(shipIcon)
+        ? `<img src="${url(shipIcon)}" width="34" alt="" style="display:block;margin:0 auto 14px;max-width:34px;height:auto;border:0;">`
+        : `<div style="font-size:26px;line-height:1;padding-bottom:14px;">${esc(shipIcon)}</div>`) : ""}
+      ${shipTitle ? `<div style="font-family:'Arial Black','Helvetica Neue',Helvetica,Arial,sans-serif;font-size:19px;font-weight:900;letter-spacing:.5px;color:${INK};text-transform:uppercase;line-height:1.3;">${esc(shipTitle)}</div>` : ""}
+      ${shipNote ? `<div style="font-size:12px;line-height:1.7;color:#5a5a5a;padding-top:12px;">${esc(shipNote).replace(/\n/g, "<br>")}</div>` : ""}
+    </td></tr>` : "";
 
   /* The standing invitation to the trade site. It is the one block that isn't
      about a single product, so it gets the inverted panel to say so. */
@@ -259,8 +285,9 @@ function buildEditorialHtml({
         ? promoBanner({ ribbon: promoRibbon, title: promoTitle, subtitle: promoSubtitle, note: promoNote, badges: promoBadges, color: promoColor || INK, font: F.body, width: W })
         : ""}
     <tr><td style="height:30px;line-height:30px;font-size:0;">&nbsp;</td></tr>
-    ${products.map(block).join("")}
+    ${productRows}
     ${tradePanel}
+    ${shipPanel}
     <tr><td align="center" style="padding:0 30px 30px;font-family:${F.body};font-size:11px;line-height:1.7;color:${MUTED};">
       ${url(instagramUrl) ? `<div style="padding-bottom:12px;"><a href="${url(instagramUrl)}" style="color:${A};text-decoration:none;font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;">Instagram</a></div>` : ""}
       <div>&copy; ${esc(brand)}</div>
@@ -286,6 +313,7 @@ function buildCampaignHtml({
   tradeEyebrow = "", tradeLine = "", tradeButton = "", tradeUrl = "",
   instagramUrl = "", addressLine = "",
   promoRibbon = "", promoTitle = "", promoSubtitle = "", promoNote = "", promoBadges = "", promoColor = "",
+  productColumns = 2, shipIcon = "", shipTitle = "", shipNote = "",
 } = {}) {
   if (layout === "editorial") {
     return buildEditorialHtml({
@@ -294,6 +322,7 @@ function buildCampaignHtml({
       dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
       instagramUrl, addressLine,
       promoRibbon, promoTitle, promoSubtitle, promoNote, promoBadges, promoColor,
+      productColumns, shipIcon, shipTitle, shipNote,
     });
   }
   const cols = +columns === 1 ? 1 : 2;

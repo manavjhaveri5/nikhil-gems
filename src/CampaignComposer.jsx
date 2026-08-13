@@ -34,6 +34,9 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     promoNote: "Current inventory available for immediate dispatch.",
     promoBadges: "📦 In stock | Available now\n🚚 Ready to ship | Quick dispatch\n🌐 Shipping included | No extra charges",
     promoColor: "#14331f",
+    productColumns: 2,
+    shipIcon: "✈️", shipTitle: "Duty free worldwide shipping",
+    shipNote: "All orders ship DDP — the price you see is the price you pay. No customs fees, no import duties, no surprise charges on delivery. Your order clears at our end, not yours.",
     tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
     tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
     instagramUrl: "", addressLine: "",
@@ -230,15 +233,18 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                           <option value="cards">Compact cards</option>
                         </select>
                       </div>
-                      {design.layout === "cards" && (
-                        <div>
-                          <label style={lab}>Columns</label>
-                          <select value={design.columns} onChange={e => setD("columns", +e.target.value)} style={FI()}>
-                            <option value={2}>Two columns</option>
-                            <option value={1}>One column (big)</option>
-                          </select>
-                        </div>
-                      )}
+                      <div>
+                        <label style={lab}>Columns</label>
+                        {design.layout === "cards"
+                          ? <select value={design.columns} onChange={e => setD("columns", +e.target.value)} style={FI()}>
+                              <option value={2}>Two columns</option>
+                              <option value={1}>One column (big)</option>
+                            </select>
+                          : <select value={design.productColumns} onChange={e => setD("productColumns", +e.target.value)} style={FI()}>
+                              <option value={2}>Two columns</option>
+                              <option value={1}>One column (big)</option>
+                            </select>}
+                      </div>
                       <div>
                         <label style={lab}>Font</label>
                         <select value={design.font} onChange={e => setD("font", e.target.value)} style={FI()}>
@@ -389,6 +395,22 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                           <div>
                             <label style={lab}>Address line <span style={{ textTransform: "none", fontWeight: 400 }}>(footer)</span></label>
                             <input value={design.addressLine} onChange={e => setD("addressLine", e.target.value)} placeholder="Jaipur, Rajasthan, India" style={FI()} />
+                          </div>
+                        </div>
+
+                        {/* Shipping terms — the closing block under the trade panel. */}
+                        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "90px 1fr", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                          <div>
+                            <label style={lab}>Icon</label>
+                            <input value={design.shipIcon} onChange={e => setD("shipIcon", e.target.value)} placeholder="✈️ or URL" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Shipping heading <span style={{ textTransform: "none", fontWeight: 400 }}>(empty removes the block)</span></label>
+                            <input value={design.shipTitle} onChange={e => setD("shipTitle", e.target.value)} style={FI()} />
+                          </div>
+                          <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
+                            <label style={lab}>Shipping note</label>
+                            <textarea value={design.shipNote} onChange={e => setD("shipNote", e.target.value)} rows={3} style={{ ...FI(), resize: "vertical", fontSize: 12 }} />
                           </div>
                         </div>
                       </div>
