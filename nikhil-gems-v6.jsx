@@ -6205,6 +6205,20 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [shopifyModal,setShopifyModal]=useState(null); // {name,price,creds}
   const [bulkShopify,setBulkShopify]=useState(null); // bulk push: {items,connected,storeKey,deal,running,done,results,hidden}
   const [bulkPrice,setBulkPrice]=useState(null); // bulk pricing: {mode,unit,rate,flat,keepRate}
+  /* Which storefront section a push lands in, and therefore which tag it carries.
+     Deals is the default because ready stock is what this button is usually for,
+     but a flatstone belongs in Flatstones — so the sections are read off the store
+     and offered. Cached for the session; a shop's sections rarely change mid-push. */
+  const [collections,setCollections]=useState([]);
+  const loadCollections=async creds=>{
+    if(!creds?.store||!creds?.token||collections.length)return;
+    try{
+      const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"collections",shopStore:creds.store,shopToken:creds.token})});
+      const d=await r.json();
+      if(r.ok&&Array.isArray(d.collections))setCollections(d.collections);
+    }catch{}
+  };
   const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   const [formQueue,setFormQueue]=useState([]); // items queued in multi-add mode
   const [customsDescs,setCustomsDescs]=useState([]);
@@ -6864,7 +6878,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
      because Shopify rejects a product without one. */
   const runBulkShopifyPush=async()=>{
     if(!bulkShopify)return;
-    const{items,connected,storeKey,deal}=bulkShopify;
+    const{items,connected,storeKey,deal,section}=bulkShopify;
     const creds=connected?.[storeKey];
     if(!creds){setBulkShopify(b=>({...b,error:"That store isn't connected"}));return;}
     setBulkShopify(b=>({...b,running:true,error:"",results:[]}));
@@ -6881,7 +6895,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       try{
         const res=await fetch("/api/shopify",{
           method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({action:item.shopifyProductId?"update":"create",item,shopStore:creds.store,shopToken:creds.token,shopifyName:name,shopifyPrice:price}),
+          body:JSON.stringify({action:item.shopifyProductId?"update":"create",item,shopStore:creds.store,shopToken:creds.token,shopifyName:name,shopifyPrice:price,section}),
         });
         const d=await res.json();
         if(!res.ok)throw new Error(d.error||"Shopify error");
@@ -6955,10 +6969,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     if(!keys.length){setShopifyStoreInput("");setShopifyTokenInput("");setShopifySetup(true);return;}
     const preferred=localStorage.getItem("ng-shopify-last-store");
     const storeKey=connected[preferred]?preferred:(connected.earth?"earth":keys[0]);
-    setBulkShopify({items:sel,connected,storeKey,deal:{enabled:true,days:7,customDate:""},running:false,done:false,results:[],error:""});
+    setBulkShopify({items:sel,connected,storeKey,deal:{enabled:true,days:7,customDate:""},section:DEFAULT_SECTION,running:false,done:false,results:[],error:""});
+    loadCollections(connected[storeKey]);
   };
 
-  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal,keepRate,lotVariants)=>{
+  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal,keepRate,lotVariants,section=DEFAULT_SECTION)=>{
     setShopifyPushing(true);
     const rawItem=itemOverride||selected;
     /* A product id only exists on the store it was created against. If this push
@@ -6971,7 +6986,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       if(!creds?.store||!creds?.token)throw new Error("Shopify isn't connected — tap reconnect and authorise the store");
       const res=await fetch("/api/shopify",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[]}),
+        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[],section}),
       });
       let d=await res.json();
       /* A stored product id survives the product being deleted on Shopify, and
@@ -6980,7 +6995,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       if(!res.ok&&itemToPush?.shopifyProductId&&/not found/i.test(String(d.error||""))){
         const again=await fetch("/api/shopify",{
           method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({action:"create",item:{...itemToPush,shopifyProductId:""},shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[]}),
+          body:JSON.stringify({action:"create",item:{...itemToPush,shopifyProductId:""},shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[],section}),
         });
         const d2=await again.json();
         if(again.ok){d=d2;showToast("Listing was gone on Shopify — created a fresh one");}
@@ -7027,6 +7042,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     }catch(e){showToast("❌ "+e.message);}
     finally{setShopifyPushing(false);}
   };
+  // Ready stock goes to Deals nine times out of ten, so that is what a push opens on.
+  const DEFAULT_SECTION="Deals";
   // Shopify creds live in per-store slots (ng-shopify-creds-earth / -atyahara).
   // The OAuth callback deliberately stopped writing the shared legacy slot, because
   // reconnecting one store clobbered the other's token there — but this screen was
@@ -7074,11 +7091,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const owned=resolveItemStore(selected,connected);
     const storeKey=owned||(connected[preferred]?preferred:(connected.earth?"earth":keys[0]));
     const autoName=stockShopifyTitle(selected);
-    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""},keepRate:isLotCard(selected),splits:["full"],nameEdited:false});
+    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""},section:DEFAULT_SECTION,keepRate:isLotCard(selected),splits:["full"],nameEdited:false});
+    loadCollections(connected[storeKey]);
   };
   const confirmShopifyPush=async()=>{
     if(!shopifyModal)return;
-    const{connected,storeKey,name,price,qty,qty2,keepRate}=shopifyModal;
+    const{connected,storeKey,name,price,qty,qty2,keepRate,section}=shopifyModal;
     const creds=connected?.[storeKey]||shopifyModal.creds;
     const overrides={};
     if(qty!=null&&qty!=="")overrides.qty=String(qty);
@@ -7086,7 +7104,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const itemToPush={...(selected||{}),...overrides};
     setShopifyModal(null);
     if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-    await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate);
+    await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate,undefined,section);
   };
   /* Manual lot re-sync. Uses sync_lot, so it touches only description, price and
      publish state — no AI title regeneration, no image churn. Caches the variant
@@ -7430,7 +7448,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           <div style={{background:C.surface,borderRadius:14,width:"min(560px,100%)",maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
             <div style={{padding:"18px 20px 12px",flexShrink:0}}>
               <div style={{fontWeight:700,fontSize:15}}>🛍 Push {b.items.length} item{b.items.length!==1?"s":""} to Shopify</div>
-              <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>Each goes to the storefront{"'"}s Deals section and gets a Listing Manager draft.</div>
+              <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>{b.section?<>Each goes to the storefront{"'"}s <b>{b.section}</b> section and gets a Listing Manager draft.</>:"Each is published with no storefront section, and gets a Listing Manager draft."}</div>
             </div>
 
             <div style={{padding:"0 20px",overflowY:"auto",flex:1}}>
@@ -7450,7 +7468,22 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     {unpriced} of these {unpriced===1?"has":"have"} no list price. Shopify needs one, so {unpriced===1?"it":"they"} will be pushed at no price and shown as ₹0 until you set it.
                   </div>
                 )}
-                <div style={{background:b.deal.enabled?"#FFF8E6":C.card,border:`1px solid ${b.deal.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
+                {/* Where these land, and therefore the tag they carry. */}
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Storefront section</div>
+                  <select value={b.section} disabled={b.running} onChange={e=>setBulkShopify(x=>({...x,section:e.target.value}))}
+                    style={{width:"100%",boxSizing:"border-box",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px",fontSize:12.5,color:C.ink,fontFamily:"inherit",cursor:b.running?"default":"pointer"}}>
+                    <option value={DEFAULT_SECTION}>{DEFAULT_SECTION}</option>
+                    {collections.filter(c=>c.title!==DEFAULT_SECTION).map(c=><option key={c.id} value={c.title}>{c.title}{c.smart?" (automated)":""}</option>)}
+                    <option value="">No section — just publish</option>
+                  </select>
+                  <div style={{fontSize:10.5,color:C.inkFaint,marginTop:5,lineHeight:1.5}}>
+                    {b.section
+                      ? <>Tagged <code style={{background:C.card,borderRadius:4,padding:"1px 5px"}}>{b.section.trim().toLowerCase()}</code> and collected into {b.section}.</>
+                      : "No section tag, no collection — the products are simply published."}
+                  </div>
+                </div>
+                {b.section===DEFAULT_SECTION&&<div style={{background:b.deal.enabled?"#FFF8E6":C.card,border:`1px solid ${b.deal.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
                   <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                     <input type="checkbox" checked={b.deal.enabled} disabled={b.running} onChange={e=>setBulkShopify(x=>({...x,deal:{...x.deal,enabled:e.target.checked}}))}/>
                     <span style={{fontSize:12,fontWeight:700,color:b.deal.enabled?"#9A6200":C.inkMid}}>⭐ Remind me to take these out of Deals</span>
@@ -7463,7 +7496,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       ))}
                     </div>
                   )}
-                </div>
+                </div>}
               </>)}
 
               {b.results.length>0&&(
@@ -7561,7 +7594,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div style={{padding:"22px 20px 4px",overflowY:"auto",flex:1,minHeight:0}}>
             <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>🛍 Push to Shopify</div>
             <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>
-              Publishes to the storefront{"'"}s <b>Deals</b> section and creates the listing in Listing Manager
+              {(shopifyModal.section===undefined?DEFAULT_SECTION:shopifyModal.section)
+                ? <>Publishes to the storefront{"'"}s <b>{shopifyModal.section===undefined?DEFAULT_SECTION:shopifyModal.section}</b> section and creates the listing in Listing Manager</>
+                : <>Publishes the product and creates the listing in Listing Manager — no storefront section</>}
               {s.video?" · 🎥 video will be uploaded":""}
             </div>
 
@@ -7676,7 +7711,24 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 </div>
               );
             })()}
-            {(()=>{const d=shopifyModal.deal||{enabled:true,days:7,customDate:""};return(
+            {/* Where it lands on the storefront, and the tag that follows from it. */}
+            {(()=>{const sec=shopifyModal.section===undefined?DEFAULT_SECTION:shopifyModal.section;return(
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Storefront section</div>
+                <select value={sec} onChange={e=>setShopifyModal(m=>({...m,section:e.target.value}))}
+                  style={{width:"100%",boxSizing:"border-box",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px",fontSize:12.5,color:C.ink,fontFamily:"inherit",cursor:"pointer"}}>
+                  <option value={DEFAULT_SECTION}>{DEFAULT_SECTION}</option>
+                  {collections.filter(c=>c.title!==DEFAULT_SECTION).map(c=><option key={c.id} value={c.title}>{c.title}{c.smart?" (automated)":""}</option>)}
+                  <option value="">No section — just publish</option>
+                </select>
+                <div style={{fontSize:10,color:C.inkFaint,marginTop:6,lineHeight:1.5}}>
+                  {sec
+                    ? <>Tagged <code style={{background:C.card,borderRadius:4,padding:"1px 5px"}}>{sec.trim().toLowerCase()}</code> and collected into {sec}. An automated section reads the tag rather than being joined directly.</>
+                    : "No section tag, no collection — the product is simply published."}
+                </div>
+              </div>
+            );})()}
+            {(shopifyModal.section===undefined||shopifyModal.section===DEFAULT_SECTION)&&(()=>{const d=shopifyModal.deal||{enabled:true,days:7,customDate:""};return(
               <div style={{background:d.enabled?"#FFF8E6":C.card,border:`1px solid ${d.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:16}}>
                 <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                   <input type="checkbox" checked={d.enabled} onChange={e=>setShopifyModal(m=>({...m,deal:{...d,enabled:e.target.checked}}))}/>
@@ -7704,7 +7756,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div style={{display:"flex",gap:8,padding:"12px 20px 18px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
               <button onClick={()=>{
                 if(!shopifyModal)return;
-                const{connected,storeKey,creds,name,price,qty,qty2,keepRate}=shopifyModal;
+                const{connected,storeKey,creds,name,price,qty,qty2,keepRate,section}=shopifyModal;
                 const pushCreds=connected?.[storeKey]||creds;
                 // Merge overridden qty/qty2 back into the item before pushing
                 const overrides={};
@@ -7713,7 +7765,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 const itemToPush={...s,...overrides};
                 setShopifyModal(null);
                 if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate&&rateBasis?rateBasis:false,lotVariants);
+                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate&&rateBasis?rateBasis:false,lotVariants,section===undefined?DEFAULT_SECTION:section);
               }} style={{flex:1,background:"#008060",border:"none",color:"#fff",fontWeight:700,fontSize:13,padding:"11px",borderRadius:8,cursor:"pointer"}}>Push →</button>
               <button onClick={()=>setShopifyModal(null)} style={{background:"none",border:`1px solid ${C.border}`,fontSize:13,padding:"11px 18px",borderRadius:8,cursor:"pointer",color:C.inkFaint}}>Cancel</button>
             </div>
