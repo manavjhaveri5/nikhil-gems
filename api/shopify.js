@@ -190,6 +190,11 @@ Return ONLY valid JSON with these fields:
   }
 }
 
+// The product tag that shadows the Deals collection. Lower case because Shopify
+// compares tags case-insensitively but stores them as typed, and a mixed bag of
+// "Deals"/"deals" makes automated-collection rules hard to trust.
+const DEALS_TAG = "deals";
+
 /* Pushing ready stock into the storefront's "Deals" section is the main reason
    this endpoint is used, so the outcome is reported back rather than swallowed —
    a missing Deals collection used to fail silently and the product would quietly
@@ -788,14 +793,22 @@ export default async function handler(req, res) {
   const ai = await generateAIContent(item, requestedTitle, availStr);
   const title = ai?.shopifyTitle || requestedTitle;
 
-  // Tags: AI tags merged with structured tags
+  /* Tags: AI tags merged with structured tags, plus `deals`.
+
+     Every push from a stock card is also collected into the Deals collection, so
+     the tag says on the product what the collection says about it — which is what
+     automated collections, theme badges and discount rules can actually read. The
+     collection alone is invisible to all three. Case-folded against the existing
+     tags so a card that already carries "Deals" doesn't end up with both. */
   const baseTags = [
     item.shape, item.grade, item.origin, item.productType,
     ...(Array.isArray(item.market) ? item.market : [item.market].filter(Boolean)),
     ...(item.tags || []),
   ].filter(Boolean);
   const aiTags = ai?.tags ? ai.tags.split(",").map(t => t.trim()).filter(Boolean) : [];
-  const tags = [...new Set([...baseTags, ...aiTags])].join(", ");
+  const merged = [...new Set([...baseTags, ...aiTags])];
+  if (!merged.some(t => String(t).trim().toLowerCase() === DEALS_TAG)) merged.push(DEALS_TAG);
+  const tags = merged.join(", ");
 
   // Description
   const descParts = [];
