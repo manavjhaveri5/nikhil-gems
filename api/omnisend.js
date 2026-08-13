@@ -558,16 +558,25 @@ export default async function handler(req, res) {
       const found = await omniList("/contacts", { email, limit: 1 });
       const hit = rowsOf(found.data, "contacts")[0];
 
+      /* createTags apply only to a contact this call brings into existence — the
+         audience membership a new arrival should start with. They are deliberately
+         not merged into an existing contact: someone already tagged `inactive` has
+         been put there on purpose, and quietly adding `active` would land them in
+         both segments at once. */
+      const createTags = [...new Set((body.createTags || []).map(t => String(t).trim()).filter(Boolean))];
+
       if (!hit) {
         if (body.createIfMissing === false) return res.status(404).json({ error: `${email} is not in Omnisend` });
+        const born = [...add];
+        for (const t of createTags) if (!born.some(x => x.toLowerCase() === t.toLowerCase())) born.push(t);
         const created = await omni("POST", "/contacts", {
           identifiers: [{ type: "email", id: email, channels: { email: { status: "subscribed" } } }],
-          tags: add.slice(0, 25),
+          tags: born.slice(0, 25),
           ...(body.firstName ? { firstName: String(body.firstName).slice(0, 100) } : {}),
           ...(body.lastName ? { lastName: String(body.lastName).slice(0, 100) } : {}),
         });
         if (!created.ok) return res.status(created.status || 400).json({ error: created.error });
-        return res.json({ ok: true, created: true, email, tags: add });
+        return res.json({ ok: true, created: true, email, tags: born });
       }
 
       const existing = Array.isArray(hit.tags) ? hit.tags : [];

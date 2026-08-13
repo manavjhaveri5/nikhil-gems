@@ -391,6 +391,11 @@ function CampaignsTab({ showToast }) {
    they are read here and passed with the request — the same path the Listing
    Manager uses. */
 const APPROVE_TAG = "approved";
+/* A contact created by an approval starts in the active segment — that segment is
+   the mailing list, and a wholesale buyer who was just let in belongs on it. Only
+   ever applied at creation: a contact already marked inactive was marked that way
+   deliberately, and adding `active` on top would put them in both segments. */
+const ACTIVE_TAG = "active";
 const WELCOME_EVENT = "wholesale_approved";
 const SHOP_CREDS_KEY = "ng-shopify-creds-earth";
 
@@ -571,10 +576,10 @@ function ApprovalsTab({ showToast }) {
           const [firstName, ...rest] = String(c.name || "").split(" ");
           const t = await api({
             action: "contact_tag", email: c.email,
-            ...(undo ? { removeTags: [APPROVE_TAG] } : { addTags: [APPROVE_TAG] }),
+            ...(undo ? { removeTags: [APPROVE_TAG] } : { addTags: [APPROVE_TAG], createTags: [ACTIVE_TAG] }),
             createIfMissing: !undo, firstName: firstName || "", lastName: rest.join(" "),
           });
-          done.push(t.created ? "added to Omnisend" : "Omnisend");
+          done.push(t.created ? `added to Omnisend · ${ACTIVE_TAG}` : "Omnisend");
           setOmniTags(m => ({ ...m, [c.email.toLowerCase()]: t.tags || [] }));
 
           // Approving is what earns the welcome mail, so the event only fires on

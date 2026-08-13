@@ -5,17 +5,28 @@ import { C, mob, FI } from "./lmTheme.js";
    Listing Manager's contextual "Campaign" button, so both drive one implementation.
    Campaigns are only ever created as drafts here; sending is a separate, confirmed
    action because a blast to the subscriber list cannot be undone. */
+/* The list has run to the same two conventions for months: a shouted subject
+   carrying the send date, and an internal name that is just the date written
+   plainly. Both are derived rather than typed, so a new campaign starts correct. */
+const MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
+const _today = new Date();
+const MAILER_DATE = `${_today.getDate()} ${MONTHS[_today.getMonth()]} ${_today.getFullYear()}`;
+const ordinal = d => d + (d > 3 && d < 21 ? "th" : ["th", "st", "nd", "rd"][d % 10] || "th");
+const CAMPAIGN_NAME = `${ordinal(_today.getDate())} ${MONTHS[_today.getMonth()][0]}${MONTHS[_today.getMonth()].slice(1).toLowerCase()} ${_today.getFullYear()}`;
+
 export default function CampaignComposer({ listings = [], onClose, showToast }) {
   const [sel, setSel] = useState(() => new Set());
   const [q, setQ] = useState("");
   const [brand, setBrand] = useState("Nikhil Gems");
   const [heading, setHeading] = useState("New arrivals");
-  const [subject, setSubject] = useState("");
+  // Every mailer is the same weekly list with a new date on it, so the subject
+  // writes itself. Still a plain field — a one-off can say something else.
+  const [subject, setSubject] = useState(() => `NIKHIL GEMS - WEEKLY MAILING LIST - ${MAILER_DATE}`);
   const [preheader, setPreheader] = useState("");
   const [intro, setIntro] = useState("");
   const [senderName, setSenderName] = useState("Nikhil Gems");
   const [senderEmail, setSenderEmail] = useState("");
-  const [priceMode, setPriceMode] = useState("none");
+  const [priceMode, setPriceMode] = useState("earth");
   /* Design lives in one object so preview and the created draft can never drift
      apart — both are rendered from payloadBase() by the same server function. */
   const [design, setDesign] = useState({
@@ -124,7 +135,9 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
       await post({ action: "sync_products", products }).catch(() => {}); // catalog sync is best-effort
       const d = await post({
         action: "create_campaign", ...payloadBase(),
-        name: subject || heading, subject, preheader, senderName, senderEmail: senderEmail || undefined,
+        // Omnisend's campaign name is internal-only; the date alone is how the
+        // list has always been labelled there.
+        name: CAMPAIGN_NAME, subject, preheader, senderName, senderEmail: senderEmail || undefined,
         segmentIds: [...segIds],
       });
       setCampaignId(d.campaignId); setTestedOk(false);
@@ -205,12 +218,12 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               <div><label style={lab}>Sender name *</label><input value={senderName} onChange={e => { setSenderName(e.target.value); invalidate(); }} style={FI()} /></div>
               <div><label style={lab}>Sender email</label><input value={senderEmail} onChange={e => { setSenderEmail(e.target.value); invalidate(); }} placeholder="verified in Omnisend" style={FI()} /></div>
               <div>
-                <label style={lab}>Prices shown</label>
+                <label style={lab}>Which price to print</label>
                 <select value={priceMode} onChange={e => { setPriceMode(e.target.value); invalidate(); }} style={FI()}>
-                  <option value="none">No prices (wholesale)</option>
                   <option value="earth">Earth Editions ($)</option>
                   <option value="aty">Atyahara (₹)</option>
                   <option value="etsy">Etsy (₹)</option>
+                  <option value="none">Print no prices</option>
                 </select>
               </div>
               <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
@@ -435,18 +448,6 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                 )}
               </div>
 
-              <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
-                <label style={lab}>Audience {segments.length === 0 && <span style={{ textTransform: "none", fontWeight: 400 }}>— none loaded, will send to all subscribers</span>}</label>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {segments.map(s => {
-                    const on = segIds.has(s.id);
-                    return <button key={s.id} type="button" onClick={() => { setSegIds(p => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; }); invalidate(); }}
-                      style={{ background: on ? C.teal : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.teal : C.border}`, borderRadius: 20, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                      {s.name}{s.count != null ? ` · ${s.count}` : ""}
-                    </button>;
-                  })}
-                </div>
-              </div>
             </div>
 
             {err && configured !== false && <div style={{ background: C.redBg, border: `1px solid ${C.red}55`, color: C.red, borderRadius: 10, padding: "9px 12px", fontSize: 12 }}>{err}</div>}
@@ -457,8 +458,26 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               </div>
             )}
 
-            {/* Draft → test → send. Each step gates the next. */}
-            <div style={{ ...card, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Draft → test → send. Each step gates the next.
+                Audience sits here rather than up in the copy: who it goes to is a
+                decision made at the point of sending, not while writing. */}
+            <div style={{ ...card, display: "grid", gap: 10 }}>
+              <div>
+                <label style={lab}>Audience {segments.length === 0
+                  ? <span style={{ textTransform: "none", fontWeight: 400 }}>— none loaded, will go to all subscribers</span>
+                  : segIds.size === 0 && <span style={{ textTransform: "none", fontWeight: 400 }}>— none picked, will go to all subscribers</span>}</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {segments.map(s => {
+                    const on = segIds.has(s.id);
+                    return <button key={s.id} type="button" onClick={() => { setSegIds(p => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; }); invalidate(); }}
+                      style={{ background: on ? C.teal : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.teal : C.border}`, borderRadius: 20, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      {s.name}{s.count != null ? ` · ${s.count}` : ""}
+                    </button>;
+                  })}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button onClick={doPreview} disabled={!products.length || !!busy}
                 style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: products.length ? "pointer" : "not-allowed", opacity: products.length ? 1 : .5 }}>
                 {busy === "preview" ? "Rendering…" : "Preview"}
@@ -479,7 +498,8 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                   style={{ background: testedOk ? C.red : C.card, color: testedOk ? "#fff" : C.inkFaint, border: `1px solid ${testedOk ? C.red : C.border}`, borderRadius: 9, padding: "10px 20px", fontSize: 12.5, fontWeight: 700, cursor: testedOk ? "pointer" : "not-allowed" }}>
                   {busy === "send" ? "Sending…" : "Send to list →"}
                 </button>
-              </>}
+                </>}
+              </div>
             </div>
             <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.6 }}>
               The draft is created in Omnisend — you can also open it there to tweak the design. Omnisend appends its own unsubscribe footer to campaigns; confirm it's present in the test email before sending. Sending is irreversible.
