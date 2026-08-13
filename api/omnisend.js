@@ -470,6 +470,24 @@ export default async function handler(req, res) {
       return res.json({ ok: true, campaign: r.data });
     }
 
+    /* Delete a draft. The status is read back from Omnisend first rather than
+       trusted from the caller: a sent campaign is the record that it went out,
+       and losing it loses the history. Whether Omnisend permits deleting drafts
+       at all is its call — its refusal is passed through verbatim. */
+    if (action === "delete_campaign") {
+      const id = String(body.campaignId || "").trim();
+      if (!id) return res.status(400).json({ error: "campaignId required" });
+      const cur = await omni("GET", `/campaigns/${encodeURIComponent(id)}`);
+      if (!cur.ok) return res.status(cur.status || 400).json({ error: cur.error });
+      const status = String(cur.data?.status || cur.data?.campaign?.status || "").toLowerCase();
+      if (status === "sent" || status === "sending") {
+        return res.status(400).json({ error: `Refusing to delete a ${status} campaign — that record is the proof it went out.` });
+      }
+      const r = await omni("DELETE", `/campaigns/${encodeURIComponent(id)}`);
+      if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+      return res.json({ ok: true, deleted: id });
+    }
+
     /* Subscribers, one cursor page at a time; the ERP loops this for CSV export. */
     if (action === "contacts") {
       const params = { limit: clampLimit(body.limit || 100) };

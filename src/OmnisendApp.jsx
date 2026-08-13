@@ -198,6 +198,7 @@ function CampaignsTab({ showToast }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [sort, setSort] = useState("newest");
+  const [deleting, setDeleting] = useState("");
 
   const load = useCallback(async (cursor = "") => {
     setLoading(true); setErr("");
@@ -207,6 +208,21 @@ function CampaignsTab({ showToast }) {
       setAfter(d.after || ""); setHasMore(!!d.hasMore);
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
   }, []);
+
+  /* Deleting is offered for drafts and the failed ones only — a sent campaign is
+     the record that it went out, and the API refuses those anyway. Typing isn't
+     demanded the way sending demands it: this destroys a draft, not an audience's
+     inbox, and the name is in the prompt to catch the wrong row. */
+  const remove = async c => {
+    if (!window.confirm(`Delete the draft "${c.name || c.subject || c.id}"?\n\nThis removes it from Omnisend and cannot be undone.`)) return;
+    setDeleting(c.id); setErr("");
+    try {
+      await api({ action: "delete_campaign", campaignId: c.id });
+      setRows(rs => rs.filter(r => r.id !== c.id));
+      setOpen(o => (o === c.id ? null : o));
+      showToast?.("✓ Draft deleted");
+    } catch (e) { setErr(`Couldn't delete: ${e.message}`); } finally { setDeleting(""); }
+  };
 
   useEffect(() => {
     load();
@@ -327,6 +343,12 @@ function CampaignsTab({ showToast }) {
                   </div>
                   <div style={{ marginTop: 13, paddingTop: 12, borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <a href="https://app.omnisend.com/campaigns" target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none", display: "inline-block" }}>Open in Omnisend ↗</a>
+                    {!["sent", "sending"].includes(String(c.status).toLowerCase()) && (
+                      <button onClick={() => remove(c)} disabled={deleting === c.id}
+                        style={{ ...btn(C.redBg, C.red), border: `1px solid ${C.red}`, opacity: deleting === c.id ? .5 : 1 }}>
+                        {deleting === c.id ? "Deleting…" : "Delete draft"}
+                      </button>
+                    )}
                     <span style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.5, flex: "1 1 260px" }}>
                       Open/click rates and the email preview aren't in Omnisend's API — its campaign endpoint returns no statistics and past templates aren't retrievable, so those live in Omnisend itself.
                     </span>
