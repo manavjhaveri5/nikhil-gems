@@ -4936,7 +4936,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
 /* ══════════════════════════════════════════════════════════════════════════
    ETSY SHOP MANAGER — fast load, edit listings, full orders + customers
 ══════════════════════════════════════════════════════════════════════════ */
-const ETSY_CACHE = "ng-etsy-v3";
+// Bump this to discard every stored cache — the shape changed, or what's in it
+// can no longer be trusted. It is the only thing that should force a cold load.
+const ETSY_CACHE = "ng-etsy-v4";
 
 function EtsyLiveView({ onCrossPost }) {
   const loadCache = () => { try { return JSON.parse(localStorage.getItem(ETSY_CACHE)||"{}"); } catch { return {}; } };
@@ -4995,14 +4997,23 @@ function EtsyLiveView({ onCrossPost }) {
   const FULL_RESYNC_MS = 24 * 60 * 60 * 1000;        // force a full resync at most once a day (catches status flips on old orders)
   const INCREMENTAL_BUFFER_S = 3 * 24 * 60 * 60;     // re-pull the last few days so recent shipping/status changes stay fresh
 
+  /* A thousand enriched receipts and a full catalog can exceed the ~5MB
+     localStorage quota, and the write then throws. Swallowing that leaves no
+     cache at all, so the next visit is a cold load — the slow path, forever,
+     invisibly. Drop order history until it fits instead: the listings and the
+     newest receipts are what the screen opens with, and the rest comes back on
+     the next sync. Newest-first also keeps the incremental cursor correct. */
   const saveCache = (ls, os, fullSynced) => {
-    try {
-      const prev = loadCache();
-      localStorage.setItem(ETSY_CACHE, JSON.stringify({
-        listings: ls, orders: os, syncedAt: Date.now(),
-        lastFullSync: fullSynced ? Date.now() : (prev.lastFullSync || 0),
-      }));
-    } catch {}
+    const prev = loadCache();
+    const write = rows => localStorage.setItem(ETSY_CACHE, JSON.stringify({
+      listings: ls, orders: rows, syncedAt: Date.now(),
+      lastFullSync: fullSynced ? Date.now() : (prev.lastFullSync || 0),
+      ordersTrimmed: rows.length < (os?.length || 0) ? (os.length - rows.length) : 0,
+    }));
+    const newest = sortEtsyReceipts(os);
+    for (const n of [newest.length, 400, 150, 50, 0]) {
+      try { write(newest.slice(0, n)); return; } catch {}
+    }
   };
 
   const etsyMoney = m => (m?.amount || 0) / (m?.divisor || 100);
@@ -5220,8 +5231,13 @@ function EtsyLiveView({ onCrossPost }) {
   useEffect(() => {
     const STALE_MS = 10 * 60 * 1000; // 10 minutes
     const cacheAge = c0.syncedAt ? Date.now() - c0.syncedAt : Infinity;
-    // Also treat cache as stale if it has suspiciously few listings (< 200 = old pre-pagination cache)
-    const cacheStale = cacheAge >= STALE_MS || (c0.listings?.length > 0 && c0.listings.length < 200);
+    /* Freshness is the timestamp's job alone. This used to also call a cache of
+       under 200 listings stale, as a way of discarding caches written before the
+       catalog paginated — but a shop with 100 listings then failed that test on
+       every visit, so the cache never counted as fresh and every open re-pulled
+       the whole catalog and a thousand enriched receipts. The cache key carries a
+       version for that job instead. */
+    const cacheStale = cacheAge >= STALE_MS;
     if (c0.listings?.length > 0 && !cacheStale) {
       // Cache is fresh — show instantly, no API call
       getToken().then(tok => setHasOAuth(!!tok));
