@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { loadK, upsertItemK, deleteItemK, onCacheRefresh, readCache, uid, fmtDate, logActivity, mob } from "./utils.js";
 import { uploadToStorage, removeFromStorage } from "./storageUtils.js";
+import { fetchWithRetry } from "./aiClient.js";
 import { C, FI } from "./ui.jsx";
 
 export const DOCS_KEY = "ng-documents-v1";
@@ -244,6 +245,233 @@ function DocForm({ draft, owners, onClose, onSaved, onToast }) {
 }
 
 // ── One row in the list ───────────────────────────────────────────────────────
+/* ── Bulk add ─────────────────────────────────────────────────────────────────
+   A drawer of paperwork is filed in one go: drop the lot in, and each file is
+   uploaded, read by the model, and comes back as a filled-in row — category,
+   title, the number on it, whose it is, and the dates. Nothing is saved until
+   the rows are reviewed, because a misread expiry date is worse than a blank
+   one: the reminders are built on it.
+
+   Files are read as they upload rather than after, three at a time — enough to
+   keep a folder of twenty moving without flooding the endpoint. */
+const BULK_CONCURRENCY = 3;
+const AI_MAX_BYTES = 8 * 1024 * 1024; // beyond this the base64 payload gets unwieldy
+
+const fileToBase64 = file => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result || "").split(",")[1] || "");
+  r.onerror = () => reject(new Error("Could not read the file"));
+  r.readAsDataURL(file);
+});
+
+const CLASSIFY_PROMPT = `You are filing a business document for a gemstone exporter in India.
+
+Read the attached file and reply with ONLY a JSON object, no prose, no code fence:
+{"category":"<id>","title":"<short human title>","owner":"<person or company it belongs to, or empty>","refNo":"<the document's own number, or empty>","issueDate":"<YYYY-MM-DD or empty>","expiryDate":"<YYYY-MM-DD or empty>","tags":["<a few lowercase keywords>"],"confidence":<0-1>}
+
+category MUST be one of: ${DOC_CATEGORIES.map(c => `${c.id} (${c.hint})`).join(", ")}.
+
+Rules:
+- title: what a person would call it, e.g. "Passport — Manav Jhaveri", "Electricity bill — Aug 2026", "GST registration certificate". Never repeat the file name if the document says something better.
+- refNo: the identifying number printed on it (passport number, PAN, bill number, licence number). Empty if there is none.
+- Dates as YYYY-MM-DD. Leave a date empty rather than guessing; do not invent an expiry for a document that has none (a bill has no expiry).
+- confidence: how sure you are of the category, 0 to 1.`;
+
+const classifyFile = async file => {
+  const b64 = await fileToBase64(file);
+  const isPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+  const part = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64, filename: file.name } }
+    : { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } };
+  const res = await fetchWithRetry("/api/claude", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      max_tokens: 600, temperature: 0,
+      messages: [{ role: "user", content: [part, { type: "text", text: CLASSIFY_PROMPT }] }],
+    }),
+  }, { tries: 2, timeoutMs: 60000 });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error?.message || "The model refused the file");
+  const text = data.content?.find(b => b.type === "text")?.text || "";
+  const json = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
+  let out;
+  try { out = JSON.parse(json); } catch { throw new Error("Couldn't read the reply"); }
+  const iso = v => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || "").trim()) ? String(v).trim() : "");
+  return {
+    category: CAT_BY_ID[out.category] ? out.category : "other",
+    title: String(out.title || "").trim().slice(0, 120),
+    owner: String(out.owner || "").trim().slice(0, 80),
+    refNo: String(out.refNo || "").trim().slice(0, 60),
+    issueDate: iso(out.issueDate),
+    expiryDate: iso(out.expiryDate),
+    tags: Array.isArray(out.tags) ? out.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean).slice(0, 6) : [],
+    confidence: Math.max(0, Math.min(1, +out.confidence || 0)),
+  };
+};
+
+function BulkAdd({ onClose, onSaved, onToast }) {
+  const [rows, setRows] = useState([]);      // {id,file,name,size,status,url,fields,error,keep}
+  const [dragging, setDragging] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef(null);
+  const patch = (id, p) => setRows(rs => rs.map(r => r.id === id ? { ...r, ...p } : r));
+
+  const intake = async list => {
+    const files = Array.from(list || []).filter(Boolean);
+    if (!files.length) return;
+    const fresh = files.map(f => ({
+      id: uid(), file: f, name: f.name, size: f.size || 0, type: f.type || "",
+      status: "queued", url: "", error: "", keep: true,
+      fields: { ...newDoc(), title: f.name.replace(/\.[^.]+$/, ""), category: "other", tags: [] },
+    }));
+    setRows(rs => [...rs, ...fresh]);
+
+    // A small worker pool: each file uploads, then is read, before the next starts.
+    const queue = [...fresh];
+    const worker = async () => {
+      while (queue.length) {
+        const row = queue.shift();
+        try {
+          patch(row.id, { status: "uploading" });
+          const path = `documents/bulk/${row.fields.id}/${uid()}${uid()}-${safeName(row.name)}`;
+          const url = await uploadToStorage(path, row.file);
+          patch(row.id, { url, status: "reading" });
+          if (row.size > AI_MAX_BYTES) {
+            patch(row.id, { status: "done", error: "Too large to read — fill it in by hand" });
+            continue;
+          }
+          const got = await classifyFile(row.file);
+          patch(row.id, {
+            status: "done",
+            fields: { ...row.fields, ...got, title: got.title || row.fields.title },
+          });
+        } catch (e) {
+          // An upload that failed has nothing to save; a read that failed still does.
+          patch(row.id, { status: "done", error: e?.message || "Could not read this file" });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BULK_CONCURRENCY, fresh.length) }, worker));
+  };
+
+  const setField = (id, k, v) => setRows(rs => rs.map(r => r.id === id ? { ...r, fields: { ...r.fields, [k]: v } } : r));
+  const drop = id => setRows(rs => {
+    const row = rs.find(r => r.id === id);
+    if (row?.url) removeFromStorage(row.url);
+    return rs.filter(r => r.id !== id);
+  });
+
+  const working = rows.some(r => r.status === "uploading" || r.status === "reading");
+  const savable = rows.filter(r => r.keep && r.url && r.fields.title.trim());
+
+  const saveAll = async () => {
+    if (!savable.length) return;
+    setSaving(true);
+    let ok = 0;
+    for (const r of savable) {
+      const rec = {
+        ...r.fields,
+        title: r.fields.title.trim(),
+        owner: (r.fields.owner || "").trim(),
+        refNo: (r.fields.refNo || "").trim(),
+        files: [{ id: uid(), name: r.name, url: r.url, type: r.type, size: r.size, uploadedAt: new Date().toISOString() }],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      try { await upsertItemK(DOCS_KEY, rec); ok++; } catch (e) { onToast(`Couldn't save ${r.name}: ${e?.message || ""}`); }
+    }
+    setSaving(false);
+    onSaved(ok);
+  };
+
+  const lbl = { fontSize: 9, fontWeight: 700, letterSpacing: .9, color: C.inkFaint, textTransform: "uppercase", marginBottom: 3, display: "block" };
+  const cell = { ...FI, padding: "6px 8px", fontSize: 12 };
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", inset: 0, background: "rgba(20,14,4,.45)", zIndex: 900, display: "flex", alignItems: mob ? "flex-end" : "center", justifyContent: "center", padding: mob ? 0 : 24 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: C.bg, borderRadius: mob ? "14px 14px 0 0" : 16, width: "min(1000px,100%)", maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "var(--e-modal)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "15px 20px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 600, color: C.ink, lineHeight: 1 }}>⇪ Bulk upload</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>drop the folder in — each file is read and filed</div>
+          <div style={{ flex: 1 }} />
+          <button onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12.5, color: C.inkMid, cursor: "pointer", fontFamily: "inherit" }}>Close</button>
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 16 }}>
+          <div
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); intake(e.dataTransfer?.files); }}
+            onClick={() => fileRef.current?.click()}
+            style={{ border: `2px dashed ${dragging ? C.gold : C.borderHi}`, background: dragging ? C.goldLight : C.card,
+              borderRadius: 14, padding: rows.length ? "18px 16px" : "40px 16px", textAlign: "center", cursor: "pointer", transition: "all .15s", marginBottom: rows.length ? 14 : 0 }}>
+            <div style={{ fontSize: rows.length ? 22 : 32, marginBottom: 6 }}>📥</div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>Drop files here, or click to choose</div>
+            <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4, lineHeight: 1.6 }}>
+              PDFs and photos, as many at once as you like. Each one is read to work out what it is,<br />what it{"'"}s numbered, whose it is and when it expires — you check before anything is saved.
+            </div>
+            <input ref={fileRef} type="file" multiple accept="application/pdf,image/*,.doc,.docx,.xls,.xlsx,.csv"
+              onChange={e => { intake(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
+          </div>
+
+          {rows.map(r => {
+            const cat = CAT_BY_ID[r.fields.category] || CAT_BY_ID.other;
+            const low = r.status === "done" && !r.error && (r.fields.confidence || 0) < 0.55;
+            return (
+              <div key={r.id} style={{ background: C.surface, border: `1px solid ${r.keep ? C.border : C.borderHi}`, borderRadius: 12, padding: 12, marginBottom: 10, opacity: r.keep ? 1 : .55 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: r.status === "done" ? 10 : 0 }}>
+                  <input type="checkbox" checked={r.keep} onChange={e => patch(r.id, { keep: e.target.checked })} style={{ accentColor: C.gold }} />
+                  <span style={{ fontSize: 15 }}>{fileIcon(r)}</span>
+                  <span style={{ fontSize: 12, color: C.inkMid, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                  <span style={{ fontSize: 10.5, color: C.inkFaint, flexShrink: 0 }}>{fmtSize(r.size)}</span>
+                  {r.status !== "done" && (
+                    <span style={{ fontSize: 11, color: C.gold, fontWeight: 600, flexShrink: 0 }}>
+                      {r.status === "uploading" ? "Uploading…" : r.status === "reading" ? "Reading…" : "Queued"}
+                    </span>
+                  )}
+                  {r.status === "done" && !r.error && <span style={{ fontSize: 11, color: C.green, fontWeight: 600, flexShrink: 0 }}>{cat.icon} {cat.label}</span>}
+                  <button onClick={() => drop(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 16, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+                </div>
+
+                {r.error && <div style={{ fontSize: 11.5, color: C.amber, background: C.amberBg, borderRadius: 7, padding: "6px 9px", marginBottom: r.status === "done" ? 9 : 0 }}>{r.error}</div>}
+                {low && <div style={{ fontSize: 11.5, color: C.amber, background: C.amberBg, borderRadius: 7, padding: "6px 9px", marginBottom: 9 }}>Not sure about this one — worth a look before saving.</div>}
+
+                {r.status === "done" && (
+                  <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "2fr 1.2fr 1fr 1fr 1fr", gap: 8 }}>
+                    <div><span style={lbl}>Title</span><input value={r.fields.title} onChange={e => setField(r.id, "title", e.target.value)} style={cell} /></div>
+                    <div><span style={lbl}>Category</span>
+                      <select value={r.fields.category} onChange={e => setField(r.id, "category", e.target.value)} style={{ ...cell, cursor: "pointer" }}>
+                        {DOC_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}
+                      </select>
+                    </div>
+                    <div><span style={lbl}>Owner</span><input value={r.fields.owner} onChange={e => setField(r.id, "owner", e.target.value)} style={cell} /></div>
+                    <div><span style={lbl}>Number</span><input value={r.fields.refNo} onChange={e => setField(r.id, "refNo", e.target.value)} style={cell} /></div>
+                    <div><span style={lbl}>Expires</span><input type="date" value={r.fields.expiryDate} onChange={e => setField(r.id, "expiryDate", e.target.value)} style={cell} /></div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 20px", borderTop: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
+          <span style={{ fontSize: 12, color: C.inkFaint }}>
+            {rows.length ? `${savable.length} of ${rows.length} ready to file` : "Nothing queued yet"}
+          </span>
+          <div style={{ flex: 1 }} />
+          <button onClick={saveAll} disabled={!savable.length || working || saving}
+            style={{ background: !savable.length || working || saving ? C.border : C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "9px 22px", fontSize: 13, fontWeight: 600, cursor: !savable.length || working || saving ? "default" : "pointer", fontFamily: "inherit" }}>
+            {saving ? "Filing…" : working ? "Reading…" : `File ${savable.length} document${savable.length === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DocRow({ doc, onEdit, onDelete, onToast }) {
   const cat = catOf(doc);
   const exp = expiryState(doc);
@@ -319,6 +547,7 @@ export default function DocumentsApp({ onHome, currentUser }) {
   const [expFilter, setExpFilter] = useState("all"); // all | soon | expired
   const [sort, setSort] = useState("updated");       // updated | expiry | title
   const [draft, setDraft] = useState(null);
+  const [bulk, setBulk] = useState(false);
   const [toast, setToast] = useState("");
   const showToast = m => { setToast(m); setTimeout(() => setToast(""), 2600); };
   const who = currentUser?.name || currentUser?.email || "Admin";
@@ -405,6 +634,18 @@ export default function DocumentsApp({ onHome, currentUser }) {
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "system-ui, sans-serif", paddingBottom: mob ? 76 : 32 }}>
       <Toast msg={toast} />
       {draft && <DocForm draft={draft} owners={owners} onClose={() => setDraft(null)} onSaved={onSaved} onToast={showToast} />}
+      {bulk && (
+        <BulkAdd
+          onClose={() => setBulk(false)}
+          onToast={showToast}
+          onSaved={n => {
+            setBulk(false);
+            pull();
+            showToast(n ? `✓ Filed ${n} document${n === 1 ? "" : "s"}` : "Nothing was filed");
+            if (n) logActivity({ user: who, action: "added", module: "documents", label: `📁 Bulk filed ${n} document${n === 1 ? "" : "s"}`, targetMod: "documents" });
+          }}
+        />
+      )}
 
       {/* Header */}
       <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: mob ? "0 12px" : "0 24px", display: "flex", alignItems: "center", height: 54, position: "sticky", top: 0, zIndex: 100, gap: 10 }}>
@@ -417,6 +658,11 @@ export default function DocumentsApp({ onHome, currentUser }) {
           style={{ ...FI, flex: 1, maxWidth: 460 }} />
         {q && <button onClick={() => setQ("")} style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 17, padding: 0 }}>×</button>}
         <div style={{ flex: 1 }} />
+        <button onClick={() => setBulk(true)}
+          title="Drop in a pile of files — each is read and filed"
+          style={{ background: C.surface, color: C.ink, border: `1px solid ${C.borderHi}`, borderRadius: 8, padding: mob ? "7px 12px" : "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0, fontFamily: "inherit", marginRight: 8 }}>
+          ⇪ {mob ? "Bulk" : "Bulk upload"}
+        </button>
         <button onClick={() => setDraft(newDoc())}
           style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: mob ? "7px 12px" : "8px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
           + {mob ? "Add" : "Add document"}
@@ -473,10 +719,16 @@ export default function DocumentsApp({ onHome, currentUser }) {
               Keep passports, ITRs, electricity bills, licences and certificates in one place —
               searchable by number, owner or tag, with expiry reminders on the ones that lapse.
             </div>
-            <button onClick={() => setDraft(newDoc())}
-              style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-              + Add your first document
-            </button>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+              <button onClick={() => setBulk(true)}
+                style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                ⇪ Drop in a pile of files
+              </button>
+              <button onClick={() => setDraft(newDoc())}
+                style={{ background: C.surface, color: C.ink, border: `1px solid ${C.borderHi}`, borderRadius: 8, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                + Add one by hand
+              </button>
+            </div>
           </div>
         )}
         {loaded && !!docs.length && !visible.length && (
