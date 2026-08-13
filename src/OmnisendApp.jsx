@@ -380,6 +380,103 @@ const shopApi = async payload => {
 };
 const hasApproveTag = c => (c.tags || []).some(t => String(t).toLowerCase() === APPROVE_TAG);
 
+/* ── Welcome email template ───────────────────────────────────────────────────
+   The mail is sent by an Omnisend automation, so its design has to live there
+   too — which is how it drifted away from everything else the brand sends. The
+   ERP can still author it: this renders the same editorial shell the campaigns
+   use (via the API's preview action, no products) and hands over the HTML to
+   paste into the automation's email step once.
+
+   [[contact.firstName]] is Omnisend's own contact tag, resolved at send. It is
+   left visible in the copy so it is obvious what will be substituted. */
+const WELCOME_DEFAULTS = {
+  heading: "Welcome to Earth Editions",
+  intro: [
+    "Hello [[contact.firstName]],",
+    "",
+    "Thank you for registering with Earth Editions — your wholesale account has been approved, and trade pricing is now visible when you log in.",
+    "",
+    "A bit about us: we exhibit internationally at Tucson, Denver, Munich and Tokyo, and export year-round to clients worldwide. With decades of experience working with natural minerals, we focus on high-quality material, honest grading and dependable support.",
+    "",
+    "We're glad to have you with us.",
+  ].join("\n"),
+};
+
+function WelcomeTemplate({ onClose, showToast }) {
+  const [heading, setHeading] = useState(WELCOME_DEFAULTS.heading);
+  const [intro, setIntro] = useState(WELCOME_DEFAULTS.intro);
+  const [html, setHtml] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  // Same renderer as the campaigns — products omitted, so the shell carries the
+  // masthead, the copy, the trade panel and the shipping terms and nothing else.
+  const render = useCallback(async () => {
+    setBusy(true); setErr("");
+    try {
+      const d = await api({
+        action: "preview", layout: "editorial", products: [],
+        brand: "Earth Editions", heading, intro,
+        dateLine: false,
+        headerImage: "https://cdn.shopify.com/s/files/1/0799/9576/4953/files/White_Background_-_Black_-_Vertical_f86e2e99-211d-4ab6-84a2-b67ff247af3f.png?v=1786605155",
+        logoWidth: 150, font: "serif", cornerStyle: "square",
+        pageBg: "#e5e6e6", cardBg: "#ffffff", ink: "#1a1308",
+        tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
+        tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
+        shipIcon: "✈️", shipTitle: "Duty free worldwide shipping",
+        shipNote: "All orders ship DDP — the price you see is the price you pay. No customs fees, no import duties, no surprise charges on delivery.",
+        instagramUrl: "https://www.instagram.com/eartheditions_/?hl=fr",
+      });
+      setHtml(d.html || "");
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }, [heading, intro]);
+  useEffect(() => { render(); /* eslint-disable-next-line */ }, []);
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(html); showToast?.("✓ HTML copied — paste it into the Omnisend automation"); }
+    catch { setErr("Couldn't reach the clipboard — select the HTML below and copy it manually."); }
+  };
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
+      <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1000px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
+          <div style={{ fontFamily: SERIF, fontSize: 20, fontWeight: 700, lineHeight: 1 }}>✉ Welcome email</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>sent by the Omnisend automation, authored here</div>
+          <div style={{ flex: 1 }} />
+          <button onClick={onClose} style={btn()}>Close</button>
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 14, display: "grid", gap: 12, gridTemplateColumns: mob() ? "1fr" : "1fr 1fr" }}>
+          <div style={{ display: "grid", gap: 10, alignContent: "start" }}>
+            <div>
+              <span style={lab}>Heading</span>
+              <input value={heading} onChange={e => setHeading(e.target.value)} style={FI()} />
+            </div>
+            <div>
+              <span style={lab}>Body</span>
+              <textarea value={intro} onChange={e => setIntro(e.target.value)} rows={12} style={{ ...FI(), resize: "vertical", lineHeight: 1.6 }} />
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={render} disabled={busy} style={btn()}>{busy ? "Rendering…" : "↻ Refresh preview"}</button>
+              <button onClick={copy} disabled={!html} style={{ ...btn(C.ink, "#FAF0DC"), opacity: html ? 1 : .5 }}>Copy HTML</button>
+            </div>
+            {err && <div style={{ ...card, borderColor: C.red, background: C.redBg, color: C.red, padding: "9px 12px", fontSize: 12.5 }}>{err}</div>}
+            <div style={{ ...card, padding: "11px 13px", fontSize: 11.5, color: C.inkMid, lineHeight: 1.7 }}>
+              <strong style={{ color: C.ink }}>Where this goes.</strong> Omnisend → Automations → trigger <code>Custom event → {WELCOME_EVENT}</code> → Email step → in the editor choose an HTML/code block and paste. Approve one customer first: an event only appears in the trigger list once it has fired.
+              <div style={{ marginTop: 7 }}>Omnisend adds the copyright, address and unsubscribe links underneath — this HTML deliberately carries none.</div>
+            </div>
+          </div>
+          <div style={{ ...card, padding: 0, overflow: "hidden", minHeight: 380 }}>
+            <iframe title="Welcome email preview" srcDoc={html} style={{ width: "100%", height: "100%", minHeight: 380, border: "none", background: "#fff" }} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ApprovalsTab({ showToast }) {
   const [creds, setCreds] = useState(undefined);   // undefined = loading, null = missing
   const [rows, setRows] = useState([]);
@@ -390,6 +487,7 @@ function ApprovalsTab({ showToast }) {
   const [busy, setBusy] = useState({});            // customer id → true
   const [view, setView] = useState("pending");
   const [q, setQ] = useState("");
+  const [tplOpen, setTplOpen] = useState(false);
 
   useEffect(() => {
     loadK(SHOP_CREDS_KEY)
@@ -489,6 +587,7 @@ function ApprovalsTab({ showToast }) {
 
   return (
     <>
+      {tplOpen && <WelcomeTemplate onClose={() => setTplOpen(false)} showToast={showToast} />}
       <div style={{ padding: "0 2px", marginBottom: 14, fontSize: 12, color: C.inkFaint, lineHeight: 1.6, maxWidth: 760 }}>
         Approving adds the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{APPROVE_TAG}</code> tag to the Shopify customer — which unlocks trade prices and account login — adds the same tag to their Omnisend contact, and fires the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{WELCOME_EVENT}</code> event so Omnisend sends the welcome email. All three in one click.
       </div>
@@ -497,6 +596,7 @@ function ApprovalsTab({ showToast }) {
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search email, name or tag…" style={{ ...FI(), maxWidth: 280 }} />
         <Segmented value={view} onChange={setView} options={[["pending", `Pending ${pending.length}`], ["approved", `Approved ${approved.length}`], ["all", `All ${rows.length}`]]} />
         <div style={{ flex: 1 }} />
+        <button onClick={() => setTplOpen(true)} style={btn()} title="Author the email the approval automation sends">✉ Welcome email</button>
         <button onClick={load} disabled={loading} style={btn()}>{loading ? "Loading…" : "↻ Refresh"}</button>
         <button
           onClick={() => downloadCsv(`earth-editions-customers-${new Date().toISOString().slice(0, 10)}.csv`,
