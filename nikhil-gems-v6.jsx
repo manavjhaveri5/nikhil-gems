@@ -6203,7 +6203,8 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [shopifyStoreInput,setShopifyStoreInput]=useState("");
   const [shopifyTokenInput,setShopifyTokenInput]=useState("");
   const [shopifyModal,setShopifyModal]=useState(null); // {name,price,creds}
-  const [bulkShopify,setBulkShopify]=useState(null); // bulk push: {items,connected,storeKey,deal,running,done,results}
+  const [bulkShopify,setBulkShopify]=useState(null); // bulk push: {items,connected,storeKey,deal,running,done,results,hidden}
+  const [bulkPrice,setBulkPrice]=useState(null); // bulk pricing: {mode,unit,rate,flat,keepRate}
   const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   const [formQueue,setFormQueue]=useState([]); // items queued in multi-add mode
   const [customsDescs,setCustomsDescs]=useState([]);
@@ -6906,7 +6907,47 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     logActivity({user:"Admin",action:"pushed",module:"stock",label:`Bulk pushed ${okN} item${okN!==1?"s":""} to Shopify`,targetMod:"stock"});
   };
 
+  /* Bulk pricing. A rate is the useful form for lots — one number ("$20/pc",
+     "₹800/kg") turned into each card's own total against its own size, which is
+     what the cards already display. A flat price is offered too for the case
+     where the selection is a set of like-for-like pieces.
+
+     Keeping the rate writes the lot basis onto the card, so as pieces sell the
+     price re-derives from what is left instead of freezing at today's total. */
+  const bulkPriceRows=()=>{
+    if(!bulkPrice)return[];
+    const sel=stock.filter(s=>selectedIds.has(s.id));
+    const rate=+bulkPrice.rate||0,flat=+bulkPrice.flat||0;
+    return sel.map(s=>{
+      const qty=bulkPrice.unit==="pcs"?resolveLotPcs(s):resolveLotKg(s);
+      const price=bulkPrice.mode==="flat"?flat:(qty!=null&&qty>0?Math.round(rate*qty*100)/100:null);
+      return{item:s,qty,price};
+    });
+  };
+  const applyBulkPrice=async()=>{
+    const rows=bulkPriceRows().filter(r=>r.price!=null&&r.price>0);
+    if(!rows.length){showToast("Nothing to price — those cards have no quantity in that unit");return;}
+    const basis=LOT_RATE_BASES.find(b=>b.unit===bulkPrice.unit)||LOT_RATE_BASES[0];
+    const byId=new Map(rows.map(r=>[r.item.id,r]));
+    const upd=stock.map(s=>{
+      const r=byId.get(s.id);
+      if(!r)return s;
+      const keep=bulkPrice.mode==="rate"&&bulkPrice.keepRate;
+      return{...s,listPrice:String(r.price),
+        ...(keep?{pricingMode:basis.mode,[basis.field]:String(+bulkPrice.rate),lotMinPrice:s.lotMinPrice||"25"}:{}),
+        updatedAt:new Date().toISOString()};
+    });
+    setStock(upd);
+    try{await saveStockK(upd);}catch(e){showToast("⚠ Priced, but saving failed: "+e.message);return;}
+    setBulkPrice(null);
+    showToast(`✓ Priced ${rows.length} item${rows.length!==1?"s":""}`);
+    logActivity({user:"Admin",action:"edited",module:"stock",label:`Bulk priced ${rows.length} item${rows.length!==1?"s":""}`,targetMod:"stock"});
+  };
+
   const openBulkShopify=async()=>{
+    // A batch already running owns the queue — bring it back up rather than
+    // starting a second one against the same store.
+    if(bulkShopify?.running){setBulkShopify(b=>({...b,hidden:false}));return;}
     const sel=stock.filter(s=>selectedIds.has(s.id));
     if(!sel.length)return;
     const connected=await loadShopifyCreds();
@@ -7290,7 +7331,96 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           </div>
         </div>
       )}
-      {bulkShopify&&(()=>{
+      {bulkPrice&&(()=>{
+        const rows=bulkPriceRows();
+        const priceable=rows.filter(r=>r.price!=null&&r.price>0);
+        const skipped=rows.length-priceable.length;
+        const unitLabel=bulkPrice.unit==="pcs"?"pc":"kg";
+        return(
+        <div onClick={e=>e.target===e.currentTarget&&setBulkPrice(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:14,width:"min(520px,100%)",maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
+            <div style={{padding:"18px 20px 12px",flexShrink:0}}>
+              <div style={{fontWeight:700,fontSize:15}}>🏷 Set price on {rows.length} item{rows.length!==1?"s":""}</div>
+              <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>Sets the list price — the figure pushed to Shopify, in the store{"'"}s own currency.</div>
+            </div>
+            <div style={{padding:"0 20px",overflowY:"auto",flex:1}}>
+              <div style={{display:"flex",gap:6,marginBottom:12}}>
+                {[["rate","Rate per unit"],["flat","Same price each"]].map(([k,label])=>(
+                  <button key={k} onClick={()=>setBulkPrice(x=>({...x,mode:k}))}
+                    style={{flex:1,background:bulkPrice.mode===k?C.ink:C.card,color:bulkPrice.mode===k?"#fff":C.ink,border:`1px solid ${bulkPrice.mode===k?C.ink:C.border}`,borderRadius:7,padding:"8px 10px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{label}</button>
+                ))}
+              </div>
+
+              {bulkPrice.mode==="rate"?(<>
+                <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:10}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Rate per {unitLabel}</div>
+                    <input type="number" inputMode="decimal" autoFocus value={bulkPrice.rate} onChange={e=>setBulkPrice(x=>({...x,rate:e.target.value}))}
+                      placeholder="800" style={{...FI,width:"100%",boxSizing:"border-box"}}/>
+                  </div>
+                  <div style={{display:"flex",gap:4}}>
+                    {LOT_RATE_BASES.map(bs=>(
+                      <button key={bs.unit} onClick={()=>setBulkPrice(x=>({...x,unit:bs.unit}))}
+                        style={{background:bulkPrice.unit===bs.unit?C.ink:C.card,color:bulkPrice.unit===bs.unit?"#fff":C.ink,border:`1px solid ${bulkPrice.unit===bs.unit?C.ink:C.border}`,borderRadius:7,padding:"9px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>per {bs.label}</button>
+                    ))}
+                  </div>
+                </div>
+                <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",marginBottom:12,background:C.card,borderRadius:8,padding:"9px 11px"}}>
+                  <input type="checkbox" checked={bulkPrice.keepRate} onChange={e=>setBulkPrice(x=>({...x,keepRate:e.target.checked}))}/>
+                  <span style={{fontSize:11.5,color:C.inkMid,lineHeight:1.5}}>Keep this rate on the card — the price re-derives as stock sells down, instead of freezing at today{"'"}s total.</span>
+                </label>
+              </>):(
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Price for every selected item</div>
+                  <input type="number" inputMode="decimal" autoFocus value={bulkPrice.flat} onChange={e=>setBulkPrice(x=>({...x,flat:e.target.value}))}
+                    placeholder="1950" style={{...FI,width:"100%",boxSizing:"border-box"}}/>
+                </div>
+              )}
+
+              {skipped>0&&bulkPrice.mode==="rate"&&(
+                <div style={{background:C.amberBg,border:`1px solid ${C.amber}66`,borderRadius:9,padding:"9px 11px",marginBottom:12,fontSize:11.5,color:C.amber,fontWeight:600,lineHeight:1.5}}>
+                  {skipped} of these {skipped===1?"has":"have"} no {unitLabel==="pc"?"piece count":"weight"} to price against and will be left alone. Switch the unit, or price {skipped===1?"it":"them"} on its own card.
+                </div>
+              )}
+
+              <div style={{display:"flex",flexDirection:"column",gap:3,marginBottom:14}}>
+                {rows.slice(0,9).map(r=>(
+                  <div key={r.item.id} style={{display:"flex",gap:8,alignItems:"baseline",fontSize:11.5,padding:"5px 8px",borderRadius:6,background:r.price?C.card:"transparent",opacity:r.price?1:.5}}>
+                    <span style={{fontWeight:600,color:C.ink,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.item.material||r.item.name||"—"}</span>
+                    <span className="tnum" style={{color:C.inkFaint,flexShrink:0}}>{r.qty!=null&&r.qty>0?`${+parseFloat(r.qty.toFixed(3))} ${unitLabel}`:"—"}</span>
+                    <span className="tnum" style={{fontWeight:700,color:r.price?C.ink:C.inkFaint,flexShrink:0,minWidth:62,textAlign:"right"}}>{r.price?r.price.toLocaleString("en-US"):"skipped"}</span>
+                  </div>
+                ))}
+                {rows.length>9&&<div style={{fontSize:11,color:C.inkFaint,padding:"2px 8px"}}>…and {rows.length-9} more</div>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,padding:"12px 20px 18px",flexShrink:0,borderTop:`1px solid ${C.border}`}}>
+              <button onClick={applyBulkPrice} disabled={!priceable.length}
+                style={{flex:1,background:priceable.length?C.ink:C.card,color:priceable.length?"#fff":C.inkFaint,border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:priceable.length?"pointer":"default",fontFamily:"inherit"}}>
+                Price {priceable.length} item{priceable.length!==1?"s":""}
+              </button>
+              <button onClick={()=>setBulkPrice(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px",fontSize:13,cursor:"pointer",color:C.inkFaint,fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>);})()}
+
+      {/* Pushed into the background: the loop is a plain async function and keeps
+          running once the modal unmounts, so the chip is the only thing needed to
+          get back to it. It dies with the tab, which is what the wording says. */}
+      {bulkShopify&&bulkShopify.hidden&&(()=>{
+        const b=bulkShopify,failed=b.results.filter(r=>!r.ok).length;
+        return(
+        <div onClick={()=>setBulkShopify(x=>({...x,hidden:false}))}
+          style={{position:"fixed",bottom:mob?86:22,left:22,zIndex:1150,background:C.ink,color:"#fff",borderRadius:10,padding:"10px 15px",display:"flex",alignItems:"center",gap:10,boxShadow:"var(--e-2)",cursor:"pointer",maxWidth:"calc(100vw - 44px)"}}>
+          {b.running&&<span style={{width:12,height:12,border:"2px solid rgba(255,255,255,.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin .8s linear infinite",flexShrink:0}}/>}
+          <span style={{fontSize:12.5,fontWeight:600}}>
+            {b.running?`Pushing ${b.results.length+1} of ${b.items.length}…`:`${b.results.filter(r=>r.ok).length}/${b.results.length} pushed`}
+          </span>
+          {failed>0&&<span style={{fontSize:11,color:"#FF9C9C"}}>{failed} failed</span>}
+          <span style={{fontSize:11,color:"rgba(255,255,255,.6)"}}>view</span>
+        </div>);})()}
+
+      {bulkShopify&&!bulkShopify.hidden&&(()=>{
         const b=bulkShopify;
         const priced=b.items.filter(i=>String(i.listPrice||"").trim()!=="");
         const unpriced=b.items.length-priced.length;
@@ -7357,7 +7487,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   style={{flex:1,background:"#008060",color:"#fff",border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:b.running?"wait":"pointer",opacity:b.running?.7:1,fontFamily:"inherit"}}>
                   {b.running?`Pushing… ${b.results.length}/${b.items.length}`:`Push ${b.items.length} →`}
                 </button>
-                <button onClick={()=>setBulkShopify(null)} disabled={b.running} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px",fontSize:13,cursor:"pointer",color:C.inkFaint,fontFamily:"inherit"}}>Cancel</button>
+                <button onClick={()=>b.running?setBulkShopify(x=>({...x,hidden:true})):setBulkShopify(null)}
+                  title={b.running?"Keeps pushing while you work — stops if you close the tab":""}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px",fontSize:13,cursor:"pointer",color:b.running?C.ink:C.inkFaint,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  {b.running?"Run in background":"Cancel"}
+                </button>
               </>):(
                 <button onClick={()=>{setBulkShopify(null);setSelectedIds(new Set());setSelectMode(false);}}
                   style={{flex:1,background:C.ink,color:"#fff",border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -8122,6 +8256,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   {mob&&selectedIds.size>0&&<><button className="bs" style={{fontSize:13,minHeight:40,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button>
                   <button className="bs" style={{fontSize:13,minHeight:40,color:C.green,borderColor:C.green,background:C.greenBg}} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button></>}
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:C.red,borderColor:C.red,background:C.redBg}} disabled={selectedIds.size===0} onClick={()=>{if(window.confirm(`Delete ${selectedIds.size} item${selectedIds.size>1?"s":""}? This cannot be undone.`))delBulk(selectedIds);}}>🗑 Delete</button>
+                  {selectedIds.size>0&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:C.gold,borderColor:C.gold,background:C.goldLight}} onClick={()=>setBulkPrice({mode:"rate",unit:"kg",rate:"",flat:"",keepRate:true})}>🏷 Set price ({selectedIds.size})</button>}
                   {selectedIds.size>0&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#008060",borderColor:"#008060",background:"#E8F5F0"}} onClick={openBulkShopify}>🛍 Push to Shopify ({selectedIds.size})</button>}
                   {onCreateInvoiceFromStock&&selectedIds.size>0&&<button className="bp" style={{fontSize:12}} onClick={()=>{const sel=stock.filter(s=>selectedIds.has(s.id));const items=sel.map(s=>({id:uid(),acctDesc:shapeToAcctDesc(s.shape),customDesc:[s.material,s.shape,s.origin,s.size].filter(Boolean).join(" · "),hsn:shapeToHsn(s.shape),qty:String(s.qty||""),unit:s.unit||"pcs",rate:"",igst:0,amt:0,stockId:s.id,acctStockId:"",ready:false,readyDate:""}));const draft={id:uid(),invNo:"",type:"commercial",date:today(),dueDate:"",currency:"USD",buyerId:"",items,status:"draft",goodsShipped:false,payments:[],paidAmount:0,notes:"",terms:"T/T in advance",portLading:"Mumbai, India",portDischarge:"",consigneeSameAsBuyer:true,consigneeName:"",consigneeAddress:"",consigneeCountry:"",totalAmt:0,createdAt:new Date().toISOString()};onCreateInvoiceFromStock(draft);}}>📄 Create Invoice ({selectedIds.size})</button>}
                 </div>
