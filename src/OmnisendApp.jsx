@@ -426,7 +426,11 @@ const WELCOME_DEFAULTS = {
   ].join("\n"),
 };
 
-function WelcomeTemplate({ onClose, showToast }) {
+/* `forCustomer` turns the authoring view into "what this person gets": the
+   personalisation tag is filled in with their own name, the way Omnisend will
+   fill it at send. It is a preview of the template, not a copy of a delivered
+   message — Omnisend sends it and the ERP never sees the result. */
+function WelcomeTemplate({ onClose, showToast, forCustomer }) {
   const [heading, setHeading] = useState(WELCOME_DEFAULTS.heading);
   const [intro, setIntro] = useState(WELCOME_DEFAULTS.intro);
   const [html, setHtml] = useState("");
@@ -438,9 +442,13 @@ function WelcomeTemplate({ onClose, showToast }) {
   const render = useCallback(async () => {
     setBusy(true); setErr("");
     try {
+      // Personalisation is resolved by Omnisend at send; substituting here shows
+      // the customer what lands in their inbox rather than the raw tag.
+      const first = String(forCustomer?.name || "").trim().split(" ")[0];
       const d = await api({
         action: "preview", layout: "editorial", products: [],
-        brand: "Earth Editions", heading, intro,
+        brand: "Earth Editions", heading,
+        intro: forCustomer ? intro.replace(/\[\[contact\.firstName\]\]/g, first || "there") : intro,
         dateLine: false,
         headerImage: "https://cdn.shopify.com/s/files/1/0799/9576/4953/files/White_Background_-_Black_-_Vertical_f86e2e99-211d-4ab6-84a2-b67ff247af3f.png?v=1786605155",
         logoWidth: 150, font: "serif", cornerStyle: "square",
@@ -453,8 +461,8 @@ function WelcomeTemplate({ onClose, showToast }) {
       });
       setHtml(d.html || "");
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
-  }, [heading, intro]);
-  useEffect(() => { render(); /* eslint-disable-next-line */ }, []);
+  }, [heading, intro, forCustomer]);
+  useEffect(() => { render(); /* eslint-disable-next-line */ }, [forCustomer]);
 
   const copy = async () => {
     try { await navigator.clipboard.writeText(html); showToast?.("✓ HTML copied — paste it into the Omnisend automation"); }
@@ -467,7 +475,9 @@ function WelcomeTemplate({ onClose, showToast }) {
       <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1000px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
           <div style={{ fontFamily: SERIF, fontSize: 20, fontWeight: 700, lineHeight: 1 }}>✉ Welcome email</div>
-          <div style={{ fontSize: 11, color: C.inkFaint }}>sent by the Omnisend automation, authored here</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>
+            {forCustomer ? `as ${forCustomer.email || forCustomer.name} receives it` : "sent by the Omnisend automation, authored here"}
+          </div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={btn()}>Close</button>
         </div>
@@ -512,6 +522,7 @@ function ApprovalsTab({ showToast }) {
   const [view, setView] = useState("pending");
   const [q, setQ] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
+  const [previewFor, setPreviewFor] = useState(null);   // customer whose copy to show
 
   useEffect(() => {
     loadK(SHOP_CREDS_KEY)
@@ -612,6 +623,7 @@ function ApprovalsTab({ showToast }) {
   return (
     <>
       {tplOpen && <WelcomeTemplate onClose={() => setTplOpen(false)} showToast={showToast} />}
+      {previewFor && <WelcomeTemplate onClose={() => setPreviewFor(null)} showToast={showToast} forCustomer={previewFor} />}
       <div style={{ padding: "0 2px", marginBottom: 14, fontSize: 12, color: C.inkFaint, lineHeight: 1.6, maxWidth: 760 }}>
         Approving adds the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{APPROVE_TAG}</code> tag to the Shopify customer — which unlocks trade prices and account login — adds the same tag to their Omnisend contact, and fires the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{WELCOME_EVENT}</code> event so Omnisend sends the welcome email. All three in one click.
       </div>
@@ -655,11 +667,20 @@ function ApprovalsTab({ showToast }) {
                           : <span style={{ fontSize: 11.5, fontWeight: 600, color: C.amber }}>untagged</span>}
                       {/* Independent of the tag state: the mail either fired or it didn't. */}
                       {mailed[String(c.email || "").toLowerCase()] &&
-                        <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>✉ welcome sent</div>}
+                        <button onClick={() => setPreviewFor(c)} title="See the welcome email as they receive it"
+                          style={{ background: "none", border: "none", padding: "1px 0 0", cursor: "pointer", fontFamily: "inherit",
+                            fontSize: 10.5, color: C.inkFaint, textDecoration: "underline", display: "block" }}>
+                          ✉ welcome sent · view
+                        </button>}
                     </td>
                     <td className="tnum" style={{ ...td, color: C.inkMid }}>{c.ordersCount || 0}</td>
                     <td className="tnum" style={{ ...td, color: C.inkMid, whiteSpace: "nowrap" }}>{fmtDate(c.createdAt)}</td>
-                    <td style={{ ...td, textAlign: "right" }}>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {/* Read the mail before sending it, not only after. */}
+                      {c.email && (
+                        <button onClick={() => setPreviewFor(c)} title="Preview the welcome email this customer will get"
+                          style={{ ...btn(), padding: "6px 10px", fontSize: 12, color: C.inkMid, marginRight: 6 }}>✉</button>
+                      )}
                       <button onClick={() => approve(c, ok)} disabled={!!busy[c.id] || !c.email}
                         title={c.email ? "" : "This customer has no email address"}
                         style={{ ...btn(ok ? C.surface : C.greenBg, ok ? C.inkMid : C.green), padding: "6px 14px", fontSize: 12,
