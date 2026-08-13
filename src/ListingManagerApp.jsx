@@ -4966,6 +4966,12 @@ function EtsyLiveView({ onCrossPost }) {
   const [editL,        setEditL]        = useState(null);
   const [editForm,     setEditForm]     = useState({});
   const [editImages,   setEditImages]   = useState([]);
+  /* Etsy doesn't return videos with the listing the way it returns images, so
+     they are fetched per listing when the editor opens. Without this the shop's
+     videos were invisible here and there was no way to get one into the
+     library — the listing looked like it had none. */
+  const [editVideos,   setEditVideos]   = useState([]);
+  const [videosLoading,setVideosLoading]= useState(false);
   const [imgUploading, setImgUploading] = useState(false);
   const [showPicker,   setShowPicker]   = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
@@ -5262,6 +5268,15 @@ function EtsyLiveView({ onCrossPost }) {
       quantity: l.quantity||1, tags: [...(l.tags||[])], state: l.state||"active" });
     setEditImages(l.images ? [...l.images].sort((a,b)=>(a.rank||0)-(b.rank||0)) : []);
     setSaveErr(null); setTagInput(""); setShowPicker(false);
+    setEditVideos([]); setVideosLoading(true);
+    (async () => {
+      try {
+        const tok = await getToken();
+        const r = await fetch(`/api/etsy?action=listing_videos&listing_id=${l.listing_id}`, { headers: tok ? { "X-Etsy-Token": tok } : {} });
+        const d = await r.json().catch(() => ({}));
+        setEditVideos(r.ok ? (d.results || []) : []);
+      } catch { setEditVideos([]); } finally { setVideosLoading(false); }
+    })();
   };
 
   const addTag = () => {
@@ -5506,7 +5521,9 @@ function EtsyLiveView({ onCrossPost }) {
     try {
       const entries = libSave.urls.map(url => ({
         id: uid(), name, category, notes: libSave.notes.trim(),
-        imageUrl: url, mediaType: "image", size: 0,
+        // The library plays a row whose URL looks like a video, so the type has to
+        // follow the file rather than be assumed to be a photo.
+        imageUrl: url, mediaType: /\.(mp4|mov|webm|m4v|avi|mkv)(\?|$)/i.test(url) ? "video" : "image", size: 0,
         createdAt: new Date().toISOString(),
         source: `etsy-listing-${editL?.listing_id || ""}`,
       }));
@@ -6312,6 +6329,44 @@ function EtsyLiveView({ onCrossPost }) {
                       fontSize:20,color:C.inkFaint,animation:"spin 1s linear infinite"}}>⟳</div>
                   )}
                 </div>
+
+                {/* Video — Etsy keeps it apart from the images, so it is shown apart too. */}
+                {(videosLoading||editVideos.length>0)&&(
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                      <span style={{fontSize:12,fontWeight:700,color:C.ink}}>
+                        Video <span style={{color:C.inkFaint,fontWeight:400}}>({videosLoading?"…":editVideos.length})</span>
+                      </span>
+                      {editVideos.length>0&&(
+                        <button onClick={()=>openLibSave(editVideos.map(v=>v.video_url||v.url).filter(Boolean))}
+                          title="Save this video to the Image Library"
+                          style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 7px",
+                            fontSize:10.5,fontWeight:700,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                          🎬 To Library
+                        </button>
+                      )}
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {editVideos.map((v,idx)=>{
+                        const src=v.video_url||v.url||"";
+                        return (
+                          <div key={v.video_id||idx} style={{position:"relative",borderRadius:8,overflow:"hidden",border:`1px solid ${C.border}`,background:"#000"}}>
+                            <video src={src} poster={v.thumbnail_url||undefined} controls preload="metadata"
+                              style={{width:"100%",display:"block",maxHeight:150,objectFit:"cover",background:"#000"}}/>
+                            <div style={{position:"absolute",top:4,right:4,display:"flex",gap:3}}>
+                              <button onClick={()=>openLibSave([src])} title="Save this video to the Image Library"
+                                style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",border:"none",borderRadius:4,
+                                  fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>🎬</button>
+                              <a href={src} download target="_blank" rel="noreferrer" title="Download"
+                                style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",borderRadius:4,fontSize:12,
+                                  textDecoration:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>↓</a>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Upload + Library buttons */}
                 <div style={{display:"flex",gap:6}}>

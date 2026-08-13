@@ -499,6 +499,22 @@ export default async function handler(req, res) {
       return res.json(data);
     }
 
+    /* listing_videos: what Etsy holds for a listing. Public like the images
+       endpoint — the listing is already public, so no OAuth is needed to read
+       back what is on it. Etsy allows one video per listing today, but the
+       endpoint answers with a list, so it is passed through as one. */
+    if (action === "listing_videos") {
+      const { listing_id } = req.query;
+      if (!listing_id) return res.status(400).json({ error: "listing_id required" });
+      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listing_id}/videos`, { headers: pubHeaders });
+      const data = await r.json();
+      // A listing with no video answers 404 on some shops rather than an empty
+      // list; that is an absence, not a failure, and the screen should say so.
+      if (r.status === 404) return res.json({ count: 0, results: [] });
+      if (!r.ok) return res.status(r.status).json({ error: data.error || "Etsy API error", details: data });
+      return res.json(data);
+    }
+
     // ── listing: single listing detail ────────────────────────────────────────
     if (action === "listing") {
       const { listing_id } = req.query;
