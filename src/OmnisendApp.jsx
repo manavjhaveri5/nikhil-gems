@@ -342,7 +342,9 @@ function CampaignsTab({ showToast }) {
                     ))}
                   </div>
                   <div style={{ marginTop: 13, paddingTop: 12, borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <a href="https://app.omnisend.com/campaigns" target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none", display: "inline-block" }}>Open in Omnisend ↗</a>
+                    {/* Deep link to this campaign — the bare /campaigns index 404s. */}
+                    <a href={`https://app.omnisend.com/campaigns/edit/${encodeURIComponent(c.id)}/content`}
+                      target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none", display: "inline-block" }}>Open in Omnisend ↗</a>
                     {!["sent", "sending"].includes(String(c.status).toLowerCase()) && (
                       <button onClick={() => remove(c)} disabled={deleting === c.id}
                         style={{ ...btn(C.redBg, C.red), border: `1px solid ${C.red}`, opacity: deleting === c.id ? .5 : 1 }}>
