@@ -39,7 +39,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     shipNote: "All orders ship DDP — the price you see is the price you pay. No customs fees, no import duties, no surprise charges on delivery. Your order clears at our end, not yours.",
     tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
     tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
-    instagramUrl: "", addressLine: "",
+    instagramUrl: "https://www.instagram.com/eartheditions_/?hl=fr", addressLine: "",
   });
   const [designOpen, setDesignOpen] = useState(false);
   const [segments, setSegments] = useState([]);
@@ -393,8 +393,8 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                             <input value={design.instagramUrl} onChange={e => setD("instagramUrl", e.target.value)} placeholder="https://instagram.com/…" style={FI()} />
                           </div>
                           <div>
-                            <label style={lab}>Address line <span style={{ textTransform: "none", fontWeight: 400 }}>(footer)</span></label>
-                            <input value={design.addressLine} onChange={e => setD("addressLine", e.target.value)} placeholder="Jaipur, Rajasthan, India" style={FI()} />
+                            <label style={lab}>Address line <span style={{ textTransform: "none", fontWeight: 400 }}>(Omnisend already prints one — leave empty)</span></label>
+                            <input value={design.addressLine} onChange={e => setD("addressLine", e.target.value)} placeholder="usually blank" style={FI()} />
                           </div>
                         </div>
 
@@ -417,7 +417,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                     )}
 
                     <div>
-                      <label style={lab}>Footer text <span style={{ textTransform: "none", fontWeight: 400 }}>(above the unsubscribe line Omnisend adds)</span></label>
+                      <label style={lab}>Footer text <span style={{ textTransform: "none", fontWeight: 400 }}>(Omnisend adds ©, your postal address and the unsubscribe links below this)</span></label>
                       <textarea value={design.footer} onChange={e => setD("footer", e.target.value)} rows={2}
                         placeholder="Studio address, reply-to, shipping note…" style={{ ...FI(), resize: "vertical" }} />
                     </div>

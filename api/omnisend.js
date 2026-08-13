@@ -288,13 +288,18 @@ function buildEditorialHtml({
     ${productRows}
     ${tradePanel}
     ${shipPanel}
-    <tr><td align="center" style="padding:0 30px 30px;font-family:${F.body};font-size:11px;line-height:1.7;color:${MUTED};">
-      ${url(instagramUrl) ? `<div style="padding-bottom:12px;"><a href="${url(instagramUrl)}" style="color:${A};text-decoration:none;font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;">Instagram</a></div>` : ""}
-      <div>&copy; ${esc(brand)}</div>
+    ${/* Omnisend appends its own footer to every campaign — the copyright, the
+          postal address from account settings, the "sent to <you>" line and the
+          Edit preferences / Unsubscribe links — and refuses to send a campaign
+          without it. Its import docs say to strip those from imported HTML, so
+          this footer carries none of them: repeating them would print the
+          address twice and risk a second, dead unsubscribe link. What is left
+          is ours to say. */""}
+    ${(url(instagramUrl) || addressLine || footer) ? `<tr><td align="center" style="padding:0 30px 30px;font-family:${F.body};font-size:11px;line-height:1.7;color:${MUTED};">
+      ${url(instagramUrl) ? `<div style="padding-bottom:10px;"><a href="${url(instagramUrl)}" style="color:${A};text-decoration:none;font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;">Instagram</a></div>` : ""}
       ${addressLine ? `<div>${esc(addressLine).replace(/\n/g, "<br>")}</div>` : ""}
-      ${footer ? `<div style="padding-top:8px;">${esc(footer).replace(/\n/g, "<br>")}</div>` : ""}
-      <div style="padding-top:8px;">You're receiving this because you subscribed to ${esc(brand)}.</div>
-    </td></tr>
+      ${footer ? `<div style="padding-top:6px;">${esc(footer).replace(/\n/g, "<br>")}</div>` : ""}
+    </td></tr>` : ""}
   </table>
 </td></tr></table>
 </body></html>`;
