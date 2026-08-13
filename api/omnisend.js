@@ -46,7 +46,17 @@ const pickId = o =>
   o?.templateID || o?.templateId || o?.campaignID || o?.campaignId || o?.id ||
   o?.data?.templateID || o?.data?.campaignID || o?.data?.id || "";
 
-const esc = s => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+/* Escapes for HTML, then folds every non-ASCII character to a numeric entity.
+   The output is handed to Omnisend's importer, which strips the <head> — and
+   the <meta charset> with it — so an em dash left as raw bytes is at the mercy
+   of whatever encoding the next tool assumes, and arrives as "â€". As entities
+   the dashes, curly quotes and accented buyer names are pure ASCII and cannot
+   be misread, whatever handles the file next. */
+const esc = s => String(s ?? "")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+  // The /u flag matters: without it an emoji is two surrogate halves, and each
+  // half becomes an entity that is meaningless on its own.
+  .replace(/[^\x00-\x7F]/gu, c => `&#${c.codePointAt(0)};`);
 
 const qs = o => Object.entries(o)
   .filter(([, v]) => v !== "" && v != null)
