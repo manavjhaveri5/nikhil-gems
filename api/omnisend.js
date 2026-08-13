@@ -192,7 +192,7 @@ function buildEditorialHtml({
   dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
   instagramUrl, addressLine,
   promoRibbon, promoTitle, promoSubtitle, promoNote, promoBadges, promoColor,
-  productColumns, shipIcon, shipTitle, shipNote,
+  productColumns, shipIcon, shipTitle, shipNote, logoWidth,
 }) {
   const A = hex(accent, "#9a6200");
   const INK = hex(ink, "#1a1308");
@@ -202,6 +202,9 @@ function buildEditorialHtml({
   const radius = cornerStyle === "square" ? "0" : "6px";
   const MUTED = "#767676";
   const W = 540;                       // content width inside the 600px card
+  // A wordmark needs room an icon doesn't — 46px would render "EARTH EDITIONS"
+  // as an unreadable smudge — so the masthead width is the caller's to set.
+  const LOGO_W = Math.min(W, Math.max(24, +logoWidth || 150));
   const url = v => (/^https?:\/\//i.test(String(v || "")) ? esc(v) : "");
 
   /* Each piece is a photo with its caption centred underneath — name, what's
@@ -273,10 +276,11 @@ function buildEditorialHtml({
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${PAGE};padding:28px 12px;">
 <tr><td align="center">
   <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:${CARD};">
-    ${url(headerImage)
-      ? `<tr><td align="center" style="padding:34px 30px 8px;"><img src="${url(headerImage)}" alt="${esc(brand)}" width="46" style="display:block;max-width:46px;height:auto;border:0;"></td></tr>`
+    ${/* Wordmark files carry their own whitespace, so the cell adds little. */
+      url(headerImage)
+      ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(headerImage)}" alt="${esc(brand)}" width="${LOGO_W}" style="display:block;max-width:${LOGO_W}px;height:auto;border:0;"></td></tr>`
       : `<tr><td align="center" style="padding:32px 30px 6px;font-family:${F.body};font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:${A};font-weight:700;">${esc(brand)}</td></tr>`}
-    ${stamp ? `<tr><td style="padding:26px 30px 0;font-family:${F.body};font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:${MUTED};">${esc(stamp)}</td></tr>` : ""}
+    ${stamp ? `<tr><td style="padding:${url(headerImage) ? 14 : 26}px 30px 0;font-family:${F.body};font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:${MUTED};">${esc(stamp)}</td></tr>` : ""}
     ${heading ? `<tr><td style="padding:8px 30px 0;font-family:${F.head};font-size:${Math.min(40, Math.max(16, +headingSize || 26))}px;color:${INK};line-height:1.25;">${esc(heading)}</td></tr>` : ""}
     ${intro ? `<tr><td style="padding:12px 30px 0;font-family:${F.body};font-size:12.5px;line-height:1.75;color:#5a5a5a;">${esc(intro).replace(/\n/g, "<br>")}</td></tr>` : ""}
     ${url(bannerImage)
@@ -318,7 +322,7 @@ function buildCampaignHtml({
   tradeEyebrow = "", tradeLine = "", tradeButton = "", tradeUrl = "",
   instagramUrl = "", addressLine = "",
   promoRibbon = "", promoTitle = "", promoSubtitle = "", promoNote = "", promoBadges = "", promoColor = "",
-  productColumns = 2, shipIcon = "", shipTitle = "", shipNote = "",
+  productColumns = 2, shipIcon = "", shipTitle = "", shipNote = "", logoWidth = 150,
 } = {}) {
   if (layout === "editorial") {
     return buildEditorialHtml({
@@ -327,7 +331,7 @@ function buildCampaignHtml({
       dateLine, bannerImage, priceSuffix, tradeEyebrow, tradeLine, tradeButton, tradeUrl,
       instagramUrl, addressLine,
       promoRibbon, promoTitle, promoSubtitle, promoNote, promoBadges, promoColor,
-      productColumns, shipIcon, shipTitle, shipNote,
+      productColumns, shipIcon, shipTitle, shipNote, logoWidth,
     });
   }
   const cols = +columns === 1 ? 1 : 2;

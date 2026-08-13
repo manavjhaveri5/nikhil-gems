@@ -23,7 +23,9 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     columns: 2, accent: "#9a6200", ink: "#1a1308", pageBg: "#e5e6e6", cardBg: "#ffffff",
     font: "serif", showPrice: true, showMeta: true, showCta: true, showDivider: false,
     cornerStyle: "square", ctaStyle: "outline", ctaLabel: "Shop now",
-    headingSize: 26, headerImage: "", footer: "",
+    headingSize: 26, footer: "",
+    headerImage: "https://cdn.shopify.com/s/files/1/0799/9576/4953/files/White_Background_-_Black_-_Vertical_f86e2e99-211d-4ab6-84a2-b67ff247af3f.png?v=1786605155",
+    logoWidth: 150,
     // Editorial furniture — the standing trade CTA is pre-filled because it is
     // the same invitation on every mailer; blank the line to drop the panel.
     bannerImage: "", priceSuffix: "", dateLine: "",
@@ -299,7 +301,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                       </div>
                       <div>
                         <label style={lab}>Logo URL <span style={{ textTransform: "none", fontWeight: 400 }}>(replaces the brand line)</span></label>
-                        <input value={design.headerImage} onChange={e => setD("headerImage", e.target.value)} placeholder="https://…" style={FI()} />
+                        <div style={{ display: "flex", gap: 5 }}>
+                          <input value={design.headerImage} onChange={e => setD("headerImage", e.target.value)} placeholder="https://…" style={FI()} />
+                          <input type="number" min={24} max={540} value={design.logoWidth} onChange={e => setD("logoWidth", +e.target.value)}
+                            title="Logo width in px" style={{ ...FI(), width: 68, flexShrink: 0 }} />
+                        </div>
                       </div>
                       <div>
                         <label style={lab}>Heading px</label>
