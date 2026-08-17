@@ -15314,7 +15314,14 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // nameJp is read as the Japanese entry so labels typed before languages existed
   // still print.
   const secondLine=s=>!lang?"":String((s.labelNames||{})[lang]??(lang==="ja"?s.nameJp||"":"")).trim();
-  const labelCopies=s=>{const n=parseInt(s.labelCopies,10);if(Number.isFinite(n)&&n>0)return Math.min(n,200);const pcs=(s.unit||"")==="pcs"?parseInt(s.qty,10):0;return Number.isFinite(pcs)&&pcs>0?Math.min(pcs,200):1;};
+  // An explicit 0 means "don't print this one" — only an unset value falls back to the
+  // piece count.
+  const labelCopies=s=>{
+    const raw=String(s.labelCopies??"").trim();
+    if(raw!==""){const n=parseInt(raw,10);if(Number.isFinite(n)&&n>=0)return Math.min(n,200);}
+    const pcs=(s.unit||"")==="pcs"?parseInt(s.qty,10):0;
+    return Number.isFinite(pcs)&&pcs>0?Math.min(pcs,200):1;
+  };
   // Labels are printed before a shipment goes, so they come off the draft while one
   // exists and off what has already been sent once it is empty.
   const labelItems=draftLines.length?draftLines.map(x=>x.item):shipItems;
@@ -16621,14 +16628,24 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                     </div>
                     <button onClick={printLabels} disabled={!labelItems.length} style={{background:labelItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:labelItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
                   </div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.length} card{labelItems.length===1?"":"s"} · 10 × 70 mm, 2 per row on A4{lang?"":" · English only, one line per label"}</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.filter(i=>labelCopies(i)>0).length} card{labelItems.filter(i=>labelCopies(i)>0).length===1?"":"s"}{labelItems.filter(i=>labelCopies(i)===0).length>0?` · ${labelItems.filter(i=>labelCopies(i)===0).length} skipped`:""} · 10 × 70 mm, 2 per row on A4{lang?"":" · English only, one line per label"}</div>
                   {labelItems.length===0?(
                     <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Plan a shipment first — labels come from what's in it.</div>
                   ):(
                     <div style={{display:"grid",gap:7}}>
-                      {labelItems.map(item=>(
-                        <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px"}}>
-                          <div style={{fontSize:10,color:C.inkFaint,marginBottom:6}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}</div>
+                      {labelItems.map(item=>{
+                        const copies=labelCopies(item);
+                        const planned=planKey(item.id);
+                        return(
+                        <div key={item.id} style={{background:copies===0?C.bg:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px",opacity:copies===0?.6:1}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
+                            <span style={{fontSize:10,color:C.inkFaint}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}{copies===0?" · not printing":""}</span>
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                              {copies>0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:"0"});}} title="Skip this card on the sheet" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.inkMid,cursor:"pointer"}}>skip</button>}
+                              {copies===0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:""});}} title="Print this card again" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.blue,cursor:"pointer"}}>print</button>}
+                              {planned&&<button onClick={e=>{e.stopPropagation();removeDraftLine(item.id);}} title="Remove from the shipment plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>}
+                            </div>
+                          </div>
                           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 90px":"1fr 90px"),gap:7}}>
                             <Field label={lang?"Label — English":"Label"}>
                               <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))onPatchStockItem?.(item.id,{labelEn:v});}} style={{...FI,fontSize:11}}/>
@@ -16639,11 +16656,12 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                               </Field>
                             )}
                             <Field label="Copies">
-                              <input type="number" min="1" max="200" defaultValue={labelCopies(item)} onBlur={e=>{const v=String(Math.max(1,Math.min(200,parseInt(e.target.value,10)||1)));if(v!==String(labelCopies(item)))onPatchStockItem?.(item.id,{labelCopies:v});}} style={{...FI,fontSize:11}}/>
+                              <input key={`cp-${item.id}-${copies}`} type="number" min="0" max="200" defaultValue={copies} onBlur={e=>{const v=String(Math.max(0,Math.min(200,parseInt(e.target.value,10)||0)));if(v!==String(copies))onPatchStockItem?.(item.id,{labelCopies:v});}} style={{...FI,fontSize:11}}/>
                             </Field>
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </>
