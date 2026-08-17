@@ -490,7 +490,6 @@ const MODS=[
   {id:"expenses",icon:"🧾",title:"Expenses",desc:"Freight, rent, show costs, utilities",ready:true},
   {id:"invoices",icon:"📋",title:"Invoicing",desc:"Export invoices, proforma",ready:true},
   {id:"shows",icon:"🌐",title:"Shows",desc:"Gem shows, checklist, shipments",ready:true},
-  {id:"shipments",icon:"📦",title:"Shipments",desc:"Plan what goes to a show — pick, price, label",ready:true},
   {id:"recon",icon:"🏦",title:"Export Recon",desc:"FIRC · Shipping Bills · Bank packets",ready:true},
   {id:"finance",icon:"💰",title:"Finance",desc:"Ledger, balances, reconcile, P&L",ready:true},
   {id:"jobwork",icon:"🔧",title:"Job Work",desc:"Track goods sent for polishing, resetting, cutting",ready:true},
@@ -866,7 +865,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   };
 
   // Apple-style icon colors per module (iOS Settings palette)
-  const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",shipments:"#0A84FF",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",users:"#007AFF",datasets:"#5AC8FA"};
+  const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",users:"#007AFF",datasets:"#5AC8FA"};
 
   return(
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"-apple-system,'SF Pro Display',Figtree,system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
@@ -14265,279 +14264,6 @@ const DEFAULT_LABEL_LANG=region=>region==="Japan"?"ja":region==="Europe"?"de":""
 // watch the cost and value build up, print the strip labels that go on each
 // piece. Committing applies the same stamp the Stock module's "Send →" applies —
 // this module is the planning surface in front of that, not a second way in.
-function ShipmentsApp({onHome,isAdmin=true}){
-  const [shows,setShows]=useState([]);
-  const [stock,setStock]=useState([]);
-  const [loaded,setLoaded]=useState(false);
-  const [destId,setDestId]=useState("");
-  const [pickOpen,setPickOpen]=useState(false);
-  const [query,setQuery]=useState("");
-  const [pickIds,setPickIds]=useState(()=>new Set());
-  const [busy,setBusy]=useState(false);
-  const [priceEditId,setPriceEditId]=useState(null);
-  const [priceDraft,setPriceDraft]=useState("");
-  const [view,setView]=useState("plan");
-  const [labelLang,setLabelLang]=useState(null);
-  const [usdInr,setUsdInr]=useState(85);
-  const [toast,setToast]=useState("");
-  const flash=m=>{setToast(m);setTimeout(()=>setToast(""),2200);};
-
-  useEffect(()=>{
-    Promise.all([loadK(SHOWS_KEY),loadK(KEYS.stock)]).then(([s,st])=>{
-      const list=Array.isArray(s)?s:[];
-      setShows(list);setStock(Array.isArray(st)?st:[]);setLoaded(true);
-      const todayStr=today();
-      const next=[...list].sort((a,b)=>String(a.startDate||"").localeCompare(String(b.startDate||""))).find(x=>(x.endDate||x.startDate||"")>=todayStr);
-      setDestId(d=>d||(next||list[0])?.id||"");
-    }).catch(()=>setLoaded(true));
-  },[]);
-  useEffect(()=>{
-    let alive=true;
-    // Same saved rate the Shows module reads; it owns refreshing it from the FX API.
-    loadK("ng-fin-rates-v1").then(r=>{if(alive&&r?.USD>0)setUsdInr(+r.USD);}).catch(()=>{});
-    return()=>{alive=false;};
-  },[]);
-
-  const dest=shows.find(s=>s.id===destId)||null;
-  const hasQty=s=>(parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0;
-  const destName=(dest?.name||"").toLowerCase();
-  // What is already going: cards stamped for this show and not yet returned.
-  const inShipment=dest?stock.filter(s=>s.showId===dest.id||(s.showTag||"").toLowerCase()===destName):[];
-  // What can still be added: anything sitting in India with quantity left.
-  const pool=stock.filter(s=>!s.showId&&!s.showTag&&(s.region||"India")==="India"&&hasQty(s)&&!s.soldDate);
-  const q=query.trim().toLowerCase();
-  const matches=q?pool.filter(s=>[s.material,s.shape,s.origin,s.size,s.grade,s.sku,s.location,s.vendor].filter(Boolean).join(" ").toLowerCase().includes(q)):pool;
-  const shown=matches.slice(0,60);
-
-  // costPrice and listPrice are whole-card figures, not per-unit rates, so these
-  // are straight sums. Cost is what left India in INR, value the USD ask.
-  const costInr=inShipment.reduce((sum,s)=>sum+(+s.costPrice||0),0);
-  const valueUsd=inShipment.reduce((sum,s)=>sum+(+s.listPrice||0),0);
-  const costUsd=usdInr>0?costInr/usdInr:0;
-  const marginUsd=valueUsd-costUsd;
-  const multiple=costUsd>0?valueUsd/costUsd:0;
-  const unpriced=inShipment.filter(s=>!(+s.listPrice>0)).length;
-  const kg=inShipment.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+s.qty||0):0)+((s.unit2||"")==="kg"?(+s.qty2||0):0),0);
-  const fmtUsd=n=>`$${(+n||0).toLocaleString("en-US",{maximumFractionDigits:0})}`;
-  const fmtKg=n=>Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";
-  const qtyText=s=>[s.qty&&s.qty!=="0"?`${s.qty} ${s.unit||"pcs"}`:"",s.qty2&&s.qty2!=="0"?`${s.qty2} ${s.unit2||"kg"}`:""].filter(Boolean).join(" / ")||"—";
-
-  const persistStock=async next=>{setStock(next);await saveStockK(next);};
-  const commitShipment=async()=>{
-    if(!dest||!pickIds.size||busy)return;
-    setBusy(true);
-    try{
-      const ids=new Set(pickIds),region=getShowRegion(dest),ts=new Date().toISOString();
-      await persistStock(stock.map(s=>!ids.has(s.id)?s:{...s,region,showTag:dest.name,showId:dest.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts}));
-      logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.size} item${ids.size>1?"s":""} → ${region} (${dest.name})`,targetMod:"stock"});
-      flash(`✓ ${ids.size} card${ids.size>1?"s":""} added to the ${dest.name} shipment`);
-      setPickIds(new Set());setQuery("");setPickOpen(false);
-    }catch(e){flash("⚠ Save failed: "+e.message);}
-    finally{setBusy(false);}
-  };
-  const commitPrice=async id=>{
-    const item=stock.find(s=>s.id===id),next=priceDraft.trim();
-    setPriceEditId(null);
-    if(item&&next!==String(item.listPrice||""))await persistStock(stock.map(s=>s.id!==id?s:{...s,listPrice:next,updatedAt:new Date().toISOString()}));
-  };
-  const setLabelField=async(id,key,val)=>persistStock(stock.map(s=>s.id!==id?s:{...s,[key]:val,updatedAt:new Date().toISOString()}));
-  // Null means "not chosen yet" — fall back to whatever suits the destination.
-  const lang=labelLang??DEFAULT_LABEL_LANG(dest?getShowRegion(dest):"");
-  const langCfg=LABEL_LANGS.find(l=>l.code===lang)||LABEL_LANGS[0];
-  // nameJp is read as the Japanese entry so labels typed before languages existed
-  // still print.
-  const secondLine=s=>!lang?"":String((s.labelNames||{})[lang]??(lang==="ja"?s.nameJp||"":"")).trim();
-  const setSecondLine=async(id,val)=>{
-    if(!lang)return;
-    await persistStock(stock.map(s=>s.id!==id?s:{...s,labelNames:{...(s.labelNames||{}),[lang]:val},updatedAt:new Date().toISOString()}));
-  };
-  // The English line a label falls back to when nothing has been typed for it.
-  const autoEn=s=>[s.origin,s.material,s.shape].filter(Boolean).join(" ")||s.material||"Item";
-  const labelCopies=s=>{const n=parseInt(s.labelCopies,10);if(Number.isFinite(n)&&n>0)return Math.min(n,200);const pcs=(s.unit||"")==="pcs"?parseInt(s.qty,10):0;return Number.isFinite(pcs)&&pcs>0?Math.min(pcs,200):1;};
-  const totalLabels=inShipment.reduce((n,s)=>n+labelCopies(s),0);
-
-  // Printed through a standalone window so the sheet carries its own millimetre
-  // page geometry instead of inheriting the app's screen styles.
-  const printLabels=()=>{
-    const rows=inShipment.flatMap(s=>Array.from({length:labelCopies(s)},()=>({en:(s.labelEn||autoEn(s)).trim(),jp:secondLine(s)})));
-    if(!rows.length){flash("Nothing to print — add cards to the shipment first");return;}
-    const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-    const w=window.open("","_blank");
-    if(!w){flash("⚠ Allow pop-ups to print labels");return;}
-    w.document.write(`<!DOCTYPE html><html lang="${lang||"en"}"><head><meta charset="UTF-8"><title>Strip Labels 10×70mm — ${esc(dest?.name||"")}</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400&family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet"><style>
-:root{--lw:70mm;--lh:10mm;--accent:#8B6F47;--border:#cbb89a;}
-*{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
-.toolbar{max-width:220mm;margin:0 auto 14px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.08);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;}
-.toolbar h1{font-family:'Noto Serif JP',serif;font-size:12px;font-weight:400;color:#888;letter-spacing:.06em;}
-.btn{border:none;padding:6px 16px;font-family:'Cormorant Garamond',serif;font-size:13px;letter-spacing:.08em;cursor:pointer;border-radius:4px;background:#8B6F47;color:#fff;}
-.page{width:210mm;background:#fff;margin:0 auto;padding:8mm;box-shadow:0 4px 24px rgba(0,0,0,.14);display:grid;grid-template-columns:repeat(2,var(--lw));gap:2mm;justify-content:center;align-content:start;}
-.label{width:var(--lw);height:var(--lh);min-height:var(--lh);max-height:var(--lh);border:.3mm solid var(--border);padding:1.2mm 3mm 1.2mm 4mm;display:flex;flex-direction:column;justify-content:center;gap:.6mm;position:relative;background:#fff;overflow:hidden;}
-.label::before{content:'';position:absolute;top:0;left:0;bottom:0;width:1.2mm;background:var(--accent);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-.label-en{font-family:'Cormorant Garamond',serif;font-size:5.5pt;font-weight:600;color:#555;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
-.label-jp{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:7pt;font-weight:400;color:#1a1a1a;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
-.label-solo{font-family:'Cormorant Garamond',serif;font-size:8pt;font-weight:600;color:#1a1a1a;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
-@media print{@page{size:A4;margin:8mm;}body{background:#fff;padding:0;}.toolbar{display:none;}.page{box-shadow:none;margin:0;padding:0;}.label{break-inside:avoid;}.label::before{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
-</style></head><body>
-<div class="toolbar"><h1>Strip Labels &nbsp;·&nbsp; 10 × 70 mm &nbsp;·&nbsp; ${esc(dest?.name||"")} &nbsp;·&nbsp; ${rows.length} labels</h1><button class="btn" onclick="window.print()">🖨 Print A4</button></div>
-<div class="page">${rows.map(r=>r.jp
-  ?`<div class="label"><div class="label-en">${esc(r.en)}</div><div class="label-jp">${esc(r.jp)}</div></div>`
-  :`<div class="label"><div class="label-solo">${esc(r.en)}</div></div>`).join("")}</div>
-</body></html>`);
-    w.document.close();
-  };
-
-  if(!loaded)return(<Shell title="Shipments" onHome={onHome}><p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p></Shell>);
-
-  const tile=(label,big,sub,color)=>(
-    <div key={label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 10px"}}>
-      <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
-      <div style={{fontSize:17,fontWeight:750,color:C.ink,lineHeight:1.1,wordBreak:"break-word"}}>{big}</div>
-      <div style={{fontSize:9,color,marginTop:3,minHeight:12}}>{sub}</div>
-    </div>
-  );
-
-  return(
-    <Shell title="Shipments" onHome={onHome}>
-      <Toast msg={toast}/>
-      <div style={{padding:"14px 16px",maxWidth:1100,margin:"0 auto"}}>
-        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:14}}>
-          <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Shipping to</span>
-          <select value={destId} onChange={e=>{setDestId(e.target.value);setPickIds(new Set());setLabelLang(null);}} style={{...FI,fontSize:12,padding:"5px 9px",minWidth:200}}>
-            {shows.length===0&&<option value="">No shows yet</option>}
-            {shows.map(s=><option key={s.id} value={s.id}>{s.name}{s.startDate?` · ${fmtDate(s.startDate)}`:""}</option>)}
-          </select>
-          {dest&&<span style={{fontSize:10,color:C.inkFaint}}>{getShowRegion(dest)}</span>}
-          <div style={{flex:1}}/>
-          {["plan","labels"].map(v=>(
-            <button key={v} onClick={()=>setView(v)} style={{background:view===v?C.ink:"none",color:view===v?"#fff":C.inkMid,border:`1px solid ${view===v?C.ink:C.border}`,borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{v==="plan"?"Plan":"🏷 Labels"}</button>
-          ))}
-        </div>
-
-        {!dest?(
-          <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:24,textAlign:"center"}}>Create a show first — a shipment always goes to one.</div>
-        ):view==="plan"?(
-          <>
-            <div style={{border:`1px solid ${C.border}`,borderLeft:`3px solid ${dest.color||C.ink}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:14}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10}}>
-                <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Shipment to {dest.name}</span>
-                <span style={{fontSize:10,color:C.inkFaint}}>{inShipment.length} card{inShipment.length===1?"":"s"}{kg>0?` · ${fmtKg(kg)} kg`:""}</span>
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
-                {tile("Cost",inr(Math.round(costInr)),costUsd>0?`${fmtUsd(costUsd)} at ₹${usdInr}/$`:"",C.inkMid)}
-                {tile("Value",fmtUsd(valueUsd),!inShipment.length?"":unpriced>0?`${unpriced} card${unpriced===1?"":"s"} unpriced`:"all priced",unpriced>0?C.amber:C.green)}
-                {tile("Margin",valueUsd>0?fmtUsd(marginUsd):"—",valueUsd>0?(multiple>0?`${(Math.round(multiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",valueUsd>0&&marginUsd<0?C.red:C.inkFaint)}
-                {tile("Weight",kg>0?`${fmtKg(kg)} kg`:"—","kg-priced cards only",C.inkMid)}
-              </div>
-              {unpriced>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Value counts only the cards that have a list price — set the rest below to see the real total.</div>}
-            </div>
-
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
-              <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>In this shipment</span>
-              {isAdmin&&!pickOpen&&<button onClick={()=>setPickOpen(true)} style={{background:dest.color||C.ink,color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>➕ Add from stock</button>}
-            </div>
-
-            {pickOpen&&(
-              <div style={{border:`1px solid ${dest.color||C.ink}`,borderRadius:9,background:C.card,padding:"11px 12px",marginBottom:12}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
-                  <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>Add to {dest.name}</span>
-                  <button onClick={()=>{setPickOpen(false);setQuery("");setPickIds(new Set());}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>
-                </div>
-                <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search stone, shape, size, box, SKU…" style={{...FI,fontSize:11,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
-                {pool.length===0?(
-                  <div style={{fontSize:11,color:C.inkFaint,padding:"10px 2px"}}>Nothing available — every stock card with quantity left is already out at a show.</div>
-                ):(
-                  <>
-                    <div style={{display:"grid",gap:5,maxHeight:300,overflowY:"auto",marginBottom:9}}>
-                      {shown.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 2px"}}>No stock matches “{query}”.</div>}
-                      {shown.map(item=>{
-                        const picked=pickIds.has(item.id);
-                        return(
-                          <div key={item.id} onClick={()=>setPickIds(p=>{const n=new Set(p);n.has(item.id)?n.delete(item.id):n.add(item.id);return n;})} style={{display:"flex",gap:8,alignItems:"center",background:picked?C.blueBg:C.surface,border:`1px solid ${picked?C.blue:C.border}`,borderRadius:7,padding:"6px 8px",cursor:"pointer"}}>
-                            <input type="checkbox" checked={picked} readOnly style={{flexShrink:0,pointerEvents:"none"}}/>
-                            {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:32,height:32,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
-                            <div style={{flex:1,minWidth:0}}>
-                              <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
-                              <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{qtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}</div>
-                            </div>
-                            <span style={{fontSize:9,fontWeight:700,color:item.listPrice?C.green:C.inkFaint,flexShrink:0}}>{item.listPrice?`$${item.listPrice}`:"no price"}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:10,color:C.inkFaint}}>{pickIds.size} selected{matches.length>shown.length?` · showing ${shown.length} of ${matches.length}, narrow the search to see more`:""}</span>
-                      <button onClick={commitShipment} disabled={!pickIds.size||busy} style={{background:pickIds.size&&!busy?(dest.color||C.ink):"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:pickIds.size&&!busy?"pointer":"default"}}>{busy?"Adding…":`Add ${pickIds.size||""} →`}</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {inShipment.length===0?(
-              <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing going to {dest.name} yet. Add cards from stock to start planning.</div>
-            ):(
-              <div style={{display:"grid",gap:6}}>
-                {inShipment.map(item=>(
-                  <div key={item.id} style={{display:"flex",gap:9,alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px"}}>
-                    {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:38,height:38,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:38,height:38,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:11.5,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
-                      <div style={{fontSize:9,color:C.inkFaint}}>{qtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}{item.sentAt?` · sent ${fmtDate(item.sentAt)}`:""}</div>
-                    </div>
-                    {isAdmin&&(priceEditId===item.id
-                      ?<input value={priceDraft} onChange={e=>setPriceDraft(e.target.value)} onBlur={()=>commitPrice(item.id)} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();if(e.key==="Escape")setPriceEditId(null);}} type="number" min="0" step="0.01" placeholder="List price / USD" autoFocus style={{...FI,fontSize:11,width:120,flexShrink:0}}/>
-                      :<button onClick={()=>{setPriceEditId(item.id);setPriceDraft(String(item.listPrice||""));}} style={{background:"none",border:`1px solid ${item.listPrice?C.border:C.blue}`,borderRadius:6,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:800,color:item.listPrice?C.green:C.blue,flexShrink:0}}>{item.listPrice?`$${(+item.listPrice).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"Set price"}</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        ):(
-          <>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
-              <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
-                <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Second line</span>
-                <select value={lang} onChange={e=>setLabelLang(e.target.value)} style={{...FI,fontSize:12,padding:"5px 9px",minWidth:170}}>
-                  {LABEL_LANGS.map(l=><option key={l.code} value={l.code}>{l.native?`${l.native} · ${l.label}`:l.label}</option>)}
-                </select>
-              </div>
-              <button onClick={printLabels} disabled={!inShipment.length} style={{background:inShipment.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:inShipment.length?"pointer":"default"}}>🖨 Open print sheet</button>
-            </div>
-            <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {inShipment.length} card{inShipment.length===1?"":"s"} · 10 × 70 mm, 2 per row on A4{lang?"":" · English only, one line per label"}</div>
-            {inShipment.length===0?(
-              <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Add cards to the shipment first — labels come from what's in it.</div>
-            ):(
-              <div style={{display:"grid",gap:7}}>
-                {inShipment.map(item=>(
-                  <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px"}}>
-                    <div style={{fontSize:10,color:C.inkFaint,marginBottom:6}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}</div>
-                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 90px":"1fr 90px"),gap:7}}>
-                      <Field label={lang?"Label — English":"Label"}>
-                        <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))setLabelField(item.id,"labelEn",v);}} style={{...FI,fontSize:11}}/>
-                      </Field>
-                      {!!lang&&(
-                        <Field label={`Label — ${langCfg.label}`}>
-                          <input key={`${item.id}-${lang}`} defaultValue={secondLine(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==secondLine(item))setSecondLine(item.id,v);}} placeholder={langCfg.sample||""} style={{...FI,fontSize:11}}/>
-                        </Field>
-                      )}
-                      <Field label="Copies">
-                        <input type="number" min="1" max="200" defaultValue={labelCopies(item)} onBlur={e=>{const v=String(Math.max(1,Math.min(200,parseInt(e.target.value,10)||1)));if(v!==String(labelCopies(item)))setLabelField(item.id,"labelCopies",v);}} style={{...FI,fontSize:11}}/>
-                      </Field>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </Shell>
-  );
-}
-
 function ShowsApp({onHome,isAdmin=true}){
   const t=useT();
   const [shows,setShows]=useState([]);
@@ -14649,6 +14375,24 @@ function ShowsApp({onHome,isAdmin=true}){
     const nextVal=typeof val==="function"?val(s[key],s):val;
     return{...s,[key]:nextVal};
   }));
+  // Adding stock to a show's shipment applies exactly the stamp the Stock module's
+  // "Send →" applies, so an item sent from either place lands the same way.
+  const addStockToShow=async(sid,ids)=>{
+    const show=(showsRef.current.length?showsRef.current:shows).find(s=>s.id===sid);
+    if(!show||!ids.length)return;
+    const idSet=new Set(ids),region=getShowRegion(show),ts=new Date().toISOString();
+    const next=stock.map(s=>!idSet.has(s.id)?s:{...s,region,showTag:show.name,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts});
+    setStock(next);
+    await saveStockK(next);
+    logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.length} item${ids.length>1?"s":""} → ${region} (${show.name})`,targetMod:"stock"});
+  };
+  // Patches a stock card in place — used for shipment pricing and label text, both
+  // of which belong to the card itself rather than to the show.
+  const patchStockItem=async(itemId,patch)=>{
+    const next=stock.map(s=>s.id!==itemId?s:{...s,...patch,updatedAt:new Date().toISOString()});
+    setStock(next);
+    await saveStockK(next);
+  };
   const toggleCheck=(sid,i)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],done:!c[i].done};return{...s,checklist:c};}));
   const editCheckTask=(sid,i,task)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],task};return{...s,checklist:c};}));
   const addCheckItem=(sid)=>save(shows.map(s=>s.id!==sid?s:{...s,checklist:[...(s.checklist||[]),{id:uid(),task:"",done:false}]}));
@@ -14695,6 +14439,7 @@ function ShowsApp({onHome,isAdmin=true}){
     stock,purchases,
     onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
     onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
+    onAddStockToShow:addStockToShow,onPatchStockItem:patchStockItem,
     onAddDailySale:addDailySale,onUpdateDailySale:updateDailySale,onDelDailySale:delDailySale,
     onAddShowExpense:addShowExpense,onDelShowExpense:delShowExpense,
     onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
@@ -14916,7 +14661,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddStockToShow,onPatchStockItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -14931,6 +14676,14 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [bagSellId,setBagSellId]=useState(null);
   const [bagSellPrice,setBagSellPrice]=useState("");
   const [showStockTab,setShowStockTab]=useState("unsold");
+  const [shipView,setShipView]=useState("plan");
+  const [shipPickOpen,setShipPickOpen]=useState(false);
+  const [shipQuery,setShipQuery]=useState("");
+  const [shipPickIds,setShipPickIds]=useState(()=>new Set());
+  const [shipBusy,setShipBusy]=useState(false);
+  const [shipPriceId,setShipPriceId]=useState(null);
+  const [shipPriceDraft,setShipPriceDraft]=useState("");
+  const [labelLang,setLabelLang]=useState(null);
   const [sellId,setSellId]=useState(null);
   const [sellPrice,setSellPrice]=useState("");
   const [sellCurrency,setSellCurrency]=useState("USD");
@@ -15499,6 +15252,80 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const flowReturnedKg=flowKgTotal(showReturnedItems);
   const flowStillKg=flowKgTotal(showStillThere);
   const flowSentKg=flowSentKgTotal(showSentItems);
+  // ── Shipment planning ────────────────────────────────────────────────────
+  // What is already going out, and what could still be added. costPrice and
+  // listPrice are whole-card figures rather than per-unit rates, so the totals are
+  // straight sums: cost is what left India in INR, value is the USD ask.
+  const shipItems=showLiveItems;
+  const shipPool=stock.filter(s=>!s.showId&&!s.showTag&&(s.region||"India")==="India"&&hasStockQty(s)&&!s.soldDate);
+  const shipQ=shipQuery.trim().toLowerCase();
+  const shipMatches=shipQ?shipPool.filter(s=>[s.material,s.shape,s.origin,s.size,s.grade,s.sku,s.location,s.vendor].filter(Boolean).join(" ").toLowerCase().includes(shipQ)):shipPool;
+  const shipShown=shipMatches.slice(0,60);
+  const shipCostInr=shipItems.reduce((sum,s)=>sum+(+s.costPrice||0),0);
+  const shipValueUsd=shipItems.reduce((sum,s)=>sum+(+s.listPrice||0),0);
+  const shipCostUsd=usdInr>0?shipCostInr/usdInr:0;
+  const shipMarginUsd=shipValueUsd-shipCostUsd;
+  const shipMultiple=shipCostUsd>0?shipValueUsd/shipCostUsd:0;
+  const shipUnpriced=shipItems.filter(s=>!(+s.listPrice>0)).length;
+  const shipKg=flowSentKgTotal(shipItems);
+  const fmtUsd=n=>`$${(+n||0).toLocaleString("en-US",{maximumFractionDigits:0})}`;
+  const shipRegion=getShowRegion(show);
+  // Null means "not chosen yet" — fall back to what suits the destination.
+  const lang=labelLang??DEFAULT_LABEL_LANG(shipRegion);
+  const langCfg=LABEL_LANGS.find(l=>l.code===lang)||LABEL_LANGS[0];
+  const autoEn=s=>[s.origin,s.material,s.shape].filter(Boolean).join(" ")||s.material||"Item";
+  // nameJp is read as the Japanese entry so labels typed before languages existed
+  // still print.
+  const secondLine=s=>!lang?"":String((s.labelNames||{})[lang]??(lang==="ja"?s.nameJp||"":"")).trim();
+  const labelCopies=s=>{const n=parseInt(s.labelCopies,10);if(Number.isFinite(n)&&n>0)return Math.min(n,200);const pcs=(s.unit||"")==="pcs"?parseInt(s.qty,10):0;return Number.isFinite(pcs)&&pcs>0?Math.min(pcs,200):1;};
+  const totalLabels=shipItems.reduce((n,s)=>n+labelCopies(s),0);
+  const addToShipment=async()=>{
+    if(!shipPickIds.size||shipBusy)return;
+    setShipBusy(true);
+    try{await onAddStockToShow?.(show.id,[...shipPickIds]);setShipPickIds(new Set());setShipQuery("");setShipPickOpen(false);}
+    finally{setShipBusy(false);}
+  };
+  const commitShipPrice=async id=>{
+    const item=stock.find(s=>s.id===id),next=shipPriceDraft.trim();
+    setShipPriceId(null);
+    if(item&&next!==String(item.listPrice||""))await onPatchStockItem?.(id,{listPrice:next});
+  };
+  const setSecondLine=async(id,val)=>{
+    if(!lang)return;
+    const item=stock.find(s=>s.id===id);
+    await onPatchStockItem?.(id,{labelNames:{...(item?.labelNames||{}),[lang]:val}});
+  };
+  // Printed through a standalone window so the sheet carries its own millimetre
+  // page geometry instead of inheriting the app's screen styles.
+  const printLabels=()=>{
+    const rows=shipItems.flatMap(s=>Array.from({length:labelCopies(s)},()=>({en:(s.labelEn||autoEn(s)).trim(),second:secondLine(s)})));
+    if(!rows.length)return;
+    const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const w=window.open("","_blank");
+    if(!w)return;
+    w.document.write(`<!DOCTYPE html><html lang="${lang||"en"}"><head><meta charset="UTF-8"><title>Strip Labels 10×70mm — ${esc(show.name||"")}</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400&family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet"><style>
+:root{--lw:70mm;--lh:10mm;--accent:#8B6F47;--border:#cbb89a;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
+.toolbar{max-width:220mm;margin:0 auto 14px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.08);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;}
+.toolbar h1{font-family:'Noto Serif JP',serif;font-size:12px;font-weight:400;color:#888;letter-spacing:.06em;}
+.btn{border:none;padding:6px 16px;font-family:'Cormorant Garamond',serif;font-size:13px;letter-spacing:.08em;cursor:pointer;border-radius:4px;background:#8B6F47;color:#fff;}
+.page{width:210mm;background:#fff;margin:0 auto;padding:8mm;box-shadow:0 4px 24px rgba(0,0,0,.14);display:grid;grid-template-columns:repeat(2,var(--lw));gap:2mm;justify-content:center;align-content:start;}
+.label{width:var(--lw);height:var(--lh);min-height:var(--lh);max-height:var(--lh);border:.3mm solid var(--border);padding:1.2mm 3mm 1.2mm 4mm;display:flex;flex-direction:column;justify-content:center;gap:.6mm;position:relative;background:#fff;overflow:hidden;}
+.label::before{content:'';position:absolute;top:0;left:0;bottom:0;width:1.2mm;background:var(--accent);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.label-en{font-family:'Cormorant Garamond',serif;font-size:5.5pt;font-weight:600;color:#555;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
+.label-2nd{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:7pt;font-weight:400;color:#1a1a1a;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
+.label-solo{font-family:'Cormorant Garamond',serif;font-size:8pt;font-weight:600;color:#1a1a1a;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
+@media print{@page{size:A4;margin:8mm;}body{background:#fff;padding:0;}.toolbar{display:none;}.page{box-shadow:none;margin:0;padding:0;}.label{break-inside:avoid;}.label::before{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
+</style></head><body>
+<div class="toolbar"><h1>Strip Labels &nbsp;·&nbsp; 10 × 70 mm &nbsp;·&nbsp; ${esc(show.name||"")} &nbsp;·&nbsp; ${rows.length} labels</h1><button class="btn" onclick="window.print()">🖨 Print A4</button></div>
+<div class="page">${rows.map(r=>r.second
+  ?`<div class="label"><div class="label-en">${esc(r.en)}</div><div class="label-2nd">${esc(r.second)}</div></div>`
+  :`<div class="label"><div class="label-solo">${esc(r.en)}</div></div>`).join("")}</div>
+</body></html>`);
+    w.document.close();
+  };
   const dailySales=show.dailySales||[];
   const showExpenses=show.showExpenses||[];
   const showPhotos=show.showPhotos||[];
@@ -15514,7 +15341,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const totalItemsSold=ssSold.length+showSoldItems.length;
   const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`).join(" · ")||"—";
   // Employees don't see show earnings — no Sales tab, no revenue figures
-  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}].filter(t=>isAdmin||t.id!=="sales");
+  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"shipment",label:"📦 Shipment"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}].filter(t=>isAdmin||t.id!=="sales");
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
   const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
 
@@ -16534,6 +16361,145 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                     })()}
                   </div>
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* ── SHIPMENT ── */}
+          {showTab==="shipment"&&(
+            <div style={{padding:"14px 16px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>What goes to {show.name} · {shipRegion}</span>
+                <div style={{display:"flex",gap:6}}>
+                  {[["plan","Plan"],["labels","🏷 Labels"]].map(([v,label])=>(
+                    <button key={v} onClick={e=>{e.stopPropagation();setShipView(v);}} style={{background:shipView===v?C.ink:"none",color:shipView===v?"#fff":C.inkMid,border:`1px solid ${shipView===v?C.ink:C.border}`,borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{label}</button>
+                  ))}
+                </div>
+              </div>
+
+              {shipView==="plan"?(
+                <>
+                  <div style={{border:`1px solid ${C.border}`,borderLeft:`3px solid ${show.color}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10}}>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Shipment total</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{shipItems.length} card{shipItems.length===1?"":"s"}{shipKg>0?` · ${fmtFlowNum(shipKg)} kg`:""}</span>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+                      {[
+                        ["Cost",inr(Math.round(shipCostInr)),shipCostUsd>0?`${fmtUsd(shipCostUsd)} at ₹${usdInr}/$`:"",C.inkMid],
+                        ["Value",fmtUsd(shipValueUsd),!shipItems.length?"":shipUnpriced>0?`${shipUnpriced} card${shipUnpriced===1?"":"s"} unpriced`:"all priced",shipUnpriced>0?C.amber:C.green],
+                        ["Margin",shipValueUsd>0?fmtUsd(shipMarginUsd):"—",shipValueUsd>0?(shipMultiple>0?`${(Math.round(shipMultiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",shipValueUsd>0&&shipMarginUsd<0?C.red:C.inkFaint],
+                        ["Weight",shipKg>0?`${fmtFlowNum(shipKg)} kg`:"—","kg-priced cards only",C.inkMid],
+                      ].map(([label,big,sub,color])=>(
+                        <div key={label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 10px"}}>
+                          <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
+                          <div style={{fontSize:17,fontWeight:750,color:C.ink,lineHeight:1.1,wordBreak:"break-word"}}>{big}</div>
+                          <div style={{fontSize:9,color,marginTop:3,minHeight:12}}>{sub}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {shipUnpriced>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Value counts only the cards that have a list price — set the rest below to see the real total.</div>}
+                  </div>
+
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+                    <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>In this shipment</span>
+                    {isAdmin&&!shipPickOpen&&<button onClick={e=>{e.stopPropagation();setShipPickOpen(true);}} style={{background:show.color,color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>➕ Add from stock</button>}
+                  </div>
+
+                  {shipPickOpen&&(
+                    <div onClick={e=>e.stopPropagation()} style={{border:`1px solid ${show.color}`,borderRadius:9,background:C.card,padding:"11px 12px",marginBottom:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+                        <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>Add to {show.name}</span>
+                        <button onClick={()=>{setShipPickOpen(false);setShipQuery("");setShipPickIds(new Set());}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>
+                      </div>
+                      <input value={shipQuery} onChange={e=>setShipQuery(e.target.value)} placeholder="Search stone, shape, size, box, SKU…" style={{...FI,fontSize:11,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
+                      {shipPool.length===0?(
+                        <div style={{fontSize:11,color:C.inkFaint,padding:"10px 2px"}}>Nothing available — every stock card with quantity left is already out at a show.</div>
+                      ):(
+                        <>
+                          <div style={{display:"grid",gap:5,maxHeight:300,overflowY:"auto",marginBottom:9}}>
+                            {shipShown.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 2px"}}>No stock matches “{shipQuery}”.</div>}
+                            {shipShown.map(item=>{
+                              const picked=shipPickIds.has(item.id);
+                              return(
+                                <div key={item.id} onClick={()=>setShipPickIds(p=>{const n=new Set(p);n.has(item.id)?n.delete(item.id):n.add(item.id);return n;})} style={{display:"flex",gap:8,alignItems:"center",background:picked?C.blueBg:C.surface,border:`1px solid ${picked?C.blue:C.border}`,borderRadius:7,padding:"6px 8px",cursor:"pointer"}}>
+                                  <input type="checkbox" checked={picked} readOnly style={{flexShrink:0,pointerEvents:"none"}}/>
+                                  {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:32,height:32,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                                  <div style={{flex:1,minWidth:0}}>
+                                    <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                    <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}</div>
+                                  </div>
+                                  <span style={{fontSize:9,fontWeight:700,color:item.listPrice?C.green:C.inkFaint,flexShrink:0}}>{item.listPrice?`$${item.listPrice}`:"no price"}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                            <span style={{fontSize:10,color:C.inkFaint}}>{shipPickIds.size} selected{shipMatches.length>shipShown.length?` · showing ${shipShown.length} of ${shipMatches.length}, narrow the search to see more`:""}</span>
+                            <button onClick={addToShipment} disabled={!shipPickIds.size||shipBusy} style={{background:shipPickIds.size&&!shipBusy?show.color:"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:shipPickIds.size&&!shipBusy?"pointer":"default"}}>{shipBusy?"Adding…":`Add ${shipPickIds.size||""} →`}</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {shipItems.length===0?(
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing going to {show.name} yet. Add cards from stock to start planning.</div>
+                  ):(
+                    <div style={{display:"grid",gap:6}}>
+                      {shipItems.map(item=>(
+                        <div key={item.id} style={{display:"flex",gap:9,alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px"}}>
+                          {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:38,height:38,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:38,height:38,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:11.5,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                            <div style={{fontSize:9,color:C.inkFaint}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}{item.sentAt?` · sent ${fmtDate(item.sentAt)}`:""}</div>
+                          </div>
+                          {isAdmin&&(shipPriceId===item.id
+                            ?<input value={shipPriceDraft} onChange={e=>setShipPriceDraft(e.target.value)} onBlur={()=>commitShipPrice(item.id)} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();if(e.key==="Escape")setShipPriceId(null);}} type="number" min="0" step="0.01" placeholder="List price / USD" autoFocus onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,width:120,flexShrink:0}}/>
+                            :<button onClick={e=>{e.stopPropagation();setShipPriceId(item.id);setShipPriceDraft(String(item.listPrice||""));}} style={{background:"none",border:`1px solid ${item.listPrice?C.border:C.blue}`,borderRadius:6,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:800,color:item.listPrice?C.green:C.blue,flexShrink:0}}>{item.listPrice?`$${(+item.listPrice).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"Set price"}</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ):(
+                <>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Second line</span>
+                      <select value={lang} onChange={e=>setLabelLang(e.target.value)} style={{...FI,fontSize:12,padding:"5px 9px",minWidth:170}}>
+                        {LABEL_LANGS.map(l=><option key={l.code} value={l.code}>{l.native?`${l.native} · ${l.label}`:l.label}</option>)}
+                      </select>
+                    </div>
+                    <button onClick={printLabels} disabled={!shipItems.length} style={{background:shipItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:shipItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
+                  </div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {shipItems.length} card{shipItems.length===1?"":"s"} · 10 × 70 mm, 2 per row on A4{lang?"":" · English only, one line per label"}</div>
+                  {shipItems.length===0?(
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Add cards to the shipment first — labels come from what's in it.</div>
+                  ):(
+                    <div style={{display:"grid",gap:7}}>
+                      {shipItems.map(item=>(
+                        <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px"}}>
+                          <div style={{fontSize:10,color:C.inkFaint,marginBottom:6}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}</div>
+                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 90px":"1fr 90px"),gap:7}}>
+                            <Field label={lang?"Label — English":"Label"}>
+                              <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))onPatchStockItem?.(item.id,{labelEn:v});}} style={{...FI,fontSize:11}}/>
+                            </Field>
+                            {!!lang&&(
+                              <Field label={`Label — ${langCfg.label}`}>
+                                <input key={`${item.id}-${lang}`} defaultValue={secondLine(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==secondLine(item))setSecondLine(item.id,v);}} placeholder={langCfg.sample||""} style={{...FI,fontSize:11}}/>
+                              </Field>
+                            )}
+                            <Field label="Copies">
+                              <input type="number" min="1" max="200" defaultValue={labelCopies(item)} onBlur={e=>{const v=String(Math.max(1,Math.min(200,parseInt(e.target.value,10)||1)));if(v!==String(labelCopies(item)))onPatchStockItem?.(item.id,{labelCopies:v});}} style={{...FI,fontSize:11}}/>
+                            </Field>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -19039,7 +19005,6 @@ const ALL_STAFF_MODS=[
   {id:"expenses",label:"Expenses"},
   {id:"invoices",label:"Invoicing"},
   {id:"shows",label:"Shows"},
-  {id:"shipments",label:"Shipments"},
   {id:"recon",label:"Export Recon"},
   {id:"jobwork",label:"Job Work"},
   {id:"etsy",label:"Listing Manager"},
@@ -19584,7 +19549,6 @@ export default function Root({onSignOut}){
     else if(mod==="stock")content=<StockApp onHome={goHome} startStockId={startStockId} onStockIdConsumed={()=>{setStartStockId(null);window.history.replaceState(null,"",window.location.pathname);}} startLocationFilter={startLocationFilter} onLocationConsumed={()=>{setStartLocationFilter(null);window.history.replaceState(null,"",window.location.pathname);}} onCreateInvoiceFromStock={draft=>{setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
     else if(mod==="expenses")content=<ExpensesApp onHome={goHome}/>;
     else if(mod==="shows")content=<ShowsApp onHome={goHome} isAdmin={isAdmin}/>;
-    else if(mod==="shipments")content=<ShipmentsApp onHome={goHome} isAdmin={isAdmin}/>;
     else if(mod==="calendar")content=<CalendarApp onHome={goHome}/>;
     else if(mod==="recon")content=<ExportReconShell onHome={goHome} onCreateInvoiceFromSb={(draft,coKey)=>{localStorage.setItem("ng-vendors-company",(coKey==="nikhil"||coKey==="ng")?"ng":"at");setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}}/>;
     else if(mod==="invoices")content=<InvoicesApp onHome={()=>{goHome();setStartInvoiceDraft(null);setStartInvoiceId(null);}} startDraft={startInvoiceDraft} startInvoiceId={startInvoiceId} onInvoiceIdConsumed={()=>setStartInvoiceId(null)}/>;
