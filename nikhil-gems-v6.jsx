@@ -6393,7 +6393,6 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const saveBulkItems=async items=>{const list=[...items,...stock];setStock(list);try{await saveStockK(list);showToast(items.length+" items added");logActivity({user:"Admin",action:"created",module:"stock",label:`Bulk added ${items.length} stock item${items.length>1?"s":""}`,targetId:items[0]?.id,targetMod:"stock"});}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
   const saveAccItem=async item=>{const list=[item,...accStock.filter(x=>x.id!==item.id)];setAccStock(list);await saveK(KEYS.accStock,list);showToast("Accounting entry saved");setForm(null);};
   const del=async id=>{const item=stock.find(x=>x.id===id);const list=stock.filter(x=>x.id!==id);setStock(list);try{await saveStockK(list,{deletedIds:[id]});logActivity({user:"Admin",action:"deleted",module:"stock",label:`Deleted: ${item?.material||"item"}${item?.shape?" "+item.shape:""}`,targetMod:"stock"});}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
-  const getShowRegion=show=>{const t=((show.city||"")+" "+(show.name||"")).toLowerCase();if(/japan|tokyo|osaka|kyoto|ikebukuro|nagoya/.test(t))return"Japan";if(/usa|america|denver|tucson|arizona/.test(t))return"USA";if(/europe|germany|munich|france|paris|italy|spain/.test(t))return"Europe";return"India";};
   const REGION_CFG={India:{label:"India",flag:"🇮🇳",color:"#9A6200",bg:"#FDF8ED",border:"#E8C878",currency:"INR"},Japan:{label:"Japan",flag:"🇯🇵",color:"#C0392B",bg:"#FFF5F5",border:"#F5C6C6",currency:"JPY"},USA:{label:"USA",flag:"🇺🇸",color:"#1D4ED8",bg:"#EFF6FF",border:"#BFDBFE",currency:"USD"},Europe:{label:"Europe",flag:"🇪🇺",color:"#059669",bg:"#F0FDF4",border:"#A7F3D0",currency:"EUR"}};
   const sendToShow=async(showId,ids,stockOverride)=>{if(!ids.size||!showId)return;const show=shows.find(s=>s.id===showId);if(!show)return;const region=getShowRegion(show);const showTag=show.name;const base=stockOverride||stock;
     const liveMatches=await findLiveListingsForStock(base.filter(s=>ids.has(s.id)),base);
@@ -9366,6 +9365,10 @@ async function savePurchasesK(list){
   // to the Stock tab after confirming a bill in Purchases.
   await saveK(KEYS.purchases,slim);
 }
+// Which region a show sits in. Stock picks this up as its region stamp when it is
+// sent to a show — from the Stock module or from the show's own Stock tab, so both
+// routes land on the same value.
+function getShowRegion(show){const t=((show.city||"")+" "+(show.name||"")).toLowerCase();if(/japan|tokyo|osaka|kyoto|ikebukuro|nagoya/.test(t))return"Japan";if(/usa|america|denver|tucson|arizona/.test(t))return"USA";if(/europe|germany|munich|france|paris|italy|spain/.test(t))return"Europe";return"India";}
 let _stockSaveQ=Promise.resolve();
 async function saveStockK(list,opts={}){
   const run=()=>_saveStockKImpl(list,opts);
@@ -14351,6 +14354,27 @@ function ShowsApp({onHome,isAdmin=true}){
     const nextVal=typeof val==="function"?val(s[key],s):val;
     return{...s,[key]:nextVal};
   }));
+  // Send stock to a show from the show's own Stock tab. Stamps exactly what the
+  // Stock module's "Send →" stamps, so an item sent from either place shows up the
+  // same way in the Sent / Still there counters.
+  const addStockToShow=async(sid,ids)=>{
+    const show=(showsRef.current.length?showsRef.current:shows).find(s=>s.id===sid);
+    if(!show||!ids.length)return;
+    const idSet=new Set(ids),region=getShowRegion(show),ts=new Date().toISOString();
+    const next=stock.map(s=>!idSet.has(s.id)?s:{...s,region,showTag:show.name,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts});
+    setStock(next);
+    await saveStockK(next);
+    logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.length} item${ids.length>1?"s":""} → ${region} (${show.name})`,targetMod:"stock"});
+  };
+  // Pricing a card at the show writes the item's own list price rather than a
+  // show-local copy, so the number follows the card back into Stock and onward to
+  // the storefronts.
+  const setStockListPrice=async(itemId,price)=>{
+    const clean=String(price??"").trim();
+    const next=stock.map(s=>s.id!==itemId?s:{...s,listPrice:clean,updatedAt:new Date().toISOString()});
+    setStock(next);
+    await saveStockK(next);
+  };
   const toggleCheck=(sid,i)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],done:!c[i].done};return{...s,checklist:c};}));
   const editCheckTask=(sid,i,task)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],task};return{...s,checklist:c};}));
   const addCheckItem=(sid)=>save(shows.map(s=>s.id!==sid?s:{...s,checklist:[...(s.checklist||[]),{id:uid(),task:"",done:false}]}));
@@ -14397,6 +14421,7 @@ function ShowsApp({onHome,isAdmin=true}){
     stock,purchases,
     onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
     onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
+    onAddStockToShow:addStockToShow,onSetStockListPrice:setStockListPrice,
     onAddDailySale:addDailySale,onUpdateDailySale:updateDailySale,onDelDailySale:delDailySale,
     onAddShowExpense:addShowExpense,onDelShowExpense:delShowExpense,
     onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
@@ -14618,7 +14643,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddStockToShow,onSetStockListPrice,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -14633,6 +14658,12 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [bagSellId,setBagSellId]=useState(null);
   const [bagSellPrice,setBagSellPrice]=useState("");
   const [showStockTab,setShowStockTab]=useState("unsold");
+  const [stockPickOpen,setStockPickOpen]=useState(false);
+  const [stockPickQuery,setStockPickQuery]=useState("");
+  const [stockPickIds,setStockPickIds]=useState(()=>new Set());
+  const [stockPickBusy,setStockPickBusy]=useState(false);
+  const [priceEditId,setPriceEditId]=useState(null);
+  const [priceDraft,setPriceDraft]=useState("");
   const [sellId,setSellId]=useState(null);
   const [sellPrice,setSellPrice]=useState("");
   const [sellCurrency,setSellCurrency]=useState("USD");
@@ -15191,13 +15222,48 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const showStillThere=showLiveItems.filter(s=>(s.region||"India")!=="India"&&hasStockQty(s)&&!s.soldDate);
   const showSoldItems=showLiveItems.filter(s=>s.soldDate||s.soldPrice||s.soldFromShowId===show.id||(s.soldFromShow||"").toLowerCase()===showName);
   const showSentItems=showLiveItems.length?showLiveItems:showFlowItems.filter(s=>s.sentAt||s.returnedFromShow||s.returnedFromShowId);
-  const fmtFlowNum=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)).replace(/\.?0+$/,""):"";};
+  // Anything still sitting in India with quantity left can be sent to this show.
+  // Items already tagged to a show are left out so the same card can't be sent twice.
+  const stockPickQ=stockPickQuery.trim().toLowerCase();
+  const stockPickPool=stock.filter(s=>!s.showId&&!s.showTag&&(s.region||"India")==="India"&&hasStockQty(s)&&!s.soldDate);
+  const stockPickMatches=(stockPickQ?stockPickPool.filter(s=>[s.material,s.shape,s.origin,s.size,s.grade,s.sku,s.location,s.vendor].filter(Boolean).join(" ").toLowerCase().includes(stockPickQ)):stockPickPool);
+  const stockPickShown=stockPickMatches.slice(0,60);
+  const toggleStockPick=id=>setStockPickIds(prev=>{const next=new Set(prev);if(next.has(id))next.delete(id);else next.add(id);return next;});
+  const closeStockPicker=()=>{setStockPickOpen(false);setStockPickQuery("");setStockPickIds(new Set());};
+  const confirmStockPick=async()=>{
+    if(!stockPickIds.size||stockPickBusy)return;
+    setStockPickBusy(true);
+    try{await onAddStockToShow?.(show.id,[...stockPickIds]);closeStockPicker();}
+    finally{setStockPickBusy(false);}
+  };
+  const commitPrice=async itemId=>{
+    const item=stock.find(s=>s.id===itemId);
+    const next=priceDraft.trim();
+    setPriceEditId(null);
+    if(item&&next!==String(item.listPrice||""))await onSetStockListPrice?.(itemId,next);
+  };
+  // Number.toFixed then unary + already drops trailing zeros (40 stays 40, 20.50
+  // becomes 20.5). Stripping /\.?0+$/ on top of that ate the zero off round
+  // numbers — 40 kg printed as "4", 100 kg as "1".
+  const fmtFlowNum=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";};
   const flowQtyText=s=>[s.qty&&s.qty!=="0"?`${s.qty} ${s.unit||"pcs"}`:s.soldQty?`${s.soldQty} ${s.unit||"pcs"}`:"",s.qty2&&s.qty2!=="0"?`${s.qty2} ${s.unit2||"kg"}`:s.soldQty2?`${s.soldQty2} ${s.unit2||"kg"}`:""].filter(Boolean).join(" / ")||"—";
   const flowKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+s.qty||0):0)+((s.unit2||"")==="kg"?(+s.qty2||0):0),0);
   const flowSentKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+(s.showSentQty||s.qty)||0):0)+((s.unit2||"")==="kg"?(+(s.showSentQty2||s.qty2)||0):0),0);
   const flowReturnedKg=flowKgTotal(showReturnedItems);
   const flowStillKg=flowKgTotal(showStillThere);
   const flowSentKg=flowSentKgTotal(showSentItems);
+  // The shipment being planned: every card currently tagged to this show. costPrice
+  // and listPrice are both whole-card figures, not per-unit rates, so these are
+  // straight sums — cost is INR out of India, value is the USD asking price.
+  const shipItems=showLiveItems;
+  const shipCostInr=shipItems.reduce((sum,s)=>sum+(+s.costPrice||0),0);
+  const shipValueUsd=shipItems.reduce((sum,s)=>sum+(+s.listPrice||0),0);
+  const shipCostUsd=usdInr>0?shipCostInr/usdInr:0;
+  const shipMarginUsd=shipValueUsd-shipCostUsd;
+  const shipMultiple=shipCostUsd>0?shipValueUsd/shipCostUsd:0;
+  const shipUnpriced=shipItems.filter(s=>!(+s.listPrice>0)).length;
+  const shipKg=flowSentKgTotal(shipItems);
+  const fmtUsd=n=>`$${(+n||0).toLocaleString("en-US",{maximumFractionDigits:0})}`;
   const dailySales=show.dailySales||[];
   const showExpenses=show.showExpenses||[];
   const showPhotos=show.showPhotos||[];
@@ -16240,8 +16306,70 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
           {/* ── STOCK ── */}
           {showTab==="stock"&&(
             <div style={{padding:"14px 16px"}}>
+              {shipItems.length>0&&(
+                <div style={{border:`1px solid ${C.border}`,borderLeft:`3px solid ${show.color}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:16}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10}}>
+                    <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Shipment to {show.name}</span>
+                    <span style={{fontSize:10,color:C.inkFaint}}>{shipItems.length} card{shipItems.length===1?"":"s"}{shipKg>0?` · ${fmtFlowNum(shipKg)} kg`:""}</span>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+                    {[
+                      ["Cost",inr(Math.round(shipCostInr)),shipCostUsd>0?`${fmtUsd(shipCostUsd)} at ₹${usdInr}/$`:"",C.inkMid],
+                      ["Value",fmtUsd(shipValueUsd),shipUnpriced>0?`${shipUnpriced} card${shipUnpriced===1?"":"s"} unpriced`:"all priced",shipUnpriced>0?C.amber:C.green],
+                      ["Margin",shipValueUsd>0?fmtUsd(shipMarginUsd):"—",shipValueUsd>0?(shipMultiple>0?`${(Math.round(shipMultiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",shipValueUsd>0&&shipMarginUsd<0?C.red:C.inkFaint],
+                      ["Weight",shipKg>0?`${fmtFlowNum(shipKg)} kg`:"—","kg-priced cards only",C.inkMid],
+                    ].map(([label,big,sub,color])=>(
+                      <div key={label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 10px"}}>
+                        <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
+                        <div style={{fontSize:17,fontWeight:750,color:C.ink,lineHeight:1.1,wordBreak:"break-word"}}>{big}</div>
+                        <div style={{fontSize:9,color,marginTop:3,minHeight:12,fontWeight:sub==="all priced"||shipUnpriced>0?700:400}}>{sub}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {shipUnpriced>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Value counts only the cards that have a list price — set the rest below to see the real total.</div>}
+                </div>
+              )}
               <div style={{marginBottom:18}}>
-                <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:8}}>Show Summary</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:8}}>
+                  <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Show Summary</div>
+                  {isAdmin&&!stockPickOpen&&<button onClick={e=>{e.stopPropagation();setStockPickOpen(true);}} style={{background:show.color,color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",flexShrink:0}}>➕ Add from stock</button>}
+                </div>
+                {stockPickOpen&&(
+                  <div onClick={e=>e.stopPropagation()} style={{border:`1px solid ${show.color}`,borderRadius:9,background:C.card,padding:"11px 12px",marginBottom:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+                      <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>Send stock to {show.name}</span>
+                      <button onClick={closeStockPicker} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>
+                    </div>
+                    <input value={stockPickQuery} onChange={e=>setStockPickQuery(e.target.value)} placeholder="Search stone, shape, size, box, SKU…" style={{...FI,fontSize:11,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
+                    {stockPickPool.length===0?(
+                      <div style={{fontSize:11,color:C.inkFaint,padding:"10px 2px"}}>Nothing available to send — every stock card with quantity left is already tagged to a show.</div>
+                    ):(
+                      <>
+                        <div style={{display:"grid",gap:5,maxHeight:280,overflowY:"auto",marginBottom:9}}>
+                          {stockPickShown.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 2px"}}>No stock matches “{stockPickQuery}”.</div>}
+                          {stockPickShown.map(item=>{
+                            const picked=stockPickIds.has(item.id);
+                            return(
+                              <div key={item.id} onClick={()=>toggleStockPick(item.id)} style={{display:"flex",gap:8,alignItems:"center",background:picked?C.blueBg:C.surface,border:`1px solid ${picked?C.blue:C.border}`,borderRadius:7,padding:"6px 8px",cursor:"pointer"}}>
+                                <input type="checkbox" checked={picked} readOnly style={{flexShrink:0,pointerEvents:"none"}}/>
+                                {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:32,height:32,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                                <div style={{flex:1,minWidth:0}}>
+                                  <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                  <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}</div>
+                                </div>
+                                <span style={{fontSize:9,fontWeight:700,color:item.listPrice?C.green:C.inkFaint,flexShrink:0}}>{item.listPrice?`$${item.listPrice}`:"no price"}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                          <span style={{fontSize:10,color:C.inkFaint}}>{stockPickIds.size} selected{stockPickMatches.length>stockPickShown.length?` · showing ${stockPickShown.length} of ${stockPickMatches.length}, narrow the search to see more`:""}</span>
+                          <button onClick={confirmStockPick} disabled={!stockPickIds.size||stockPickBusy} style={{background:stockPickIds.size&&!stockPickBusy?show.color:"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:stockPickIds.size&&!stockPickBusy?"pointer":"default",flexShrink:0}}>{stockPickBusy?"Sending…":`Send ${stockPickIds.size||""} →`}</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8,marginBottom:12}}>
                   {[
                     ["Sent",showSentItems.length,flowSentKg?`${fmtFlowNum(flowSentKg)} kg`:"",C.blue,C.blueBg],
@@ -16279,6 +16407,10 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                                 <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}</div>
                                 <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}</div>
                                 {(item.returnedAt||item.soldDate||item.sentAt)&&<div style={{fontSize:9,color:C.inkFaint,marginTop:1}}>{item.returnedAt?`Returned ${fmtDate(item.returnedAt)}`:item.soldDate?`Sold ${fmtDate(item.soldDate)}`:`Sent ${fmtDate(item.sentAt)}`}</div>}
+                                {badge==="Still"&&isAdmin&&(priceEditId===item.id
+                                  ?<input value={priceDraft} onChange={e=>setPriceDraft(e.target.value)} onBlur={()=>commitPrice(item.id)} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();if(e.key==="Escape")setPriceEditId(null);}} type="number" min="0" step="0.01" placeholder="List price / USD" autoFocus onClick={e=>e.stopPropagation()} style={{...FI,fontSize:10,padding:"2px 5px",width:"100%",boxSizing:"border-box",marginTop:3}}/>
+                                  :<button onClick={e=>{e.stopPropagation();setPriceEditId(item.id);setPriceDraft(String(item.listPrice||""));}} style={{background:"none",border:"none",padding:0,marginTop:2,cursor:"pointer",fontSize:10,fontWeight:800,color:item.listPrice?C.green:C.blue,textDecoration:item.listPrice?"none":"underline"}}>{item.listPrice?`$${(+item.listPrice).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"Set price"}</button>
+                                )}
                               </div>
                               <span style={{fontSize:9,fontWeight:800,color,background:"#fff",border:`1px solid ${C.border}`,borderRadius:6,padding:"2px 6px",flexShrink:0}}>{badge}</span>
                             </div>
