@@ -14271,6 +14271,7 @@ function ShowsApp({onHome,isAdmin=true}){
   const showSaveChainRef=useRef(Promise.resolve());
   const pendingShowSavesRef=useRef(0);
   const [stock,setStock]=useState([]);
+  const stockUndoRef=useRef(null);
   const [purchases,setPurchases]=useState([]);
   const [calEvents,setCalEvents]=useState([]);
   const [loaded,setLoaded]=useState(false);
@@ -14382,8 +14383,14 @@ function ShowsApp({onHome,isAdmin=true}){
   // becomes its own card and the India card keeps the remainder.
   const addStockToShow=async(sid,entries)=>{
     const show=(showsRef.current.length?showsRef.current:shows).find(s=>s.id===sid);
-    if(!show||!entries?.length)return;
+    if(!show||!entries?.length)return{sent:0};
     const region=getShowRegion(show),ts=new Date().toISOString();
+    // The same guard the Stock module applies: nothing leaves for a show without
+    // warning that it is still listed for sale online.
+    const wanted=new Set(entries.map(e=>e.id));
+    const live=await findLiveListingsForStock(stock.filter(s=>wanted.has(s.id)),stock).catch(()=>[]);
+    if(live.length&&!window.confirm(liveListingAlertText(live,`These items are about to go to ${region} (${show.name}). Check and delete/adjust the online listings if needed.\n\nSend anyway?`)))return{sent:0,cancelled:true};
+    const prevStock=[...stock];
     let working=[...stock];
     const idsToSend=new Set();
     for(const e of entries){
@@ -14408,11 +14415,23 @@ function ShowsApp({onHome,isAdmin=true}){
       working=[splitItem,...working];
       idsToSend.add(splitItem.id);
     }
-    if(!idsToSend.size)return;
+    if(!idsToSend.size)return{sent:0};
     const next=working.map(s=>!idsToSend.has(s.id)?s:{...s,region,showTag:show.name,showId:show.id,showSentQty:s.qty||"",showSentQty2:s.qty2||"",sentAt:today(),updatedAt:ts});
     setStock(next);
     await saveStockK(next);
+    stockUndoRef.current={prevStock,count:idsToSend.size};
     logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${idsToSend.size} item${idsToSend.size>1?"s":""} → ${region} (${show.name})`,targetMod:"stock"});
+    return{sent:idsToSend.size};
+  };
+  // Putting a shipment back: the snapshot is written as authoritative state so the
+  // split cards the send created disappear rather than being merged back in.
+  const undoStockSend=async()=>{
+    const snap=stockUndoRef.current;
+    if(!snap)return false;
+    stockUndoRef.current=null;
+    setStock(snap.prevStock);
+    try{await saveStockK(snap.prevStock,{direct:true});return true;}
+    catch{return false;}
   };
   // Patches a stock card in place — used for shipment pricing and label text, both
   // of which belong to the card itself rather than to the show.
@@ -14467,7 +14486,7 @@ function ShowsApp({onHome,isAdmin=true}){
     stock,purchases,
     onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
     onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
-    onAddStockToShow:addStockToShow,onPatchStockItem:patchStockItem,
+    onAddStockToShow:addStockToShow,onPatchStockItem:patchStockItem,onUndoStockSend:undoStockSend,
     onAddDailySale:addDailySale,onUpdateDailySale:updateDailySale,onDelDailySale:delDailySale,
     onAddShowExpense:addShowExpense,onDelShowExpense:delShowExpense,
     onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
@@ -14689,7 +14708,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddStockToShow,onPatchStockItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddStockToShow,onPatchStockItem,onUndoStockSend,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -14709,6 +14728,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [shipQuery,setShipQuery]=useState("");
   const [shipPickIds,setShipPickIds]=useState(()=>new Set());
   const [shipQtys,setShipQtys]=useState({});
+  const [shipSent,setShipSent]=useState(0);
   const [shipBusy,setShipBusy]=useState(false);
   const [shipPriceId,setShipPriceId]=useState(null);
   const [shipPriceDraft,setShipPriceDraft]=useState("");
@@ -15282,14 +15302,56 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const flowStillKg=flowKgTotal(showStillThere);
   const flowSentKg=flowSentKgTotal(showSentItems);
   // ── Shipment planning ────────────────────────────────────────────────────
-  // What is already going out, and what could still be added. costPrice and
-  // listPrice are whole-card figures rather than per-unit rates, so the totals are
-  // straight sums: cost is what left India in INR, value is the USD ask.
+  // The draft is a plan, not a copy: each line just points at a stock card and says
+  // how much of it is meant to travel. Nothing in stock moves until the shipment is
+  // sent, so a half-built plan can sit here for days without touching inventory.
+  const shipDraft=show.shipmentDraft||[];
+  const draftLines=shipDraft.map(line=>({line,item:stock.find(s=>s.id===line.id)})).filter(x=>x.item);
+  // A line's share of its card — a part-lot line contributes only its fraction of the
+  // cost and value, which is what makes the totals trustworthy before anything ships.
+  const lineShare=({line,item})=>{
+    const fullQty=parseFloat(item.qty)||0,fullQty2=parseFloat(item.qty2)||0;
+    const q=line.qty===""||line.qty==null?fullQty:(parseFloat(line.qty)||0);
+    const q2=line.qty2===""||line.qty2==null?fullQty2:(parseFloat(line.qty2)||0);
+    const ratio=fullQty>0?Math.min(q/fullQty,1):(fullQty2>0?Math.min(q2/fullQty2,1):1);
+    return{q,q2,ratio,partial:q<fullQty||q2<fullQty2,
+      cost:(parseFloat(item.costPrice)||0)*ratio,
+      value:(parseFloat(item.listPrice)||0)*ratio,
+      kg:((item.unit||"")==="kg"?q:0)+((item.unit2||"")==="kg"?q2:0)};
+  };
+  // A line stops being sendable if the card was sold, sent elsewhere, or shrank below
+  // what the plan asks for while the draft sat here.
+  const lineIssue=({line,item})=>{
+    if(item.showId||item.showTag)return"already sent to a show";
+    if(item.soldDate)return"sold";
+    const{q,q2}=lineShare({line,item});
+    const fullQty=parseFloat(item.qty)||0,fullQty2=parseFloat(item.qty2)||0;
+    if(q>fullQty||q2>fullQty2)return`only ${flowQtyText(item)} left in stock`;
+    if(q<=0&&q2<=0)return"quantity is zero";
+    return"";
+  };
+  const draftBlocked=draftLines.filter(l=>lineIssue(l));
+  const draftSendable=draftLines.filter(l=>!lineIssue(l));
+  const saveDraft=next=>onUpdateShow?.(show.id,"shipmentDraft",next);
+  const addDraftLines=items=>saveDraft([...shipDraft,...items.filter(it=>!shipDraft.some(l=>l.id===it.id)).map(it=>({id:it.id,qty:String(it.qty||""),qty2:String(it.qty2||"")}))]);
+  const setDraftQty=(id,key,val)=>saveDraft(shipDraft.map(l=>l.id!==id?l:{...l,[key]:val}));
+  const removeDraftLine=id=>saveDraft(shipDraft.filter(l=>l.id!==id));
+  // What is already at the show — the shipments that have gone.
   const shipItems=showLiveItems;
-  const shipPool=stock.filter(s=>!s.showId&&!s.showTag&&(s.region||"India")==="India"&&hasStockQty(s)&&!s.soldDate);
+  const shipPool=stock.filter(s=>!s.showId&&!s.showTag&&(s.region||"India")==="India"&&hasStockQty(s)&&!s.soldDate&&!shipDraft.some(l=>l.id===s.id));
   const shipQ=shipQuery.trim().toLowerCase();
   const shipMatches=shipQ?shipPool.filter(s=>[s.material,s.shape,s.origin,s.size,s.grade,s.sku,s.location,s.vendor].filter(Boolean).join(" ").toLowerCase().includes(shipQ)):shipPool;
   const shipShown=shipMatches.slice(0,60);
+  // Totals cover the draft while it is being planned, and what has actually gone once
+  // it has been sent — the two are shown as separate blocks so they never blur.
+  const draftShares=draftLines.map(lineShare);
+  const draftCostInr=draftShares.reduce((sum,s)=>sum+s.cost,0);
+  const draftValueUsd=draftShares.reduce((sum,s)=>sum+s.value,0);
+  const draftKg=draftShares.reduce((sum,s)=>sum+s.kg,0);
+  const draftUnpriced=draftLines.filter(({item})=>!(+item.listPrice>0)).length;
+  const draftCostUsd=usdInr>0?draftCostInr/usdInr:0;
+  const draftMarginUsd=draftValueUsd-draftCostUsd;
+  const draftMultiple=draftCostUsd>0?draftValueUsd/draftCostUsd:0;
   const shipCostInr=shipItems.reduce((sum,s)=>sum+(+s.costPrice||0),0);
   const shipValueUsd=shipItems.reduce((sum,s)=>sum+(+s.listPrice||0),0);
   const shipCostUsd=usdInr>0?shipCostInr/usdInr:0;
@@ -15307,7 +15369,10 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // still print.
   const secondLine=s=>!lang?"":String((s.labelNames||{})[lang]??(lang==="ja"?s.nameJp||"":"")).trim();
   const labelCopies=s=>{const n=parseInt(s.labelCopies,10);if(Number.isFinite(n)&&n>0)return Math.min(n,200);const pcs=(s.unit||"")==="pcs"?parseInt(s.qty,10):0;return Number.isFinite(pcs)&&pcs>0?Math.min(pcs,200):1;};
-  const totalLabels=shipItems.reduce((n,s)=>n+labelCopies(s),0);
+  // Labels are printed before a shipment goes, so they come off the draft while one
+  // exists and off what has already been sent once it is empty.
+  const labelItems=draftLines.length?draftLines.map(x=>x.item):shipItems;
+  const totalLabels=labelItems.reduce((n,s)=>n+labelCopies(s),0);
   // Selecting a card defaults to sending all of it; the quantity boxes are there for
   // when only part of a lot is meant to travel.
   const toggleShipPick=item=>setShipPickIds(prev=>{
@@ -15326,15 +15391,36 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     const q=e.qty===""?full:(parseFloat(e.qty)||0),q2=e.qty2===""?full2:(parseFloat(e.qty2)||0);
     return q<full||q2<full2;
   };
-  const addToShipment=async()=>{
-    if(!shipPickIds.size||shipBusy)return;
+  // Adding only writes the plan onto the show. Stock is untouched until "Send".
+  const addToDraft=()=>{
+    if(!shipPickIds.size)return;
+    const items=[...shipPickIds].map(id=>{
+      const item=stock.find(s=>s.id===id);
+      const e=shipQtys[id]||{};
+      return item?{id,qty:e.qty??item.qty,qty2:e.qty2??item.qty2}:null;
+    }).filter(Boolean);
+    addDraftLines(items);
+    setShipPickIds(new Set());setShipQtys({});setShipQuery("");setShipPickOpen(false);
+  };
+  // The one moment stock actually changes: split, stamp, Shopify guard and undo all
+  // run here, through the same handler the Stock module's send uses.
+  const sendShipment=async()=>{
+    if(!draftSendable.length||shipBusy)return;
+    if(!window.confirm(`Send ${draftSendable.length} card${draftSendable.length===1?"":"s"} to ${show.name}?\n\nThis moves them out of India in your stock — part-lot lines will split into a separate card.`))return;
     setShipBusy(true);
     try{
-      const entries=[...shipPickIds].map(id=>({id,...(shipQtys[id]||{})}));
-      await onAddStockToShow?.(show.id,entries);
-      setShipPickIds(new Set());setShipQtys({});setShipQuery("");setShipPickOpen(false);
-    }
-    finally{setShipBusy(false);}
+      const entries=draftSendable.map(({line})=>({id:line.id,qty:line.qty,qty2:line.qty2}));
+      const res=await onAddStockToShow?.(show.id,entries);
+      if(res?.sent){
+        saveDraft(shipDraft.filter(l=>!entries.some(e=>e.id===l.id)));
+        setShipSent(res.sent);
+      }
+    }finally{setShipBusy(false);}
+  };
+  const undoSend=async()=>{
+    const ok=await onUndoStockSend?.();
+    setShipSent(0);
+    if(!ok)window.alert("Could not undo — reload and check your stock.");
   };
   const commitShipPrice=async id=>{
     const item=stock.find(s=>s.id===id),next=shipPriceDraft.trim();
@@ -15349,7 +15435,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // Printed through a standalone window so the sheet carries its own millimetre
   // page geometry instead of inheriting the app's screen styles.
   const printLabels=()=>{
-    const rows=shipItems.flatMap(s=>Array.from({length:labelCopies(s)},()=>({en:(s.labelEn||autoEn(s)).trim(),second:secondLine(s)})));
+    const rows=labelItems.flatMap(s=>Array.from({length:labelCopies(s)},()=>({en:(s.labelEn||autoEn(s)).trim(),second:secondLine(s)})));
     if(!rows.length)return;
     const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
     const w=window.open("","_blank");
@@ -16430,17 +16516,28 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
 
               {shipView==="plan"?(
                 <>
-                  <div style={{border:`1px solid ${C.border}`,borderLeft:`3px solid ${show.color}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:14}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10}}>
-                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Shipment total</span>
-                      <span style={{fontSize:10,color:C.inkFaint}}>{shipItems.length} card{shipItems.length===1?"":"s"}{shipKg>0?` · ${fmtFlowNum(shipKg)} kg`:""}</span>
+                  {shipSent>0&&(
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,background:C.greenBg,border:`1px solid ${C.green}`,borderRadius:9,padding:"9px 12px",marginBottom:12,flexWrap:"wrap"}}>
+                      <span style={{fontSize:11,fontWeight:700,color:C.green}}>✓ {shipSent} card{shipSent===1?"":"s"} sent to {show.name} — stock updated</span>
+                      <div style={{display:"flex",gap:7}}>
+                        <button onClick={e=>{e.stopPropagation();undoSend();}} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 11px",fontSize:11,fontWeight:700,color:C.ink,cursor:"pointer"}}>↩ Undo send</button>
+                        <button onClick={e=>{e.stopPropagation();setShipSent(0);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:11}}>Dismiss</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── The draft: a plan only. Nothing here has moved in stock yet. ── */}
+                  <div style={{border:`1px solid ${draftLines.length?show.color:C.border}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Planned shipment · not sent yet</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{draftLines.length} card{draftLines.length===1?"":"s"}{draftKg>0?` · ${fmtFlowNum(draftKg)} kg`:""}</span>
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
                       {[
-                        ["Cost",inr(Math.round(shipCostInr)),shipCostUsd>0?`${fmtUsd(shipCostUsd)} at ₹${usdInr}/$`:"",C.inkMid],
-                        ["Value",fmtUsd(shipValueUsd),!shipItems.length?"":shipUnpriced>0?`${shipUnpriced} card${shipUnpriced===1?"":"s"} unpriced`:"all priced",shipUnpriced>0?C.amber:C.green],
-                        ["Margin",shipValueUsd>0?fmtUsd(shipMarginUsd):"—",shipValueUsd>0?(shipMultiple>0?`${(Math.round(shipMultiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",shipValueUsd>0&&shipMarginUsd<0?C.red:C.inkFaint],
-                        ["Weight",shipKg>0?`${fmtFlowNum(shipKg)} kg`:"—","kg-priced cards only",C.inkMid],
+                        ["Cost",inr(Math.round(draftCostInr)),draftCostUsd>0?`${fmtUsd(draftCostUsd)} at ₹${usdInr}/$`:"",C.inkMid],
+                        ["Value",fmtUsd(draftValueUsd),!draftLines.length?"":draftUnpriced>0?`${draftUnpriced} card${draftUnpriced===1?"":"s"} unpriced`:"all priced",draftUnpriced>0?C.amber:C.green],
+                        ["Margin",draftValueUsd>0?fmtUsd(draftMarginUsd):"—",draftValueUsd>0?(draftMultiple>0?`${(Math.round(draftMultiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",draftValueUsd>0&&draftMarginUsd<0?C.red:C.inkFaint],
+                        ["Weight",draftKg>0?`${fmtFlowNum(draftKg)} kg`:"—","kg-priced cards only",C.inkMid],
                       ].map(([label,big,sub,color])=>(
                         <div key={label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 10px"}}>
                           <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
@@ -16449,18 +16546,66 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                         </div>
                       ))}
                     </div>
-                    {shipUnpriced>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Value counts only the cards that have a list price — set the rest below to see the real total.</div>}
-                  </div>
 
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
-                    <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>In this shipment</span>
-                    {isAdmin&&!shipPickOpen&&<button onClick={e=>{e.stopPropagation();setShipPickOpen(true);}} style={{background:show.color,color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>➕ Add from stock</button>}
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,margin:"12px 0 8px",flexWrap:"wrap"}}>
+                      <span style={{fontSize:10,color:C.inkFaint}}>Part-lot lines count only their share of cost and value.</span>
+                      {isAdmin&&!shipPickOpen&&<button onClick={e=>{e.stopPropagation();setShipPickOpen(true);}} style={{background:show.color,color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>➕ Add from stock</button>}
+                    </div>
+
+                    {draftLines.length===0?(
+                      <div style={{fontSize:12,color:C.inkFaint,border:`1px dashed ${C.border}`,borderRadius:8,padding:18,textAlign:"center"}}>Nothing planned for {show.name} yet. Add cards from stock — they stay in India until you send.</div>
+                    ):(
+                      <>
+                        <div style={{display:"grid",gap:6}}>
+                          {draftLines.map(({line,item})=>{
+                            const sh=lineShare({line,item});
+                            const issue=lineIssue({line,item});
+                            const hasQty2=(parseFloat(item.qty2)||0)>0;
+                            return(
+                              <div key={line.id} style={{background:issue?C.redBg:C.surface,border:`1px solid ${issue?C.red:C.border}`,borderRadius:8,padding:"8px 10px"}}>
+                                <div style={{display:"flex",gap:9,alignItems:"center"}}>
+                                  {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:34,height:34,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:34,height:34,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                                  <div style={{flex:1,minWidth:0}}>
+                                    <div style={{fontSize:11.5,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                    <div style={{fontSize:9,color:C.inkFaint}}>{item.location?`Box ${item.location} · `:""}card holds {flowQtyText(item)}{sh.cost>0?` · share ${inr(Math.round(sh.cost))}`:""}</div>
+                                  </div>
+                                  {isAdmin&&(shipPriceId===item.id
+                                    ?<input value={shipPriceDraft} onChange={e=>setShipPriceDraft(e.target.value)} onBlur={()=>commitShipPrice(item.id)} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();if(e.key==="Escape")setShipPriceId(null);}} type="number" min="0" step="0.01" placeholder="List price / USD" autoFocus onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,width:110,flexShrink:0}}/>
+                                    :<button onClick={e=>{e.stopPropagation();setShipPriceId(item.id);setShipPriceDraft(String(item.listPrice||""));}} style={{background:"none",border:`1px solid ${item.listPrice?C.border:C.blue}`,borderRadius:6,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:800,color:item.listPrice?C.green:C.blue,flexShrink:0}}>{item.listPrice?`$${(+item.listPrice).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"Set price"}</button>
+                                  )}
+                                  <button onClick={e=>{e.stopPropagation();removeDraftLine(line.id);}} title="Remove from plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,flexShrink:0}}>&times;</button>
+                                </div>
+                                <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:6,paddingLeft:43}}>
+                                  <span style={{fontSize:9,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:.4}}>Send</span>
+                                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                    <input value={line.qty??""} onChange={e=>setDraftQty(line.id,"qty",e.target.value)} type="number" min="0" step="any" style={{...FI,fontSize:10,padding:"2px 5px",width:64}}/>
+                                    <span style={{fontSize:9,color:C.inkFaint}}>of {item.qty||"0"} {item.unit||"pcs"}</span>
+                                  </div>
+                                  {hasQty2&&(
+                                    <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                      <input value={line.qty2??""} onChange={e=>setDraftQty(line.id,"qty2",e.target.value)} type="number" min="0" step="any" style={{...FI,fontSize:10,padding:"2px 5px",width:64}}/>
+                                      <span style={{fontSize:9,color:C.inkFaint}}>of {item.qty2} {item.unit2||"kg"}</span>
+                                    </div>
+                                  )}
+                                  {issue?<span style={{fontSize:9,fontWeight:700,color:C.red}}>⚠ {issue}</span>
+                                    :sh.partial?<span style={{fontSize:9,fontWeight:700,color:C.amber}}>splits on send — rest stays in India</span>:null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:11,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,color:C.inkFaint}}>{draftBlocked.length>0?`${draftBlocked.length} line${draftBlocked.length===1?"":"s"} can't be sent — fix or remove ${draftBlocked.length===1?"it":"them"}`:"Nothing has left your stock yet."}</span>
+                          {isAdmin&&<button onClick={e=>{e.stopPropagation();sendShipment();}} disabled={!draftSendable.length||shipBusy} style={{background:draftSendable.length&&!shipBusy?"#1D6F42":"#ccc",color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",fontSize:12,fontWeight:800,cursor:draftSendable.length&&!shipBusy?"pointer":"default"}}>{shipBusy?"Sending…":`🚚 Send shipment (${draftSendable.length})`}</button>}
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {shipPickOpen&&(
                     <div onClick={e=>e.stopPropagation()} style={{border:`1px solid ${show.color}`,borderRadius:9,background:C.card,padding:"11px 12px",marginBottom:12}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
-                        <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>Add to {show.name}</span>
+                        <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>Add to the {show.name} plan</span>
                         <button onClick={()=>{setShipPickOpen(false);setShipQuery("");setShipPickIds(new Set());setShipQtys({});}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>
                       </div>
                       <input value={shipQuery} onChange={e=>setShipQuery(e.target.value)} placeholder="Search stone, shape, size, box, SKU…" style={{...FI,fontSize:11,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
@@ -16508,15 +16653,40 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                           </div>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
                             <span style={{fontSize:10,color:C.inkFaint}}>{shipPickIds.size} selected{shipMatches.length>shipShown.length?` · showing ${shipShown.length} of ${shipMatches.length}, narrow the search to see more`:""}</span>
-                            <button onClick={addToShipment} disabled={!shipPickIds.size||shipBusy} style={{background:shipPickIds.size&&!shipBusy?show.color:"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:shipPickIds.size&&!shipBusy?"pointer":"default"}}>{shipBusy?"Adding…":`Add ${shipPickIds.size||""} →`}</button>
+                            <button onClick={addToDraft} disabled={!shipPickIds.size} style={{background:shipPickIds.size?show.color:"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:shipPickIds.size?"pointer":"default"}}>{`Add ${shipPickIds.size||""} to plan`}</button>
                           </div>
                         </>
                       )}
                     </div>
                   )}
 
+                  {/* ── Already gone: the real stock state at the show. ── */}
+                  <div style={{border:`1px solid ${C.border}`,borderLeft:`3px solid ${show.color}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10}}>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Already sent · at the show</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{shipItems.length} card{shipItems.length===1?"":"s"}{shipKg>0?` · ${fmtFlowNum(shipKg)} kg`:""}</span>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+                      {[
+                        ["Cost",inr(Math.round(shipCostInr)),shipCostUsd>0?`${fmtUsd(shipCostUsd)} at ₹${usdInr}/$`:"",C.inkMid],
+                        ["Value",fmtUsd(shipValueUsd),!shipItems.length?"":shipUnpriced>0?`${shipUnpriced} card${shipUnpriced===1?"":"s"} unpriced`:"all priced",shipUnpriced>0?C.amber:C.green],
+                        ["Margin",shipValueUsd>0?fmtUsd(shipMarginUsd):"—",shipValueUsd>0?(shipMultiple>0?`${(Math.round(shipMultiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",shipValueUsd>0&&shipMarginUsd<0?C.red:C.inkFaint],
+                        ["Weight",shipKg>0?`${fmtFlowNum(shipKg)} kg`:"—","kg-priced cards only",C.inkMid],
+                      ].map(([label,big,sub,color])=>(
+                        <div key={label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 10px"}}>
+                          <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
+                          <div style={{fontSize:17,fontWeight:750,color:C.ink,lineHeight:1.1,wordBreak:"break-word"}}>{big}</div>
+                          <div style={{fontSize:9,color,marginTop:3,minHeight:12}}>{sub}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {shipUnpriced>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Value counts only the cards that have a list price — set the rest below to see the real total.</div>}
+                  </div>
+
+                  <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:8}}>Cards at the show</div>
+
                   {shipItems.length===0?(
-                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing going to {show.name} yet. Add cards from stock to start planning.</div>
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing has been sent to {show.name} yet.</div>
                   ):(
                     <div style={{display:"grid",gap:6}}>
                       {shipItems.map(item=>(
@@ -16544,14 +16714,14 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                         {LABEL_LANGS.map(l=><option key={l.code} value={l.code}>{l.native?`${l.native} · ${l.label}`:l.label}</option>)}
                       </select>
                     </div>
-                    <button onClick={printLabels} disabled={!shipItems.length} style={{background:shipItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:shipItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
+                    <button onClick={printLabels} disabled={!labelItems.length} style={{background:labelItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:labelItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
                   </div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {shipItems.length} card{shipItems.length===1?"":"s"} · 10 × 70 mm, 2 per row on A4{lang?"":" · English only, one line per label"}</div>
-                  {shipItems.length===0?(
-                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Add cards to the shipment first — labels come from what's in it.</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.length} card{labelItems.length===1?"":"s"} · 10 × 70 mm, 2 per row on A4{lang?"":" · English only, one line per label"}</div>
+                  {labelItems.length===0?(
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Plan a shipment first — labels come from what's in it.</div>
                   ):(
                     <div style={{display:"grid",gap:7}}>
-                      {shipItems.map(item=>(
+                      {labelItems.map(item=>(
                         <div key={item.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px"}}>
                           <div style={{fontSize:10,color:C.inkFaint,marginBottom:6}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}</div>
                           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 90px":"1fr 90px"),gap:7}}>
