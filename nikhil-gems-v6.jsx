@@ -14671,8 +14671,6 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [shipPickIds,setShipPickIds]=useState(()=>new Set());
   const [shipQtys,setShipQtys]=useState({});
   const [shipBusy,setShipBusy]=useState(false);
-  const [shipPriceId,setShipPriceId]=useState(null);
-  const [shipPriceDraft,setShipPriceDraft]=useState("");
   const [labelLang,setLabelLang]=useState(null);
   const [sellId,setSellId]=useState(null);
   const [sellPrice,setSellPrice]=useState("");
@@ -15288,6 +15286,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // The plan reads in the same alphabetical order as the picker, so a stone is where
   // you expect it rather than wherever it happened to be added.
   draftLines.sort((a,b)=>shipSort(a.item,b.item));
+  const shipSent=shipItems.slice().sort(shipSort);
   const shipUnplanned=shipShown.filter(s=>!planKey(s.id));
   // Totals cover the draft while it is being planned, and what has actually gone once
   // it has been sent — the two are shown as separate blocks so they never blur.
@@ -16583,23 +16582,32 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                   <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:8}}>Cards at the show</div>
 
                   {shipItems.length===0?(
-                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing has been sent to {show.name} yet.</div>
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing has been sent to {show.name} yet. Use <strong>Send → show</strong> in the Stock module.</div>
                   ):(
-                    <div style={{display:"grid",gap:6}}>
-                      {shipItems.map(item=>(
-                        <div key={item.id} style={{display:"flex",gap:9,alignItems:"center",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px"}}>
-                          {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:38,height:38,objectFit:"cover",borderRadius:6,flexShrink:0}}/>:<div style={{width:38,height:38,borderRadius:6,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
-                          <div style={{flex:1,minWidth:0}}>
-                            <div style={{fontSize:11.5,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
-                            <div style={{fontSize:9,color:C.inkFaint}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}{item.sentAt?` · sent ${fmtDate(item.sentAt)}`:""}</div>
-                          </div>
-                          {isAdmin&&(shipPriceId===item.id
-                            ?<input value={shipPriceDraft} onChange={e=>setShipPriceDraft(e.target.value)} onBlur={()=>commitShipPrice(item.id)} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();if(e.key==="Escape")setShipPriceId(null);}} type="number" min="0" step="0.01" placeholder="List price / USD" autoFocus onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,width:120,flexShrink:0}}/>
-                            :<button onClick={e=>{e.stopPropagation();setShipPriceId(item.id);setShipPriceDraft(String(item.listPrice||""));}} style={{background:"none",border:`1px solid ${item.listPrice?C.border:C.blue}`,borderRadius:6,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:800,color:item.listPrice?C.green:C.blue,flexShrink:0}}>{item.listPrice?`$${(+item.listPrice).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"Set price"}</button>
-                          )}
+                    <>
+                      {!mob&&(
+                        <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 150px 88px 78px 150px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
+                          <span>Item</span><span>At the show</span><span>Cost ₹</span><span>SP $</span><span>Vendor</span>
                         </div>
-                      ))}
-                    </div>
+                      )}
+                      <div style={{display:"grid",gap:5}}>
+                        {shipSent.map(item=>(
+                          <div key={item.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 150px 88px 78px 150px",gap:8,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center",minWidth:0}}>
+                              {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:30,height:30,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:30,height:30,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.location?`Box ${item.location}`:""}{item.sentAt?`${item.location?" · ":""}sent ${fmtDate(item.sentAt)}`:""}{item.soldDate?" · sold":""}</div>
+                              </div>
+                            </div>
+                            <span style={{fontSize:10,color:C.ink,fontWeight:700}}>{flowQtyText(item)}</span>
+                            <input key={`scp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"Cost ₹":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
+                            <input key={`ssp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"SP $":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
+                            <input key={`svn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} placeholder={mob?"Vendor":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                 </>
               ):(
