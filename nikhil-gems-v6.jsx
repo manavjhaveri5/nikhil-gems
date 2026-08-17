@@ -40,6 +40,67 @@ const stockPhotos=item=>{
 };
 const stockCover=item=>stockPhotos(item)[0]||"";
 const thumbUrl=(url)=>url||"";
+/* ── Stock card colours ───────────────────────────────────────────────────────
+   Where a piece has gone, read off the grid without opening anything: each card
+   wears a ribbon in the colours of every destination it belongs to.
+
+     Etsy            orange, the same orange as its badge
+     eBay            grey
+     Denver, Tucson  the US flag
+     Japan shows     the Japanese flag — white with the red disc
+
+   Listed on Etsy and eBay both, the ribbon is orange then grey; set aside for
+   Tucson as well and the flag joins on the end. So an item doing everything
+   looks like it, and nothing has to win a fight over one colour.
+
+   Two different facts feed this, and the ribbon keeps them apart rather than
+   flattening them. A market is a plan — where the piece is meant to go. A
+   posted flag is a fact — it is live there now. So:
+
+     solid segment    it is there: listed on Etsy, listed on eBay, packed for
+                      the show. Nothing left to do.
+     candy stripe     it is only intended: market says Etsy/Online but no
+                      listing exists yet. A striped card is a to-do.
+
+   Shows have no "posted" flag of their own — setting the market is what putting
+   a piece aside for Tucson means — so they read solid. If a packed/shipped flag
+   ever lands on shows, it drops into the same two states without redrawing any
+   of this.
+
+   The first destination also washes the card in a few percent of its colour and
+   rings it in a hairline of the same — fainter when everything is still a plan.
+   That wash is what makes the grid scannable at arm's length; keeping it that
+   faint is what stops it becoming a bag of sweets. */
+const hexA=(hex,a)=>{
+  const h=String(hex).replace("#","");
+  const n=parseInt(h.length===3?h.split("").map(c=>c+c).join(""):h,16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+};
+/* `bg` is what the ribbon segment paints. Stripes are hard-stopped so they read
+   as a flag rather than a smear; Japan is a radial stop, which is the disc. */
+const STOCK_FLAGS=[
+  {key:"etsy", label:"Etsy",           lead:"#F56400", bg:"#F56400"},
+  {key:"ebay", label:"eBay",           lead:"#8A8F98", bg:"#8A8F98"},
+  {key:"usa",  label:"Denver / Tucson",lead:"#B22234", bg:"linear-gradient(90deg,#B22234 0 33.33%,#FFFFFF 33.33% 66.66%,#3C3B6E 66.66% 100%)"},
+  {key:"japan",label:"Japan show",     lead:"#BC002D", bg:"radial-gradient(circle at 50% 50%,#BC002D 0 42%,#FFFFFF 43% 100%)"},
+];
+/* Planned, not done: the same hue laid down as a soft diagonal candy stripe. */
+const stockStripe=lead=>`repeating-linear-gradient(45deg,${hexA(lead,.5)} 0 3px,${hexA(lead,.13)} 3px 6px)`;
+const stockFlags=s=>{
+  const mkts=(Array.isArray(s?.market)?s.market:[s?.market]).filter(Boolean).map(m=>String(m).toLowerCase());
+  // The show can be recorded as a market or typed into the show tag — match both,
+  // so "Tucson 2027" in the tag colours the card the same as the market does.
+  const tag=String(s?.showTag||"").toLowerCase();
+  const at=re=>mkts.some(m=>re.test(m))||re.test(tag);
+  const st={};
+  // Etsy/Online is one market covering the web channels, so it can only ever mean
+  // "meant to go online" — the listing itself is what makes it solid.
+  if(s?.postedEtsy) st.etsy="live"; else if(at(/etsy|online/)) st.etsy="planned";
+  if(s?.postedEbay) st.ebay="live";
+  if(at(/tucson|denver/)) st.usa="live";
+  if(at(/japan|tokyo|osaka/)) st.japan="live";
+  return STOCK_FLAGS.filter(f=>st[f.key]).map(f=>({...f,live:st[f.key]==="live"}));
+};
 const fmtStockQtyValue=v=>{
   if(v===undefined||v===null||v==="")return"";
   const n=Number(v);
@@ -8386,14 +8447,32 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     const qty=+s.qty||0;
                     const listed=s.postedShopifyAtyahara||s.postedShopifyEarth||s.postedShopify||s.postedWix||s.postedEtsy||s.postedEbay;
                     const cover=stockCover(s);
+                    /* Selection outranks the destination colours — a card being
+                       picked has to look picked, so the wash and ring stand down
+                       while the ribbon stays. */
+                    const flags=stockFlags(s);
+                    /* A card that is only planned somewhere gets a fainter wash
+                       than one that is actually live — the grid should read
+                       loudest where the work is done. */
+                    const leadFlag=flags.find(f=>f.live)||flags[0];
+                    const lead=leadFlag?.lead||"";
+                    const wash=leadFlag?.live?.06:.03, ring=leadFlag?.live?.3:.16;
+                    const cardBg=isSel?C.amberBg:lead?`linear-gradient(0deg,${hexA(lead,wash)},${hexA(lead,wash)}),${C.surface}`:C.surface;
+                    const restShadow=isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:lead?`0 0 0 1px ${hexA(lead,ring)}, var(--e-1)`:"var(--e-1)";
+                    const hoverShadow=lead?`0 0 0 1px ${hexA(lead,ring+.15)}, var(--e-2)`:"var(--e-2)";
                     return(
                     <div key={s.id}
                       onClick={()=>{if(selectMode){setSelectedIds(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;});}else setSelected(s);}}
-                      style={{background:isSel?C.amberBg:C.surface,boxShadow:isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:"var(--e-1)",borderRadius:16,overflow:"hidden",cursor:"pointer",
+                      style={{background:cardBg,boxShadow:restShadow,borderRadius:16,overflow:"hidden",cursor:"pointer",
                         animation:`fadeSlideUp .3s ease both`,animationDelay:`${Math.min(idx*.025,.5)}s`,
                         transition:"box-shadow .18s,transform .18s"}}
-                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow="var(--e-2)";e.currentTarget.style.transform="translateY(-2px)";}}}
-                      onMouseLeave={e=>{e.currentTarget.style.boxShadow=isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:"var(--e-1)";e.currentTarget.style.transform="none";}}>
+                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow=hoverShadow;e.currentTarget.style.transform="translateY(-2px)";}}}
+                      onMouseLeave={e=>{e.currentTarget.style.boxShadow=restShadow;e.currentTarget.style.transform="none";}}>
+                      {/* Destination ribbon — one segment per place this piece is going. */}
+                      {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
+                        style={{display:"flex",height:6,flexShrink:0,boxShadow:"inset 0 -1px 0 rgba(0,0,0,.07)"}}>
+                        {flags.map(f=><div key={f.key} style={{flex:1,background:f.live?f.bg:stockStripe(f.lead)}}/>)}
+                      </div>}
                       {/* Photo */}
                       <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
                         {cover
@@ -9028,7 +9107,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <Tag>Markets</Tag><div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>{DEFAULT_MARKETS.filter(m=>m!=="Unassigned").map(m=>{const cur=Array.isArray(form.market)?form.market:[];const on=cur.includes(m);return <button type="button" key={m} onClick={()=>setForm(f=>{const c=Array.isArray(f.market)?f.market:[];return{...f,market:on?c.filter(x=>x!==m):[...c,m]};})  } style={{fontSize:11,padding:"3px 9px",borderRadius:4,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:"transparent",color:on?C.ink:C.inkMid,cursor:"pointer",transition:"all .1s"}}>{m}</button>;})} </div>
                 </div>
                 <div style={{marginTop:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[["photographed","📸 Photographed"],["postedShopifyAtyahara","Atyahara"],["postedShopifyEarth","Earth Editions"],["postedWix","Wix"],["postedEtsy","Etsy"]].map(([key,label])=>(
+                  {/* eBay is read everywhere else — the card badge, the ribbon — so
+                      it needs a box here too, or it can only ever be set by import. */}
+                  {[["photographed","📸 Photographed"],["postedShopifyAtyahara","Atyahara"],["postedShopifyEarth","Earth Editions"],["postedWix","Wix"],["postedEtsy","Etsy"],["postedEbay","eBay"]].map(([key,label])=>(
                     <label key={key} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"7px 10px",borderRadius:6,border:`1px solid ${form[key]?C.green:C.border}`,background:form[key]?"#E8F5E9":"transparent",transition:"all .1s"}}>
                       <input type="checkbox" checked={!!form[key]} onChange={e=>setForm(f=>({...f,[key]:e.target.checked}))} style={{accentColor:C.green,width:14,height:14,cursor:"pointer"}}/>
                       <span style={{fontSize:12,fontWeight:form[key]?600:400,color:form[key]?"#2E7D32":C.inkMid}}>{label}</span>
