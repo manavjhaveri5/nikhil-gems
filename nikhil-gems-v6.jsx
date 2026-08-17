@@ -14377,6 +14377,16 @@ function ShowsApp({onHome,isAdmin=true}){
   }));
   // Patches a stock card in place — used for shipment pricing and label text, both
   // of which belong to the card itself rather than to the show.
+  // Bulk sibling of patchStockItem — AI fill touches a whole sheet at once and one
+  // save is both faster and safer than a dozen racing writes.
+  const patchStockItems=async(patches)=>{
+    const ids=Object.keys(patches||{});
+    if(!ids.length)return;
+    const ts=new Date().toISOString();
+    const next=stock.map(s=>patches[s.id]?{...s,...patches[s.id],updatedAt:ts}:s);
+    setStock(next);
+    await saveStockK(next);
+  };
   const patchStockItem=async(itemId,patch)=>{
     const next=stock.map(s=>s.id!==itemId?s:{...s,...patch,updatedAt:new Date().toISOString()});
     setStock(next);
@@ -14428,7 +14438,7 @@ function ShowsApp({onHome,isAdmin=true}){
     stock,purchases,
     onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
     onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
-    onPatchStockItem:patchStockItem,
+    onPatchStockItem:patchStockItem,onPatchStockItems:patchStockItems,
     onAddDailySale:addDailySale,onUpdateDailySale:updateDailySale,onDelDailySale:delDailySale,
     onAddShowExpense:addShowExpense,onDelShowExpense:delShowExpense,
     onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
@@ -14650,7 +14660,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -14672,6 +14682,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [shipQtys,setShipQtys]=useState({});
   const [shipBusy,setShipBusy]=useState(false);
   const [labelLang,setLabelLang]=useState(null);
+  const [aiBusy,setAiBusy]=useState("");
   const [sellId,setSellId]=useState(null);
   const [sellPrice,setSellPrice]=useState("");
   const [sellCurrency,setSellCurrency]=useState("USD");
@@ -15310,7 +15321,9 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // Null means "not chosen yet" — fall back to what suits the destination.
   const lang=labelLang??DEFAULT_LABEL_LANG(shipRegion);
   const langCfg=LABEL_LANGS.find(l=>l.code===lang)||LABEL_LANGS[0];
-  const autoEn=s=>[s.origin,s.material,s.shape].filter(Boolean).join(" ")||s.material||"Item";
+  // Sentence case here too, so an unwritten card already reads "Blue opal bowl - 2
+  // inch" rather than shouting Title Case off the stock record.
+  const autoEn=s=>sentenceCase([s.material,s.shape,s.size].filter(Boolean).join(" "))||s.material||"Item";
   // nameJp is read as the Japanese entry so labels typed before languages existed
   // still print.
   const secondLine=s=>!lang?"":String((s.labelNames||{})[lang]??(lang==="ja"?s.nameJp||"":"")).trim();
@@ -15375,6 +15388,51 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     await onPatchStockItem?.(id,{labelDescs:{...(item?.labelDescs||{}),[descKey]:val}});
   };
   const showCur=shipRegion==="Japan"?"¥":shipRegion==="Europe"?"€":shipRegion==="India"?"₹":"$";
+  // Sentence case: first letter up, the rest down, but leave genuine acronyms (AAA,
+  // USA) alone. Proper nouns get lowercased here — AI fill writes them correctly.
+  const sentenceCase=t=>{
+    const str=String(t||"").trim();
+    if(!str)return"";
+    const words=str.split(/(\s+)/).map(w=>/^[A-Z0-9]{2,}$/.test(w)?w:w.toLowerCase());
+    const out=words.join("");
+    return out.charAt(0).toUpperCase()+out.slice(1);
+  };
+  // One call for the whole sheet: the model gets every stone at once and returns a
+  // row per card, so filling fourteen cards is one request and one save.
+  const aiFillCards=async(items)=>{
+    if(!items.length||aiBusy)return;
+    setAiBusy(items.length>1?"all":items[0].id);
+    try{
+      const langName=lang?langCfg.label:"English";
+      const list=items.map((s,i)=>`${i+1}. stone="${s.material||""}" shape="${s.shape||""}" size="${s.size||""}" origin="${s.origin||""}"`).join("\n");
+      const prompt=`You write the display cards that sit beside stones on a mineral dealer's table at a gem show. For each numbered item below, return one object.
+
+${list}
+
+Rules for every object:
+"name": the stone's display name in SENTENCE CASE — capital on the first word and on genuine proper nouns only (so "Blue opal bowl", "Crazy lace agate bowl", "Tanzanian moonstone bowl"). Include the shape and size when given. Never Title Case Every Word.
+"origin": the country of origin in capitals and nothing else — "INDIA", "BRAZIL", "MADAGASCAR". Use the origin given if there is one; otherwise the country the material most commonly comes from.
+"desc": ONE editorial sentence in ${langName}, 12 to 22 words, written for a collector standing at the table. Say something concrete and specific — what the stone actually is, how the pattern forms, where it comes from, what to look at. Never repeat the stone's name or open with it: the card already shows the name directly above, so a sentence that starts with it wastes the line. Start each one differently across the set. Do not use "prized for", "known for", "sought after", "stunning", "beautiful", or any mystical or healing claim.
+
+Return ONLY a raw JSON array of ${items.length} objects in the same order, each {"name":"...","origin":"...","desc":"..."}. No markdown fences, no commentary.`;
+      const raw=await callClaude([{role:"user",content:prompt}],400+items.length*120);
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      if(!Array.isArray(parsed))throw new Error("unexpected reply shape");
+      const patches={};
+      items.forEach((item,i)=>{
+        const r=parsed[i];
+        if(!r)return;
+        const patch={};
+        if(r.name)patch.labelEn=sentenceCase(r.name);
+        if(r.origin)patch.labelOrigin=String(r.origin).trim().toUpperCase();
+        if(r.desc)patch.labelDescs={...(item.labelDescs||{}),[descKey]:String(r.desc).trim()};
+        if(Object.keys(patch).length)patches[item.id]=patch;
+      });
+      if(Object.keys(patches).length)await onPatchStockItems?.(patches);
+      else window.alert("AI fill came back empty — try again.");
+    }catch(e){window.alert("AI fill failed: "+e.message);}
+    finally{setAiBusy("");}
+  };
   // Printed through a standalone window so the sheet carries its own millimetre
   // page geometry instead of inheriting the app's screen styles.
   const printLabels=()=>{
@@ -16654,6 +16712,7 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                         {LABEL_LANGS.map(l=><option key={l.code} value={l.code}>{l.native?`${l.native} · ${l.label}`:l.label}</option>)}
                       </select>
                     </div>
+                    {isAdmin&&<button onClick={()=>aiFillCards(labelItems.filter(i=>labelCopies(i)>0))} disabled={!labelItems.length||!!aiBusy} style={{background:"none",border:`1px solid ${aiBusy?C.border:"#8B6F47"}`,borderRadius:6,padding:"6px 13px",fontSize:11,fontWeight:700,color:aiBusy?C.inkFaint:"#8B6F47",cursor:labelItems.length&&!aiBusy?"pointer":"default",marginRight:7}}>{aiBusy==="all"?"Writing…":"✨ AI fill all"}</button>}
                     <button onClick={printLabels} disabled={!labelItems.length} style={{background:labelItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:labelItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
                   </div>
                   <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.filter(i=>labelCopies(i)>0).length} card{labelItems.filter(i=>labelCopies(i)>0).length===1?"":"s"}{labelItems.filter(i=>labelCopies(i)===0).length>0?` · ${labelItems.filter(i=>labelCopies(i)===0).length} skipped`:""} · 95 × 50 mm name cards, 2 per row on A4{lang?"":" · English only"}</div>
@@ -16669,6 +16728,7 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
                             <span style={{fontSize:10,color:C.inkFaint}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}{copies===0?" · not printing":""}</span>
                             <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                              {isAdmin&&<button onClick={e=>{e.stopPropagation();aiFillCards([item]);}} disabled={!!aiBusy} title="Write this card with AI" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:aiBusy===item.id?C.inkFaint:"#8B6F47",cursor:aiBusy?"default":"pointer"}}>{aiBusy===item.id?"…":"✨"}</button>}
                               {copies>0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:"0"});}} title="Skip this card on the sheet" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.inkMid,cursor:"pointer"}}>skip</button>}
                               {copies===0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:""});}} title="Print this card again" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.blue,cursor:"pointer"}}>print</button>}
                               {planned&&<button onClick={e=>{e.stopPropagation();removeDraftLine(item.id);}} title="Remove from the shipment plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>}
