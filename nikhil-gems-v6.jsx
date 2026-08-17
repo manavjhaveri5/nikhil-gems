@@ -15257,16 +15257,20 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // sent, so a half-built plan can sit here for days without touching inventory.
   const shipDraft=show.shipmentDraft||[];
   const draftLines=shipDraft.map(line=>({line,item:stock.find(s=>s.id===line.id)})).filter(x=>x.item);
-  // A line's share of its card — a part-lot line contributes only its fraction of the
-  // cost and value, which is what makes the totals trustworthy before anything ships.
+  // costPrice and listPrice are per-unit rates, not whole-card figures — every total in
+  // the app multiplies them by quantity — so a line is worth what it takes times its
+  // rate. The primary quantity is the pricing basis, falling back to the secondary
+  // only on cards that carry no primary count.
   const lineShare=({line,item})=>{
     const fullQty=parseFloat(item.qty)||0,fullQty2=parseFloat(item.qty2)||0;
     const q=line.qty===""||line.qty==null?fullQty:(parseFloat(line.qty)||0);
     const q2=line.qty2===""||line.qty2==null?fullQty2:(parseFloat(line.qty2)||0);
-    const ratio=fullQty>0?Math.min(q/fullQty,1):(fullQty2>0?Math.min(q2/fullQty2,1):1);
-    return{q,q2,ratio,partial:q<fullQty||q2<fullQty2,
-      cost:(parseFloat(item.costPrice)||0)*ratio,
-      value:(parseFloat(item.listPrice)||0)*ratio,
+    const basis=fullQty>0?q:q2;
+    const cost=(parseFloat(item.costPrice)||0)*basis;
+    const value=(parseFloat(item.listPrice)||0)*basis;
+    return{q,q2,basis,cost,value,
+      margin:value-(usdInr>0?cost/usdInr:0),
+      partial:q<fullQty||q2<fullQty2,
       kg:((item.unit||"")==="kg"?q:0)+((item.unit2||"")==="kg"?q2:0)};
   };
   // Notes, not blockers — the plan never sends anything, so a line whose card moved
@@ -16554,7 +16558,7 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                     </div>
 
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,margin:"12px 0 8px",flexWrap:"wrap"}}>
-                      <span style={{fontSize:10,color:C.inkFaint}}>Part-lot lines count only their share of cost and value.</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>Cost and SP are per-unit rates; value is what you're taking times SP.</span>
                       {isAdmin&&!shipPickOpen&&<button onClick={e=>{e.stopPropagation();setShipPickOpen(true);}} style={{background:show.color,color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>➕ Add from stock</button>}
                     </div>
 
@@ -16563,8 +16567,8 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                     ):(
                       <>
                         {!mob&&(
-                          <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 150px 88px 78px 150px 20px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
-                            <span>Item</span><span>Taking</span><span>Cost ₹</span><span>SP $</span><span>Vendor</span><span/>
+                          <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 132px 84px 74px 88px 88px 128px 20px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
+                            <span>Item</span><span>Taking</span><span>Cost ₹/u</span><span>SP $/u</span><span>Value $</span><span>Margin $</span><span>Vendor</span><span/>
                           </div>
                         )}
                         <div style={{display:"grid",gap:5}}>
@@ -16573,12 +16577,12 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                             const issue=lineIssue({line,item});
                             const hasQty2=(parseFloat(item.qty2)||0)>0;
                             return(
-                              <div key={line.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 150px 88px 78px 150px 20px",gap:8,alignItems:"center",background:issue?C.amberBg:C.surface,border:`1px solid ${issue?C.amber:C.border}`,borderRadius:8,padding:"7px 10px"}}>
+                              <div key={line.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 132px 84px 74px 88px 88px 128px 20px",gap:8,alignItems:"center",background:issue?C.amberBg:C.surface,border:`1px solid ${issue?C.amber:C.border}`,borderRadius:8,padding:"7px 10px"}}>
                                 <div style={{display:"flex",gap:8,alignItems:"center",minWidth:0}}>
                                   {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:30,height:30,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:30,height:30,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
                                   <div style={{minWidth:0}}>
                                     <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
-                                    <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.location?`Box ${item.location} · `:""}{sh.cost>0?`share ${inr(Math.round(sh.cost))}`:"no cost"}{sh.partial?` · ${Math.round(sh.ratio*100)}%`:""}{issue?` · ${issue}`:""}</div>
+                                    <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.location?`Box ${item.location} · `:""}{`${sh.basis||0} of ${item.qty||item.qty2||0} ${(parseFloat(item.qty)||0)>0?(item.unit||"pcs"):(item.unit2||"kg")}`}{issue?` · ${issue}`:""}</div>
                                   </div>
                                 </div>
                                 <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
@@ -16588,6 +16592,8 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                                 </div>
                                 <input key={`cp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"Cost ₹":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
                                 <input key={`sp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"SP $":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
+                                <span style={{fontSize:11,fontWeight:800,color:sh.value>0?C.ink:C.inkFaint}}>{sh.value>0?fmtUsd(sh.value):"—"}</span>
+                                <span style={{fontSize:11,fontWeight:800,color:sh.value<=0?C.inkFaint:sh.margin<0?C.red:C.green}}>{sh.value>0?fmtUsd(sh.margin):"—"}</span>
                                 <input key={`vn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} placeholder={mob?"Vendor":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
                                 <button onClick={e=>{e.stopPropagation();removeDraftLine(line.id);}} title="Remove from plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,justifySelf:"end"}}>&times;</button>
                               </div>
@@ -16679,13 +16685,13 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                   ):(
                     <>
                       {!mob&&(
-                        <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 150px 88px 78px 150px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
-                          <span>Item</span><span>At the show</span><span>Cost ₹</span><span>SP $</span><span>Vendor</span>
+                        <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
+                          <span>Item</span><span>At the show</span><span>Cost ₹/u</span><span>SP $/u</span><span>Value $</span><span>Margin $</span><span>Vendor</span>
                         </div>
                       )}
                       <div style={{display:"grid",gap:5}}>
                         {shipSent.map(item=>(
-                          <div key={item.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 150px 88px 78px 150px",gap:8,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px"}}>
+                          <div key={item.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px"}}>
                             <div style={{display:"flex",gap:8,alignItems:"center",minWidth:0}}>
                               {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:30,height:30,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:30,height:30,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
                               <div style={{minWidth:0}}>
@@ -16696,6 +16702,10 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                             <span style={{fontSize:10,color:C.ink,fontWeight:700}}>{flowQtyText(item)}</span>
                             <input key={`scp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"Cost ₹":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
                             <input key={`ssp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"SP $":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
+                            {(()=>{const b=(parseFloat(item.qty)||0)>0?(parseFloat(item.qty)||0):(parseFloat(item.qty2)||0);const v=(parseFloat(item.listPrice)||0)*b;const c=(parseFloat(item.costPrice)||0)*b;const m=v-(usdInr>0?c/usdInr:0);return(<>
+                              <span style={{fontSize:11,fontWeight:800,color:v>0?C.ink:C.inkFaint}}>{v>0?fmtUsd(v):"—"}</span>
+                              <span style={{fontSize:11,fontWeight:800,color:v<=0?C.inkFaint:m<0?C.red:C.green}}>{v>0?fmtUsd(m):"—"}</span>
+                            </>);})()}
                             <input key={`svn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} placeholder={mob?"Vendor":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
                           </div>
                         ))}
