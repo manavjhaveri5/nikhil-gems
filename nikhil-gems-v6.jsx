@@ -14377,14 +14377,42 @@ function ShowsApp({onHome,isAdmin=true}){
   }));
   // Adding stock to a show's shipment applies exactly the stamp the Stock module's
   // "Send →" applies, so an item sent from either place lands the same way.
-  const addStockToShow=async(sid,ids)=>{
+  // Entries are {id,qty,qty2}; a quantity short of the card's full amount splits the
+  // card the same way the Stock module's send dialog does — the travelling portion
+  // becomes its own card and the India card keeps the remainder.
+  const addStockToShow=async(sid,entries)=>{
     const show=(showsRef.current.length?showsRef.current:shows).find(s=>s.id===sid);
-    if(!show||!ids.length)return;
-    const idSet=new Set(ids),region=getShowRegion(show),ts=new Date().toISOString();
-    const next=stock.map(s=>!idSet.has(s.id)?s:{...s,region,showTag:show.name,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts});
+    if(!show||!entries?.length)return;
+    const region=getShowRegion(show),ts=new Date().toISOString();
+    let working=[...stock];
+    const idsToSend=new Set();
+    for(const e of entries){
+      const item=working.find(s=>s.id===e.id);
+      if(!item)continue;
+      const fullQty=parseFloat(item.qty)||0,fullQty2=parseFloat(item.qty2)||0;
+      const sendQty=e.qty===""||e.qty==null?fullQty:(parseFloat(e.qty)||0);
+      const sendQty2=e.qty2===""||e.qty2==null?fullQty2:(parseFloat(e.qty2)||0);
+      if(sendQty<=0&&sendQty2<=0)continue;
+      if(sendQty>=fullQty&&sendQty2>=fullQty2){idsToSend.add(item.id);continue;}
+      // Cost and asking price belong to the whole card, so a split has to divide them
+      // by the fraction that travels — copying both across would count the same money
+      // twice, once in the shipment and once in India. The two halves still sum to the
+      // original, so total book value is unchanged.
+      const ratio=fullQty>0?sendQty/fullQty:(fullQty2>0?sendQty2/fullQty2:1);
+      const share=(v)=>{const n=parseFloat(v);if(!Number.isFinite(n)||n===0)return["",""];const sent=+(n*ratio).toFixed(2);return[String(sent),String(+(n-sent).toFixed(2))];};
+      const [sentCost,restCost]=share(item.costPrice);
+      const [sentList,restList]=share(item.listPrice);
+      const splitItem={...item,id:uid(),qty:String(sendQty),qty2:fullQty2>0?String(sendQty2):"",costPrice:sentCost,listPrice:sentList,sentAt:null,showTag:null,showId:null,sourceIndiaId:item.id,updatedAt:ts};
+      const remainItem={...item,qty:String(+(fullQty-sendQty).toFixed(4)),qty2:fullQty2>0?String(+(fullQty2-sendQty2).toFixed(4)):"",costPrice:restCost,listPrice:restList,updatedAt:ts};
+      working=working.map(s=>s.id===item.id?remainItem:s);
+      working=[splitItem,...working];
+      idsToSend.add(splitItem.id);
+    }
+    if(!idsToSend.size)return;
+    const next=working.map(s=>!idsToSend.has(s.id)?s:{...s,region,showTag:show.name,showId:show.id,showSentQty:s.qty||"",showSentQty2:s.qty2||"",sentAt:today(),updatedAt:ts});
     setStock(next);
     await saveStockK(next);
-    logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.length} item${ids.length>1?"s":""} → ${region} (${show.name})`,targetMod:"stock"});
+    logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${idsToSend.size} item${idsToSend.size>1?"s":""} → ${region} (${show.name})`,targetMod:"stock"});
   };
   // Patches a stock card in place — used for shipment pricing and label text, both
   // of which belong to the card itself rather than to the show.
@@ -14680,6 +14708,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [shipPickOpen,setShipPickOpen]=useState(false);
   const [shipQuery,setShipQuery]=useState("");
   const [shipPickIds,setShipPickIds]=useState(()=>new Set());
+  const [shipQtys,setShipQtys]=useState({});
   const [shipBusy,setShipBusy]=useState(false);
   const [shipPriceId,setShipPriceId]=useState(null);
   const [shipPriceDraft,setShipPriceDraft]=useState("");
@@ -15279,10 +15308,32 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const secondLine=s=>!lang?"":String((s.labelNames||{})[lang]??(lang==="ja"?s.nameJp||"":"")).trim();
   const labelCopies=s=>{const n=parseInt(s.labelCopies,10);if(Number.isFinite(n)&&n>0)return Math.min(n,200);const pcs=(s.unit||"")==="pcs"?parseInt(s.qty,10):0;return Number.isFinite(pcs)&&pcs>0?Math.min(pcs,200):1;};
   const totalLabels=shipItems.reduce((n,s)=>n+labelCopies(s),0);
+  // Selecting a card defaults to sending all of it; the quantity boxes are there for
+  // when only part of a lot is meant to travel.
+  const toggleShipPick=item=>setShipPickIds(prev=>{
+    const next=new Set(prev);
+    if(next.has(item.id))next.delete(item.id);
+    else{
+      next.add(item.id);
+      setShipQtys(q=>q[item.id]?q:{...q,[item.id]:{qty:String(item.qty||""),qty2:String(item.qty2||"")}});
+    }
+    return next;
+  });
+  const shipQtyOf=item=>shipQtys[item.id]||{qty:String(item.qty||""),qty2:String(item.qty2||"")};
+  const setShipQty=(id,key,val)=>setShipQtys(q=>({...q,[id]:{...(q[id]||{}),[key]:val}}));
+  const isPartial=item=>{
+    const e=shipQtyOf(item),full=parseFloat(item.qty)||0,full2=parseFloat(item.qty2)||0;
+    const q=e.qty===""?full:(parseFloat(e.qty)||0),q2=e.qty2===""?full2:(parseFloat(e.qty2)||0);
+    return q<full||q2<full2;
+  };
   const addToShipment=async()=>{
     if(!shipPickIds.size||shipBusy)return;
     setShipBusy(true);
-    try{await onAddStockToShow?.(show.id,[...shipPickIds]);setShipPickIds(new Set());setShipQuery("");setShipPickOpen(false);}
+    try{
+      const entries=[...shipPickIds].map(id=>({id,...(shipQtys[id]||{})}));
+      await onAddStockToShow?.(show.id,entries);
+      setShipPickIds(new Set());setShipQtys({});setShipQuery("");setShipPickOpen(false);
+    }
     finally{setShipBusy(false);}
   };
   const commitShipPrice=async id=>{
@@ -16410,7 +16461,7 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                     <div onClick={e=>e.stopPropagation()} style={{border:`1px solid ${show.color}`,borderRadius:9,background:C.card,padding:"11px 12px",marginBottom:12}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
                         <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>Add to {show.name}</span>
-                        <button onClick={()=>{setShipPickOpen(false);setShipQuery("");setShipPickIds(new Set());}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>
+                        <button onClick={()=>{setShipPickOpen(false);setShipQuery("");setShipPickIds(new Set());setShipQtys({});}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>
                       </div>
                       <input value={shipQuery} onChange={e=>setShipQuery(e.target.value)} placeholder="Search stone, shape, size, box, SKU…" style={{...FI,fontSize:11,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
                       {shipPool.length===0?(
@@ -16421,15 +16472,36 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                             {shipShown.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 2px"}}>No stock matches “{shipQuery}”.</div>}
                             {shipShown.map(item=>{
                               const picked=shipPickIds.has(item.id);
+                              const ent=shipQtyOf(item);
+                              const hasQty2=(parseFloat(item.qty2)||0)>0;
+                              const partial=picked&&isPartial(item);
                               return(
-                                <div key={item.id} onClick={()=>setShipPickIds(p=>{const n=new Set(p);n.has(item.id)?n.delete(item.id):n.add(item.id);return n;})} style={{display:"flex",gap:8,alignItems:"center",background:picked?C.blueBg:C.surface,border:`1px solid ${picked?C.blue:C.border}`,borderRadius:7,padding:"6px 8px",cursor:"pointer"}}>
-                                  <input type="checkbox" checked={picked} readOnly style={{flexShrink:0,pointerEvents:"none"}}/>
-                                  {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:32,height:32,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
-                                  <div style={{flex:1,minWidth:0}}>
-                                    <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
-                                    <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}</div>
+                                <div key={item.id} style={{background:picked?C.blueBg:C.surface,border:`1px solid ${picked?C.blue:C.border}`,borderRadius:7,overflow:"hidden"}}>
+                                  <div onClick={()=>toggleShipPick(item)} style={{display:"flex",gap:8,alignItems:"center",padding:"6px 8px",cursor:"pointer"}}>
+                                    <input type="checkbox" checked={picked} readOnly style={{flexShrink:0,pointerEvents:"none"}}/>
+                                    {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:32,height:32,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                                    <div style={{flex:1,minWidth:0}}>
+                                      <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                      <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}</div>
+                                    </div>
+                                    <span style={{fontSize:9,fontWeight:700,color:item.listPrice?C.green:C.inkFaint,flexShrink:0}}>{item.listPrice?`$${item.listPrice}`:"no price"}</span>
                                   </div>
-                                  <span style={{fontSize:9,fontWeight:700,color:item.listPrice?C.green:C.inkFaint,flexShrink:0}}>{item.listPrice?`$${item.listPrice}`:"no price"}</span>
+                                  {picked&&(
+                                    <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",padding:"0 8px 7px 30px"}}>
+                                      <span style={{fontSize:9,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:.4}}>Send</span>
+                                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                        <input value={ent.qty} onChange={e=>setShipQty(item.id,"qty",e.target.value)} type="number" min="0" step="any" style={{...FI,fontSize:10,padding:"2px 5px",width:64}}/>
+                                        <span style={{fontSize:9,color:C.inkFaint}}>of {item.qty||"0"} {item.unit||"pcs"}</span>
+                                      </div>
+                                      {hasQty2&&(
+                                        <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                          <input value={ent.qty2} onChange={e=>setShipQty(item.id,"qty2",e.target.value)} type="number" min="0" step="any" style={{...FI,fontSize:10,padding:"2px 5px",width:64}}/>
+                                          <span style={{fontSize:9,color:C.inkFaint}}>of {item.qty2} {item.unit2||"kg"}</span>
+                                        </div>
+                                      )}
+                                      {partial&&<span style={{fontSize:9,fontWeight:700,color:C.amber}}>splits — rest stays in India</span>}
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })}
