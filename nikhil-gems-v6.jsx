@@ -15362,34 +15362,62 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     const item=stock.find(s=>s.id===id);
     await onPatchStockItem?.(id,{labelNames:{...(item?.labelNames||{}),[lang]:val}});
   };
+  // ── Name cards ───────────────────────────────────────────────────────────
+  // 95 x 50 mm display cards for the table: the stone's name in the local language
+  // over its origin, the English name beneath, a one-line description, and a price
+  // line. All four bits live on the stock card so a stone is written up once and
+  // every future show reuses it.
+  const descKey=lang||"en";
+  const cardOrigin=s=>String(s.labelOrigin??s.origin??"").trim();
+  const cardDesc=s=>String((s.labelDescs||{})[descKey]??"").trim();
+  const setCardDesc=async(id,val)=>{
+    const item=stock.find(x=>x.id===id);
+    await onPatchStockItem?.(id,{labelDescs:{...(item?.labelDescs||{}),[descKey]:val}});
+  };
+  const showCur=shipRegion==="Japan"?"¥":shipRegion==="Europe"?"€":shipRegion==="India"?"₹":"$";
   // Printed through a standalone window so the sheet carries its own millimetre
   // page geometry instead of inheriting the app's screen styles.
   const printLabels=()=>{
-    const rows=labelItems.flatMap(s=>Array.from({length:labelCopies(s)},()=>({en:(s.labelEn||autoEn(s)).trim(),second:secondLine(s)})));
+    const rows=labelItems.flatMap(s=>{
+      const n=labelCopies(s);
+      const local=secondLine(s);
+      const en=(s.labelEn||autoEn(s)).trim();
+      return Array.from({length:n},()=>({
+        // With no second language the English name carries the card on its own.
+        lead:local||en,
+        sub:local?en:"",
+        origin:cardOrigin(s),
+        desc:cardDesc(s),
+        price:(+s.listPrice>0)?`${showCur}${(+s.listPrice).toLocaleString("en-US",{maximumFractionDigits:0})}`:"",
+      }));
+    });
     if(!rows.length)return;
     const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
     const w=window.open("","_blank");
     if(!w)return;
-    w.document.write(`<!DOCTYPE html><html lang="${lang||"en"}"><head><meta charset="UTF-8"><title>Strip Labels 10×70mm — ${esc(show.name||"")}</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400&family=Cormorant+Garamond:wght@400;600&display=swap" rel="stylesheet"><style>
-:root{--lw:70mm;--lh:10mm;--accent:#8B6F47;--border:#cbb89a;}
+    w.document.write(`<!DOCTYPE html><html lang="${lang||"en"}"><head><meta charset="UTF-8"><title>Name Cards 95×50mm — ${esc(show.name||"")}</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400;600&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap" rel="stylesheet"><style>
+:root{--card-w:95mm;--card-h:50mm;--accent:#8B6F47;--text-main:#1a1a1a;--text-origin:#6B5344;--border:#d4c4b0;--rule:#e8ddd2;--bg:#f2ede7;}
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
-.toolbar{max-width:220mm;margin:0 auto 14px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.08);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;}
-.toolbar h1{font-family:'Noto Serif JP',serif;font-size:12px;font-weight:400;color:#888;letter-spacing:.06em;}
-.btn{border:none;padding:6px 16px;font-family:'Cormorant Garamond',serif;font-size:13px;letter-spacing:.08em;cursor:pointer;border-radius:4px;background:#8B6F47;color:#fff;}
-.page{width:210mm;background:#fff;margin:0 auto;padding:8mm;box-shadow:0 4px 24px rgba(0,0,0,.14);display:grid;grid-template-columns:repeat(2,var(--lw));gap:2mm;justify-content:center;align-content:start;}
-.label{width:var(--lw);height:var(--lh);min-height:var(--lh);max-height:var(--lh);border:.3mm solid var(--border);padding:1.2mm 3mm 1.2mm 4mm;display:flex;flex-direction:column;justify-content:center;gap:.6mm;position:relative;background:#fff;overflow:hidden;}
-.label::before{content:'';position:absolute;top:0;left:0;bottom:0;width:1.2mm;background:var(--accent);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-.label-en{font-family:'Cormorant Garamond',serif;font-size:5.5pt;font-weight:600;color:#555;letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
-.label-2nd{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:7pt;font-weight:400;color:#1a1a1a;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
-.label-solo{font-family:'Cormorant Garamond',serif;font-size:8pt;font-weight:600;color:#1a1a1a;letter-spacing:.06em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1;}
-@media print{@page{size:A4;margin:8mm;}body{background:#fff;padding:0;}.toolbar{display:none;}.page{box-shadow:none;margin:0;padding:0;}.label{break-inside:avoid;}.label::before{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
+body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
+.toolbar{max-width:226mm;margin:0 auto 16px;background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.08);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;}
+.toolbar h1{font-family:'Noto Serif JP',serif;font-size:13px;font-weight:400;color:#666;letter-spacing:.06em;}
+.btn-print{background:var(--accent);color:#fff;border:none;padding:7px 18px;font-family:'Cormorant Garamond',serif;font-size:13px;letter-spacing:.08em;cursor:pointer;border-radius:5px;}
+.page{width:210mm;background:var(--bg);margin:0 auto;display:grid;grid-template-columns:repeat(2,var(--card-w));gap:3mm;justify-content:center;align-content:start;}
+.card{width:var(--card-w);height:var(--card-h);border:.4mm solid var(--border);padding:3.5mm 5mm 3mm;display:flex;flex-direction:column;justify-content:space-between;position:relative;background:#fff;overflow:hidden;}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:1.2mm;background:var(--accent);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.card-top{display:flex;flex-direction:column;align-items:center;gap:1mm;}
+.lead{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:17.6pt;font-weight:400;color:var(--text-main);letter-spacing:.05em;line-height:1.1;text-align:center;width:100%;}
+.origin{font-size:9.4pt;color:var(--text-origin);letter-spacing:.12em;text-transform:uppercase;text-align:center;width:100%;}
+.rule{width:100%;border:none;border-top:.25mm solid var(--rule);margin:1mm 0;}
+.sub{font-size:9.9pt;font-style:italic;font-weight:300;color:#777;letter-spacing:.06em;text-align:center;width:100%;}
+.props{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:8.8pt;font-weight:300;color:#666;text-align:center;line-height:1.4;width:100%;}
+.card-bottom{display:flex;align-items:center;border-top:.2mm solid var(--rule);padding-top:1.5mm;}
+.price{font-size:11pt;color:var(--text-main);letter-spacing:.05em;width:100%;border-bottom:.3mm solid #ccc;text-align:right;min-height:5mm;}
+@media print{@page{size:A4;margin:8mm;}*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}body{background:#fff !important;padding:0 !important;margin:0 !important;}.toolbar{display:none !important;}.page{background:#fff !important;margin:0 !important;width:100% !important;}.card{break-inside:avoid;}.card::before{background:#8B6F47 !important;}}
 </style></head><body>
-<div class="toolbar"><h1>Strip Labels &nbsp;·&nbsp; 10 × 70 mm &nbsp;·&nbsp; ${esc(show.name||"")} &nbsp;·&nbsp; ${rows.length} labels</h1><button class="btn" onclick="window.print()">🖨 Print A4</button></div>
-<div class="page">${rows.map(r=>r.second
-  ?`<div class="label"><div class="label-en">${esc(r.en)}</div><div class="label-2nd">${esc(r.second)}</div></div>`
-  :`<div class="label"><div class="label-solo">${esc(r.en)}</div></div>`).join("")}</div>
+<div class="toolbar"><h1>${esc(show.name||"")} &nbsp;·&nbsp; 95 × 50 mm &nbsp;·&nbsp; ${rows.length} card${rows.length===1?"":"s"}</h1><button class="btn-print" onclick="window.print()">🖨 Print A4</button></div>
+<div class="page">${rows.map(r=>`<div class="card"><div class="card-top"><div class="lead">${esc(r.lead)}</div>${r.origin?`<div class="origin">${esc(r.origin)}</div>`:""}<hr class="rule"/>${r.sub?`<div class="sub">${esc(r.sub)}</div>`:""}${r.desc?`<div class="props">${esc(r.desc)}</div>`:""}</div><div class="card-bottom"><div class="price">${esc(r.price)}</div></div></div>`).join("")}</div>
 </body></html>`);
     w.document.close();
   };
@@ -16438,7 +16466,7 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                 <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>What goes to {show.name} · {shipRegion}</span>
                 <div style={{display:"flex",gap:6}}>
-                  {[["plan","Plan"],["labels","🏷 Labels"]].map(([v,label])=>(
+                  {[["plan","Plan"],["labels","🏷 Name cards"]].map(([v,label])=>(
                     <button key={v} onClick={e=>{e.stopPropagation();setShipView(v);}} style={{background:shipView===v?C.ink:"none",color:shipView===v?"#fff":C.inkMid,border:`1px solid ${shipView===v?C.ink:C.border}`,borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{label}</button>
                   ))}
                 </div>
@@ -16621,16 +16649,16 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                 <>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                     <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
-                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Second line</span>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Card language</span>
                       <select value={lang} onChange={e=>setLabelLang(e.target.value)} style={{...FI,fontSize:12,padding:"5px 9px",minWidth:170}}>
                         {LABEL_LANGS.map(l=><option key={l.code} value={l.code}>{l.native?`${l.native} · ${l.label}`:l.label}</option>)}
                       </select>
                     </div>
                     <button onClick={printLabels} disabled={!labelItems.length} style={{background:labelItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:labelItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
                   </div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.filter(i=>labelCopies(i)>0).length} card{labelItems.filter(i=>labelCopies(i)>0).length===1?"":"s"}{labelItems.filter(i=>labelCopies(i)===0).length>0?` · ${labelItems.filter(i=>labelCopies(i)===0).length} skipped`:""} · 10 × 70 mm, 2 per row on A4{lang?"":" · English only, one line per label"}</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.filter(i=>labelCopies(i)>0).length} card{labelItems.filter(i=>labelCopies(i)>0).length===1?"":"s"}{labelItems.filter(i=>labelCopies(i)===0).length>0?` · ${labelItems.filter(i=>labelCopies(i)===0).length} skipped`:""} · 95 × 50 mm name cards, 2 per row on A4{lang?"":" · English only"}</div>
                   {labelItems.length===0?(
-                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Plan a shipment first — labels come from what's in it.</div>
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Plan a shipment first — name cards come from what's in it.</div>
                   ):(
                     <div style={{display:"grid",gap:7}}>
                       {labelItems.map(item=>{
@@ -16646,17 +16674,25 @@ body{font-family:'Cormorant Garamond',serif;background:#f2ede7;padding:20px;}
                               {planned&&<button onClick={e=>{e.stopPropagation();removeDraftLine(item.id);}} title="Remove from the shipment plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>}
                             </div>
                           </div>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 90px":"1fr 90px"),gap:7}}>
-                            <Field label={lang?"Label — English":"Label"}>
-                              <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))onPatchStockItem?.(item.id,{labelEn:v});}} style={{...FI,fontSize:11}}/>
-                            </Field>
+                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 150px 90px":"1fr 150px 90px"),gap:7}}>
                             {!!lang&&(
-                              <Field label={`Label — ${langCfg.label}`}>
+                              <Field label={`${langCfg.label} name — big line`}>
                                 <input key={`${item.id}-${lang}`} defaultValue={secondLine(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==secondLine(item))setSecondLine(item.id,v);}} placeholder={langCfg.sample||""} style={{...FI,fontSize:11}}/>
                               </Field>
                             )}
+                            <Field label={lang?"English name":"Name — big line"}>
+                              <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))onPatchStockItem?.(item.id,{labelEn:v});}} style={{...FI,fontSize:11}}/>
+                            </Field>
+                            <Field label="Origin">
+                              <input key={`or-${item.id}`} defaultValue={cardOrigin(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardOrigin(item))onPatchStockItem?.(item.id,{labelOrigin:v});}} placeholder={lang==="ja"?"INDIA · インド産":"INDIA"} style={{...FI,fontSize:11}}/>
+                            </Field>
                             <Field label="Copies">
                               <input key={`cp-${item.id}-${copies}`} type="number" min="0" max="200" defaultValue={copies} onBlur={e=>{const v=String(Math.max(0,Math.min(200,parseInt(e.target.value,10)||0)));if(v!==String(copies))onPatchStockItem?.(item.id,{labelCopies:v});}} style={{...FI,fontSize:11}}/>
+                            </Field>
+                          </div>
+                          <div style={{marginTop:6}}>
+                            <Field label={`Description${lang?` — ${langCfg.label}`:""} · one line on the card`}>
+                              <input key={`ds-${item.id}-${descKey}`} defaultValue={cardDesc(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardDesc(item))setCardDesc(item.id,v);}} placeholder={lang==="ja"?"金属光沢を持つ硫化鉄で、豊かさを象徴する。":"A copper silicate prized for its deep blue colour."} style={{...FI,fontSize:11}}/>
                             </Field>
                           </div>
                         </div>
