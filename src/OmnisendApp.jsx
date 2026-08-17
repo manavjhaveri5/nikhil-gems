@@ -391,10 +391,11 @@ function CampaignsTab({ showToast }) {
    they are read here and passed with the request — the same path the Listing
    Manager uses. */
 const APPROVE_TAG = "approved";
-/* A contact created by an approval starts in the active segment — that segment is
-   the mailing list, and a wholesale buyer who was just let in belongs on it. Only
-   ever applied at creation: a contact already marked inactive was marked that way
-   deliberately, and adding `active` on top would put them in both segments. */
+/* An approval puts the contact in the active segment — that segment is the mailing
+   list, and a wholesale buyer who was just let in belongs on it. Applied whether
+   the approval creates the contact or finds one already there: being approved is
+   what "active" means here. If a contact was parked in another segment by hand,
+   the tag editor is where that gets sorted out. */
 const ACTIVE_TAG = "active";
 const WELCOME_EVENT = "wholesale_approved";
 const SHOP_CREDS_KEY = "ng-shopify-creds-earth";
@@ -516,6 +517,90 @@ function WelcomeTemplate({ onClose, showToast, forCustomer }) {
   );
 }
 
+/* ── Omnisend tag editor ──────────────────────────────────────────────────────
+   Segments in Omnisend are driven by these tags, so the tags have to be editable
+   by hand: a contact sitting in the wrong segment is fixed here rather than in a
+   second browser tab. Saved as a diff rather than a whole list — the API merges
+   adds and removals into whatever the contact carries at that moment, so a tag
+   applied in Omnisend since this screen loaded isn't wiped by saving here. */
+const TAG_SUGGESTIONS = [APPROVE_TAG, ACTIVE_TAG, "inactive", "wholesale"];
+
+function TagEditor({ email, tags, onClose, onSaved, showToast }) {
+  const [list, setList] = useState(() => [...(tags || [])]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const has = t => list.some(x => String(x).toLowerCase() === String(t).toLowerCase());
+  const addTag = raw => {
+    const fresh = String(raw).split(",").map(t => t.trim()).filter(Boolean);
+    setList(l => {
+      const out = [...l];
+      for (const t of fresh) if (!out.some(x => String(x).toLowerCase() === t.toLowerCase())) out.push(t);
+      return out;
+    });
+    setInput("");
+  };
+  const drop = t => setList(l => l.filter(x => x !== t));
+
+  const save = async () => {
+    const before = (tags || []).map(String);
+    const lower = a => a.map(t => String(t).toLowerCase());
+    const addTags = list.filter(t => !lower(before).includes(String(t).toLowerCase()));
+    const removeTags = before.filter(t => !lower(list).includes(String(t).toLowerCase()));
+    if (!addTags.length && !removeTags.length) { onClose(); return; }
+    setBusy(true); setErr("");
+    try {
+      const d = await api({ action: "contact_tag", email, addTags, removeTags, createIfMissing: false });
+      onSaved(d.tags || list);
+      showToast?.(`✓ Tags updated for ${email}`);
+      onClose();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div onClick={e => e.target === e.currentTarget && onClose()}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ ...card, background: C.bg, width: "min(460px,100%)", padding: 18 }}>
+        <div style={{ fontFamily: SERIF, fontSize: 19, fontWeight: 700, lineHeight: 1 }}>Omnisend tags</div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>{email}</div>
+
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", margin: "14px 0 10px", minHeight: 26 }}>
+          {list.length ? list.map(t => (
+            <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 6px 3px 8px", fontSize: 11.5, color: C.ink }}>
+              {t}
+              <button onClick={() => drop(t)} title={`Remove ${t}`}
+                style={{ background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", color: C.inkFaint, fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+            </span>
+          )) : <span style={{ fontSize: 11.5, color: C.inkFaint }}>No tags — this contact is in no tag-driven segment.</span>}
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && input.trim()) { e.preventDefault(); addTag(input); } }}
+            placeholder="Add a tag, then Enter…" style={FI()} />
+          <button onClick={() => input.trim() && addTag(input)} disabled={!input.trim()} style={{ ...btn(), opacity: input.trim() ? 1 : .5 }}>Add</button>
+        </div>
+
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 9 }}>
+          {TAG_SUGGESTIONS.filter(t => !has(t)).map(t => (
+            <button key={t} onClick={() => addTag(t)}
+              style={{ background: "none", border: `1px dashed ${C.border}`, borderRadius: 5, padding: "3px 8px", fontSize: 11, color: C.inkMid, cursor: "pointer", fontFamily: "inherit" }}>+ {t}</button>
+          ))}
+        </div>
+
+        {err && <div style={{ ...card, borderColor: C.red, background: C.redBg, color: C.red, padding: "9px 12px", fontSize: 12.5, marginTop: 12 }}>{err}</div>}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+          <button onClick={save} disabled={busy} style={{ ...btn(C.ink, "#FAF0DC"), opacity: busy ? .6 : 1 }}>{busy ? "Saving…" : "Save tags"}</button>
+          <button onClick={onClose} style={btn()}>Cancel</button>
+          <span style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.4 }}>Segments update on Omnisend's own schedule.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ApprovalsTab({ showToast }) {
   const [creds, setCreds] = useState(undefined);   // undefined = loading, null = missing
   const [rows, setRows] = useState([]);
@@ -528,6 +613,7 @@ function ApprovalsTab({ showToast }) {
   const [q, setQ] = useState("");
   const [tplOpen, setTplOpen] = useState(false);
   const [previewFor, setPreviewFor] = useState(null);   // customer whose copy to show
+  const [tagFor, setTagFor] = useState(null);           // customer whose Omnisend tags are being edited
 
   useEffect(() => {
     loadK(SHOP_CREDS_KEY)
@@ -576,10 +662,15 @@ function ApprovalsTab({ showToast }) {
           const [firstName, ...rest] = String(c.name || "").split(" ");
           const t = await api({
             action: "contact_tag", email: c.email,
-            ...(undo ? { removeTags: [APPROVE_TAG] } : { addTags: [APPROVE_TAG], createTags: [ACTIVE_TAG] }),
+            /* Un-approving takes back trade access, so it takes back the mailing
+               segment with it — otherwise a removed buyer keeps receiving the
+               list they were removed from. */
+            ...(undo ? { removeTags: [APPROVE_TAG, ACTIVE_TAG] } : { addTags: [APPROVE_TAG, ACTIVE_TAG] }),
             createIfMissing: !undo, firstName: firstName || "", lastName: rest.join(" "),
           });
-          done.push(t.created ? `added to Omnisend · ${ACTIVE_TAG}` : "Omnisend");
+          done.push(undo ? "Omnisend"
+            : t.created ? `added to Omnisend · ${APPROVE_TAG} + ${ACTIVE_TAG}`
+            : `Omnisend · ${ACTIVE_TAG}`);
           setOmniTags(m => ({ ...m, [c.email.toLowerCase()]: t.tags || [] }));
 
           // Approving is what earns the welcome mail, so the event only fires on
@@ -629,8 +720,15 @@ function ApprovalsTab({ showToast }) {
     <>
       {tplOpen && <WelcomeTemplate onClose={() => setTplOpen(false)} showToast={showToast} />}
       {previewFor && <WelcomeTemplate onClose={() => setPreviewFor(null)} showToast={showToast} forCustomer={previewFor} />}
+      {tagFor && (
+        <TagEditor
+          email={tagFor.email} tags={inOmnisend(tagFor) || []} showToast={showToast}
+          onClose={() => setTagFor(null)}
+          onSaved={tags => setOmniTags(m => ({ ...m, [String(tagFor.email).toLowerCase()]: tags }))}
+        />
+      )}
       <div style={{ padding: "0 2px", marginBottom: 14, fontSize: 12, color: C.inkFaint, lineHeight: 1.6, maxWidth: 760 }}>
-        Approving adds the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{APPROVE_TAG}</code> tag to the Shopify customer — which unlocks trade prices and account login — adds the same tag to their Omnisend contact, and fires the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{WELCOME_EVENT}</code> event so Omnisend sends the welcome email. All three in one click.
+        Approving adds the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{APPROVE_TAG}</code> tag to the Shopify customer — which unlocks trade prices and account login — adds that tag plus <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{ACTIVE_TAG}</code> to their Omnisend contact so they land in the active segment, and fires the <code style={{ fontSize: 11.5, background: C.card, borderRadius: 4, padding: "1px 5px" }}>{WELCOME_EVENT}</code> event so Omnisend sends the welcome email. All in one click — and <em>✎ tags</em> on any row edits that contact's Omnisend tags by hand.
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
@@ -641,9 +739,10 @@ function ApprovalsTab({ showToast }) {
         <button onClick={load} disabled={loading} style={btn()}>{loading ? "Loading…" : "↻ Refresh"}</button>
         <button
           onClick={() => downloadCsv(`earth-editions-customers-${new Date().toISOString().slice(0, 10)}.csv`,
-            [["Email", "Name", "Approved", "In Omnisend", "Omnisend approved", "Orders", "Spent", "Tags", "Joined"],
+            [["Email", "Name", "Approved", "In Omnisend", "Omnisend approved", "Orders", "Spent", "Shopify tags", "Omnisend tags", "Joined"],
              ...shown.map(c => [c.email, c.name, hasApproveTag(c) ? "yes" : "no", inOmnisend(c) ? "yes" : "no",
-               omniApproved(c) ? "yes" : "no", c.ordersCount, c.totalSpent, (c.tags || []).join(" | "), c.createdAt])])}
+               omniApproved(c) ? "yes" : "no", c.ordersCount, c.totalSpent, (c.tags || []).join(" | "),
+               (inOmnisend(c) || []).join(" | "), c.createdAt])])}
           disabled={!shown.length} style={btn()}>⬇ CSV</button>
       </div>
 
@@ -665,11 +764,28 @@ function ApprovalsTab({ showToast }) {
                     </td>
                     <td style={td}><Pill>{ok ? "approved" : "pending"}</Pill></td>
                     <td style={td}>
-                      {!known
-                        ? <span style={{ fontSize: 11.5, color: C.inkFaint }}>not a contact</span>
-                        : omniApproved(c)
-                          ? <span style={{ fontSize: 11.5, fontWeight: 600, color: C.green }}>✓ tagged</span>
-                          : <span style={{ fontSize: 11.5, fontWeight: 600, color: C.amber }}>untagged</span>}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {!known
+                          ? <span style={{ fontSize: 11.5, color: C.inkFaint }}>not a contact</span>
+                          : omniApproved(c)
+                            ? <span style={{ fontSize: 11.5, fontWeight: 600, color: C.green }}>✓ tagged</span>
+                            : <span style={{ fontSize: 11.5, fontWeight: 600, color: C.amber }}>untagged</span>}
+                        {/* The tags are what put the contact in a segment, so they're
+                            editable in place — no trip to Omnisend to fix one. */}
+                        {known && c.email && (
+                          <button onClick={() => setTagFor(c)} title="Edit this contact's Omnisend tags"
+                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit",
+                              fontSize: 10.5, color: C.inkFaint, textDecoration: "underline" }}>✎ tags</button>
+                        )}
+                      </div>
+                      {known && !!(inOmnisend(c) || []).length && (
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 3 }}>
+                          {(inOmnisend(c) || []).slice(0, 3).map(t => (
+                            <span key={t} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 5, padding: "1px 5px", fontSize: 10, color: C.inkMid, whiteSpace: "nowrap" }}>{t}</span>
+                          ))}
+                          {(inOmnisend(c) || []).length > 3 && <span style={{ fontSize: 10, color: C.inkFaint }}>+{(inOmnisend(c) || []).length - 3}</span>}
+                        </div>
+                      )}
                       {/* Independent of the tag state: the mail either fired or it didn't. */}
                       {mailed[String(c.email || "").toLowerCase()] &&
                         <button onClick={() => setPreviewFor(c)} title="See the welcome email as they receive it"
