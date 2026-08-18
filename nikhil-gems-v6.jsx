@@ -6206,15 +6206,10 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [fqVendor,setFqVendor]=useState("");
   const filterBarRef=useRef();
   const [sortBy,setSortBy]=useState("date");const [aiTagging,setAiTagging]=useState(false);const [toast,setToast]=useState("");const [selected,setSelected]=useState(null);const [loaded,setLoaded]=useState(()=>readCache(KEYS.stock)!==null);const [selectMode,setSelectMode]=useState(false);const [selectedIds,setSelectedIds]=useState(new Set());const [accSelectMode,setAccSelectMode]=useState(false);const [accSelectedIds,setAccSelectedIds]=useState(new Set());
-  const PAGE_SIZE=36;
-  const [visibleCount,setVisibleCount]=useState(PAGE_SIZE);
-  const [sentinelEl,setSentinelEl]=useState(null);
-  useEffect(()=>{
-    if(!sentinelEl)return;
-    const obs=new IntersectionObserver(entries=>{if(entries[0].isIntersecting)setVisibleCount(c=>c+PAGE_SIZE);},{rootMargin:"400px"});
-    obs.observe(sentinelEl);
-    return()=>obs.disconnect();
-  },[sentinelEl]);
+  const PAGE_SIZES=[24,36,60,120];
+  // Page size sticks per browser — most people settle on one density and keep it.
+  const [pageSize,setPageSize]=useState(()=>{const v=+localStorage.getItem("ng.stock.pageSize");return PAGE_SIZES.includes(v)?v:36;});
+  const [page,setPage]=useState(1);
   const [qtyFilter,setQtyFilter]=useState("in-stock"); // "in-stock" | "all" | "sold"
   const [summaryOpen,setSummaryOpen]=useState(false);
   const [summaryDate,setSummaryDate]=useState(today());
@@ -6848,9 +6843,15 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     if(act==null&&bct==null)return 0;if(act==null)return 1;if(bct==null)return -1;
     return bct-act;
   }),[stock,search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
-  // Reset page whenever the filtered set changes so we don't show a stale "Load more" offset
-  useEffect(()=>{setVisibleCount(PAGE_SIZE);},[filtered]);
-  const visibleStock=filtered.slice(0,visibleCount);
+  // Reset to page 1 whenever the filtered set changes so we never land on a page that no longer exists
+  useEffect(()=>{setPage(1);},[filtered]);
+  const changePageSize=n=>{setPageSize(n);setPage(1);try{localStorage.setItem("ng.stock.pageSize",String(n));}catch{}window.scrollTo({top:0,behavior:"smooth"});};
+  const pageCount=Math.max(1,Math.ceil(filtered.length/pageSize));
+  const curPage=Math.min(page,pageCount);
+  const pageStart=(curPage-1)*pageSize;
+  const visibleStock=filtered.slice(pageStart,pageStart+pageSize);
+  // Jumping pages should put you at the top of the new page, not mid-grid.
+  const goPage=n=>{const t=Math.min(Math.max(1,n),pageCount);setPage(t);window.scrollTo({top:0,behavior:"smooth"});};
   const stones=useMemo(()=>[...new Set(stock.map(s=>s.material).filter(Boolean))].sort(),[stock]);
   const shapes=useMemo(()=>[...new Set(stock.map(s=>s.shape).filter(Boolean))].sort(),[stock]);
   const markets=useMemo(()=>[...new Set(stock.flatMap(s=>Array.isArray(s.market)?s.market:[s.market||""]).filter(m=>m&&m!=="Unassigned"))].sort(),[stock]);
@@ -8593,7 +8594,37 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     </div>
                   );})}
                   </div>
-                  {visibleCount<filtered.length&&<div ref={setSentinelEl} style={{height:1}}/>}
+                  {(pageCount>1||filtered.length>PAGE_SIZES[0])&&(()=>{
+                    /* Window of page numbers around the current one — first and
+                       last are always reachable, with ellipses for the gap. */
+                    const nums=[];const span=mob?1:2;
+                    for(let i=1;i<=pageCount;i++){
+                      if(i===1||i===pageCount||(i>=curPage-span&&i<=curPage+span))nums.push(i);
+                      else if(nums[nums.length-1]!=="…")nums.push("…");
+                    }
+                    const btn=(extra={})=>({background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"6px 10px":"6px 12px",fontSize:mob?12:13,color:C.inkMid,cursor:"pointer",minWidth:mob?32:36,fontWeight:500,transition:"all .15s",...extra});
+                    return(
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:8,margin:"20px 0 8px"}}>
+                        <div style={{display:"flex",gap:mob?4:6,alignItems:"center",flexWrap:"wrap",justifyContent:"center"}}>
+                          {pageCount>1&&<>
+                            <button onClick={()=>goPage(curPage-1)} disabled={curPage===1} style={btn({opacity:curPage===1?.4:1,cursor:curPage===1?"default":"pointer"})}>‹</button>
+                            {nums.map((n,i)=>n==="…"
+                              ?<span key={`e${i}`} style={{fontSize:12,color:C.inkFaint,padding:"0 2px"}}>…</span>
+                              :<button key={n} onClick={()=>goPage(n)} style={btn(n===curPage?{background:C.amber,borderColor:C.amber,color:"#fff",fontWeight:700}:{})}>{n}</button>)}
+                            <button onClick={()=>goPage(curPage+1)} disabled={curPage===pageCount} style={btn({opacity:curPage===pageCount?.4:1,cursor:curPage===pageCount?"default":"pointer"})}>›</button>
+                            <span style={{width:1,height:20,background:C.border,margin:mob?"0 2px":"0 6px"}}/>
+                          </>}
+                          <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.inkFaint}}>
+                            {!mob&&<span>Per page</span>}
+                            <select value={pageSize} onChange={e=>changePageSize(+e.target.value)} style={{...FI,fontSize:mob?12:13,padding:mob?"5px 8px":"6px 10px",width:"auto",cursor:"pointer"}}>
+                              {PAGE_SIZES.map(n=><option key={n} value={n}>{n}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <div style={{fontSize:11,color:C.inkFaint}}>{pageStart+1}–{Math.min(pageStart+pageSize,filtered.length)} of {filtered.length} items · page {curPage} of {pageCount}</div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
               {/* Stock item detail panel */}
