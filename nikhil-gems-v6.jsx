@@ -6843,8 +6843,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     if(act==null&&bct==null)return 0;if(act==null)return 1;if(bct==null)return -1;
     return bct-act;
   }),[stock,search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
-  // Reset to page 1 whenever the filtered set changes so we never land on a page that no longer exists
-  useEffect(()=>{setPage(1);},[filtered]);
+  /* Reset to page 1 when the *criteria* change — not when `filtered` changes
+     identity. A background refresh of `stock` rebuilds that memo every time,
+     which would yank you back to page 1 mid-browse. Out-of-range pages are
+     handled by the curPage clamp below instead. */
+  useEffect(()=>{setPage(1);},[search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
   const changePageSize=n=>{setPageSize(n);setPage(1);try{localStorage.setItem("ng.stock.pageSize",String(n));}catch{}window.scrollTo({top:0,behavior:"smooth"});};
   const pageCount=Math.max(1,Math.ceil(filtered.length/pageSize));
   const curPage=Math.min(page,pageCount);
