@@ -2726,6 +2726,14 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
   const updNg = (o, patch) => setNgState(s => ({ ...s, [o.id]: { ...defaultNgDraft(o), ...(s[o.id] || {}), ...patch } }));
   const linkOrderStock = (order, stockId) => patchOrder(order, { linked_stock_id: stockId });
   const setOrderTrackingUrl = (order, url) => patchOrder(order, { tracking_url: url });
+  /* The "Shipping you paid" box writes into ngState, not the tracking draft. The
+     ship handlers were reading `draft.shipCost` off the tracking draft, where it
+     is always undefined — so `+undefined || 0` stamped every order shipped from
+     step 1 at ₹0, overwriting the figure the blur had just saved. */
+  const shipCostPatch = o => {
+    const entered = ngDraft(o).shipCost;
+    return { ship_cost: entered == null || entered === "" ? (o.ship_cost || "") : Math.max(0, +entered || 0) };
+  };
   const saveOrderShipCost = (order, value) => {
     const shipCost = value === "" ? "" : Math.max(0, +value || 0);
     updNg(order, { shipCost: value });
@@ -3193,7 +3201,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         tracking_code: trackingCode,
         tracking_number: trackingCode,
         carrier_name: normalizeCarrier(carrierName) || carrierName,
-        ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...shipCostPatch(o),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         ebay_completed_at: now(),
         _shipStepUndone: false,
@@ -3247,7 +3255,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         tracking_code: trackingCode,
         tracking_number: trackingCode,
         carrier_name: normalizeCarrier(carrierName) || carrierName,
-        ship_cost: draft.shipCost === "" ? (x.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...shipCostPatch(x),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         etsy_completed_at: now,
         _shipStepUndone: false,
@@ -3294,7 +3302,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
         tracking_code: trackingCode || o.tracking_code || "",
         tracking_number: trackingCode || o.tracking_number || "",
         carrier_name: normalizeCarrier(carrierName) || carrierName,
-        ship_cost: draft.shipCost === "" ? (o.ship_cost || "") : Math.max(0, +draft.shipCost || 0),
+        ...shipCostPatch(o),
         ...(draft.tracking_url ? { tracking_url: draft.tracking_url } : {}),
         _shipStepUndone: false,
       });
@@ -4928,7 +4936,9 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
 /* ══════════════════════════════════════════════════════════════════════════
    ETSY SHOP MANAGER — fast load, edit listings, full orders + customers
 ══════════════════════════════════════════════════════════════════════════ */
-const ETSY_CACHE = "ng-etsy-v3";
+// Bump this to discard every stored cache — the shape changed, or what's in it
+// can no longer be trusted. It is the only thing that should force a cold load.
+const ETSY_CACHE = "ng-etsy-v4";
 
 function EtsyLiveView({ onCrossPost }) {
   const loadCache = () => { try { return JSON.parse(localStorage.getItem(ETSY_CACHE)||"{}"); } catch { return {}; } };
@@ -4956,9 +4966,17 @@ function EtsyLiveView({ onCrossPost }) {
   const [editL,        setEditL]        = useState(null);
   const [editForm,     setEditForm]     = useState({});
   const [editImages,   setEditImages]   = useState([]);
+  /* Etsy doesn't return videos with the listing the way it returns images, so
+     they are fetched per listing when the editor opens. Without this the shop's
+     videos were invisible here and there was no way to get one into the
+     library — the listing looked like it had none. */
+  const [editVideos,   setEditVideos]   = useState([]);
+  const [videosLoading,setVideosLoading]= useState(false);
   const [imgUploading, setImgUploading] = useState(false);
   const [showPicker,   setShowPicker]   = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
+  const [libSave,      setLibSave]      = useState(null); // {urls, name, category, notes, saving} when saving into the library
+  const [libEntries,   setLibEntries]   = useState([]);
   const [saving,       setSaving]       = useState(false);
   const [saveErr,      setSaveErr]      = useState(null);
   const [toast,        setToast]        = useState("");
@@ -4985,14 +5003,23 @@ function EtsyLiveView({ onCrossPost }) {
   const FULL_RESYNC_MS = 24 * 60 * 60 * 1000;        // force a full resync at most once a day (catches status flips on old orders)
   const INCREMENTAL_BUFFER_S = 3 * 24 * 60 * 60;     // re-pull the last few days so recent shipping/status changes stay fresh
 
+  /* A thousand enriched receipts and a full catalog can exceed the ~5MB
+     localStorage quota, and the write then throws. Swallowing that leaves no
+     cache at all, so the next visit is a cold load — the slow path, forever,
+     invisibly. Drop order history until it fits instead: the listings and the
+     newest receipts are what the screen opens with, and the rest comes back on
+     the next sync. Newest-first also keeps the incremental cursor correct. */
   const saveCache = (ls, os, fullSynced) => {
-    try {
-      const prev = loadCache();
-      localStorage.setItem(ETSY_CACHE, JSON.stringify({
-        listings: ls, orders: os, syncedAt: Date.now(),
-        lastFullSync: fullSynced ? Date.now() : (prev.lastFullSync || 0),
-      }));
-    } catch {}
+    const prev = loadCache();
+    const write = rows => localStorage.setItem(ETSY_CACHE, JSON.stringify({
+      listings: ls, orders: rows, syncedAt: Date.now(),
+      lastFullSync: fullSynced ? Date.now() : (prev.lastFullSync || 0),
+      ordersTrimmed: rows.length < (os?.length || 0) ? (os.length - rows.length) : 0,
+    }));
+    const newest = sortEtsyReceipts(os);
+    for (const n of [newest.length, 400, 150, 50, 0]) {
+      try { write(newest.slice(0, n)); return; } catch {}
+    }
   };
 
   const etsyMoney = m => (m?.amount || 0) / (m?.divisor || 100);
@@ -5210,8 +5237,13 @@ function EtsyLiveView({ onCrossPost }) {
   useEffect(() => {
     const STALE_MS = 10 * 60 * 1000; // 10 minutes
     const cacheAge = c0.syncedAt ? Date.now() - c0.syncedAt : Infinity;
-    // Also treat cache as stale if it has suspiciously few listings (< 200 = old pre-pagination cache)
-    const cacheStale = cacheAge >= STALE_MS || (c0.listings?.length > 0 && c0.listings.length < 200);
+    /* Freshness is the timestamp's job alone. This used to also call a cache of
+       under 200 listings stale, as a way of discarding caches written before the
+       catalog paginated — but a shop with 100 listings then failed that test on
+       every visit, so the cache never counted as fresh and every open re-pulled
+       the whole catalog and a thousand enriched receipts. The cache key carries a
+       version for that job instead. */
+    const cacheStale = cacheAge >= STALE_MS;
     if (c0.listings?.length > 0 && !cacheStale) {
       // Cache is fresh — show instantly, no API call
       getToken().then(tok => setHasOAuth(!!tok));
@@ -5236,6 +5268,15 @@ function EtsyLiveView({ onCrossPost }) {
       quantity: l.quantity||1, tags: [...(l.tags||[])], state: l.state||"active" });
     setEditImages(l.images ? [...l.images].sort((a,b)=>(a.rank||0)-(b.rank||0)) : []);
     setSaveErr(null); setTagInput(""); setShowPicker(false);
+    setEditVideos([]); setVideosLoading(true);
+    (async () => {
+      try {
+        const tok = await getToken();
+        const r = await fetch(`/api/etsy?action=listing_videos&listing_id=${l.listing_id}`, { headers: tok ? { "X-Etsy-Token": tok } : {} });
+        const d = await r.json().catch(() => ({}));
+        setEditVideos(r.ok ? (d.results || []) : []);
+      } catch { setEditVideos([]); } finally { setVideosLoading(false); }
+    })();
   };
 
   const addTag = () => {
@@ -5437,7 +5478,70 @@ function EtsyLiveView({ onCrossPost }) {
     } catch (e) { showToast("⚠ " + e.message); setImgUploading(false); }
   };
 
-  const libImages = () => { try { return JSON.parse(localStorage.getItem("ng-image-library-v1")||"[]"); } catch { return []; } };
+  /* The library is a flat array of {name, category, imageUrl} written by
+     ImageLibraryApp through saveK — not the {images:[…]} groups this used to read
+     out of localStorage, which is why the picker below came up empty however many
+     photos had been filed. Grouping into listings is this screen's own business. */
+  useEffect(() => { loadK(IMG_KEY).then(d => { if (Array.isArray(d)) setLibEntries(d); }).catch(()=>{}); }, []);
+  useEffect(() => onCacheRefresh(keys => {
+    if (keys.includes(IMG_KEY)) loadK(IMG_KEY).then(d => { if (Array.isArray(d)) setLibEntries(d); }).catch(()=>{});
+  }), []);
+  const libImages = () => {
+    const groups = new Map();
+    for (const e of libEntries) {
+      if (!e?.imageUrl || e.mediaType === "video") continue;
+      const key = `${e.name || ""}|||${e.category || ""}`;
+      if (!groups.has(key)) groups.set(key, { id: key, name: e.name || "", category: e.category || "", images: [] });
+      groups.get(key).images.push({ url: e.imageUrl, isVideo: false });
+    }
+    return [...groups.values()];
+  };
+  /* Photos live on the listing but the library is where they get reused, so the
+     trip has to work both ways. Entries are keyed by stone + category, so those
+     are asked for rather than guessed — a mis-filed shot is worse than none. */
+  const openLibSave = urls => {
+    const fresh = urls.filter(u => u && !libEntries.some(e => e.imageUrl === u));
+    if (!fresh.length) { showToast("Already in the library"); return; }
+    const known = [...new Set(libEntries.map(e => e.name).filter(Boolean))];
+    const title = String(editL?.title || "").toLowerCase();
+    setLibSave({
+      urls: fresh,
+      // A stone already in the library and named in the title is a safe guess.
+      name: known.find(n => title.includes(String(n).toLowerCase())) || "",
+      category: "",
+      notes: "",
+      saving: false,
+    });
+  };
+  const saveToLibrary = async () => {
+    if (!libSave) return;
+    const name = libSave.name.trim(), category = libSave.category.trim();
+    if (!name) return;
+    setLibSave(s => ({ ...s, saving: true }));
+    try {
+      const entries = libSave.urls.map(url => ({
+        id: uid(), name, category, notes: libSave.notes.trim(),
+        // The library plays a row whose URL looks like a video, so the type has to
+        // follow the file rather than be assumed to be a photo.
+        imageUrl: url, mediaType: /\.(mp4|mov|webm|m4v|avi|mkv)(\?|$)/i.test(url) ? "video" : "image", size: 0,
+        createdAt: new Date().toISOString(),
+        source: `etsy-listing-${editL?.listing_id || ""}`,
+      }));
+      /* upsertItemK, not saveK of the whole array: it appends the row server-side
+         and — the part that was missing — announces the change, so the Image
+         Library screen and the stock photo picker pick it up instead of sitting on
+         a copy loaded before the save. Writing the array back did neither, which is
+         why a saved photo seemed to vanish. */
+      let next = null;
+      for (const entry of entries) next = await upsertItemK(IMG_KEY, entry, { prepend: true });
+      setLibEntries(Array.isArray(next) ? next : await loadKFresh(IMG_KEY));
+      setLibSave(null);
+      showToast(`✓ ${entries.length} photo${entries.length !== 1 ? "s" : ""} saved to the library`);
+    } catch (e) {
+      setLibSave(s => ({ ...s, saving: false }));
+      showToast("⚠ " + (e.message || "Could not save to the library"));
+    }
+  };
 
   // ── derived ───────────────────────────────────────────────────────────────
   const firstOrder = orders.find(o => o.grandtotal?.currency_code);
@@ -6175,6 +6279,14 @@ function EtsyLiveView({ onCrossPost }) {
                       ({editImages.length}/10)
                     </span>
                   </span>
+                  {editImages.length>0&&(
+                    <button onClick={()=>openLibSave(editImages.map(i=>i.url_fullxfull||i.url_570xN||i.url_170x135))}
+                      title="Save every photo on this listing to the Image Library"
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 7px",
+                        fontSize:10.5,fontWeight:700,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                      🖼 To Library
+                    </button>
+                  )}
                 </div>
 
                 {/* Photo grid */}
@@ -6195,6 +6307,10 @@ function EtsyLiveView({ onCrossPost }) {
                           padding:4,gap:3}}
                           onMouseOver={e=>{e.currentTarget.style.background="rgba(0,0,0,.3)";}}
                           onMouseOut={e=>{e.currentTarget.style.background="rgba(0,0,0,0)";}}>
+                          <button onClick={()=>openLibSave([url])} title="Save this photo to the Image Library"
+                            style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",
+                              border:"none",borderRadius:4,fontSize:11,cursor:"pointer",
+                              display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>🖼</button>
                           <a href={url} download target="_blank" rel="noreferrer"
                             style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",
                               borderRadius:4,fontSize:12,textDecoration:"none",display:"flex",
@@ -6213,6 +6329,44 @@ function EtsyLiveView({ onCrossPost }) {
                       fontSize:20,color:C.inkFaint,animation:"spin 1s linear infinite"}}>⟳</div>
                   )}
                 </div>
+
+                {/* Video — Etsy keeps it apart from the images, so it is shown apart too. */}
+                {(videosLoading||editVideos.length>0)&&(
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                      <span style={{fontSize:12,fontWeight:700,color:C.ink}}>
+                        Video <span style={{color:C.inkFaint,fontWeight:400}}>({videosLoading?"…":editVideos.length})</span>
+                      </span>
+                      {editVideos.length>0&&(
+                        <button onClick={()=>openLibSave(editVideos.map(v=>v.video_url||v.url).filter(Boolean))}
+                          title="Save this video to the Image Library"
+                          style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 7px",
+                            fontSize:10.5,fontWeight:700,color:C.inkMid,cursor:"pointer",fontFamily:"inherit"}}>
+                          🎬 To Library
+                        </button>
+                      )}
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {editVideos.map((v,idx)=>{
+                        const src=v.video_url||v.url||"";
+                        return (
+                          <div key={v.video_id||idx} style={{position:"relative",borderRadius:8,overflow:"hidden",border:`1px solid ${C.border}`,background:"#000"}}>
+                            <video src={src} poster={v.thumbnail_url||undefined} controls preload="metadata"
+                              style={{width:"100%",display:"block",maxHeight:150,objectFit:"cover",background:"#000"}}/>
+                            <div style={{position:"absolute",top:4,right:4,display:"flex",gap:3}}>
+                              <button onClick={()=>openLibSave([src])} title="Save this video to the Image Library"
+                                style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",border:"none",borderRadius:4,
+                                  fontSize:11,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>🎬</button>
+                              <a href={src} download target="_blank" rel="noreferrer" title="Download"
+                                style={{width:22,height:22,background:"rgba(0,0,0,.7)",color:"#fff",borderRadius:4,fontSize:12,
+                                  textDecoration:"none",display:"flex",alignItems:"center",justifyContent:"center"}}>↓</a>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Upload + Library buttons */}
                 <div style={{display:"flex",gap:6}}>
@@ -6256,6 +6410,55 @@ function EtsyLiveView({ onCrossPost }) {
                   </div>
                 )}
               </div>
+
+              {/* Save-to-library dialog */}
+              {libSave && (
+                <div onMouseDown={()=>!libSave.saving&&setLibSave(null)}
+                  style={{position:"fixed",inset:0,zIndex:1100,background:"rgba(0,0,0,.5)",display:"grid",placeItems:"center",padding:18}}>
+                  <div onMouseDown={e=>e.stopPropagation()}
+                    style={{width:"min(100%,420px)",background:C.bg,border:`1.5px solid ${C.border}`,borderRadius:12,padding:20,boxShadow:"0 24px 70px rgba(0,0,0,.28)"}}>
+                    <div style={{fontSize:15,fontWeight:800,color:C.ink}}>🖼 Save to Image Library</div>
+                    <div style={{fontSize:11.5,color:C.inkMid,marginTop:4,lineHeight:1.5}}>
+                      {libSave.urls.length} photo{libSave.urls.length!==1?"s":""} from this listing. The library files by stone and shape, so both are worth getting right — that is how they are found again.
+                    </div>
+                    <div style={{display:"flex",gap:5,marginTop:12,overflowX:"auto",paddingBottom:2}}>
+                      {libSave.urls.slice(0,8).map(u=>(
+                        <img key={u} src={u} alt="" style={{width:46,height:46,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,flexShrink:0}}/>
+                      ))}
+                      {libSave.urls.length>8&&<div style={{width:46,height:46,borderRadius:6,border:`1px solid ${C.border}`,display:"grid",placeItems:"center",fontSize:11,fontWeight:700,color:C.inkMid,flexShrink:0}}>+{libSave.urls.length-8}</div>}
+                    </div>
+                    <div style={{marginTop:12}}>
+                      <label style={{color:C.inkFaint,fontSize:11,fontWeight:600,marginBottom:5,display:"block"}}>Stone / name</label>
+                      <input autoFocus list="lib-save-stones" value={libSave.name} onChange={e=>setLibSave(s=>({...s,name:e.target.value}))}
+                        placeholder="e.g. Rhodonite" style={{...IS,fontSize:13}}/>
+                      <datalist id="lib-save-stones">
+                        {[...new Set(libEntries.map(e=>e.name).filter(Boolean))].map(n=><option key={n} value={n}/>)}
+                      </datalist>
+                    </div>
+                    <div style={{marginTop:10}}>
+                      <label style={{color:C.inkFaint,fontSize:11,fontWeight:600,marginBottom:5,display:"block"}}>Shape / category</label>
+                      <input list="lib-save-cats" value={libSave.category} onChange={e=>setLibSave(s=>({...s,category:e.target.value}))}
+                        placeholder="e.g. Mini Hearts" style={{...IS,fontSize:13}}/>
+                      <datalist id="lib-save-cats">
+                        {[...new Set(libEntries.map(e=>e.category).filter(Boolean))].map(n=><option key={n} value={n}/>)}
+                      </datalist>
+                    </div>
+                    <div style={{marginTop:10}}>
+                      <label style={{color:C.inkFaint,fontSize:11,fontWeight:600,marginBottom:5,display:"block"}}>Notes <span style={{fontWeight:400}}>(optional)</span></label>
+                      <input value={libSave.notes} onChange={e=>setLibSave(s=>({...s,notes:e.target.value}))}
+                        placeholder="Shoot, batch, anything worth remembering" style={{...IS,fontSize:13}}/>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
+                      <button onClick={()=>setLibSave(null)} disabled={libSave.saving}
+                        style={{background:C.card,color:C.ink,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 14px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+                      <button onClick={saveToLibrary} disabled={libSave.saving||!libSave.name.trim()}
+                        style={{background:libSave.name.trim()?"#F56400":C.card,color:libSave.name.trim()?"#fff":C.inkFaint,border:"none",borderRadius:7,padding:"9px 16px",fontSize:12,fontWeight:850,cursor:libSave.name.trim()&&!libSave.saving?"pointer":"default",fontFamily:"inherit"}}>
+                        {libSave.saving?"Saving…":`Save ${libSave.urls.length} to library`}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* RIGHT — Form */}
               <div style={{flex:1,overflowY:"auto",padding:"20px 22px",display:"flex",flexDirection:"column",gap:18}}>

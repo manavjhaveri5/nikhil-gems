@@ -199,17 +199,31 @@ Return ONLY valid JSON with these fields:
   }
 }
 
-/* Pushing ready stock into the storefront's "Deals" section is the main reason
-   this endpoint is used, so the outcome is reported back rather than swallowed —
-   a missing Deals collection used to fail silently and the product would quietly
-   never appear in the section. */
-async function addToDealsCollection(shop, token, productId) {
+/* The tag that shadows a storefront section. Lower case because Shopify compares
+   tags case-insensitively but stores them as typed, and a mixed bag of
+   "Deals"/"deals" makes automated-collection rules hard to trust. */
+const sectionTagOf = title => String(title || "").trim().toLowerCase();
+
+/* Put the product in a storefront section. Deals is the usual one — pushing ready
+   stock into it is the main reason this endpoint exists — but a flatstone belongs
+   in Flatstones, so the section is the caller's to name and the outcome is
+   reported back rather than swallowed.
+
+   Only a custom collection can be joined this way. A smart collection decides its
+   own membership from rules, which is exactly what the tag is for: say so plainly
+   instead of reporting a failure the caller can do nothing about. */
+async function addToCollection(shop, token, productId, title) {
   const H = { "Content-Type": "application/json", "X-Shopify-Access-Token": token };
   try {
-    const r = await fetch(`https://${shop}/admin/api/2024-04/custom_collections.json?title=Deals&limit=1`, { headers: H });
+    const r = await fetch(`https://${shop}/admin/api/2024-04/custom_collections.json?title=${encodeURIComponent(title)}&limit=1`, { headers: H });
     const data = await r.json();
     const collection = data?.custom_collections?.[0];
-    if (!collection) return { ok: false, error: 'No collection titled "Deals" on this store' };
+    if (!collection) {
+      const sr2 = await fetch(`https://${shop}/admin/api/2024-04/smart_collections.json?title=${encodeURIComponent(title)}&limit=1`, { headers: H });
+      const sd = await sr2.json().catch(() => ({}));
+      if (sd?.smart_collections?.[0]) return { ok: true, smart: true, collectionId: String(sd.smart_collections[0].id) };
+      return { ok: false, error: `No collection titled "${title}" on this store` };
+    }
 
     // Re-pushing an item must not create a duplicate collect.
     const fr = await fetch(`https://${shop}/admin/api/2024-04/collects.json?product_id=${productId}&collection_id=${collection.id}&limit=1`, { headers: H });
@@ -222,11 +236,11 @@ async function addToDealsCollection(shop, token, productId) {
     });
     if (!cr.ok) {
       const err = await cr.text().catch(() => "");
-      return { ok: false, error: `Deals collect failed (${cr.status}) ${err.slice(0, 140)}` };
+      return { ok: false, error: `${title} collect failed (${cr.status}) ${err.slice(0, 140)}` };
     }
     return { ok: true, collectionId: String(collection.id) };
   } catch (e) {
-    console.error("Add to Deals collection failed:", e.message);
+    console.error(`Add to ${title} collection failed:`, e.message);
     return { ok: false, error: e.message };
   }
 }
@@ -359,9 +373,13 @@ function nextPagePath(linkHeader) {
    Shopify answers only the affected call with a 403 naming the scope. That reads as a
    dead end in the UI ("[API] This action requires merchant approval for read_customers
    scope"), when the fix is simply to reconnect the store — so name the scope and say so. */
-function missingScope(err) {
+function missingScope(err, fallback = "") {
   const msg = typeof err === "string" ? err : JSON.stringify(err ?? "");
-  return /merchant approval for (\w+) scope/i.exec(msg)?.[1] || "";
+  const named = /merchant approval for (\w+) scope/i.exec(msg)?.[1];
+  if (named) return named;
+  // Not every store names the scope — some answer the same cause with a bare
+  // permission error, so the caller says which scope it was reaching for.
+  return /merchant approval|access denied|read_customers|write_customers/i.test(msg) ? fallback : "";
 }
 const scopeErrorBody = (scope, what) => ({
   error: `This store's Shopify token doesn't grant ${scope}, so ${what}. Reconnect the store in Listing Manager → Earth Ed. to grant it (the Shopify app also needs protected customer data access approved).`,
@@ -410,7 +428,9 @@ export default async function handler(req, res) {
     // Requesting scopes the app lacks fails the authorize, so these stay in step with each
     // app's configured scopes — Earth mirrors the Stock module's own ERP-2 connect button
     // (EARTH_SCOPES), which is the same app and already asks for the customer scopes the
-    // Omnisend approvals screen needs. Atyahara is a different app and is left alone.
+    // Omnisend approvals screen needs, so both buttons mint interchangeable tokens. Those
+    // are protected customer data, so the ERP-2 app must also have them enabled in the
+    // Partner Dashboard. Atyahara is a different app and is left alone.
     const isEarth = store_key === "earth";
     const scope = isEarth ? EARTH_SCOPES : "read_products,write_products,read_orders,read_all_orders";
     const redirect = `${REDIRECT_BASE}${isEarth ? "/api/shopify-auth" : "/api/shopify"}`;
@@ -432,7 +452,7 @@ export default async function handler(req, res) {
     if (body.query) qs.set("query", String(body.query));
     const result = await shopifyGetAll(sr, `/customers.json?${qs.toString()}`, "customers");
     if (!result.ok) {
-      const scope = missingScope(result.error);
+      const scope = missingScope(result.error, "read_customers");
       if (scope) return res.status(403).json(scopeErrorBody(scope, "the customer list can't be read"));
       return res.status(400).json({ error: result.error });
     }
@@ -465,7 +485,7 @@ export default async function handler(req, res) {
     // Shopify replaces the whole tag string, so read first and merge.
     const cur = await sr("GET", `/customers/${encodeURIComponent(id)}.json?fields=id,email,tags`);
     if (!cur.ok) {
-      const scope = missingScope(cur.error);
+      const scope = missingScope(cur.error, "read_customers");
       if (scope) return res.status(403).json(scopeErrorBody(scope, "the tag can't be written"));
       return res.status(cur.status || 400).json({ error: cur.error || "Customer not found" });
     }
@@ -476,7 +496,7 @@ export default async function handler(req, res) {
 
     const r = await sr("PUT", `/customers/${encodeURIComponent(id)}.json`, { customer: { id, tags: merged.join(", ") } });
     if (!r.ok) {
-      const scope = missingScope(r.error);
+      const scope = missingScope(r.error, "write_customers");
       if (scope) return res.status(403).json(scopeErrorBody(scope, "the tag can't be written"));
       return res.status(r.status || 400).json({ error: r.error });
     }
@@ -662,6 +682,24 @@ export default async function handler(req, res) {
     return res.json({ success: true, deleted: results.filter(r => r.ok).length, total: ids.length, results });
   }
 
+  /* The store's sections, for picking where a push should land. Titles only —
+     list_products also returns collections, but pulling the whole catalog to
+     populate a dropdown is a poor trade. */
+  if (action === "collections") {
+    const [custom, smart] = await Promise.all([
+      shopifyGetAll(sr, "/custom_collections.json?limit=250&fields=id,title,handle", "custom_collections"),
+      shopifyGetAll(sr, "/smart_collections.json?limit=250&fields=id,title,handle", "smart_collections"),
+    ]);
+    if (!custom.ok && !smart.ok) return res.status(400).json({ error: custom.error || smart.error });
+    const rows = [
+      ...(custom.ok ? (custom.rows || []).map(c => ({ ...c, smart: false })) : []),
+      ...(smart.ok ? (smart.rows || []).map(c => ({ ...c, smart: true })) : []),
+    ].map(c => ({ id: String(c.id), title: c.title || "", handle: c.handle || "", smart: !!c.smart }))
+     .filter(c => c.title)
+     .sort((a, b) => a.title.localeCompare(b.title));
+    return res.json({ success: true, collections: rows });
+  }
+
   if (action === "add_to_deals" || action === "remove_from_deals") {
     // Add/remove existing products to the store's "Deals" collection (the daily-deals
     // section). Used by the ERP store view's "Add to Deals" flow + the expiry popup.
@@ -805,6 +843,12 @@ export default async function handler(req, res) {
 
   if (!item) return res.status(400).json({ error: "item required" });
 
+  /* Which storefront section this push is for. Deals is the default because that
+     is what ready stock is pushed for nearly every time; `section: ""` is an
+     explicit "no section", which also means no section tag. Older clients that
+     send nothing keep the Deals behaviour they were written against. */
+  const sectionTitle = body.section === undefined ? "Deals" : String(body.section || "").trim();
+
   // Title: stock pushes should read "Stone Shape - kg pcs"; AI may clean
   // capitalization/wording, but exact quantities come from stock.
   const requestedTitle = shopifyName || fallbackShopifyTitle(item);
@@ -814,14 +858,24 @@ export default async function handler(req, res) {
   const ai = await generateAIContent(item, requestedTitle, availStr);
   const title = ai?.shopifyTitle || requestedTitle;
 
-  // Tags: AI tags merged with structured tags
+  /* Tags: AI tags merged with structured tags, plus the section's own tag.
+
+     A product pushed into a storefront section should say so on itself: the
+     collection is invisible to automated collections, theme badges and discount
+     rules, which all read tags. Which section that is belongs to the caller —
+     Deals for ready stock, Flatstones for a flatstone — and a push aimed at no
+     section adds no tag. Case-folded against the existing tags so a card already
+     carrying "Deals" doesn't end up with both. */
   const baseTags = [
     item.shape, item.grade, item.origin, item.productType,
     ...(Array.isArray(item.market) ? item.market : [item.market].filter(Boolean)),
     ...(item.tags || []),
   ].filter(Boolean);
   const aiTags = ai?.tags ? ai.tags.split(",").map(t => t.trim()).filter(Boolean) : [];
-  const tags = [...new Set([...baseTags, ...aiTags])].join(", ");
+  const merged = [...new Set([...baseTags, ...aiTags])];
+  const sectionTag = sectionTitle ? (String(body.sectionTag || "").trim().toLowerCase() || sectionTagOf(sectionTitle)) : "";
+  if (sectionTag && !merged.some(t => String(t).trim().toLowerCase() === sectionTag)) merged.push(sectionTag);
+  const tags = merged.join(", ");
 
   // Description
   const descParts = [];
@@ -845,6 +899,37 @@ export default async function handler(req, res) {
     : item.qty;
   const qty = Math.max(0, parseInt(inventorySource) || 0);
 
+  /* Part-lot variants. The client computes them (lib/lotPricing.js) so the modal
+     preview and what gets published are the same numbers; here they are only
+     mapped onto Shopify's option/variant shape. One variant is not a variant set —
+     a lone "full lot" stays the plain single-variant product it has always been. */
+  const lotVariants = (Array.isArray(body.lotVariants) ? body.lotVariants : [])
+    .filter(v => v && String(v.title || "").trim());
+  const useVariants = lotVariants.length > 1;
+  const variantSku = v => `${item.sku || item.id}${v.key ? `-${v.key}` : ""}`;
+  const variantQty = v => Math.max(0, parseInt(v.inventory) || 1);
+  const buildVariantPayload = (v, extra = {}) => ({
+    option1: String(v.title),
+    sku: variantSku(v),
+    ...(v.price ? { price: String(v.price) } : price ? { price: String(price) } : {}),
+    ...extra,
+  });
+  // Every variant that came back, levelled to what the card says it holds.
+  const setVariantInventory = async (product, want) => {
+    try {
+      const locResult = await sr("GET", "/locations.json");
+      if (!locResult.ok || !locResult.data.locations?.length) return;
+      const locationId = locResult.data.locations[0].id;
+      for (const v of product.variants || []) {
+        const inventory_item_id = v.inventory_item_id;
+        if (!inventory_item_id) continue;
+        const match = useVariants ? want.find(w => String(w.title) === String(v.option1)) : null;
+        const available = useVariants ? (match ? variantQty(match) : 0) : qty;
+        await sr("POST", "/inventory_levels/set.json", { location_id: locationId, inventory_item_id, available });
+      }
+    } catch (_) {}
+  };
+
   if (action === "delete") {
     const productId = item.shopifyProductId;
     if (!productId) return res.status(400).json({ error: "No shopifyProductId" });
@@ -862,13 +947,20 @@ export default async function handler(req, res) {
         product_type: item.productType || "Crystal",
         tags,
         status: "active",
-        variants: [{
-          sku: item.sku || item.id,
-          inventory_management: "shopify",
-          inventory_policy: "deny",
-          inventory_quantity: qty,
-          ...(price ? { price: String(price) } : {}),
-        }],
+        ...(useVariants ? { options: [{ name: "Lot size" }] } : {}),
+        variants: useVariants
+          ? lotVariants.map(v => buildVariantPayload(v, {
+              inventory_management: "shopify",
+              inventory_policy: "deny",
+              inventory_quantity: variantQty(v),
+            }))
+          : [{
+              sku: item.sku || item.id,
+              inventory_management: "shopify",
+              inventory_policy: "deny",
+              inventory_quantity: qty,
+              ...(price ? { price: String(price) } : {}),
+            }],
       },
     };
 
@@ -878,20 +970,7 @@ export default async function handler(req, res) {
     const product = result.data.product;
 
     // Set inventory quantity (requires location)
-    try {
-      const locResult = await sr("GET", "/locations.json");
-      if (locResult.ok && locResult.data.locations?.length) {
-        const locationId = locResult.data.locations[0].id;
-        const variantId = product.variants[0]?.inventory_item_id;
-        if (variantId) {
-          await sr("POST", "/inventory_levels/set.json", {
-            location_id: locationId,
-            inventory_item_id: variantId,
-            available: qty,
-          });
-        }
-      }
-    } catch (_) {}
+    await setVariantInventory(product, lotVariants);
 
     // Upload photo + video, set SEO + metafields
     await uploadPhoto(sr, product.id, item);
@@ -899,7 +978,7 @@ export default async function handler(req, res) {
     if (item.video) { try { await pushVideo(SHOP, TOKEN, product.id, item.video); } catch(e) { videoOk = false; videoErr = e.message; } }
     const [, dealRes] = await Promise.all([
       applySEOAndMeta(SHOP, TOKEN, product.id, seoTitle, seoDesc, item),
-      addToDealsCollection(SHOP, TOKEN, product.id),
+      sectionTitle ? addToCollection(SHOP, TOKEN, product.id, sectionTitle) : Promise.resolve(null),
     ]);
 
     return res.json({
@@ -911,6 +990,10 @@ export default async function handler(req, res) {
       storefrontUrl: product.handle ? `https://${SHOP}/products/${product.handle}` : "",
       dealAdded: !!dealRes?.ok,
       dealError: dealRes?.ok ? undefined : dealRes?.error,
+      section: sectionTitle || "",
+      sectionTag,
+      // A smart collection can't be joined directly — the tag is what lands it there.
+      sectionSmart: !!dealRes?.smart,
       videoQueued: videoOk && !!item.video,
       videoErr: videoErr || undefined,
     });
@@ -919,6 +1002,21 @@ export default async function handler(req, res) {
     // Update existing product
     const productId = item.shopifyProductId;
 
+    /* A variant sent without its id is a new variant, and the ones left out are
+       deleted — which would break every cart and order link on a re-push. So the
+       existing set is read first and matched by option value, and only genuinely
+       new sizes arrive without an id. */
+    let existingVariants = [];
+    if (useVariants) {
+      const got = await sr("GET", `/products/${encodeURIComponent(productId)}.json?fields=id,variants`);
+      if (got.ok) existingVariants = got.data?.product?.variants || [];
+    }
+    const carryId = v => {
+      const hit = existingVariants.find(e => String(e.option1) === String(v.title))
+        || existingVariants.find(e => String(e.sku) === variantSku(v));
+      return hit?.id ? { id: hit.id } : {};
+    };
+
     const updatePayload = {
       product: {
         id: productId,
@@ -926,11 +1024,14 @@ export default async function handler(req, res) {
         body_html: bodyHtml,
         product_type: item.productType || "Crystal",
         tags,
-        variants: [{
-          sku: item.sku || item.id,
-          inventory_quantity: qty,
-          ...(price ? { price: String(price) } : {}),
-        }],
+        ...(useVariants ? { options: [{ name: "Lot size" }] } : {}),
+        variants: useVariants
+          ? lotVariants.map(v => buildVariantPayload(v, carryId(v)))
+          : [{
+              sku: item.sku || item.id,
+              inventory_quantity: qty,
+              ...(price ? { price: String(price) } : {}),
+            }],
       },
     };
 
@@ -940,20 +1041,7 @@ export default async function handler(req, res) {
     const product = result.data.product;
 
     // Update inventory
-    try {
-      const locResult = await sr("GET", "/locations.json");
-      if (locResult.ok && locResult.data.locations?.length) {
-        const locationId = locResult.data.locations[0].id;
-        const variantInventoryItemId = product.variants[0]?.inventory_item_id;
-        if (variantInventoryItemId) {
-          await sr("POST", "/inventory_levels/set.json", {
-            location_id: locationId,
-            inventory_item_id: variantInventoryItemId,
-            available: qty,
-          });
-        }
-      }
-    } catch (_) {}
+    await setVariantInventory(product, lotVariants);
 
     // Upload photo + video, set SEO + metafields
     await uploadPhoto(sr, productId, item);
@@ -961,7 +1049,7 @@ export default async function handler(req, res) {
     if (item.video) { try { await pushVideo(SHOP, TOKEN, productId, item.video); } catch(e) { videoOk2 = false; videoErr2 = e.message; } }
     const [, dealRes2] = await Promise.all([
       applySEOAndMeta(SHOP, TOKEN, productId, seoTitle, seoDesc, item),
-      addToDealsCollection(SHOP, TOKEN, productId),
+      sectionTitle ? addToCollection(SHOP, TOKEN, productId, sectionTitle) : Promise.resolve(null),
     ]);
 
     return res.json({
@@ -973,6 +1061,10 @@ export default async function handler(req, res) {
       storefrontUrl: product.handle ? `https://${SHOP}/products/${product.handle}` : "",
       dealAdded: !!dealRes2?.ok,
       dealError: dealRes2?.ok ? undefined : dealRes2?.error,
+      section: sectionTitle || "",
+      sectionTag,
+      // A smart collection can't be joined directly — the tag is what lands it there.
+      sectionSmart: !!dealRes2?.smart,
       videoQueued: videoOk2 && !!item.video,
       videoErr: videoErr2 || undefined,
     });

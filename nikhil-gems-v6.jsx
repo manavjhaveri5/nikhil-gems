@@ -9,7 +9,7 @@ const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BI
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
 import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
-import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
+import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, lotQtyPairs, lotBasisFor, LOT_RATE_BASES, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
@@ -40,6 +40,67 @@ const stockPhotos=item=>{
 };
 const stockCover=item=>stockPhotos(item)[0]||"";
 const thumbUrl=(url)=>url||"";
+/* ── Stock card colours ───────────────────────────────────────────────────────
+   Where a piece has gone, read off the grid without opening anything: each card
+   wears a ribbon in the colours of every destination it belongs to.
+
+     Etsy            orange, the same orange as its badge
+     eBay            grey
+     Denver, Tucson  the US flag
+     Japan shows     the Japanese flag — white with the red disc
+
+   Listed on Etsy and eBay both, the ribbon is orange then grey; set aside for
+   Tucson as well and the flag joins on the end. So an item doing everything
+   looks like it, and nothing has to win a fight over one colour.
+
+   Two different facts feed this, and the ribbon keeps them apart rather than
+   flattening them. A market is a plan — where the piece is meant to go. A
+   posted flag is a fact — it is live there now. So:
+
+     solid segment    it is there: listed on Etsy, listed on eBay, packed for
+                      the show. Nothing left to do.
+     candy stripe     it is only intended: market says Etsy/Online but no
+                      listing exists yet. A striped card is a to-do.
+
+   Shows have no "posted" flag of their own — setting the market is what putting
+   a piece aside for Tucson means — so they read solid. If a packed/shipped flag
+   ever lands on shows, it drops into the same two states without redrawing any
+   of this.
+
+   The first destination also washes the card in a few percent of its colour and
+   rings it in a hairline of the same — fainter when everything is still a plan.
+   That wash is what makes the grid scannable at arm's length; keeping it that
+   faint is what stops it becoming a bag of sweets. */
+const hexA=(hex,a)=>{
+  const h=String(hex).replace("#","");
+  const n=parseInt(h.length===3?h.split("").map(c=>c+c).join(""):h,16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+};
+/* `bg` is what the ribbon segment paints. Stripes are hard-stopped so they read
+   as a flag rather than a smear; Japan is a radial stop, which is the disc. */
+const STOCK_FLAGS=[
+  {key:"etsy", label:"Etsy",           lead:"#F56400", bg:"#F56400"},
+  {key:"ebay", label:"eBay",           lead:"#8A8F98", bg:"#8A8F98"},
+  {key:"usa",  label:"Denver / Tucson",lead:"#B22234", bg:"linear-gradient(90deg,#B22234 0 33.33%,#FFFFFF 33.33% 66.66%,#3C3B6E 66.66% 100%)"},
+  {key:"japan",label:"Japan show",     lead:"#BC002D", bg:"radial-gradient(circle at 50% 50%,#BC002D 0 42%,#FFFFFF 43% 100%)"},
+];
+/* Planned, not done: the same hue laid down as a soft diagonal candy stripe. */
+const stockStripe=lead=>`repeating-linear-gradient(45deg,${hexA(lead,.5)} 0 3px,${hexA(lead,.13)} 3px 6px)`;
+const stockFlags=s=>{
+  const mkts=(Array.isArray(s?.market)?s.market:[s?.market]).filter(Boolean).map(m=>String(m).toLowerCase());
+  // The show can be recorded as a market or typed into the show tag — match both,
+  // so "Tucson 2027" in the tag colours the card the same as the market does.
+  const tag=String(s?.showTag||"").toLowerCase();
+  const at=re=>mkts.some(m=>re.test(m))||re.test(tag);
+  const st={};
+  // Etsy/Online is one market covering the web channels, so it can only ever mean
+  // "meant to go online" — the listing itself is what makes it solid.
+  if(s?.postedEtsy) st.etsy="live"; else if(at(/etsy|online/)) st.etsy="planned";
+  if(s?.postedEbay) st.ebay="live";
+  if(at(/tucson|denver/)) st.usa="live";
+  if(at(/japan|tokyo|osaka/)) st.japan="live";
+  return STOCK_FLAGS.filter(f=>st[f.key]).map(f=>({...f,live:st[f.key]==="live"}));
+};
 const fmtStockQtyValue=v=>{
   if(v===undefined||v===null||v==="")return"";
   const n=Number(v);
@@ -1393,7 +1454,11 @@ function Shell({title,crumb,onHome,onBack,actions,children}){
         </div>
         <div style={{flex:1}}/><div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>{canSwitchLang&&<button onClick={()=>setLang(lang==="en"?"mr":"en")} title={lang==="en"?"Switch to Marathi":"English वर जा"} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:12,cursor:"pointer",lineHeight:1,minHeight:mob?36:32,fontFamily:"inherit",color:C.inkMid,fontWeight:600}}>{lang==="en"?"मराठी":"EN"}</button>}<button onClick={toggleDark} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"4px 8px":"5px 12px",fontSize:14,cursor:"pointer",lineHeight:1,minHeight:mob?36:32}}>{dark?"☀️":"🌙"}</button>{actions}</div>
       </div>
-      <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":132,maxWidth:1240,margin:"0 auto",animation:"slideIn .18s ease",overflowX:"auto"}}>{children}</div>
+      {/* fadeIn, not slideIn: a transform on this wrapper makes it the containing
+          block for every position:fixed modal inside it, so "inset:0" became the
+          page's height rather than the screen's and tall modals ran off the bottom
+          with their buttons unreachable. Opacity alone creates no such block. */}
+      <div style={{padding:mob?"14px 12px":"22px 28px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":132,maxWidth:1240,margin:"0 auto",animation:"fadeIn .18s ease",overflowX:"auto"}}>{children}</div>
     </div>
   );
 }
@@ -6141,15 +6206,10 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [fqVendor,setFqVendor]=useState("");
   const filterBarRef=useRef();
   const [sortBy,setSortBy]=useState("date");const [aiTagging,setAiTagging]=useState(false);const [toast,setToast]=useState("");const [selected,setSelected]=useState(null);const [loaded,setLoaded]=useState(()=>readCache(KEYS.stock)!==null);const [selectMode,setSelectMode]=useState(false);const [selectedIds,setSelectedIds]=useState(new Set());const [accSelectMode,setAccSelectMode]=useState(false);const [accSelectedIds,setAccSelectedIds]=useState(new Set());
-  const PAGE_SIZE=36;
-  const [visibleCount,setVisibleCount]=useState(PAGE_SIZE);
-  const [sentinelEl,setSentinelEl]=useState(null);
-  useEffect(()=>{
-    if(!sentinelEl)return;
-    const obs=new IntersectionObserver(entries=>{if(entries[0].isIntersecting)setVisibleCount(c=>c+PAGE_SIZE);},{rootMargin:"400px"});
-    obs.observe(sentinelEl);
-    return()=>obs.disconnect();
-  },[sentinelEl]);
+  const PAGE_SIZES=[24,36,60,120];
+  // Page size sticks per browser — most people settle on one density and keep it.
+  const [pageSize,setPageSize]=useState(()=>{const v=+localStorage.getItem("ng.stock.pageSize");return PAGE_SIZES.includes(v)?v:36;});
+  const [page,setPage]=useState(1);
   const [qtyFilter,setQtyFilter]=useState("in-stock"); // "in-stock" | "all" | "sold"
   const [summaryOpen,setSummaryOpen]=useState(false);
   const [summaryDate,setSummaryDate]=useState(today());
@@ -6199,7 +6259,22 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [shopifyStoreInput,setShopifyStoreInput]=useState("");
   const [shopifyTokenInput,setShopifyTokenInput]=useState("");
   const [shopifyModal,setShopifyModal]=useState(null); // {name,price,creds}
-  const [bulkShopify,setBulkShopify]=useState(null); // bulk push: {items,connected,storeKey,deal,running,done,results}
+  const [bulkShopify,setBulkShopify]=useState(null); // bulk push: {items,connected,storeKey,deal,running,done,results,hidden}
+  const [bulkPrice,setBulkPrice]=useState(null); // bulk pricing: {mode,unit,rate,flat,keepRate}
+  /* Which storefront section a push lands in, and therefore which tag it carries.
+     Deals is the default because ready stock is what this button is usually for,
+     but a flatstone belongs in Flatstones — so the sections are read off the store
+     and offered. Cached for the session; a shop's sections rarely change mid-push. */
+  const [collections,setCollections]=useState([]);
+  const loadCollections=async creds=>{
+    if(!creds?.store||!creds?.token||collections.length)return;
+    try{
+      const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"collections",shopStore:creds.store,shopToken:creds.token})});
+      const d=await r.json();
+      if(r.ok&&Array.isArray(d.collections))setCollections(d.collections);
+    }catch{}
+  };
   const [bulkEditFields,setBulkEditFields]=useState({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});
   const [formQueue,setFormQueue]=useState([]); // items queued in multi-add mode
   const [customsDescs,setCustomsDescs]=useState([]);
@@ -6313,7 +6388,6 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const saveBulkItems=async items=>{const list=[...items,...stock];setStock(list);try{await saveStockK(list);showToast(items.length+" items added");logActivity({user:"Admin",action:"created",module:"stock",label:`Bulk added ${items.length} stock item${items.length>1?"s":""}`,targetId:items[0]?.id,targetMod:"stock"});}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
   const saveAccItem=async item=>{const list=[item,...accStock.filter(x=>x.id!==item.id)];setAccStock(list);await saveK(KEYS.accStock,list);showToast("Accounting entry saved");setForm(null);};
   const del=async id=>{const item=stock.find(x=>x.id===id);const list=stock.filter(x=>x.id!==id);setStock(list);try{await saveStockK(list,{deletedIds:[id]});logActivity({user:"Admin",action:"deleted",module:"stock",label:`Deleted: ${item?.material||"item"}${item?.shape?" "+item.shape:""}`,targetMod:"stock"});}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}};
-  const getShowRegion=show=>{const t=((show.city||"")+" "+(show.name||"")).toLowerCase();if(/japan|tokyo|osaka|kyoto|ikebukuro|nagoya/.test(t))return"Japan";if(/usa|america|denver|tucson|arizona/.test(t))return"USA";if(/europe|germany|munich|france|paris|italy|spain/.test(t))return"Europe";return"India";};
   const REGION_CFG={India:{label:"India",flag:"🇮🇳",color:"#9A6200",bg:"#FDF8ED",border:"#E8C878",currency:"INR"},Japan:{label:"Japan",flag:"🇯🇵",color:"#C0392B",bg:"#FFF5F5",border:"#F5C6C6",currency:"JPY"},USA:{label:"USA",flag:"🇺🇸",color:"#1D4ED8",bg:"#EFF6FF",border:"#BFDBFE",currency:"USD"},Europe:{label:"Europe",flag:"🇪🇺",color:"#059669",bg:"#F0FDF4",border:"#A7F3D0",currency:"EUR"}};
   const sendToShow=async(showId,ids,stockOverride)=>{if(!ids.size||!showId)return;const show=shows.find(s=>s.id===showId);if(!show)return;const region=getShowRegion(show);const showTag=show.name;const base=stockOverride||stock;
     const liveMatches=await findLiveListingsForStock(base.filter(s=>ids.has(s.id)),base);
@@ -6636,6 +6710,64 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
   const videoXhrRef=useRef(null);
   const pendingVideoSaveRef=useRef(null); // {itemId} set when user saves while video still uploading
   const setFormPhotoList=(photos,extra={})=>setForm(f=>{const clean=photos.filter(Boolean);return{...f,photos:clean,photo:clean[0]||"",photographed:clean.length>0?true:!!f.photographed,...extra};});
+  /* Photo picker. The same parcel is shot once and then keeps turning up — a fresh
+     Rhodonite lot, a re-cut of stock already photographed — so re-uploading the
+     same file is wasted work. Two sources are offered: the Image Library module
+     (the real shoot archive) and photos already sitting on other stock cards.
+     Blob URLs are skipped; they belong to an in-flight upload on this tab and are
+     dead on the next load. Videos are the video field's business, not this one. */
+  const IMAGE_LIBRARY_KEY="ng-image-library-v1";
+  const [photoLibrary,setPhotoLibrary]=useState(null); // {q, src, sel:string[]} when open
+  const [libraryEntries,setLibraryEntries]=useState(()=>readCache(IMAGE_LIBRARY_KEY)||[]);
+  useEffect(()=>{loadK(IMAGE_LIBRARY_KEY).then(d=>{if(Array.isArray(d))setLibraryEntries(d);}).catch(()=>{});},[]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(IMAGE_LIBRARY_KEY))loadK(IMAGE_LIBRARY_KEY).then(d=>{if(Array.isArray(d))setLibraryEntries(d);}).catch(()=>{});}),[]);
+  const photoLibraryImages=useMemo(()=>{
+    const seen=new Set();
+    const out=[];
+    const push=(url,entry)=>{
+      if(!url||url.startsWith("blob:")||seen.has(url))return;
+      if(/\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(url))return;
+      seen.add(url);
+      out.push({url,...entry});
+    };
+    for(const im of libraryEntries){
+      if(im?.mediaType==="video")continue;
+      push(im?.imageUrl,{
+        src:"library",
+        label:[im?.name,im?.category].filter(Boolean).join(" · ")||"Untitled",
+        sub:im?.notes||"Image Library",
+        hay:`${im?.name||""} ${im?.category||""} ${im?.notes||""}`,
+      });
+    }
+    for(const s of stock){
+      for(const url of stockPhotos(s)){
+        push(url,{
+          src:"stock",
+          label:[s.material,s.shape].filter(Boolean).join(" · ")||"Untitled",
+          sub:[s.sku,s.location&&`🗄 ${s.location}`,s.size].filter(Boolean).join(" · "),
+          hay:`${s.material||""} ${s.shape||""} ${s.sku||""} ${s.location||""} ${s.productType||""} ${s.origin||""}`,
+        });
+      }
+    }
+    return out;
+  },[libraryEntries,stock]);
+  const openPhotoLibrary=()=>{
+    setPhotoLibrary({q:form?.material||"",src:"all",sel:[]});
+    // Photos get filed from Listing Manager and from other machines, so the moment
+    // the picker opens is the moment to go and look rather than trust what was
+    // loaded when this screen mounted.
+    loadKFresh(IMAGE_LIBRARY_KEY).then(d=>{if(Array.isArray(d))setLibraryEntries(d);}).catch(()=>{});
+  };
+  const addPhotosFromLibrary=()=>{
+    const picked=(photoLibrary?.sel||[]).filter(Boolean);
+    if(!picked.length){setPhotoLibrary(null);return;}
+    const existing=stockPhotos(form);
+    // Already on this card is a no-op, not a duplicate tile.
+    const fresh=picked.filter(u=>!existing.includes(u));
+    setFormPhotoList([...existing,...fresh]);
+    setPhotoLibrary(null);
+    showToast(fresh.length?`✓ Added ${fresh.length} photo${fresh.length!==1?"s":""} from the library`:"Already on this item");
+  };
   const addStockPhotoFiles=async files=>{
     const picked=Array.from(files||[]).filter(Boolean);
     if(!picked.length)return;
@@ -6724,9 +6856,18 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     if(act==null&&bct==null)return 0;if(act==null)return 1;if(bct==null)return -1;
     return bct-act;
   }),[stock,search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
-  // Reset page whenever the filtered set changes so we don't show a stale "Load more" offset
-  useEffect(()=>{setVisibleCount(PAGE_SIZE);},[filtered]);
-  const visibleStock=filtered.slice(0,visibleCount);
+  /* Reset to page 1 when the *criteria* change — not when `filtered` changes
+     identity. A background refresh of `stock` rebuilds that memo every time,
+     which would yank you back to page 1 mid-browse. Out-of-range pages are
+     handled by the curPage clamp below instead. */
+  useEffect(()=>{setPage(1);},[search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
+  const changePageSize=n=>{setPageSize(n);setPage(1);try{localStorage.setItem("ng.stock.pageSize",String(n));}catch{}window.scrollTo({top:0,behavior:"smooth"});};
+  const pageCount=Math.max(1,Math.ceil(filtered.length/pageSize));
+  const curPage=Math.min(page,pageCount);
+  const pageStart=(curPage-1)*pageSize;
+  const visibleStock=filtered.slice(pageStart,pageStart+pageSize);
+  // Jumping pages should put you at the top of the new page, not mid-grid.
+  const goPage=n=>{const t=Math.min(Math.max(1,n),pageCount);setPage(t);window.scrollTo({top:0,behavior:"smooth"});};
   const stones=useMemo(()=>[...new Set(stock.map(s=>s.material).filter(Boolean))].sort(),[stock]);
   const shapes=useMemo(()=>[...new Set(stock.map(s=>s.shape).filter(Boolean))].sort(),[stock]);
   const markets=useMemo(()=>[...new Set(stock.flatMap(s=>Array.isArray(s.market)?s.market:[s.market||""]).filter(m=>m&&m!=="Unassigned"))].sort(),[stock]);
@@ -6814,7 +6955,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
      because Shopify rejects a product without one. */
   const runBulkShopifyPush=async()=>{
     if(!bulkShopify)return;
-    const{items,connected,storeKey,deal}=bulkShopify;
+    const{items,connected,storeKey,deal,section}=bulkShopify;
     const creds=connected?.[storeKey];
     if(!creds){setBulkShopify(b=>({...b,error:"That store isn't connected"}));return;}
     setBulkShopify(b=>({...b,running:true,error:"",results:[]}));
@@ -6831,7 +6972,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       try{
         const res=await fetch("/api/shopify",{
           method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({action:item.shopifyProductId?"update":"create",item,shopStore:creds.store,shopToken:creds.token,shopifyName:name,shopifyPrice:price}),
+          body:JSON.stringify({action:item.shopifyProductId?"update":"create",item,shopStore:creds.store,shopToken:creds.token,shopifyName:name,shopifyPrice:price,section}),
         });
         const d=await res.json();
         if(!res.ok)throw new Error(d.error||"Shopify error");
@@ -6857,7 +6998,47 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     logActivity({user:"Admin",action:"pushed",module:"stock",label:`Bulk pushed ${okN} item${okN!==1?"s":""} to Shopify`,targetMod:"stock"});
   };
 
+  /* Bulk pricing. A rate is the useful form for lots — one number ("$20/pc",
+     "₹800/kg") turned into each card's own total against its own size, which is
+     what the cards already display. A flat price is offered too for the case
+     where the selection is a set of like-for-like pieces.
+
+     Keeping the rate writes the lot basis onto the card, so as pieces sell the
+     price re-derives from what is left instead of freezing at today's total. */
+  const bulkPriceRows=()=>{
+    if(!bulkPrice)return[];
+    const sel=stock.filter(s=>selectedIds.has(s.id));
+    const rate=+bulkPrice.rate||0,flat=+bulkPrice.flat||0;
+    return sel.map(s=>{
+      const qty=bulkPrice.unit==="pcs"?resolveLotPcs(s):resolveLotKg(s);
+      const price=bulkPrice.mode==="flat"?flat:(qty!=null&&qty>0?Math.round(rate*qty*100)/100:null);
+      return{item:s,qty,price};
+    });
+  };
+  const applyBulkPrice=async()=>{
+    const rows=bulkPriceRows().filter(r=>r.price!=null&&r.price>0);
+    if(!rows.length){showToast("Nothing to price — those cards have no quantity in that unit");return;}
+    const basis=LOT_RATE_BASES.find(b=>b.unit===bulkPrice.unit)||LOT_RATE_BASES[0];
+    const byId=new Map(rows.map(r=>[r.item.id,r]));
+    const upd=stock.map(s=>{
+      const r=byId.get(s.id);
+      if(!r)return s;
+      const keep=bulkPrice.mode==="rate"&&bulkPrice.keepRate;
+      return{...s,listPrice:String(r.price),
+        ...(keep?{pricingMode:basis.mode,[basis.field]:String(+bulkPrice.rate),lotMinPrice:s.lotMinPrice||"25"}:{}),
+        updatedAt:new Date().toISOString()};
+    });
+    setStock(upd);
+    try{await saveStockK(upd);}catch(e){showToast("⚠ Priced, but saving failed: "+e.message);return;}
+    setBulkPrice(null);
+    showToast(`✓ Priced ${rows.length} item${rows.length!==1?"s":""}`);
+    logActivity({user:"Admin",action:"edited",module:"stock",label:`Bulk priced ${rows.length} item${rows.length!==1?"s":""}`,targetMod:"stock"});
+  };
+
   const openBulkShopify=async()=>{
+    // A batch already running owns the queue — bring it back up rather than
+    // starting a second one against the same store.
+    if(bulkShopify?.running){setBulkShopify(b=>({...b,hidden:false}));return;}
     const sel=stock.filter(s=>selectedIds.has(s.id));
     if(!sel.length)return;
     const connected=await loadShopifyCreds();
@@ -6865,10 +7046,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     if(!keys.length){setShopifyStoreInput("");setShopifyTokenInput("");setShopifySetup(true);return;}
     const preferred=localStorage.getItem("ng-shopify-last-store");
     const storeKey=connected[preferred]?preferred:(connected.earth?"earth":keys[0]);
-    setBulkShopify({items:sel,connected,storeKey,deal:{enabled:true,days:7,customDate:""},running:false,done:false,results:[],error:""});
+    setBulkShopify({items:sel,connected,storeKey,deal:{enabled:true,days:7,customDate:""},section:DEFAULT_SECTION,running:false,done:false,results:[],error:""});
+    loadCollections(connected[storeKey]);
   };
 
-  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal,keepRate)=>{
+  const doPush=async(creds,customName,customPrice,itemOverride,storeKey,deal,keepRate,lotVariants,section=DEFAULT_SECTION)=>{
     setShopifyPushing(true);
     const rawItem=itemOverride||selected;
     /* A product id only exists on the store it was created against. If this push
@@ -6881,7 +7063,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       if(!creds?.store||!creds?.token)throw new Error("Shopify isn't connected — tap reconnect and authorise the store");
       const res=await fetch("/api/shopify",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice}),
+        body:JSON.stringify({action:itemToPush?.shopifyProductId?"update":"create",item:itemToPush,shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[],section}),
       });
       let d=await res.json();
       /* A stored product id survives the product being deleted on Shopify, and
@@ -6890,18 +7072,22 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       if(!res.ok&&itemToPush?.shopifyProductId&&/not found/i.test(String(d.error||""))){
         const again=await fetch("/api/shopify",{
           method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({action:"create",item:{...itemToPush,shopifyProductId:""},shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice}),
+          body:JSON.stringify({action:"create",item:{...itemToPush,shopifyProductId:""},shopStore:creds.store,shopToken:creds.token,shopifyName:pushName,shopifyPrice:customPrice,lotVariants:lotVariants||[],section}),
         });
         const d2=await again.json();
         if(again.ok){d=d2;showToast("Listing was gone on Shopify — created a fresh one");}
         else throw new Error(d2.error||d.error||"Shopify error");
       }else if(!res.ok)throw new Error(d.error||"Shopify error");
-      /* "Keep this rate" is the whole opt-in for weight pricing — derive the rate
-         from the price just entered against the lot's current weight, so there is
-         no second number to type. */
-      const lotKg=resolveLotKg(itemToPush);
-      const lotPatch=keepRate&&lotKg>0&&+customPrice>0
-        ? {pricingMode:"lot_by_weight",pricePerKg:String(Math.round((+customPrice/lotKg)*100)/100),lotMinPrice:itemToPush.lotMinPrice||"25"}
+      /* "Keep this rate" is the whole opt-in for lot pricing — the rate comes from
+         the price just entered against the lot's current size, so there is no second
+         number to type. `keepRate` carries the basis the modal was showing (per kg
+         or per piece); a bare truthy value keeps the original weight behaviour. */
+      const basis=keepRate&&typeof keepRate==="object"
+        ? keepRate
+        : (keepRate?{pricingMode:"lot_by_weight",qty:resolveLotKg(itemToPush)}:null);
+      const basisField=basis?.pricingMode==="lot_by_count"?"pricePerPcs":"pricePerKg";
+      const lotPatch=basis&&basis.qty>0&&+customPrice>0
+        ? {pricingMode:basis.pricingMode,[basisField]:String(Math.round((+customPrice/basis.qty)*100)/100),lotMinPrice:itemToPush.lotMinPrice||"25"}
         : (keepRate===false?{pricingMode:""}:{});
       const upd=stock.map(s=>s.id===itemToPush.id?{...s,...lotPatch,...(itemToPush.qty!=null?{qty:itemToPush.qty}:{}),...(itemToPush.qty2!=null?{qty2:itemToPush.qty2}:{}),shopifyProductId:d.shopifyProductId,postedShopify:true,shopifyStore:storeKey||s.shopifyStore,listPrice:customPrice||s.listPrice,updatedAt:new Date().toISOString()}:s);
       setStock(upd);
@@ -6933,6 +7119,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     }catch(e){showToast("❌ "+e.message);}
     finally{setShopifyPushing(false);}
   };
+  // Ready stock goes to Deals nine times out of ten, so that is what a push opens on.
+  const DEFAULT_SECTION="Deals";
   // Shopify creds live in per-store slots (ng-shopify-creds-earth / -atyahara).
   // The OAuth callback deliberately stopped writing the shared legacy slot, because
   // reconnecting one store clobbered the other's token there — but this screen was
@@ -6980,11 +7168,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const owned=resolveItemStore(selected,connected);
     const storeKey=owned||(connected[preferred]?preferred:(connected.earth?"earth":keys[0]));
     const autoName=stockShopifyTitle(selected);
-    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""},keepRate:isLotCard(selected)});
+    setShopifyModal({name:autoName,price:selected.listPrice||"",connected,storeKey,creds:connected[storeKey],deal:{enabled:true,days:7,customDate:""},section:DEFAULT_SECTION,keepRate:isLotCard(selected),splits:["full"],nameEdited:false});
+    loadCollections(connected[storeKey]);
   };
   const confirmShopifyPush=async()=>{
     if(!shopifyModal)return;
-    const{connected,storeKey,name,price,qty,qty2,keepRate}=shopifyModal;
+    const{connected,storeKey,name,price,qty,qty2,keepRate,section}=shopifyModal;
     const creds=connected?.[storeKey]||shopifyModal.creds;
     const overrides={};
     if(qty!=null&&qty!=="")overrides.qty=String(qty);
@@ -6992,7 +7181,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const itemToPush={...(selected||{}),...overrides};
     setShopifyModal(null);
     if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-    await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate);
+    await doPush(creds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate,undefined,section);
   };
   /* Manual lot re-sync. Uses sync_lot, so it touches only description, price and
      publish state — no AI title regeneration, no image churn. Caches the variant
@@ -7237,7 +7426,96 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           </div>
         </div>
       )}
-      {bulkShopify&&(()=>{
+      {bulkPrice&&(()=>{
+        const rows=bulkPriceRows();
+        const priceable=rows.filter(r=>r.price!=null&&r.price>0);
+        const skipped=rows.length-priceable.length;
+        const unitLabel=bulkPrice.unit==="pcs"?"pc":"kg";
+        return(
+        <div onClick={e=>e.target===e.currentTarget&&setBulkPrice(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div style={{background:C.surface,borderRadius:14,width:"min(520px,100%)",maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
+            <div style={{padding:"18px 20px 12px",flexShrink:0}}>
+              <div style={{fontWeight:700,fontSize:15}}>🏷 Set price on {rows.length} item{rows.length!==1?"s":""}</div>
+              <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>Sets the list price — the figure pushed to Shopify, in the store{"'"}s own currency.</div>
+            </div>
+            <div style={{padding:"0 20px",overflowY:"auto",flex:1}}>
+              <div style={{display:"flex",gap:6,marginBottom:12}}>
+                {[["rate","Rate per unit"],["flat","Same price each"]].map(([k,label])=>(
+                  <button key={k} onClick={()=>setBulkPrice(x=>({...x,mode:k}))}
+                    style={{flex:1,background:bulkPrice.mode===k?C.ink:C.card,color:bulkPrice.mode===k?"#fff":C.ink,border:`1px solid ${bulkPrice.mode===k?C.ink:C.border}`,borderRadius:7,padding:"8px 10px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{label}</button>
+                ))}
+              </div>
+
+              {bulkPrice.mode==="rate"?(<>
+                <div style={{display:"flex",gap:8,alignItems:"flex-end",marginBottom:10}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Rate per {unitLabel}</div>
+                    <input type="number" inputMode="decimal" autoFocus value={bulkPrice.rate} onChange={e=>setBulkPrice(x=>({...x,rate:e.target.value}))}
+                      placeholder="800" style={{...FI,width:"100%",boxSizing:"border-box"}}/>
+                  </div>
+                  <div style={{display:"flex",gap:4}}>
+                    {LOT_RATE_BASES.map(bs=>(
+                      <button key={bs.unit} onClick={()=>setBulkPrice(x=>({...x,unit:bs.unit}))}
+                        style={{background:bulkPrice.unit===bs.unit?C.ink:C.card,color:bulkPrice.unit===bs.unit?"#fff":C.ink,border:`1px solid ${bulkPrice.unit===bs.unit?C.ink:C.border}`,borderRadius:7,padding:"9px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>per {bs.label}</button>
+                    ))}
+                  </div>
+                </div>
+                <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",marginBottom:12,background:C.card,borderRadius:8,padding:"9px 11px"}}>
+                  <input type="checkbox" checked={bulkPrice.keepRate} onChange={e=>setBulkPrice(x=>({...x,keepRate:e.target.checked}))}/>
+                  <span style={{fontSize:11.5,color:C.inkMid,lineHeight:1.5}}>Keep this rate on the card — the price re-derives as stock sells down, instead of freezing at today{"'"}s total.</span>
+                </label>
+              </>):(
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>Price for every selected item</div>
+                  <input type="number" inputMode="decimal" autoFocus value={bulkPrice.flat} onChange={e=>setBulkPrice(x=>({...x,flat:e.target.value}))}
+                    placeholder="1950" style={{...FI,width:"100%",boxSizing:"border-box"}}/>
+                </div>
+              )}
+
+              {skipped>0&&bulkPrice.mode==="rate"&&(
+                <div style={{background:C.amberBg,border:`1px solid ${C.amber}66`,borderRadius:9,padding:"9px 11px",marginBottom:12,fontSize:11.5,color:C.amber,fontWeight:600,lineHeight:1.5}}>
+                  {skipped} of these {skipped===1?"has":"have"} no {unitLabel==="pc"?"piece count":"weight"} to price against and will be left alone. Switch the unit, or price {skipped===1?"it":"them"} on its own card.
+                </div>
+              )}
+
+              <div style={{display:"flex",flexDirection:"column",gap:3,marginBottom:14}}>
+                {rows.slice(0,9).map(r=>(
+                  <div key={r.item.id} style={{display:"flex",gap:8,alignItems:"baseline",fontSize:11.5,padding:"5px 8px",borderRadius:6,background:r.price?C.card:"transparent",opacity:r.price?1:.5}}>
+                    <span style={{fontWeight:600,color:C.ink,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.item.material||r.item.name||"—"}</span>
+                    <span className="tnum" style={{color:C.inkFaint,flexShrink:0}}>{r.qty!=null&&r.qty>0?`${+parseFloat(r.qty.toFixed(3))} ${unitLabel}`:"—"}</span>
+                    <span className="tnum" style={{fontWeight:700,color:r.price?C.ink:C.inkFaint,flexShrink:0,minWidth:62,textAlign:"right"}}>{r.price?r.price.toLocaleString("en-US"):"skipped"}</span>
+                  </div>
+                ))}
+                {rows.length>9&&<div style={{fontSize:11,color:C.inkFaint,padding:"2px 8px"}}>…and {rows.length-9} more</div>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,padding:"12px 20px 18px",flexShrink:0,borderTop:`1px solid ${C.border}`}}>
+              <button onClick={applyBulkPrice} disabled={!priceable.length}
+                style={{flex:1,background:priceable.length?C.ink:C.card,color:priceable.length?"#fff":C.inkFaint,border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:priceable.length?"pointer":"default",fontFamily:"inherit"}}>
+                Price {priceable.length} item{priceable.length!==1?"s":""}
+              </button>
+              <button onClick={()=>setBulkPrice(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px",fontSize:13,cursor:"pointer",color:C.inkFaint,fontFamily:"inherit"}}>Cancel</button>
+            </div>
+          </div>
+        </div>);})()}
+
+      {/* Pushed into the background: the loop is a plain async function and keeps
+          running once the modal unmounts, so the chip is the only thing needed to
+          get back to it. It dies with the tab, which is what the wording says. */}
+      {bulkShopify&&bulkShopify.hidden&&(()=>{
+        const b=bulkShopify,failed=b.results.filter(r=>!r.ok).length;
+        return(
+        <div onClick={()=>setBulkShopify(x=>({...x,hidden:false}))}
+          style={{position:"fixed",bottom:mob?86:22,left:22,zIndex:1150,background:C.ink,color:"#fff",borderRadius:10,padding:"10px 15px",display:"flex",alignItems:"center",gap:10,boxShadow:"var(--e-2)",cursor:"pointer",maxWidth:"calc(100vw - 44px)"}}>
+          {b.running&&<span style={{width:12,height:12,border:"2px solid rgba(255,255,255,.3)",borderTopColor:"#fff",borderRadius:"50%",display:"inline-block",animation:"spin .8s linear infinite",flexShrink:0}}/>}
+          <span style={{fontSize:12.5,fontWeight:600}}>
+            {b.running?`Pushing ${b.results.length+1} of ${b.items.length}…`:`${b.results.filter(r=>r.ok).length}/${b.results.length} pushed`}
+          </span>
+          {failed>0&&<span style={{fontSize:11,color:"#FF9C9C"}}>{failed} failed</span>}
+          <span style={{fontSize:11,color:"rgba(255,255,255,.6)"}}>view</span>
+        </div>);})()}
+
+      {bulkShopify&&!bulkShopify.hidden&&(()=>{
         const b=bulkShopify;
         const priced=b.items.filter(i=>String(i.listPrice||"").trim()!=="");
         const unpriced=b.items.length-priced.length;
@@ -7247,7 +7525,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           <div style={{background:C.surface,borderRadius:14,width:"min(560px,100%)",maxHeight:"90vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
             <div style={{padding:"18px 20px 12px",flexShrink:0}}>
               <div style={{fontWeight:700,fontSize:15}}>🛍 Push {b.items.length} item{b.items.length!==1?"s":""} to Shopify</div>
-              <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>Each goes to the storefront{"'"}s Deals section and gets a Listing Manager draft.</div>
+              <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>{b.section?<>Each goes to the storefront{"'"}s <b>{b.section}</b> section and gets a Listing Manager draft.</>:"Each is published with no storefront section, and gets a Listing Manager draft."}</div>
             </div>
 
             <div style={{padding:"0 20px",overflowY:"auto",flex:1}}>
@@ -7267,7 +7545,22 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     {unpriced} of these {unpriced===1?"has":"have"} no list price. Shopify needs one, so {unpriced===1?"it":"they"} will be pushed at no price and shown as ₹0 until you set it.
                   </div>
                 )}
-                <div style={{background:b.deal.enabled?"#FFF8E6":C.card,border:`1px solid ${b.deal.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
+                {/* Where these land, and therefore the tag they carry. */}
+                <div style={{marginBottom:12}}>
+                  <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Storefront section</div>
+                  <select value={b.section} disabled={b.running} onChange={e=>setBulkShopify(x=>({...x,section:e.target.value}))}
+                    style={{width:"100%",boxSizing:"border-box",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px",fontSize:12.5,color:C.ink,fontFamily:"inherit",cursor:b.running?"default":"pointer"}}>
+                    <option value={DEFAULT_SECTION}>{DEFAULT_SECTION}</option>
+                    {collections.filter(c=>c.title!==DEFAULT_SECTION).map(c=><option key={c.id} value={c.title}>{c.title}{c.smart?" (automated)":""}</option>)}
+                    <option value="">No section — just publish</option>
+                  </select>
+                  <div style={{fontSize:10.5,color:C.inkFaint,marginTop:5,lineHeight:1.5}}>
+                    {b.section
+                      ? <>Tagged <code style={{background:C.card,borderRadius:4,padding:"1px 5px"}}>{b.section.trim().toLowerCase()}</code> and collected into {b.section}.</>
+                      : "No section tag, no collection — the products are simply published."}
+                  </div>
+                </div>
+                {b.section===DEFAULT_SECTION&&<div style={{background:b.deal.enabled?"#FFF8E6":C.card,border:`1px solid ${b.deal.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
                   <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                     <input type="checkbox" checked={b.deal.enabled} disabled={b.running} onChange={e=>setBulkShopify(x=>({...x,deal:{...x.deal,enabled:e.target.checked}}))}/>
                     <span style={{fontSize:12,fontWeight:700,color:b.deal.enabled?"#9A6200":C.inkMid}}>⭐ Remind me to take these out of Deals</span>
@@ -7280,7 +7573,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       ))}
                     </div>
                   )}
-                </div>
+                </div>}
               </>)}
 
               {b.results.length>0&&(
@@ -7304,7 +7597,11 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   style={{flex:1,background:"#008060",color:"#fff",border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:b.running?"wait":"pointer",opacity:b.running?.7:1,fontFamily:"inherit"}}>
                   {b.running?`Pushing… ${b.results.length}/${b.items.length}`:`Push ${b.items.length} →`}
                 </button>
-                <button onClick={()=>setBulkShopify(null)} disabled={b.running} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px",fontSize:13,cursor:"pointer",color:C.inkFaint,fontFamily:"inherit"}}>Cancel</button>
+                <button onClick={()=>b.running?setBulkShopify(x=>({...x,hidden:true})):setBulkShopify(null)}
+                  title={b.running?"Keeps pushing while you work — stops if you close the tab":""}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px",fontSize:13,cursor:"pointer",color:b.running?C.ink:C.inkFaint,fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  {b.running?"Run in background":"Cancel"}
+                </button>
               </>):(
                 <button onClick={()=>{setBulkShopify(null);setSelectedIds(new Set());setSelectMode(false);}}
                   style={{flex:1,background:C.ink,color:"#fff",border:"none",borderRadius:8,padding:"11px",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -7317,12 +7614,66 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       {shopifyModal&&(()=>{
         const s=selected||{};
         const hasQty2=s.qty2!=null&&s.qty2!==""&&+s.qty2>0&&s.unit2&&s.unit2!==s.unit;
+        /* The title carries the quantity ("… - 222 pcs"), so pushing 50 of a 222
+           lot under the old title advertises stock that isn't in the listing.
+           Editing a quantity therefore re-derives the name — until the name is
+           typed in by hand, after which it is left alone. */
+        const pushItem={
+          ...s,
+          ...(shopifyModal.qty!=null&&shopifyModal.qty!==""?{qty:shopifyModal.qty}:{}),
+          ...(shopifyModal.qty2!=null&&shopifyModal.qty2!==""?{qty2:shopifyModal.qty2}:{}),
+        };
+        const patchPush=patch=>setShopifyModal(m=>{
+          const next={...m,...patch};
+          if(!next.nameEdited){
+            next.name=stockShopifyTitle({
+              ...s,
+              ...(next.qty!=null&&next.qty!==""?{qty:next.qty}:{}),
+              ...(next.qty2!=null&&next.qty2!==""?{qty2:next.qty2}:{}),
+            });
+          }
+          return next;
+        });
+        const splits=shopifyModal.splits||["full"];
+        const qtyPairs=lotQtyPairs(pushItem);
+        const primary=resolvePrimaryQty(pushItem,shopifyModal.splitUnit);
+        const lotVariants=buildLotVariants(pushItem,splits,shopifyModal.price,shopifyModal.splitUnit);
+        /* The kept rate is charged in whatever unit the lot is being sold in. Rate
+           it per kilo while offering it per piece and the re-price arithmetic runs
+           on a number nobody in the transaction is thinking about. */
+        const rateBasis=(()=>{
+          const byCount=primary?.unit==="pcs";
+          const qty=byCount?resolveLotPcs(pushItem):resolveLotKg(pushItem);
+          if(qty==null||!(qty>0))return null;
+          const price=+shopifyModal.price;
+          return{
+            pricingMode:byCount?"lot_by_count":"lot_by_weight",
+            label:byCount?"pc":"kg",
+            qtyLabel:byCount?`${fmtStockQtyValue(qty)} pcs`:`${qty} kg`,
+            qty,
+            rate:price>0?Math.round((price/qty)*100)/100:null,
+          };
+        })();
+        const toggleSplit=key=>setShopifyModal(m=>{
+          const cur=m.splits||["full"];
+          // Full lot is the listing itself — there is always something to buy.
+          if(key==="full")return m;
+          const next=cur.includes(key)?cur.filter(k=>k!==key):[...cur,key];
+          return{...m,splits:next};
+        });
         return(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div style={{background:C.surface,borderRadius:14,padding:"22px 20px",width:"min(420px,100%)",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
+          {/* The modal grew a store picker, a rate box and the part-lot sizes, and
+              on a laptop that pushed Push/Cancel off the bottom of the screen with
+              no way to scroll to them. Fixed height, scrolling body, footer that
+              stays put. */}
+          <div style={{background:C.surface,borderRadius:14,width:"min(420px,100%)",maxHeight:"92vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)"}}>
+            <div style={{padding:"22px 20px 4px",overflowY:"auto",flex:1,minHeight:0}}>
             <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>🛍 Push to Shopify</div>
             <div style={{fontSize:11,color:C.inkFaint,marginBottom:14}}>
-              Publishes to the storefront{"'"}s <b>Deals</b> section and creates the listing in Listing Manager
+              {(shopifyModal.section===undefined?DEFAULT_SECTION:shopifyModal.section)
+                ? <>Publishes to the storefront{"'"}s <b>{shopifyModal.section===undefined?DEFAULT_SECTION:shopifyModal.section}</b> section and creates the listing in Listing Manager</>
+                : <>Publishes the product and creates the listing in Listing Manager — no storefront section</>}
               {s.video?" · 🎥 video will be uploaded":""}
             </div>
 
@@ -7338,33 +7689,42 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               </div>
             </>)}
 
-            <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Product Name</div>
-            <input value={shopifyModal.name} onChange={e=>setShopifyModal(m=>({...m,name:e.target.value}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box",fontSize:14}}/>
+            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:4}}>
+              <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Product Name</div>
+              {shopifyModal.nameEdited&&(
+                <button type="button" onClick={()=>setShopifyModal(m=>({...m,nameEdited:false,name:stockShopifyTitle(pushItem)}))}
+                  style={{marginLeft:"auto",background:"none",border:"none",padding:0,fontSize:10.5,color:C.inkFaint,cursor:"pointer",textDecoration:"underline",fontFamily:"inherit"}}>
+                  ↺ follow the quantity
+                </button>
+              )}
+            </div>
+            <input value={shopifyModal.name} onChange={e=>setShopifyModal(m=>({...m,name:e.target.value,nameEdited:true}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box",fontSize:14}}/>
 
             <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>Price (USD)</div>
             <input type="number" value={shopifyModal.price} onChange={e=>setShopifyModal(m=>({...m,price:e.target.value}))} style={{...FI,width:"100%",marginBottom:12,boxSizing:"border-box"}} placeholder="0.00"/>
 
             {(() => {
-              /* You price the lot as a whole, so the per-kg rate is derived rather
-                 than asked for. Keeping it is what lets the listing re-price itself
-                 as the lot shrinks. */
-              const kg = resolveLotKg(selected);
-              if (kg == null || !(kg > 0)) return null;
-              const rate = +shopifyModal.price > 0 ? Math.round((+shopifyModal.price / kg) * 100) / 100 : null;
+              /* You price the lot as a whole, so the rate is derived rather than
+                 asked for. Keeping it is what lets the listing re-price itself as
+                 the lot shrinks. */
+              if (!rateBasis) return null;
+              const {rate,label,qtyLabel} = rateBasis;
               const keep = !!shopifyModal.keepRate;
+              const byCount = label === "pc";
               return (
                 <div style={{background:keep?"#F3F8F5":C.card,border:`1px solid ${keep?"#2A684544":C.border}`,borderRadius:8,padding:"9px 11px",marginBottom:12,marginTop:-4}}>
                   <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                     <input type="checkbox" checked={keep} onChange={e=>setShopifyModal(m=>({...m,keepRate:e.target.checked}))}/>
                     <span style={{fontSize:12,fontWeight:700,color:keep?"#2A6845":C.inkMid}}>
-                      ⚖️ Keep this rate as the lot sells
-                      {rate!=null&&<span style={{fontWeight:600,color:C.inkFaint}}> · ${rate}/kg</span>}
+                      {byCount?"🧮":"⚖️"} Keep this rate as the lot sells
+                      {rate!=null&&<span style={{fontWeight:600,color:C.inkFaint}}> · ${rate}/{label}</span>}
                     </span>
                   </label>
                   <div style={{fontSize:10,color:C.inkFaint,marginTop:6,lineHeight:1.5}}>
                     {keep
-                      ? `Priced by weight. Sell a piece and ${kg} kg becomes less, so the listing re-prices itself at $${rate??"—"}/kg.`
+                      ? `Priced ${byCount?"by the piece":"by weight"}. Sell some and ${qtyLabel} becomes less, so the listing re-prices itself at $${rate??"—"}/${label}.`
                       : "Fixed price — it stays at this figure however much of the lot sells."}
+                    {qtyPairs.length>1&&<> Follows the <b>Sell by</b> unit below.</>}
                   </div>
                 </div>
               );
@@ -7372,18 +7732,80 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
 
             <div style={{fontSize:11,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>Quantity</div>
             <div style={{display:"flex",gap:8,marginBottom:hasQty2?8:18,alignItems:"center"}}>
-              <input type="number" value={shopifyModal.qty??s.qty??""} onChange={e=>setShopifyModal(m=>({...m,qty:e.target.value}))}
+              <input type="number" value={shopifyModal.qty??s.qty??""} onChange={e=>patchPush({qty:e.target.value})}
                 style={{...FI,flex:1,boxSizing:"border-box"}} placeholder="0"/>
               <span style={{fontSize:13,color:C.inkFaint,minWidth:32}}>{s.unit||"pcs"}</span>
             </div>
             {hasQty2&&(
               <div style={{display:"flex",gap:8,marginBottom:18,alignItems:"center"}}>
-                <input type="number" value={shopifyModal.qty2??s.qty2??""} onChange={e=>setShopifyModal(m=>({...m,qty2:e.target.value}))}
+                <input type="number" value={shopifyModal.qty2??s.qty2??""} onChange={e=>patchPush({qty2:e.target.value})}
                   style={{...FI,flex:1,boxSizing:"border-box"}} placeholder="0"/>
                 <span style={{fontSize:13,color:C.inkFaint,minWidth:32}}>{s.unit2||"kg"}</span>
               </div>
             )}
-            {(()=>{const d=shopifyModal.deal||{enabled:true,days:7,customDate:""};return(
+            {primary&&primary.qty>1&&(()=>{
+              /* Not everyone wants 222 pieces. Each extra size is a Shopify variant
+                 priced off the same total, counted in the card's own unit. */
+              const on=lotVariants.length>1;
+              return(
+                <div style={{background:on?"#F3F8F5":C.card,border:`1px solid ${on?"#2A684544":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:16}}>
+                  <div style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid,marginBottom:8}}>📦 Let buyers take part of the lot</div>
+                  {qtyPairs.length>1&&(
+                    /* Costed in one unit, bought in another — 940 gm of hearts is
+                       117 pieces to whoever is ordering. The sizes below follow
+                       whichever is picked here. */
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:9,flexWrap:"wrap"}}>
+                      <span style={{fontSize:10.5,color:C.inkFaint,fontWeight:700,textTransform:"uppercase",letterSpacing:.4}}>Sell by</span>
+                      {qtyPairs.map(p=>{
+                        const active=primary?.unit===p.unit;
+                        return(
+                          <button key={p.unit} type="button" onClick={()=>setShopifyModal(m=>({...m,splitUnit:p.unit}))}
+                            style={{background:active?"#2A6845":C.surface,color:active?"#fff":C.ink,border:`1px solid ${active?"#2A6845":C.border}`,borderRadius:6,padding:"4px 9px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                            {fmtStockQtyValue(p.qty)} {p.unit}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {LOT_SPLITS.map(def=>{
+                      const picked=def.key==="full"||splits.includes(def.key);
+                      const v=lotVariants.find(x=>x.key===def.key);
+                      const label=def.key==="unit"?`Single ${primary.unit==="pcs"?"pc":primary.unit}`:def.label;
+                      return(
+                        <button key={def.key} type="button" disabled={def.key==="full"} onClick={()=>toggleSplit(def.key)}
+                          style={{background:picked?"#2A6845":C.surface,color:picked?"#fff":C.ink,border:`1px solid ${picked?"#2A6845":C.border}`,borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:def.key==="full"?"default":"pointer",opacity:def.key==="full"?.85:1,fontFamily:"inherit"}}>
+                          {label}{v?<span style={{fontWeight:600,opacity:.85}}> · {v.price?`$${v.price}`:`${v.qty} ${v.unit}`}</span>:null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginTop:7,lineHeight:1.5}}>
+                    {on
+                      ? `Listed as ${lotVariants.length} sizes under “Lot size”. Shopify counts each size’s stock on its own — the ERP card stays the real number and every push rewrites them all.`
+                      : `Sold whole: one buyer takes all ${fmtStockQtyValue(primary.qty)} ${primary.unit}.`}
+                  </div>
+                </div>
+              );
+            })()}
+            {/* Where it lands on the storefront, and the tag that follows from it. */}
+            {(()=>{const sec=shopifyModal.section===undefined?DEFAULT_SECTION:shopifyModal.section;return(
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Storefront section</div>
+                <select value={sec} onChange={e=>setShopifyModal(m=>({...m,section:e.target.value}))}
+                  style={{width:"100%",boxSizing:"border-box",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px",fontSize:12.5,color:C.ink,fontFamily:"inherit",cursor:"pointer"}}>
+                  <option value={DEFAULT_SECTION}>{DEFAULT_SECTION}</option>
+                  {collections.filter(c=>c.title!==DEFAULT_SECTION).map(c=><option key={c.id} value={c.title}>{c.title}{c.smart?" (automated)":""}</option>)}
+                  <option value="">No section — just publish</option>
+                </select>
+                <div style={{fontSize:10,color:C.inkFaint,marginTop:6,lineHeight:1.5}}>
+                  {sec
+                    ? <>Tagged <code style={{background:C.card,borderRadius:4,padding:"1px 5px"}}>{sec.trim().toLowerCase()}</code> and collected into {sec}. An automated section reads the tag rather than being joined directly.</>
+                    : "No section tag, no collection — the product is simply published."}
+                </div>
+              </div>
+            );})()}
+            {(shopifyModal.section===undefined||shopifyModal.section===DEFAULT_SECTION)&&(()=>{const d=shopifyModal.deal||{enabled:true,days:7,customDate:""};return(
               <div style={{background:d.enabled?"#FFF8E6":C.card,border:`1px solid ${d.enabled?"#F0DFAE":C.border}`,borderRadius:9,padding:"10px 12px",marginBottom:16}}>
                 <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                   <input type="checkbox" checked={d.enabled} onChange={e=>setShopifyModal(m=>({...m,deal:{...d,enabled:e.target.checked}}))}/>
@@ -7406,11 +7828,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   </div>
                 </>)}
               </div>);})()}
+            </div>
 
-            <div style={{display:"flex",gap:8}}>
+            <div style={{display:"flex",gap:8,padding:"12px 20px 18px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
               <button onClick={()=>{
                 if(!shopifyModal)return;
-                const{connected,storeKey,creds,name,price,qty,qty2}=shopifyModal;
+                const{connected,storeKey,creds,name,price,qty,qty2,keepRate,section}=shopifyModal;
                 const pushCreds=connected?.[storeKey]||creds;
                 // Merge overridden qty/qty2 back into the item before pushing
                 const overrides={};
@@ -7419,13 +7842,88 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 const itemToPush={...s,...overrides};
                 setShopifyModal(null);
                 if(storeKey)localStorage.setItem("ng-shopify-last-store",storeKey);
-                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal);
+                doPush(pushCreds,name,price,itemToPush,storeKey,shopifyModal.deal,keepRate&&rateBasis?rateBasis:false,lotVariants,section===undefined?DEFAULT_SECTION:section);
               }} style={{flex:1,background:"#008060",border:"none",color:"#fff",fontWeight:700,fontSize:13,padding:"11px",borderRadius:8,cursor:"pointer"}}>Push →</button>
               <button onClick={()=>setShopifyModal(null)} style={{background:"none",border:`1px solid ${C.border}`,fontSize:13,padding:"11px 18px",borderRadius:8,cursor:"pointer",color:C.inkFaint}}>Cancel</button>
             </div>
           </div>
         </div>
         );
+      })()}
+      {photoLibrary&&(()=>{
+        const q=(photoLibrary.q||"").trim().toLowerCase();
+        const tokens=q.split(/\s+/).filter(Boolean);
+        const srcFilter=photoLibrary.src||"all";
+        const pool=srcFilter==="all"?photoLibraryImages:photoLibraryImages.filter(im=>im.src===srcFilter);
+        const matches=tokens.length
+          ? pool.filter(im=>tokens.every(t=>(im.hay||"").toLowerCase().includes(t)))
+          : pool;
+        const counts={all:photoLibraryImages.length,library:photoLibraryImages.filter(im=>im.src==="library").length,stock:photoLibraryImages.filter(im=>im.src==="stock").length};
+        const sel=photoLibrary.sel||[];
+        const onCard=stockPhotos(form);
+        return(
+        <div onMouseDown={()=>setPhotoLibrary(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div onMouseDown={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:14,width:"min(680px,100%)",maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 8px 40px rgba(0,0,0,.3)",overflow:"hidden"}}>
+            <div style={{padding:"18px 20px 12px",flexShrink:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontWeight:700,fontSize:15,color:C.ink}}>🖼 Photo library</div>
+                  <div style={{fontSize:11,color:C.inkFaint,marginTop:3}}>Shots from the Image Library and photos already on other stock items. Picking one reuses the same file — nothing is uploaded twice.</div>
+                </div>
+                <button onClick={()=>setPhotoLibrary(null)} aria-label="Close" style={{border:"none",background:"transparent",color:C.inkMid,fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+              </div>
+              <input autoFocus value={photoLibrary.q||""} onChange={e=>setPhotoLibrary(p=>({...p,q:e.target.value}))}
+                placeholder="Search by stone, shape, SKU or box" style={{...FI,width:"100%",marginTop:12,boxSizing:"border-box",fontSize:13}}/>
+              <div style={{display:"flex",gap:6,marginTop:9}}>
+                {[["all","Everything"],["library","🖼 Image Library"],["stock","💎 On stock items"]].map(([key,label])=>{
+                  const on=srcFilter===key;
+                  return(
+                    <button key={key} type="button" onClick={()=>setPhotoLibrary(p=>({...p,src:key}))} disabled={!counts[key]}
+                      style={{background:on?C.green:C.card,color:on?"#fff":C.ink,border:`1px solid ${on?C.green:C.border}`,borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:counts[key]?"pointer":"default",opacity:counts[key]?1:.45,fontFamily:"inherit"}}>
+                      {label} <span style={{fontWeight:600,opacity:.8}}>{counts[key]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div style={{overflowY:"auto",flex:1,padding:"4px 20px 12px"}}>
+              {matches.length===0
+                ? <div style={{padding:"36px 12px",textAlign:"center",fontSize:12.5,color:C.inkFaint}}>{q?`No photos on items matching “${photoLibrary.q}”`:"No photos on any stock item yet."}</div>
+                : (
+                  <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+                    {matches.slice(0,120).map(im=>{
+                      const picked=sel.includes(im.url);
+                      const already=onCard.includes(im.url);
+                      return(
+                        <button key={im.url} type="button" title={already?"Already on this item":im.label}
+                          onClick={()=>setPhotoLibrary(p=>({...p,sel:picked?p.sel.filter(u=>u!==im.url):[...(p.sel||[]),im.url]}))}
+                          style={{padding:0,border:`2px solid ${picked?C.green:C.border}`,borderRadius:9,overflow:"hidden",background:C.card,cursor:"pointer",textAlign:"left",opacity:already&&!picked?.55:1,fontFamily:"inherit"}}>
+                          <div style={{position:"relative",height:96,background:C.card}}>
+                            <img src={im.url} alt="" loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                            {picked&&<span style={{position:"absolute",right:5,top:5,width:20,height:20,borderRadius:10,background:C.green,color:"#fff",fontSize:12,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center"}}>✓</span>}
+                            {already&&!picked&&<span style={{position:"absolute",left:5,top:5,background:"rgba(26,19,8,.7)",color:"#FAF0DC",borderRadius:4,padding:"1px 5px",fontSize:9,fontWeight:700}}>On this item</span>}
+                          </div>
+                          <div style={{padding:"6px 7px"}}>
+                            <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{im.label}</div>
+                            {im.sub&&<div style={{fontSize:9.5,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{im.sub}</div>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              {matches.length>120&&<div style={{fontSize:10.5,color:C.inkFaint,marginTop:10,textAlign:"center"}}>Showing the first 120 of {matches.length} — search to narrow it down.</div>}
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",padding:"12px 20px 18px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
+              <div style={{fontSize:11.5,color:C.inkMid,flex:1}}>{sel.length?`${sel.length} selected`:`${matches.length} photo${matches.length!==1?"s":""}`}</div>
+              <button onClick={()=>setPhotoLibrary(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 16px",fontSize:13,cursor:"pointer",color:C.inkFaint,fontFamily:"inherit"}}>Cancel</button>
+              <button onClick={addPhotosFromLibrary} disabled={!sel.length}
+                style={{background:sel.length?C.green:C.card,color:sel.length?"#fff":C.inkFaint,border:"none",borderRadius:8,padding:"10px 18px",fontSize:13,fontWeight:700,cursor:sel.length?"pointer":"default",fontFamily:"inherit"}}>
+                Add {sel.length||""} photo{sel.length!==1?"s":""}
+              </button>
+            </div>
+          </div>
+        </div>);
       })()}
       {bulkAdd&&<BulkAddStockModal vendors={vendors} existingMaterials={stones} onSave={saveBulkItems} onClose={()=>setBulkAdd(false)}/>}
       {summaryOpen&&(()=>{
@@ -7887,6 +8385,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   {mob&&selectedIds.size>0&&<><button className="bs" style={{fontSize:13,minHeight:40,color:C.blue,borderColor:C.blue,background:C.blueBg}} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button>
                   <button className="bs" style={{fontSize:13,minHeight:40,color:C.green,borderColor:C.green,background:C.greenBg}} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button></>}
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:C.red,borderColor:C.red,background:C.redBg}} disabled={selectedIds.size===0} onClick={()=>{if(window.confirm(`Delete ${selectedIds.size} item${selectedIds.size>1?"s":""}? This cannot be undone.`))delBulk(selectedIds);}}>🗑 Delete</button>
+                  {selectedIds.size>0&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:C.gold,borderColor:C.gold,background:C.goldLight}} onClick={()=>setBulkPrice({mode:"rate",unit:"kg",rate:"",flat:"",keepRate:true})}>🏷 Set price ({selectedIds.size})</button>}
                   {selectedIds.size>0&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#008060",borderColor:"#008060",background:"#E8F5F0"}} onClick={openBulkShopify}>🛍 Push to Shopify ({selectedIds.size})</button>}
                   {onCreateInvoiceFromStock&&selectedIds.size>0&&<button className="bp" style={{fontSize:12}} onClick={()=>{const sel=stock.filter(s=>selectedIds.has(s.id));const items=sel.map(s=>({id:uid(),acctDesc:shapeToAcctDesc(s.shape),customDesc:[s.material,s.shape,s.origin,s.size].filter(Boolean).join(" · "),hsn:shapeToHsn(s.shape),qty:String(s.qty||""),unit:s.unit||"pcs",rate:"",igst:0,amt:0,stockId:s.id,acctStockId:"",ready:false,readyDate:""}));const draft={id:uid(),invNo:"",type:"commercial",date:today(),dueDate:"",currency:"USD",buyerId:"",items,status:"draft",goodsShipped:false,payments:[],paidAmount:0,notes:"",terms:"T/T in advance",portLading:"Mumbai, India",portDischarge:"",consigneeSameAsBuyer:true,consigneeName:"",consigneeAddress:"",consigneeCountry:"",totalAmt:0,createdAt:new Date().toISOString()};onCreateInvoiceFromStock(draft);}}>📄 Create Invoice ({selectedIds.size})</button>}
                 </div>
@@ -7964,14 +8463,32 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     const qty=+s.qty||0;
                     const listed=s.postedShopifyAtyahara||s.postedShopifyEarth||s.postedShopify||s.postedWix||s.postedEtsy||s.postedEbay;
                     const cover=stockCover(s);
+                    /* Selection outranks the destination colours — a card being
+                       picked has to look picked, so the wash and ring stand down
+                       while the ribbon stays. */
+                    const flags=stockFlags(s);
+                    /* A card that is only planned somewhere gets a fainter wash
+                       than one that is actually live — the grid should read
+                       loudest where the work is done. */
+                    const leadFlag=flags.find(f=>f.live)||flags[0];
+                    const lead=leadFlag?.lead||"";
+                    const wash=leadFlag?.live?.06:.03, ring=leadFlag?.live?.3:.16;
+                    const cardBg=isSel?C.amberBg:lead?`linear-gradient(0deg,${hexA(lead,wash)},${hexA(lead,wash)}),${C.surface}`:C.surface;
+                    const restShadow=isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:lead?`0 0 0 1px ${hexA(lead,ring)}, var(--e-1)`:"var(--e-1)";
+                    const hoverShadow=lead?`0 0 0 1px ${hexA(lead,ring+.15)}, var(--e-2)`:"var(--e-2)";
                     return(
                     <div key={s.id}
                       onClick={()=>{if(selectMode){setSelectedIds(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;});}else setSelected(s);}}
-                      style={{background:isSel?C.amberBg:C.surface,boxShadow:isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:"var(--e-1)",borderRadius:16,overflow:"hidden",cursor:"pointer",
+                      style={{background:cardBg,boxShadow:restShadow,borderRadius:16,overflow:"hidden",cursor:"pointer",
                         animation:`fadeSlideUp .3s ease both`,animationDelay:`${Math.min(idx*.025,.5)}s`,
                         transition:"box-shadow .18s,transform .18s"}}
-                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow="var(--e-2)";e.currentTarget.style.transform="translateY(-2px)";}}}
-                      onMouseLeave={e=>{e.currentTarget.style.boxShadow=isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:"var(--e-1)";e.currentTarget.style.transform="none";}}>
+                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow=hoverShadow;e.currentTarget.style.transform="translateY(-2px)";}}}
+                      onMouseLeave={e=>{e.currentTarget.style.boxShadow=restShadow;e.currentTarget.style.transform="none";}}>
+                      {/* Destination ribbon — one segment per place this piece is going. */}
+                      {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
+                        style={{display:"flex",height:6,flexShrink:0,boxShadow:"inset 0 -1px 0 rgba(0,0,0,.07)"}}>
+                        {flags.map(f=><div key={f.key} style={{flex:1,background:f.live?f.bg:stockStripe(f.lead)}}/>)}
+                      </div>}
                       {/* Photo */}
                       <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
                         {cover
@@ -8093,7 +8610,37 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     </div>
                   );})}
                   </div>
-                  {visibleCount<filtered.length&&<div ref={setSentinelEl} style={{height:1}}/>}
+                  {(pageCount>1||filtered.length>PAGE_SIZES[0])&&(()=>{
+                    /* Window of page numbers around the current one — first and
+                       last are always reachable, with ellipses for the gap. */
+                    const nums=[];const span=mob?1:2;
+                    for(let i=1;i<=pageCount;i++){
+                      if(i===1||i===pageCount||(i>=curPage-span&&i<=curPage+span))nums.push(i);
+                      else if(nums[nums.length-1]!=="…")nums.push("…");
+                    }
+                    const btn=(extra={})=>({background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:mob?"6px 10px":"6px 12px",fontSize:mob?12:13,color:C.inkMid,cursor:"pointer",minWidth:mob?32:36,fontWeight:500,transition:"all .15s",...extra});
+                    return(
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:8,margin:"20px 0 8px"}}>
+                        <div style={{display:"flex",gap:mob?4:6,alignItems:"center",flexWrap:"wrap",justifyContent:"center"}}>
+                          {pageCount>1&&<>
+                            <button onClick={()=>goPage(curPage-1)} disabled={curPage===1} style={btn({opacity:curPage===1?.4:1,cursor:curPage===1?"default":"pointer"})}>‹</button>
+                            {nums.map((n,i)=>n==="…"
+                              ?<span key={`e${i}`} style={{fontSize:12,color:C.inkFaint,padding:"0 2px"}}>…</span>
+                              :<button key={n} onClick={()=>goPage(n)} style={btn(n===curPage?{background:C.amber,borderColor:C.amber,color:"#fff",fontWeight:700}:{})}>{n}</button>)}
+                            <button onClick={()=>goPage(curPage+1)} disabled={curPage===pageCount} style={btn({opacity:curPage===pageCount?.4:1,cursor:curPage===pageCount?"default":"pointer"})}>›</button>
+                            <span style={{width:1,height:20,background:C.border,margin:mob?"0 2px":"0 6px"}}/>
+                          </>}
+                          <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.inkFaint}}>
+                            {!mob&&<span>Per page</span>}
+                            <select value={pageSize} onChange={e=>changePageSize(+e.target.value)} style={{...FI,fontSize:mob?12:13,padding:mob?"5px 8px":"6px 10px",width:"auto",cursor:"pointer"}}>
+                              {PAGE_SIZES.map(n=><option key={n} value={n}>{n}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <div style={{fontSize:11,color:C.inkFaint}}>{pageStart+1}–{Math.min(pageStart+pageSize,filtered.length)} of {filtered.length} items · page {curPage} of {pageCount}</div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
               {/* Stock item detail panel */}
@@ -8463,11 +9010,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               {/* ── QUANTITIES ── */}
               <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px"}}>
                 <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:13,display:"flex",alignItems:"center",gap:6}}><span style={{display:"inline-block",width:3,height:13,background:C.blue,borderRadius:2}}/>{t("Quantities & Cost")}</div>
+                {/* The unit selects were 60px wide, which is the field padding plus
+                    the native dropdown arrow and about two characters — "gm" and
+                    "pcs" came out as "g" and "p". Wider box, tighter padding. */}
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto 1fr",gap:10,alignItems:"end"}}>
                   <Field label="Qty — Primary">
                     <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6}}>
                       <input type="number" value={form.qty||""} onChange={e=>setForm(f=>({...f,qty:e.target.value}))} style={FI} placeholder="0"/>
-                      <select value={form.unit||"pcs"} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} style={{...FI,width:60,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
+                      <select value={form.unit||"pcs"} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} style={{...FI,width:78,padding:"8px 6px",cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
                     </div>
                   </Field>
                   <button type="button" title="Swap primary and secondary quantities" onClick={()=>setForm(f=>({...f,qty:f.qty2||"",unit:f.unit2||"pcs",qty2:f.qty||"",unit2:f.unit||"pcs"}))} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontSize:16,color:C.inkMid,marginBottom:1,flexShrink:0}}>⇄</button>
@@ -8477,7 +9027,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   </span>}>
                     <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6}}>
                       <input type="number" value={form.qty2||""} onChange={e=>{const q=e.target.value;const u=form.unit2||"kg";const wGm=q?(u==="kg"?+q*1000:u==="gm"?+q:u==="ct"?+q*0.2:undefined):undefined;setForm(f=>({...f,qty2:q,weightGm:wGm??f.weightGm}));}} style={FI} placeholder="none"/>
-                      <select value={form.unit2||"kg"} onChange={e=>{const u=e.target.value;const q=+form.qty2||0;const wGm=q?(u==="kg"?q*1000:u==="gm"?q:u==="ct"?q*0.2:undefined):undefined;setForm(f=>({...f,unit2:u,weightGm:wGm??f.weightGm}));}} style={{...FI,width:60,cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
+                      <select value={form.unit2||"kg"} onChange={e=>{const u=e.target.value;const q=+form.qty2||0;const wGm=q?(u==="kg"?q*1000:u==="gm"?q:u==="ct"?q*0.2:undefined):undefined;setForm(f=>({...f,unit2:u,weightGm:wGm??f.weightGm}));}} style={{...FI,width:78,padding:"8px 6px",cursor:"pointer"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select>
                     </div>
                   </Field>
                   <Field label="Cost Price (₹)"><input type="number" value={form.costPrice||""} onChange={e=>setForm(f=>({...f,costPrice:e.target.value}))} style={FI} placeholder="0.00"/></Field>
@@ -8491,25 +9041,53 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 {(() => {
                   const kg = resolveLotKg(form);
                   const pcs = resolveLotPcs(form);
-                  const on = form.pricingMode === "lot_by_weight";
-                  if (kg == null && !on) return (
+                  const basis = lotBasisFor(form.pricingMode);
+                  const on = !!basis;
+                  if (kg == null && pcs == null && !on) return (
                     <div style={{fontSize:10.5,color:C.inkFaint,marginTop:12,lineHeight:1.5}}>
-                      Lot pricing needs a weight on this card — add a kg or gm quantity to price it by the kilo.
+                      Lot pricing needs a quantity on this card — add a kg, gm or pcs figure to price it by the unit.
                     </div>
                   );
+                  // Pieces are what a buyer picks, so a card with a count leads with it.
+                  const qtyFor = m => (m === "lot_by_count" ? pcs : kg);
+                  const mode = basis?.mode || (pcs != null && pcs > 0 ? "lot_by_count" : "lot_by_weight");
+                  const b = lotBasisFor(mode);
+                  const seedRate = (m, f) => {
+                    const q = m === "lot_by_count" ? resolveLotPcs(f) : resolveLotKg(f);
+                    return +f.listPrice > 0 && q > 0 ? String(Math.round((+f.listPrice / q) * 100) / 100) : "";
+                  };
                   const sync = on ? buildLotSync(form) : null;
                   return (
                     <div style={{marginTop:14,background:on?"#F3F8F5":C.card,border:`1px solid ${on?"#2A684544":C.border}`,borderRadius:9,padding:"11px 13px"}}>
                       <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
                         <input type="checkbox" checked={on}
-                          onChange={e=>setForm(f=>({...f,pricingMode:e.target.checked?"lot_by_weight":"",
-                            pricePerKg:e.target.checked&&!f.pricePerKg&&+f.listPrice>0&&resolveLotKg(f)>0?String(Math.round((+f.listPrice/resolveLotKg(f))*100)/100):(f.pricePerKg||""),
+                          onChange={e=>setForm(f=>({...f,pricingMode:e.target.checked?mode:"",
+                            [b.field]:e.target.checked&&!f[b.field]?seedRate(mode,f):(f[b.field]||""),
                             lotMinPrice:f.lotMinPrice||"25"}))}/>
-                        <span style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid}}>⚖️ Price this lot by weight on Earth Editions</span>
+                        <span style={{fontSize:12,fontWeight:700,color:on?"#2A6845":C.inkMid}}>
+                          {mode==="lot_by_count"?"🧮":"⚖️"} Price this lot by the {b.label==="pc"?"piece":"kilo"} on Earth Editions
+                        </span>
                       </label>
                       {on && (<>
+                        {kg != null && pcs != null && (
+                          /* Costed per gram, sold per piece — the card has to be able
+                             to say which one the rate is charged in. */
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:10,flexWrap:"wrap"}}>
+                            <span style={{fontSize:10,color:C.inkFaint,fontWeight:700,textTransform:"uppercase",letterSpacing:.4}}>Rate per</span>
+                            {LOT_RATE_BASES.map(x=>{
+                              const active=mode===x.mode;
+                              return(
+                                <button key={x.mode} type="button" disabled={!(qtyFor(x.mode)>0)}
+                                  onClick={()=>setForm(f=>({...f,pricingMode:x.mode,[x.field]:f[x.field]||seedRate(x.mode,f)}))}
+                                  style={{background:active?"#2A6845":C.surface,color:active?"#fff":C.ink,border:`1px solid ${active?"#2A6845":C.border}`,borderRadius:6,padding:"4px 9px",fontSize:11,fontWeight:700,cursor:qtyFor(x.mode)>0?"pointer":"default",opacity:qtyFor(x.mode)>0?1:.45,fontFamily:"inherit"}}>
+                                  {x.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                         <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:10,marginTop:11}}>
-                          <Field label="Price / kg (USD)"><input type="number" value={form.pricePerKg||""} onChange={e=>setForm(f=>({...f,pricePerKg:e.target.value}))} style={FI} placeholder="125"/></Field>
+                          <Field label={`Price / ${b.label} (USD)`}><input type="number" value={form[b.field]||""} onChange={e=>setForm(f=>({...f,[b.field]:e.target.value}))} style={FI} placeholder={b.label==="pc"?"4":"125"}/></Field>
                           <Field label="Min price (USD)"><input type="number" value={form.lotMinPrice||""} onChange={e=>setForm(f=>({...f,lotMinPrice:e.target.value}))} style={FI} placeholder="25"/></Field>
                           <Field label="When sold out">
                             <select value={form.shopifySoldOutMode||"draft"} onChange={e=>setForm(f=>({...f,shopifySoldOutMode:e.target.value}))} style={{...FI,cursor:"pointer"}}>
@@ -8532,7 +9110,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           <div style={{fontSize:16,fontWeight:800,color:sync.status==="draft"?C.red:"#2A6845"}}>
                             {sync.price!=null?`$${sync.price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"—"}
                             <span style={{fontSize:10.5,fontWeight:600,color:C.inkFaint,marginLeft:8}}>
-                              {kg!=null?`${kg} kg`:""}{pcs!=null?` · ${pcs} pcs`:""}{sync.rate?` @ $${sync.rate}/kg`:""}
+                              {kg!=null?`${kg} kg`:""}{pcs!=null?` · ${pcs} pcs`:""}{sync.rate?` @ $${sync.rate}/${sync.rateUnit||"kg"}`:""}
                             </span>
                           </div>
                           {sync.status==="draft"&&(
@@ -8575,7 +9153,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <Tag>Markets</Tag><div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>{DEFAULT_MARKETS.filter(m=>m!=="Unassigned").map(m=>{const cur=Array.isArray(form.market)?form.market:[];const on=cur.includes(m);return <button type="button" key={m} onClick={()=>setForm(f=>{const c=Array.isArray(f.market)?f.market:[];return{...f,market:on?c.filter(x=>x!==m):[...c,m]};})  } style={{fontSize:11,padding:"3px 9px",borderRadius:4,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:"transparent",color:on?C.ink:C.inkMid,cursor:"pointer",transition:"all .1s"}}>{m}</button>;})} </div>
                 </div>
                 <div style={{marginTop:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  {[["photographed","📸 Photographed"],["postedShopifyAtyahara","Atyahara"],["postedShopifyEarth","Earth Editions"],["postedWix","Wix"],["postedEtsy","Etsy"]].map(([key,label])=>(
+                  {/* eBay is read everywhere else — the card badge, the ribbon — so
+                      it needs a box here too, or it can only ever be set by import. */}
+                  {[["photographed","📸 Photographed"],["postedShopifyAtyahara","Atyahara"],["postedShopifyEarth","Earth Editions"],["postedWix","Wix"],["postedEtsy","Etsy"],["postedEbay","eBay"]].map(([key,label])=>(
                     <label key={key} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"7px 10px",borderRadius:6,border:`1px solid ${form[key]?C.green:C.border}`,background:form[key]?"#E8F5E9":"transparent",transition:"all .1s"}}>
                       <input type="checkbox" checked={!!form[key]} onChange={e=>setForm(f=>({...f,[key]:e.target.checked}))} style={{accentColor:C.green,width:14,height:14,cursor:"pointer"}}/>
                       <span style={{fontSize:12,fontWeight:form[key]?600:400,color:form[key]?"#2E7D32":C.inkMid}}>{label}</span>
@@ -8603,7 +9183,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   ):<div style={{textAlign:"center",color:C.inkFaint}}><div style={{fontSize:20,marginBottom:3}}>📷</div><div style={{fontSize:10}}>{t("Add photos")}</div></div>}
                   {form._photoUploading&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(0,0,0,.3)",borderRadius:7,fontSize:11,color:"#fff"}}>Uploading…</div>}
                 </label>
-                <button className="bs" style={{width:"100%",fontSize:11,padding:"6px"}} onClick={()=>photoRef.current?.click()}>{t("+ Add More Photos")}</button>
+                <div style={{display:"flex",gap:6}}>
+                  <button className="bs" style={{flex:1,fontSize:11,padding:"6px"}} onClick={()=>photoRef.current?.click()}>{t("+ Add More Photos")}</button>
+                  <button className="bs" type="button" disabled={!photoLibraryImages.length} title={photoLibraryImages.length?"Reuse a photo already on another stock item":"No photos on any stock item yet"}
+                    onClick={openPhotoLibrary}
+                    style={{flex:1,fontSize:11,padding:"6px",opacity:photoLibraryImages.length?1:.5,cursor:photoLibraryImages.length?"pointer":"default"}}>
+                    🖼 {t("From Library")}
+                  </button>
+                </div>
                 {/* Video */}
                 <div style={{marginTop:12,borderTop:`1px solid ${C.border}`,paddingTop:12}}>
                   <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:8}}>🎬 Video</div>
@@ -8825,6 +9412,10 @@ async function savePurchasesK(list){
   // to the Stock tab after confirming a bill in Purchases.
   await saveK(KEYS.purchases,slim);
 }
+// Which region a show sits in. Stock picks this up as its region stamp when it is
+// sent to a show — from the Stock module or from the show's own Stock tab, so both
+// routes land on the same value.
+function getShowRegion(show){const t=((show.city||"")+" "+(show.name||"")).toLowerCase();if(/japan|tokyo|osaka|kyoto|ikebukuro|nagoya/.test(t))return"Japan";if(/usa|america|denver|tucson|arizona/.test(t))return"USA";if(/europe|germany|munich|france|paris|italy|spain/.test(t))return"Europe";return"India";}
 let _stockSaveQ=Promise.resolve();
 async function saveStockK(list,opts={}){
   const run=()=>_saveStockKImpl(list,opts);
@@ -13715,6 +14306,27 @@ const withShowsDraft=list=>{
   }):base;
 };
 
+// The second line on a strip label is whatever the buyers at that show read, so it
+// follows the destination rather than being fixed to one language. Each card keeps
+// a name per language, so the same stone carries its Japanese to Osaka and its
+// German to Munich without either overwriting the other.
+const LABEL_LANGS=[
+  {code:"",label:"None — English only",native:"",font:""},
+  {code:"ja",label:"Japanese",native:"日本語",font:"'Noto Serif JP',serif",sample:"ヒマラヤ緑泥石水晶"},
+  {code:"de",label:"German",native:"Deutsch",font:"'Cormorant Garamond',serif",sample:"Himalaya-Chlorit-Quarz"},
+  {code:"fr",label:"French",native:"Français",font:"'Cormorant Garamond',serif",sample:"Quartz chlorite de l'Himalaya"},
+  {code:"es",label:"Spanish",native:"Español",font:"'Cormorant Garamond',serif",sample:"Cuarzo con clorita del Himalaya"},
+  {code:"it",label:"Italian",native:"Italiano",font:"'Cormorant Garamond',serif",sample:"Quarzo con clorite himalayano"},
+];
+// A sensible starting language for a destination — always overridable, since
+// "Europe" covers Munich, Paris and Milan alike.
+const DEFAULT_LABEL_LANG=region=>region==="Japan"?"ja":region==="Europe"?"de":"";
+
+// ── SHIPMENTS ──────────────────────────────────────────────────────────────
+// Planning what physically leaves India for a show: pick the cards, price them,
+// watch the cost and value build up, print the strip labels that go on each
+// piece. Committing applies the same stamp the Stock module's "Send →" applies —
+// this module is the planning surface in front of that, not a second way in.
 function ShowsApp({onHome,isAdmin=true}){
   const t=useT();
   const [shows,setShows]=useState([]);
@@ -13826,6 +14438,23 @@ function ShowsApp({onHome,isAdmin=true}){
     const nextVal=typeof val==="function"?val(s[key],s):val;
     return{...s,[key]:nextVal};
   }));
+  // Patches a stock card in place — used for shipment pricing and label text, both
+  // of which belong to the card itself rather than to the show.
+  // Bulk sibling of patchStockItem — AI fill touches a whole sheet at once and one
+  // save is both faster and safer than a dozen racing writes.
+  const patchStockItems=async(patches)=>{
+    const ids=Object.keys(patches||{});
+    if(!ids.length)return;
+    const ts=new Date().toISOString();
+    const next=stock.map(s=>patches[s.id]?{...s,...patches[s.id],updatedAt:ts}:s);
+    setStock(next);
+    await saveStockK(next);
+  };
+  const patchStockItem=async(itemId,patch)=>{
+    const next=stock.map(s=>s.id!==itemId?s:{...s,...patch,updatedAt:new Date().toISOString()});
+    setStock(next);
+    await saveStockK(next);
+  };
   const toggleCheck=(sid,i)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],done:!c[i].done};return{...s,checklist:c};}));
   const editCheckTask=(sid,i,task)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],task};return{...s,checklist:c};}));
   const addCheckItem=(sid)=>save(shows.map(s=>s.id!==sid?s:{...s,checklist:[...(s.checklist||[]),{id:uid(),task:"",done:false}]}));
@@ -13872,6 +14501,7 @@ function ShowsApp({onHome,isAdmin=true}){
     stock,purchases,
     onAddBagItem:addBagItem,onUpdateBagItem:updateBagItem,onRemoveBagItem:removeBagItem,
     onMarkShowItemSold:markShowItemSold,onRemoveShowItem:removeShowItem,
+    onPatchStockItem:patchStockItem,onPatchStockItems:patchStockItems,
     onAddDailySale:addDailySale,onUpdateDailySale:updateDailySale,onDelDailySale:delDailySale,
     onAddShowExpense:addShowExpense,onDelShowExpense:delShowExpense,
     onAddShowPhoto:addShowPhoto,onDelShowPhoto:delShowPhoto,
@@ -14093,7 +14723,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -14108,6 +14738,14 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [bagSellId,setBagSellId]=useState(null);
   const [bagSellPrice,setBagSellPrice]=useState("");
   const [showStockTab,setShowStockTab]=useState("unsold");
+  const [shipView,setShipView]=useState("plan");
+  const [shipPickOpen,setShipPickOpen]=useState(false);
+  const [shipQuery,setShipQuery]=useState("");
+  const [shipPickIds,setShipPickIds]=useState(()=>new Set());
+  const [shipQtys,setShipQtys]=useState({});
+  const [shipBusy,setShipBusy]=useState(false);
+  const [labelLang,setLabelLang]=useState(null);
+  const [aiBusy,setAiBusy]=useState("");
   const [sellId,setSellId]=useState(null);
   const [sellPrice,setSellPrice]=useState("");
   const [sellCurrency,setSellCurrency]=useState("USD");
@@ -14666,13 +15304,248 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const showStillThere=showLiveItems.filter(s=>(s.region||"India")!=="India"&&hasStockQty(s)&&!s.soldDate);
   const showSoldItems=showLiveItems.filter(s=>s.soldDate||s.soldPrice||s.soldFromShowId===show.id||(s.soldFromShow||"").toLowerCase()===showName);
   const showSentItems=showLiveItems.length?showLiveItems:showFlowItems.filter(s=>s.sentAt||s.returnedFromShow||s.returnedFromShowId);
-  const fmtFlowNum=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)).replace(/\.?0+$/,""):"";};
+  // Number.toFixed then unary + already drops trailing zeros (40 stays 40, 20.50
+  // becomes 20.5). Stripping /\.?0+$/ on top of that ate the zero off round
+  // numbers — 40 kg printed as "4", 100 kg as "1".
+  const fmtFlowNum=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";};
   const flowQtyText=s=>[s.qty&&s.qty!=="0"?`${s.qty} ${s.unit||"pcs"}`:s.soldQty?`${s.soldQty} ${s.unit||"pcs"}`:"",s.qty2&&s.qty2!=="0"?`${s.qty2} ${s.unit2||"kg"}`:s.soldQty2?`${s.soldQty2} ${s.unit2||"kg"}`:""].filter(Boolean).join(" / ")||"—";
   const flowKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+s.qty||0):0)+((s.unit2||"")==="kg"?(+s.qty2||0):0),0);
   const flowSentKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+(s.showSentQty||s.qty)||0):0)+((s.unit2||"")==="kg"?(+(s.showSentQty2||s.qty2)||0):0),0);
   const flowReturnedKg=flowKgTotal(showReturnedItems);
   const flowStillKg=flowKgTotal(showStillThere);
   const flowSentKg=flowSentKgTotal(showSentItems);
+  // ── Shipment planning ────────────────────────────────────────────────────
+  // The draft is a plan, not a copy: each line just points at a stock card and says
+  // how much of it is meant to travel. Nothing in stock moves until the shipment is
+  // sent, so a half-built plan can sit here for days without touching inventory.
+  const shipDraft=show.shipmentDraft||[];
+  const draftLines=shipDraft.map(line=>({line,item:stock.find(s=>s.id===line.id)})).filter(x=>x.item);
+  // costPrice and listPrice are per-unit rates, not whole-card figures — every total in
+  // the app multiplies them by quantity — so a line is worth what it takes times its
+  // rate. The primary quantity is the pricing basis, falling back to the secondary
+  // only on cards that carry no primary count.
+  const lineShare=({line,item})=>{
+    const fullQty=parseFloat(item.qty)||0,fullQty2=parseFloat(item.qty2)||0;
+    const q=line.qty===""||line.qty==null?fullQty:(parseFloat(line.qty)||0);
+    const q2=line.qty2===""||line.qty2==null?fullQty2:(parseFloat(line.qty2)||0);
+    const basis=fullQty>0?q:q2;
+    const cost=(parseFloat(item.costPrice)||0)*basis;
+    const value=(parseFloat(item.listPrice)||0)*basis;
+    return{q,q2,basis,cost,value,
+      margin:value-(usdInr>0?cost/usdInr:0),
+      partial:q<fullQty||q2<fullQty2,
+      kg:((item.unit||"")==="kg"?q:0)+((item.unit2||"")==="kg"?q2:0)};
+  };
+  // Notes, not blockers — the plan never sends anything, so a line whose card moved
+  // or shrank is just worth flagging while you decide what to actually pack.
+  const lineIssue=({line,item})=>{
+    if(item.showId||item.showTag)return"already out at a show";
+    if(item.soldDate)return"sold";
+    const{q,q2}=lineShare({line,item});
+    const fullQty=parseFloat(item.qty)||0,fullQty2=parseFloat(item.qty2)||0;
+    if(q>fullQty||q2>fullQty2)return`stock only holds ${flowQtyText(item)}`;
+    if(q<=0&&q2<=0)return"quantity is zero";
+    return"";
+  };
+  const saveDraft=next=>onUpdateShow?.(show.id,"shipmentDraft",next);
+  const addDraftLines=items=>saveDraft([...shipDraft,...items.filter(it=>!shipDraft.some(l=>l.id===it.id)).map(it=>({id:it.id,qty:String(it.qty||""),qty2:String(it.qty2||"")}))]);
+  const setDraftQty=(id,key,val)=>saveDraft(shipDraft.map(l=>l.id!==id?l:{...l,[key]:val}));
+  const removeDraftLine=id=>saveDraft(shipDraft.filter(l=>l.id!==id));
+  // What is already at the show — the shipments that have gone.
+  const shipItems=showLiveItems;
+  const shipPool=stock.filter(s=>!s.showId&&!s.showTag&&(s.region||"India")==="India"&&hasStockQty(s)&&!s.soldDate);
+  const planKey=id=>shipDraft.some(l=>l.id===id);
+  // Alphabetical by stone, then shape, then size — so a search for "bowl" reads as a
+  // grouped list you can scan, and the same stone's cards sit together.
+  const shipSort=(a,b)=>`${a.material||""} ${a.shape||""} ${a.size||""}`.localeCompare(`${b.material||""} ${b.shape||""} ${b.size||""}`,undefined,{numeric:true,sensitivity:"base"});
+  const shipQ=shipQuery.trim().toLowerCase();
+  const shipMatches=(shipQ?shipPool.filter(s=>[s.material,s.shape,s.origin,s.size,s.grade,s.sku,s.location,s.vendor].filter(Boolean).join(" ").toLowerCase().includes(shipQ)):shipPool).slice().sort(shipSort);
+  const shipShown=shipMatches.slice(0,200);
+  // The plan reads in the same alphabetical order as the picker, so a stone is where
+  // you expect it rather than wherever it happened to be added.
+  draftLines.sort((a,b)=>shipSort(a.item,b.item));
+  const shipSent=shipItems.slice().sort(shipSort);
+  const shipUnplanned=shipShown.filter(s=>!planKey(s.id));
+  // Totals cover the draft while it is being planned, and what has actually gone once
+  // it has been sent — the two are shown as separate blocks so they never blur.
+  const draftShares=draftLines.map(lineShare);
+  const draftCostInr=draftShares.reduce((sum,s)=>sum+s.cost,0);
+  const draftValueUsd=draftShares.reduce((sum,s)=>sum+s.value,0);
+  const draftKg=draftShares.reduce((sum,s)=>sum+s.kg,0);
+  const draftUnpriced=draftLines.filter(({item})=>!(+item.listPrice>0)).length;
+  const draftCostUsd=usdInr>0?draftCostInr/usdInr:0;
+  const draftMarginUsd=draftValueUsd-draftCostUsd;
+  const draftMultiple=draftCostUsd>0?draftValueUsd/draftCostUsd:0;
+  const shipCostInr=shipItems.reduce((sum,s)=>sum+(+s.costPrice||0),0);
+  const shipValueUsd=shipItems.reduce((sum,s)=>sum+(+s.listPrice||0),0);
+  const shipCostUsd=usdInr>0?shipCostInr/usdInr:0;
+  const shipMarginUsd=shipValueUsd-shipCostUsd;
+  const shipMultiple=shipCostUsd>0?shipValueUsd/shipCostUsd:0;
+  const shipUnpriced=shipItems.filter(s=>!(+s.listPrice>0)).length;
+  const shipKg=flowSentKgTotal(shipItems);
+  const fmtUsd=n=>`$${(+n||0).toLocaleString("en-US",{maximumFractionDigits:0})}`;
+  const shipRegion=getShowRegion(show);
+  // Null means "not chosen yet" — fall back to what suits the destination.
+  const lang=labelLang??DEFAULT_LABEL_LANG(shipRegion);
+  const langCfg=LABEL_LANGS.find(l=>l.code===lang)||LABEL_LANGS[0];
+  // Sentence case here too, so an unwritten card already reads "Blue opal bowl - 2
+  // inch" rather than shouting Title Case off the stock record.
+  const autoEn=s=>sentenceCase([s.material,s.shape,s.size].filter(Boolean).join(" "))||s.material||"Item";
+  // nameJp is read as the Japanese entry so labels typed before languages existed
+  // still print.
+  const secondLine=s=>!lang?"":String((s.labelNames||{})[lang]??(lang==="ja"?s.nameJp||"":"")).trim();
+  // An explicit 0 means "don't print this one" — only an unset value falls back to the
+  // piece count.
+  const labelCopies=s=>{
+    const raw=String(s.labelCopies??"").trim();
+    if(raw!==""){const n=parseInt(raw,10);if(Number.isFinite(n)&&n>=0)return Math.min(n,200);}
+    const pcs=(s.unit||"")==="pcs"?parseInt(s.qty,10):0;
+    return Number.isFinite(pcs)&&pcs>0?Math.min(pcs,200):1;
+  };
+  // Labels are printed before a shipment goes, so they come off the draft while one
+  // exists and off what has already been sent once it is empty.
+  const labelItems=draftLines.length?draftLines.map(x=>x.item):shipItems;
+  const totalLabels=labelItems.reduce((n,s)=>n+labelCopies(s),0);
+  // Selecting a card defaults to sending all of it; the quantity boxes are there for
+  // when only part of a lot is meant to travel.
+  const toggleShipPick=item=>setShipPickIds(prev=>{
+    const next=new Set(prev);
+    if(next.has(item.id))next.delete(item.id);
+    else{
+      next.add(item.id);
+      setShipQtys(q=>q[item.id]?q:{...q,[item.id]:{qty:String(item.qty||""),qty2:String(item.qty2||"")}});
+    }
+    return next;
+  });
+  const shipQtyOf=item=>shipQtys[item.id]||{qty:String(item.qty||""),qty2:String(item.qty2||"")};
+  const setShipQty=(id,key,val)=>setShipQtys(q=>({...q,[id]:{...(q[id]||{}),[key]:val}}));
+  const isPartial=item=>{
+    const e=shipQtyOf(item),full=parseFloat(item.qty)||0,full2=parseFloat(item.qty2)||0;
+    const q=e.qty===""?full:(parseFloat(e.qty)||0),q2=e.qty2===""?full2:(parseFloat(e.qty2)||0);
+    return q<full||q2<full2;
+  };
+  // Adding only writes the plan onto the show. Stock is untouched until "Send".
+  const addToDraft=()=>{
+    if(!shipPickIds.size)return;
+    const items=[...shipPickIds].map(id=>{
+      const item=stock.find(s=>s.id===id);
+      const e=shipQtys[id]||{};
+      return item?{id,qty:e.qty??item.qty,qty2:e.qty2??item.qty2}:null;
+    }).filter(Boolean);
+    addDraftLines(items);
+    // Stay open and keep the search: added rows flip to "in plan" in place, so a long
+    // search like "bowl" can be worked through in one pass.
+    setShipPickIds(new Set());setShipQtys({});
+  };
+  const setSecondLine=async(id,val)=>{
+    if(!lang)return;
+    const item=stock.find(s=>s.id===id);
+    await onPatchStockItem?.(id,{labelNames:{...(item?.labelNames||{}),[lang]:val}});
+  };
+  // ── Name cards ───────────────────────────────────────────────────────────
+  // 95 x 50 mm display cards for the table: the stone's name in the local language
+  // over its origin, the English name beneath, a one-line description, and a price
+  // line. All four bits live on the stock card so a stone is written up once and
+  // every future show reuses it.
+  const descKey=lang||"en";
+  const cardOrigin=s=>String(s.labelOrigin??s.origin??"").trim();
+  const cardDesc=s=>String((s.labelDescs||{})[descKey]??"").trim();
+  const setCardDesc=async(id,val)=>{
+    const item=stock.find(x=>x.id===id);
+    await onPatchStockItem?.(id,{labelDescs:{...(item?.labelDescs||{}),[descKey]:val}});
+  };
+  const showCur=shipRegion==="Japan"?"¥":shipRegion==="Europe"?"€":shipRegion==="India"?"₹":"$";
+  // Sentence case: first letter up, the rest down, but leave genuine acronyms (AAA,
+  // USA) alone. Proper nouns get lowercased here — AI fill writes them correctly.
+  const sentenceCase=t=>{
+    const str=String(t||"").trim();
+    if(!str)return"";
+    const words=str.split(/(\s+)/).map(w=>/^[A-Z0-9]{2,}$/.test(w)?w:w.toLowerCase());
+    const out=words.join("");
+    return out.charAt(0).toUpperCase()+out.slice(1);
+  };
+  // One call for the whole sheet: the model gets every stone at once and returns a
+  // row per card, so filling fourteen cards is one request and one save.
+  const aiFillCards=async(items)=>{
+    if(!items.length||aiBusy)return;
+    setAiBusy(items.length>1?"all":items[0].id);
+    try{
+      const langName=lang?langCfg.label:"English";
+      const list=items.map((s,i)=>`${i+1}. stone="${s.material||""}" shape="${s.shape||""}" size="${s.size||""}" origin="${s.origin||""}"`).join("\n");
+      const prompt=`You write the display cards that sit beside stones on a mineral dealer's table at a gem show. For each numbered item below, return one object.
+
+${list}
+
+Rules for every object:
+"name": the stone's display name in SENTENCE CASE — capital on the first word and on genuine proper nouns only (so "Blue opal bowl", "Crazy lace agate bowl", "Tanzanian moonstone bowl"). Include the shape and size when given. Never Title Case Every Word.
+"origin": the country of origin in capitals and nothing else — "INDIA", "BRAZIL", "MADAGASCAR". Use the origin given if there is one; otherwise the country the material most commonly comes from.
+"desc": ONE editorial sentence in ${langName}, 12 to 22 words, written for a collector standing at the table. Say something concrete and specific — what the stone actually is, how the pattern forms, where it comes from, what to look at. Never repeat the stone's name or open with it: the card already shows the name directly above, so a sentence that starts with it wastes the line. Start each one differently across the set. Do not use "prized for", "known for", "sought after", "stunning", "beautiful", or any mystical or healing claim.
+
+Return ONLY a raw JSON array of ${items.length} objects in the same order, each {"name":"...","origin":"...","desc":"..."}. No markdown fences, no commentary.`;
+      const raw=await callClaude([{role:"user",content:prompt}],400+items.length*120);
+      const parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());
+      if(!Array.isArray(parsed))throw new Error("unexpected reply shape");
+      const patches={};
+      items.forEach((item,i)=>{
+        const r=parsed[i];
+        if(!r)return;
+        const patch={};
+        if(r.name)patch.labelEn=sentenceCase(r.name);
+        if(r.origin)patch.labelOrigin=String(r.origin).trim().toUpperCase();
+        if(r.desc)patch.labelDescs={...(item.labelDescs||{}),[descKey]:String(r.desc).trim()};
+        if(Object.keys(patch).length)patches[item.id]=patch;
+      });
+      if(Object.keys(patches).length)await onPatchStockItems?.(patches);
+      else window.alert("AI fill came back empty — try again.");
+    }catch(e){window.alert("AI fill failed: "+e.message);}
+    finally{setAiBusy("");}
+  };
+  // Printed through a standalone window so the sheet carries its own millimetre
+  // page geometry instead of inheriting the app's screen styles.
+  const printLabels=()=>{
+    const rows=labelItems.flatMap(s=>{
+      const n=labelCopies(s);
+      const local=secondLine(s);
+      const en=(s.labelEn||autoEn(s)).trim();
+      return Array.from({length:n},()=>({
+        // With no second language the English name carries the card on its own.
+        lead:local||en,
+        sub:local?en:"",
+        origin:cardOrigin(s),
+        desc:cardDesc(s),
+        price:(+s.listPrice>0)?`${showCur}${(+s.listPrice).toLocaleString("en-US",{maximumFractionDigits:0})}`:"",
+      }));
+    });
+    if(!rows.length)return;
+    const esc=t=>String(t).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const w=window.open("","_blank");
+    if(!w)return;
+    w.document.write(`<!DOCTYPE html><html lang="${lang||"en"}"><head><meta charset="UTF-8"><title>Name Cards 95×50mm — ${esc(show.name||"")}</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400;600&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap" rel="stylesheet"><style>
+:root{--card-w:95mm;--card-h:50mm;--accent:#8B6F47;--text-main:#1a1a1a;--text-origin:#6B5344;--border:#d4c4b0;--rule:#e8ddd2;--bg:#f2ede7;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
+.toolbar{max-width:226mm;margin:0 auto 16px;background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.08);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;}
+.toolbar h1{font-family:'Noto Serif JP',serif;font-size:13px;font-weight:400;color:#666;letter-spacing:.06em;}
+.btn-print{background:var(--accent);color:#fff;border:none;padding:7px 18px;font-family:'Cormorant Garamond',serif;font-size:13px;letter-spacing:.08em;cursor:pointer;border-radius:5px;}
+.page{width:210mm;background:var(--bg);margin:0 auto;display:grid;grid-template-columns:repeat(2,var(--card-w));gap:3mm;justify-content:center;align-content:start;}
+.card{width:var(--card-w);height:var(--card-h);border:.4mm solid var(--border);padding:3.5mm 5mm 3mm;display:flex;flex-direction:column;justify-content:space-between;position:relative;background:#fff;overflow:hidden;}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:1.2mm;background:var(--accent);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.card-top{display:flex;flex-direction:column;align-items:center;gap:1mm;}
+.lead{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:17.6pt;font-weight:400;color:var(--text-main);letter-spacing:.05em;line-height:1.1;text-align:center;width:100%;}
+.origin{font-size:9.4pt;color:var(--text-origin);letter-spacing:.12em;text-transform:uppercase;text-align:center;width:100%;}
+.rule{width:100%;border:none;border-top:.25mm solid var(--rule);margin:1mm 0;}
+.sub{font-size:9.9pt;font-style:italic;font-weight:300;color:#777;letter-spacing:.06em;text-align:center;width:100%;}
+.props{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:8.8pt;font-weight:300;color:#666;text-align:center;line-height:1.4;width:100%;}
+.card-bottom{display:flex;align-items:center;border-top:.2mm solid var(--rule);padding-top:1.5mm;}
+.price{font-size:11pt;color:var(--text-main);letter-spacing:.05em;width:100%;border-bottom:.3mm solid #ccc;text-align:right;min-height:5mm;}
+@media print{@page{size:A4;margin:8mm;}*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}body{background:#fff !important;padding:0 !important;margin:0 !important;}.toolbar{display:none !important;}.page{background:#fff !important;margin:0 !important;width:100% !important;}.card{break-inside:avoid;}.card::before{background:#8B6F47 !important;}}
+</style></head><body>
+<div class="toolbar"><h1>${esc(show.name||"")} &nbsp;·&nbsp; 95 × 50 mm &nbsp;·&nbsp; ${rows.length} card${rows.length===1?"":"s"}</h1><button class="btn-print" onclick="window.print()">🖨 Print A4</button></div>
+<div class="page">${rows.map(r=>`<div class="card"><div class="card-top"><div class="lead">${esc(r.lead)}</div>${r.origin?`<div class="origin">${esc(r.origin)}</div>`:""}<hr class="rule"/>${r.sub?`<div class="sub">${esc(r.sub)}</div>`:""}${r.desc?`<div class="props">${esc(r.desc)}</div>`:""}</div><div class="card-bottom"><div class="price">${esc(r.price)}</div></div></div>`).join("")}</div>
+</body></html>`);
+    w.document.close();
+  };
   const dailySales=show.dailySales||[];
   const showExpenses=show.showExpenses||[];
   const showPhotos=show.showPhotos||[];
@@ -14688,7 +15561,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const totalItemsSold=ssSold.length+showSoldItems.length;
   const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`).join(" · ")||"—";
   // Employees don't see show earnings — no Sales tab, no revenue figures
-  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}].filter(t=>isAdmin||t.id!=="sales");
+  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"shipment",label:"📦 Shipment"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}].filter(t=>isAdmin||t.id!=="sales");
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
   const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
 
@@ -15708,6 +16581,259 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
                     })()}
                   </div>
                 </div>
+              )}
+            </div>
+          )}
+
+          {/* ── SHIPMENT ── */}
+          {showTab==="shipment"&&(
+            <div style={{padding:"14px 16px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>What goes to {show.name} · {shipRegion}</span>
+                <div style={{display:"flex",gap:6}}>
+                  {[["plan","Plan"],["labels","🏷 Name cards"]].map(([v,label])=>(
+                    <button key={v} onClick={e=>{e.stopPropagation();setShipView(v);}} style={{background:shipView===v?C.ink:"none",color:shipView===v?"#fff":C.inkMid,border:`1px solid ${shipView===v?C.ink:C.border}`,borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{label}</button>
+                  ))}
+                </div>
+              </div>
+
+              {shipView==="plan"?(
+                <>
+                  {/* ── The draft: a plan only. Nothing here has moved in stock yet. ── */}
+                  <div style={{border:`1px solid ${draftLines.length?show.color:C.border}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Planned shipment · not sent yet</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{draftLines.length} card{draftLines.length===1?"":"s"}{draftKg>0?` · ${fmtFlowNum(draftKg)} kg`:""}</span>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+                      {[
+                        ["Cost",inr(Math.round(draftCostInr)),draftCostUsd>0?`${fmtUsd(draftCostUsd)} at ₹${usdInr}/$`:"",C.inkMid],
+                        ["Value",fmtUsd(draftValueUsd),!draftLines.length?"":draftUnpriced>0?`${draftUnpriced} card${draftUnpriced===1?"":"s"} unpriced`:"all priced",draftUnpriced>0?C.amber:C.green],
+                        ["Margin",draftValueUsd>0?fmtUsd(draftMarginUsd):"—",draftValueUsd>0?(draftMultiple>0?`${(Math.round(draftMultiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",draftValueUsd>0&&draftMarginUsd<0?C.red:C.inkFaint],
+                        ["Weight",draftKg>0?`${fmtFlowNum(draftKg)} kg`:"—","kg-priced cards only",C.inkMid],
+                      ].map(([label,big,sub,color])=>(
+                        <div key={label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 10px"}}>
+                          <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
+                          <div style={{fontSize:17,fontWeight:750,color:C.ink,lineHeight:1.1,wordBreak:"break-word"}}>{big}</div>
+                          <div style={{fontSize:9,color,marginTop:3,minHeight:12}}>{sub}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,margin:"12px 0 8px",flexWrap:"wrap"}}>
+                      <span style={{fontSize:10,color:C.inkFaint}}>Cost and SP are per-unit rates; value is what you're taking times SP.</span>
+                      {isAdmin&&!shipPickOpen&&<button onClick={e=>{e.stopPropagation();setShipPickOpen(true);}} style={{background:show.color,color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>➕ Add from stock</button>}
+                    </div>
+
+                    {draftLines.length===0?(
+                      <div style={{fontSize:12,color:C.inkFaint,border:`1px dashed ${C.border}`,borderRadius:8,padding:18,textAlign:"center"}}>Nothing planned for {show.name} yet. Add cards from stock — they stay in India until you send.</div>
+                    ):(
+                      <>
+                        {!mob&&(
+                          <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 132px 84px 74px 88px 88px 128px 20px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
+                            <span>Item</span><span>Taking</span><span>Cost ₹/u</span><span>SP $/u</span><span>Value $</span><span>Margin $</span><span>Vendor</span><span/>
+                          </div>
+                        )}
+                        <div style={{display:"grid",gap:5}}>
+                          {draftLines.map(({line,item})=>{
+                            const sh=lineShare({line,item});
+                            const issue=lineIssue({line,item});
+                            const hasQty2=(parseFloat(item.qty2)||0)>0;
+                            return(
+                              <div key={line.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 132px 84px 74px 88px 88px 128px 20px",gap:8,alignItems:"center",background:issue?C.amberBg:C.surface,border:`1px solid ${issue?C.amber:C.border}`,borderRadius:8,padding:"7px 10px"}}>
+                                <div style={{display:"flex",gap:8,alignItems:"center",minWidth:0}}>
+                                  {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:30,height:30,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:30,height:30,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                                  <div style={{minWidth:0}}>
+                                    <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                    <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.location?`Box ${item.location} · `:""}{`${sh.basis||0} of ${item.qty||item.qty2||0} ${(parseFloat(item.qty)||0)>0?(item.unit||"pcs"):(item.unit2||"kg")}`}{issue?` · ${issue}`:""}</div>
+                                  </div>
+                                </div>
+                                <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap"}}>
+                                  {mob&&<span style={{fontSize:9,fontWeight:700,color:C.inkMid}}>TAKING</span>}
+                                  <input value={line.qty??""} onChange={e=>setDraftQty(line.id,"qty",e.target.value)} type="number" min="0" step="any" title={`of ${item.qty||0} ${item.unit||"pcs"}`} style={{...FI,fontSize:10,padding:"3px 5px",width:hasQty2?60:74}}/>
+                                  {hasQty2&&<input value={line.qty2??""} onChange={e=>setDraftQty(line.id,"qty2",e.target.value)} type="number" min="0" step="any" title={`of ${item.qty2} ${item.unit2||"kg"}`} style={{...FI,fontSize:10,padding:"3px 5px",width:60}}/>}
+                                </div>
+                                <input key={`cp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"Cost ₹":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
+                                <input key={`sp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"SP $":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
+                                <span style={{fontSize:11,fontWeight:800,color:sh.value>0?C.ink:C.inkFaint}}>{sh.value>0?fmtUsd(sh.value):"—"}</span>
+                                <span style={{fontSize:11,fontWeight:800,color:sh.value<=0?C.inkFaint:sh.margin<0?C.red:C.green}}>{sh.value>0?fmtUsd(sh.margin):"—"}</span>
+                                <input key={`vn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} placeholder={mob?"Vendor":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
+                                <button onClick={e=>{e.stopPropagation();removeDraftLine(line.id);}} title="Remove from plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,justifySelf:"end"}}>&times;</button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{fontSize:10,color:C.inkFaint,marginTop:11,lineHeight:1.5}}>
+                          This is a plan only — nothing is deducted from stock. Do the actual send with <strong>Send → show</strong> in the Stock module. Prices, cost and vendor edited here save straight onto the stock card.
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {shipPickOpen&&(
+                    <div onClick={e=>e.stopPropagation()} style={{border:`1px solid ${show.color}`,borderRadius:9,background:C.card,padding:"11px 12px",marginBottom:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+                        <span style={{fontSize:10,fontWeight:800,color:C.inkMid,textTransform:"uppercase",letterSpacing:.5}}>Add to the {show.name} plan</span>
+                        <button onClick={()=>{setShipPickOpen(false);setShipQuery("");setShipPickIds(new Set());setShipQtys({});}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>
+                      </div>
+                      <input value={shipQuery} onChange={e=>setShipQuery(e.target.value)} placeholder="Search stone, shape, size, box, SKU…" style={{...FI,fontSize:11,width:"100%",boxSizing:"border-box",marginBottom:8}}/>
+                      {shipPool.length===0?(
+                        <div style={{fontSize:11,color:C.inkFaint,padding:"10px 2px"}}>Nothing available — every stock card with quantity left is already out at a show.</div>
+                      ):(
+                        <>
+                          <div style={{display:"grid",gap:5,maxHeight:300,overflowY:"auto",marginBottom:9}}>
+                            {shipShown.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"8px 2px"}}>No stock matches “{shipQuery}”.</div>}
+                            {shipShown.map(item=>{
+                              const inPlan=planKey(item.id);
+                              const picked=shipPickIds.has(item.id);
+                              const ent=shipQtyOf(item);
+                              const hasQty2=(parseFloat(item.qty2)||0)>0;
+                              return(
+                                <div key={item.id} style={{background:inPlan?C.greenBg:picked?C.blueBg:C.surface,border:`1px solid ${inPlan?C.green:picked?C.blue:C.border}`,borderRadius:7,overflow:"hidden",opacity:inPlan?.85:1}}>
+                                  <div onClick={()=>inPlan?removeDraftLine(item.id):toggleShipPick(item)} style={{display:"flex",gap:8,alignItems:"center",padding:"6px 8px",cursor:"pointer"}}>
+                                    <input type="checkbox" checked={inPlan||picked} readOnly style={{flexShrink:0,pointerEvents:"none"}}/>
+                                    {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:32,height:32,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:32,height:32,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                                    <div style={{flex:1,minWidth:0}}>
+                                      <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                      <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flowQtyText(item)}{item.location?` · Box ${item.location}`:""}{item.costPrice?` · cost ${inr(item.costPrice)}`:""}</div>
+                                    </div>
+                                    {inPlan
+                                      ?<span style={{fontSize:9,fontWeight:800,color:C.green,flexShrink:0,whiteSpace:"nowrap"}}>✓ in plan · tap to remove</span>
+                                      :<span style={{fontSize:9,fontWeight:700,color:item.listPrice?C.green:C.inkFaint,flexShrink:0}}>{item.listPrice?`$${item.listPrice}`:"no price"}</span>}
+                                  </div>
+                                  {picked&&!inPlan&&(
+                                    <div onClick={e=>e.stopPropagation()} style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",padding:"0 8px 7px 30px"}}>
+                                      <span style={{fontSize:9,fontWeight:700,color:C.inkMid,textTransform:"uppercase",letterSpacing:.4}}>Taking</span>
+                                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                        <input value={ent.qty} onChange={e=>setShipQty(item.id,"qty",e.target.value)} type="number" min="0" step="any" style={{...FI,fontSize:10,padding:"2px 5px",width:64}}/>
+                                        <span style={{fontSize:9,color:C.inkFaint}}>of {item.qty||"0"} {item.unit||"pcs"}</span>
+                                      </div>
+                                      {hasQty2&&(
+                                        <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                          <input value={ent.qty2} onChange={e=>setShipQty(item.id,"qty2",e.target.value)} type="number" min="0" step="any" style={{...FI,fontSize:10,padding:"2px 5px",width:64}}/>
+                                          <span style={{fontSize:9,color:C.inkFaint}}>of {item.qty2} {item.unit2||"kg"}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                            <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                              <span style={{fontSize:10,color:C.inkFaint}}>{shipPickIds.size} selected · {draftLines.length} in plan{shipMatches.length>shipShown.length?` · showing ${shipShown.length} of ${shipMatches.length}`:` · ${shipMatches.length} match${shipMatches.length===1?"":"es"}`}</span>
+                              {shipUnplanned.length>0&&(
+                                <button onClick={()=>{setShipPickIds(new Set(shipUnplanned.map(i=>i.id)));setShipQtys(q=>{const n={...q};shipUnplanned.forEach(i=>{if(!n[i.id])n[i.id]={qty:String(i.qty||""),qty2:String(i.qty2||"")};});return n;});}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"2px 9px",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer"}}>Select all {shipUnplanned.length}</button>
+                              )}
+                              {shipPickIds.size>0&&<button onClick={()=>{setShipPickIds(new Set());setShipQtys({});}} style={{background:"none",border:"none",fontSize:10,color:C.inkFaint,cursor:"pointer",textDecoration:"underline"}}>clear</button>}
+                            </div>
+                            <button onClick={addToDraft} disabled={!shipPickIds.size} style={{background:shipPickIds.size?show.color:"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 15px",fontSize:11,fontWeight:800,cursor:shipPickIds.size?"pointer":"default"}}>{`Add ${shipPickIds.size||""} to plan`}</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actual stock at the show — sent from the Stock module, shown here
+                      only so the plan can be compared against what really went. */}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 12px",marginBottom:10,flexWrap:"wrap"}}>
+                    <span style={{fontSize:10,fontWeight:700,color:C.inkMid}}>Actually sent so far · {shipItems.length} card{shipItems.length===1?"":"s"}{shipKg>0?` · ${fmtFlowNum(shipKg)} kg`:""}{shipCostInr>0?` · ${inr(Math.round(shipCostInr))}`:""}</span>
+                    <span style={{fontSize:9,color:C.inkFaint}}>sent via Stock → Send to show</span>
+                  </div>
+                  <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:8}}>Cards at the show</div>
+
+                  {shipItems.length===0?(
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing has been sent to {show.name} yet. Use <strong>Send → show</strong> in the Stock module.</div>
+                  ):(
+                    <>
+                      {!mob&&(
+                        <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
+                          <span>Item</span><span>At the show</span><span>Cost ₹/u</span><span>SP $/u</span><span>Value $</span><span>Margin $</span><span>Vendor</span>
+                        </div>
+                      )}
+                      <div style={{display:"grid",gap:5}}>
+                        {shipSent.map(item=>(
+                          <div key={item.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center",minWidth:0}}>
+                              {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:30,height:30,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:30,height:30,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
+                              <div style={{minWidth:0}}>
+                                <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
+                                <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.location?`Box ${item.location}`:""}{item.sentAt?`${item.location?" · ":""}sent ${fmtDate(item.sentAt)}`:""}{item.soldDate?" · sold":""}</div>
+                              </div>
+                            </div>
+                            <span style={{fontSize:10,color:C.ink,fontWeight:700}}>{flowQtyText(item)}</span>
+                            <input key={`scp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"Cost ₹":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
+                            <input key={`ssp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"SP $":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
+                            {(()=>{const b=(parseFloat(item.qty)||0)>0?(parseFloat(item.qty)||0):(parseFloat(item.qty2)||0);const v=(parseFloat(item.listPrice)||0)*b;const c=(parseFloat(item.costPrice)||0)*b;const m=v-(usdInr>0?c/usdInr:0);return(<>
+                              <span style={{fontSize:11,fontWeight:800,color:v>0?C.ink:C.inkFaint}}>{v>0?fmtUsd(v):"—"}</span>
+                              <span style={{fontSize:11,fontWeight:800,color:v<=0?C.inkFaint:m<0?C.red:C.green}}>{v>0?fmtUsd(m):"—"}</span>
+                            </>);})()}
+                            <input key={`svn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} placeholder={mob?"Vendor":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              ):(
+                <>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Card language</span>
+                      <select value={lang} onChange={e=>setLabelLang(e.target.value)} style={{...FI,fontSize:12,padding:"5px 9px",minWidth:170}}>
+                        {LABEL_LANGS.map(l=><option key={l.code} value={l.code}>{l.native?`${l.native} · ${l.label}`:l.label}</option>)}
+                      </select>
+                    </div>
+                    {isAdmin&&<button onClick={()=>aiFillCards(labelItems.filter(i=>labelCopies(i)>0))} disabled={!labelItems.length||!!aiBusy} style={{background:"none",border:`1px solid ${aiBusy?C.border:"#8B6F47"}`,borderRadius:6,padding:"6px 13px",fontSize:11,fontWeight:700,color:aiBusy?C.inkFaint:"#8B6F47",cursor:labelItems.length&&!aiBusy?"pointer":"default",marginRight:7}}>{aiBusy==="all"?"Writing…":"✨ AI fill all"}</button>}
+                    <button onClick={printLabels} disabled={!labelItems.length} style={{background:labelItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:labelItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
+                  </div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.filter(i=>labelCopies(i)>0).length} card{labelItems.filter(i=>labelCopies(i)>0).length===1?"":"s"}{labelItems.filter(i=>labelCopies(i)===0).length>0?` · ${labelItems.filter(i=>labelCopies(i)===0).length} skipped`:""} · 95 × 50 mm name cards, 2 per row on A4{lang?"":" · English only"}</div>
+                  {labelItems.length===0?(
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Plan a shipment first — name cards come from what's in it.</div>
+                  ):(
+                    <div style={{display:"grid",gap:7}}>
+                      {labelItems.map(item=>{
+                        const copies=labelCopies(item);
+                        const planned=planKey(item.id);
+                        return(
+                        <div key={item.id} style={{background:copies===0?C.bg:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px",opacity:copies===0?.6:1}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
+                            <span style={{fontSize:10,color:C.inkFaint}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}{copies===0?" · not printing":""}</span>
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                              {isAdmin&&<button onClick={e=>{e.stopPropagation();aiFillCards([item]);}} disabled={!!aiBusy} title="Write this card with AI" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:aiBusy===item.id?C.inkFaint:"#8B6F47",cursor:aiBusy?"default":"pointer"}}>{aiBusy===item.id?"…":"✨"}</button>}
+                              {copies>0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:"0"});}} title="Skip this card on the sheet" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.inkMid,cursor:"pointer"}}>skip</button>}
+                              {copies===0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:""});}} title="Print this card again" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.blue,cursor:"pointer"}}>print</button>}
+                              {planned&&<button onClick={e=>{e.stopPropagation();removeDraftLine(item.id);}} title="Remove from the shipment plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>}
+                            </div>
+                          </div>
+                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 150px 90px":"1fr 150px 90px"),gap:7}}>
+                            {!!lang&&(
+                              <Field label={`${langCfg.label} name — big line`}>
+                                <input key={`${item.id}-${lang}`} defaultValue={secondLine(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==secondLine(item))setSecondLine(item.id,v);}} placeholder={langCfg.sample||""} style={{...FI,fontSize:11}}/>
+                              </Field>
+                            )}
+                            <Field label={lang?"English name":"Name — big line"}>
+                              <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))onPatchStockItem?.(item.id,{labelEn:v});}} style={{...FI,fontSize:11}}/>
+                            </Field>
+                            <Field label="Origin">
+                              <input key={`or-${item.id}`} defaultValue={cardOrigin(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardOrigin(item))onPatchStockItem?.(item.id,{labelOrigin:v});}} placeholder={lang==="ja"?"INDIA · インド産":"INDIA"} style={{...FI,fontSize:11}}/>
+                            </Field>
+                            <Field label="Copies">
+                              <input key={`cp-${item.id}-${copies}`} type="number" min="0" max="200" defaultValue={copies} onBlur={e=>{const v=String(Math.max(0,Math.min(200,parseInt(e.target.value,10)||0)));if(v!==String(copies))onPatchStockItem?.(item.id,{labelCopies:v});}} style={{...FI,fontSize:11}}/>
+                            </Field>
+                          </div>
+                          <div style={{marginTop:6}}>
+                            <Field label={`Description${lang?` — ${langCfg.label}`:""} · one line on the card`}>
+                              <input key={`ds-${item.id}-${descKey}`} defaultValue={cardDesc(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardDesc(item))setCardDesc(item.id,v);}} placeholder={lang==="ja"?"金属光沢を持つ硫化鉄で、豊かさを象徴する。":"A copper silicate prized for its deep blue colour."} style={{...FI,fontSize:11}}/>
+                            </Field>
+                          </div>
+                        </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

@@ -5,24 +5,54 @@ import { C, mob, FI } from "./lmTheme.js";
    Listing Manager's contextual "Campaign" button, so both drive one implementation.
    Campaigns are only ever created as drafts here; sending is a separate, confirmed
    action because a blast to the subscriber list cannot be undone. */
+/* The list has run to the same two conventions for months: a shouted subject
+   carrying the send date, and an internal name that is just the date written
+   plainly. Both are derived rather than typed, so a new campaign starts correct. */
+const MONTHS = ["JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"];
+const _today = new Date();
+const MAILER_DATE = `${_today.getDate()} ${MONTHS[_today.getMonth()]} ${_today.getFullYear()}`;
+const ordinal = d => d + (d > 3 && d < 21 ? "th" : ["th", "st", "nd", "rd"][d % 10] || "th");
+const CAMPAIGN_NAME = `${ordinal(_today.getDate())} ${MONTHS[_today.getMonth()][0]}${MONTHS[_today.getMonth()].slice(1).toLowerCase()} ${_today.getFullYear()}`;
+
 export default function CampaignComposer({ listings = [], onClose, showToast }) {
   const [sel, setSel] = useState(() => new Set());
   const [q, setQ] = useState("");
   const [brand, setBrand] = useState("Nikhil Gems");
   const [heading, setHeading] = useState("New arrivals");
-  const [subject, setSubject] = useState("");
+  // Every mailer is the same weekly list with a new date on it, so the subject
+  // writes itself. Still a plain field — a one-off can say something else.
+  const [subject, setSubject] = useState(() => `NIKHIL GEMS - WEEKLY MAILING LIST - ${MAILER_DATE}`);
   const [preheader, setPreheader] = useState("");
   const [intro, setIntro] = useState("");
   const [senderName, setSenderName] = useState("Nikhil Gems");
   const [senderEmail, setSenderEmail] = useState("");
-  const [priceMode, setPriceMode] = useState("none");
+  const [priceMode, setPriceMode] = useState("earth");
   /* Design lives in one object so preview and the created draft can never drift
      apart — both are rendered from payloadBase() by the same server function. */
   const [design, setDesign] = useState({
-    columns: 2, accent: "#9a6200", ink: "#1a1308", pageBg: "#faf7f2", cardBg: "#ffffff",
+    layout: "editorial",
+    columns: 2, accent: "#9a6200", ink: "#1a1308", pageBg: "#e5e6e6", cardBg: "#ffffff",
     font: "serif", showPrice: true, showMeta: true, showCta: true, showDivider: false,
-    cornerStyle: "rounded", ctaStyle: "solid", ctaLabel: "View product",
-    headingSize: 27, headerImage: "", footer: "",
+    cornerStyle: "square", ctaStyle: "outline", ctaLabel: "Shop now",
+    headingSize: 26, footer: "",
+    headerImage: "https://cdn.shopify.com/s/files/1/0799/9576/4953/files/White_Background_-_Black_-_Vertical_f86e2e99-211d-4ab6-84a2-b67ff247af3f.png?v=1786605155",
+    logoWidth: 150,
+    // Editorial furniture — the standing trade CTA is pre-filled because it is
+    // the same invitation on every mailer; blank the line to drop the panel.
+    bannerImage: "", priceSuffix: "", dateLine: "",
+    // The in-stock banner is drawn from these rather than uploaded as a graphic,
+    // so it stays sharp, readable on a phone, and survives blocked images.
+    promoRibbon: "Limited lots · Special pricing", promoTitle: "IN-STOCK SPECIALS",
+    promoSubtitle: "Special prices · Shipping included",
+    promoNote: "Current inventory available for immediate dispatch.",
+    promoBadges: "📦 In stock | Available now\n🚚 Ready to ship | Quick dispatch\n🌐 Shipping included | No extra charges",
+    promoColor: "#14331f",
+    productColumns: 2,
+    shipIcon: "✈️", shipTitle: "Duty free worldwide shipping",
+    shipNote: "All orders ship DDP — the price you see is the price you pay. No customs fees, no import duties, no surprise charges on delivery. Your order clears at our end, not yours.",
+    tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",
+    tradeButton: "Log in to eartheditions.co", tradeUrl: "https://eartheditions.co/account/login",
+    instagramUrl: "https://www.instagram.com/eartheditions_/?hl=fr", addressLine: "",
   });
   const [designOpen, setDesignOpen] = useState(false);
   const [segments, setSegments] = useState([]);
@@ -66,11 +96,18 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     return { price: `${sym}${v.toLocaleString(currency === "INR" ? "en-IN" : "en-US")}`, priceValue: v, currency };
   };
   const linkOf = l => l.platforms?.shopify_earth?.storefront_url || l.platforms?.shopify_aty?.storefront_url || l.platforms?.etsy?.url || l.platforms?.ebay?.url || "";
+  // "Available: 269 pcs" only means something on a repeatable lot — a unique
+  // piece is always exactly one, and saying so reads like a scarcity gimmick.
+  const availableOf = l => {
+    const n = +l.qty || 0;
+    return l.type === "unique" || n < 2 ? "" : `${n} ${l.unit || "pcs"}`;
+  };
   const toProduct = l => ({
     id: l.id, title: l.title || "Untitled",
     image: (l.images || [])[0] || "",
     url: linkOf(l),
     meta: [l.material, l.shape, l.size].filter(Boolean).join(" · "),
+    available: availableOf(l),
     description: l.description || "",
     ...priceOf(l),
   });
@@ -98,7 +135,9 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
       await post({ action: "sync_products", products }).catch(() => {}); // catalog sync is best-effort
       const d = await post({
         action: "create_campaign", ...payloadBase(),
-        name: subject || heading, subject, preheader, senderName, senderEmail: senderEmail || undefined,
+        // Omnisend's campaign name is internal-only; the date alone is how the
+        // list has always been labelled there.
+        name: CAMPAIGN_NAME, subject, preheader, senderName, senderEmail: senderEmail || undefined,
         segmentIds: [...segIds],
       });
       setCampaignId(d.campaignId); setTestedOk(false);
@@ -120,13 +159,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   };
 
   const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 14 };
-  const lab = { fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
+  const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
 
   return (
     <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 1000, display: "flex", alignItems: mob() ? "stretch" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
       <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>📣 New-products campaign</div>
+          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, color: C.ink, lineHeight: 1 }}>📣 New-products campaign</div>
           <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size} selected</div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Close</button>
@@ -179,21 +218,21 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               <div><label style={lab}>Sender name *</label><input value={senderName} onChange={e => { setSenderName(e.target.value); invalidate(); }} style={FI()} /></div>
               <div><label style={lab}>Sender email</label><input value={senderEmail} onChange={e => { setSenderEmail(e.target.value); invalidate(); }} placeholder="verified in Omnisend" style={FI()} /></div>
               <div>
-                <label style={lab}>Prices shown</label>
+                <label style={lab}>Which price to print</label>
                 <select value={priceMode} onChange={e => { setPriceMode(e.target.value); invalidate(); }} style={FI()}>
-                  <option value="none">No prices (wholesale)</option>
                   <option value="earth">Earth Editions ($)</option>
                   <option value="aty">Atyahara (₹)</option>
                   <option value="etsy">Etsy (₹)</option>
+                  <option value="none">Print no prices</option>
                 </select>
               </div>
               <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
                 <button type="button" onClick={() => setDesignOpen(o => !o)}
-                  style={{ width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 800, color: C.ink, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8 }}>
+                  style={{ width: "100%", textAlign: "left", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, color: C.ink, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ transform: designOpen ? "rotate(90deg)" : "none", transition: "transform .15s", fontSize: 10 }}>▸</span>
                   🎨 Design
                   <span style={{ fontWeight: 500, color: C.inkFaint, fontSize: 11 }}>
-                    {design.columns === 1 ? "1 column" : "2 columns"} · {design.font === "sans" ? "sans" : "serif"} · {design.cornerStyle}
+                    {design.layout === "editorial" ? "editorial" : design.columns === 1 ? "cards · 1 column" : "cards · 2 columns"} · {design.font === "sans" ? "sans" : "serif"} · {design.cornerStyle}
                   </span>
                   <span style={{ flex: 1 }} />
                   <span style={{ width: 15, height: 15, borderRadius: 4, background: design.accent, border: `1px solid ${C.border}` }} />
@@ -204,10 +243,22 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
                       <div>
                         <label style={lab}>Layout</label>
-                        <select value={design.columns} onChange={e => setD("columns", +e.target.value)} style={FI()}>
-                          <option value={2}>Two columns</option>
-                          <option value={1}>One column (big)</option>
+                        <select value={design.layout} onChange={e => setD("layout", e.target.value)} style={FI()}>
+                          <option value="editorial">Editorial (big photos)</option>
+                          <option value="cards">Compact cards</option>
                         </select>
+                      </div>
+                      <div>
+                        <label style={lab}>Columns</label>
+                        {design.layout === "cards"
+                          ? <select value={design.columns} onChange={e => setD("columns", +e.target.value)} style={FI()}>
+                              <option value={2}>Two columns</option>
+                              <option value={1}>One column (big)</option>
+                            </select>
+                          : <select value={design.productColumns} onChange={e => setD("productColumns", +e.target.value)} style={FI()}>
+                              <option value={2}>Two columns</option>
+                              <option value={1}>One column (big)</option>
+                            </select>}
                       </div>
                       <div>
                         <label style={lab}>Font</label>
@@ -223,14 +274,16 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                           <option value="square">Square</option>
                         </select>
                       </div>
-                      <div>
-                        <label style={lab}>Button style</label>
-                        <select value={design.ctaStyle} onChange={e => setD("ctaStyle", e.target.value)} style={FI()}>
-                          <option value="solid">Solid</option>
-                          <option value="outline">Outline</option>
-                          <option value="link">Text link</option>
-                        </select>
-                      </div>
+                      {design.layout === "cards" && (
+                        <div>
+                          <label style={lab}>Button style</label>
+                          <select value={design.ctaStyle} onChange={e => setD("ctaStyle", e.target.value)} style={FI()}>
+                            <option value="solid">Solid</option>
+                            <option value="outline">Outline</option>
+                            <option value="link">Text link</option>
+                          </select>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
@@ -261,7 +314,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                       </div>
                       <div>
                         <label style={lab}>Logo URL <span style={{ textTransform: "none", fontWeight: 400 }}>(replaces the brand line)</span></label>
-                        <input value={design.headerImage} onChange={e => setD("headerImage", e.target.value)} placeholder="https://…" style={FI()} />
+                        <div style={{ display: "flex", gap: 5 }}>
+                          <input value={design.headerImage} onChange={e => setD("headerImage", e.target.value)} placeholder="https://…" style={FI()} />
+                          <input type="number" min={24} max={540} value={design.logoWidth} onChange={e => setD("logoWidth", +e.target.value)}
+                            title="Logo width in px" style={{ ...FI(), width: 68, flexShrink: 0 }} />
+                        </div>
                       </div>
                       <div>
                         <label style={lab}>Heading px</label>
@@ -269,8 +326,117 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                       </div>
                     </div>
 
+                    {design.layout === "editorial" && (
+                      <div style={{ display: "grid", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                        {/* In-stock banner — built in HTML, not an uploaded image. */}
+                        <div style={{ display: "grid", gap: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <label style={{ ...lab, marginBottom: 0 }}>In-stock banner</label>
+                            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: C.inkMid, cursor: "pointer" }}>
+                              <input type="checkbox" checked={!!design.promoTitle || !!design.promoRibbon}
+                                onChange={e => {
+                                  if (e.target.checked) setDesign(d => ({ ...d, promoTitle: "IN-STOCK SPECIALS", promoRibbon: "Limited lots · Special pricing" }));
+                                  else setDesign(d => ({ ...d, promoTitle: "", promoRibbon: "" }));
+                                  invalidate();
+                                }} /> show
+                            </label>
+                            <span style={{ fontSize: 11, color: C.inkFaint }}>drawn in the email — no image to host</span>
+                          </div>
+                          {(design.promoTitle || design.promoRibbon) && (
+                            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10 }}>
+                              <div>
+                                <label style={lab}>Ribbon</label>
+                                <input value={design.promoRibbon} onChange={e => setD("promoRibbon", e.target.value)} style={FI()} />
+                              </div>
+                              <div>
+                                <label style={lab}>Banner title</label>
+                                <input value={design.promoTitle} onChange={e => setD("promoTitle", e.target.value)} style={FI()} />
+                              </div>
+                              <div>
+                                <label style={lab}>Sub-line</label>
+                                <input value={design.promoSubtitle} onChange={e => setD("promoSubtitle", e.target.value)} style={FI()} />
+                              </div>
+                              <div>
+                                <label style={lab}>Note under the rule</label>
+                                <input value={design.promoNote} onChange={e => setD("promoNote", e.target.value)} style={FI()} />
+                              </div>
+                              <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
+                                <label style={lab}>Badges <span style={{ textTransform: "none", fontWeight: 400 }}>— one per line, “emoji Label | caption”, up to 3</span></label>
+                                <textarea value={design.promoBadges} onChange={e => setD("promoBadges", e.target.value)} rows={3} style={{ ...FI(), resize: "vertical", fontSize: 12 }} />
+                              </div>
+                              <div>
+                                <label style={lab}>Banner colour</label>
+                                <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                                  <input type="color" value={design.promoColor} onChange={e => setD("promoColor", e.target.value)}
+                                    style={{ width: 34, height: 32, padding: 0, border: `1px solid ${C.border}`, borderRadius: 6, background: "none", cursor: "pointer", flexShrink: 0 }} />
+                                  <input value={design.promoColor} onChange={e => setD("promoColor", e.target.value)} style={{ ...FI(), fontSize: 11, padding: "7px 8px" }} />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "2fr 1fr 1fr", gap: 10 }}>
+                          <div>
+                            <label style={lab}>Banner image <span style={{ textTransform: "none", fontWeight: 400 }}>(overrides the drawn banner)</span></label>
+                            <input value={design.bannerImage} onChange={e => setD("bannerImage", e.target.value)} placeholder="https://…  only if you have artwork" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Price suffix</label>
+                            <input value={design.priceSuffix} onChange={e => setD("priceSuffix", e.target.value)} placeholder="/ LOT" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Date line</label>
+                            <input value={design.dateLine} onChange={e => setD("dateLine", e.target.value)} placeholder="today's date" style={FI()} />
+                          </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10 }}>
+                          <div>
+                            <label style={lab}>Trade panel heading <span style={{ textTransform: "none", fontWeight: 400 }}>(empty removes the panel)</span></label>
+                            <input value={design.tradeLine} onChange={e => setD("tradeLine", e.target.value)} style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Trade panel eyebrow</label>
+                            <input value={design.tradeEyebrow} onChange={e => setD("tradeEyebrow", e.target.value)} style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Trade button label</label>
+                            <input value={design.tradeButton} onChange={e => setD("tradeButton", e.target.value)} style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Trade button link</label>
+                            <input value={design.tradeUrl} onChange={e => setD("tradeUrl", e.target.value)} placeholder="https://…" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Instagram link</label>
+                            <input value={design.instagramUrl} onChange={e => setD("instagramUrl", e.target.value)} placeholder="https://instagram.com/…" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Address line <span style={{ textTransform: "none", fontWeight: 400 }}>(Omnisend already prints one — leave empty)</span></label>
+                            <input value={design.addressLine} onChange={e => setD("addressLine", e.target.value)} placeholder="usually blank" style={FI()} />
+                          </div>
+                        </div>
+
+                        {/* Shipping terms — the closing block under the trade panel. */}
+                        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "90px 1fr", gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                          <div>
+                            <label style={lab}>Icon</label>
+                            <input value={design.shipIcon} onChange={e => setD("shipIcon", e.target.value)} placeholder="✈️ or URL" style={FI()} />
+                          </div>
+                          <div>
+                            <label style={lab}>Shipping heading <span style={{ textTransform: "none", fontWeight: 400 }}>(empty removes the block)</span></label>
+                            <input value={design.shipTitle} onChange={e => setD("shipTitle", e.target.value)} style={FI()} />
+                          </div>
+                          <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
+                            <label style={lab}>Shipping note</label>
+                            <textarea value={design.shipNote} onChange={e => setD("shipNote", e.target.value)} rows={3} style={{ ...FI(), resize: "vertical", fontSize: 12 }} />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div>
-                      <label style={lab}>Footer text <span style={{ textTransform: "none", fontWeight: 400 }}>(above the unsubscribe line Omnisend adds)</span></label>
+                      <label style={lab}>Footer text <span style={{ textTransform: "none", fontWeight: 400 }}>(Omnisend adds ©, your postal address and the unsubscribe links below this)</span></label>
                       <textarea value={design.footer} onChange={e => setD("footer", e.target.value)} rows={2}
                         placeholder="Studio address, reply-to, shipping note…" style={{ ...FI(), resize: "vertical" }} />
                     </div>
@@ -282,18 +448,6 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                 )}
               </div>
 
-              <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
-                <label style={lab}>Audience {segments.length === 0 && <span style={{ textTransform: "none", fontWeight: 400 }}>— none loaded, will send to all subscribers</span>}</label>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {segments.map(s => {
-                    const on = segIds.has(s.id);
-                    return <button key={s.id} type="button" onClick={() => { setSegIds(p => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; }); invalidate(); }}
-                      style={{ background: on ? C.teal : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.teal : C.border}`, borderRadius: 20, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
-                      {s.name}{s.count != null ? ` · ${s.count}` : ""}
-                    </button>;
-                  })}
-                </div>
-              </div>
             </div>
 
             {err && configured !== false && <div style={{ background: C.redBg, border: `1px solid ${C.red}55`, color: C.red, borderRadius: 10, padding: "9px 12px", fontSize: 12 }}>{err}</div>}
@@ -304,29 +458,48 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               </div>
             )}
 
-            {/* Draft → test → send. Each step gates the next. */}
-            <div style={{ ...card, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Draft → test → send. Each step gates the next.
+                Audience sits here rather than up in the copy: who it goes to is a
+                decision made at the point of sending, not while writing. */}
+            <div style={{ ...card, display: "grid", gap: 10 }}>
+              <div>
+                <label style={lab}>Audience {segments.length === 0
+                  ? <span style={{ textTransform: "none", fontWeight: 400 }}>— none loaded, will go to all subscribers</span>
+                  : segIds.size === 0 && <span style={{ textTransform: "none", fontWeight: 400 }}>— none picked, will go to all subscribers</span>}</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {segments.map(s => {
+                    const on = segIds.has(s.id);
+                    return <button key={s.id} type="button" onClick={() => { setSegIds(p => { const n = new Set(p); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; }); invalidate(); }}
+                      style={{ background: on ? C.teal : C.card, color: on ? "#fff" : C.ink, border: `1px solid ${on ? C.teal : C.border}`, borderRadius: 20, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                      {s.name}{s.count != null ? ` · ${s.count}` : ""}
+                    </button>;
+                  })}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <button onClick={doPreview} disabled={!products.length || !!busy}
-                style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 800, cursor: products.length ? "pointer" : "not-allowed", opacity: products.length ? 1 : .5 }}>
+                style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: products.length ? "pointer" : "not-allowed", opacity: products.length ? 1 : .5 }}>
                 {busy === "preview" ? "Rendering…" : "Preview"}
               </button>
               <button onClick={doCreate} disabled={!products.length || !subject || !senderName || configured === false || !!busy}
-                style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: (!products.length || !subject || !senderName || configured === false) ? .4 : 1 }}>
+                style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: (!products.length || !subject || !senderName || configured === false) ? .4 : 1 }}>
                 {busy === "create" ? "Creating…" : campaignId ? "Recreate draft" : "Create draft"}
               </button>
               {campaignId && <>
                 <input value={testTo} onChange={e => setTestTo(e.target.value)} placeholder="you@example.com" style={{ ...FI(), width: 190 }} />
                 <button onClick={doTest} disabled={!testTo || !!busy}
-                  style={{ background: C.tealBg, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 800, cursor: testTo ? "pointer" : "not-allowed", opacity: testTo ? 1 : .5 }}>
+                  style={{ background: C.tealBg, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 9, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: testTo ? "pointer" : "not-allowed", opacity: testTo ? 1 : .5 }}>
                   {busy === "test" ? "Sending…" : "Send test"}
                 </button>
                 <div style={{ flex: 1 }} />
                 <button onClick={doSend} disabled={!testedOk || !!busy}
                   title={testedOk ? "" : "Send yourself a test first"}
-                  style={{ background: testedOk ? C.red : C.card, color: testedOk ? "#fff" : C.inkFaint, border: `1px solid ${testedOk ? C.red : C.border}`, borderRadius: 9, padding: "10px 20px", fontSize: 12.5, fontWeight: 850, cursor: testedOk ? "pointer" : "not-allowed" }}>
+                  style={{ background: testedOk ? C.red : C.card, color: testedOk ? "#fff" : C.inkFaint, border: `1px solid ${testedOk ? C.red : C.border}`, borderRadius: 9, padding: "10px 20px", fontSize: 12.5, fontWeight: 700, cursor: testedOk ? "pointer" : "not-allowed" }}>
                   {busy === "send" ? "Sending…" : "Send to list →"}
                 </button>
-              </>}
+                </>}
+              </div>
             </div>
             <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.6 }}>
               The draft is created in Omnisend — you can also open it there to tweak the design. Omnisend appends its own unsubscribe footer to campaigns; confirm it's present in the test email before sending. Sending is irreversible.
