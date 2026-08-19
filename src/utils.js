@@ -361,8 +361,8 @@ export const isConflictError=e=>e?.code==="STALE_RECORD"||/changed in another ta
 const _conflictError=(k,id,result)=>{
   const latest=result?.latest||null;
   const who=latest?.updatedBy||"someone else";
-  const when=latest?.updatedAt?new Date(latest.updatedAt).toLocaleString():"recently";
-  const err=new Error(`This record was updated by ${who} at ${when}. Reload latest before saving.`);
+  const when=latest?.updatedAt?` at ${new Date(latest.updatedAt).toLocaleString()}`:"";
+  const err=new Error(`This record was updated by ${who}${when}. Reload latest before saving.`);
   err.code="STALE_RECORD";
   err.key=k;
   err.id=id;
