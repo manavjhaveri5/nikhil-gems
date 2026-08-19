@@ -6318,8 +6318,16 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const sendToShow=async(showId,ids,stockOverride)=>{if(!ids.size||!showId)return;const show=shows.find(s=>s.id===showId);if(!show)return;const region=getShowRegion(show);const showTag=show.name;const base=stockOverride||stock;
     const liveMatches=await findLiveListingsForStock(base.filter(s=>ids.has(s.id)),base);
     if(liveMatches.length&&!window.confirm(liveListingAlertText(liveMatches,`These items are about to go to ${region} (${showTag}). Check and delete/adjust the online listings if needed.\n\nSend anyway?`)))return;
-    const prevStock=[...base];const ts=new Date().toISOString();const newStock=base.map(s=>ids.has(s.id)?{...s,region,showTag,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts}:s);setStock(newStock);try{await saveStockK(newStock);setUndoSend({prevStock,label:`${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`});showToast(`✓ ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`);setSelectedIds(new Set());setSelectMode(false);setSendToShowOpen(false);setSendToShowId("");logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`,targetMod:"stock"});}catch(e){showToast("⚠ Save failed: "+e.message);}};
-  const doUndoSend=async()=>{if(!undoSend)return;const{prevStock}=undoSend;setUndoSend(null);setStock(prevStock);try{await saveStockK(prevStock);showToast("↩ Send undone");}catch(e){showToast("⚠ Undo failed: "+e.message);}};;
+    const prevStock=[...base];const ts=new Date().toISOString();const newStock=base.map(s=>ids.has(s.id)?{...s,region,showTag,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),updatedAt:ts}:s);setStock(newStock);try{const saved=await saveStockK(newStock);const synced=syncStockVersions(newStock,saved);setStock(synced);setUndoSend({prevStock,label:`${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`});showToast(`✓ ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`);setSelectedIds(new Set());setSelectMode(false);setSendToShowOpen(false);setSendToShowId("");logActivity({user:"Admin",action:"sent",module:"stock",label:`Sent ${ids.size} item${ids.size>1?"s":""} → ${region} (${showTag})`,targetMod:"stock"});}catch(e){showToast("⚠ Save failed: "+e.message);}};
+  // Undo restores the pre-send content, but it is a fresh write of rows the send just
+  // bumped: it has to carry their current versions, and a newer updatedAt than the send
+  // wrote, or the merge treats the restore as the older copy and keeps the sent state.
+  const doUndoSend=async()=>{if(!undoSend)return;const{prevStock}=undoSend;setUndoSend(null);
+    const ts=new Date().toISOString();
+    const currentById=new Map(stock.map(s=>[s?.id,s]));
+    const restore=syncStockVersions(prevStock,stock).map(s=>{const now=currentById.get(s?.id);return now&&stockChanged(s,now)?{...s,updatedAt:ts}:s;});
+    setStock(restore);
+    try{const saved=await saveStockK(restore);setStock(syncStockVersions(restore,saved));showToast("↩ Send undone");}catch(e){showToast("⚠ Undo failed: "+e.message);}};
   const trySendToShow=async(showId,ids,stockOverride)=>{
     if(!ids.size||!showId)return;
     const base=stockOverride||stock;
@@ -6358,7 +6366,10 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     }
     if(!idsToSend.size){showToast("No items to send");return;}
     setStock(workingStock);
-    try{await saveStockK(workingStock);}catch(e){showToast("⚠ Save failed: "+e.message);return;}
+    // The split write and the send are two saves of the same rows, so the send has to
+    // start from the versions this write returned, not the ones it was built with.
+    try{const saved=await saveStockK(workingStock);workingStock=syncStockVersions(workingStock,saved);setStock(workingStock);}
+    catch(e){showToast("⚠ Save failed: "+e.message);return;}
     await trySendToShow(showId,idsToSend,workingStock);
   };
   const confirmShopifyDeleteAndSend=async(deleteListings)=>{
@@ -6379,9 +6390,11 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
       }
       const cleared=workingStock.map(s=>items.find(x=>x.id===s.id)?{...s,postedShopify:false,shopifyProductId:null,updatedAt:new Date().toISOString()}:s);
       setStock(cleared);
-      await saveStockK(cleared);
+      // Same two-saves-in-a-row shape as the split path: rebase on what this write returned.
+      const saved=await saveStockK(cleared);
+      workingStock=syncStockVersions(cleared,saved);
+      setStock(workingStock);
       showToast(`✓ ${deleted} Shopify listing${deleted!==1?"s":""} deleted`);
-      workingStock=cleared;
     }
     await sendToShow(showId,ids,workingStock);
   };
@@ -8825,6 +8838,19 @@ const stockComparable=x=>{
   return rest;
 };
 const stockChanged=(a,b)=>JSON.stringify(stockComparable(a))!==JSON.stringify(stockComparable(b));
+// Carry the versions the server assigned on the last write back onto the rows we still
+// hold. Saving is optimistic-locked per row, so a row whose _version is one write behind
+// reads as "someone else edited this" on the very next save — even though the only writer
+// was us a moment ago. Flows that save the same rows twice in a row (send to show, undo,
+// Shopify delete-then-send) must re-sync in between or the second save always conflicts.
+const syncStockVersions=(list,saved)=>{
+  if(!Array.isArray(saved)||!Array.isArray(list))return list;
+  const byId=new Map(saved.map(s=>[s?.id,s]));
+  return list.map(s=>{
+    const server=byId.get(s?.id);
+    return server&&recordVersion(server)!==recordVersion(s)?{...s,_version:recordVersion(server)}:s;
+  });
+};
 async function _saveStockKImpl(list,opts={}){
   // Strip base64 blobs and temporary blob: URLs — only persist real https:// Storage URLs.
   const slim=list.map(s=>{
@@ -8834,7 +8860,9 @@ async function _saveStockKImpl(list,opts={}){
   });
   // direct=true: caller already has authoritative full state (e.g. dedup/migration).
   // Skip remote fetch+merge — just write the list as-is.
-  if(opts.direct){await saveK(KEYS.stock,slim,{merge:false});return;}
+  // Every path returns the list as persisted, so a caller that saves again straight
+  // after can rebase on it (see syncStockVersions) instead of on its pre-write copy.
+  if(opts.direct){await saveK(KEYS.stock,slim,{merge:false});return slim;}
   const deletedIds=new Set(opts.deletedIds||[]);
   const fresh=await loadKFresh(KEYS.stock);
   const remote=Array.isArray(fresh)?fresh:[];
@@ -8869,6 +8897,7 @@ async function _saveStockKImpl(list,opts={}){
     return next;
   }
   await saveK(KEYS.stock,merged,{merge:false});
+  return merged;
 }
 async function loadStockWithPhotos({fresh=false}={}){
   const rows=fresh?await loadKFresh(KEYS.stock):await loadK(KEYS.stock);
