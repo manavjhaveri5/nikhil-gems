@@ -6430,7 +6430,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
         idsToSend.add(item.id);
       }else{
         // split: the sent portion gets sendQty (and sendQty2 if applicable)
-        const splitItem={...item,id:uid(),qty:String(sendQty),qty2:fullQty2>0?String(sendQty2):"",sentAt:null,showTag:null,sourceIndiaId:item.id,updatedAt:new Date().toISOString()};
+        const splitItem=newStockRowFrom(item,{id:uid(),qty:String(sendQty),qty2:fullQty2>0?String(sendQty2):"",sentAt:null,showTag:null,sourceIndiaId:item.id,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
         const remainQty2=fullQty2>0?String(+(fullQty2-sendQty2).toFixed(4)):"";
         const remainItem={...item,qty:String(+(fullQty-sendQty).toFixed(4)),qty2:remainQty2,updatedAt:new Date().toISOString()};
         workingStock=workingStock.map(s=>s.id===item.id?remainItem:s);
@@ -6554,8 +6554,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
         }
       }else{
         // Partial return or multi-destination split — create new India card(s)
-        const splitItems=cleanSplits.map(sp=>({
-          ...item,
+        const splitItems=cleanSplits.map(sp=>newStockRowFrom(item,{
           id:uid(),
           material:String(sp.material||item.material||"").trim(),
           shape:String(sp.shape||item.shape||"").trim(),
@@ -9429,6 +9428,16 @@ const stockComparable=x=>{
   return rest;
 };
 const stockChanged=(a,b)=>JSON.stringify(stockComparable(a))!==JSON.stringify(stockComparable(b));
+// A row cloned from an existing row (a send/return split) is a brand-new record: the
+// server has never seen its id, so it has no optimistic-lock history there. Spreading the
+// source row copies that row's _version along with everything else, and the insert then
+// goes out claiming to update a row that does not exist — which the row guard reports as
+// "This record was updated by someone else". Clone through here so a new id always starts
+// unversioned.
+const newStockRowFrom=(src,patch={})=>{
+  const {_version,updatedBy,...rest}=src&&typeof src==="object"?src:{};
+  return{...rest,...patch};
+};
 // Carry the versions the server assigned on the last write back onto the rows we still
 // hold. Saving is optimistic-locked per row, so a row whose _version is one write behind
 // reads as "someone else edited this" on the very next save — even though the only writer
