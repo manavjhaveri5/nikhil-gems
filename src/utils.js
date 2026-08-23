@@ -357,12 +357,17 @@ const _setCachedValue=(k,value)=>{
   _notifyRefresh([k]);
 };
 const _versionOf=item=>Number.isFinite(+item?._version)?+item._version:0;
-export const isConflictError=e=>e?.code==="STALE_RECORD"||/changed in another tab|updated by someone else|stale/i.test(e?.message||"");
+export const isConflictError=e=>e?.code==="STALE_RECORD"||/changed in another tab|updated by someone else|no longer on the server|stale/i.test(e?.message||"");
 const _conflictError=(k,id,result)=>{
   const latest=result?.latest||null;
   const who=latest?.updatedBy||"someone else";
   const when=latest?.updatedAt?` at ${new Date(latest.updatedAt).toLocaleString()}`:"";
-  const err=new Error(`This record was updated by ${who}${when}. Reload latest before saving.`);
+  // No `latest` means the row the write expected to update is not on the server at all,
+  // which is a different problem from losing a race against another editor — say so
+  // rather than blaming an edit that never happened.
+  const err=new Error(latest
+    ?`This record was updated by ${who}${when}. Reload latest before saving.`
+    :"This record is no longer on the server — it was deleted elsewhere. Reload latest before saving.");
   err.code="STALE_RECORD";
   err.key=k;
   err.id=id;
