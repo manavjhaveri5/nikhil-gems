@@ -16817,8 +16817,8 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                             ["Sent",item.sentAt?fmtDate(item.sentAt):""],
                             ["Sold",item.soldDate?fmtDate(item.soldDate):""],
                             ["Returned",item.returnedAt?fmtDate(item.returnedAt):""],
-                            ["Markets",(item.market||[]).join(" · ")],
-                          ].filter(([,v])=>String(v??"").trim());
+                            ["Markets",(Array.isArray(item.market)?item.market:[item.market]).filter(Boolean).join(" · ")],
+                          ].map(([label,v])=>[label,String(v??"").trim()]).filter(([,v])=>v);
                           const qtyLines=flowQtyLines(item);
                           return(
                           <div key={item.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
@@ -16859,7 +16859,7 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                                   {!!String(item.notes||"").trim()&&(
                                     <div style={{gridColumn:"1/-1",minWidth:0}}>
                                       <div style={{fontSize:8.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Notes</div>
-                                      <div style={{fontSize:11,color:C.inkMid,overflowWrap:"anywhere"}}>{item.notes}</div>
+                                      <div style={{fontSize:11,color:C.inkMid,overflowWrap:"anywhere"}}>{String(item.notes)}</div>
                                     </div>
                                   )}
                                 </div>
