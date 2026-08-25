@@ -14754,6 +14754,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [shipQtys,setShipQtys]=useState({});
   const [shipBusy,setShipBusy]=useState(false);
   const [labelLang,setLabelLang]=useState(null);
+  const [labelDup,setLabelDup]=useState(false);
   const [aiBusy,setAiBusy]=useState("");
   const [sellId,setSellId]=useState(null);
   const [sellPrice,setSellPrice]=useState("");
@@ -15463,6 +15464,18 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
     const item=stock.find(x=>x.id===id);
     await onPatchStockItem?.(id,{labelDescs:{...(item?.labelDescs||{}),[descKey]:val}});
   };
+  // The small caps line under the name: the stone's form ("RAW", "SPHERE",
+  // "HEART"). Falls back to the shape on the stock card so a card is already
+  // filled in before anyone edits it.
+  const cardShape=s=>String(s.labelShape??s.shape??"").trim().toUpperCase();
+  // Bottom-left of the card — free text for whatever the stone needs saying
+  // ("per kg", "sold as a pair", "with stand"). Defaults to the unit it is
+  // priced in.
+  const noteFallback=s=>{
+    const u=String(s.unit||"").toLowerCase();
+    return u==="pcs"?"per pc":u==="kg"||u==="kgs"?"per kg":"per kg / per pc";
+  };
+  const cardNote=s=>String(s.labelNote??"").trim();
   const showCur=shipRegion==="Japan"?"¥":shipRegion==="Europe"?"€":shipRegion==="India"?"₹":"$";
   // Sentence case: first letter up, the rest down, but leave genuine acronyms (AAA,
   // USA) alone. Proper nouns get lowercased here — AI fill writes them correctly.
@@ -15513,15 +15526,19 @@ Return ONLY a raw JSON array of ${items.length} objects in the same order, each 
   // page geometry instead of inheriting the app's screen styles.
   const printLabels=()=>{
     const rows=labelItems.flatMap(s=>{
-      const n=labelCopies(s);
+      // "Print duplicates" runs the whole sheet twice per card — one for the
+      // table, one for the box — without touching anyone's copy counts.
+      const n=labelCopies(s)*(labelDup?2:1);
       const local=secondLine(s);
       const en=(s.labelEn||autoEn(s)).trim();
       return Array.from({length:n},()=>({
         // With no second language the English name carries the card on its own.
         lead:local||en,
         sub:local?en:"",
+        shape:cardShape(s),
         origin:cardOrigin(s),
         desc:cardDesc(s),
+        note:cardNote(s)||noteFallback(s),
         price:(+s.listPrice>0)?`${showCur}${(+s.listPrice).toLocaleString("en-US",{maximumFractionDigits:0})}`:"",
       }));
     });
@@ -15540,18 +15557,24 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
 .page{width:210mm;background:var(--bg);margin:0 auto;display:grid;grid-template-columns:repeat(2,var(--card-w));gap:3mm;justify-content:center;align-content:start;}
 .card{width:var(--card-w);height:var(--card-h);border:.4mm solid var(--border);padding:3.5mm 5mm 3mm;display:flex;flex-direction:column;justify-content:space-between;position:relative;background:#fff;overflow:hidden;}
 .card::before{content:'';position:absolute;top:0;left:0;right:0;height:1.2mm;background:var(--accent);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-.card-top{display:flex;flex-direction:column;align-items:center;gap:1mm;}
+.card-top{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8mm;min-height:0;}
 .lead{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:17.6pt;font-weight:400;color:var(--text-main);letter-spacing:.05em;line-height:1.1;text-align:center;width:100%;}
-.origin{font-size:9.4pt;color:var(--text-origin);letter-spacing:.12em;text-transform:uppercase;text-align:center;width:100%;}
-.rule{width:100%;border:none;border-top:.25mm solid var(--rule);margin:1mm 0;}
 .sub{font-size:9.9pt;font-style:italic;font-weight:300;color:#777;letter-spacing:.06em;text-align:center;width:100%;}
+.card-mid{display:flex;flex-direction:column;align-items:center;gap:.9mm;width:100%;}
+.shape{font-size:9.4pt;color:var(--text-origin);letter-spacing:.18em;text-transform:uppercase;text-align:center;width:100%;}
+.origin{font-size:8.6pt;color:#8a8177;letter-spacing:.18em;text-transform:uppercase;text-align:center;width:100%;}
+.rule{width:100%;border:none;border-top:.25mm solid var(--rule);margin:0;}
+.rule-accent{width:100%;border:none;border-top:.35mm solid var(--border);margin:.5mm 0 0;}
 .props{font-family:${langCfg.font||"'Cormorant Garamond',serif"};font-size:8.8pt;font-weight:300;color:#666;text-align:center;line-height:1.4;width:100%;}
-.card-bottom{display:flex;align-items:center;border-top:.2mm solid var(--rule);padding-top:1.5mm;}
-.price{font-size:11pt;color:var(--text-main);letter-spacing:.05em;width:100%;border-bottom:.3mm solid #ccc;text-align:right;min-height:5mm;}
+.card-bottom{display:flex;align-items:flex-end;justify-content:space-between;gap:3mm;padding-top:1.8mm;}
+.note{font-size:9pt;font-style:italic;font-weight:300;color:#a09a92;letter-spacing:.04em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.price{font-size:11pt;color:var(--text-main);letter-spacing:.05em;text-align:right;white-space:nowrap;display:flex;align-items:flex-end;gap:1.5mm;}
+.price .cur{color:#a09a92;}
+.write{display:inline-block;width:26mm;border-bottom:.25mm dashed #bdb5aa;height:3.6mm;}
 @media print{@page{size:A4;margin:8mm;}*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}body{background:#fff !important;padding:0 !important;margin:0 !important;}.toolbar{display:none !important;}.page{background:#fff !important;margin:0 !important;width:100% !important;}.card{break-inside:avoid;}.card::before{background:#8B6F47 !important;}}
 </style></head><body>
 <div class="toolbar"><h1>${esc(show.name||"")} &nbsp;·&nbsp; 95 × 50 mm &nbsp;·&nbsp; ${rows.length} card${rows.length===1?"":"s"}</h1><button class="btn-print" onclick="window.print()">🖨 Print A4</button></div>
-<div class="page">${rows.map(r=>`<div class="card"><div class="card-top"><div class="lead">${esc(r.lead)}</div>${r.origin?`<div class="origin">${esc(r.origin)}</div>`:""}<hr class="rule"/>${r.sub?`<div class="sub">${esc(r.sub)}</div>`:""}${r.desc?`<div class="props">${esc(r.desc)}</div>`:""}</div><div class="card-bottom"><div class="price">${esc(r.price)}</div></div></div>`).join("")}</div>
+<div class="page">${rows.map(r=>`<div class="card"><div class="card-top"><div class="lead">${esc(r.lead)}</div>${r.sub?`<div class="sub">${esc(r.sub)}</div>`:""}</div><div class="card-mid"><hr class="rule"/>${r.shape?`<div class="shape">${esc(r.shape)}</div>`:""}${r.origin?`<div class="origin">${esc(r.origin)}</div>`:""}${r.desc?`<div class="props">${esc(r.desc)}</div>`:""}<hr class="rule"/><hr class="rule-accent"/></div><div class="card-bottom"><div class="note">${esc(r.note)}</div><div class="price">${r.price?esc(r.price):`<span class="cur">${esc(showCur)}</span><span class="write"></span>`}</div></div></div>`).join("")}</div>
 </body></html>`);
     w.document.close();
   };
@@ -16795,9 +16818,10 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                       </select>
                     </div>
                     {isAdmin&&<button onClick={()=>aiFillCards(labelItems.filter(i=>labelCopies(i)>0))} disabled={!labelItems.length||!!aiBusy} style={{background:"none",border:`1px solid ${aiBusy?C.border:"#8B6F47"}`,borderRadius:6,padding:"6px 13px",fontSize:11,fontWeight:700,color:aiBusy?C.inkFaint:"#8B6F47",cursor:labelItems.length&&!aiBusy?"pointer":"default",marginRight:7}}>{aiBusy==="all"?"Writing…":"✨ AI fill all"}</button>}
+                    <button onClick={()=>setLabelDup(d=>!d)} title="Print two of every card — one for the table, one for the box" style={{background:labelDup?"#8B6F47":"none",border:`1px solid ${labelDup?"#8B6F47":C.border}`,borderRadius:6,padding:"6px 13px",fontSize:11,fontWeight:700,color:labelDup?"#fff":C.inkMid,cursor:"pointer",marginRight:7}}>{labelDup?"✓ Duplicates ×2":"Print duplicates"}</button>
                     <button onClick={printLabels} disabled={!labelItems.length} style={{background:labelItems.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:700,cursor:labelItems.length?"pointer":"default"}}>🖨 Open print sheet</button>
                   </div>
-                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels} label{totalLabels===1?"":"s"} across {labelItems.filter(i=>labelCopies(i)>0).length} card{labelItems.filter(i=>labelCopies(i)>0).length===1?"":"s"}{labelItems.filter(i=>labelCopies(i)===0).length>0?` · ${labelItems.filter(i=>labelCopies(i)===0).length} skipped`:""} · 95 × 50 mm name cards, 2 per row on A4{lang?"":" · English only"}</div>
+                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:10}}>{totalLabels*(labelDup?2:1)} label{totalLabels*(labelDup?2:1)===1?"":"s"}{labelDup?" (×2 duplicates)":""} across {labelItems.filter(i=>labelCopies(i)>0).length} card{labelItems.filter(i=>labelCopies(i)>0).length===1?"":"s"}{labelItems.filter(i=>labelCopies(i)===0).length>0?` · ${labelItems.filter(i=>labelCopies(i)===0).length} skipped`:""} · 95 × 50 mm name cards, 2 per row on A4{lang?"":" · English only"}</div>
                   {labelItems.length===0?(
                     <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Plan a shipment first — name cards come from what's in it.</div>
                   ):(
@@ -16816,7 +16840,7 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                               {planned&&<button onClick={e=>{e.stopPropagation();removeDraftLine(item.id);}} title="Remove from the shipment plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>}
                             </div>
                           </div>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 150px 90px":"1fr 150px 90px"),gap:7}}>
+                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 116px 150px 96px 80px":"1fr 116px 150px 96px 80px"),gap:7}}>
                             {!!lang&&(
                               <Field label={`${langCfg.label} name — big line`}>
                                 <input key={`${item.id}-${lang}`} defaultValue={secondLine(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==secondLine(item))setSecondLine(item.id,v);}} placeholder={langCfg.sample||""} style={{...FI,fontSize:11}}/>
@@ -16825,16 +16849,25 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                             <Field label={lang?"English name":"Name — big line"}>
                               <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))onPatchStockItem?.(item.id,{labelEn:v});}} style={{...FI,fontSize:11}}/>
                             </Field>
+                            <Field label="Shape — small line">
+                              <input key={`sh-${item.id}`} defaultValue={cardShape(item)} onBlur={e=>{const v=e.target.value.trim().toUpperCase();if(v!==cardShape(item))onPatchStockItem?.(item.id,{labelShape:v});}} placeholder="RAW" style={{...FI,fontSize:11,textTransform:"uppercase"}}/>
+                            </Field>
                             <Field label="Origin">
                               <input key={`or-${item.id}`} defaultValue={cardOrigin(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardOrigin(item))onPatchStockItem?.(item.id,{labelOrigin:v});}} placeholder={lang==="ja"?"INDIA · インド産":"INDIA"} style={{...FI,fontSize:11}}/>
+                            </Field>
+                            <Field label={`Price ${showCur} · blank = write-on line`}>
+                              <input key={`lp-${item.id}-${item.listPrice||""}`} type="number" min="0" step="0.01" defaultValue={item.listPrice||""} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} placeholder="—" style={{...FI,fontSize:11}}/>
                             </Field>
                             <Field label="Copies">
                               <input key={`cp-${item.id}-${copies}`} type="number" min="0" max="200" defaultValue={copies} onBlur={e=>{const v=String(Math.max(0,Math.min(200,parseInt(e.target.value,10)||0)));if(v!==String(copies))onPatchStockItem?.(item.id,{labelCopies:v});}} style={{...FI,fontSize:11}}/>
                             </Field>
                           </div>
-                          <div style={{marginTop:6}}>
+                          <div style={{marginTop:6,display:"grid",gridTemplateColumns:mob?"1fr":"1fr 230px",gap:7}}>
                             <Field label={`Description${lang?` — ${langCfg.label}`:""} · one line on the card`}>
                               <input key={`ds-${item.id}-${descKey}`} defaultValue={cardDesc(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardDesc(item))setCardDesc(item.id,v);}} placeholder={lang==="ja"?"金属光沢を持つ硫化鉄で、豊かさを象徴する。":"A copper silicate prized for its deep blue colour."} style={{...FI,fontSize:11}}/>
+                            </Field>
+                            <Field label="Extra details · bottom left">
+                              <input key={`nt-${item.id}`} defaultValue={cardNote(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardNote(item))onPatchStockItem?.(item.id,{labelNote:v});}} placeholder={noteFallback(item)} style={{...FI,fontSize:11}}/>
                             </Field>
                           </div>
                         </div>
