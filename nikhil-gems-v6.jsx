@@ -14754,6 +14754,7 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [shipQtys,setShipQtys]=useState({});
   const [shipBusy,setShipBusy]=useState(false);
   const [labelLang,setLabelLang]=useState(null);
+  const [sentOpen,setSentOpen]=useState(()=>new Set());
   const [labelDup,setLabelDup]=useState(false);
   const [aiBusy,setAiBusy]=useState("");
   const [sellId,setSellId]=useState(null);
@@ -15319,6 +15320,13 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // numbers — 40 kg printed as "4", 100 kg as "1".
   const fmtFlowNum=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";};
   const flowQtyText=s=>[s.qty&&s.qty!=="0"?`${s.qty} ${s.unit||"pcs"}`:s.soldQty?`${s.soldQty} ${s.unit||"pcs"}`:"",s.qty2&&s.qty2!=="0"?`${s.qty2} ${s.unit2||"kg"}`:s.soldQty2?`${s.soldQty2} ${s.unit2||"kg"}`:""].filter(Boolean).join(" / ")||"—";
+  // The same quantities flowQtyText joins with a slash, kept apart so a row can
+  // stack them — a lot that travels as both weight and count reads better as two
+  // lines than as "0.445 kg / 36 pcs" squeezed into one column.
+  const flowQtyLines=s=>[
+    s.qty&&s.qty!=="0"?`${fmtStockQtyValue(s.qty)} ${s.unit||"pcs"}`:s.soldQty?`${fmtStockQtyValue(s.soldQty)} ${s.unit||"pcs"}`:"",
+    s.qty2&&s.qty2!=="0"?`${fmtStockQtyValue(s.qty2)} ${s.unit2||"kg"}`:s.soldQty2?`${fmtStockQtyValue(s.soldQty2)} ${s.unit2||"kg"}`:"",
+  ].filter(Boolean);
   const flowKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+s.qty||0):0)+((s.unit2||"")==="kg"?(+s.qty2||0):0),0);
   const flowSentKgTotal=items=>items.reduce((sum,s)=>sum+((s.unit||"")==="kg"?(+(s.showSentQty||s.qty)||0):0)+((s.unit2||"")==="kg"?(+(s.showSentQty2||s.qty2)||0):0),0);
   const flowReturnedKg=flowKgTotal(showReturnedItems);
@@ -16773,7 +16781,12 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                     <span style={{fontSize:10,fontWeight:700,color:C.inkMid}}>Actually sent so far · {shipItems.length} card{shipItems.length===1?"":"s"}{shipKg>0?` · ${fmtFlowNum(shipKg)} kg`:""}{shipCostInr>0?` · ${inr(Math.round(shipCostInr))}`:""}</span>
                     <span style={{fontSize:9,color:C.inkFaint}}>sent via Stock → Send to show</span>
                   </div>
-                  <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:8}}>Cards at the show</div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+                    <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Cards at the show</span>
+                    {shipSent.length>0&&(
+                      <button onClick={()=>setSentOpen(prev=>prev.size?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>{sentOpen.size?"Collapse all":"Expand all"}</button>
+                    )}
+                  </div>
 
                   {shipItems.length===0?(
                     <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing has been sent to {show.name} yet. Use <strong>Send → show</strong> in the Stock module.</div>
@@ -16785,16 +16798,44 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                         </div>
                       )}
                       <div style={{display:"grid",gap:5}}>
-                        {shipSent.map(item=>(
-                          <div key={item.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,alignItems:"center",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px"}}>
+                        {shipSent.map(item=>{
+                          // Everything else the stock card knows, listed only when it is
+                          // actually filled in — the row stays a row, and the detail
+                          // slides out underneath when someone wants it.
+                          const open=sentOpen.has(item.id);
+                          const extras=[
+                            ["Origin",item.origin],
+                            ["Size",item.size],
+                            ["Grade",item.grade],
+                            ["Type",item.productType],
+                            ["Condition",item.cond&&item.cond!=="ok"?item.cond:""],
+                            ["Weight",item.weightGm?`${item.weightGm} gm`:""],
+                            ["Sent qty",item.showSentQty?`${fmtStockQtyValue(item.showSentQty)} ${item.unit||"pcs"}`:""],
+                            ["Box",item.location],
+                            ["SKU",item.sku],
+                            ["Added",item.addedDate?fmtDate(item.addedDate):""],
+                            ["Sent",item.sentAt?fmtDate(item.sentAt):""],
+                            ["Sold",item.soldDate?fmtDate(item.soldDate):""],
+                            ["Returned",item.returnedAt?fmtDate(item.returnedAt):""],
+                            ["Markets",(item.market||[]).join(" · ")],
+                          ].filter(([,v])=>String(v??"").trim());
+                          const qtyLines=flowQtyLines(item);
+                          return(
+                          <div key={item.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,alignItems:"center",padding:"7px 10px"}}>
                             <div style={{display:"flex",gap:8,alignItems:"center",minWidth:0}}>
+                              <button onClick={()=>setSentOpen(prev=>{const n=new Set(prev);n.has(item.id)?n.delete(item.id):n.add(item.id);return n;})} title={open?"Hide details":"More details"} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:10,padding:"2px 3px",flexShrink:0,transform:open?"rotate(90deg)":"none",transition:"transform .15s"}}>▶</button>
                               {stockCover(item)?<img src={thumbUrl(stockCover(item),120)} alt="" style={{width:30,height:30,objectFit:"cover",borderRadius:5,flexShrink:0}}/>:<div style={{width:30,height:30,borderRadius:5,background:C.bg,border:`1px solid ${C.border}`,flexShrink:0}}/>}
                               <div style={{minWidth:0}}>
                                 <div style={{fontSize:11,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.size?` · ${item.size}`:""}</div>
                                 <div style={{fontSize:9,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.location?`Box ${item.location}`:""}{item.sentAt?`${item.location?" · ":""}sent ${fmtDate(item.sentAt)}`:""}{item.soldDate?" · sold":""}</div>
                               </div>
                             </div>
-                            <span style={{fontSize:10,color:C.ink,fontWeight:700}}>{flowQtyText(item)}</span>
+                            <div style={{display:"grid",gap:1}}>
+                              {qtyLines.length===0
+                                ?<span style={{fontSize:10,color:C.inkFaint,fontWeight:700}}>—</span>
+                                :qtyLines.map((line,i)=><span key={i} style={{fontSize:10,color:C.ink,fontWeight:700,whiteSpace:"nowrap"}}>{line}</span>)}
+                            </div>
                             <input key={`scp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"Cost ₹":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
                             <input key={`ssp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"SP $":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
                             {(()=>{const b=(parseFloat(item.qty)||0)>0?(parseFloat(item.qty)||0):(parseFloat(item.qty2)||0);const v=(parseFloat(item.listPrice)||0)*b;const c=(parseFloat(item.costPrice)||0)*b;const m=v-(usdInr>0?c/usdInr:0);return(<>
@@ -16803,7 +16844,31 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                             </>);})()}
                             <input key={`svn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} placeholder={mob?"Vendor":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
                           </div>
-                        ))}
+                          {open&&(
+                            <div style={{borderTop:`1px solid ${C.border}`,background:C.card,padding:"9px 12px 10px"}}>
+                              {extras.length===0&&!String(item.notes||"").trim()
+                                ?<span style={{fontSize:10,color:C.inkFaint}}>Nothing else is recorded on this card.</span>
+                                :(
+                                <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(auto-fill,minmax(132px,1fr))",gap:"8px 14px"}}>
+                                  {extras.map(([label,val])=>(
+                                    <div key={label} style={{minWidth:0}}>
+                                      <div style={{fontSize:8.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>{label}</div>
+                                      <div style={{fontSize:11,color:C.ink,fontWeight:600,overflowWrap:"anywhere"}}>{val}</div>
+                                    </div>
+                                  ))}
+                                  {!!String(item.notes||"").trim()&&(
+                                    <div style={{gridColumn:"1/-1",minWidth:0}}>
+                                      <div style={{fontSize:8.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>Notes</div>
+                                      <div style={{fontSize:11,color:C.inkMid,overflowWrap:"anywhere"}}>{item.notes}</div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          </div>
+                          );
+                        })}
                       </div>
                     </>
                   )}
