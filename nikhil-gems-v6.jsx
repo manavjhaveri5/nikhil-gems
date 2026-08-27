@@ -11899,6 +11899,15 @@ const invUnderpaid=inv=>{
 // sequence has to stay intact — but it is void: locked from edits, and out of
 // receivables, totals and payment pickers.
 const invCancelled=inv=>String(inv?.status||"").toLowerCase()==="cancelled";
+// Printing is what finalises an invoice: the document leaves the building, so the
+// record is stamped and locked. Corrections after this are a cancellation, not an edit.
+const invPrinted=inv=>!!inv?.printedAt;
+const stampPrinted=inv=>({...inv,
+  printedAt:inv?.printedAt||new Date().toISOString(),
+  lastPrintedAt:new Date().toISOString(),
+  printCount:(+inv?.printCount||0)+1,
+  printedBy:inv?.printedBy||"Admin",
+  updatedAt:new Date().toISOString()});
 // Re-derive the status from money actually received, so a raised total can't stay "paid".
 const reconcileInvoiceStatus=inv=>{
   if(invCancelled(inv))return inv;
@@ -11956,11 +11965,24 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   const allFilteredSelected=filteredIds=>filteredIds.length>0&&filteredIds.every(id=>selectedInvIds.has(id));
   const toggleAllFiltered=filteredIds=>setSelectedInvIds(prev=>{const n=new Set(prev);if(filteredIds.every(id=>n.has(id))){filteredIds.forEach(id=>n.delete(id));}else{filteredIds.forEach(id=>n.add(id));}return n;});
   const clearSel=()=>setSelectedInvIds(new Set());
+  // Anything that produces the finished document counts as printed.
+  const markSelectionPrinted=async(sel)=>{
+    const ids=new Set(sel.map(i=>i.id));
+    if(!ids.size)return;
+    try{
+      const fresh=await loadKFresh(INV_KEYS.invoices);
+      const base=Array.isArray(fresh)?fresh:invoices;
+      const list=base.map(inv=>ids.has(inv.id)?stampPrinted(inv):inv);
+      setInvoices(list);await saveK(INV_KEYS.invoices,list);
+      showToast(`Marked printed · ${ids.size} invoice${ids.size>1?"s":""}`);
+    }catch(e){showToast("Printed, but the stamp didn't save: "+(e?.message||"check connection"));}
+  };
   const bulkPrintTogether=()=>{
     const sel=invoices.filter(i=>selectedInvIds.has(i.id)).sort((a,b)=>(a.invNo||"").localeCompare(b.invNo||""));
     if(!sel.length)return;
 	    const html=wrapInvDoc(sel.map(i=>i.invNo).join(", "),sel.map(inv=>buildInvBodyHTML(inv,buyers,company)));
     const w=window.open("","_blank");w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),700);
+    markSelectionPrinted(sel);
   };
   const bulkDownloadSeparate=()=>{
     const sel=invoices.filter(i=>selectedInvIds.has(i.id)).sort((a,b)=>(a.invNo||"").localeCompare(b.invNo||""));
@@ -11971,6 +11993,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
       const a=document.createElement("a");a.href=url;a.download=`${(inv.invNo||"invoice").replace(/[\\/]/g,"-")}.html`;a.click();
       setTimeout(()=>URL.revokeObjectURL(url),1500);
     },idx*400));
+    markSelectionPrinted(sel);
   };
   const bulkPrintSeparate=()=>{
     const sel=invoices.filter(i=>selectedInvIds.has(i.id)).sort((a,b)=>(a.invNo||"").localeCompare(b.invNo||""));
@@ -11978,6 +12001,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
 	      const html=wrapInvDoc(inv.invNo,[buildInvBodyHTML(inv,buyers,company)]);
 	      const w=window.open("","_blank");w.document.write(html);w.document.close();setTimeout(()=>w.print(),700);
 	    },idx*1200));
+    markSelectionPrinted(sel);
 	  };
 	  const bulkSetCurrency=async currency=>{
 	    if(!currency||selectedInvIds.size===0)return;
@@ -11996,7 +12020,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
     const sorted=[...list].sort((a,b)=>(a.date||"").localeCompare(b.date||"")||(a.invNo||"").localeCompare(b.invNo||""));
     const esc=v=>{const s=String(v??"");return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
     const r2=n=>(Math.round((+n||0)*100)/100).toFixed(2);
-    const cols=["Invoice No","Date","Due Date","Type","Status","Buyer","Country","Currency","Items","Subtotal","Shipping","Discount","Tax","Total","Notes"];
+    const cols=["Invoice No","Date","Due Date","Type","Status","Printed On","Times Printed","Buyer","Country","Currency","Items","Subtotal","Shipping","Discount","Tax","Total","Notes"];
     const rows=sorted.map(inv=>{
       const buyer=buyers.find(b=>b.id===inv.buyerId);
       const items=inv.items||[];
@@ -12005,7 +12029,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
       const discount=+inv.discountAmt||0;
       const tax=items.reduce((s,i)=>s+(+i.amt||0)*(+i.igst||0)/100,0);
       const total=inv.totalAmt||Math.max(0,subTotal+freight-discount);
-      return [inv.invNo||"",inv.date||"",inv.dueDate||"",inv.type==="proforma"?"Proforma":"Commercial",inv.status||"",buyer?.name||inv.buyerName||"",buyer?.country||"",inv.currency||"",items.length,r2(subTotal),r2(freight),r2(discount),r2(tax),r2(total),cleanInvoiceNotes(inv.notes).replace(/[\r\n]+/g," ")];
+      return [inv.invNo||"",inv.date||"",inv.dueDate||"",inv.type==="proforma"?"Proforma":"Commercial",inv.status||"",(inv.printedAt||"").slice(0,10),+inv.printCount||0,buyer?.name||inv.buyerName||"",buyer?.country||"",inv.currency||"",items.length,r2(subTotal),r2(freight),r2(discount),r2(tax),r2(total),cleanInvoiceNotes(inv.notes).replace(/[\r\n]+/g," ")];
     });
     const csv="﻿"+[cols,...rows].map(r=>r.map(esc).join(",")).join("\r\n");
     const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
@@ -12659,6 +12683,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                       <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                         <span style={{fontSize:9,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"2px 6px",flexShrink:0}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span>
                         <span style={{fontSize:9,fontWeight:600,color:invCancelled(inv)?C.red:inv.status==="paid"?C.green:inv.status==="partial"?C.amber:C.inkMid,background:C.card,borderRadius:3,padding:"2px 6px",border:`1px solid ${C.border}`,flexShrink:0}}>{inv.status?.toUpperCase()||"DRAFT"}</span>
+                        {!invCancelled(inv)&&invPrinted(inv)&&<span style={{fontSize:9,fontWeight:600,color:C.blue,background:C.blueBg,borderRadius:3,padding:"2px 6px",flexShrink:0}}>🖨 PRINTED</span>}
                         {totalPaidAmt>0&&!isPaid&&<span style={{fontSize:9,color:C.green,flexShrink:0}}>pd {totalPaidAmt.toLocaleString("en-IN",{minimumFractionDigits:2})}</span>}
                         <div style={{flex:1,minWidth:0}}/>
                         <div onClick={e=>e.stopPropagation()} style={{display:"flex",alignItems:"center",gap:3,flexShrink:0}}>
@@ -12714,6 +12739,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                       <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:13,textDecoration:invCancelled(inv)?"line-through":"none"}}>
                         {inv.invNo}
                         {invCancelled(inv)&&<div style={{fontFamily:"inherit",fontSize:9,fontWeight:700,color:C.red,textDecoration:"none",letterSpacing:.5}}>CANCELLED</div>}
+                        {!invCancelled(inv)&&invPrinted(inv)&&<div title={`Printed ${fmtDate(String(inv.printedAt).slice(0,10))}${(+inv.printCount||0)>1?` · ${+inv.printCount} prints`:""}`} style={{fontFamily:"inherit",fontSize:9,fontWeight:700,color:C.blue,letterSpacing:.4}}>🖨 PRINTED</div>}
                       </div>
                       <div><span style={{fontSize:10,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"1px 6px"}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span></div>
                       <div style={{fontSize:13}}>{buyer?.name||inv.buyerName||inv.buyer||"—"}</div>
@@ -12975,8 +13001,27 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
 function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],isSaved=false,onCancelInvoice,onReinstate,onSave,onDelete,onPreview,showToast,onRefreshStock,onCancelPaymentSource}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
   // Cancelled invoices are read-only: printed and issued, so nothing about them may change.
-  const locked=invCancelled(draft);
+  // A printed invoice is locked the same way, but an admin can unlock it for this sitting.
+  const [unlocked,setUnlocked]=useState(false);
+  const printedLock=invPrinted(draft)&&!unlocked&&!invCancelled(draft);
+  const locked=invCancelled(draft)||printedLock;
   const [cancelBox,setCancelBox]=useState(null); // {reason,restoreStock} while confirming
+  const [printing,setPrinting]=useState(false);
+  // Print straight from the form: same document as the preview, and it stamps the record.
+  const printDraft=async()=>{
+    if(printing)return;
+    setPrinting(true);
+    try{
+      const w=window.open("","_blank");
+      if(w){w.document.write(wrapInvDoc(draft.invNo,[buildInvBodyHTML(draft,buyers,company)]));w.document.close();w.focus();setTimeout(()=>w.print(),600);}
+      else showToast?.("Allow pop-ups to print this invoice");
+      await onSave?.(stampPrinted(draft),{navigateAway:false});
+      showToast?.(invPrinted(draft)?"Reprinted · print count updated":"Marked as printed");
+    }catch(e){
+      showToast?.(isConflictError(e)?"This invoice changed in another tab. Reload latest before printing.":"Printed, but the stamp didn't save: "+(e?.message||"check connection"));
+    }
+    setPrinting(false);
+  };
 	  const co=companyProfileFromKey(company);
   const gstBuyer=buyers.find(b=>b.id===draft.buyerId);
   const gstMode=getGSTMode(gstBuyer); // "cgst_sgst" | "igst" | "none"
@@ -13270,17 +13315,21 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
               <button onClick={()=>setConfirmDel(false)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkMid,fontSize:12}}>✕</button>
             </div>
           }
-          {!locked&&isSaved&&onCancelInvoice&&!cancelBox&&
+          {!invCancelled(draft)&&isSaved&&onCancelInvoice&&!cancelBox&&
             <button className="bs" style={{color:C.red,borderColor:C.red}} onClick={()=>setCancelBox({reason:"",restoreStock:true})}>⛔ Cancel Invoice</button>}
           <button className="bs" onClick={onPreview}>👁 Preview</button>
-          {locked
+          {isSaved&&!invCancelled(draft)&&
+            <button className="bs" disabled={printing} onClick={printDraft} title="Prints and marks this invoice as printed">{printing?"Printing…":invPrinted(draft)?"🖨 Reprint":"🖨 Print"}</button>}
+          {printedLock&&<button className="bs" onClick={()=>{if(window.confirm("This invoice has already been printed. Edit it anyway?\n\nIf the printed copy is already with the buyer, cancel this invoice and raise a new one instead."))setUnlocked(true);}}>✏ Edit anyway</button>}
+          {invCancelled(draft)
             ?<button className="bs" onClick={()=>{if(window.confirm("Reinstate this invoice? It becomes editable again"+(draft.stockRestoredOnCancel?" and its stock is deducted from inventory again.":"."))) onReinstate?.(draft);}}>↩ Reinstate</button>
+            :locked?null
             :<button className="bp" onClick={async()=>{try{await onSave({...draft});}catch(e){showToast?.(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>Save</button>}
         </div>
       </div>
 
       {/* Cancelled: the number stays on record, the document is frozen */}
-      {locked&&(
+      {invCancelled(draft)&&(
         <div style={{background:C.redBg,border:`1px solid ${C.red}55`,borderLeft:`4px solid ${C.red}`,borderRadius:8,padding:"11px 14px",marginBottom:13}}>
           <div style={{fontSize:13,fontWeight:700,color:C.red}}>⛔ Cancelled{draft.cancelledAt?` on ${fmtDate(String(draft.cancelledAt).slice(0,10))}`:""}</div>
           {draft.cancelledReason&&<div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Reason: {draft.cancelledReason}</div>}
@@ -13291,8 +13340,23 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         </div>
       )}
 
+      {/* Printed: the document is out, so the record is stamped and frozen */}
+      {invPrinted(draft)&&!invCancelled(draft)&&(
+        <div style={{background:C.blueBg,border:`1px solid ${C.blue}44`,borderLeft:`4px solid ${C.blue}`,borderRadius:8,padding:"11px 14px",marginBottom:13}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.blue}}>
+            🖨 Printed on {fmtDate(String(draft.printedAt).slice(0,10))}{(+draft.printCount||0)>1?` · ${+draft.printCount} prints`:""}
+            {unlocked&&<span style={{color:C.amber}}> · unlocked for editing</span>}
+          </div>
+          <div style={{fontSize:11,color:C.inkFaint,marginTop:4}}>
+            {unlocked
+              ?"Editing a printed invoice — if the printed copy is already with the buyer, cancel it and raise a new one instead."
+              :"This invoice has gone out, so it's locked. Cancel it and raise a new one rather than changing it."}
+          </div>
+        </div>
+      )}
+
       {/* Cancel confirmation — reason + whether the goods go back on the shelf */}
-      {cancelBox&&!locked&&(
+      {cancelBox&&!invCancelled(draft)&&(
         <div style={{background:C.redBg,border:`1px solid ${C.red}55`,borderRadius:8,padding:"13px 15px",marginBottom:13}}>
           <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:7}}>Cancel invoice {draft.invNo}?</div>
           <div style={{fontSize:11,color:C.inkMid,marginBottom:9}}>It keeps its number and stays in the list, but is voided: locked from edits and out of receivables and totals.</div>
@@ -14260,8 +14324,9 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
   const printAndSave=async()=>{
     // Open print window first (non-blocking) so user doesn't wait
     downloadHTML();
-    // Then save — this will also navigate to list after saving
-    if(onSave)try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}
+    // Then save with the print stamp — this also navigates to the list.
+    // A cancelled invoice is frozen: reprint the record, don't restamp it.
+    if(onSave&&!invCancelled(inv))try{await onSave(stampPrinted(inv));}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}
   };
 
   return(
@@ -14272,7 +14337,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
           {onEdit&&<button className="bs" onClick={onEdit}>✏ Edit</button>}
           <button className="bs" onClick={async()=>{const html=generateHTML();const w=window.open("","_blank");w.document.write(html);w.document.close();if(onSave)try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>🔗 Open / Share</button>
           {onSave&&<button className="bs" style={{color:"#1a7a4a",borderColor:"#1a7a4a",background:"#f0faf4"}} onClick={async()=>{try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>💾 Save Invoice</button>}
-          <button className="bp" onClick={printAndSave}>🖨 Print &amp; Save</button>
+          <button className="bp" onClick={printAndSave} title={invCancelled(inv)?"Cancelled invoices are reprinted without restamping":"Prints and marks this invoice as printed"}>🖨 Print{invCancelled(inv)?"":" & Mark Printed"}</button>
         </div>
       </div>
       <div style={{background:"#fff",border:"1px solid #ddd",padding:"28px 32px",fontFamily:"Arial,sans-serif",fontSize:12}}>
