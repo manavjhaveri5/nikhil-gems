@@ -648,9 +648,9 @@ function Dashboard({ accounts, transactions, rates, invoices, purchases, balance
   const monthIn  = transactions.filter(t => t.type === "credit"     && (t.date || "").startsWith(thisMonth)).reduce((s, t) => s + toINR(+t.amount, t.currency || accounts.find(a => a.id === t.accountTo)?.currency, rates), 0);
   const monthOut = transactions.filter(t => t.type === "debit"      && (t.date || "").startsWith(thisMonth)).reduce((s, t) => s + toINR(+t.amount, t.currency || accounts.find(a => a.id === t.accountFrom)?.currency, rates), 0);
 
-  // Receivables: invoices not yet paid
-  const unpaidInvs = invoices.filter(i => !["paid", "draft"].includes(i.status || ""));
-  const proformas  = invoices.filter(i => i.type === "proforma" && i.status !== "paid");
+  // Receivables: invoices not yet paid. Cancelled invoices keep their number but are void.
+  const unpaidInvs = invoices.filter(i => !["paid", "draft", "cancelled"].includes(i.status || ""));
+  const proformas  = invoices.filter(i => i.type === "proforma" && !["paid", "cancelled"].includes(i.status || ""));
   const receivablesByCur = unpaidInvs.reduce((acc, inv) => {
     const cur = inv.currency || "USD";
     const paid = (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0) + (+inv.paidAmount || 0);
@@ -3489,7 +3489,7 @@ function buildForecastEvents({ recurring, invoices, purchases, rates, horizon = 
     for (; t <= end; t = addDays(t, r.cadenceDays)) add(iso(t), -r.avg, `${r.name} (${r.cadence.toLowerCase()})`);
   }
   for (const inv of invoices || []) {
-    if (["paid", "draft"].includes(inv.status || "") || inv.type === "proforma") continue;
+    if (["paid", "draft", "cancelled"].includes(inv.status || "") || inv.type === "proforma") continue;
     const paid = (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0) + (+inv.paidAmount || 0);
     const due = cvt(Math.max(0, (+inv.totalAmt || 0) - paid), inv.currency || "USD");
     if (!due) continue;

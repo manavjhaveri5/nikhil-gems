@@ -2781,15 +2781,14 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       (order._ngLineId && String(it.id || "") === String(order._ngLineId))
     ) || null;
   };
-  const isNgInvoiceLocked = order => {
-    const inv = ngInvoiceForOrder(order);
-    return !!inv && String(inv.status || "draft").toLowerCase() !== "draft";
+  // A cancelled invoice is void, so the order is free to be invoiced again.
+  const invoiceLocksOrder = inv => {
+    const st = String(inv?.status || "draft").toLowerCase();
+    return !!inv && st !== "draft" && st !== "cancelled";
   };
+  const isNgInvoiceLocked = order => invoiceLocksOrder(ngInvoiceForOrder(order));
   const atInvoiceForOrder = order => (atInvoices || []).find(i => String(i.invNo || "") === String(order?._atInvoiceNo || "")) || null;
-  const isAtInvoiceLocked = order => {
-    const inv = atInvoiceForOrder(order);
-    return !!inv && String(inv.status || "draft").toLowerCase() !== "draft";
-  };
+  const isAtInvoiceLocked = order => invoiceLocksOrder(atInvoiceForOrder(order));
   const plausibleEtsyFees = (fees, gross) => {
     const f = Math.abs(+fees || 0);
     const g = Math.max(0, +gross || 0);

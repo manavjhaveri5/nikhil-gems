@@ -1471,7 +1471,9 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
   const exportInvoices = invoices
     .filter(i => i.type !== "proforma")
     // Export Recon is for exports only — INR invoices are domestic sales.
-    .filter(i => (i.currency || "").toUpperCase() !== "INR");
+    .filter(i => (i.currency || "").toUpperCase() !== "INR")
+    // A cancelled invoice was never shipped or realised — nothing for the bank.
+    .filter(i => String(i.status || "").toLowerCase() !== "cancelled");
   const yearOptions = [...new Set([currentNgYear(), ...exportInvoices.map(ngYearOfInvoice).filter(Boolean)])]
     .sort((a, b) => b.localeCompare(a));
   const rows = exportInvoices

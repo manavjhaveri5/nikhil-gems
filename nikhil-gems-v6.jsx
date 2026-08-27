@@ -761,7 +761,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   const payablesUSD=unpaidBills.filter(p=>p.currency==="USD").reduce((a,p)=>a+((+p.totalAmount||0)-(+p.paidAmount||0)),0);
   const payables=payablesINR;// kept for chart compat
   // Receivables: exclude paid, include proformas (unpaid), subtract any partial payments, all currencies
-  const unpaidInvs=stats.invoices.filter(i=>i.status!=="paid"&&(i.type==="proforma"||!["draft"].includes(i.status||"")));
+  const unpaidInvs=stats.invoices.filter(i=>i.status!=="paid"&&!invCancelled(i)&&(i.type==="proforma"||!["draft"].includes(i.status||"")));
   const receivablesByCur=unpaidInvs.reduce((acc,i)=>{
     const cur=i.currency||"USD";
     const alreadyPaid=(i.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+i.paidAmount||0);
@@ -774,7 +774,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
   // Action items
   const notShipped=stats.invoices.filter(i=>!i.goodsShipped&&["sent","partial","draft"].includes(i.status));
-  const overdueInvs=stats.invoices.filter(i=>!["paid"].includes(i.status)&&i.date&&(new Date(todayStr)-new Date(i.date))/(86400000)>60);
+  const overdueInvs=stats.invoices.filter(i=>!["paid"].includes(i.status)&&!invCancelled(i)&&i.date&&(new Date(todayStr)-new Date(i.date))/(86400000)>60);
   const billsDue=unpaidBills.filter(p=>p.status==="pending");
   const openPOs=stats.purchases.filter(p=>p.type==="po"&&!["paid","cancelled","closed"].includes(p.status||""));
 
@@ -11819,6 +11819,7 @@ function getGSTMode(buyer){
 }
 
 function invRowColor(inv){
+  if(invCancelled(inv))return{background:"#F3F1ED",borderLeft:"3px solid #9A938A",opacity:.62};
   const total=+inv.totalAmt||0;
   const paid=(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+inv.paidAmount||0);
   const payDone=total>0&&paid>=total*0.99;
@@ -11894,8 +11895,13 @@ const invUnderpaid=inv=>{
   const due=total-invPaidAmt(inv);
   return due>0.01?due:0;
 };
+// A cancelled invoice keeps its number on record — once the thing is printed the
+// sequence has to stay intact — but it is void: locked from edits, and out of
+// receivables, totals and payment pickers.
+const invCancelled=inv=>String(inv?.status||"").toLowerCase()==="cancelled";
 // Re-derive the status from money actually received, so a raised total can't stay "paid".
 const reconcileInvoiceStatus=inv=>{
+  if(invCancelled(inv))return inv;
   if(!invUnderpaid(inv))return inv;
   return {...inv,status:invPaidAmt(inv)>0.01?"partial":(inv.goodsShipped?"shipped":"sent")};
 };
@@ -12126,6 +12132,8 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   },[invoices,company]);
 
   const saveInvoice=async (inv,{navigateAway=true}={})=>{
+    // A cancelled invoice is locked — reinstate it first (that also re-deducts stock).
+    if(invCancelled(invoices.find(i=>i.id===inv.id))&&invCancelled(inv)){showToast("This invoice is cancelled — reinstate it to make changes");return;}
     inv=await persistInvoiceShipmentAttachments(inv,company);
     inv=reconcileInvoiceStatus(inv);
     setDraft(d=>d?.id===inv.id?inv:d);
@@ -12276,6 +12284,87 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
     }
     showToast("Payment source cancelled");
   };
+  /* ── Cancel / reinstate ──────────────────────────────────────────────
+     An invoice that's been finalised and printed can't be edited or deleted —
+     the number has to stay on record. Cancelling voids it instead: locked form,
+     no receivable, and (optionally) the goods go back on the shelf. */
+  const shiftInvoiceStock=async(inv,sign)=>{   // sign +1 puts stock back, -1 takes it out again
+    const newStock=[...stock];let physChanged=false;
+    (inv.items||[]).forEach(it=>{
+      const links=it.stockLinks?.length?it.stockLinks:(it.stockId&&it.qty?[{id:it.stockId,qty:+it.qty||0}]:[]);
+      links.forEach(({id,qty,qty2})=>{
+        const i=newStock.findIndex(s=>s.id===id);if(i<0)return;
+        const nq=Math.max(0,(+newStock[i].qty||0)+sign*(+qty||0));
+        const nq2=qty2>0?Math.max(0,(+newStock[i].qty2||0)+sign*(+qty2||0)):null;
+        newStock[i]={...newStock[i],qty:String(+nq.toFixed(4)),...(nq2!=null?{qty2:String(+nq2.toFixed(4))}:{}),updatedAt:new Date().toISOString()};
+        physChanged=true;
+      });
+    });
+    if(physChanged){setStock(newStock);try{await saveStockK(newStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}}
+    // Accounting stock: qty back on the shelf and this invoice's outward movements dropped (or re-added)
+    const acctLinks=(inv.items||[]).filter(it=>it.acctStockId&&acctLinkQty(it));
+    const hasOuts=accStock.some(s=>(s.outs||[]).some(o=>o.invId===inv.id));
+    if(acctLinks.length||hasOuts){
+      let newAccStock=accStock.map(s=>(s.outs||[]).some(o=>o.invId===inv.id)?{...s,outs:(s.outs||[]).filter(o=>o.invId!==inv.id)}:s);
+      acctLinks.forEach(it=>{
+        const i=newAccStock.findIndex(s=>s.id===it.acctStockId);if(i<0)return;
+        const e=newAccStock[i];const dq=acctLinkQty(it);
+        const out={invId:inv.id,invNo:inv.invNo||"",buyer:inv.buyerName||inv.buyer||"",date:inv.date||today(),qty:dq,unit:e.unit||it.unit||""};
+        newAccStock[i]={...e,qty:Math.max(0,(+e.qty||0)+sign*dq),...(sign<0?{outs:[...(e.outs||[]),out]}:{})};
+      });
+      setAccStock(newAccStock);await saveK(KEYS.accStock,newAccStock);
+    }
+    // The auto outward journal entry follows the stock (NG-scoped). Reinstating leaves it
+    // to the next save, which rebuilds the entry from the invoice lines.
+    if(sign>0&&company==="ng"){
+      try{
+        const freshJ=await loadKFresh(JOURNAL_KEY);
+        for(const entry of (Array.isArray(freshJ)?freshJ:[]).filter(e=>e.sourceInvoiceId===inv.id))await deleteItemK(JOURNAL_KEY,entry.id);
+      }catch(e){/* non-fatal */}
+    }
+  };
+  const persistInvoice=async inv=>{
+    const list=await upsertVersionedItemK(INV_KEYS.invoices,inv,{prepend:false,user:"Admin"});
+    setInvoices(list);
+    const saved=list.find(i=>i.id===inv.id)||inv;
+    setDraft(d=>d?.id===inv.id?saved:d);
+    return saved;
+  };
+  const cancelInvoice=async(inv,{reason="",restoreStock=true}={})=>{
+    const target=invoices.find(i=>i.id===inv.id)||inv;
+    const alreadyRestored=!!target.stockRestoredOnCancel;
+    if(restoreStock&&!alreadyRestored)await shiftInvoiceStock(target,+1);
+    const cancelled={...target,status:"cancelled",statusBeforeCancel:target.status||"draft",
+      cancelledAt:new Date().toISOString(),cancelledReason:reason||"",
+      stockRestoredOnCancel:restoreStock||alreadyRestored,updatedAt:new Date().toISOString()};
+    try{
+      await persistInvoice(cancelled);
+      logActivity({user:"Admin",action:"cancelled",module:"invoices",label:`Invoice ${cancelled.invNo||cancelled.id.slice(0,6)} cancelled${reason?` · ${reason}`:""}`,targetId:cancelled.id,targetMod:"invoices"});
+      showToast(restoreStock&&!alreadyRestored?"Invoice cancelled · stock restored":"Invoice cancelled");
+      setView("list");setDraft(null);
+    }catch(e){
+      if(isConflictError(e)){if(Array.isArray(e.items))setInvoices(e.items);showToast("Invoice changed in another tab. Reload latest before cancelling.");}
+      else showToast("Cancel failed: "+(e?.message||"check connection"));
+    }
+  };
+  const reinstateInvoice=async inv=>{
+    const target=invoices.find(i=>i.id===inv.id)||inv;
+    if(target.stockRestoredOnCancel)await shiftInvoiceStock(target,-1);
+    const paid=invPaidAmt(target),total=+target.totalAmt||0;
+    const prev=target.statusBeforeCancel;
+    const status=prev&&prev!=="cancelled"?prev
+      :(total>0&&paid>=total*0.99?"paid":paid>0?"partial":target.goodsShipped?"shipped":"sent");
+    const back={...target,status,stockRestoredOnCancel:false,cancelledAt:"",cancelledReason:"",statusBeforeCancel:"",
+      reinstatedAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+    try{
+      await persistInvoice(reconcileInvoiceStatus(back));
+      logActivity({user:"Admin",action:"reinstated",module:"invoices",label:`Invoice ${back.invNo||back.id.slice(0,6)} reinstated`,targetId:back.id,targetMod:"invoices"});
+      showToast(target.stockRestoredOnCancel?"Invoice reinstated · stock deducted again":"Invoice reinstated");
+    }catch(e){
+      if(isConflictError(e)){if(Array.isArray(e.items))setInvoices(e.items);showToast("Invoice changed in another tab. Reload latest before reinstating.");}
+      else showToast("Reinstate failed: "+(e?.message||"check connection"));
+    }
+  };
   const delInvoice=async id=>{
     const inv=invoices.find(i=>i.id===id);
     const list=await deleteVersionedItemK(INV_KEYS.invoices,inv||id,{user:"Admin"});
@@ -12301,15 +12390,17 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
           }
         }catch(e){/* invoice delete should not be blocked by Listing Manager cleanup */}
       }
-      // Restore physical stock quantities (supports both stockLinks[] and legacy stockId)
+      // Restore physical stock quantities (supports both stockLinks[] and legacy stockId).
+      // A cancelled invoice already put its stock back — don't credit it twice.
+      const stockAlreadyBack=!!inv.stockRestoredOnCancel;
       const newStock=[...stock];let physChanged=false;
-      inv.items.forEach(it=>{
+      if(!stockAlreadyBack)inv.items.forEach(it=>{
         const links=it.stockLinks?.length?it.stockLinks:(it.stockId&&it.qty?[{id:it.stockId,qty:+it.qty||0}]:[]);
         links.forEach(({id,qty,qty2})=>{const i=newStock.findIndex(s=>s.id===id);if(i>=0){newStock[i]={...newStock[i],qty:(+(newStock[i].qty)||0)+(+qty||0),...(qty2>0?{qty2:String((+newStock[i].qty2||0)+(+qty2||0))}:{}),updatedAt:new Date().toISOString()};physChanged=true;}});
       });
       if(physChanged){setStock(newStock);try{await saveStockK(newStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}}
       // Restore accounting stock quantities + remove this invoice's outward movements
-      const acctLinks=inv.items.filter(it=>it.acctStockId&&acctLinkQty(it));
+      const acctLinks=stockAlreadyBack?[]:inv.items.filter(it=>it.acctStockId&&acctLinkQty(it));
       const hasOuts=accStock.some(s=>(s.outs||[]).some(o=>o.invId===id));
       if(acctLinks.length>0||hasOuts){
         let newAccStock=[...accStock];
@@ -12329,7 +12420,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
         }catch(e){/* non-fatal */}
       }
     }
-    showToast("Invoice deleted · stock restored");setView("list");setDraft(null);
+    showToast(inv&&inv.stockRestoredOnCancel?"Invoice deleted":"Invoice deleted · stock restored");setView("list");setDraft(null);
   };
   const newDraft=(type="commercial")=>({
     id:uid(),invNo:nextInvNo(),type,date:today(),dueDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),
@@ -12387,6 +12478,8 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   };
 
   const unpaid=invoices.filter(i=>["draft","sent","partial"].includes(i.status)).length;
+  const liveInvoices=invoices.filter(i=>!invCancelled(i));
+  const cancelledCount=invoices.length-liveInvoices.length;
   const quickSave=async(inv)=>{
     try{
       inv=reconcileInvoiceStatus(inv);
@@ -12486,7 +12579,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
       {loaded&&view==="list"&&(
         <div>
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:mob?8:11,marginBottom:16}}>
-            {[[invoices.length,t("Invoices"),C.blue,C.blueBg],[`${invoices.filter(i=>i.currency==="USD").reduce((a,i)=>a+(+i.totalAmt||0),0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}`,t("Total USD"),C.green,C.greenBg],[unpaid,t("Unpaid/Draft"),C.red,C.redBg],[invoices.filter(i=>i.status==="paid").length,t("Paid"),C.teal,C.tealBg]].map(([v,l,col,bg])=>(
+            {[[liveInvoices.length,t("Invoices"),C.blue,C.blueBg],[`${liveInvoices.filter(i=>i.currency==="USD").reduce((a,i)=>a+(+i.totalAmt||0),0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}`,t("Total USD"),C.green,C.greenBg],[unpaid,t("Unpaid/Draft"),C.red,C.redBg],[liveInvoices.filter(i=>i.status==="paid").length,t("Paid"),C.teal,C.tealBg]].map(([v,l,col,bg])=>(
               <div key={l} style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:mob?"10px 12px":"13px 16px"}}>
                 <div style={{fontSize:mob?10:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>{l}</div>
                 <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?22:20,fontWeight:600,color:col,wordBreak:"break-all"}}>{v}</div>
@@ -12496,7 +12589,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           <div style={{display:"flex",gap:mob?6:9,marginBottom:8,alignItems:"center",flexWrap:mob?"nowrap":"wrap",overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}}>
             <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder={mob?"Search…":"Search invoice / buyer…"} style={{...FI,width:mob?120:190,fontSize:mob?16:12,flexShrink:0,minHeight:mob?40:undefined}}/>
             <div style={{display:"flex",gap:4,flexShrink:0}}>
-              {["all","draft","sent","partial","paid"].map(s=>(
+              {["all","draft","sent","partial","paid",...(cancelledCount||filterStatus==="cancelled"?["cancelled"]:[])].map(s=>(
                 <button key={s} onClick={()=>setFilterStatus(s)} style={{fontSize:mob?12:11,padding:mob?"6px 12px":"4px 10px",borderRadius:4,cursor:"pointer",border:`1px solid ${filterStatus===s?C.gold:C.border}`,background:filterStatus===s?C.goldLight:C.surface,color:filterStatus===s?C.gold:C.inkMid,fontWeight:filterStatus===s?700:400,whiteSpace:"nowrap",minHeight:mob?40:undefined}}>{s==="all"?t("All"):t(s.charAt(0).toUpperCase()+s.slice(1))}</button>
               ))}
             </div>
@@ -12565,18 +12658,18 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                       <div style={{fontSize:12,color:C.inkMid,marginBottom:7}}>{buyer?.name||inv.buyerName||inv.buyer||"—"} · {fmtDate(inv.date)}</div>
                       <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
                         <span style={{fontSize:9,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"2px 6px",flexShrink:0}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span>
-                        <span style={{fontSize:9,fontWeight:600,color:inv.status==="paid"?C.green:inv.status==="partial"?C.amber:C.inkMid,background:C.card,borderRadius:3,padding:"2px 6px",border:`1px solid ${C.border}`,flexShrink:0}}>{inv.status?.toUpperCase()||"DRAFT"}</span>
+                        <span style={{fontSize:9,fontWeight:600,color:invCancelled(inv)?C.red:inv.status==="paid"?C.green:inv.status==="partial"?C.amber:C.inkMid,background:C.card,borderRadius:3,padding:"2px 6px",border:`1px solid ${C.border}`,flexShrink:0}}>{inv.status?.toUpperCase()||"DRAFT"}</span>
                         {totalPaidAmt>0&&!isPaid&&<span style={{fontSize:9,color:C.green,flexShrink:0}}>pd {totalPaidAmt.toLocaleString("en-IN",{minimumFractionDigits:2})}</span>}
                         <div style={{flex:1,minWidth:0}}/>
                         <div onClick={e=>e.stopPropagation()} style={{display:"flex",alignItems:"center",gap:3,flexShrink:0}}>
                           <label style={{display:"flex",alignItems:"center",gap:3,cursor:"pointer",fontSize:11,color:inv.goodsShipped?C.green:C.inkFaint}}>
-                            <input type="checkbox" checked={!!inv.goodsShipped} onChange={async e=>{const shipped=e.target.checked;const tot=(+inv.totalAmt||0);const paid=(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+inv.paidAmount||0);const newStatus=paid>=tot*0.99?"paid":paid>0?"partial":shipped?"shipped":"sent";const u={...inv,goodsShipped:shipped,status:newStatus};await quickSave(u);}}/>
+                            <input type="checkbox" disabled={invCancelled(inv)} checked={!!inv.goodsShipped} onChange={async e=>{const shipped=e.target.checked;const tot=(+inv.totalAmt||0);const paid=(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+inv.paidAmount||0);const newStatus=paid>=tot*0.99?"paid":paid>0?"partial":shipped?"shipped":"sent";const u={...inv,goodsShipped:shipped,status:newStatus};await quickSave(u);}}/>
                             {inv.goodsShipped?"Shipped":"Ship?"}
                           </label>
                         </div>
                         <div onClick={e=>e.stopPropagation()} style={{display:"flex",alignItems:"center",gap:3,flexShrink:0}}>
                           <label style={{display:"flex",alignItems:"center",gap:3,cursor:"pointer",fontSize:11,color:isPaid?C.green:C.inkFaint}}>
-                            <input type="checkbox" checked={isPaid} onChange={async e=>{
+                            <input type="checkbox" disabled={invCancelled(inv)} checked={isPaid} onChange={async e=>{
                               if(e.target.checked){
                                 confetti({particleCount:150,spread:80,origin:{y:0.6},colors:["#C89020","#E0A830","#FEF6E0","#9A6200","#fff"]});
                                 await quickSave({...inv,status:"paid",paidAmount:+inv.totalAmt});
@@ -12618,7 +12711,10 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                   return(
                     <div key={inv.id} className="rh" style={{display:"grid",gridTemplateColumns:"28px 120px 85px 1fr 82px 110px 78px 75px 75px 55px",padding:"10px 15px",borderBottom:i<filteredInvoices.length-1?`1px solid ${C.border}`:"none",alignItems:"center",cursor:"pointer",...rowStyle,...(isSel?{background:"#EFF6FF"}:{})}} onClick={()=>{setDraft({...inv});setView("form");}}>
                       <div onClick={e=>e.stopPropagation()}><input type="checkbox" style={{cursor:"pointer"}} checked={isSel} onChange={()=>toggleInvSel(inv.id)}/></div>
-                      <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:13}}>{inv.invNo}</div>
+                      <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:13,textDecoration:invCancelled(inv)?"line-through":"none"}}>
+                        {inv.invNo}
+                        {invCancelled(inv)&&<div style={{fontFamily:"inherit",fontSize:9,fontWeight:700,color:C.red,textDecoration:"none",letterSpacing:.5}}>CANCELLED</div>}
+                      </div>
                       <div><span style={{fontSize:10,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"1px 6px"}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span></div>
                       <div style={{fontSize:13}}>{buyer?.name||inv.buyerName||inv.buyer||"—"}</div>
                       <div style={{fontSize:11,color:C.inkMid}}>{fmtDate(inv.date)}</div>
@@ -12631,13 +12727,13 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                       </div>
                       <div onClick={e=>e.stopPropagation()}>
                         <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:11,color:inv.goodsShipped?C.green:C.inkFaint}}>
-                          <input type="checkbox" checked={!!inv.goodsShipped} onChange={async e=>{const shipped=e.target.checked;const tot=(+inv.totalAmt||0);const paid=(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+inv.paidAmount||0);const newStatus=paid>=tot*0.99?"paid":paid>0?"partial":shipped?"shipped":"sent";const u={...inv,goodsShipped:shipped,status:newStatus};await quickSave(u);}}/>
+                          <input type="checkbox" disabled={invCancelled(inv)} checked={!!inv.goodsShipped} onChange={async e=>{const shipped=e.target.checked;const tot=(+inv.totalAmt||0);const paid=(inv.payments||[]).reduce((s,p)=>s+(+p.amount||0),0)+(+inv.paidAmount||0);const newStatus=paid>=tot*0.99?"paid":paid>0?"partial":shipped?"shipped":"sent";const u={...inv,goodsShipped:shipped,status:newStatus};await quickSave(u);}}/>
                           {inv.goodsShipped?"Shipped":"Ship?"}
                         </label>
                       </div>
                       <div onClick={e=>e.stopPropagation()}>
                         <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer",fontSize:11,color:isPaid?C.green:C.inkFaint}}>
-                          <input type="checkbox" checked={isPaid} onChange={async e=>{
+                          <input type="checkbox" disabled={invCancelled(inv)} checked={isPaid} onChange={async e=>{
                             if(e.target.checked){
                               confetti({particleCount:150,spread:80,origin:{y:0.6},colors:["#C89020","#E0A830","#FEF6E0","#9A6200","#fff"]});
                               await quickSave({...inv,status:"paid",paidAmount:+inv.totalAmt});
@@ -12660,7 +12756,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
-	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
+	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} isSaved={invoices.some(i=>i.id===draft.id)} onCancelInvoice={cancelInvoice} onReinstate={reinstateInvoice} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
 	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")}/>}
 	      {loaded&&view==="bulk-inv"&&<InvBulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} buyers={buyers} company={company} extractInvoice={extractInvoice} onSave={async inv=>{await saveInvoice(inv,{navigateAway:false});if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);}else{showToast(`${bulkQueue.length} invoice${bulkQueue.length>1?"s":""} processed`);setView("list");setDraft(null);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
     </Shell>
@@ -12876,8 +12972,11 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
   );
 }
 
-function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],onSave,onDelete,onPreview,showToast,onRefreshStock,onCancelPaymentSource}) {
+function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],isSaved=false,onCancelInvoice,onReinstate,onSave,onDelete,onPreview,showToast,onRefreshStock,onCancelPaymentSource}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
+  // Cancelled invoices are read-only: printed and issued, so nothing about them may change.
+  const locked=invCancelled(draft);
+  const [cancelBox,setCancelBox]=useState(null); // {reason,restoreStock} while confirming
 	  const co=companyProfileFromKey(company);
   const gstBuyer=buyers.find(b=>b.id===draft.buyerId);
   const gstMode=getGSTMode(gstBuyer); // "cgst_sgst" | "igst" | "none"
@@ -13171,10 +13270,45 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
               <button onClick={()=>setConfirmDel(false)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkMid,fontSize:12}}>✕</button>
             </div>
           }
+          {!locked&&isSaved&&onCancelInvoice&&!cancelBox&&
+            <button className="bs" style={{color:C.red,borderColor:C.red}} onClick={()=>setCancelBox({reason:"",restoreStock:true})}>⛔ Cancel Invoice</button>}
           <button className="bs" onClick={onPreview}>👁 Preview</button>
-          <button className="bp" onClick={async()=>{try{await onSave({...draft});}catch(e){showToast?.(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>Save</button>
+          {locked
+            ?<button className="bs" onClick={()=>{if(window.confirm("Reinstate this invoice? It becomes editable again"+(draft.stockRestoredOnCancel?" and its stock is deducted from inventory again.":"."))) onReinstate?.(draft);}}>↩ Reinstate</button>
+            :<button className="bp" onClick={async()=>{try{await onSave({...draft});}catch(e){showToast?.(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>Save</button>}
         </div>
       </div>
+
+      {/* Cancelled: the number stays on record, the document is frozen */}
+      {locked&&(
+        <div style={{background:C.redBg,border:`1px solid ${C.red}55`,borderLeft:`4px solid ${C.red}`,borderRadius:8,padding:"11px 14px",marginBottom:13}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.red}}>⛔ Cancelled{draft.cancelledAt?` on ${fmtDate(String(draft.cancelledAt).slice(0,10))}`:""}</div>
+          {draft.cancelledReason&&<div style={{fontSize:12,color:C.inkMid,marginTop:3}}>Reason: {draft.cancelledReason}</div>}
+          <div style={{fontSize:11,color:C.inkFaint,marginTop:4}}>
+            The invoice number stays on record and the document is locked — no edits, no receivable.
+            {draft.stockRestoredOnCancel?" Stock was put back into inventory.":" Stock was left as deducted."}
+          </div>
+        </div>
+      )}
+
+      {/* Cancel confirmation — reason + whether the goods go back on the shelf */}
+      {cancelBox&&!locked&&(
+        <div style={{background:C.redBg,border:`1px solid ${C.red}55`,borderRadius:8,padding:"13px 15px",marginBottom:13}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.red,marginBottom:7}}>Cancel invoice {draft.invNo}?</div>
+          <div style={{fontSize:11,color:C.inkMid,marginBottom:9}}>It keeps its number and stays in the list, but is voided: locked from edits and out of receivables and totals.</div>
+          <input value={cancelBox.reason} onChange={e=>setCancelBox(c=>({...c,reason:e.target.value}))} placeholder="Reason (optional) — e.g. buyer cancelled order" style={{...FI,marginBottom:9}}/>
+          <label style={{display:"flex",alignItems:"center",gap:7,fontSize:12,color:C.inkMid,marginBottom:11,cursor:"pointer"}}>
+            <input type="checkbox" checked={cancelBox.restoreStock} onChange={e=>setCancelBox(c=>({...c,restoreStock:e.target.checked}))}/>
+            Put the invoiced stock back into inventory
+          </label>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>{const box=cancelBox;setCancelBox(null);onCancelInvoice?.(draft,box);}} style={{background:C.red,border:"none",borderRadius:5,cursor:"pointer",color:"#fff",fontSize:12,fontWeight:600,padding:"7px 14px"}}>Yes, cancel invoice</button>
+            <button className="bs" onClick={()=>setCancelBox(null)}>Keep it</button>
+          </div>
+        </div>
+      )}
+
+      <fieldset disabled={locked} style={{border:0,padding:0,margin:0,minWidth:0,opacity:locked?.7:1}}>
 
       {/* Invoice meta — always-visible fields */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 16px",marginBottom:13}}>
@@ -13757,6 +13891,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           </div>
         );
       })()}
+      </fieldset>
     </div>
   );
 }
@@ -13820,6 +13955,7 @@ function buildInvBodyHTML(inv,buyers,company="ng"){
   <div>
     <div class="inv-title">${inv.type==="proforma"?"PROFORMA INVOICE":"COMMERCIAL INVOICE"}</div>
     <div class="inv-no">Invoice# ${inv.invNo}</div>
+${invCancelled(inv)?`<div style="margin-top:5px;border:2px solid #B3261E;color:#B3261E;font-size:13px;font-weight:700;letter-spacing:2px;text-align:center;padding:3px 8px">CANCELLED</div>`:""}
   </div>
 </div>
 <table class="info-table" style="margin-bottom:7px;border:1px solid #ccc;">
@@ -13983,6 +14119,7 @@ async function renderBasicInvoicePacketPdf(inv,buyers,company){
   const nextPage=()=>{page=pdf.addPage([595,842]);y=800;};
   const line=(txt,x=40,size=9,f=font)=>{if(y<50)nextPage();draw(txt,x,y,size,f);y-=size+6;};
   draw(co.name,40,y,18,bold);draw(inv.type==="proforma"?"PROFORMA INVOICE":"COMMERCIAL INVOICE",360,y,16,bold);y-=22;
+  if(invCancelled(inv)){draw("** CANCELLED **",360,y,13,bold,rgb(0.70,0.15,0.12));y-=18;}
   co.address.split("\n").forEach(t=>line(t,40,9));
   line(`TEL: ${co.tel}   Email: ${co.email}`,40,9);
   y-=8;
@@ -14148,6 +14285,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
           <div style={{textAlign:"right"}}>
             <div style={{fontSize:18,fontWeight:700}}>{inv.type==="proforma"?"PROFORMA INVOICE":"COMMERCIAL INVOICE"}</div>
             <div style={{fontSize:13,marginTop:4,color:"#444"}}>Invoice# {inv.invNo}</div>
+            {invCancelled(inv)&&<div style={{marginTop:5,border:"2px solid #B3261E",color:"#B3261E",fontSize:13,fontWeight:700,letterSpacing:2,textAlign:"center",padding:"3px 8px"}}>CANCELLED</div>}
           </div>
         </div>
 
