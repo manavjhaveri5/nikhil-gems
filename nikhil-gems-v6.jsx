@@ -6405,7 +6405,7 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const trySendToShow=async(showId,ids,stockOverride)=>{
     if(!ids.size||!showId)return;
     const base=stockOverride||stock;
-    const shopifyItems=base.filter(s=>ids.has(s.id)&&s.postedShopify&&s.shopifyProductId);
+    const shopifyItems=base.filter(s=>ids.has(s.id)&&s.shopifyProductId);
     if(shopifyItems.length>0){setShopifyDeleteConfirm({items:shopifyItems,showId,ids,stockOverride:base});return;}
     await sendToShow(showId,ids,base);
   };
@@ -6446,29 +6446,67 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     catch(e){showToast("⚠ Save failed: "+e.message);return;}
     await trySendToShow(showId,idsToSend,workingStock);
   };
+  /* A deleted product is gone from the storefront, so its Deals timer has to go with
+     it — otherwise the reminder keeps asking us to take down a product that no longer
+     exists. Registry lives per store, keyed by Shopify product id. */
+  const dropDealsEntries=async deleted=>{
+    const byStore={};
+    deleted.forEach(({item,storeKey})=>{
+      const pid=String(item.shopifyProductId||"");
+      if(!pid||!storeKey)return;
+      (byStore[storeKey]=byStore[storeKey]||new Set()).add(pid);
+    });
+    for(const[storeKey,pids]of Object.entries(byStore)){
+      const key=storeKey==="atyahara"?"ng-deals-atyahara":"ng-deals-earth";
+      try{
+        const cur=await loadKFresh(key).catch(()=>loadK(key));
+        const list=Array.isArray(cur)?cur:[];
+        const next=list.filter(e=>!pids.has(String(e.productId)));
+        if(next.length!==list.length)await saveK(key,next);
+      }catch(e){/* listing is already gone; a stale timer isn't worth failing the send */}
+    }
+  };
   const confirmShopifyDeleteAndSend=async(deleteListings)=>{
     if(!shopifyDeleteConfirm)return;
     const{items,showId,ids,stockOverride}=shopifyDeleteConfirm;
     setShopifyDeleteConfirm(null);
     let workingStock=stockOverride||stock;
     if(deleteListings&&items.length>0){
-      const creds=await loadK("ng-shopify-creds-v1")||{};
-      if(!creds.store||!creds.token){showToast("⚠ Shopify credentials not set — send without deleting");await sendToShow(showId,ids,workingStock);return;}
+      /* Credentials live in per-store slots (ng-shopify-creds-earth / -atyahara) and a
+         product id is only valid on the store that created it, so every card is deleted
+         against its own store. This used to read the shared legacy slot, which the OAuth
+         callback stopped writing — so the delete quietly did nothing and the listing (and
+         its Deals entry) stayed up while the stock went to the show. */
+      const connected=await loadShopifyCreds();
+      if(!Object.keys(connected).length){showToast("⚠ No Shopify store connected — sending without deleting");await sendToShow(showId,ids,workingStock);return;}
       showToast("Deleting Shopify listings…");
-      let deleted=0;
+      const deleted=[];const failed=[];
       for(const item of items){
+        const storeKey=resolveItemStore(item,connected);
+        const creds=storeKey?connected[storeKey]:null;
+        if(!creds){failed.push(item);continue;}
         try{
-          await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",item,shopStore:creds.store,shopToken:creds.token})});
-          deleted++;
-        }catch(e){console.error("Shopify delete failed",e);}
+          const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",item,shopStore:creds.store,shopToken:creds.token})});
+          const d=await r.json().catch(()=>({}));
+          if(!r.ok||!d.success)throw new Error(d.error||`HTTP ${r.status}`);
+          deleted.push({item,storeKey});
+        }catch(e){console.error("Shopify delete failed",e);failed.push(item);}
       }
-      const cleared=workingStock.map(s=>items.find(x=>x.id===s.id)?{...s,postedShopify:false,shopifyProductId:null,updatedAt:new Date().toISOString()}:s);
-      setStock(cleared);
-      // Same two-saves-in-a-row shape as the split path: rebase on what this write returned.
-      const saved=await saveStockK(cleared);
-      workingStock=syncStockVersions(cleared,saved);
-      setStock(workingStock);
-      showToast(`✓ ${deleted} Shopify listing${deleted!==1?"s":""} deleted`);
+      // Only the cards whose listing actually went lose their posted flags — clearing a
+      // card whose product is still live loses the only link back to it.
+      if(deleted.length){
+        const goneIds=new Set(deleted.map(d=>d.item.id));
+        const cleared=workingStock.map(s=>goneIds.has(s.id)?{...s,postedShopify:false,postedShopifyEarth:false,postedShopifyAtyahara:false,postedShopifyAty:false,shopifyProductId:null,shopifyStore:null,updatedAt:new Date().toISOString()}:s);
+        setStock(cleared);
+        // Same two-saves-in-a-row shape as the split path: rebase on what this write returned.
+        const saved=await saveStockK(cleared);
+        workingStock=syncStockVersions(cleared,saved);
+        setStock(workingStock);
+        await dropDealsEntries(deleted);
+      }
+      showToast(failed.length
+        ?`✓ ${deleted.length} listing${deleted.length!==1?"s":""} deleted · ${failed.length} failed — check the store`
+        :`✓ ${deleted.length} Shopify listing${deleted.length!==1?"s":""} deleted`);
     }
     await sendToShow(showId,ids,workingStock);
   };
