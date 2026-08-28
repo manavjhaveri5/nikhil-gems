@@ -6220,6 +6220,8 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
   const [mergeOpen,setMergeOpen]=useState(false);
   const [mergeKeepId,setMergeKeepId]=useState("");
   const [sendToShowOpen,setSendToShowOpen]=useState(false);
+  // Cleanup sweep for cards that went to a show while their listing stayed live.
+  const [showListingSweep,setShowListingSweep]=useState(null); // {ids:Set, busy}
   const [shows,setShows]=useState([]);
   const [sendToShowId,setSendToShowId]=useState("");
   const [shopifyDeleteConfirm,setShopifyDeleteConfirm]=useState(null); // {items,showId,ids,stockOverride}
@@ -6466,6 +6468,54 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
       }catch(e){/* listing is already gone; a stale timer isn't worth failing the send */}
     }
   };
+  /* Delete each card's listing on the store that card was published to. Returns what
+     went and what didn't, so callers only clear the cards whose product is really gone. */
+  const deleteShopifyListings=async items=>{
+    const connected=await loadShopifyCreds();
+    if(!Object.keys(connected).length)return{deleted:[],failed:items,noCreds:true};
+    const deleted=[];const failed=[];
+    for(const item of items){
+      const storeKey=resolveItemStore(item,connected);
+      const creds=storeKey?connected[storeKey]:null;
+      if(!creds){failed.push(item);continue;}
+      try{
+        const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",item,shopStore:creds.store,shopToken:creds.token})});
+        const d=await r.json().catch(()=>({}));
+        if(!r.ok||!d.success)throw new Error(d.error||`HTTP ${r.status}`);
+        deleted.push({item,storeKey});
+      }catch(e){console.error("Shopify delete failed",e);failed.push(item);}
+    }
+    return{deleted,failed,noCreds:false};
+  };
+  // Cards whose product is gone forget the listing; the rest keep their link to it.
+  const clearListingFlags=(base,deletedItems)=>{
+    const goneIds=new Set(deletedItems.map(d=>d.item.id));
+    return base.map(s=>goneIds.has(s.id)?{...s,postedShopify:false,postedShopifyEarth:false,postedShopifyAtyahara:false,postedShopifyAty:false,shopifyProductId:null,shopifyStore:null,updatedAt:new Date().toISOString()}:s);
+  };
+  /* Stock that travelled to a show but kept its online listing. Normally a send offers
+     to delete the listing; sends made before that delete worked left these behind, and
+     the odd one is deliberate ("keep the listing"), so the sweep is opt-in per card. */
+  const strandedShowListings=stock.filter(s=>s.shopifyProductId&&(s.showId||s.showTag));
+  const runShowListingSweep=async()=>{
+    if(!showListingSweep||showListingSweep.busy)return;
+    const items=strandedShowListings.filter(s=>showListingSweep.ids.has(s.id));
+    if(!items.length)return;
+    setShowListingSweep(sw=>({...sw,busy:true}));
+    const{deleted,failed,noCreds}=await deleteShopifyListings(items);
+    if(noCreds){showToast("⚠ No Shopify store connected");setShowListingSweep(sw=>({...sw,busy:false}));return;}
+    if(deleted.length){
+      const cleared=clearListingFlags(stock,deleted);
+      setStock(cleared);
+      try{const saved=await saveStockK(cleared);setStock(syncStockVersions(cleared,saved));}
+      catch(e){showToast("⚠ Deleted on Shopify, but the stock save failed: "+e.message);}
+      await dropDealsEntries(deleted);
+      logActivity({user:"Admin",action:"deleted",module:"stock",label:`Removed ${deleted.length} stale show listing${deleted.length>1?"s":""} from Shopify`,targetMod:"stock"});
+    }
+    setShowListingSweep(null);
+    showToast(failed.length
+      ?`✓ ${deleted.length} listing${deleted.length!==1?"s":""} deleted · ${failed.length} failed — check the store`
+      :`✓ ${deleted.length} stale listing${deleted.length!==1?"s":""} deleted`);
+  };
   const confirmShopifyDeleteAndSend=async(deleteListings)=>{
     if(!shopifyDeleteConfirm)return;
     const{items,showId,ids,stockOverride}=shopifyDeleteConfirm;
@@ -6477,26 +6527,11 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
          against its own store. This used to read the shared legacy slot, which the OAuth
          callback stopped writing — so the delete quietly did nothing and the listing (and
          its Deals entry) stayed up while the stock went to the show. */
-      const connected=await loadShopifyCreds();
-      if(!Object.keys(connected).length){showToast("⚠ No Shopify store connected — sending without deleting");await sendToShow(showId,ids,workingStock);return;}
       showToast("Deleting Shopify listings…");
-      const deleted=[];const failed=[];
-      for(const item of items){
-        const storeKey=resolveItemStore(item,connected);
-        const creds=storeKey?connected[storeKey]:null;
-        if(!creds){failed.push(item);continue;}
-        try{
-          const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",item,shopStore:creds.store,shopToken:creds.token})});
-          const d=await r.json().catch(()=>({}));
-          if(!r.ok||!d.success)throw new Error(d.error||`HTTP ${r.status}`);
-          deleted.push({item,storeKey});
-        }catch(e){console.error("Shopify delete failed",e);failed.push(item);}
-      }
-      // Only the cards whose listing actually went lose their posted flags — clearing a
-      // card whose product is still live loses the only link back to it.
+      const{deleted,failed,noCreds}=await deleteShopifyListings(items);
+      if(noCreds){showToast("⚠ No Shopify store connected — sending without deleting");await sendToShow(showId,ids,workingStock);return;}
       if(deleted.length){
-        const goneIds=new Set(deleted.map(d=>d.item.id));
-        const cleared=workingStock.map(s=>goneIds.has(s.id)?{...s,postedShopify:false,postedShopifyEarth:false,postedShopifyAtyahara:false,postedShopifyAty:false,shopifyProductId:null,shopifyStore:null,updatedAt:new Date().toISOString()}:s);
+        const cleared=clearListingFlags(workingStock,deleted);
         setStock(cleared);
         // Same two-saves-in-a-row shape as the split path: rebase on what this write returned.
         const saved=await saveStockK(cleared);
@@ -7463,6 +7498,39 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
           </div>
         </div>
       )}
+      {showListingSweep&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000,padding:16}} onClick={()=>{if(!showListingSweep.busy)setShowListingSweep(null);}}>
+          <div style={{background:C.surface,borderRadius:12,width:"min(560px,100%)",maxHeight:"86vh",display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+            <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{fontSize:16,fontWeight:800,color:C.ink}}>Still listed online, but at a show</div>
+              <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>
+                These went to a show with their Shopify listing left up. Deleting removes the product from the store — and from Deals — and clears the link on the card. Untick anything you want to keep selling online.
+              </div>
+            </div>
+            <div style={{padding:"12px 20px",overflowY:"auto",flex:1}}>
+              {strandedShowListings.map(item=>{
+                const on=showListingSweep.ids.has(item.id);
+                return(
+                  <label key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:on?C.redBg:C.card,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:6,cursor:"pointer"}}>
+                    <input type="checkbox" checked={on} disabled={showListingSweep.busy} onChange={()=>setShowListingSweep(sw=>{const ids=new Set(sw.ids);ids.has(item.id)?ids.delete(item.id):ids.add(item.id);return{...sw,ids};})}/>
+                    {stockCover(item)&&<img src={thumbUrl(stockCover(item),150)} alt="" style={{width:40,height:40,objectFit:"cover",borderRadius:5,flexShrink:0}}/>}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[item.material,item.shape].filter(Boolean).join(" — ")||"Stock item"}{item.location?` · #${item.location}`:""}</div>
+                      <div style={{fontSize:11,color:C.inkFaint}}>{item.showTag||"At a show"}{item.sentAt?` · sent ${fmtDate(item.sentAt)}`:""} · {item.shopifyStore==="atyahara"?"Atyahara":"Earth Ed."} · ID {item.shopifyProductId}</div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{padding:"14px 20px",borderTop:`1px solid ${C.border}`,display:"flex",flexDirection:"column",gap:8}}>
+              <button disabled={showListingSweep.busy||showListingSweep.ids.size===0} onClick={runShowListingSweep} style={{background:showListingSweep.ids.size?"#C0392B":C.border,border:"none",borderRadius:8,padding:"11px 0",fontSize:13,fontWeight:700,color:"#fff",cursor:showListingSweep.busy?"wait":showListingSweep.ids.size?"pointer":"default"}}>
+                {showListingSweep.busy?"Deleting…":`🗑 Delete ${showListingSweep.ids.size} Listing${showListingSweep.ids.size!==1?"s":""}`}
+              </button>
+              <button disabled={showListingSweep.busy} onClick={()=>setShowListingSweep(null)} style={{background:"none",border:"none",fontSize:12,color:C.inkFaint,cursor:"pointer",padding:"4px 0"}}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
       {bulkPrice&&(()=>{
         const rows=bulkPriceRows();
         const priceable=rows.filter(r=>r.price!=null&&r.price>0);
@@ -8408,6 +8476,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               <div style={{marginBottom:13,display:"flex",alignItems:"center",justifyContent:"flex-end"}}>
                 <span style={{fontSize:11,color:C.inkFaint}}>{filtered.length} item{filtered.length!==1?"s":""}{activeFilterCount>0?` (${activeFilterCount} filter${activeFilterCount>1?"s":""} active)`:""}</span>
               </div>
+              {strandedShowListings.length>0&&!showListingSweep&&(
+                <div style={{display:"flex",gap:10,alignItems:"center",background:C.redBg,border:"1px solid #F5C0B8",borderRadius:7,padding:"9px 14px",marginBottom:12,flexWrap:"wrap"}}>
+                  <span style={{fontSize:13,color:C.ink,flex:1,minWidth:180}}>
+                    <b>{strandedShowListings.length} item{strandedShowListings.length!==1?"s":""}</b> {strandedShowListings.length!==1?"are":"is"} at a show but still listed online.
+                  </span>
+                  <button className="bs" style={{fontSize:12,color:C.red,borderColor:C.red,background:C.surface}} onClick={()=>setShowListingSweep({ids:new Set(strandedShowListings.map(s=>s.id)),busy:false})}>Review &amp; delete listings</button>
+                </div>
+              )}
               {selectMode&&(
                 <div style={{display:"flex",gap:8,alignItems:"center",background:C.amberBg,border:`1px solid #F0C890`,borderRadius:7,padding:"9px 14px",marginBottom:12,flexWrap:"wrap"}}>
                   <span style={{fontSize:13,fontWeight:600,color:C.ink,flex:"1 1 100%"}}>{selectedIds.size} selected{mob&&selectedIds.size===0?" — tap items below to select":""}</span>
