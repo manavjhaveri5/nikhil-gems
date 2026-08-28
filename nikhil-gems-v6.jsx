@@ -6513,7 +6513,8 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
           const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"product_sections",product_ids:list.map(i=>String(i.shopifyProductId)),shopStore:creds.store,shopToken:creds.token})});
           const d=await r.json().catch(()=>({}));
           if(!r.ok||!d.success)throw new Error(d.error||`HTTP ${r.status}`);
-          list.forEach(i=>{sections[i.id]=d.sections?.[String(i.shopifyProductId)]||[];});
+          // The API sends null for a product it couldn't check — keep that distinct from [].
+          list.forEach(i=>{const v=d.sections?.[String(i.shopifyProductId)];sections[i.id]=Array.isArray(v)?v:false;});
         }catch(e){
           // false, not [] — "we couldn't check" must not read as "in no section".
           list.forEach(i=>{sections[i.id]=false;});

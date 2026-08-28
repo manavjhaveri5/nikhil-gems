@@ -701,17 +701,26 @@ export default async function handler(req, res) {
   }
 
   if (action === "product_sections") {
-    /* Which storefront sections a product currently sits in. /collections.json?product_id
-       covers both custom and smart collections, unlike /collects.json which only knows
-       the manual ones — a product can land in "Mini Hearts" purely by rule. */
+    /* Which storefront sections a product currently sits in. Both collection lists take a
+       product_id filter; there is no combined /collections.json list endpoint, and
+       /collects.json would miss the smart ones — a product lands in "Mini Hearts" by rule,
+       with no collect row to find. */
     const ids = [...new Set((body.product_ids || []).map(String).filter(Boolean))].slice(0, 50);
     if (!ids.length) return res.status(400).json({ error: "No products given" });
     const sections = {};
     for (const id of ids) {
-      const r = await sr("GET", `/collections.json?product_id=${encodeURIComponent(id)}&limit=250`);
-      sections[id] = r.ok
-        ? (r.data?.collections || []).map(c => c.title || "").filter(Boolean).sort((a, b) => a.localeCompare(b))
-        : [];
+      const q = `product_id=${encodeURIComponent(id)}&limit=250&fields=id,title`;
+      const [custom, smart] = await Promise.all([
+        sr("GET", `/custom_collections.json?${q}`),
+        sr("GET", `/smart_collections.json?${q}`),
+      ]);
+      // null, never [] — a lookup that failed must not read as "in no section".
+      if (!custom.ok && !smart.ok) { sections[id] = null; continue; }
+      const titles = [
+        ...(custom.ok ? custom.data?.custom_collections || [] : []),
+        ...(smart.ok ? smart.data?.smart_collections || [] : []),
+      ].map(c => c.title || "").filter(Boolean);
+      sections[id] = [...new Set(titles)].sort((a, b) => a.localeCompare(b));
     }
     return res.json({ success: true, sections });
   }
