@@ -7531,7 +7531,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`}}>
               <div style={{fontSize:16,fontWeight:800,color:C.ink}}>Still listed online, but at a show</div>
               <div style={{fontSize:12,color:C.inkMid,marginTop:4}}>
-                These went to a show with their Shopify listing left up. Deleting removes the product from the store — and from Deals — and clears the link on the card. Untick anything you want to keep selling online.
+                These went to a show with their Shopify listing left up. Deleting removes the <b>whole product</b> from the store — it leaves every section it sits in, not just Deals — and clears the link on the card. Untick anything you want to keep selling online.
               </div>
             </div>
             <div style={{padding:"12px 20px",overflowY:"auto",flex:1}}>
