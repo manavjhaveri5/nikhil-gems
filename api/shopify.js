@@ -700,6 +700,22 @@ export default async function handler(req, res) {
     return res.json({ success: true, collections: rows });
   }
 
+  if (action === "product_sections") {
+    /* Which storefront sections a product currently sits in. /collections.json?product_id
+       covers both custom and smart collections, unlike /collects.json which only knows
+       the manual ones — a product can land in "Mini Hearts" purely by rule. */
+    const ids = [...new Set((body.product_ids || []).map(String).filter(Boolean))].slice(0, 50);
+    if (!ids.length) return res.status(400).json({ error: "No products given" });
+    const sections = {};
+    for (const id of ids) {
+      const r = await sr("GET", `/collections.json?product_id=${encodeURIComponent(id)}&limit=250`);
+      sections[id] = r.ok
+        ? (r.data?.collections || []).map(c => c.title || "").filter(Boolean).sort((a, b) => a.localeCompare(b))
+        : [];
+    }
+    return res.json({ success: true, sections });
+  }
+
   if (action === "add_to_deals" || action === "remove_from_deals") {
     // Add/remove existing products to the store's "Deals" collection (the daily-deals
     // section). Used by the ERP store view's "Add to Deals" flow + the expiry popup.

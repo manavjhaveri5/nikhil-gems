@@ -6496,6 +6496,32 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
      to delete the listing; sends made before that delete worked left these behind, and
      the odd one is deliberate ("keep the listing"), so the sweep is opt-in per card. */
   const strandedShowListings=stock.filter(s=>s.shopifyProductId&&(s.showId||s.showTag));
+  /* Which storefront sections these products are actually in — read from the store
+     rather than the card, since a product can be recollected (or rule-collected into a
+     smart section like Mini Hearts) long after the push. */
+  const openShowListingSweep=async()=>{
+    const items=strandedShowListings;
+    setShowListingSweep({ids:new Set(items.map(s=>s.id)),busy:false,sections:null});
+    try{
+      const connected=await loadShopifyCreds();
+      const byStore={};
+      items.forEach(item=>{const k=resolveItemStore(item,connected);if(k)(byStore[k]=byStore[k]||[]).push(item);});
+      const sections={};
+      for(const[storeKey,list]of Object.entries(byStore)){
+        const creds=connected[storeKey];
+        try{
+          const r=await fetch("/api/shopify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"product_sections",product_ids:list.map(i=>String(i.shopifyProductId)),shopStore:creds.store,shopToken:creds.token})});
+          const d=await r.json().catch(()=>({}));
+          if(!r.ok||!d.success)throw new Error(d.error||`HTTP ${r.status}`);
+          list.forEach(i=>{sections[i.id]=d.sections?.[String(i.shopifyProductId)]||[];});
+        }catch(e){
+          // false, not [] — "we couldn't check" must not read as "in no section".
+          list.forEach(i=>{sections[i.id]=false;});
+        }
+      }
+      setShowListingSweep(sw=>sw?{...sw,sections}:sw);
+    }catch(e){setShowListingSweep(sw=>sw?{...sw,sections:{}}:sw);}
+  };
   const runShowListingSweep=async()=>{
     if(!showListingSweep||showListingSweep.busy)return;
     const items=strandedShowListings.filter(s=>showListingSweep.ids.has(s.id));
@@ -7510,6 +7536,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
             <div style={{padding:"12px 20px",overflowY:"auto",flex:1}}>
               {strandedShowListings.map(item=>{
                 const on=showListingSweep.ids.has(item.id);
+                const secs=showListingSweep.sections?(showListingSweep.sections[item.id]??false):null;
                 return(
                   <label key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:on?C.redBg:C.card,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:6,cursor:"pointer"}}>
                     <input type="checkbox" checked={on} disabled={showListingSweep.busy} onChange={()=>setShowListingSweep(sw=>{const ids=new Set(sw.ids);ids.has(item.id)?ids.delete(item.id):ids.add(item.id);return{...sw,ids};})}/>
@@ -7517,6 +7544,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:600,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[item.material,item.shape].filter(Boolean).join(" — ")||"Stock item"}{item.location?` · #${item.location}`:""}</div>
                       <div style={{fontSize:11,color:C.inkFaint}}>{item.showTag||"At a show"}{item.sentAt?` · sent ${fmtDate(item.sentAt)}`:""} · {item.shopifyStore==="atyahara"?"Atyahara":"Earth Ed."} · ID {item.shopifyProductId}</div>
+                      <div style={{fontSize:11,marginTop:1,color:secs===null?C.inkFaint:secs.length?C.blue:C.inkFaint}}>
+                        {secs===null?"checking sections…":secs===false?"section unknown":secs.length?`in ${secs.join(" · ")}`:"not in any section"}
+                      </div>
                     </div>
                   </label>
                 );
@@ -8481,7 +8511,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <span style={{fontSize:13,color:C.ink,flex:1,minWidth:180}}>
                     <b>{strandedShowListings.length} item{strandedShowListings.length!==1?"s":""}</b> {strandedShowListings.length!==1?"are":"is"} at a show but still listed online.
                   </span>
-                  <button className="bs" style={{fontSize:12,color:C.red,borderColor:C.red,background:C.surface}} onClick={()=>setShowListingSweep({ids:new Set(strandedShowListings.map(s=>s.id)),busy:false})}>Review &amp; delete listings</button>
+                  <button className="bs" style={{fontSize:12,color:C.red,borderColor:C.red,background:C.surface}} onClick={openShowListingSweep}>Review &amp; delete listings</button>
                 </div>
               )}
               {selectMode&&(
