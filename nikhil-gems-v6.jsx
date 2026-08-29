@@ -347,7 +347,13 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
     return a.dueDate.localeCompare(b.dueDate);
   };
   const activeTodos=[...todos].filter(todo=>!todo.done).sort(sortFn);
+  // Repeating chores come back forever and would otherwise bury the new one-offs, so
+  // the two are listed apart. Headings only appear once there's something to separate.
+  const oneOffTodos=activeTodos.filter(todo=>!todo.recurring);
+  const repeatTodos=activeTodos.filter(todo=>todo.recurring);
+  const splitTodos=oneOffTodos.length>0&&repeatTodos.length>0;
   const doneTodos=[...todos].filter(todo=>todo.done).sort(sortFn);
+  const todoSectionHead={fontSize:9,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,margin:"6px 0 2px"};
 
   const todayStr=today();
   const fmtDue=d=>{if(!d)return null;const diff=Math.round((new Date(d)-new Date(todayStr))/(86400000));if(diff<0)return{label:`${Math.abs(diff)}d overdue`,color:C.red};if(diff===0)return{label:"Today",color:C.amber};if(diff===1)return{label:"Tomorrow",color:C.amber};return{label:fmtDate(d),color:C.inkFaint};};
@@ -462,7 +468,10 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
       {loaded&&(
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
           <div style={{maxHeight:280,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-            {activeTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
+            {splitTodos&&<div style={{...todoSectionHead,marginTop:0}}>One-off</div>}
+            {oneOffTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
+            {repeatTodos.length>0&&<div style={{...todoSectionHead,color:C.blue,...(oneOffTodos.length?{}:{marginTop:0})}}>↻ Repeating</div>}
+            {repeatTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
             {activeTodos.length===0&&!showDone&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"6px 0"}}>No pending tasks 🎉</div>}
           </div>
           {showDone&&doneTodos.length>0&&(
