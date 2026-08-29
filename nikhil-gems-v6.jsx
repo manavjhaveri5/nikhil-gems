@@ -355,6 +355,50 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
   const doneTodos=[...todos].filter(todo=>todo.done).sort(sortFn);
   const todoSectionHead={fontSize:9,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,margin:"6px 0 2px"};
 
+  /* Repeating tasks read better on a month than in a list: what matters is which day
+     each one lands on. Occurrences are projected forward from the task's due date —
+     the due date is always the *next* one, so nothing before it is still owed. */
+  const stepDate=(d,freq)=>{
+    const n=new Date(d);
+    if(freq==="daily")n.setDate(n.getDate()+1);
+    else if(freq==="weekly")n.setDate(n.getDate()+7);
+    else if(freq==="monthly")n.setMonth(n.getMonth()+1);
+    else n.setFullYear(n.getFullYear()+1);
+    return n;
+  };
+  const isoOf=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const occurrencesIn=(task,from,to)=>{
+    if(!task.dueDate)return[];
+    let d=new Date(task.dueDate+"T00:00:00");
+    if(isNaN(d))return[];
+    const out=[];
+    let guard=0;
+    while(d<from&&guard++<400)d=stepDate(d,task.recurring);
+    while(d<=to&&guard++<400){out.push(isoOf(d));d=stepDate(d,task.recurring);}
+    return out;
+  };
+  const [calMonth,setCalMonth]=useState(()=>{const n=new Date();return new Date(n.getFullYear(),n.getMonth(),1);});
+  const [calSel,setCalSel]=useState(()=>today());
+  const monthStart=new Date(calMonth.getFullYear(),calMonth.getMonth(),1);
+  const monthEnd=new Date(calMonth.getFullYear(),calMonth.getMonth()+1,0);
+  const occByDay={};
+  repeatTodos.forEach(task=>occurrencesIn(task,monthStart,monthEnd).forEach(iso=>{(occByDay[iso]=occByDay[iso]||[]).push(task);}));
+  const undatedRepeats=repeatTodos.filter(task=>!task.dueDate);
+  const calCells=[...Array(monthStart.getDay()).fill(null),
+    ...Array.from({length:monthEnd.getDate()},(_,i)=>isoOf(new Date(calMonth.getFullYear(),calMonth.getMonth(),i+1)))];
+  const selTasks=occByDay[calSel]||[];
+  // Land on the next day that actually has a repeat, so the panel isn't empty on open.
+  const [calTouched,setCalTouched]=useState(false);
+  useEffect(()=>{
+    if(calTouched||!loaded||!repeatTodos.length)return;
+    if((occByDay[todayStr]||[]).length)return;
+    const dates=repeatTodos.map(task=>task.dueDate).filter(Boolean).sort();
+    const next=dates.find(d=>d>=todayStr)||dates[0];
+    if(!next)return;
+    setCalSel(next);
+    setCalMonth(new Date(+next.slice(0,4),+next.slice(5,7)-1,1));
+  },[loaded,todos,calTouched]);
+
   const todayStr=today();
   const fmtDue=d=>{if(!d)return null;const diff=Math.round((new Date(d)-new Date(todayStr))/(86400000));if(diff<0)return{label:`${Math.abs(diff)}d overdue`,color:C.red};if(diff===0)return{label:"Today",color:C.amber};if(diff===1)return{label:"Tomorrow",color:C.amber};return{label:fmtDate(d),color:C.inkFaint};};
 
@@ -467,11 +511,60 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
       {!loaded&&<div style={{fontSize:11,color:C.inkFaint,paddingTop:4}}>Loading...</div>}
       {loaded&&(
         <div style={{display:"flex",flexDirection:"column",gap:4}}>
-          <div style={{maxHeight:280,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-            {splitTodos&&<div style={{...todoSectionHead,marginTop:0}}>One-off</div>}
-            {oneOffTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
-            {repeatTodos.length>0&&<div style={{...todoSectionHead,color:C.blue,...(oneOffTodos.length?{}:{marginTop:0})}}>↻ Repeating</div>}
-            {repeatTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
+          <div style={{display:"grid",gridTemplateColumns:repeatTodos.length?"repeat(auto-fit,minmax(215px,1fr))":"1fr",gap:12,alignItems:"start"}}>
+            {/* One-off — the list, unchanged */}
+            <div style={{display:"flex",flexDirection:"column",gap:4,minWidth:0}}>
+              {splitTodos&&<div style={{...todoSectionHead,marginTop:0}}>One-off</div>}
+              <div style={{maxHeight:repeatTodos.length&&!mob?300:280,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                {oneOffTodos.map(todo=><TodoRow key={todo.id} t={todo}/>)}
+                {oneOffTodos.length===0&&repeatTodos.length>0&&<div style={{fontSize:11,color:C.inkFaint,padding:"6px 0"}}>Nothing one-off pending 🎉</div>}
+              </div>
+            </div>
+            {/* Repeating — a month, because what matters is which day each lands on */}
+            {repeatTodos.length>0&&(
+              <div style={{minWidth:0,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 11px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7}}>
+                  <div style={{...todoSectionHead,color:C.blue,margin:0}}>↻ Repeating</div>
+                  <div style={{flex:1}}/>
+                  <button onClick={()=>{setCalTouched(true);setCalMonth(m=>new Date(m.getFullYear(),m.getMonth()-1,1));}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:"0 4px",lineHeight:1}}>‹</button>
+                  <div style={{fontSize:11,fontWeight:600,color:C.inkMid,minWidth:74,textAlign:"center"}}>{calMonth.toLocaleDateString("en-GB",{month:"short",year:"numeric"})}</div>
+                  <button onClick={()=>{setCalTouched(true);setCalMonth(m=>new Date(m.getFullYear(),m.getMonth()+1,1));}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:"0 4px",lineHeight:1}}>›</button>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:3}}>
+                  {WEEKDAY_NAMES.map(w=><div key={w} style={{fontSize:8.5,fontWeight:700,color:C.inkFaint,textAlign:"center",letterSpacing:.4}}>{w.slice(0,1)}</div>)}
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+                  {calCells.map((iso,i)=>{
+                    if(!iso)return <div key={`b${i}`}/>;
+                    const hits=occByDay[iso]||[];
+                    const isToday=iso===todayStr, isSel=iso===calSel;
+                    return(
+                      <button key={iso} onClick={()=>{setCalTouched(true);setCalSel(iso);}} title={hits.map(h=>h.text).join(", ")}
+                        style={{aspectRatio:"1",border:`1px solid ${isSel?C.blue:isToday?C.gold:"transparent"}`,borderRadius:6,cursor:"pointer",
+                          background:isSel?C.blueBg:hits.length?C.card:"transparent",
+                          color:hits.length?C.ink:C.inkFaint,fontSize:10.5,fontWeight:hits.length?700:400,fontFamily:"inherit",
+                          display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,padding:0,lineHeight:1}}>
+                        {+iso.slice(8)}
+                        <span style={{display:"flex",gap:1.5,height:3}}>
+                          {hits.slice(0,3).map((h,j)=><span key={j} style={{width:3,height:3,borderRadius:"50%",background:C.blue}}/>)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{marginTop:9,maxHeight:150,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                  <div style={{fontSize:9,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>
+                    {calSel===todayStr?"Today":fmtDate(calSel)}{selTasks.length?` · ${selTasks.length}`:""}
+                  </div>
+                  {selTasks.map(todo=><TodoRow key={todo.id} t={todo}/>)}
+                  {selTasks.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:"2px 0"}}>Nothing repeating on this day</div>}
+                  {undatedRepeats.length>0&&(<>
+                    <div style={{fontSize:9,fontWeight:600,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginTop:4}}>No date set</div>
+                    {undatedRepeats.map(todo=><TodoRow key={todo.id} t={todo}/>)}
+                  </>)}
+                </div>
+              </div>
+            )}
             {activeTodos.length===0&&!showDone&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"6px 0"}}>No pending tasks 🎉</div>}
           </div>
           {showDone&&doneTodos.length>0&&(
