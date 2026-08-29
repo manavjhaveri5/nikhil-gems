@@ -13290,6 +13290,18 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     return{...d,items,totalAmt:calcTotalAmt(items,d.shippingCost,d.discountAmt)};
   });
   const addItem=()=>setDraft(d=>{const items=[...d.items,newInvItem({buyer:gstBuyer})];return{...d,items};});
+  /* How much is actually going in the box. Kilos and pieces can't be added together,
+     so each unit is totalled on its own and shown side by side. */
+  const qtyTotals=items=>{
+    const by={};
+    (items||[]).forEach(it=>{
+      const q=parseFloat(it.qty);
+      if(!Number.isFinite(q)||q===0)return;
+      const u=(it.unit||"pcs").trim()||"pcs";
+      by[u]=(by[u]||0)+q;
+    });
+    return Object.entries(by).map(([unit,qty])=>`${+qty.toFixed(3)} ${unit}`);
+  };
   const delItem=idx=>setDraft(d=>{const items=d.items.filter((_,i)=>i!==idx);return{...d,items,totalAmt:calcTotalAmt(items,d.shippingCost,d.discountAmt)};});
   // Consolidate: group rows by acctDesc+unit, sum qty & amt, join customDescs
   const consolidateItems=()=>setDraft(d=>{
@@ -13742,6 +13754,12 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           </table>
         </div>
         <div style={{padding:"10px 15px",borderTop:`1px solid ${C.border}`,background:C.card}}>
+          {(()=>{const totals=qtyTotals(draft.items);return totals.length>0&&(
+            <div style={{display:"flex",justifyContent:"flex-end",gap:12,alignItems:"center",marginBottom:6}}>
+              <span style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase"}}>Total Qty · {draft.items.length} line{draft.items.length===1?"":"s"}</span>
+              <span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,color:C.inkMid}}>{totals.join(" · ")}</span>
+            </div>
+          );})()}
           <div style={{display:"flex",justifyContent:"flex-end",gap:12,alignItems:"center",marginBottom:6}}>
             <span style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase"}}>Items Subtotal</span>
             <span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,color:C.inkMid}}>{draft.currency} {draft.items.reduce((s,i)=>s+(+i.amt||0),0).toFixed(2)}</span>
