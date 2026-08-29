@@ -10676,7 +10676,7 @@ function POForm({draft,setDraft,vendors,onSave}){
               <tr key={item.id} style={{borderBottom:`1px solid ${C.border}`}}>
                 <td style={{padding:"5px 8px"}}><input value={item.desc} onChange={e=>si(idx,"desc",e.target.value)} style={CI} placeholder="e.g. Assorted Palmstones..."/></td>
                 <td style={{padding:"5px 7px"}}><input type="number" value={item.qty} onChange={e=>si(idx,"qty",e.target.value)} style={{...CI,textAlign:"right"}}/></td>
-                <td style={{padding:"5px 7px"}}><select value={item.unit} onChange={e=>si(idx,"unit",e.target.value)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:C.ink,fontFamily:"inherit",padding:"1px 2px",borderBottom:"1px dashed #bbb"}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                <td style={{padding:"5px 7px"}}><select value={item.unit||""} onChange={e=>si(idx,"unit",e.target.value)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:C.ink,fontFamily:"inherit",padding:"1px 2px",borderBottom:"1px dashed #bbb"}}>{!String(item.unit||"").trim()&&<option value="">— unit</option>}{unitOptionsFor(item.unit).map(u=><option key={u}>{u}</option>)}</select></td>
                 <td style={{padding:"5px 7px"}}><input type="number" value={item.rate} onChange={e=>si(idx,"rate",e.target.value)} style={{...CI,textAlign:"right"}}/></td>
                 <td style={{padding:"5px 7px",textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:13,fontWeight:500,whiteSpace:"nowrap"}}>{item.amt?fmtAmt(item.amt):"—"}</td>
                 <td style={{padding:"5px 7px",textAlign:"center"}}><button onClick={()=>del(idx)} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:15,lineHeight:1}}>&times;</button></td>
@@ -11934,6 +11934,7 @@ const formatInvQty=v=>{
   if((raw.split(".")[1]||"").length>6)return String(+n.toFixed(6));
   return raw.replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.0+$/,"");
 };
+const unitOptionsFor=u=>{const v=String(u||"").trim();return v&&!UNITS.includes(v)?[v,...UNITS]:UNITS;};
 const newInvItem=(seed={})=>{
   const {buyer,...rest}=seed;
   const hsn=rest.hsn||"71031029";
@@ -13297,7 +13298,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     (items||[]).forEach(it=>{
       const q=parseFloat(it.qty);
       if(!Number.isFinite(q)||q===0)return;
-      const u=(it.unit||"pcs").trim()||"pcs";
+      const u=String(it.unit||"").trim()||"no unit";
       by[u]=(by[u]||0)+q;
     });
     return Object.entries(by).map(([unit,qty])=>`${+qty.toFixed(3)} ${unit}`);
@@ -13735,7 +13736,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                     </td>
                     <td style={{padding:"5px 7px"}}><input value={item.hsn||""} onChange={e=>si(idx,"hsn",e.target.value)} style={{...CI,width:55,textAlign:"center"}}/></td>
                     <td style={{padding:"5px 7px"}}><input type="number" value={item.qty} onChange={e=>si(idx,"qty",e.target.value)} style={{...CI,textAlign:"right",width:60}}/></td>
-                    <td style={{padding:"5px 7px"}}><select value={item.unit} onChange={e=>si(idx,"unit",e.target.value)} style={{...CI,cursor:"pointer",width:52}}>{UNITS.map(u=><option key={u}>{u}</option>)}</select></td>
+                    <td style={{padding:"5px 7px"}}><select value={item.unit||""} onChange={e=>si(idx,"unit",e.target.value)} style={{...CI,cursor:"pointer",width:52}}>{!String(item.unit||"").trim()&&<option value="">— unit</option>}{unitOptionsFor(item.unit).map(u=><option key={u}>{u}</option>)}</select></td>
                     <td style={{padding:"5px 7px"}}><input type="number" value={item.rate} onChange={e=>si(idx,"rate",e.target.value)} style={{...CI,textAlign:"right",width:75}}/></td>
                     {gstMode==="cgst_sgst"
                       ?<><td style={{padding:"5px 7px"}}><select value={item.igst??0} onChange={e=>si(idx,"igst",+e.target.value)} style={{...CI,cursor:"pointer",width:52}}><option value={0}>0%</option>{[0.25,3,5,12,18].map(r=><option key={r} value={r}>{r/2}%</option>)}</select></td>
