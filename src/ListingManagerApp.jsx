@@ -4,6 +4,7 @@ import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
 import { CUSTOMS_DESCS_KEY, DEFAULT_CUSTOMS_DESCS } from "./DatasetsApp.jsx";
 import CampaignComposer from "./CampaignComposer.jsx";
+import PhotoEditor from "./PhotoEditor.jsx";
 import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
@@ -993,6 +994,9 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const [bgDesign, setBgDesign] = useState(null);
   const [bgResult, setBgResult] = useState("");
   const [bgErr, setBgErr]       = useState("");
+  // The native editor — colour and tone, AI-directed, applied here rather than
+  // in another tab. Background work stays with Canva alongside it.
+  const [editIdx, setEditIdx] = useState(null);
   const openView = i => { setViewIdx(i); setBgDesign(null); setBgResult(""); setBgErr(""); };
   const dataURLToBlob = durl => { const [h, b] = durl.split(","); const mime = (h.match(/:(.*?);/) || [])[1] || "image/png"; const bin = atob(b); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i); return new Blob([arr], { type: mime }); };
   const urlToImageData = async url => {
@@ -1179,6 +1183,10 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
               {bgErr && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 8, padding: "8px 10px" }}>{bgErr}</div>}
               <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 {!bgResult ? <>
+                  <button onClick={() => { setEditIdx(viewIdx); setViewIdx(null); }}
+                    style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8, padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: "pointer" }}>
+                    🎛 Edit photo
+                  </button>
                   {!bgDesign
                     ? <button onClick={bgSend} disabled={!!bgBusy} style={{ background: "#7B3FF2", color: "#fff", border: "none", borderRadius: 8, padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: bgBusy ? "wait" : "pointer" }}>{bgBusy === "send" ? "Opening Canva…" : "✂️ Remove background (Canva)"}</button>
                     : <>
@@ -1192,10 +1200,18 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                   <button onClick={() => setBgResult("")} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Discard</button>
                 </>}
               </div>
-              <div style={{ marginTop: 10, fontSize: 11, color: C.inkFaint, lineHeight: 1.4 }}>Opens the photo in Canva to erase the background, then pulls the clean cutout back and replaces this photo. Needs Canva connected (Home → Background Remover).</div>
+              <div style={{ marginTop: 10, fontSize: 11, color: C.inkFaint, lineHeight: 1.4 }}>Edit photo does colour and tone here — tell it what you want and the AI sets the sliders. Remove background opens the photo in Canva, then pulls the clean cutout back. Needs Canva connected (Home → Background Remover).</div>
             </div>
           </div>
         </div>
+      )}
+
+      {editIdx != null && selectedUrls[editIdx] && (
+        <PhotoEditor
+          url={selectedUrls[editIdx]}
+          onSave={newUrl => onChange(selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)))}
+          onClose={() => setEditIdx(null)}
+        />
       )}
 
       {/* ── 2b. Listing video (optional) — one per listing (Etsy/eBay) ── */}

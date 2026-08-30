@@ -11,6 +11,9 @@ export const C = {
   amber:"var(--c-amber)", amberBg:"var(--c-amberBg)",
   blue:"var(--c-blue)", blueBg:"var(--c-blueBg)",
   purple:"#6B3FA0", purpleBg:"#F3EEFF",
+  // The selection accent these screens have always asked for by name; the CSS
+  // variables were there, the mapping wasn't, so every C.teal read as undefined.
+  teal:"var(--c-teal)", tealBg:"var(--c-tealBg)",
 };
 
 export const mob = () => window.innerWidth < 700;
