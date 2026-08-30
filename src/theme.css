@@ -112,3 +112,35 @@ html.dark {
   --e-2:0 0 0 1px rgba(255,255,255,.10),0 8px 28px rgba(0,0,0,.55);
   --e-modal:0 0 0 1px rgba(255,255,255,.08),0 24px 64px rgba(0,0,0,.70);
 }
+
+/* ── Show name cards, edited as cards ──────────────────────────────────────
+   The card holds the printed 95 × 50 mm proportion and is its own container,
+   so every size inside is a share of the card's width (cqw) and the screen
+   preview crowds a long name at exactly the point the paper does. The card
+   keeps its paper colours in dark mode — it is a picture of a printed thing,
+   not a panel of the app. Print styles live with the print sheet. */
+.ngcard {
+  container-type: inline-size;
+  position: relative;
+  aspect-ratio: 95 / 50;
+  background: #fff;
+  border: 1px solid #d4c4b0;
+  padding: 3.7cqw 5.3cqw 3.2cqw;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+}
+.ngcard-accent { position: absolute; top: 0; left: 0; right: 0; height: 1.3cqw; background: #8B6F47; }
+.ngcard-top { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .8cqw; min-height: 0; }
+.ngcard-mid { display: flex; flex-direction: column; align-items: center; gap: .9cqw; width: 100%; }
+.ngcard-bottom { display: flex; align-items: flex-end; justify-content: space-between; gap: 3cqw; padding-top: 1.8cqw; }
+.ngcard-rule { width: 100%; border: none; border-top: 1px solid #e8ddd2; margin: 0; }
+.ngcard-rule-accent { width: 100%; border: none; border-top: 1px solid #d4c4b0; margin: .5cqw 0 0; }
+
+/* Editable text reads as text until you go near it. */
+.ngcard-edit { outline: none; border-radius: 2px; cursor: text; min-height: 1em; }
+.ngcard-edit:empty::before { content: attr(data-ph); color: #c3bab0; }
+.ngcard-edit:hover { background: rgba(139, 111, 71, .07); }
+.ngcard-edit:focus { background: rgba(139, 111, 71, .12); }
+

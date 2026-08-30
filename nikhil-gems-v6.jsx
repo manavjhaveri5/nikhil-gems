@@ -13,6 +13,7 @@ import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotK
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
+import NameCard from "./src/NameCard.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
@@ -17359,52 +17360,34 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                   {labelItems.length===0?(
                     <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Plan a shipment first — name cards come from what's in it.</div>
                   ):(
-                    <div style={{display:"grid",gap:7}}>
+                    /* Two to a row, as they land on the A4 sheet. */
+                    <div style={{display:"grid",gap:16,gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(330px,1fr))"}}>
                       {labelItems.map(item=>{
                         const copies=labelCopies(item);
-                        const planned=planKey(item.id);
+                        const en=item.labelEn||autoEn(item);
+                        const local=secondLine(item);
                         return(
-                        <div key={item.id} style={{background:copies===0?C.bg:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 11px",opacity:copies===0?.6:1}}>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6}}>
-                            <span style={{fontSize:10,color:C.inkFaint}}>{item.material||"Item"}{item.shape?` · ${item.shape}`:""}{item.location?` · Box ${item.location}`:""}{copies===0?" · not printing":""}</span>
-                            <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
-                              {isAdmin&&<button onClick={e=>{e.stopPropagation();aiFillCards([item]);}} disabled={!!aiBusy} title="Write this card with AI" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:aiBusy===item.id?C.inkFaint:"#8B6F47",cursor:aiBusy?"default":"pointer"}}>{aiBusy===item.id?"…":"✨"}</button>}
-                              {copies>0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:"0"});}} title="Skip this card on the sheet" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.inkMid,cursor:"pointer"}}>skip</button>}
-                              {copies===0&&<button onClick={e=>{e.stopPropagation();onPatchStockItem?.(item.id,{labelCopies:""});}} title="Print this card again" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"1px 8px",fontSize:9,fontWeight:700,color:C.blue,cursor:"pointer"}}>print</button>}
-                              {planned&&<button onClick={e=>{e.stopPropagation();removeDraftLine(item.id);}} title="Remove from the shipment plan" style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:15,padding:0,lineHeight:1}}>&times;</button>}
-                            </div>
-                          </div>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":(lang?"1fr 1fr 116px 150px 96px 80px":"1fr 116px 150px 96px 80px"),gap:7}}>
-                            {!!lang&&(
-                              <Field label={`${langCfg.label} name — big line`}>
-                                <input key={`${item.id}-${lang}`} defaultValue={secondLine(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==secondLine(item))setSecondLine(item.id,v);}} placeholder={langCfg.sample||""} style={{...FI,fontSize:11}}/>
-                              </Field>
-                            )}
-                            <Field label={lang?"English name":"Name — big line"}>
-                              <input defaultValue={item.labelEn||autoEn(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==(item.labelEn||autoEn(item)))onPatchStockItem?.(item.id,{labelEn:v});}} style={{...FI,fontSize:11}}/>
-                            </Field>
-                            <Field label="Shape — small line">
-                              <input key={`sh-${item.id}`} defaultValue={cardShape(item)} onBlur={e=>{const v=e.target.value.trim().toUpperCase();if(v!==cardShape(item))onPatchStockItem?.(item.id,{labelShape:v});}} placeholder="RAW" style={{...FI,fontSize:11,textTransform:"uppercase"}}/>
-                            </Field>
-                            <Field label="Origin">
-                              <input key={`or-${item.id}`} defaultValue={cardOrigin(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardOrigin(item))onPatchStockItem?.(item.id,{labelOrigin:v});}} placeholder={lang==="ja"?"INDIA · インド産":"INDIA"} style={{...FI,fontSize:11}}/>
-                            </Field>
-                            <Field label={`Price ${showCur} · blank = write-on line`}>
-                              <input key={`lp-${item.id}-${item.listPrice||""}`} type="number" min="0" step="0.01" defaultValue={item.listPrice||""} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} placeholder="—" style={{...FI,fontSize:11}}/>
-                            </Field>
-                            <Field label="Copies">
-                              <input key={`cp-${item.id}-${copies}`} type="number" min="0" max="200" defaultValue={copies} onBlur={e=>{const v=String(Math.max(0,Math.min(200,parseInt(e.target.value,10)||0)));if(v!==String(copies))onPatchStockItem?.(item.id,{labelCopies:v});}} style={{...FI,fontSize:11}}/>
-                            </Field>
-                          </div>
-                          <div style={{marginTop:6,display:"grid",gridTemplateColumns:mob?"1fr":"1fr 230px",gap:7}}>
-                            <Field label={`Description${lang?` — ${langCfg.label}`:""} · one line on the card`}>
-                              <input key={`ds-${item.id}-${descKey}`} defaultValue={cardDesc(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardDesc(item))setCardDesc(item.id,v);}} placeholder={lang==="ja"?"金属光沢を持つ硫化鉄で、豊かさを象徴する。":"A copper silicate prized for its deep blue colour."} style={{...FI,fontSize:11}}/>
-                            </Field>
-                            <Field label="Extra details · bottom left">
-                              <input key={`nt-${item.id}`} defaultValue={cardNote(item)} onBlur={e=>{const v=e.target.value.trim();if(v!==cardNote(item))onPatchStockItem?.(item.id,{labelNote:v});}} placeholder={noteFallback(item)} style={{...FI,fontSize:11}}/>
-                            </Field>
-                          </div>
-                        </div>
+                          <NameCard
+                            key={`${item.id}-${lang}`}
+                            meta={`${item.material||"Item"}${item.shape?` · ${item.shape}`:""}${item.location?` · Box ${item.location}`:""}`}
+                            font={langCfg.font}
+                            lead={lang?local:en}
+                            sub={lang?en:undefined}
+                            onLead={lang?(v=>setSecondLine(item.id,v)):(v=>onPatchStockItem?.(item.id,{labelEn:v}))}
+                            onSub={lang?(v=>onPatchStockItem?.(item.id,{labelEn:v})):undefined}
+                            shape={cardShape(item)} onShape={v=>onPatchStockItem?.(item.id,{labelShape:v})}
+                            origin={cardOrigin(item)} onOrigin={v=>onPatchStockItem?.(item.id,{labelOrigin:v})}
+                            desc={cardDesc(item)} onDesc={v=>setCardDesc(item.id,v)}
+                            note={cardNote(item)} notePlaceholder={noteFallback(item)}
+                            onNote={v=>onPatchStockItem?.(item.id,{labelNote:v})}
+                            price={item.listPrice||""} currency={showCur}
+                            onPrice={v=>onPatchStockItem?.(item.id,{listPrice:String(v).trim()})}
+                            copies={copies} onCopies={v=>onPatchStockItem?.(item.id,{labelCopies:v})}
+                            skipped={copies===0}
+                            onSkip={()=>onPatchStockItem?.(item.id,{labelCopies:copies===0?"":"0"})}
+                            showAi={isAdmin} aiBusy={aiBusy===item.id||aiBusy==="all"} onAi={()=>aiFillCards([item])}
+                            removable={!!planKey(item.id)} onRemove={()=>removeDraftLine(item.id)}
+                          />
                         );
                       })}
                     </div>
