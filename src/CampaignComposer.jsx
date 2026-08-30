@@ -20,12 +20,29 @@ const MAILER_DATE = `${_today.getDate()} ${MONTHS[_today.getMonth()]} ${_today.g
 const ordinal = d => d + (d > 3 && d < 21 ? "th" : ["th", "st", "nd", "rd"][d % 10] || "th");
 const CAMPAIGN_NAME = `${ordinal(_today.getDate())} ${MONTHS[_today.getMonth()][0]}${MONTHS[_today.getMonth()].slice(1).toLowerCase()} ${_today.getFullYear()}`;
 
+/* The five things a card actually says. Everything else about the card is a
+   design decision that belongs to the whole mailer, not to one product. */
+const OVERRIDABLE = [
+  { key: "title", label: "Card title", wide: true },
+  { key: "meta", label: "Meta line", wide: true },
+  { key: "price", label: "Price as printed" },
+  { key: "url", label: "Link" },
+];
+
 export default function CampaignComposer({ listings = [], onClose, showToast }) {
   const [sel, setSel] = useState(() => new Set());
   /* The in-stock banner splits the mailer: pieces marked as a deal print under
      it, everything else above. Mark none and the banner stays where it was,
      above the whole run of products. */
   const [deals, setDeals] = useState(() => new Set());
+  /* Per-card copy for this mailer only. A listing is written for its storefront;
+     the card that sells it in an email sometimes wants a shorter name, a lot
+     price, or the second photo. Overrides are keyed by listing id and hold only
+     the fields actually typed — a blank one falls back to the listing, so the
+     card follows later catalogue edits until the moment it is overridden.
+     Nothing here is written back to the listing. */
+  const [overrides, setOverrides] = useState({});
+  const [editing, setEditing] = useState("");
   const [q, setQ] = useState("");
   const [brand, setBrand] = useState("Nikhil Gems");
   const [heading, setHeading] = useState("New arrivals");
@@ -115,14 +132,29 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     return { price: `${sym}${v.toLocaleString(currency === "INR" ? "en-IN" : "en-US")}`, priceValue: v, currency };
   };
   const linkOf = l => l.platforms?.shopify_earth?.storefront_url || l.platforms?.shopify_aty?.storefront_url || l.platforms?.etsy?.url || l.platforms?.ebay?.url || "";
-  const toProduct = l => ({
+  const metaOf = l => [l.material, l.shape, l.size].filter(Boolean).join(" · ");
+  const baseProduct = l => ({
     id: l.id, title: l.title || "Untitled", deal: deals.has(l.id),
     image: (l.images || [])[0] || "",
     url: linkOf(l),
-    meta: [l.material, l.shape, l.size].filter(Boolean).join(" · "),
+    meta: metaOf(l),
     description: l.description || "",
     ...priceOf(l),
   });
+  const toProduct = l => {
+    const o = overrides[l.id] || {};
+    const p = baseProduct(l);
+    for (const k of ["title", "meta", "price", "image", "url"]) {
+      if (typeof o[k] === "string" && o[k].trim()) p[k] = o[k].trim();
+    }
+    return p;
+  };
+  const edited = l => [...OVERRIDABLE.map(f => f.key), "image"].some(k => (overrides[l.id] || {})[k]?.trim());
+  const setOverride = (id, key, val) => {
+    setOverrides(o => ({ ...o, [id]: { ...(o[id] || {}), [key]: val } }));
+    invalidate();
+  };
+  const clearOverrides = id => { setOverrides(o => { const n = { ...o }; delete n[id]; return n; }); invalidate(); };
 
   const ql = q.toLowerCase();
   const visible = listings.filter(l => !ql || `${l.title || ""} ${l.material || ""} ${l.sku || ""}`.toLowerCase().includes(ql));
@@ -242,14 +274,18 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               {visible.length === 0 && <div style={{ fontSize: 12, color: C.inkFaint, padding: 10 }}>No listings match.</div>}
               {visible.map(l => {
                 const on = sel.has(l.id);
+                const o = overrides[l.id] || {};
+                const open = editing === l.id;
+                const shot = o.image?.trim() || (l.images || [])[0] || "";
                 return (
-                  <label key={l.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", borderRadius: 8, cursor: "pointer", background: on ? C.tealBg : "transparent", border: `1px solid ${on ? C.teal : "transparent"}` }}>
+                  <div key={l.id} style={{ borderRadius: 8, background: on ? C.tealBg : "transparent", border: `1px solid ${on ? C.teal : "transparent"}` }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", cursor: "pointer" }}>
                     <input type="checkbox" checked={on} onChange={() => { toggle(l.id); invalidate(); }} style={{ accentColor: C.teal }} />
-                    {(l.images || [])[0]
-                      ? <img src={l.images[0]} alt="" style={{ width: 34, height: 34, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
+                    {shot
+                      ? <img src={shot} alt="" style={{ width: 34, height: 34, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
                       : <div style={{ width: 34, height: 34, borderRadius: 6, background: C.card, flexShrink: 0 }} />}
                     <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.title || "Untitled"}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.title?.trim() || l.title || "Untitled"}{edited(l) && <span title="Edited for this mailer" style={{ color: C.teal }}> ✎</span>}</div>
                       <div style={{ fontSize: 10, color: C.inkFaint }}>{[l.material, l.shape].filter(Boolean).join(" · ") || l.sku || ""}{!linkOf(l) && " · no public link"}</div>
                       {sentOf(l) && (
                         <div title={(l.campaigns || []).map(c => `${c.name} — ${sentLabel(c.sentAt)}`).join("\n")}
@@ -265,7 +301,46 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                         Deal
                       </button>
                     )}
+                    {on && (
+                      <button type="button" title="Edit how this one reads in the mailer"
+                        onClick={e => { e.preventDefault(); e.stopPropagation(); setEditing(open ? "" : l.id); }}
+                        style={{ flexShrink: 0, border: `1px solid ${open ? C.teal : C.border}`, background: "transparent", color: open ? C.teal : C.inkFaint, borderRadius: 6, padding: "3px 7px", fontSize: 11, cursor: "pointer" }}>
+                        ✎
+                      </button>
+                    )}
                   </label>
+                  {on && open && (
+                    <div style={{ padding: "2px 8px 10px", display: "grid", gap: 7 }}>
+                      {/* The listing's own photos, so picking the second shot is a
+                          click rather than a hunt for its URL. */}
+                      {(l.images || []).length > 1 && (
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                          {(l.images || []).slice(0, 8).map(src => (
+                            <img key={src} src={src} alt="" onClick={() => setOverride(l.id, "image", src === (l.images || [])[0] ? "" : src)}
+                              style={{ width: 34, height: 34, borderRadius: 6, objectFit: "cover", cursor: "pointer", border: `2px solid ${src === shot ? C.teal : "transparent"}` }} />
+                          ))}
+                        </div>
+                      )}
+                      {OVERRIDABLE.map(f => (
+                        <div key={f.key}>
+                          <label style={{ ...lab, marginBottom: 2 }}>{f.label}</label>
+                          <input value={o[f.key] || ""} onChange={e => setOverride(l.id, f.key, e.target.value)}
+                            placeholder={String(baseProduct(l)[f.key] || "—")}
+                            style={{ ...FI(), fontSize: 11.5, padding: "5px 7px" }} />
+                        </div>
+                      ))}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 10, color: C.inkFaint, flex: 1 }}>Blank = whatever the listing says. This mailer only.</span>
+                        {edited(l) && (
+                          <button type="button" onClick={() => clearOverrides(l.id)}
+                            style={{ border: `1px solid ${C.border}`, background: "transparent", color: C.inkFaint, borderRadius: 6, padding: "3px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  </div>
                 );
               })}
             </div>
