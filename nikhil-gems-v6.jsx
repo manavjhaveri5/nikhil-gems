@@ -15864,8 +15864,15 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const draftCostUsd=usdInr>0?draftCostInr/usdInr:0;
   const draftMarginUsd=draftValueUsd-draftCostUsd;
   const draftMultiple=draftCostUsd>0?draftValueUsd/draftCostUsd:0;
-  const shipCostInr=shipItems.reduce((sum,s)=>sum+(+s.costPrice||0),0);
-  const shipValueUsd=shipItems.reduce((sum,s)=>sum+(+s.listPrice||0),0);
+  /* Cost and SP are per-unit rates, so the totals for what has actually gone are
+     rate times what went — the same arithmetic the plan uses and the same the
+     rows print. Summing the rates themselves (which is what this did) answered
+     a question nobody asks: the sum of the price tags, not the value on the
+     table. A sent card carries its whole quantity, so it is one lineShare with
+     nothing held back. */
+  const sentShares=shipItems.map(item=>lineShare({line:{},item}));
+  const shipCostInr=sentShares.reduce((sum,x)=>sum+x.cost,0);
+  const shipValueUsd=sentShares.reduce((sum,x)=>sum+x.value,0);
   const shipCostUsd=usdInr>0?shipCostInr/usdInr:0;
   const shipMarginUsd=shipValueUsd-shipCostUsd;
   const shipMultiple=shipCostUsd>0?shipValueUsd/shipCostUsd:0;
@@ -17247,9 +17254,29 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
 
                   {/* Actual stock at the show — sent from the Stock module, shown here
                       only so the plan can be compared against what really went. */}
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 12px",marginBottom:10,flexWrap:"wrap"}}>
-                    <span style={{fontSize:10,fontWeight:700,color:C.inkMid}}>Actually sent so far · {shipItems.length} card{shipItems.length===1?"":"s"}{shipKg>0?` · ${fmtFlowNum(shipKg)} kg`:""}{shipCostInr>0?` · ${inr(Math.round(shipCostInr))}`:""}</span>
-                    <span style={{fontSize:9,color:C.inkFaint}}>sent via Stock → Send to show</span>
+                  {/* What has actually gone, totalled the same way the plan is — the
+                      two blocks answer the same four questions so they can be read
+                      against each other. */}
+                  <div style={{border:`1px solid ${C.border}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                      <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Actually sent so far</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{shipItems.length} card{shipItems.length===1?"":"s"} · sent via Stock → Send to show</span>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
+                      {[
+                        ["Cost",inr(Math.round(shipCostInr)),shipCostUsd>0?`${fmtUsd(shipCostUsd)} at ₹${usdInr}/$`:"",C.inkMid],
+                        ["Value",fmtUsd(shipValueUsd),!shipItems.length?"":shipUnpriced>0?`${shipUnpriced} card${shipUnpriced===1?"":"s"} unpriced`:"all priced",shipUnpriced>0?C.amber:C.green],
+                        ["Margin",shipValueUsd>0?fmtUsd(shipMarginUsd):"—",shipValueUsd>0?(shipMultiple>0?`${(Math.round(shipMultiple*100)/100).toFixed(2)}× on cost`:""):"price a card to see it",shipValueUsd>0&&shipMarginUsd<0?C.red:C.inkFaint],
+                        ["Weight",shipKg>0?`${fmtFlowNum(shipKg)} kg`:"—","kg-priced cards only",C.inkMid],
+                      ].map(([label,big,sub,color])=>(
+                        <div key={label} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 10px"}}>
+                          <div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</div>
+                          <div style={{fontSize:17,fontWeight:750,color:C.ink,lineHeight:1.1,wordBreak:"break-word"}}>{big}</div>
+                          <div style={{fontSize:9,color,marginTop:3,minHeight:12}}>{sub}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Cost and SP are per-unit rates; value is what went times SP.</div>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
                     <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Cards at the show</span>
