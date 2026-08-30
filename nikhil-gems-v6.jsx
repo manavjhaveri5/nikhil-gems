@@ -15218,6 +15218,8 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const [bagSellPrice,setBagSellPrice]=useState("");
   const [showStockTab,setShowStockTab]=useState("unsold");
   const [shipView,setShipView]=useState("plan");
+  // null = the list's own alphabetical order; otherwise the column being sorted.
+  const [sentSort,setSentSort]=useState(null);
   const [shipBusy,setShipBusy]=useState(false);
   const [labelLang,setLabelLang]=useState(null);
   const [sentOpen,setSentOpen]=useState(()=>new Set());
@@ -15823,7 +15825,42 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   // Alphabetical by stone, then shape, then size — so a search for "bowl" reads as a
   // grouped list you can scan, and the same stone's cards sit together.
   const shipSort=(a,b)=>`${a.material||""} ${a.shape||""} ${a.size||""}`.localeCompare(`${b.material||""} ${b.shape||""} ${b.size||""}`,undefined,{numeric:true,sensitivity:"base"});
-  const shipSent=shipItems.slice().sort(shipSort);
+  /* Sorting the cards at the show. A column is clicked to answer "which are the
+     big ones" — so the first click is high to low, the second flips it, and the
+     third gives the alphabetical list back. Text columns read A→Z first, since
+     that is what "sort by vendor" means to the hand that clicked it. */
+  const sentKgOf=s=>((s.unit||"")==="kg"?(+(s.showSentQty||s.qty)||0):0)+((s.unit2||"")==="kg"?(+(s.showSentQty2||s.qty2)||0):0);
+  const SENT_COLS=[
+    {key:"item",label:"Item",text:true,value:s=>`${s.material||""} ${s.shape||""} ${s.size||""}`},
+    // Weight where a card is weighed, count where it is counted — one number per
+    // card, in the order the "at the show" column reads them.
+    {key:"qty",label:"At the show",value:s=>sentKgOf(s)||(+(s.showSentQty||s.qty)||0)||(+(s.showSentQty2||s.qty2)||0)},
+    {key:"cost",label:"Cost ₹/u",value:s=>+s.costPrice||0},
+    {key:"sp",label:"SP $/u",value:s=>+s.listPrice||0},
+    {key:"value",label:"Value $",value:s=>lineShare({line:{},item:s}).value},
+    {key:"margin",label:"Margin $",value:s=>lineShare({line:{},item:s}).margin},
+    {key:"vendor",label:"Vendor",text:true,value:s=>s.vendor||""},
+  ];
+  const clickSentCol=key=>setSentSort(cur=>{
+    const col=SENT_COLS.find(c=>c.key===key);
+    const first=col?.text?"asc":"desc";
+    if(cur?.key!==key)return{key,dir:first};
+    if(cur.dir===first)return{key,dir:first==="desc"?"asc":"desc"};
+    return null;
+  });
+  const shipSent=(()=>{
+    const rows=shipItems.slice();
+    const col=sentSort&&SENT_COLS.find(c=>c.key===sentSort.key);
+    if(!col)return rows.sort(shipSort);
+    const sign=sentSort.dir==="asc"?1:-1;
+    return rows.sort((a,b)=>{
+      const va=col.value(a),vb=col.value(b);
+      const cmp=col.text?String(va).localeCompare(String(vb),undefined,{numeric:true,sensitivity:"base"}):va-vb;
+      // A tie falls back to the alphabetical order, so the list never shuffles
+      // under a column where half the cards are unpriced.
+      return cmp===0?shipSort(a,b):cmp*sign;
+    });
+  })();
   /* Cost and SP are per-unit rates, so the totals for what has actually gone are
      rate times what went — the same arithmetic the plan uses and the same the
      rows print. Summing the rates themselves (which is what this did) answered
@@ -17081,7 +17118,16 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                     <>
                       {!mob&&(
                         <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
-                          <span>Item</span><span>At the show</span><span>Cost ₹/u</span><span>SP $/u</span><span>Value $</span><span>Margin $</span><span>Vendor</span>
+                          {SENT_COLS.map(col=>{
+                            const on=sentSort?.key===col.key;
+                            return(
+                              <button key={col.key} onClick={()=>clickSentCol(col.key)}
+                                title={on?"Click to flip, again for A–Z by stone":"Click to sort"}
+                                style={{background:"none",border:"none",padding:0,textAlign:"left",cursor:"pointer",font:"inherit",letterSpacing:"inherit",textTransform:"inherit",color:on?C.ink:C.inkFaint}}>
+                                {col.label}{on?(sentSort.dir==="desc"?" ↓":" ↑"):""}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                       <div style={{display:"grid",gap:5}}>
