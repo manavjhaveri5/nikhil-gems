@@ -24,8 +24,8 @@ const CAMPAIGN_NAME = `${ordinal(_today.getDate())} ${MONTHS[_today.getMonth()][
    design decision that belongs to the whole mailer, not to one product. */
 const OVERRIDABLE = [
   { key: "title", label: "Card title", wide: true },
-  { key: "meta", label: "Meta line", wide: true },
-  { key: "price", label: "Price as printed" },
+  { key: "meta", label: "Meta line", wide: true, hideKey: "hideMeta", hideLabel: "Print the detail line on this card" },
+  { key: "price", label: "Price as printed", hideKey: "hidePrice", hideLabel: "Print the price on this card" },
   { key: "url", label: "Link" },
 ];
 
@@ -150,9 +150,10 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     // A card with no price reads as "ask us" — which is the point for a piece
     // whose number is negotiated, sitting beside pieces that print theirs.
     if (o.hidePrice) { p.price = ""; p.priceValue = null; }
+    if (o.hideMeta) p.meta = "";
     return p;
   };
-  const edited = l => !!(overrides[l.id] || {}).hidePrice
+  const edited = l => ["hidePrice", "hideMeta"].some(k => (overrides[l.id] || {})[k])
     || [...OVERRIDABLE.map(f => f.key), "image"].some(k => (overrides[l.id] || {})[k]?.trim());
   const setOverride = (id, key, val) => {
     setOverrides(o => ({ ...o, [id]: { ...(o[id] || {}), [key]: val } }));
@@ -330,14 +331,14 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                           <label style={{ ...lab, marginBottom: 2 }}>{f.label}</label>
                           <input value={o[f.key] || ""} onChange={e => setOverride(l.id, f.key, e.target.value)}
                             placeholder={String(baseProduct(l)[f.key] || "—")}
-                            disabled={f.key === "price" && !!o.hidePrice}
-                            style={{ ...FI(), fontSize: 11.5, padding: "5px 7px", ...(f.key === "price" && o.hidePrice ? { opacity: .45 } : {}) }} />
-                          {f.key === "price" && (
+                            disabled={!!(f.hideKey && o[f.hideKey])}
+                            style={{ ...FI(), fontSize: 11.5, padding: "5px 7px", ...(f.hideKey && o[f.hideKey] ? { opacity: .45 } : {}) }} />
+                          {f.hideKey && (
                             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.inkMid, cursor: "pointer", marginTop: 5 }}>
-                              <input type="checkbox" checked={!o.hidePrice}
-                                onChange={e => setOverride(l.id, "hidePrice", !e.target.checked)}
+                              <input type="checkbox" checked={!o[f.hideKey]}
+                                onChange={e => setOverride(l.id, f.hideKey, !e.target.checked)}
                                 style={{ accentColor: C.teal }} />
-                              Print the price on this card
+                              {f.hideLabel}
                             </label>
                           )}
                         </div>
