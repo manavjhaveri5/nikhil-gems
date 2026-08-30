@@ -7312,6 +7312,29 @@ function ShopifyStoreView({ listings, onEditLocal, onPublish, onRefreshShopifyVi
     return {};
   };
 
+  /* The collection list rides along with list_products, but that call pulls the
+     whole catalogue — when it is slow or fails, the dropdown silently keeps
+     whatever the cache held and a collection added since then never appears.
+     Titles are cheap on their own, so they are also fetched by themselves. */
+  const fetchCollections = async (nextCreds = creds) => {
+    try {
+      const r = await fetch("/api/shopify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "collections",
+          store_key: STORE,
+          ...(nextCreds?.token ? { shopStore: nextCreds.store, shopToken: nextCreds.token } : {}),
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success || !Array.isArray(d.collections)) return;
+      setCollections(d.collections);
+      const cached = readProductCache();
+      if (cached) saveProductCache({ ...cached, collections: d.collections });
+    } catch {}
+  };
+
   const fetchProducts = async (nextCreds = creds, bg = false, nextCollection = collectionFilter) => {
     if (!bg) setLoading(true);
     setError("");
@@ -7351,7 +7374,7 @@ function ShopifyStoreView({ listings, onEditLocal, onPublish, onRefreshShopifyVi
       if (cached.shop) setCreds(c => ({ ...(c || {}), store: cached.shop, publicUrl: cached.publicUrl }));
       setLoading(false);
     }
-    loadCreds().then(c => fetchProducts(c, !!cached, ""));
+    loadCreds().then(c => { fetchProducts(c, !!cached, ""); fetchCollections(c); });
   }, []);
 
   // One-click OAuth connect: ask the server for this store's authorize URL (it holds
