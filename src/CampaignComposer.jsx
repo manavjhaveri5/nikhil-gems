@@ -147,9 +147,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     for (const k of ["title", "meta", "price", "image", "url"]) {
       if (typeof o[k] === "string" && o[k].trim()) p[k] = o[k].trim();
     }
+    // A card with no price reads as "ask us" — which is the point for a piece
+    // whose number is negotiated, sitting beside pieces that print theirs.
+    if (o.hidePrice) { p.price = ""; p.priceValue = null; }
     return p;
   };
-  const edited = l => [...OVERRIDABLE.map(f => f.key), "image"].some(k => (overrides[l.id] || {})[k]?.trim());
+  const edited = l => !!(overrides[l.id] || {}).hidePrice
+    || [...OVERRIDABLE.map(f => f.key), "image"].some(k => (overrides[l.id] || {})[k]?.trim());
   const setOverride = (id, key, val) => {
     setOverrides(o => ({ ...o, [id]: { ...(o[id] || {}), [key]: val } }));
     invalidate();
@@ -326,7 +330,16 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                           <label style={{ ...lab, marginBottom: 2 }}>{f.label}</label>
                           <input value={o[f.key] || ""} onChange={e => setOverride(l.id, f.key, e.target.value)}
                             placeholder={String(baseProduct(l)[f.key] || "—")}
-                            style={{ ...FI(), fontSize: 11.5, padding: "5px 7px" }} />
+                            disabled={f.key === "price" && !!o.hidePrice}
+                            style={{ ...FI(), fontSize: 11.5, padding: "5px 7px", ...(f.key === "price" && o.hidePrice ? { opacity: .45 } : {}) }} />
+                          {f.key === "price" && (
+                            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.inkMid, cursor: "pointer", marginTop: 5 }}>
+                              <input type="checkbox" checked={!o.hidePrice}
+                                onChange={e => setOverride(l.id, "hidePrice", !e.target.checked)}
+                                style={{ accentColor: C.teal }} />
+                              Print the price on this card
+                            </label>
+                          )}
                         </div>
                       ))}
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
