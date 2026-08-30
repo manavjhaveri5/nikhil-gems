@@ -246,12 +246,23 @@ function buildEditorialHtml({
       </td>`;
   };
 
-  const grid = [];
-  for (let i = 0; i < products.length; i += cols) {
-    grid.push(`<tr>${cols === 1 ? cell(products[i])
-      : `${cell(products[i])}${products[i + 1] ? cell(products[i + 1]) : '<td width="50%"></td>'}`}</tr>`);
-  }
-  const productRows = `<tr><td style="padding:0 30px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${grid.join("")}</table></td></tr>`;
+  const gridFor = list => {
+    if (!list.length) return "";
+    const grid = [];
+    for (let i = 0; i < list.length; i += cols) {
+      grid.push(`<tr>${cols === 1 ? cell(list[i])
+        : `${cell(list[i])}${list[i + 1] ? cell(list[i + 1]) : '<td width="50%"></td>'}`}</tr>`);
+    }
+    return `<tr><td style="height:30px;line-height:30px;font-size:0;">&nbsp;</td></tr>
+    <tr><td style="padding:0 30px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${grid.join("")}</table></td></tr>`;
+  };
+
+  /* The in-stock banner is a divider, not a masthead: the pieces on special
+     sit under it and everything else above it. When nothing is flagged the
+     mailer reads as it always has — banner first, then all the products. */
+  const dealItems = products.filter(p => p.deal);
+  const aboveRows = dealItems.length ? gridFor(products.filter(p => !p.deal)) : "";
+  const belowRows = gridFor(dealItems.length ? dealItems : products);
 
   /* Shipping terms are the last thing a wholesale buyer checks, so they close
      the mailer — after the products, under the trade panel. */
@@ -293,13 +304,13 @@ function buildEditorialHtml({
     ${stamp ? `<tr><td style="padding:${url(headerImage) ? 14 : 26}px 30px 0;font-family:${F.body};font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:${MUTED};">${esc(stamp)}</td></tr>` : ""}
     ${heading ? `<tr><td style="padding:8px 30px 0;font-family:${F.head};font-size:${Math.min(40, Math.max(16, +headingSize || 26))}px;color:${INK};line-height:1.25;">${esc(heading)}</td></tr>` : ""}
     ${intro ? `<tr><td style="padding:12px 30px 0;font-family:${F.body};font-size:12.5px;line-height:1.75;color:#5a5a5a;">${esc(intro).replace(/\n/g, "<br>")}</td></tr>` : ""}
+    ${aboveRows}
     ${url(bannerImage)
       ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(bannerImage)}" width="${W}" alt="" style="display:block;width:100%;max-width:${W}px;height:auto;border:0;"></td></tr>`
       : (promoTitle || promoRibbon)
         ? promoBanner({ ribbon: promoRibbon, title: promoTitle, subtitle: promoSubtitle, note: promoNote, badges: promoBadges, color: promoColor || INK, font: F.body, width: W })
         : ""}
-    <tr><td style="height:30px;line-height:30px;font-size:0;">&nbsp;</td></tr>
-    ${productRows}
+    ${belowRows}
     ${tradePanel}
     ${shipPanel}
     ${/* Omnisend appends its own footer to every campaign — the copyright, the

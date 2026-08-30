@@ -16,6 +16,10 @@ const CAMPAIGN_NAME = `${ordinal(_today.getDate())} ${MONTHS[_today.getMonth()][
 
 export default function CampaignComposer({ listings = [], onClose, showToast }) {
   const [sel, setSel] = useState(() => new Set());
+  /* The in-stock banner splits the mailer: pieces marked as a deal print under
+     it, everything else above. Mark none and the banner stays where it was,
+     above the whole run of products. */
+  const [deals, setDeals] = useState(() => new Set());
   const [q, setQ] = useState("");
   const [brand, setBrand] = useState("Nikhil Gems");
   const [heading, setHeading] = useState("New arrivals");
@@ -109,7 +113,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     return l.type === "unique" || n < 2 ? "" : `${n} ${l.unit || "pcs"}`;
   };
   const toProduct = l => ({
-    id: l.id, title: l.title || "Untitled",
+    id: l.id, title: l.title || "Untitled", deal: deals.has(l.id),
     image: (l.images || [])[0] || "",
     url: linkOf(l),
     meta: [l.material, l.shape, l.size].filter(Boolean).join(" · "),
@@ -125,6 +129,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const payloadBase = () => ({ brand, heading, intro, products, ...design });
 
   const toggle = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleDeal = id => { setDeals(d => { const n = new Set(d); n.has(id) ? n.delete(id) : n.add(id); return n; }); invalidate(); };
   // Any edit invalidates the draft that's already in Omnisend.
   const invalidate = () => { setCampaignId(""); setTestedOk(false); };
   // Any design change invalidates the draft already sitting in Omnisend.
@@ -172,7 +177,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
       <div style={{ background: C.bg, borderRadius: mob() ? 0 : 16, width: "min(1100px,100%)", maxHeight: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
           <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, color: C.ink, lineHeight: 1 }}>📣 New-products campaign</div>
-          <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size} selected</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>{sel.size} selected{products.filter(p => p.deal).length ? ` · ${products.filter(p => p.deal).length} under the banner` : ""}</div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", color: C.ink }}>Close</button>
         </div>
@@ -201,6 +206,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                       <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.title || "Untitled"}</div>
                       <div style={{ fontSize: 10, color: C.inkFaint }}>{[l.material, l.shape].filter(Boolean).join(" · ") || l.sku || ""}{!linkOf(l) && " · no public link"}</div>
                     </div>
+                    {on && (
+                      <button type="button" title="Print this one under the in-stock banner"
+                        onClick={e => { e.preventDefault(); e.stopPropagation(); toggleDeal(l.id); }}
+                        style={{ flexShrink: 0, border: `1px solid ${deals.has(l.id) ? C.teal : C.border}`, background: deals.has(l.id) ? C.teal : "transparent", color: deals.has(l.id) ? "#fff" : C.inkFaint, borderRadius: 6, padding: "3px 7px", fontSize: 9.5, fontWeight: 700, letterSpacing: .4, textTransform: "uppercase", cursor: "pointer" }}>
+                        Deal
+                      </button>
+                    )}
                   </label>
                 );
               })}
