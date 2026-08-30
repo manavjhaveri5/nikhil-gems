@@ -115,18 +115,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     return { price: `${sym}${v.toLocaleString(currency === "INR" ? "en-IN" : "en-US")}`, priceValue: v, currency };
   };
   const linkOf = l => l.platforms?.shopify_earth?.storefront_url || l.platforms?.shopify_aty?.storefront_url || l.platforms?.etsy?.url || l.platforms?.ebay?.url || "";
-  // "Available: 269 pcs" only means something on a repeatable lot — a unique
-  // piece is always exactly one, and saying so reads like a scarcity gimmick.
-  const availableOf = l => {
-    const n = +l.qty || 0;
-    return l.type === "unique" || n < 2 ? "" : `${n} ${l.unit || "pcs"}`;
-  };
   const toProduct = l => ({
     id: l.id, title: l.title || "Untitled", deal: deals.has(l.id),
     image: (l.images || [])[0] || "",
     url: linkOf(l),
     meta: [l.material, l.shape, l.size].filter(Boolean).join(" · "),
-    available: availableOf(l),
     description: l.description || "",
     ...priceOf(l),
   });

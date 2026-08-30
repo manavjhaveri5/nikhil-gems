@@ -237,8 +237,7 @@ function buildEditorialHtml({
       <td width="${cols === 1 ? "100%" : "50%"}" align="center" valign="top" style="padding:0 ${cols === 1 ? 0 : 8}px 30px;font-family:${F.body};">
         ${link ? `<a href="${link}" style="text-decoration:none;">${img}</a>` : img}
         <div style="font-size:12.5px;color:${INK};padding-top:12px;line-height:1.5;">${esc(p.title)}</div>
-        ${showMeta && p.available ? `<div style="font-size:12px;color:${INK};padding-top:5px;"><strong>Available:</strong> ${esc(p.available)}</div>`
-          : showMeta && p.meta ? `<div style="font-size:12px;color:${MUTED};padding-top:5px;">${esc(p.meta)}</div>` : ""}
+        ${showMeta && p.meta ? `<div style="font-size:12px;color:${MUTED};padding-top:5px;">${esc(p.meta)}</div>` : ""}
         ${showPrice && p.price ? `<div style="font-size:12.5px;color:${INK};padding-top:5px;white-space:nowrap;">${esc(p.price)}${priceSuffix ? ` ${esc(priceSuffix)}` : ""}</div>` : ""}
         ${showCta && link ? `<div style="padding-top:12px;">
           <a href="${link}" style="display:inline-block;border:1px solid ${INK};color:${INK};text-decoration:none;font-size:10px;letter-spacing:.5px;padding:7px 15px;">${esc(ctaLabel)}</a>
