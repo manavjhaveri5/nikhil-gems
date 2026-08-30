@@ -3,6 +3,7 @@ import { C, mob, FI } from "./lmTheme.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { CurveEditor, buildLut, emptyCurves, curvesTouched, CHANNELS } from "./ToneCurve.jsx";
+import { buildBackgroundMask, maskToRgba } from "./backgroundSweep.js";
 
 /* Native photo editor for listing shots.
 
@@ -72,7 +73,8 @@ precision highp float;
 varying vec2 vUv;
 uniform sampler2D uTex;
 uniform sampler2D uCurve;   // 256x1 LUT, one channel per component
-uniform float uCurveOn;
+uniform sampler2D uMask;    // backdrop mask, 255 where the sweep may write white
+uniform float uCurveOn, uSweep;
 uniform vec2 uTexel;
 uniform float uExposure, uContrast, uSaturation, uVibrance, uTemp, uTint, uHighlights, uShadows, uClarity;
 uniform int uBandCount;
@@ -163,6 +165,10 @@ void main() {
   float mn = min(col.r, min(col.g, col.b));
   col = mix(vec3(g), col, 1.0 + uVibrance * (1.0 - (mx - mn)));
   col = mix(vec3(g), col, 1.0 + uSaturation);
+
+  /* The sweep is last: it paints the backdrop white after every tonal move, so
+     white stays white however the rest of the picture was pushed. */
+  if (uSweep > 0.0) col = mix(col, vec3(1.0), texture2D(uMask, vUv).r * uSweep);
 
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
@@ -305,6 +311,11 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
   const [bands, setBands] = useState([]);
   const [curves, setCurves] = useState(emptyCurves);
   const [mixer, setMixer] = useState(emptyMixer);
+  /* The backdrop sweep. `mask` is recomputed only when its own settings change,
+     never on a slider move — it reads the source pixels, which the sliders
+     don't touch. */
+  const [sweep, setSweep] = useState({ on: false, tolerance: 30, softness: 2, strength: 100 });
+  const [mask, setMask] = useState(null);   // { data, width, height, coverage }
   const [mixKey, setMixKey] = useState("blue");
   const [ask, setAsk] = useState("");
   const [summary, setSummary] = useState("");
@@ -321,7 +332,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
   }, []);
 
   const touched = ADJUSTMENTS.some(a => adjust[a.key] !== 0) || bands.length > 0
-    || curvesTouched(curves) || mixerTouched(mixer);
+    || curvesTouched(curves) || mixerTouched(mixer) || (sweep.on && !!mask);
   /* The mixer's ranges and the model's measured targets are the same mechanism,
      so they go to the shader as one list — mixer first, since those are the
      ranges the hand is on. */
@@ -373,13 +384,23 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.activeTexture(gl.TEXTURE0);
 
+    const maskTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, maskTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.activeTexture(gl.TEXTURE0);
+
     const u = name => gl.getUniformLocation(program, name);
     gl.uniform1i(u("uTex"), 0);
     gl.uniform1i(u("uCurve"), 1);
+    gl.uniform1i(u("uMask"), 2);
     glRef.current = {
-      gl, program, texture, curveTexture,
+      gl, program, texture, curveTexture, maskTexture,
       uniforms: {
-        texel: u("uTexel"), bandCount: u("uBandCount"), curveOn: u("uCurveOn"),
+        texel: u("uTexel"), bandCount: u("uBandCount"), curveOn: u("uCurveOn"), sweep: u("uSweep"),
         bands: u("uBands[0]"), bandHue: u("uBandHue[0]"),
         ...Object.fromEntries(ADJUSTMENTS.map(a => [a.key, u(a.u)])),
       },
@@ -387,7 +408,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     return true;
   }, []);
 
-  const draw = useCallback((values = adjust, bandList = bands, curveSet = curves, size = null) => {
+  const draw = useCallback((values = adjust, bandList = bands, curveSet = curves, sweepSet = sweep, size = null) => {
     const ctx = glRef.current;
     const bitmap = bitmapRef.current;
     const canvas = canvasRef.current;
@@ -399,6 +420,15 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     gl.viewport(0, 0, w, h);
     gl.uniform2f(uniforms.texel, 1 / bitmap.width, 1 / bitmap.height);
+
+    const useSweep = sweepSet.on && mask ? sweepSet.strength / 100 : 0;
+    gl.uniform1f(uniforms.sweep, useSweep);
+    if (useSweep) {
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, ctx.maskTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, mask.width, mask.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, mask.data);
+      gl.activeTexture(gl.TEXTURE0);
+    }
 
     const useCurve = curvesTouched(curveSet);
     gl.uniform1f(uniforms.curveOn, useCurve ? 1 : 0);
@@ -422,7 +452,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     gl.uniform1fv(uniforms.bandHue, hues);
     gl.uniform1i(uniforms.bandCount, list.length);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  }, [adjust, bands, curves]);
+  }, [adjust, bands, curves, sweep, mask]);
 
   /* Load the photo through fetch rather than <img src>, so the canvas is never
      tainted and the edited pixels can be read back out on save. */
@@ -449,8 +479,24 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
 
   useEffect(() => {
     if (!ready) return;
-    draw(showOriginal ? NEUTRAL : adjust, showOriginal ? [] : allBands, showOriginal ? emptyCurves() : curves);
-  }, [ready, adjust, allBands, curves, showOriginal, draw]);
+    draw(showOriginal ? NEUTRAL : adjust, showOriginal ? [] : allBands,
+      showOriginal ? emptyCurves() : curves, showOriginal ? { ...sweep, on: false } : sweep);
+  }, [ready, adjust, allBands, curves, sweep, mask, showOriginal, draw]);
+
+  /* Growing the mask is the only heavy thing here, so it runs when its own
+     settings change and not on every render. */
+  useEffect(() => {
+    if (!ready || !sweep.on || !bitmapRef.current) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      try {
+        const built = buildBackgroundMask(bitmapRef.current, { tolerance: sweep.tolerance, softness: sweep.softness });
+        if (cancelled) return;
+        setMask({ data: maskToRgba(built.mask), width: built.width, height: built.height, coverage: built.coverage });
+      } catch (e) { if (!cancelled) setErr(e.message || String(e)); }
+    }, 120);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [ready, sweep.on, sweep.tolerance, sweep.softness]);
 
   /* ── The model's turn ───────────────────────────────────────────────────── */
   const runAi = async (instruction, mode = "edit") => {
@@ -498,7 +544,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     const view = { w: canvas.width, h: canvas.height };
     try {
       // Same shader, full resolution — what was previewed is what is written.
-      draw(adjust, allBands, curves, { w: bitmap.width, h: bitmap.height });
+      draw(adjust, allBands, curves, sweep, { w: bitmap.width, h: bitmap.height });
       const blob = await new Promise((resolve, reject) =>
         canvas.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
       const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
@@ -508,7 +554,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
       onClose();
     } catch (e) {
       setErr(e.message || String(e));
-      draw(adjust, allBands, curves, view);   // put the preview back at preview size
+      draw(adjust, allBands, curves, sweep, view);   // put the preview back at preview size
     } finally { setBusy(""); }
   };
 
@@ -533,14 +579,19 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gap: 14, padding: 14, overflowY: "auto",
-          gridTemplateColumns: narrow ? "1fr" : "1fr 300px" }}>
+        {/* Two columns that scroll on their own: the controls are a long list and
+            the picture is the thing being judged, so scrolling the sliders must
+            never carry the preview off the top of the screen. */}
+        <div style={{ flex: 1, minHeight: 0, display: "grid", gap: 14, padding: 14,
+          overflowY: narrow ? "auto" : "hidden",
+          gridTemplateColumns: narrow ? "1fr" : "1fr 320px" }}>
 
           {/* Canvas */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0,
+            overflowY: narrow ? "visible" : "auto" }}>
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 10,
               display: "grid", placeItems: "center", minHeight: 240 }}>
-              <canvas ref={canvasRef} style={{ maxWidth: "100%", maxHeight: narrow ? 320 : 460, borderRadius: 8, display: ready ? "block" : "none" }} />
+              <canvas ref={canvasRef} style={{ maxWidth: "100%", maxHeight: narrow ? 320 : "min(52vh, 460px)", borderRadius: 8, display: ready ? "block" : "none" }} />
               {!ready && <div style={{ fontSize: 12, color: C.inkFaint }}>{err ? "—" : "Loading the photo…"}</div>}
             </div>
 
@@ -552,7 +603,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 👁 Hold to compare
               </button>
-              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSummary(""); }}
+              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setSummary(""); }}
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 Reset
               </button>
@@ -568,7 +619,8 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
           </div>
 
           {/* Controls */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0, minHeight: 0,
+            overflowY: narrow ? "visible" : "auto", paddingRight: narrow ? 0 : 4 }}>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 8 }}>
               <label style={lab}>Tell it what you want</label>
               <textarea value={ask} onChange={e => setAsk(e.target.value)} rows={2}
@@ -589,6 +641,39 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
                 </button>
               </div>
               {summary && <div style={{ fontSize: 11.5, color: C.inkMid, lineHeight: 1.5, borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>{summary}</div>}
+            </div>
+
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+                <input type="checkbox" checked={sweep.on} onChange={e => setSweep(v => ({ ...v, on: e.target.checked }))}
+                  style={{ accentColor: C.teal }} />
+                <span style={lab}>White background</span>
+              </label>
+              {!sweep.on && (
+                <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>
+                  Sweeps the backdrop to pure white by growing in from the edge of the frame — a pale face on the stone stays put, because it isn't joined to the border.
+                </div>
+              )}
+              {sweep.on && (
+                <>
+                  <Slider label="Tolerance" hint="how far from the backdrop still counts" min={4} max={90} signed={false}
+                    value={sweep.tolerance} onChange={v => setSweep(x => ({ ...x, tolerance: v }))} onReset={() => setSweep(x => ({ ...x, tolerance: 30 }))} />
+                  <Slider label="Edge softness" min={0} max={8} signed={false}
+                    value={sweep.softness} onChange={v => setSweep(x => ({ ...x, softness: v }))} onReset={() => setSweep(x => ({ ...x, softness: 2 }))} />
+                  <Slider label="Strength" hint="part way cleans up, all the way is pure white" min={0} max={100} signed={false}
+                    value={sweep.strength} onChange={v => setSweep(x => ({ ...x, strength: v }))} onReset={() => setSweep(x => ({ ...x, strength: 100 }))} />
+                  {mask && (
+                    <div style={{ fontSize: 11, lineHeight: 1.5,
+                      color: mask.coverage < 0.04 || mask.coverage > 0.85 ? C.red : C.inkFaint }}>
+                      {mask.coverage < 0.04
+                        ? "Almost no continuous backdrop found — a hand shot has none. Use Remove background (Canva) for those."
+                        : mask.coverage > 0.85
+                          ? "That is claiming nearly the whole frame. Lower the tolerance before saving."
+                          : `Backdrop covers ${Math.round(mask.coverage * 100)}% of the frame.`}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
 
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 12 }}>
