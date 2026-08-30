@@ -23,7 +23,13 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   // writes itself. Still a plain field — a one-off can say something else.
   const [subject, setSubject] = useState(() => `NIKHIL GEMS - WEEKLY MAILING LIST - ${MAILER_DATE}`);
   const [preheader, setPreheader] = useState("");
-  const [intro, setIntro] = useState("");
+  /* Every mailer has opened with the same line telling the reader why it landed
+     in their inbox — the standing broadcast-list note. It is prefilled like the
+     other standing furniture (promo, shipping, trade) rather than retyped each
+     week; clear the field to drop the paragraph entirely. */
+  const [intro, setIntro] = useState(
+    "You're receiving this email as part of the Nikhil Gems broadcast list, where we share weekly updates on new stones, carvings, and special lots available for order."
+  );
   const [senderName, setSenderName] = useState("Nikhil Gems");
   const [senderEmail, setSenderEmail] = useState("");
   const [priceMode, setPriceMode] = useState("earth");
@@ -212,7 +218,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               <div><label style={lab}>Heading</label><input value={heading} onChange={e => { setHeading(e.target.value); invalidate(); }} style={FI()} /></div>
               <div style={{ gridColumn: mob() ? "auto" : "1 / -1" }}>
                 <label style={lab}>Intro</label>
-                <textarea value={intro} onChange={e => { setIntro(e.target.value); invalidate(); }} rows={2} placeholder="A line or two above the products…" style={{ ...FI(), resize: "vertical" }} />
+                <textarea value={intro} onChange={e => { setIntro(e.target.value); invalidate(); }} rows={3} placeholder="A line or two above the products…" style={{ ...FI(), resize: "vertical" }} />
               </div>
               <div><label style={lab}>Brand</label><input value={brand} onChange={e => { setBrand(e.target.value); invalidate(); }} style={FI()} /></div>
               <div><label style={lab}>Sender name *</label><input value={senderName} onChange={e => { setSenderName(e.target.value); invalidate(); }} style={FI()} /></div>
