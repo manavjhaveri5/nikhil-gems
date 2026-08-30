@@ -1,5 +1,11 @@
 import { useState, useEffect } from "react";
 import { C, mob, FI } from "./lmTheme.js";
+import { loadK, upsertItemK } from "./utils.js";
+
+/* Listings live in the one store the Listing Manager writes; a send stamps the
+   pieces it went out with, so the next mailer can see what has already been
+   shown to the list. */
+const LIST_KEY = "ng-listings-v1";
 
 /* Campaign composer — shared by the Omnisend module (primary home) and the
    Listing Manager's contextual "Campaign" button, so both drive one implementation.
@@ -73,6 +79,9 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const [testTo, setTestTo] = useState("");
   const [testedOk, setTestedOk] = useState(false);
   const [busy, setBusy] = useState("");
+  // Stamps written this session, so a row updates the moment the send lands
+  // rather than waiting for the listings prop to come back around.
+  const [stamps, setStamps] = useState({});
   const [err, setErr] = useState("");
 
   const post = async payload => {
@@ -160,12 +169,56 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     try { await post({ action: "test_email", campaignId, emails: [testTo] }); setTestedOk(true); showToast?.(`✓ Test sent to ${testTo}`); }
     catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
+  /* What a listing already knows about being mailed. The newest entry wins —
+     entries are appended in send order. */
+  const sentOf = l => {
+    if (stamps[l.id]) return stamps[l.id];
+    const rows = Array.isArray(l.campaigns) ? l.campaigns : [];
+    return rows.length ? rows[rows.length - 1].sentAt : (l.last_campaign_at || "");
+  };
+  const sentLabel = iso => {
+    const d = new Date(iso);
+    return isNaN(d) ? "" : d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  };
+  const sentCount = l => {
+    const rows = Array.isArray(l.campaigns) ? l.campaigns : (l.last_campaign_at ? [{ sentAt: l.last_campaign_at }] : []);
+    // The prop doesn't refresh under us, so a stamp written this session counts once more.
+    return rows.length + (stamps[l.id] && !rows.some(c => c.sentAt === stamps[l.id]) ? 1 : 0);
+  };
+
+  /* A send is the only thing that marks a listing as mailed — a draft or a test
+     is not, since neither reaches the list. Best-effort: the campaign is already
+     out the door, so a failed stamp is reported, never thrown. */
+  const recordSend = async () => {
+    const sentAt = new Date().toISOString();
+    const fresh = await loadK(LIST_KEY).catch(() => null);
+    const byId = new Map((Array.isArray(fresh) ? fresh : listings).map(l => [l.id, l]));
+    const done = {};
+    for (const l of chosen) {
+      const row = byId.get(l.id) || l;
+      const prior = (Array.isArray(row.campaigns) ? row.campaigns : []).filter(c => c.id !== campaignId);
+      await upsertItemK(LIST_KEY, {
+        ...row,
+        campaigns: [...prior, { id: campaignId, name: CAMPAIGN_NAME, subject, sentAt, deal: deals.has(l.id) }],
+        last_campaign_at: sentAt,
+      }, { prepend: false });
+      done[l.id] = sentAt;
+    }
+    setStamps(s => ({ ...s, ...done }));
+  };
+
   const doSend = async () => {
     const audience = segIds.size ? `${segIds.size} segment(s)` : "ALL subscribers";
     if (!window.confirm(`Send "${subject}" to ${audience}?\n\nThis emails real people and cannot be undone.`)) return;
     if (window.prompt('Type SEND to confirm:') !== "SEND") { showToast?.("Cancelled — nothing sent"); return; }
     setBusy("send"); setErr("");
-    try { await post({ action: "send", campaignId, confirm: "SEND" }); showToast?.("📣 Campaign sent"); onClose(); }
+    try {
+      await post({ action: "send", campaignId, confirm: "SEND" });
+      showToast?.("📣 Campaign sent");
+      try { await recordSend(); showToast?.(`✓ ${chosen.length} listing(s) marked as mailed`); }
+      catch (e) { showToast?.(`Sent — but the listings weren't marked: ${e.message}`); }
+      onClose();
+    }
     catch (e) { setErr(e.message); } finally { setBusy(""); }
   };
 
@@ -205,6 +258,12 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.title || "Untitled"}</div>
                       <div style={{ fontSize: 10, color: C.inkFaint }}>{[l.material, l.shape].filter(Boolean).join(" · ") || l.sku || ""}{!linkOf(l) && " · no public link"}</div>
+                      {sentOf(l) && (
+                        <div title={(l.campaigns || []).map(c => `${c.name} — ${sentLabel(c.sentAt)}`).join("\n")}
+                          style={{ fontSize: 10, color: C.teal, fontWeight: 600 }}>
+                          ✉ Mailed {sentLabel(sentOf(l))}{sentCount(l) > 1 ? ` · ${sentCount(l)}×` : ""}
+                        </div>
+                      )}
                     </div>
                     {on && (
                       <button type="button" title="Print this one under the in-stock banner"
