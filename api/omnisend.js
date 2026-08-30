@@ -261,6 +261,11 @@ function buildEditorialHtml({
      sit under it and everything else above it. When nothing is flagged the
      mailer reads as it always has — banner first, then all the products. */
   const dealItems = products.filter(p => p.deal);
+  /* The banner announces the pieces beneath it, so with nothing marked as a
+     deal there is nothing for it to announce and it stays off — however the
+     promo fields are filled in. An uploaded banner image is separate: that one
+     is the caller's own artwork and prints whenever it is set. */
+  const showPromo = dealItems.length > 0 && (promoTitle || promoRibbon);
   const aboveRows = dealItems.length ? gridFor(products.filter(p => !p.deal)) : "";
   const belowRows = gridFor(dealItems.length ? dealItems : products);
 
@@ -307,7 +312,7 @@ function buildEditorialHtml({
     ${aboveRows}
     ${url(bannerImage)
       ? `<tr><td align="center" style="padding:26px 30px 0;"><img src="${url(bannerImage)}" width="${W}" alt="" style="display:block;width:100%;max-width:${W}px;height:auto;border:0;"></td></tr>`
-      : (promoTitle || promoRibbon)
+      : showPromo
         ? promoBanner({ ribbon: promoRibbon, title: promoTitle, subtitle: promoSubtitle, note: promoNote, badges: promoBadges, color: promoColor || INK, font: F.body, width: W })
         : ""}
     ${belowRows}

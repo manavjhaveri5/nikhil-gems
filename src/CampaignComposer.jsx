@@ -417,7 +417,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                                   invalidate();
                                 }} /> show
                             </label>
-                            <span style={{ fontSize: 11, color: C.inkFaint }}>drawn in the email — no image to host</span>
+                            <span style={{ fontSize: 11, color: C.inkFaint }}>
+                              {products.some(p => p.deal)
+                                ? "drawn in the email — no image to host"
+                                : "only prints once a listing is marked DEAL"}
+                            </span>
                           </div>
                           {(design.promoTitle || design.promoRibbon) && (
                             <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10 }}>
