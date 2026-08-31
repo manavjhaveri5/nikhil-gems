@@ -1209,7 +1209,10 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
       {editIdx != null && selectedUrls[editIdx] && (
         <PhotoEditor
           url={selectedUrls[editIdx]}
+          photos={selectedUrls}
+          index={editIdx}
           onSave={newUrl => onChange(selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)))}
+          onSaveAll={next => onChange(next)}
           onClose={() => setEditIdx(null)}
         />
       )}
