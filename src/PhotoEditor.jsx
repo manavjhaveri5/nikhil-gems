@@ -306,6 +306,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);       // { gl, program, uniforms, texture }
   const bitmapRef = useRef(null);
+  const viewRef = useRef(null);     // preview render size, before any crop
   const [ready, setReady] = useState(false);
   const [adjust, setAdjust] = useState(NEUTRAL);
   const [bands, setBands] = useState([]);
@@ -316,6 +317,11 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
      don't touch. */
   const [sweep, setSweep] = useState({ on: false, tolerance: 30, softness: 2, strength: 100 });
   const [mask, setMask] = useState(null);   // { data, width, height, coverage }
+  /* Square crop. The shader still draws the whole photo — the canvas is just cut
+     down to a square and the drawing slid along its long side, so cropping costs
+     nothing and stays live while the sliders move. */
+  const [crop, setCrop] = useState({ on: false, offset: 50 });
+  const [dims, setDims] = useState(null);   // source pixels, for the crop panel
   const [mixKey, setMixKey] = useState("blue");
   const [ask, setAsk] = useState("");
   const [summary, setSummary] = useState("");
@@ -332,7 +338,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
   }, []);
 
   const touched = ADJUSTMENTS.some(a => adjust[a.key] !== 0) || bands.length > 0
-    || curvesTouched(curves) || mixerTouched(mixer) || (sweep.on && !!mask);
+    || curvesTouched(curves) || mixerTouched(mixer) || (sweep.on && !!mask) || crop.on;
   /* The mixer's ranges and the model's measured targets are the same mechanism,
      so they go to the shader as one list — mixer first, since those are the
      ranges the hand is on. */
@@ -408,17 +414,26 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     return true;
   }, []);
 
-  const draw = useCallback((values = adjust, bandList = bands, curveSet = curves, sweepSet = sweep, size = null) => {
+  const draw = useCallback((values = adjust, bandList = bands, curveSet = curves, sweepSet = sweep, size = null, cropSet = crop) => {
     const ctx = glRef.current;
     const bitmap = bitmapRef.current;
     const canvas = canvasRef.current;
     if (!ctx || !bitmap || !canvas) return;
     const { gl, uniforms } = ctx;
 
-    const w = size?.w || canvas.width;
-    const h = size?.h || canvas.height;
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-    gl.viewport(0, 0, w, h);
+    const w = size?.w || viewRef.current?.w || canvas.width;
+    const h = size?.h || viewRef.current?.h || canvas.height;
+    /* The crop is a viewport trick: the picture is still drawn at w×h, but the
+       canvas is only a square, and the drawing is slid along the long axis so the
+       chosen band of it lands inside. GL's origin is bottom-left, so the offset —
+       which reads top-to-bottom on a tall photo — is flipped for the y case. */
+    const side = Math.min(w, h);
+    const cw = cropSet.on ? side : w;
+    const ch = cropSet.on ? side : h;
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    const off = (cropSet.offset ?? 50) / 100;
+    gl.viewport(cropSet.on ? -Math.round((w - side) * off) : 0,
+      cropSet.on ? -Math.round((h - side) * (1 - off)) : 0, w, h);
     gl.uniform2f(uniforms.texel, 1 / bitmap.width, 1 / bitmap.height);
 
     const useSweep = sweepSet.on && mask ? sweepSet.strength / 100 : 0;
@@ -452,7 +467,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     gl.uniform1fv(uniforms.bandHue, hues);
     gl.uniform1i(uniforms.bandCount, list.length);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  }, [adjust, bands, curves, sweep, mask]);
+  }, [adjust, bands, curves, sweep, mask, crop]);
 
   /* Load the photo through fetch rather than <img src>, so the canvas is never
      tainted and the edited pixels can be read back out on save. */
@@ -468,8 +483,10 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
         const box = 640;
         const scale = Math.min(1, box / Math.max(bitmap.width, bitmap.height));
         const canvas = canvasRef.current;
-        canvas.width = Math.round(bitmap.width * scale);
-        canvas.height = Math.round(bitmap.height * scale);
+        viewRef.current = { w: Math.round(bitmap.width * scale), h: Math.round(bitmap.height * scale) };
+        canvas.width = viewRef.current.w;
+        canvas.height = viewRef.current.h;
+        setDims({ w: bitmap.width, h: bitmap.height });
         if (!initGl(bitmap)) throw new Error("This browser has no WebGL, so the editor can't run here.");
         setReady(true);
       } catch (e) { if (!cancelled) setErr(e.message || String(e)); }
@@ -480,8 +497,9 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
   useEffect(() => {
     if (!ready) return;
     draw(showOriginal ? NEUTRAL : adjust, showOriginal ? [] : allBands,
-      showOriginal ? emptyCurves() : curves, showOriginal ? { ...sweep, on: false } : sweep);
-  }, [ready, adjust, allBands, curves, sweep, mask, showOriginal, draw]);
+      showOriginal ? emptyCurves() : curves, showOriginal ? { ...sweep, on: false } : sweep,
+      null, showOriginal ? { ...crop, on: false } : crop);
+  }, [ready, adjust, allBands, curves, sweep, mask, crop, showOriginal, draw]);
 
   /* Growing the mask is the only heavy thing here, so it runs when its own
      settings change and not on every render. */
@@ -541,10 +559,10 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
     const canvas = canvasRef.current;
     if (!bitmap || !canvas) return;
     setBusy("save"); setErr("");
-    const view = { w: canvas.width, h: canvas.height };
+    const view = viewRef.current || { w: canvas.width, h: canvas.height };
     try {
       // Same shader, full resolution — what was previewed is what is written.
-      draw(adjust, allBands, curves, sweep, { w: bitmap.width, h: bitmap.height });
+      draw(adjust, allBands, curves, sweep, { w: bitmap.width, h: bitmap.height }, crop);
       const blob = await new Promise((resolve, reject) =>
         canvas.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
       const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
@@ -554,7 +572,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
       onClose();
     } catch (e) {
       setErr(e.message || String(e));
-      draw(adjust, allBands, curves, sweep, view);   // put the preview back at preview size
+      draw(adjust, allBands, curves, sweep, view, crop);   // put the preview back at preview size
     } finally { setBusy(""); }
   };
 
@@ -603,7 +621,7 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 👁 Hold to compare
               </button>
-              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setSummary(""); }}
+              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setCrop({ on: false, offset: 50 }); setSummary(""); }}
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 Reset
               </button>
@@ -641,6 +659,31 @@ export default function PhotoEditor({ url, onSave, onClose, showToast }) {
                 </button>
               </div>
               {summary && <div style={{ fontSize: 11.5, color: C.inkMid, lineHeight: 1.5, borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>{summary}</div>}
+            </div>
+
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+                <input type="checkbox" checked={crop.on} onChange={e => setCrop(v => ({ ...v, on: e.target.checked }))}
+                  style={{ accentColor: C.teal }} />
+                <span style={lab}>Square crop</span>
+              </label>
+              {!crop.on && (
+                <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>
+                  Cuts the photo to a 1:1 square — the shape the shop grid and Instagram both want. Nothing is stretched; the long side is trimmed.
+                </div>
+              )}
+              {crop.on && (dims && dims.w !== dims.h ? (
+                <>
+                  <Slider label={dims.w > dims.h ? "Left ↔ right" : "Top ↔ bottom"} hint="which part of the long side to keep"
+                    min={0} max={100} signed={false}
+                    value={crop.offset} onChange={v => setCrop(x => ({ ...x, offset: v }))} onReset={() => setCrop(x => ({ ...x, offset: 50 }))} />
+                  <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>
+                    {Math.min(dims.w, dims.h)} × {Math.min(dims.w, dims.h)} px from a {dims.w} × {dims.h} original.
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>This photo is already square — nothing to trim.</div>
+              ))}
             </div>
 
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
