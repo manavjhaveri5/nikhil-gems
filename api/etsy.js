@@ -619,7 +619,9 @@ export default async function handler(req, res) {
         if (payload.title       !== undefined) form.set("title",       payload.title);
         if (payload.description !== undefined) form.set("description", payload.description);
         if (payload.state       !== undefined) form.set("state",       payload.state);
-        if (payload.tags        !== undefined) form.set("tags",        JSON.stringify(payload.tags));
+        // Form-encoded Etsy wants a comma-separated list, not a JSON array —
+        // sending `["a","b"]` made this fallback fail as surely as the JSON try.
+        if (payload.tags        !== undefined) form.set("tags",        payload.tags.join(","));
         const rf = await fetch(url, {
           method: "PATCH",
           headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },

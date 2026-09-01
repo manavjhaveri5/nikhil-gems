@@ -228,6 +228,58 @@ async function uploadEtsyVideo(listingId, videoUrl, authHdrs, name = "video") {
   } catch (e) { console.error("Etsy video upload failed:", e.message); return false; }
 }
 
+/* ── Tags: the form is the record, the AI is a suggestion ──────────────────── */
+/* Generate merges its tags into the listing's own chips, and those chips are
+   what the seller then edits by hand — so the list on the form is the only one
+   they can see and the only one they can change. Preferring the AI's snapshot
+   over it meant a tag typed after Generate never reached Etsy, and a thin AI
+   reply carrying "etsy_tags": [] published the listing with no tags at all,
+   because an empty array is truthy and won the `||`.
+
+   Title and description are the other way round on purpose: those have their
+   own per-platform override boxes, folded into `_ai` on the way out, so there
+   the `_ai` value *is* what the seller asked for. */
+function curatedTags(own, suggested, maxLen = 20) {
+  const list = Array.isArray(own) && own.length ? own
+    : Array.isArray(suggested) ? suggested
+    : typeof suggested === "string" ? suggested.split(",")
+    : [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    // Etsy caps a tag at 20 characters and rejects the whole array if one is
+    // over, which is how a single long AI tag could take all thirteen down
+    // with it. Trimmed here rather than trusted; Shopify is far more generous,
+    // so it passes its own limit in.
+    const clean = String(raw || "").replace(/[^\p{L}\p{N}\s'-]/gu, " ").replace(/\s+/g, " ").trim();
+    // Cut back to a whole word rather than leaving "a really very long t".
+    let tag = clean.slice(0, maxLen).trim();
+    if (clean.length > maxLen && tag.includes(" ")) tag = tag.slice(0, tag.lastIndexOf(" "));
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out;
+}
+
+/* Etsy accepts the create, then keeps whatever tags it liked and says nothing
+   about the rest. Reading the listing back is the only way to know the
+   seller's tags actually landed — and telling them beats a green tick over an
+   untagged listing, which is how this went unnoticed in the first place. */
+async function verifyEtsyTags(listingId, expected, hdrs) {
+  if (!expected.length) return null;
+  try {
+    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, { headers: hdrs });
+    if (!r.ok) return null;
+    const live = ((await r.json())?.tags || []).map(t => String(t).toLowerCase());
+    const missing = expected.filter(t => !live.includes(t.toLowerCase()));
+    if (!missing.length) return null;
+    console.warn(`[etsy] listing ${listingId}: kept ${live.length}/${expected.length} tags, missing ${JSON.stringify(missing)}`);
+    return `Etsy kept ${live.length} of ${expected.length} tags — missing: ${missing.join(", ")}`;
+  } catch { return null; }
+}
+
 /* ── Etsy: publish listing ─────────────────────────────────────────────────── */
 async function publishEtsy(listing, ai, { activate = true } = {}) {
   const {
@@ -237,7 +289,7 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   const etsyTitle = ai?.etsy_title || title;
   const etsyDesc  = ai?.etsy_description || listing.description || title;
-  const etsyTags  = (ai?.etsy_tags || listing.tags || []).slice(0, 13);
+  const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
 
   const sectionId      = listing.etsy_section_id   || ETSY_SECTIONS[shape] || ETSY_SECTIONS[productType] || null;
   const taxonomyId     = listing.etsy_taxonomy_id  || ETSY_TAXONOMY[productType] || ETSY_TAXONOMY.default;
@@ -328,14 +380,18 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
     }
   }
 
-  return { listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus };
+  const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
+  return {
+    listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
+    tags_applied: etsyTags.length, ...(tagsWarning ? { tagsWarning } : {}),
+  };
 }
 
 /* ── Etsy: update listing ──────────────────────────────────────────────────── */
 async function updateEtsyListing(listingId, listing, ai) {
   const etsyTitle = ai?.etsy_title || listing.title;
   const etsyDesc  = ai?.etsy_description || listing.description || listing.title;
-  const etsyTags  = (ai?.etsy_tags || listing.tags || []).slice(0, 13);
+  const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
   const quantity  = listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1);
 
   const hdrs = await etsyHeaders();
@@ -391,7 +447,8 @@ async function updateEtsyListing(listingId, listing, ai) {
     await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle);
   }
 
-  return { listing_id: listingId, status: existingStatus };
+  const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
+  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, ...(tagsWarning ? { tagsWarning } : {}) };
 }
 
 /* ── Etsy: delete/end listing ──────────────────────────────────────────────── */
@@ -625,7 +682,7 @@ async function publishShopify(store, token, listing, ai) {
 
   const shopTitle = ai?.shopify_title || title;
   const bodyHtml  = ai?.shopify_description || `<p>${listing.description || title}</p>`;
-  const tags      = ai?.shopify_tags || listing.tags?.join(", ") || "";
+  const tags      = curatedTags(listing.tags, ai?.shopify_tags, 255).join(", ");
   const quantity  = type === "unique" ? 1 : Math.max(0, +qty || 0);
   const variantBundle = buildShopifyVariants(listing);
 
@@ -943,7 +1000,7 @@ export default async function handler(req, res) {
             id: existingId,
             title: ai?.shopify_title || listing.title,
             body_html: ai?.shopify_description || listing.description || "",
-            tags: ai?.shopify_tags || listing.tags?.join(", ") || "",
+            tags: curatedTags(listing.tags, ai?.shopify_tags, 255).join(", "),
             ...(variantBundle
               ? { options: variantBundle.options, variants: variantBundle.variants }
               : { variants: [{ price: String(resolvedPrice) }] }),

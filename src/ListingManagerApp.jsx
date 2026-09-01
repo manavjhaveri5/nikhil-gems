@@ -978,6 +978,25 @@ function AiField({ label, value, mono, rows }) {
 /* ══════════════════════════════════════════════════════════════════════════
    IMAGE PICKER  — library matches + new uploads → auto-save to library
 ══════════════════════════════════════════════════════════════════════════ */
+/* Etsy's rules for a tag, applied where the seller can see the result: 13 of
+   them, 20 characters each, no duplicates. The publish path applies the same
+   trim server-side — this is here so the chips on screen are the tags that go
+   out, rather than a list that quietly loses members on the way. */
+const cleanTags = list => {
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const clean = String(raw || "").replace(/[^\p{L}\p{N}\s'-]/gu, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    let t = clean.slice(0, 20).trim();
+    if (clean.length > 20 && t.includes(" ")) t = t.slice(0, t.lastIndexOf(" "));
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length === 13) break;
+  }
+  return out;
+};
+
 function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoChange }) {
   const [allLibImages, setAllLibImages] = useState([]);
   const [uploading,    setUploading]    = useState(false);
@@ -1647,7 +1666,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       });
       const d = await r.json();
       if (d.ai) {
-        if (d.ai.etsy_tags?.length)        setTags([...new Set([...tags, ...d.ai.etsy_tags])].slice(0, 13));
+        // Merged through the same rules a typed tag goes through, so the chips
+        // are exactly what gets published — Etsy refuses a tag over 20
+        // characters, and it used to refuse the whole batch along with it.
+        if (d.ai.etsy_tags?.length) setTags(cleanTags([...tags, ...d.ai.etsy_tags]));
         if (d.ai.etsy_description && !form.description) set("description", d.ai.etsy_description);
         set("_ai", d.ai);
       }
@@ -8508,6 +8530,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       if (!d.ok) throw new Error(d.error || "Publishing failed");
       result = d.result;
       if (listing.video && result?.videoErr) showToast(`⚠ ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} video: ${result.videoErr}`);
+      // Etsy takes the listing and then keeps whichever tags it liked. The API
+      // reads them back, so say so rather than showing a plain ✓.
+      if (result?.tagsWarning) showToast(`⚠ ${result.tagsWarning}`);
       // ⭐ Deal-on-publish: drop the just-published product into the store's Deals
       // collection and start its remind-to-delete timer.
       if (listing._dealOnPublish && result?.product_id && (storeKey === "earth" || storeKey === "atyahara")) {
