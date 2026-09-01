@@ -1,9 +1,15 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { C, mob, FI } from "./lmTheme.js";
 import { uploadToStorage } from "./storageUtils.js";
-import { fetchWithRetry } from "./aiClient.js";
-import { CurveEditor, buildLut, emptyCurves, curvesTouched, CHANNELS } from "./ToneCurve.jsx";
+import { CurveEditor, emptyCurves, curvesTouched } from "./ToneCurve.jsx";
+import { askGrade } from "./gradeAi.js";
 import { buildBackgroundMask, maskToRgba } from "./backgroundSweep.js";
+import {
+  ADJUSTMENTS, NEUTRAL, MIXER, emptyMixer, mixerTouched, mixerBands, MAX_BANDS,
+  ASPECTS, NO_GEO, PREVIEW_EDGE, clamp, cropGeometry, geoTouched, loadBitmap,
+  createPipeline, setPipelineSource, renderPipeline,
+} from "./glPipeline.js";
+import { lab, Slider } from "./EditorControls.jsx";
 
 /* Native photo editor for listing shots.
 
@@ -17,344 +23,8 @@ import { buildBackgroundMask, maskToRgba } from "./backgroundSweep.js";
    Everything renders through one WebGL pass, so the preview is the save: the
    same shader runs again at full resolution when the photo is written back. */
 
-/* Sliders are all -100..100 so the model has one scale to reason in; the shader
-   receives them normalised. Ranges are chosen to make ±100 a strong but not
-   destructive move — a full stop of exposure, a doubling of saturation. */
-const ADJUSTMENTS = [
-  { key: "exposure",   u: "uExposure",   label: "Exposure",   hint: "stops" },
-  { key: "contrast",   u: "uContrast",   label: "Contrast" },
-  { key: "highlights", u: "uHighlights", label: "Highlights" },
-  { key: "shadows",    u: "uShadows",    label: "Shadows" },
-  { key: "temperature",u: "uTemp",       label: "Warmth" },
-  { key: "tint",       u: "uTint",       label: "Tint",       hint: "green ↔ magenta" },
-  { key: "vibrance",   u: "uVibrance",   label: "Vibrance",   hint: "spares what's already saturated" },
-  { key: "saturation", u: "uSaturation", label: "Saturation" },
-  { key: "clarity",    u: "uClarity",    label: "Clarity",    hint: "local contrast" },
-];
-const NEUTRAL = Object.fromEntries(ADJUSTMENTS.map(a => [a.key, 0]));
 
-/* The colour mixer: the eight ranges every editor names, so "just the blues,
-   brighter and stronger" is two sliders rather than a sentence to the model.
-   Centres and widths are the usual wheel divisions, widened a little where the
-   eye reads a range as broad (greens, blues) and kept tight where a spill would
-   show (orange, which is also where skin lives). */
-const MIXER = [
-  { key: "red",     label: "Red",     center: 2,   width: 40, swatch: "#c0392b" },
-  { key: "orange",  label: "Orange",  center: 28,  width: 30, swatch: "#d97b20" },
-  { key: "yellow",  label: "Yellow",  center: 56,  width: 34, swatch: "#d4b106" },
-  { key: "green",   label: "Green",   center: 120, width: 70, swatch: "#2e8b57" },
-  { key: "aqua",    label: "Aqua",    center: 182, width: 50, swatch: "#1c9c9c" },
-  { key: "blue",    label: "Blue",    center: 226, width: 52, swatch: "#2c6fbb" },
-  { key: "purple",  label: "Purple",  center: 283, width: 44, swatch: "#7b4fa8" },
-  { key: "magenta", label: "Magenta", center: 322, width: 44, swatch: "#b83b7a" },
-];
-const NO_MIX = Object.fromEntries(MIXER.map(m => [m.key, { hue: 0, sat: 0, lum: 0 }]));
-const emptyMixer = () => JSON.parse(JSON.stringify(NO_MIX));
-const mixerTouched = mix => MIXER.some(m => mix[m.key].hue || mix[m.key].sat || mix[m.key].lum);
-// Only the ranges actually moved become bands, so the shader loop stays short.
-const mixerBands = mix => MIXER.filter(m => mix[m.key].hue || mix[m.key].sat || mix[m.key].lum).map(m => ({
-  name: m.label, center: m.center, width: m.width,
-  sat: mix[m.key].sat, lum: mix[m.key].lum, hue: (mix[m.key].hue / 100) * 20,
-}));
-/* Eight named ranges for the colour mixer plus room for the model's own
-   measured targets. Ten vec4s is nothing to a fragment shader. */
-const MAX_BANDS = 10;
 
-/* The quad always fills the canvas; what moves is where its corners read from
-   in the source photo. uUvM is a 2x2 (rotation × the crop rectangle's size) and
-   uUvOff the crop's centre — so straightening, the 90° turns and the crop are
-   one matrix, applied for free at the only moment the pixels are touched. */
-const VERT = `
-attribute vec2 aPos;
-varying vec2 vUv;
-uniform vec4 uUvM;
-uniform vec2 uUvOff;
-void main() {
-  vUv = vec2(uUvM.x * aPos.x + uUvM.y * aPos.y, uUvM.z * aPos.x + uUvM.w * aPos.y) + uUvOff;
-  gl_Position = vec4(aPos, 0.0, 1.0);
-}`;
-
-const FRAG = `
-precision highp float;
-varying vec2 vUv;
-uniform sampler2D uTex;
-uniform sampler2D uCurve;   // 256x1 LUT, one channel per component
-uniform sampler2D uMask;    // backdrop mask, 255 where the sweep may write white
-uniform float uCurveOn, uSweep;
-uniform vec2 uTexel;
-uniform float uExposure, uContrast, uSaturation, uVibrance, uTemp, uTint, uHighlights, uShadows, uClarity;
-uniform int uBandCount;
-uniform vec4 uBands[${MAX_BANDS}];   // centre°, width°, saturation, luminance
-uniform float uBandHue[${MAX_BANDS}];
-
-vec3 rgb2hsv(vec3 c) {
-  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
-  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
-  float d = q.x - min(q.w, q.y);
-  float e = 1.0e-10;
-  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
-}
-vec3 hsv2rgb(vec3 c) {
-  vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-}
-
-void main() {
-  vec3 col = texture2D(uTex, vUv).rgb;
-
-  /* Clarity first, while the tones are still where the lens put them: an
-     unsharp mask against a cheap 8-tap ring, which is what "punch" actually is
-     on a stone — edge micro-contrast, not global contrast. */
-  if (abs(uClarity) > 0.001) {
-    float r = 3.0;
-    vec3 blur = vec3(0.0);
-    blur += texture2D(uTex, vUv + vec2( uTexel.x * r, 0.0)).rgb;
-    blur += texture2D(uTex, vUv + vec2(-uTexel.x * r, 0.0)).rgb;
-    blur += texture2D(uTex, vUv + vec2(0.0,  uTexel.y * r)).rgb;
-    blur += texture2D(uTex, vUv + vec2(0.0, -uTexel.y * r)).rgb;
-    blur += texture2D(uTex, vUv + vec2( uTexel.x * r,  uTexel.y * r)).rgb;
-    blur += texture2D(uTex, vUv + vec2(-uTexel.x * r, -uTexel.y * r)).rgb;
-    blur += texture2D(uTex, vUv + vec2( uTexel.x * r, -uTexel.y * r)).rgb;
-    blur += texture2D(uTex, vUv + vec2(-uTexel.x * r,  uTexel.y * r)).rgb;
-    blur /= 8.0;
-    col = clamp(col + (col - blur) * uClarity * 1.6, 0.0, 1.0);
-  }
-
-  col *= pow(2.0, uExposure);
-
-  // White balance as channel gain — warmth trades red against blue, tint green
-  // against the magenta pair, which is how the sliders read to the eye.
-  col.r *= 1.0 + uTemp * 0.30;
-  col.b *= 1.0 - uTemp * 0.30;
-  col.g *= 1.0 + uTint * 0.22;
-  col.r *= 1.0 - uTint * 0.10;
-  col.b *= 1.0 - uTint * 0.10;
-  col = clamp(col, 0.0, 1.0);
-
-  float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  col = clamp(col + uHighlights * smoothstep(0.5, 1.0, l) * 0.45, 0.0, 1.0);
-  col = clamp(col + uShadows * (1.0 - smoothstep(0.0, 0.5, l)) * 0.45, 0.0, 1.0);
-  col = clamp((col - 0.5) * (1.0 + uContrast) + 0.5, 0.0, 1.0);
-
-  /* Curves sit after the tone sliders and before any colour work: they are the
-     last word on where each input level lands, and the hue bands should read
-     the tones the user actually sees. */
-  if (uCurveOn > 0.5) {
-    col = vec3(
-      texture2D(uCurve, vec2(col.r, 0.5)).r,
-      texture2D(uCurve, vec2(col.g, 0.5)).g,
-      texture2D(uCurve, vec2(col.b, 0.5)).b);
-  }
-
-  /* Targeted hue work. Each band is a soft wedge of the colour wheel, feathered
-     at the edges so a boost never draws a seam through a gradient, and held off
-     the near-greys so a hand or a white sweep doesn't take the colour with it. */
-  vec3 hsv = rgb2hsv(col);
-  for (int i = 0; i < ${MAX_BANDS}; i++) {
-    if (i >= uBandCount) break;
-    vec4 b = uBands[i];
-    float d = abs(mod(hsv.x * 360.0 - b.x + 540.0, 360.0) - 180.0);
-    float w = 1.0 - smoothstep(b.y * 0.5, b.y * 0.5 + 10.0, d);
-    w *= smoothstep(0.07, 0.20, hsv.y);
-    if (w > 0.0) {
-      hsv.y = clamp(hsv.y * (1.0 + b.z * w), 0.0, 1.0);
-      hsv.z = clamp(hsv.z * (1.0 + b.w * w), 0.0, 1.0);
-      hsv.x = fract(hsv.x + (uBandHue[i] / 360.0) * w + 1.0);
-    }
-  }
-  col = hsv2rgb(hsv);
-
-  float g = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  float mx = max(col.r, max(col.g, col.b));
-  float mn = min(col.r, min(col.g, col.b));
-  col = mix(vec3(g), col, 1.0 + uVibrance * (1.0 - (mx - mn)));
-  col = mix(vec3(g), col, 1.0 + uSaturation);
-
-  /* The sweep is last: it paints the backdrop white after every tonal move, so
-     white stays white however the rest of the picture was pushed. */
-  if (uSweep > 0.0) col = mix(col, vec3(1.0), texture2D(uMask, vUv).r * uSweep);
-
-  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
-}`;
-
-const SYSTEM = `You are a retoucher for wholesale gemstone and mineral product photography.
-
-You are given one product photo and what the seller wants changed. Reply with ONLY a JSON object — no prose, no code fence:
-
-{
-  "summary": "one short sentence on what you changed and why",
-  "adjust": { "exposure": 0, "contrast": 0, "highlights": 0, "shadows": 0, "temperature": 0, "tint": 0, "vibrance": 0, "saturation": 0, "clarity": 0 },
-  "bands": [ { "name": "purple inclusions", "center": 275, "width": 34, "sat": 22, "lum": -4, "hue": 0 } ],
-  "curve": { "rgb": [[0,0],[64,58],[192,200],[255,255]] }
-}
-
-Every value in "adjust" is -100..100, 0 = untouched. Omit a key to leave it at 0.
-"bands" targets specific colours already in the photo: "center" and "width" are degrees on the hue wheel (red 0, yellow 55, green 120, cyan 185, blue 240, purple 280, magenta 320), "sat"/"lum" are -100..100, "hue" is a shift in degrees, -30..30. At most 4 bands. Read the actual hues off THIS photo — measure them, do not use the nominal value for the colour's name. Name each band after what it is in the picture.
-
-"curve" is optional and usually unnecessary — reach for it only when the sliders cannot say it: a filmic S for a flat scene, a lifted black point for a washed-out shot, or a per-channel fix for a colour cast ("r", "g", "b" keys, same shape). Points are [in, out] on 0..255, x ascending, first x 0 and last x 255, at most 6 points, never decreasing.
-
-Rules:
-- The buyer receives this exact stone. Correct the photograph, never invent the goods: no colour that isn't in the frame, no saturation that turns a dull piece into a bright one.
-- Hand shots are the norm here. Skin sits around hue 15-35 at low saturation — keep bands off it, and say so in the summary if the seller's request would have hit it.
-- Prefer a few decisive numbers over many timid ones. Most photos need less than ±30.
-- If the photo is already right, return zeros and say so.`;
-
-/* Reading the picture, not editing it. The model's other job is to answer "what
-   colours are actually in here" — named in the photo's own terms and measured
-   off the pixels — so the ranges to push are the ones this stone has, rather
-   than the eight a colour wheel happens to be divided into. */
-const SYSTEM_FIND = `You are a retoucher looking at one product photo of a gemstone, mineral or carving.
-
-List the distinct colour ranges actually present in the stone. Reply with ONLY JSON:
-
-{ "summary": "one short sentence naming what you found",
-  "bands": [ { "name": "rust vein", "center": 28, "width": 26, "sat": 0, "lum": 0, "hue": 0 } ] }
-
-- 2 to 4 ranges, ordered by how much of the stone they cover.
-- "center" and "width" are degrees on the hue wheel, measured off THIS photo — sample the pixels, do not use the nominal hue for the colour's name.
-- Width is the spread that colour actually occupies, not a default.
-- Name each range the way the seller would say it out loud: "rust vein", "olive body", "blue-grey shell".
-- The background and the hand holding the piece are not colours of the stone. Skin sits near hue 15-35 at low saturation — never return a range that would catch it, and say so in the summary if the stone's own colour sits there too.
-- Always return "sat": 0, "lum": 0, "hue": 0. You are identifying the ranges, not adjusting them.`;
-
-/* Two ceilings meet at 4096: the storage layer downscales anything larger on
-   upload anyway, and a texture that big is safely inside every GPU's limit. So
-   the working copy is capped there and nothing is lost that would have survived
-   the save. */
-const MAX_EDGE = 4096;
-/* The preview only has to satisfy the eye on screen; the save renders the crop
-   at its own true pixels. */
-const PREVIEW_EDGE = 640;
-/* Crop shapes. The value is width/height; the label is what the seller calls it. */
-const ASPECTS = [
-  { key: "1:1", label: "Square", hint: "shop grid · Instagram", ratio: 1 },
-  { key: "4:5", label: "4:5",    hint: "tallest Instagram allows", ratio: 4 / 5 },
-  { key: "4:3", label: "4:3",    hint: "eBay · marketplace", ratio: 4 / 3 },
-  { key: "3:2", label: "3:2",    hint: "a camera's own shape", ratio: 3 / 2 },
-];
-const NO_GEO = { rotate: 0, straighten: 0, crop: { on: false, aspect: "1:1", zoom: 0, cx: 0.5, cy: 0.5 } };
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-
-/* The crop rectangle, in source pixels. Rotating the photo tilts the rectangle
-   against the frame, so the biggest one that still fits shrinks as the angle
-   grows — computing that here is what stops a straighten from ever exposing an
-   empty corner. Zoom shrinks it further, and the centre is then held far enough
-   from the edges that the tilted rectangle stays inside the picture. */
-function cropGeometry(src, geo) {
-  const { w: W, h: H } = src;
-  // Negated: the shader maps output→source, so turning the picture right means
-  // reading it along an axis turned left.
-  const theta = -((geo.rotate * 90 + geo.straighten) * Math.PI) / 180;
-  const cos = Math.cos(theta), sin = Math.sin(theta);
-  const c = Math.abs(cos), sn = Math.abs(sin);
-  const upright = geo.rotate % 2 === 0;
-  const ratio = geo.crop.on
-    ? (ASPECTS.find(a => a.key === geo.crop.aspect) || ASPECTS[0]).ratio
-    : (upright ? W / H : H / W);
-  // Fits when the tilted rectangle's own bounding box fits the frame.
-  let w = Math.min(W / (c + sn / ratio), H / (sn + c / ratio));
-  w *= 1 - (geo.crop.on ? geo.crop.zoom / 100 : 0) * 0.6;
-  const h = w / ratio;
-  const bw = w * c + h * sn, bh = w * sn + h * c;
-  const cx = clamp(geo.crop.cx * W, bw / 2, W - bw / 2);
-  const cy = clamp(geo.crop.cy * H, bh / 2, H - bh / 2);
-  return { w, h, cx, cy, cos, sin, W, H };
-}
-const geoTouched = g => g.rotate !== 0 || g.straighten !== 0 || g.crop.on;
-
-async function fitToTexture(bitmap) {
-  const longest = Math.max(bitmap.width, bitmap.height);
-  if (longest <= MAX_EDGE) return bitmap;
-  const scale = MAX_EDGE / longest;
-  const cv = document.createElement("canvas");
-  cv.width = Math.round(bitmap.width * scale);
-  cv.height = Math.round(bitmap.height * scale);
-  cv.getContext("2d").drawImage(bitmap, 0, 0, cv.width, cv.height);
-  const fitted = await createImageBitmap(cv);
-  bitmap.close?.();
-  return fitted;
-}
-
-/* Fetched rather than pointed at with <img src>, so the canvas is never tainted
-   and the edited pixels can be read back out on save. */
-async function loadBitmap(url) {
-  const res = await fetch(url, { mode: "cors" });
-  if (!res.ok) throw new Error(`Couldn't load the photo (${res.status})`);
-  return fitToTexture(await createImageBitmap(await res.blob()));
-}
-
-/* The model gets a small copy — a 768px long edge is plenty to judge exposure
-   and read hues off, and keeps the request quick and cheap. */
-async function downscaleToB64(bitmap, max = 768) {
-  const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
-  const w = Math.max(1, Math.round(bitmap.width * scale));
-  const h = Math.max(1, Math.round(bitmap.height * scale));
-  const cv = document.createElement("canvas");
-  cv.width = w; cv.height = h;
-  cv.getContext("2d").drawImage(bitmap, 0, 0, w, h);
-  return cv.toDataURL("image/jpeg", 0.85).split(",")[1] || "";
-}
-
-function parseRecipe(text) {
-  const raw = String(text || "").replace(/```json|```/gi, "").trim();
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("The model didn't return a recipe.");
-  const parsed = JSON.parse(raw.slice(start, end + 1));
-  const adjust = { ...NEUTRAL };
-  for (const a of ADJUSTMENTS) {
-    const v = +parsed?.adjust?.[a.key];
-    if (Number.isFinite(v)) adjust[a.key] = Math.max(-100, Math.min(100, Math.round(v)));
-  }
-  const bands = (Array.isArray(parsed?.bands) ? parsed.bands : []).slice(0, MAX_BANDS).map(b => ({
-    name: String(b?.name || "colour").slice(0, 28),
-    center: ((+b?.center || 0) % 360 + 360) % 360,
-    width: Math.max(8, Math.min(180, +b?.width || 40)),
-    sat: Math.max(-100, Math.min(100, +b?.sat || 0)),
-    lum: Math.max(-100, Math.min(100, +b?.lum || 0)),
-    hue: Math.max(-30, Math.min(30, +b?.hue || 0)),
-  }));
-  const curves = emptyCurves();
-  for (const ch of CHANNELS) {
-    const raw = parsed?.curve?.[ch.key];
-    if (!Array.isArray(raw) || raw.length < 2) continue;
-    const pts = raw
-      .map(p => [Math.max(0, Math.min(1, (+p?.[0] || 0) / 255)), Math.max(0, Math.min(1, (+p?.[1] || 0) / 255))])
-      .sort((a, b) => a[0] - b[0])
-      .slice(0, 6);
-    // The ends are structural, not the model's to move off the corners.
-    pts[0] = [0, pts[0][1]];
-    pts[pts.length - 1] = [1, pts[pts.length - 1][1]];
-    curves[ch.key] = pts;
-  }
-  return { summary: String(parsed?.summary || "").slice(0, 240), adjust, bands, curves };
-}
-
-/* Defined at module scope on purpose: a component created inside the render is a
-   fresh type on every state change, so React would remount the range input
-   mid-drag and the slider would drop the pointer after the first pixel. */
-const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6 };
-
-function Slider({ label, hint, value, min = -100, max = 100, signed = true, step = 1, unit = "", onChange, onReset }) {
-  return (
-    <div style={{ display: "grid", gap: 3 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-        <span style={lab}>{label}</span>
-        {hint && <span style={{ fontSize: 9.5, color: C.inkFaint }}>{hint}</span>}
-        <span style={{ flex: 1 }} />
-        <button type="button" onClick={onReset} title="Back to zero"
-          style={{ background: "none", border: "none", padding: 0, cursor: "pointer",
-            fontSize: 11, fontWeight: 700, color: value === 0 ? C.inkFaint : C.teal }}>
-          {(signed && value > 0 ? `+${value}` : `${value}`) + unit}
-        </button>
-      </div>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(+e.target.value)}
-        style={{ width: "100%", accentColor: C.teal, margin: 0 }} />
-    </div>
-  );
-}
 
 export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onClose, showToast }) {
   const canvasRef = useRef(null);
@@ -410,70 +80,10 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
   const initGl = useCallback(bitmap => {
     const canvas = canvasRef.current;
     if (!canvas) return false;
-    const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true, premultipliedAlpha: false });
-    if (!gl) return false;
-
-    const compile = (type, src) => {
-      const sh = gl.createShader(type);
-      gl.shaderSource(sh, src);
-      gl.compileShader(sh);
-      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh) || "shader failed");
-      return sh;
-    };
-    const program = gl.createProgram();
-    gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
-    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || "link failed");
-    gl.useProgram(program);
-
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    const aPos = gl.getAttribLocation(program, "aPos");
-    gl.enableVertexAttribArray(aPos);
-    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
-
-    const texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-
-    // The LUT lives on its own texture unit and is refreshed whenever a point moves.
-    const curveTexture = gl.createTexture();
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, curveTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.activeTexture(gl.TEXTURE0);
-
-    const maskTexture = gl.createTexture();
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, maskTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.activeTexture(gl.TEXTURE0);
-
-    const u = name => gl.getUniformLocation(program, name);
-    gl.uniform1i(u("uTex"), 0);
-    gl.uniform1i(u("uCurve"), 1);
-    gl.uniform1i(u("uMask"), 2);
-    glRef.current = {
-      gl, program, texture, curveTexture, maskTexture,
-      uniforms: {
-        texel: u("uTexel"), bandCount: u("uBandCount"), curveOn: u("uCurveOn"), sweep: u("uSweep"),
-        uvM: u("uUvM"), uvOff: u("uUvOff"),
-        bands: u("uBands[0]"), bandHue: u("uBandHue[0]"),
-        ...Object.fromEntries(ADJUSTMENTS.map(a => [a.key, u(a.u)])),
-      },
-    };
+    const ctx = createPipeline(canvas);
+    if (!ctx) return false;
+    glRef.current = ctx;
+    setPipelineSource(ctx, bitmap);
     return true;
   }, []);
 
@@ -485,70 +95,23 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     const bitmap = o.bitmap || bitmapRef.current;
     const canvas = canvasRef.current;
     if (!ctx || !bitmap || !canvas) return;
-    const { gl, uniforms } = ctx;
-    const values = o.values || adjust;
-    const bandList = o.bands || allBands;
-    const curveSet = o.curves || curves;
-    const sweepSet = o.sweep || sweep;
-    const maskSet = o.bitmap ? o.mask : (o.mask !== undefined ? o.mask : mask);
-
-    const g = cropGeometry({ w: bitmap.width, h: bitmap.height }, o.geo || geo);
-    geoRef.current = g;
     /* Preview at a size the screen can show, save at the crop's true pixels —
        the only difference between the two renders. */
-    const scale = o.full ? 1 : Math.min(1, PREVIEW_EDGE / Math.max(g.w, g.h));
-    const ow = Math.max(1, Math.round(g.w * scale));
-    const oh = Math.max(1, Math.round(g.h * scale));
-    if (canvas.width !== ow || canvas.height !== oh) { canvas.width = ow; canvas.height = oh; }
-    gl.viewport(0, 0, ow, oh);
-
-    gl.uniform4f(uniforms.uvM,
-      (g.cos * g.w * 0.5) / g.W, (g.sin * g.h * 0.5) / g.W,
-      (g.sin * g.w * 0.5) / g.H, (-g.cos * g.h * 0.5) / g.H);
-    gl.uniform2f(uniforms.uvOff, g.cx / g.W, g.cy / g.H);
-    gl.uniform2f(uniforms.texel, 1 / bitmap.width, 1 / bitmap.height);
-
-    const useSweep = sweepSet.on && maskSet ? sweepSet.strength / 100 : 0;
-    gl.uniform1f(uniforms.sweep, useSweep);
-    if (useSweep) {
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, ctx.maskTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, maskSet.width, maskSet.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, maskSet.data);
-      gl.activeTexture(gl.TEXTURE0);
-    }
-
-    const useCurve = curvesTouched(curveSet);
-    gl.uniform1f(uniforms.curveOn, useCurve ? 1 : 0);
-    if (useCurve) {
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, ctx.curveTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, buildLut(curveSet));
-      gl.activeTexture(gl.TEXTURE0);
-    }
-
-    for (const a of ADJUSTMENTS) gl.uniform1f(uniforms[a.key], (values[a.key] || 0) / 100);
-
-    const list = bandList.slice(0, MAX_BANDS);
-    const packed = new Float32Array(MAX_BANDS * 4);
-    const hues = new Float32Array(MAX_BANDS);
-    list.forEach((b, i) => {
-      packed.set([b.center, b.width, b.sat / 100, b.lum / 100], i * 4);
-      hues[i] = b.hue;
+    geoRef.current = renderPipeline(ctx, canvas, {
+      sw: bitmap.width, sh: bitmap.height,
+      values: o.values || adjust,
+      bands: o.bands || allBands,
+      curves: o.curves || curves,
+      sweep: o.sweep || sweep,
+      mask: o.bitmap ? o.mask : (o.mask !== undefined ? o.mask : mask),
+      geo: o.geo || geo,
+      maxEdge: o.full ? 0 : PREVIEW_EDGE,
     });
-    gl.uniform4fv(uniforms.bands, packed);
-    gl.uniform1fv(uniforms.bandHue, hues);
-    gl.uniform1i(uniforms.bandCount, list.length);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }, [adjust, allBands, curves, sweep, mask, geo]);
 
   /* Point the one texture unit at a different photo — the batch's whole trick. */
   const setSource = useCallback(bitmap => {
-    const ctx = glRef.current;
-    if (!ctx) return;
-    const { gl } = ctx;
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, ctx.texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    if (glRef.current) setPipelineSource(glRef.current, bitmap);
   }, []);
 
   useEffect(() => {
@@ -593,29 +156,10 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     if (!bitmapRef.current) return;
     setBusy("ai"); setErr("");
     try {
-      const data = await downscaleToB64(bitmapRef.current);
-      const res = await fetchWithRetry("/api/claude", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "gpt-4.1-mini",
-          max_tokens: 800,
-          temperature: 0,
-          messages: [
-            { role: "system", content: mode === "find" ? SYSTEM_FIND : SYSTEM },
-            { role: "user", content: [
-              { type: "text", text: instruction },
-              { type: "image", source: { media_type: "image/jpeg", data } },
-            ] },
-          ],
-        }),
-      }, { tries: 2, timeoutMs: 60000 });
-      const body = await res.json();
-      if (body.error) throw new Error(body.error?.message || "The model refused the request.");
-      const recipe = parseRecipe(body.content?.[0]?.text || "");
+      const recipe = await askGrade({ source: bitmapRef.current, instruction, mode });
       if (mode === "find") {
         // An inventory, not an edit: the ranges arrive at zero for you to push.
-        setBands(recipe.bands.map(b => ({ ...b, sat: 0, lum: 0, hue: 0 })));
+        setBands(recipe.bands);
       } else {
         setAdjust(recipe.adjust);
         setBands(recipe.bands);
@@ -837,7 +381,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
               {geo.crop.on && (
                 <>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {ASPECTS.map(a => (
+                    {ASPECTS.filter(a => !a.video).map(a => (
                       <button key={a.key} type="button" onClick={() => setCrop({ aspect: a.key })} title={a.hint}
                         style={{ ...btn(geo.crop.aspect === a.key ? C.teal : "transparent", geo.crop.aspect === a.key ? "#fff" : C.ink),
                           padding: "6px 10px", fontSize: 11.5 }}>

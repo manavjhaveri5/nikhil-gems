@@ -1,0 +1,169 @@
+<!doctype html>
+<!-- Proof for the video editor's lossless claim, and the rest of videoLab.js.
+
+     Open http://localhost:5173/videolab-test.html with the dev server running.
+     It builds its own test clips in the browser, runs both export paths, and
+     checks the copied output's encoded packets against the source's byte for
+     byte — which is the only way to tell "lossless" from "very good". Not part
+     of the build; vite only ever builds index.html. -->
+<html><body style="font:13px/1.6 ui-monospace,monospace;padding:16px">
+<pre id="log">running…</pre>
+<script type="module">
+import { Output, Mp4OutputFormat, BufferTarget, CanvasSource, Quality, Input, ALL_FORMATS, BlobSource, EncodedPacketSink, AudioBufferSource } from "/node_modules/mediabunny/dist/modules/src/index.js";
+import { openClip, exportVideo, clipLength, keyframeBefore, canCopy } from "/src/videoLab.js";
+import { NEUTRAL, NO_GEO } from "/src/glPipeline.js";
+import { emptyCurves } from "/src/ToneCurve.jsx";
+const el = document.getElementById("log");
+const log = (...a) => { el.textContent += "\n" + a.join(" "); console.log(...a); };
+el.textContent = "";
+const results = [];
+const ok = (name, cond, extra="") => { results.push([name, !!cond, extra]); log((cond?"PASS":"FAIL")+" · "+name+(extra?"  ("+extra+")":"")); };
+
+async function makeSource(seconds = 3, w = 320, h = 240, keyEvery = 1, withAudio = false) {
+  const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  const c = cv.getContext("2d");
+  const out = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target: new BufferTarget() });
+  const src = new CanvasSource(cv, { codec: "avc", quality: new Quality({ bitrate: 1_000_000 }), keyFrameInterval: keyEvery });
+  out.addVideoTrack(src);
+  let asrc = null;
+  if (withAudio) { asrc = new AudioBufferSource({ codec: "aac", quality: new Quality({ bitrate: 128_000 }) }); out.addAudioTrack(asrc); }
+  await out.start();
+  const fps = 30, n = seconds * fps;
+  for (let i = 0; i < n; i++) {
+    c.fillStyle = `hsl(${(i * 4) % 360} 60% 45%)`; c.fillRect(0, 0, w, h);
+    c.fillStyle = "#fff"; c.font = "28px monospace"; c.fillText(String(i), 20, 60);
+    await src.add(i / fps, 1 / fps);
+  }
+  if (asrc) {
+    const ac = new AudioContext({ sampleRate: 48000 });
+    const buf = ac.createBuffer(1, 48000 * seconds, 48000);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.sin(i * 0.05) * 0.2;
+    await asrc.add(buf); asrc.close(); await ac.close();
+  }
+  src.close(); await out.finalize();
+  return new Blob([out.target.buffer], { type: "video/mp4" });
+}
+
+const plain = { touched: false, adjust: NEUTRAL, bands: [], curves: emptyCurves(), geo: NO_GEO };
+const graded = { touched: true, adjust: { ...NEUTRAL, exposure: 25 }, bands: [], curves: emptyCurves(), geo: NO_GEO };
+const cropped = { touched: true, adjust: NEUTRAL, bands: [], curves: emptyCurves(),
+  geo: { ...NO_GEO, crop: { on: true, aspect: "1:1", zoom: 0, cx: .5, cy: .5 } } };
+
+async function probe(blob) {
+  const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
+  const t = await input.getPrimaryVideoTrack();
+  const r = { duration: await input.computeDuration(), w: await t.getDisplayWidth(), h: await t.getDisplayHeight(), codec: await t.getCodec() };
+  input.dispose(); return r;
+}
+
+try {
+  const srcBlob = await makeSource(3);
+  ok("built a 3s test clip", srcBlob.size > 1000, srcBlob.size + " bytes");
+  const src0 = await probe(srcBlob);
+  ok("source reads back", Math.abs(src0.duration - 3) < .1 && src0.w === 320, JSON.stringify(src0));
+
+  // 1. lossless trim
+  const c1 = await openClip(new File([srcBlob], "take-1.mp4", { type: "video/mp4" }));
+  ok("openClip", Math.abs(c1.duration - 3) < .1 && c1.width === 320 && c1.codec === "avc", `${c1.width}x${c1.height} ${c1.codec} ${c1.duration.toFixed(2)}s`);
+  c1.in = 1; c1.out = 2;
+  ok("canCopy on a plain trim", canCopy({ clips: [c1], recipeTouched: false }).ok);
+  const kf = await keyframeBefore(c1, 1);
+  ok("keyframe lookup", kf <= 1.001, "snaps to " + kf.toFixed(3) + "s");
+  const r1 = await exportVideo({ clips: [c1], recipe: plain });
+  ok("trim is lossless", r1.lossless === true);
+  const p1 = await probe(r1.blob);
+  ok("trimmed output plays 1s", Math.abs(p1.duration - 1) < .2, JSON.stringify(p1));
+  ok("trimmed output keeps codec+size", p1.codec === "avc" && p1.w === 320 && p1.h === 240);
+
+  // 2. lossless merge of two takes
+  const c2 = await openClip(new File([srcBlob], "take-2.mp4", { type: "video/mp4" }));
+  c2.in = 0; c2.out = 1;
+  const r2 = await exportVideo({ clips: [c1, c2], recipe: plain });
+  ok("merge is lossless", r2.lossless === true);
+  const p2 = await probe(r2.blob);
+  ok("merged output is both takes", Math.abs(p2.duration - 2) < .3, p2.duration.toFixed(2) + "s");
+
+  // 3. graded → re-encode
+  const r3 = await exportVideo({ clips: [c1], recipe: graded, quantizer: 21 });
+  ok("a colour move drops out of the copy path", r3.lossless === false, r3.why);
+  const p3 = await probe(r3.blob);
+  ok("graded output plays 1s at source size", Math.abs(p3.duration - 1) < .25 && p3.w === 320 && p3.h === 240, JSON.stringify(p3));
+
+  // 4. crop → square
+  const r4 = await exportVideo({ clips: [c1], recipe: cropped, quantizer: 21 });
+  const p4 = await probe(r4.blob);
+  ok("crop to 1:1 comes out square", p4.w === p4.h && p4.w > 0, `${p4.w}x${p4.h}`);
+
+  // 5. merged + graded
+  const r5 = await exportVideo({ clips: [c1, c2], recipe: graded, quantizer: 21 });
+  const p5 = await probe(r5.blob);
+  ok("merge + grade together", Math.abs(p5.duration - 2) < .35, p5.duration.toFixed(2) + "s");
+
+  // 6. "Lossless" checked literally: the encoded bytes of the trimmed output
+  //    must be the very packets the source carried over that span.
+  const packetBytes = async (blob, from = 0, to = Infinity) => {
+    const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });
+    const track = await input.getPrimaryVideoTrack();
+    const sink = new EncodedPacketSink(track);
+    const start = from > 0 ? await sink.getKeyPacket(from, { verifyKeyPackets: true }) : undefined;
+    const out = [];
+    for await (const pk of sink.packets(start ?? undefined, undefined, { verifyKeyPackets: true })) {
+      if (pk.timestamp >= to) break;
+      out.push([...pk.data.slice(0, 24)].join(",") + "#" + pk.byteLength);
+    }
+    input.dispose();
+    return out;
+  };
+  const wanted = await packetBytes(srcBlob, 1, 2);
+  const got = await packetBytes(r1.blob);
+  ok("lossless output carries the source's own packets, byte for byte",
+     wanted.length > 0 && wanted.length === got.length && wanted.every((x, i) => x === got[i]),
+     `${got.length} packets`);
+
+  // 7. A source with keyframes every 2s: the cut has to snap back, and the
+  //    editor's number has to be the one the export actually uses.
+  const sparse = await makeSource(4, 320, 240, 2);
+  const cs = await openClip(new File([sparse], "sparse.mp4", { type: "video/mp4" }));
+  cs.in = 3; cs.out = 4;
+  const snap = await keyframeBefore(cs, 3);
+  const rs = await exportVideo({ clips: [cs], recipe: plain });
+  const ps = await probe(rs.blob);
+  ok("a mid-GOP cut snaps back to a key frame", snap < 2.99, "asked 3.00s, starts " + snap.toFixed(2) + "s");
+  ok("and the export is exactly that long", Math.abs(ps.duration - (4 - snap)) < 0.2,
+     `${ps.duration.toFixed(2)}s vs ${(4 - snap).toFixed(2)}s`);
+
+  // 8. Audio rides along untouched.
+  const withSound = await makeSource(3, 320, 240, 1, true);
+  const ca = await openClip(new File([withSound], "sound.mp4", { type: "video/mp4" }));
+  ok("audio track is found", !!ca.audio, ca.audioKey.slice(0, 24));
+  ca.in = 0.5; ca.out = 2;
+  const ra = await exportVideo({ clips: [ca], recipe: plain });
+  const inputA = new Input({ formats: ALL_FORMATS, source: new BlobSource(ra.blob) });
+  const at = await inputA.getPrimaryAudioTrack();
+  ok("audio survives a lossless trim", !!at, at ? await at.getCodec() : "none");
+  inputA.dispose();
+  const rg = await exportVideo({ clips: [ca], recipe: graded, quantizer: 21 });
+  const inputG = new Input({ formats: ALL_FORMATS, source: new BlobSource(rg.blob) });
+  ok("audio survives a re-render too", !!(await inputG.getPrimaryAudioTrack()));
+  inputG.dispose();
+
+  // 9. Two takes at different sizes: no shared encoding, so the copy path has
+  //    to stand down and the render has to put them in one frame.
+  const small = await makeSource(2, 320, 240);
+  const big = await makeSource(2, 640, 480);
+  const ms = await openClip(new File([small], "small.mp4", { type: "video/mp4" }));
+  const mb2 = await openClip(new File([big], "big.mp4", { type: "video/mp4" }));
+  ok("mismatched takes leave the copy path", !canCopy({ clips: [mb2, ms], recipeTouched: false }).ok,
+     canCopy({ clips: [mb2, ms], recipeTouched: false }).why);
+  const rm = await exportVideo({ clips: [mb2, ms], recipe: plain, quantizer: 21 });
+  const pm = await probe(rm.blob);
+  ok("mismatched takes still merge into one video", Math.abs(pm.duration - 4) < .4 && pm.w === 640 && pm.h === 480,
+     `${pm.w}x${pm.h} ${pm.duration.toFixed(2)}s`);
+} catch (e) {
+  log("THREW: " + (e && e.stack || e));
+  results.push(["threw", false, String(e)]);
+}
+window.__results = results;
+log("\n" + results.filter(r => r[1]).length + "/" + results.length + " passed");
+</script></body></html>

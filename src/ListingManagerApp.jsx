@@ -1,10 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, deleteItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
 import { CUSTOMS_DESCS_KEY, DEFAULT_CUSTOMS_DESCS } from "./DatasetsApp.jsx";
 import CampaignComposer from "./CampaignComposer.jsx";
 import PhotoEditor from "./PhotoEditor.jsx";
+/* Split out: the video editor carries a whole media toolkit with it, and most
+   visits to the listing manager never open one. It arrives when it is asked
+   for. */
+const VideoEditor = lazy(() => import("./VideoEditor.jsx"));
 import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
@@ -997,6 +1001,25 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   // The native editor — colour and tone, AI-directed, applied here rather than
   // in another tab. Background work stays with Canva alongside it.
   const [editIdx, setEditIdx] = useState(null);
+  const [editVideo, setEditVideo] = useState(false);
+  /* What the photos and the video were before the editor last wrote over them.
+     Editing replaces the listing's picture with a new file, and the seller only
+     finds out whether they liked it by looking at it afterwards — so the way
+     back is kept here until they leave the form. It matters most after
+     "Apply to all", where one decision has just landed on every photo. */
+  const [undoEdit, setUndoEdit] = useState(null);
+  const [editedUrls, setEditedUrls] = useState(() => new Set());
+  const [undoVideo, setUndoVideo] = useState(null);   // the clip as it was before the last edit
+  const noteEdit = (urls, next) => {
+    const changed = next.filter((u, i) => u !== urls[i]);
+    setUndoEdit({ urls, next, count: changed.length || next.length });
+    setEditedUrls(new Set(changed));
+  };
+  /* Offered only while the photos are still exactly as the editor left them.
+     Once the seller has reordered or removed one, putting the old list back
+     would quietly undo that too, so the offer withdraws instead. */
+  const canUndoEdit = !!undoEdit && undoEdit.next.length === selectedUrls.length
+    && undoEdit.next.every((u, i) => u === selectedUrls[i]);
   const openView = i => { setViewIdx(i); setBgDesign(null); setBgResult(""); setBgErr(""); };
   const dataURLToBlob = durl => { const [h, b] = durl.split(","); const mime = (h.match(/:(.*?);/) || [])[1] || "image/png"; const bin = atob(b); const arr = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i); return new Blob([arr], { type: mime }); };
   const urlToImageData = async url => {
@@ -1158,6 +1181,10 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                     borderRadius: 4, fontSize: 8, fontWeight: 700, padding: "1px 5px", letterSpacing: .3 }}>COVER</div>
                 )}
                 <div style={{ position: "absolute", bottom: 3, left: 3, background: "rgba(0,0,0,.55)", color: "#fff", borderRadius: 4, fontSize: 9, padding: "0 4px", pointerEvents: "none" }}>✂️</div>
+                {editedUrls.has(url) && (
+                  <div style={{ position: "absolute", bottom: 3, right: 3, background: C.green, color: "#fff",
+                    borderRadius: 4, fontSize: 8, fontWeight: 700, padding: "1px 5px", letterSpacing: .3, pointerEvents: "none" }}>EDITED</div>
+                )}
                 <button onClick={e => { e.stopPropagation(); onChange(selectedUrls.filter((_, j) => j !== i)); }}
                   style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,.65)", color: "#fff",
                     border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer",
@@ -1165,6 +1192,20 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
               </div>
             ))}
           </div>
+          {canUndoEdit && (
+            <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+              background: C.greenBg, border: `1px solid ${C.green}40`, borderRadius: 8, padding: "8px 10px" }}>
+              <span style={{ fontSize: 11.5, fontWeight: 800, color: C.green }}>
+                ✓ {undoEdit.count} photo{undoEdit.count === 1 ? "" : "s"} replaced with the edited version{undoEdit.count === 1 ? "" : "s"}
+              </span>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => { onChange(undoEdit.urls); setUndoEdit(null); setEditedUrls(new Set()); }}
+                style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
+                  padding: "5px 11px", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>
+                Put the originals back
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1206,13 +1247,28 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
         </div>
       )}
 
+      {editVideo && video && (
+        <Suspense fallback={
+          <div style={{ position: "fixed", inset: 0, zIndex: 2100, background: "rgba(20,15,8,.78)",
+            display: "grid", placeItems: "center", color: "#FAF0DC", fontSize: 13, fontWeight: 700 }}>
+            Loading the video editor…
+          </div>
+        }>
+          <VideoEditor
+            url={video}
+            onSave={newUrl => { setUndoVideo(video); onVideoChange(newUrl); }}
+            onClose={() => setEditVideo(false)}
+          />
+        </Suspense>
+      )}
+
       {editIdx != null && selectedUrls[editIdx] && (
         <PhotoEditor
           url={selectedUrls[editIdx]}
           photos={selectedUrls}
           index={editIdx}
-          onSave={newUrl => onChange(selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)))}
-          onSaveAll={next => onChange(next)}
+          onSave={newUrl => { const next = selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)); noteEdit(selectedUrls, next); onChange(next); }}
+          onSaveAll={next => { noteEdit(selectedUrls, next); onChange(next); }}
           onClose={() => setEditIdx(null)}
         />
       )}
@@ -1225,14 +1281,41 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
             Video (optional) · MP4 · one per listing
           </div>
           {video ? (
-            <div style={{ position: "relative", width: 120, height: 120, borderRadius: 8, overflow: "hidden",
-              border: `2px solid ${C.gold}`, background: "#000" }}>
-              <video src={video} muted playsInline preload="metadata" controls
-                style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-              <button onClick={() => onVideoChange("")}
-                style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,.65)", color: "#fff",
-                  border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, lineHeight: 1 }}>×</button>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+              <div style={{ position: "relative", width: 120, height: 120, borderRadius: 8, overflow: "hidden",
+                border: `2px solid ${C.gold}`, background: "#000" }}>
+                <video src={video} muted playsInline preload="metadata" controls
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <button onClick={() => onVideoChange("")}
+                  style={{ position: "absolute", top: 3, right: 3, background: "rgba(0,0,0,.65)", color: "#fff",
+                    border: "none", borderRadius: "50%", width: 18, height: 18, cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, lineHeight: 1 }}>×</button>
+              </div>
+              {/* The same door the photos have. Trimming to Etsy's 15 seconds is
+                  the reason it exists, and it costs nothing: a cut that leaves
+                  the colour alone copies the original frames across. */}
+              <div style={{ display: "grid", gap: 6 }}>
+                <button onClick={() => setEditVideo(true)}
+                  style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8,
+                    padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: "pointer" }}>
+                  🎬 Edit video
+                </button>
+                <div style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.5, maxWidth: 230 }}>
+                  Trim to Etsy's 15 seconds, join takes, crop and grade. A trim on its own
+                  is lossless — the original frames, re-cut.
+                </div>
+                {undoVideo && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+                    background: C.greenBg, border: `1px solid ${C.green}40`, borderRadius: 8, padding: "6px 9px", maxWidth: 230 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: C.green }}>✓ Edited clip in place</span>
+                    <button onClick={() => { onVideoChange(undoVideo); setUndoVideo(null); }}
+                      style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
+                        padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                      Put the original back
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <div onClick={() => !vidUploading && videoRef.current?.click()}
