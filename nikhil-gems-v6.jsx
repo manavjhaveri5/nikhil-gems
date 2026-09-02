@@ -8,7 +8,7 @@ const loadCSVStock    = () => import("./src/csvStockData.js").then(m => m.CSV_ST
 const loadCSVBills    = () => import("./src/csvBillsData.js").then(m => m.CSV_BILLS);
 const loadCSVInvoices = () => import("./src/csvInvoicesData.js").then(m => m.CSV_INVOICES);
 const loadCSVBuyers   = () => import("./src/csvBuyersData.js").then(m => m.CSV_BUYERS);
-import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES } from "./src/constants.js";
+import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES, ACCT_CATS, SHAPES, SHAPE_TO_PRODUCT_TYPE, DEFAULT_EXP_CATS, PIE_COLORS, DEFAULT_STONES, EARTH_LOGO_URL } from "./src/constants.js";
 import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, lotQtyPairs, lotBasisFor, LOT_RATE_BASES, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
@@ -14496,44 +14496,51 @@ async function renderBasicInvoicePacketPdf(inv,buyers,company){
   line("AUTHORIZED SIGNATORY",420,9,bold);
   return await pdf.save();
 }
+/* One HTML document in, PDF bytes out. html2canvas needs a laid-out document, so
+   the page is written into an offscreen iframe (not a hidden one — display:none
+   measures as zero) and rasterised, then sliced across A4 pages. Every printable
+   document in the app that wants a file rather than a print dialog comes through
+   here. */
+async function htmlToPdfBytes(html,selector=".inv-page"){
+  const {html2canvas,jsPDF}=await loadInvoiceHtmlPdfLibs();
+  const iframe=document.createElement("iframe");
+  iframe.style.cssText="position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(iframe);
+  try{
+    const doc=iframe.contentDocument;
+    doc.open();doc.write(html);doc.close();
+    await new Promise(resolve=>setTimeout(resolve,150));
+    if(doc.fonts?.ready)await doc.fonts.ready.catch(()=>{});
+    await Promise.all([...doc.images].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=resolve;img.onerror=resolve;})));
+    const el=doc.querySelector(selector)||doc.body;
+    const canvas=await html2canvas(el,{scale:2,useCORS:true,backgroundColor:"#ffffff",windowWidth:794});
+    const pdf=new jsPDF({orientation:"p",unit:"pt",format:"a4"});
+    const pageW=595.28,pageH=841.89;
+    const imgW=pageW;
+    const imgH=canvas.height*imgW/canvas.width;
+    const data=canvas.toDataURL("image/jpeg",0.96);
+    let y=0;
+    pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
+    while(imgH+y>pageH){
+      y-=pageH;
+      pdf.addPage();
+      pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
+    }
+    const pageCount=pdf.getNumberOfPages();
+    if(pageCount>1){
+      for(let p=1;p<=pageCount;p++){
+        pdf.setPage(p);pdf.setFontSize(8);pdf.setTextColor(90);
+        pdf.text(`Page ${p} of ${pageCount}`,pageW-16,pageH-10,{align:"right"});
+      }
+    }
+    return new Uint8Array(pdf.output("arraybuffer"));
+  }finally{
+    iframe.remove();
+  }
+}
 async function renderInvoicePacketPdf(inv,buyers,company){
   try{
-    const {html2canvas,jsPDF}=await loadInvoiceHtmlPdfLibs();
-    const iframe=document.createElement("iframe");
-    iframe.style.cssText="position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0;opacity:0;pointer-events:none;";
-    document.body.appendChild(iframe);
-    try{
-      const html=wrapInvDoc(inv.invNo||"Invoice",[buildInvBodyHTML(inv,buyers,company)]);
-      const doc=iframe.contentDocument;
-      doc.open();doc.write(html);doc.close();
-      await new Promise(resolve=>setTimeout(resolve,150));
-      if(doc.fonts?.ready)await doc.fonts.ready.catch(()=>{});
-      await Promise.all([...doc.images].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=resolve;img.onerror=resolve;})));
-      const el=doc.querySelector(".inv-page")||doc.body;
-      const canvas=await html2canvas(el,{scale:2,useCORS:true,backgroundColor:"#ffffff",windowWidth:794});
-      const pdf=new jsPDF({orientation:"p",unit:"pt",format:"a4"});
-      const pageW=595.28,pageH=841.89;
-      const imgW=pageW;
-      const imgH=canvas.height*imgW/canvas.width;
-      const data=canvas.toDataURL("image/jpeg",0.96);
-      let y=0;
-      pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
-      while(imgH+y>pageH){
-        y-=pageH;
-        pdf.addPage();
-        pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
-      }
-      const pageCount=pdf.getNumberOfPages();
-      if(pageCount>1){
-        for(let p=1;p<=pageCount;p++){
-          pdf.setPage(p);pdf.setFontSize(8);pdf.setTextColor(90);
-          pdf.text(`Page ${p} of ${pageCount}`,pageW-16,pageH-10,{align:"right"});
-        }
-      }
-      return new Uint8Array(pdf.output("arraybuffer"));
-    }finally{
-      iframe.remove();
-    }
+    return await htmlToPdfBytes(wrapInvDoc(inv.invNo||"Invoice",[buildInvBodyHTML(inv,buyers,company)]));
   }catch(e){
     console.warn("invoice html pdf fallback:",e?.message||e);
     return await renderBasicInvoicePacketPdf(inv,buyers,company);
@@ -14801,6 +14808,779 @@ const LABEL_LANGS=[
 // "Europe" covers Munich, Paris and Milan alike.
 const DEFAULT_LABEL_LANG=region=>region==="Japan"?"ja":region==="Europe"?"de":"";
 
+// ── INVOICING AT THE BOOTH ─────────────────────────────────────────────────
+// A sale at a show used to leave two traces: a line of free text in the Sales
+// tab and, days later, a sold stamp applied on the way home. Neither is a
+// document the customer walks away with, and nobody who bought at the booth
+// ever reached the mailing list. This is the counter-side of the show: pick
+// what sold off the cards that travelled, name the buyer, print them something
+// on Earth Editions paper, and tag them for the show they bought at.
+// The currencies a booth actually takes money in.
+const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
+const SHOW_INV_KEY="ng-show-invoices-v1";
+const SHOW_INV_SETTINGS_KEY="ng-show-invoice-settings-v1";
+const SHOW_CUSTOMERS_KEY="ng-show-customers-v1";
+const SHOW_INV_DRAFT_PREFIX="ng-show-invoice-draft:";
+
+/* Methods are declared rather than hardcoded because the handles behind them —
+   a Zelle phone number, an account number — belong in the database, not in the
+   repository. Each one is off until it is filled in on the Settings screen. */
+const SHOW_PAY_METHODS=[
+  {key:"cash",label:"Cash",fields:[]},
+  {key:"zelle",label:"Zelle",fields:[{k:"handle",label:"Zelle email or phone"}]},
+  {key:"venmo",label:"Venmo",fields:[{k:"handle",label:"@username"}]},
+  {key:"card",label:"Card",fields:[{k:"note",label:"Line on the invoice",placeholder:"Visa / Mastercard taken at the booth"}]},
+  {key:"wire",label:"Bank wire / ACH",fields:[
+    {k:"beneficiary",label:"Beneficiary"},{k:"bank",label:"Bank"},
+    {k:"account",label:"Account no."},{k:"routing",label:"Routing / ABA"},
+    {k:"swift",label:"SWIFT"},{k:"bankAddress",label:"Bank address"},
+  ]},
+  {key:"paypal",label:"PayPal",fields:[{k:"email",label:"PayPal email"}]},
+  {key:"check",label:"Check",fields:[{k:"payee",label:"Payable to"}]},
+];
+const DEFAULT_SHOW_INV_SETTINGS={
+  seller:{name:"Earth Editions",address:"",phone:"",email:"",website:"eartheditions.co"},
+  methods:{cash:{on:true}},
+  customItems:[],
+  logoDataUrl:"",
+  terms:"",
+};
+const showInvSettings=raw=>({
+  ...DEFAULT_SHOW_INV_SETTINGS,...(raw||{}),
+  seller:{...DEFAULT_SHOW_INV_SETTINGS.seller,...(raw?.seller||{})},
+  methods:{...DEFAULT_SHOW_INV_SETTINGS.methods,...(raw?.methods||{})},
+  customItems:Array.isArray(raw?.customItems)?raw.customItems:[],
+});
+const showInvMethodOn=(settings,key)=>!!settings?.methods?.[key]?.on;
+// What a method actually prints under its name. Cash says nothing beyond "Cash".
+const showInvMethodDetail=(settings,key)=>{
+  const cfg=settings?.methods?.[key]||{};
+  const def=SHOW_PAY_METHODS.find(m=>m.key===key);
+  return (def?.fields||[]).map(f=>{
+    const v=String(cfg[f.k]||"").trim();
+    if(!v)return "";
+    return key==="wire"?`${f.label}: ${v}`:v;
+  }).filter(Boolean);
+};
+
+/* The Omnisend tag for a show. "Denver Mineral Show" is what the show is called;
+   "denver-2026" is what a segment is called — so the words every show shares get
+   dropped and the year, which is the whole point of the tag, stays. */
+const showTagSlug=show=>{
+  const base=String(show?.name||"").toLowerCase()
+    .replace(/\b(gem|gems|mineral|minerals|fair|show|shows|international|intl|expo|and)\b/g," ")
+    .replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  const year=show?.year||String(show?.startDate||"").slice(0,4);
+  return [base||"show",year].filter(Boolean).join("-");
+};
+const SHOW_CUR_SYM={USD:"$",JPY:"¥",EUR:"€",GBP:"£",INR:"₹"};
+// JPY has no minor unit — printing ¥12,000.00 at a Tokyo booth reads as an error.
+const showMoney=(n,cur="USD")=>{
+  const d=cur==="JPY"?0:2;
+  return `${SHOW_CUR_SYM[cur]||cur+" "}${(+n||0).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d})}`;
+};
+const showInvEsc=v=>String(v==null?"":v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const showInvNum=v=>{const n=parseFloat(v);return Number.isFinite(n)?n:0;};
+const showInvQty=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";};
+
+/* One place computes the money, so the screen, the printed page and the sold
+   stamp can never disagree about what the customer owes. */
+const showInvTotals=inv=>{
+  const lines=inv?.lines||[];
+  const subtotal=lines.reduce((s,l)=>s+showInvNum(l.qty)*showInvNum(l.rate),0);
+  const discount=Math.min(subtotal,inv?.discountMode==="pct"?subtotal*showInvNum(inv?.discount)/100:showInvNum(inv?.discount));
+  const taxable=Math.max(0,subtotal-discount);
+  const taxAmt=taxable*showInvNum(inv?.taxPct)/100;
+  const total=taxable+taxAmt;
+  const paid=(inv?.payments||[]).reduce((s,p)=>s+showInvNum(p.amount),0);
+  return{subtotal,discount,taxable,taxAmt,total,paid,balance:total-paid};
+};
+// EE-2026-0001. Sequence runs per calendar year across every show, so the books
+// read as one series rather than one per booth.
+const nextShowInvNo=(invoices,year)=>{
+  const y=String(year||new Date().getFullYear());
+  const seq=(invoices||[]).reduce((max,i)=>{
+    const m=/^EE-(\d{4})-(\d+)$/.exec(i?.invNo||"");
+    return m&&m[1]===y?Math.max(max,+m[2]):max;
+  },0);
+  return `EE-${y}-${String(seq+1).padStart(4,"0")}`;
+};
+
+/* The wordmark lives on the Shopify CDN, and a show hall's wifi is exactly where
+   that fails. Fetched once and cached as a data URL in the settings blob, so the
+   second invoice of the show — and every one after the network drops — still
+   prints with the logo on it. */
+async function showInvLogoDataUrl(){
+  const r=await fetch(EARTH_LOGO_URL,{mode:"cors"});
+  if(!r.ok)throw new Error(`logo ${r.status}`);
+  const blob=await r.blob();
+  return await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob);});
+}
+
+/* The document. Deliberately not the Nikhil Gems export invoice — no HSN, no
+   IGST, no IEC; this is a US retail counter sale. Inline styles and a self
+   contained <style> because it is written into a print window and an offscreen
+   iframe, neither of which has the app's stylesheet. */
+function buildShowInvoiceHTML(inv,settings,show){
+  const s=showInvSettings(settings);
+  const cur=inv.currency||"USD";
+  const t=showInvTotals(inv);
+  const c=inv.customer||{};
+  const logo=s.logoDataUrl||EARTH_LOGO_URL;
+  const money=n=>showInvEsc(showMoney(n,cur));
+  const sellerBits=[s.seller.address,s.seller.phone,s.seller.email,s.seller.website].map(x=>String(x||"").trim()).filter(Boolean);
+  const custBits=[c.company,c.phone,c.email,[c.city,c.state,c.country].filter(Boolean).join(", ")].map(x=>String(x||"").trim()).filter(Boolean);
+  const methodKeys=(inv.showMethods&&inv.showMethods.length?inv.showMethods:SHOW_PAY_METHODS.map(m=>m.key)).filter(k=>showInvMethodOn(s,k));
+  const rows=(inv.lines||[]).map(l=>{
+    const amt=showInvNum(l.qty)*showInvNum(l.rate);
+    return `<tr>
+      <td class="d">${showInvEsc(l.desc||"—")}${l.note?`<div class="sub">${showInvEsc(l.note)}</div>`:""}</td>
+      <td class="d sh">${showInvEsc(l.shape||"")}</td>
+      <td class="d n">${showInvEsc(showInvQty(l.qty)||"—")}${l.unit?` <span class="u">${showInvEsc(l.unit)}</span>`:""}</td>
+      <td class="d n">${money(l.rate)}</td>
+      <td class="d n b">${money(amt)}</td>
+    </tr>`;
+  }).join("");
+  const totalRow=(label,val,cls="")=>`<tr class="${cls}"><td class="tl">${showInvEsc(label)}</td><td class="tv">${val}</td></tr>`;
+  const totals=[
+    totalRow("Subtotal",money(t.subtotal)),
+    t.discount>0?totalRow(`Discount${inv.discountMode==="pct"?` (${showInvEsc(inv.discount)}%)`:""}`,`−${money(t.discount)}`):"",
+    t.taxAmt>0?totalRow(`Sales tax (${showInvEsc(inv.taxPct)}%)`,money(t.taxAmt)):"",
+    totalRow("Total",money(t.total),"grand"),
+    t.paid>0?totalRow("Paid",`−${money(t.paid)}`):"",
+    t.paid>0||t.balance!==t.total?totalRow("Balance due",money(t.balance),"due"):"",
+  ].filter(Boolean).join("");
+  const payBlock=methodKeys.length?`
+    <div class="pay">
+      <div class="lab">Payment</div>
+      <div class="paygrid">
+        ${methodKeys.map(k=>{
+          const def=SHOW_PAY_METHODS.find(m=>m.key===k);
+          const det=showInvMethodDetail(s,k);
+          return `<div class="paycell"><div class="pm">${showInvEsc(def?.label||k)}</div>${det.map(d=>`<div class="pd">${showInvEsc(d)}</div>`).join("")}</div>`;
+        }).join("")}
+      </div>
+      ${(inv.payments||[]).filter(p=>showInvNum(p.amount)>0).map(p=>`<div class="rec">Received ${money(p.amount)} · ${showInvEsc(SHOW_PAY_METHODS.find(m=>m.key===p.method)?.label||p.method||"")}${p.ref?` · ${showInvEsc(p.ref)}`:""}</div>`).join("")}
+    </div>`:"";
+  const showLine=[show?.name,show?.year||String(show?.startDate||"").slice(0,4)].filter(Boolean).join(" · ");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${showInvEsc(inv.invNo||"Invoice")}</title>
+<style>
+  *{box-sizing:border-box;}
+  body{margin:0;background:#e5e6e6;font-family:Georgia,'Times New Roman',serif;color:#1a1308;}
+  .ee-inv{width:794px;margin:0 auto;background:#fff;padding:46px 54px 40px;}
+  .mast{text-align:center;padding-bottom:22px;border-bottom:1px solid #d8d3c8;}
+  .mast img{width:150px;height:auto;display:inline-block;}
+  .mast .name{font-size:22px;letter-spacing:6px;text-transform:uppercase;font-weight:400;}
+  .mast .bits{font-size:10.5px;color:#6b6255;margin-top:9px;letter-spacing:.3px;}
+  .head{display:flex;justify-content:space-between;align-items:flex-end;margin:26px 0 20px;gap:24px;}
+  .head .ttl{font-size:26px;letter-spacing:8px;text-transform:uppercase;font-weight:400;}
+  .head .no{text-align:right;font-size:12px;color:#6b6255;line-height:1.7;}
+  .head .no b{color:#1a1308;font-weight:700;letter-spacing:.6px;}
+  .parties{display:flex;gap:34px;border-top:1px solid #e6e1d8;border-bottom:1px solid #e6e1d8;padding:16px 0;margin-bottom:22px;}
+  .parties>div{flex:1;min-width:0;}
+  .lab{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#9a8f7d;font-family:Helvetica,Arial,sans-serif;font-weight:700;margin-bottom:7px;}
+  .who{font-size:14px;font-weight:700;margin-bottom:3px;}
+  .bit{font-size:11.5px;color:#544c40;line-height:1.65;}
+  table.items{width:100%;border-collapse:collapse;margin-bottom:18px;}
+  table.items th{font-family:Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:1.6px;text-transform:uppercase;color:#9a8f7d;text-align:left;padding:0 8px 8px;border-bottom:1.5px solid #1a1308;font-weight:700;}
+  table.items th.n,table.items td.n{text-align:right;}
+  td.d{padding:10px 8px;border-bottom:1px solid #eceae4;font-size:12.5px;vertical-align:top;}
+  td.d.b{font-weight:700;}
+  td.d .sub{font-size:10.5px;color:#8a8073;margin-top:2px;}
+  td.d.sh{color:#544c40;}
+  td.d .u{font-size:10px;color:#9a8f7d;}
+  .totwrap{display:flex;justify-content:flex-end;margin-bottom:24px;}
+  table.tot{border-collapse:collapse;min-width:270px;}
+  table.tot td{padding:5px 0;font-size:12.5px;}
+  table.tot td.tl{color:#544c40;padding-right:26px;}
+  table.tot td.tv{text-align:right;font-variant-numeric:tabular-nums;}
+  table.tot tr.grand td{border-top:1px solid #1a1308;border-bottom:1px solid #1a1308;font-size:16px;font-weight:700;padding:9px 0;}
+  table.tot tr.due td{font-weight:700;padding-top:8px;}
+  .pay{border:1px solid #e6e1d8;background:#faf9f6;padding:15px 18px;margin-bottom:20px;}
+  .paygrid{display:flex;flex-wrap:wrap;gap:10px 26px;}
+  .paycell{min-width:150px;}
+  .pm{font-size:11.5px;font-weight:700;}
+  .pd{font-size:11px;color:#544c40;line-height:1.6;}
+  .rec{font-size:11px;color:#2a6845;margin-top:9px;font-weight:700;}
+  .notes{font-size:11.5px;color:#544c40;line-height:1.7;margin-bottom:20px;white-space:pre-wrap;}
+  .foot{border-top:1px solid #e6e1d8;padding-top:14px;text-align:center;}
+  .foot .ty{font-size:14px;letter-spacing:1.5px;}
+  .foot .sm{font-size:10px;color:#9a8f7d;margin-top:6px;letter-spacing:.4px;}
+  @media print{
+    body{background:#fff;}
+    .ee-inv{width:auto;padding:0;}
+    @page{size:A4;margin:14mm 13mm;}
+  }
+</style></head><body><div class="ee-inv">
+  <div class="mast">
+    ${logo?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`:`<div class="name">${showInvEsc(s.seller.name)}</div>`}
+    ${sellerBits.length?`<div class="bits">${sellerBits.map(showInvEsc).join(" &nbsp;·&nbsp; ")}</div>`:""}
+  </div>
+  <div class="head">
+    <div class="ttl">Invoice</div>
+    <div class="no"><div><b>${showInvEsc(inv.invNo||"—")}</b></div><div>${showInvEsc(inv.date||"")}</div>${showLine?`<div>${showInvEsc(showLine)}</div>`:""}</div>
+  </div>
+  <div class="parties">
+    <div>
+      <div class="lab">Billed to</div>
+      <div class="who">${showInvEsc(c.name||"—")}</div>
+      ${custBits.map(b=>`<div class="bit">${showInvEsc(b)}</div>`).join("")}
+    </div>
+    <div>
+      <div class="lab">Sold at</div>
+      <div class="who">${showInvEsc(show?.name||"—")}</div>
+      ${show?.city?`<div class="bit">${showInvEsc(show.city)}</div>`:""}
+      <div class="bit">${showInvEsc(inv.date||"")}</div>
+    </div>
+  </div>
+  <table class="items">
+    <thead><tr><th>Item</th><th>Shape</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Amount</th></tr></thead>
+    <tbody>${rows||`<tr><td class="d" colspan="5">No items</td></tr>`}</tbody>
+  </table>
+  <div class="totwrap"><table class="tot"><tbody>${totals}</tbody></table></div>
+  ${payBlock}
+  ${inv.notes?`<div class="notes">${showInvEsc(inv.notes)}</div>`:""}
+  ${s.terms?`<div class="notes">${showInvEsc(s.terms)}</div>`:""}
+  <div class="foot">
+    <div class="ty">Thank you</div>
+    <div class="sm">${showInvEsc([s.seller.name,showLine].filter(Boolean).join(" · "))}</div>
+  </div>
+</div></body></html>`;
+}
+
+/* The booth screen. Everything on it is one thumb wide on a phone, because that
+   is what it is used on: a customer is standing there. The draft is mirrored to
+   localStorage the way the buying plan is, so a stray refresh mid-sale does not
+   cost the invoice. */
+const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city:"",state:"",country:"",notes:"",addToList:true});
+const emptyShowInvDraft=show=>({
+  id:uid(),invNo:"",showId:show?.id||"",showName:show?.name||"",showSlug:showTagSlug(show),
+  date:today(),currency:"USD",customer:emptyShowInvCustomer(),lines:[],
+  discount:"",discountMode:"amt",taxPct:"",payments:[],showMethods:[],notes:"",status:"draft",
+  createdAt:new Date().toISOString(),
+});
+const readShowInvDraft=sid=>{
+  try{const d=JSON.parse(localStorage.getItem(SHOW_INV_DRAFT_PREFIX+sid)||"null");return d&&d.id?d:null;}catch{return null;}
+};
+const writeShowInvDraft=(sid,draft)=>{
+  try{
+    if(!draft)localStorage.removeItem(SHOW_INV_DRAFT_PREFIX+sid);
+    else localStorage.setItem(SHOW_INV_DRAFT_PREFIX+sid,JSON.stringify(draft));
+  }catch{}
+};
+
+function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSaveInvoice,onDelInvoice,onSaveSettings,onSaveCustomer,onSellStock,onRestoreStock,showToast}){
+  const S=showInvSettings(settings);
+  const [view,setView]=useState("new");
+  const [draft,setDraft]=useState(()=>readShowInvDraft(show.id)||emptyShowInvDraft(show));
+  const [pick,setPick]=useState("");
+  const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"pcs",rate:"",save:true});
+  const [busy,setBusy]=useState("");
+  const [custQuery,setCustQuery]=useState("");
+  const [logo,setLogo]=useState(S.logoDataUrl||"");
+  const mine=invoices.filter(i=>i.showId===show.id);
+  const cur=draft.currency||"USD";
+  const T=showInvTotals(draft);
+  const slug=showTagSlug(show);
+  const setD=patch=>setDraft(d=>{const next=typeof patch==="function"?patch(d):{...d,...patch};writeShowInvDraft(show.id,next);return next;});
+  const setCust=patch=>setD(d=>({...d,customer:{...d.customer,...patch}}));
+
+  // Warm the print/PDF engines and the logo the moment the tab opens — the hall
+  // wifi that dies is never the one you were using a second ago.
+  useEffect(()=>{
+    loadInvoiceHtmlPdfLibs().catch(()=>{});
+    if(S.logoDataUrl){setLogo(S.logoDataUrl);return;}
+    let live=true;
+    showInvLogoDataUrl().then(url=>{if(!live)return;setLogo(url);onSaveSettings?.({...S,logoDataUrl:url});}).catch(()=>{});
+    return()=>{live=false;};
+  },[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── picking lines ────────────────────────────────────────────────────────
+  const takenQty=(stockId,exceptLineId)=>(draft.lines||[]).filter(l=>l.stockId===stockId&&l.id!==exceptLineId).reduce((s,l)=>s+showInvNum(l.qty),0);
+  const basisOf=item=>(parseFloat(item.qty)||0)>0?"qty":((parseFloat(item.qty2)||0)>0?"qty2":"qty");
+  const availOf=item=>{const b=basisOf(item);return Math.max(0,(parseFloat(item[b])||0)-takenQty(item.id));};
+  const sellable=atShow.filter(s=>!s.soldDate&&((parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0));
+  const q=pick.trim().toLowerCase();
+  const matches=(q?sellable.filter(s=>`${s.material||""} ${s.shape||""} ${s.size||""} ${s.origin||""} ${s.sku||""} ${s.location||""}`.toLowerCase().includes(q)):sellable)
+    .sort((a,b)=>`${a.material||""} ${a.shape||""}`.localeCompare(`${b.material||""} ${b.shape||""}`,undefined,{numeric:true,sensitivity:"base"}))
+    .slice(0,q?60:25);
+  const addStockLine=item=>{
+    const b=basisOf(item);
+    const avail=availOf(item);
+    if(avail<=0){showToast?.("Nothing left of that card");return;}
+    setD(d=>({...d,lines:[...d.lines,{
+      id:uid(),stockId:item.id,basis:b,
+      desc:[item.material,item.origin,item.size].filter(Boolean).join(" · ")||item.material||"Item",
+      shape:item.shape||"",
+      qty:String(Math.min(1,avail)||avail),
+      unit:b==="qty"?(item.unit||"pcs"):(item.unit2||"kg"),
+      rate:String(item.listPrice||""),note:"",
+    }]}));
+    setPick("");
+  };
+  const addCustomLine=()=>{
+    const desc=newLine.desc.trim();
+    if(!desc){showToast?.("Name the stone first");return;}
+    setD(d=>({...d,lines:[...d.lines,{id:uid(),stockId:null,basis:null,desc,shape:newLine.shape.trim(),qty:newLine.qty||"1",unit:newLine.unit||"pcs",rate:newLine.rate,note:""}]}));
+    if(newLine.save&&showInvNum(newLine.rate)>0){
+      const item={id:uid(),desc,shape:newLine.shape.trim(),unit:newLine.unit||"pcs",rate:newLine.rate};
+      const dup=(S.customItems||[]).some(x=>x.desc===item.desc&&x.shape===item.shape&&x.rate===item.rate);
+      if(!dup)onSaveSettings?.({...S,customItems:[item,...(S.customItems||[])].slice(0,60)});
+    }
+    setNewLine({desc:"",shape:"",qty:"1",unit:"pcs",rate:"",save:true});
+  };
+  const addSavedItem=it=>setD(d=>({...d,lines:[...d.lines,{id:uid(),stockId:null,basis:null,desc:it.desc,shape:it.shape||"",qty:"1",unit:it.unit||"pcs",rate:it.rate,note:""}]}));
+  const setLine=(id,patch)=>setD(d=>({...d,lines:d.lines.map(l=>l.id===id?{...l,...patch}:l)}));
+  const delLine=id=>setD(d=>({...d,lines:d.lines.filter(l=>l.id!==id)}));
+
+  // ── customers ────────────────────────────────────────────────────────────
+  const cq=custQuery.trim().toLowerCase();
+  const custMatches=cq.length>1?customers.filter(c=>`${c.name||""} ${c.email||""} ${c.phone||""} ${c.company||""}`.toLowerCase().includes(cq)).slice(0,6):[];
+  const pickCustomer=c=>{
+    setCust({...c,addToList:!c.omnisendTagged});
+    setCustQuery("");
+    showToast?.(c.omnisendTagged?`${c.name||c.email} — already on the list`:`${c.name||c.email} loaded`);
+  };
+
+  // ── the document ─────────────────────────────────────────────────────────
+  const docFor=inv=>buildShowInvoiceHTML(inv,{...S,logoDataUrl:logo||S.logoDataUrl},show);
+  const printInv=inv=>{
+    const w=window.open("","_blank");
+    if(!w){showToast?.("Allow pop-ups to print");return;}
+    w.document.write(docFor(inv));
+    w.document.close();
+    setTimeout(()=>{try{w.focus();w.print();}catch{}},700);
+  };
+  const pdfBytes=inv=>htmlToPdfBytes(docFor(inv),".ee-inv");
+  const downloadPdf=async inv=>{
+    setBusy("pdf");
+    try{
+      const bytes=await pdfBytes(inv);
+      const url=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
+      const a=document.createElement("a");
+      a.href=url;a.download=`${inv.invNo||"invoice"}.pdf`;a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+    }catch(e){showToast?.("⚠ PDF failed: "+(e.message||e));}
+    setBusy("");
+  };
+  /* mailto: cannot carry an attachment, so the PDF is uploaded and the Gmail
+     compose window opens with the link in the body. The user reads it and sends
+     it themselves — nothing leaves this machine unsent. */
+  const emailInv=async inv=>{
+    const to=String(inv.customer?.email||"").trim();
+    if(!to){showToast?.("No email on this invoice");return;}
+    setBusy("email");
+    try{
+      let url=inv.pdfUrl;
+      if(!url){
+        const bytes=await pdfBytes(inv);
+        const file=new File([bytes],`${inv.invNo||"invoice"}.pdf`,{type:"application/pdf"});
+        url=await supabaseUpload(`show-invoices/${show.id}/${inv.invNo||inv.id}-${uid()}.pdf`,file);
+        await onSaveInvoice({...inv,pdfUrl:url});
+      }
+      const subject=`${S.seller.name||"Earth Editions"} — Invoice ${inv.invNo||""}`.trim();
+      const body=[`Hi ${String(inv.customer?.name||"").split(" ")[0]||"there"},`,"",
+        `Thank you for stopping by our booth at ${show.name}. Your invoice ${inv.invNo||""} is here:`,"",url,"",
+        `Total ${showMoney(showInvTotals(inv).total,inv.currency||"USD")}.`,"",
+        S.seller.name||"Earth Editions"].join("\n");
+      const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      const w=window.open(gmail,"_blank");
+      if(!w)window.location.href=`mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    }catch(e){showToast?.("⚠ Email prep failed: "+(e.message||e));}
+    setBusy("");
+  };
+
+  // ── mailing list ─────────────────────────────────────────────────────────
+  /* Tagging must never be able to hold up the document. It runs after the
+     invoice is safely saved, and a failure is recorded on the invoice so the
+     Saved list can offer it again once there is signal. */
+  const tagOmnisend=async inv=>{
+    const email=String(inv.customer?.email||"").trim();
+    if(!email)return;
+    const parts=String(inv.customer?.name||"").trim().split(/\s+/).filter(Boolean);
+    const tags=[inv.showSlug||slug,"show-customer"];
+    try{
+      const r=await fetch("/api/omnisend",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        action:"contact_tag",email,createIfMissing:true,
+        firstName:parts[0]||"",lastName:parts.slice(1).join(" "),
+        addTags:tags,createTags:tags,
+      })});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok||d.error)throw new Error(d.error||`HTTP ${r.status}`);
+      await onSaveInvoice({...inv,omnisend:{tagged:true,at:new Date().toISOString(),tags}});
+      await onSaveCustomer?.({...inv.customer,omnisendTagged:true});
+      showToast?.(`✓ ${email} tagged ${tags[0]}`);
+    }catch(e){
+      await onSaveInvoice({...inv,omnisend:{tagged:false,error:e.message||"failed",at:new Date().toISOString(),tags}});
+      showToast?.("⚠ Mailing list tag failed — retry it from Saved");
+    }
+  };
+
+  // ── issue ────────────────────────────────────────────────────────────────
+  const issue=async()=>{
+    if(!draft.lines.length){showToast?.("Add something to sell first");return;}
+    if(!String(draft.customer.name||"").trim()&&!String(draft.customer.email||"").trim()){showToast?.("Name the customer");return;}
+    const over=draft.lines.find(l=>{
+      if(!l.stockId)return false;
+      const item=atShow.find(s=>s.id===l.stockId);
+      if(!item)return false;
+      return showInvNum(l.qty)>(parseFloat(item[l.basis||"qty"])||0)+0.0001;
+    });
+    if(over){showToast?.(`More ${over.desc} than is at the show`);return;}
+    setBusy("issue");
+    try{
+      const custId=draft.customer.id||uid();
+      const inv={
+        ...draft,
+        invNo:draft.invNo||nextShowInvNo(invoices,String(draft.date||today()).slice(0,4)),
+        status:"issued",
+        customer:{...draft.customer,id:custId},
+        issuedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),
+      };
+      const effects=await onSellStock?.(inv);
+      const saved={...inv,stockEffects:effects||[]};
+      await onSaveInvoice(saved);
+      if(String(saved.customer.name||"").trim()||String(saved.customer.email||"").trim()){
+        await onSaveCustomer?.({...saved.customer,lastShowId:show.id,lastInvoiceNo:saved.invNo,updatedAt:new Date().toISOString()});
+      }
+      writeShowInvDraft(show.id,null);
+      setDraft(emptyShowInvDraft(show));
+      setView("list");
+      showToast?.(`✓ ${saved.invNo} · ${showMoney(showInvTotals(saved).total,saved.currency)}`);
+      printInv(saved);
+      if(saved.customer.addToList&&String(saved.customer.email||"").trim())tagOmnisend(saved);
+    }catch(e){showToast?.("⚠ Could not issue: "+(e.message||e));}
+    setBusy("");
+  };
+  const voidInv=async inv=>{
+    if(!window.confirm(`Void ${inv.invNo}? The stock goes back to the show.`))return;
+    setBusy("void");
+    try{
+      await onRestoreStock?.(inv);
+      await onSaveInvoice({...inv,status:"void",voidedAt:new Date().toISOString(),stockEffects:[]});
+      showToast?.(`${inv.invNo} voided`);
+    }catch(e){showToast?.("⚠ Void failed: "+(e.message||e));}
+    setBusy("");
+  };
+
+  const lab={fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7};
+  const box={border:`1px solid ${C.border}`,borderRadius:9,background:C.card,padding:mob?"11px 12px":"13px 15px",marginBottom:12};
+  const sIn={...FI,fontSize:mob?16:12,padding:mob?"8px 9px":"6px 8px"};
+  const pill=(on)=>({background:on?C.ink:"none",color:on?"#fff":C.inkMid,border:`1px solid ${on?C.ink:C.border}`,borderRadius:6,padding:mob?"7px 13px":"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"});
+
+  return(
+    <div style={{padding:mob?"12px":"14px 16px"}} onClick={e=>e.stopPropagation()}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+        <span style={lab}>Invoicing · {show.name} · tag <b style={{color:C.ink}}>{slug}</b></span>
+        <div style={{display:"flex",gap:6}}>
+          {[["new","🧾 New"],["list",`📄 Saved${mine.length?` (${mine.length})`:""}`],["settings","⚙ Settings"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setView(v)} style={pill(view===v)}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── NEW INVOICE ── */}
+      {view==="new"&&(
+        <>
+          <div style={box}>
+            <div style={{...lab,marginBottom:9}}>Customer</div>
+            <div style={{position:"relative",marginBottom:8}}>
+              <input value={draft.customer.name} placeholder="Name"
+                onChange={e=>{setCust({name:e.target.value,id:""});setCustQuery(e.target.value);}}
+                style={{...sIn,fontWeight:700}}/>
+              {custMatches.length>0&&(
+                <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,marginTop:3,boxShadow:"0 8px 24px rgba(0,0,0,.12)",overflow:"hidden"}}>
+                  {custMatches.map(c=>(
+                    <button key={c.id} onClick={()=>pickCustomer(c)} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:"8px 10px",cursor:"pointer",font:"inherit"}}>
+                      <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{c.name||c.email}</div>
+                      <div style={{fontSize:10,color:C.inkFaint}}>{[c.email,c.phone,c.omnisendTagged?"on the list":""].filter(Boolean).join(" · ")}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,marginBottom:7}}>
+              <input value={draft.customer.phone} onChange={e=>setCust({phone:e.target.value})} placeholder="Phone" inputMode="tel" style={sIn}/>
+              <input value={draft.customer.email} onChange={e=>setCust({email:e.target.value})} placeholder="Email" inputMode="email" autoCapitalize="none" style={sIn}/>
+              <input value={draft.customer.company} onChange={e=>setCust({company:e.target.value})} placeholder="Business (optional)" style={sIn}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 70px 1fr",gap:6}}>
+                <input value={draft.customer.city} onChange={e=>setCust({city:e.target.value})} placeholder="City" style={sIn}/>
+                <input value={draft.customer.state} onChange={e=>setCust({state:e.target.value})} placeholder="ST" style={sIn}/>
+                <input value={draft.customer.country} onChange={e=>setCust({country:e.target.value})} placeholder="Country" style={sIn}/>
+              </div>
+            </div>
+            <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.inkMid,cursor:"pointer"}}>
+              <input type="checkbox" checked={!!draft.customer.addToList} onChange={e=>setCust({addToList:e.target.checked})} style={{width:17,height:17,cursor:"pointer"}}/>
+              Add to the mailing list as <b style={{color:C.ink}}>{slug}</b>
+            </label>
+          </div>
+
+          <div style={box}>
+            <div style={{...lab,marginBottom:9}}>What sold</div>
+            <input value={pick} onChange={e=>setPick(e.target.value)} placeholder={`Search the ${sellable.length} card${sellable.length===1?"":"s"} at the show…`} style={{...sIn,marginBottom:8}}/>
+            <div style={{maxHeight:mob?200:230,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,marginBottom:10}}>
+              {matches.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:14,textAlign:"center"}}>{sellable.length?"No card matches that":"Nothing is at this show yet — send stock from the Stock module"}</div>}
+              {matches.map(item=>{
+                const avail=availOf(item);
+                const b=basisOf(item);
+                return(
+                  <button key={item.id} disabled={avail<=0} onClick={()=>addStockLine(item)}
+                    style={{display:"flex",width:"100%",gap:8,alignItems:"center",justifyContent:"space-between",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:mob?"10px":"8px 10px",cursor:avail>0?"pointer":"default",opacity:avail>0?1:.42,font:"inherit"}}>
+                    <span style={{minWidth:0}}>
+                      <span style={{display:"block",fontSize:12.5,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[item.material,item.shape,item.size].filter(Boolean).join(" · ")||"Item"}</span>
+                      <span style={{display:"block",fontSize:10,color:C.inkFaint}}>{[showInvQty(avail)?`${showInvQty(avail)} ${b==="qty"?(item.unit||"pcs"):(item.unit2||"kg")} left`:"none left",item.location,item.sku].filter(Boolean).join(" · ")}</span>
+                    </span>
+                    <span style={{fontSize:12,fontWeight:700,color:+item.listPrice>0?C.green:C.amber,flexShrink:0}}>{+item.listPrice>0?showMoney(item.listPrice,cur):"no price"}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {(S.customItems||[]).length>0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+                {S.customItems.slice(0,12).map(it=>(
+                  <button key={it.id} onClick={()=>addSavedItem(it)} title="Saved price — tap to add"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"4px 11px",fontSize:11,color:C.ink,cursor:"pointer",font:"inherit"}}>
+                    {it.desc}{it.shape?` · ${it.shape}`:""} <b>{showMoney(it.rate,cur)}</b>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"minmax(0,2fr) minmax(0,1fr) 70px 80px 90px",gap:6,alignItems:"end"}}>
+              <input value={newLine.desc} onChange={e=>setNewLine({...newLine,desc:e.target.value})} placeholder="New stone" list="ng-stones-dl" style={sIn}/>
+              <input value={newLine.shape} onChange={e=>setNewLine({...newLine,shape:e.target.value})} placeholder="Shape" list="ng-shapes-dl" style={sIn}/>
+              <input value={newLine.qty} onChange={e=>setNewLine({...newLine,qty:e.target.value})} placeholder="Qty" inputMode="decimal" style={sIn}/>
+              <input value={newLine.unit} onChange={e=>setNewLine({...newLine,unit:e.target.value})} placeholder="pcs" style={sIn}/>
+              <input value={newLine.rate} onChange={e=>setNewLine({...newLine,rate:e.target.value})} placeholder={`Rate ${SHOW_CUR_SYM[cur]||""}`} inputMode="decimal" style={sIn}/>
+            </div>
+            <datalist id="ng-stones-dl">{DEFAULT_STONES.map(s=><option key={s} value={s}/>)}</datalist>
+            <datalist id="ng-shapes-dl">{SHAPES.map(s=><option key={s} value={s}/>)}</datalist>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:8,flexWrap:"wrap"}}>
+              <label style={{display:"flex",alignItems:"center",gap:7,fontSize:11,color:C.inkMid,cursor:"pointer"}}>
+                <input type="checkbox" checked={newLine.save} onChange={e=>setNewLine({...newLine,save:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
+                Save this price to reuse
+              </label>
+              <button onClick={addCustomLine} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:mob?"8px 16px":"6px 14px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>+ Add line</button>
+            </div>
+          </div>
+
+          {draft.lines.length>0&&(
+            <div style={box}>
+              <div style={{...lab,marginBottom:9}}>{draft.lines.length} line{draft.lines.length===1?"":"s"}</div>
+              <div style={{display:"grid",gap:6}}>
+                {draft.lines.map(l=>{
+                  const item=l.stockId?atShow.find(s=>s.id===l.stockId):null;
+                  const cap=item?(parseFloat(item[l.basis||"qty"])||0):null;
+                  const over=cap!=null&&showInvNum(l.qty)>cap+0.0001;
+                  return(
+                    <div key={l.id} style={{border:`1px solid ${over?C.red:C.border}`,borderRadius:8,padding:mob?"9px 10px":"8px 10px",background:C.surface}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",marginBottom:6}}>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:12.5,fontWeight:700,color:C.ink,wordBreak:"break-word"}}>{l.desc}{l.shape?` · ${l.shape}`:""}</div>
+                          <div style={{fontSize:9.5,color:over?C.red:C.inkFaint}}>{over?`only ${showInvQty(cap)} at the show`:(l.stockId?`from stock${cap!=null?` · ${showInvQty(cap)} ${l.unit} there`:""}`:"off-catalogue")}</div>
+                        </div>
+                        <button onClick={()=>delLine(l.id)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:16,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr 92px",gap:6,alignItems:"center"}}>
+                        <input value={l.qty} onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty" style={sIn}/>
+                        <input value={l.unit} onChange={e=>setLine(l.id,{unit:e.target.value})} style={sIn}/>
+                        <input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={sIn}/>
+                        <div style={{textAlign:"right",fontSize:13,fontWeight:750,color:C.ink}}>{showMoney(showInvNum(l.qty)*showInvNum(l.rate),cur)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={box}>
+            <div style={{...lab,marginBottom:9}}>Totals</div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:7,marginBottom:10}}>
+              <Field label="Date"><input type="date" value={draft.date} onChange={e=>setD({date:e.target.value})} style={sIn}/></Field>
+              <Field label="Currency"><select value={cur} onChange={e=>setD({currency:e.target.value})} style={{...sIn,cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select></Field>
+              <Field label="Discount">
+                <div style={{display:"flex",gap:5}}>
+                  <input value={draft.discount} onChange={e=>setD({discount:e.target.value})} inputMode="decimal" placeholder="0" style={sIn}/>
+                  <select value={draft.discountMode} onChange={e=>setD({discountMode:e.target.value})} style={{...sIn,width:62,cursor:"pointer"}}><option value="amt">{SHOW_CUR_SYM[cur]||cur}</option><option value="pct">%</option></select>
+                </div>
+              </Field>
+              <Field label="Sales tax %"><input value={draft.taxPct} onChange={e=>setD({taxPct:e.target.value})} inputMode="decimal" placeholder="0" style={sIn}/></Field>
+            </div>
+            <div style={{borderTop:`1px solid ${C.border}`,paddingTop:9}}>
+              {[["Subtotal",T.subtotal],...(T.discount>0?[["Discount",-T.discount]]:[]),...(T.taxAmt>0?[["Sales tax",T.taxAmt]]:[])].map(([k,v])=>(
+                <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.inkMid,padding:"2px 0"}}><span>{k}</span><span>{showMoney(v,cur)}</span></div>
+              ))}
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:17,fontWeight:800,color:C.ink,padding:"7px 0 3px",borderTop:`1px solid ${C.border}`,marginTop:5}}><span>Total</span><span>{showMoney(T.total,cur)}</span></div>
+              {T.paid>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,color:T.balance>0.005?C.red:C.green,padding:"2px 0"}}><span>{T.balance>0.005?"Balance due":"Paid in full"}</span><span>{showMoney(T.balance,cur)}</span></div>}
+            </div>
+          </div>
+
+          <div style={box}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9,flexWrap:"wrap"}}>
+              <span style={lab}>Payment taken</span>
+              <button onClick={()=>setD(d=>({...d,payments:[...(d.payments||[]),{id:uid(),method:(SHOW_PAY_METHODS.find(m=>showInvMethodOn(S,m.key))||{}).key||"cash",amount:String(+(showInvTotals(d).balance||0).toFixed(2)),ref:""}]}))}
+                style={{background:"none",border:"none",fontSize:11,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>+ Record payment</button>
+            </div>
+            {(draft.payments||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint}}>Nothing recorded — the invoice prints the full amount as due.</div>}
+            {(draft.payments||[]).map(p=>(
+              <div key={p.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr 24px":"150px 110px 1fr 24px",gap:6,alignItems:"center",marginBottom:6}}>
+                <select value={p.method} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,method:e.target.value}:x)}))} style={{...sIn,cursor:"pointer"}}>
+                  {SHOW_PAY_METHODS.filter(m=>showInvMethodOn(S,m.key)).map(m=><option key={m.key} value={m.key}>{m.label}</option>)}
+                  {!SHOW_PAY_METHODS.some(m=>showInvMethodOn(S,m.key))&&<option value="cash">Cash</option>}
+                </select>
+                <input value={p.amount} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,amount:e.target.value}:x)}))} inputMode="decimal" placeholder="Amount" style={sIn}/>
+                <input value={p.ref} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,ref:e.target.value}:x)}))} placeholder="Ref (optional)" style={sIn}/>
+                <button onClick={()=>setD(d=>({...d,payments:d.payments.filter(x=>x.id!==p.id)}))} style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0}}>&times;</button>
+              </div>
+            ))}
+            <div style={{marginTop:10}}>
+              <div style={{...lab,marginBottom:6}}>Methods to print</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {SHOW_PAY_METHODS.filter(m=>showInvMethodOn(S,m.key)).map(m=>{
+                  const chosen=!draft.showMethods?.length||draft.showMethods.includes(m.key);
+                  return(
+                    <button key={m.key} onClick={()=>setD(d=>{
+                      const base=d.showMethods?.length?d.showMethods:SHOW_PAY_METHODS.filter(x=>showInvMethodOn(S,x.key)).map(x=>x.key);
+                      const next=base.includes(m.key)?base.filter(x=>x!==m.key):[...base,m.key];
+                      return{...d,showMethods:next};
+                    })} style={{...pill(chosen),borderRadius:14,padding:"4px 11px",fontWeight:600}}>{m.label}</button>
+                  );
+                })}
+                {!SHOW_PAY_METHODS.some(m=>showInvMethodOn(S,m.key))&&<span style={{fontSize:11,color:C.amber}}>No payment method set up yet — add one under ⚙ Settings.</span>}
+              </div>
+            </div>
+          </div>
+
+          <div style={box}>
+            <div style={{...lab,marginBottom:7}}>Note on the invoice</div>
+            <textarea value={draft.notes} onChange={e=>setD({notes:e.target.value})} rows={2} placeholder="Anything the customer should read" style={{...sIn,resize:"vertical"}}/>
+          </div>
+
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",position:"sticky",bottom:0,background:C.bg,padding:"10px 0 2px"}}>
+            <button onClick={issue} disabled={busy==="issue"} style={{flex:mob?"1 1 100%":"1 1 240px",background:C.ink,color:"#fff",border:"none",borderRadius:9,padding:"13px 18px",fontSize:14,fontWeight:750,cursor:"pointer",opacity:busy==="issue"?.6:1}}>
+              {busy==="issue"?"Issuing…":`Issue & print · ${showMoney(T.total,cur)}`}
+            </button>
+            <button onClick={()=>printInv({...draft,invNo:draft.invNo||"DRAFT"})} style={{flex:"1 1 120px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 14px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>👁 Preview</button>
+            {(draft.lines.length>0||draft.customer.name)&&(
+              <button onClick={()=>{if(window.confirm("Clear this invoice?")){writeShowInvDraft(show.id,null);setDraft(emptyShowInvDraft(show));}}}
+                style={{flex:"0 0 auto",background:"none",border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 14px",fontSize:12,color:C.inkFaint,cursor:"pointer"}}>Clear</button>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── SAVED ── */}
+      {view==="list"&&(
+        <>
+          {mine.length===0&&<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>No invoices written at this show yet.</div>}
+          {[...mine].sort((a,b)=>String(b.invNo||"").localeCompare(String(a.invNo||""))).map(inv=>{
+            const it=showInvTotals(inv);
+            const voided=inv.status==="void";
+            return(
+              <div key={inv.id} style={{...box,opacity:voided?.55:1}}>
+                <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",flexWrap:"wrap",marginBottom:8}}>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{inv.invNo}{voided?" · VOID":""}</div>
+                    <div style={{fontSize:11,color:C.inkMid}}>{inv.customer?.name||inv.customer?.email||"—"}{inv.customer?.email?` · ${inv.customer.email}`:""}</div>
+                    <div style={{fontSize:10,color:C.inkFaint}}>{inv.date} · {(inv.lines||[]).length} line{(inv.lines||[]).length===1?"":"s"}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:16,fontWeight:800,color:C.ink}}>{showMoney(it.total,inv.currency)}</div>
+                    <div style={{fontSize:10,fontWeight:700,color:it.balance>0.005?C.red:C.green}}>{it.balance>0.005?`${showMoney(it.balance,inv.currency)} due`:"paid"}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={()=>printInv(inv)} style={pill(false)}>🖨 Print</button>
+                  <button onClick={()=>downloadPdf(inv)} disabled={busy==="pdf"} style={pill(false)}>{busy==="pdf"?"…":"⬇ PDF"}</button>
+                  {inv.customer?.email&&<button onClick={()=>emailInv(inv)} disabled={busy==="email"} style={pill(false)}>{busy==="email"?"…":"✉ Email"}</button>}
+                  {!voided&&<button onClick={()=>voidInv(inv)} style={{...pill(false),color:C.red,borderColor:C.border}}>Void</button>}
+                  {inv.customer?.email&&(
+                    inv.omnisend?.tagged
+                      ?<span style={{fontSize:10,color:C.green,fontWeight:700}}>✓ {(inv.omnisend.tags||[])[0]||slug}</span>
+                      :inv.customer?.addToList
+                        ?<button onClick={()=>tagOmnisend(inv)} style={{...pill(false),color:C.amber}}>↻ Retry tagging</button>
+                        :null
+                  )}
+                  {inv.pdfUrl&&<a href={inv.pdfUrl} target="_blank" rel="noreferrer" style={{fontSize:10,color:C.blue,textDecoration:"none"}}>pdf link</a>}
+                </div>
+                {inv.omnisend&&!inv.omnisend.tagged&&inv.omnisend.error&&<div style={{fontSize:10,color:C.red,marginTop:6}}>Tagging: {inv.omnisend.error}</div>}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* ── SETTINGS ── */}
+      {view==="settings"&&(
+        <>
+          <div style={box}>
+            <div style={{...lab,marginBottom:9}}>Who the invoice comes from</div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7}}>
+              <Field label="Business"><input value={S.seller.name} onChange={e=>onSaveSettings({...S,seller:{...S.seller,name:e.target.value}})} style={sIn}/></Field>
+              <Field label="Website"><input value={S.seller.website} onChange={e=>onSaveSettings({...S,seller:{...S.seller,website:e.target.value}})} style={sIn}/></Field>
+              <Field label="Phone"><input value={S.seller.phone} onChange={e=>onSaveSettings({...S,seller:{...S.seller,phone:e.target.value}})} style={sIn}/></Field>
+              <Field label="Email"><input value={S.seller.email} onChange={e=>onSaveSettings({...S,seller:{...S.seller,email:e.target.value}})} style={sIn}/></Field>
+              <div style={{gridColumn:mob?"auto":"1 / -1"}}><Field label="Address"><input value={S.seller.address} onChange={e=>onSaveSettings({...S,seller:{...S.seller,address:e.target.value}})} placeholder="Printed under the wordmark" style={sIn}/></Field></div>
+            </div>
+          </div>
+          <div style={box}>
+            <div style={{...lab,marginBottom:4}}>Payment methods</div>
+            <div style={{fontSize:10.5,color:C.inkFaint,marginBottom:10}}>Only the methods switched on here can be printed or recorded. Details are stored in the database, never in the code.</div>
+            {SHOW_PAY_METHODS.map(m=>{
+              const cfg=S.methods?.[m.key]||{};
+              return(
+                <div key={m.key} style={{borderTop:`1px solid ${C.border}`,padding:"10px 0"}}>
+                  <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:cfg.on&&m.fields.length?8:0}}>
+                    <input type="checkbox" checked={!!cfg.on} onChange={e=>onSaveSettings({...S,methods:{...S.methods,[m.key]:{...cfg,on:e.target.checked}}})} style={{width:17,height:17,cursor:"pointer"}}/>
+                    <span style={{fontSize:13,fontWeight:700,color:cfg.on?C.ink:C.inkFaint}}>{m.label}</span>
+                  </label>
+                  {cfg.on&&m.fields.length>0&&(
+                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,paddingLeft:26}}>
+                      {m.fields.map(f=>(
+                        <Field key={f.k} label={f.label}>
+                          <input value={cfg[f.k]||""} placeholder={f.placeholder||""} onChange={e=>onSaveSettings({...S,methods:{...S.methods,[m.key]:{...cfg,[f.k]:e.target.value}}})} style={sIn}/>
+                        </Field>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div style={box}>
+            <div style={{...lab,marginBottom:7}}>Standing terms</div>
+            <textarea value={S.terms||""} onChange={e=>onSaveSettings({...S,terms:e.target.value})} rows={2} placeholder="Printed on every invoice — returns, warranty, anything standing" style={{...sIn,resize:"vertical"}}/>
+          </div>
+          {(S.customItems||[]).length>0&&(
+            <div style={box}>
+              <div style={{...lab,marginBottom:8}}>Saved prices ({S.customItems.length})</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {S.customItems.map(it=>(
+                  <span key={it.id} style={{display:"inline-flex",alignItems:"center",gap:7,background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"4px 8px 4px 11px",fontSize:11,color:C.ink}}>
+                    {it.desc}{it.shape?` · ${it.shape}`:""} <b>{showMoney(it.rate,"USD")}</b>
+                    <button onClick={()=>onSaveSettings({...S,customItems:S.customItems.filter(x=>x.id!==it.id)})} style={{background:"none",border:"none",color:C.inkFaint,cursor:"pointer",fontSize:13,padding:0}}>&times;</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={box}>
+            <div style={{...lab,marginBottom:7}}>Logo</div>
+            <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+              {logo?<img src={logo} alt="" style={{width:110,height:"auto",background:"#fff",border:`1px solid ${C.border}`,borderRadius:6,padding:6}}/>:<span style={{fontSize:11,color:C.amber}}>Not cached yet</span>}
+              <button onClick={async()=>{try{const u=await showInvLogoDataUrl();setLogo(u);onSaveSettings({...S,logoDataUrl:u});showToast?.("✓ Logo cached for offline printing");}catch(e){showToast?.("⚠ Could not fetch the logo: "+(e.message||e));}}}
+                style={pill(false)}>↻ Re-cache</button>
+              <span style={{fontSize:10.5,color:C.inkFaint,flex:"1 1 180px"}}>Stored with the settings so invoices still print with the wordmark when the hall wifi is gone.</span>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 // ── SHIPMENTS ──────────────────────────────────────────────────────────────
 // Planning what physically leaves India for a show: pick the cards, price them,
 // watch the cost and value build up, print the strip labels that go on each
@@ -14811,10 +15591,15 @@ function ShowsApp({onHome,isAdmin=true}){
   const [shows,setShows]=useState([]);
   const showsRef=useRef([]);
   const showSaveChainRef=useRef(Promise.resolve());
+  const showInvoicesRef=useRef([]);
+  const showCustomersRef=useRef([]);
   const pendingShowSavesRef=useRef(0);
   const [stock,setStock]=useState([]);
   const [purchases,setPurchases]=useState([]);
   const [calEvents,setCalEvents]=useState([]);
+  const [showInvoices,setShowInvoices]=useState([]);
+  const [showInvCfg,setShowInvCfg]=useState(DEFAULT_SHOW_INV_SETTINGS);
+  const [showCustomers,setShowCustomers]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const [detailId,setDetailId]=useState(null);
   const [toast,setToast]=useState("");
@@ -14823,10 +15608,14 @@ function ShowsApp({onHome,isAdmin=true}){
   const applyShows=list=>{showsRef.current=Array.isArray(list)?list:[];setShows(list);};
 
   useEffect(()=>{
-    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases)]).then(([s,e,st,p])=>{
+    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases),loadK(SHOW_INV_KEY),loadK(SHOW_INV_SETTINGS_KEY),loadK(SHOW_CUSTOMERS_KEY)]).then(([s,e,st,p,inv,cfg,cust])=>{
       const initial=s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""}));
       applyShows(withShowsDraft(initial));
-      setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);setLoaded(true);
+      setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);
+      showInvoicesRef.current=Array.isArray(inv)?inv:[];setShowInvoices(showInvoicesRef.current);
+      showCustomersRef.current=Array.isArray(cust)?cust:[];setShowCustomers(showCustomersRef.current);
+      setShowInvCfg(showInvSettings(cfg));
+      setLoaded(true);
     });
     // Always reconcile with Supabase on open so a device that missed a live update
     // (was closed/backgrounded) doesn't keep showing a stale buying plan.
@@ -14840,6 +15629,8 @@ function ShowsApp({onHome,isAdmin=true}){
     if(keys.includes(KEYS.stock))loadKFresh(KEYS.stock).then(st=>{if(Array.isArray(st))setStock(st);}).catch(()=>{});
     if(keys.includes(KEYS.purchases))loadKFresh(KEYS.purchases).then(p=>{if(Array.isArray(p))setPurchases(p);}).catch(()=>{});
     if(keys.includes(CAL_KEY))loadKFresh(CAL_KEY).then(e=>{if(Array.isArray(e))setCalEvents(e);}).catch(()=>{});
+    if(keys.includes(SHOW_INV_KEY))loadKFresh(SHOW_INV_KEY).then(v=>{if(Array.isArray(v)){showInvoicesRef.current=v;setShowInvoices(v);}}).catch(()=>{});
+    if(keys.includes(SHOW_CUSTOMERS_KEY))loadKFresh(SHOW_CUSTOMERS_KEY).then(v=>{if(Array.isArray(v)){showCustomersRef.current=v;setShowCustomers(v);}}).catch(()=>{});
   }),[]);
 
   const save=async(list)=>{
@@ -14934,6 +15725,122 @@ function ShowsApp({onHome,isAdmin=true}){
     setStock(next);
     await saveStockK(next);
   };
+
+  // ── Invoicing at the booth ───────────────────────────────────────────────
+  const saveShowInvoice=async(inv)=>{
+    const cur=showInvoicesRef.current;
+    const next=cur.some(i=>i.id===inv.id)?cur.map(i=>i.id===inv.id?{...i,...inv}:i):[inv,...cur];
+    showInvoicesRef.current=next;setShowInvoices(next);
+    await saveK(SHOW_INV_KEY,next);
+  };
+  const delShowInvoice=async(id)=>{
+    const next=showInvoicesRef.current.filter(i=>i.id!==id);
+    showInvoicesRef.current=next;setShowInvoices(next);
+    await saveK(SHOW_INV_KEY,next);
+  };
+  const saveShowInvCfg=async(cfg)=>{
+    const next=showInvSettings(cfg);
+    setShowInvCfg(next);
+    await saveK(SHOW_INV_SETTINGS_KEY,next);
+  };
+  // Email is the only identity a booth customer reliably carries, so it is what
+  // decides whether this is the same person who bought last year.
+  const saveShowCustomer=async(cust)=>{
+    const email=String(cust.email||"").trim().toLowerCase();
+    const cur=showCustomersRef.current;
+    const hit=cur.find(c=>(email&&String(c.email||"").trim().toLowerCase()===email)||(cust.id&&c.id===cust.id));
+    const rec={...(hit||{}),...cust,id:hit?.id||cust.id||uid(),omnisendTagged:cust.omnisendTagged||hit?.omnisendTagged||false};
+    const next=hit?cur.map(c=>c.id===hit.id?rec:c):[rec,...cur];
+    showCustomersRef.current=next;setShowCustomers(next);
+    await saveK(SHOW_CUSTOMERS_KEY,next);
+  };
+  /* Issuing an invoice is what actually sells the stock. It writes the same
+     fields the Stock module's return dialog writes, so the show's sold column,
+     the revenue rollups and the card itself all learn about the sale from one
+     place. A part-lot sale splits: the sold quantity leaves as its own card (a
+     clone starts unversioned, hence newStockRowFrom) and the original keeps the
+     balance. What each line did is handed back, so voiding undoes exactly that
+     and nothing more. */
+  const sellStockForInvoice=async(inv)=>{
+    const lines=(inv.lines||[]).filter(l=>l.stockId);
+    if(!lines.length)return[];
+    const effects=[];
+    const now=new Date().toISOString();
+    let out=[...stock];
+    lines.forEach(l=>{
+      const idx=out.findIndex(s=>s.id===l.stockId);
+      if(idx<0)return;
+      const item=out[idx];
+      const basis=l.basis==="qty2"?"qty2":"qty";
+      const have=parseFloat(item[basis])||0;
+      const soldQ=Math.min(showInvNum(l.qty),have);
+      if(soldQ<=0)return;
+      const rest=+(have-soldQ).toFixed(4);
+      const sentKey=basis==="qty2"?"showSentQty2":"showSentQty";
+      const sentHave=parseFloat(item[sentKey])||have;
+      const stamp={
+        soldDate:inv.date||today(),
+        soldRate:String(l.rate||""),
+        soldPrice:String(+(showInvNum(l.rate)*soldQ).toFixed(2)),
+        soldCurrency:inv.currency||"USD",
+        soldFromShow:inv.showName||"",soldFromShowId:inv.showId||"",
+        showInvoiceId:inv.id,showInvoiceNo:inv.invNo||"",
+        [basis==="qty2"?"soldQty2":"soldQty"]:showInvQty(soldQ),
+        updatedAt:now,
+      };
+      if(rest<=0){
+        out[idx]={...item,...stamp,[basis]:"0"};
+        effects.push({lineId:l.id,stockId:item.id,splitId:null,basis,qty:soldQ});
+      }else{
+        out[idx]={...item,[basis]:String(rest),[sentKey]:String(Math.max(0,+(sentHave-soldQ).toFixed(4))),updatedAt:now};
+        const splitId=uid();
+        out=[newStockRowFrom(item,{
+          id:splitId,...stamp,
+          /* Only the basis that was sold travels onto the split. Carrying the
+             other quantity across would put the same 31.5 kg on two cards, and
+             the show's weight and value totals would count it twice. */
+          qty:basis==="qty"?"0":"",
+          qty2:basis==="qty2"?"0":"",
+          showSentQty:basis==="qty"?showInvQty(soldQ):"",
+          showSentQty2:basis==="qty2"?showInvQty(soldQ):"",
+        }),...out];
+        effects.push({lineId:l.id,stockId:item.id,splitId,basis,qty:soldQ});
+      }
+    });
+    if(!effects.length)return[];
+    setStock(out);
+    const saved=await saveStockK(out);
+    setStock(syncStockVersions(out,saved));
+    return effects;
+  };
+  const restoreStockForInvoice=async(inv)=>{
+    const effects=inv?.stockEffects||[];
+    if(!effects.length)return;
+    const now=new Date().toISOString();
+    const clearSold={soldDate:"",soldRate:"",soldPrice:"",soldCurrency:"",soldQty:"",soldQty2:"",soldFromShow:"",soldFromShowId:"",showInvoiceId:"",showInvoiceNo:""};
+    let out=[...stock];
+    effects.forEach(fx=>{
+      const basis=fx.basis==="qty2"?"qty2":"qty";
+      const sentKey=basis==="qty2"?"showSentQty2":"showSentQty";
+      if(fx.splitId){
+        out=out.filter(s=>s.id!==fx.splitId);
+        const idx=out.findIndex(s=>s.id===fx.stockId);
+        if(idx<0)return;
+        const item=out[idx];
+        out[idx]={...item,
+          [basis]:String(+((parseFloat(item[basis])||0)+fx.qty).toFixed(4)),
+          [sentKey]:String(+((parseFloat(item[sentKey])||0)+fx.qty).toFixed(4)),
+          updatedAt:now};
+      }else{
+        const idx=out.findIndex(s=>s.id===fx.stockId);
+        if(idx<0)return;
+        out[idx]={...out[idx],...clearSold,[basis]:String(+fx.qty.toFixed(4)),updatedAt:now};
+      }
+    });
+    setStock(out);
+    const saved=await saveStockK(out);
+    setStock(syncStockVersions(out,saved));
+  };
   const toggleCheck=(sid,i)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],done:!c[i].done};return{...s,checklist:c};}));
   const editCheckTask=(sid,i,task)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],task};return{...s,checklist:c};}));
   const addCheckItem=(sid)=>save(shows.map(s=>s.id!==sid?s:{...s,checklist:[...(s.checklist||[]),{id:uid(),task:"",done:false}]}));
@@ -14987,6 +15894,11 @@ function ShowsApp({onHome,isAdmin=true}){
     onUpdateShowPhotoCaption:updateShowPhotoCaption,
     onAddJournalEntry:addJournalEntry,onDelJournalEntry:delJournalEntry,
     onCreatePOFromBuyingPlan:createPOFromBuyingPlan,
+    showInvoices,showInvCfg,showCustomers,
+    onSaveShowInvoice:saveShowInvoice,onDelShowInvoice:delShowInvoice,
+    onSaveShowInvCfg:saveShowInvCfg,onSaveShowCustomer:saveShowCustomer,
+    onSellStock:sellStockForInvoice,onRestoreStock:restoreStockForInvoice,
+    onToast:showToast,
   });
 
   if(!loaded)return(<Shell title="Shows" onHome={onHome}><p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p></Shell>);
@@ -15202,7 +16114,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],onSaveShowInvoice,onDelShowInvoice,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -16038,15 +16950,24 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
   const ssSoldRevByCur=ssSold.reduce((m,i)=>{const c=i.soldCurrency||"USD";m[c]=(m[c]||0)+(+i.soldPrice||0);return m;},{});
   const flowSoldRevByCur=showSoldItems.reduce((m,i)=>{const c=i.soldCurrency||"USD";m[c]=(m[c]||0)+(+i.soldPrice||0);return m;},{});
   const dailySalesRevByCur=sumByCur(dailySales,"amount","currency");
+  /* Invoices written at the booth stamp the stock cards they sold, so their
+     stock lines are already counted in flowSoldRevByCur. Only the off-catalogue
+     lines — the stone that never had a card — are new revenue here; adding the
+     whole invoice would count the same sale twice. */
+  const myShowInvoices=(showInvoices||[]).filter(i=>i.showId===show.id&&i.status!=="void");
+  const invoiceRevByCur=myShowInvoices.reduce((m,inv)=>{
+    const extra=(inv.lines||[]).filter(l=>!l.stockId).reduce((sum,l)=>sum+showInvNum(l.qty)*showInvNum(l.rate),0);
+    if(extra>0){const c=inv.currency||"USD";m[c]=(m[c]||0)+extra;}
+    return m;
+  },{});
   const allRevByCur={...dailySalesRevByCur};
-  [ssSoldRevByCur,flowSoldRevByCur].forEach(src2=>Object.entries(src2).forEach(([c,v])=>{allRevByCur[c]=(allRevByCur[c]||0)+v;}));
+  [ssSoldRevByCur,flowSoldRevByCur,invoiceRevByCur].forEach(src2=>Object.entries(src2).forEach(([c,v])=>{allRevByCur[c]=(allRevByCur[c]||0)+v;}));
   const expByCur=sumByCur(showExpenses,"amount","currency");
   const totalItemsSold=ssSold.length+showSoldItems.length;
   const fmtCurObj=obj=>Object.entries(obj).filter(([,v])=>v>0).map(([c,v])=>`${c} ${(+v||0).toLocaleString("en-IN",{maximumFractionDigits:2})}`).join(" · ")||"—";
   // Employees don't see show earnings — no Sales tab, no revenue figures
-  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"shipment",label:"📦 Shipment"},{id:"stock",label:"💎 Stock"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}].filter(t=>isAdmin||t.id!=="sales");
+  const TABS=[{id:"prep",label:"📋 Prep"},{id:"buying",label:"🛒 Buying Plan"},{id:"shipment",label:"📦 Shipment"},{id:"stock",label:"💎 Stock"},{id:"invoice",label:"🧾 Invoice"},{id:"sales",label:"💰 Sales"},{id:"costs",label:"💸 Costs"},{id:"photos",label:"📸 Photos"},{id:"notes",label:"📝 Notes"}].filter(t=>isAdmin||(t.id!=="sales"&&t.id!=="invoice"));
   const EXP_CATS=["Booth","Hotel","Flights","Transport","Food","Shipping","Customs","Other"];
-  const SHOW_CURS=["USD","JPY","EUR","GBP","INR"];
 
   // ── Compact card (list mode) ─────────────────────────────────────────────
   if(!isDetail){
@@ -17358,6 +18279,18 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
             </div>
           )}
 
+          {/* ── INVOICE ── */}
+          {showTab==="invoice"&&isAdmin&&(
+            <ShowInvoiceTab
+              show={show} atShow={shipItems}
+              invoices={showInvoices} settings={showInvCfg} customers={showCustomers}
+              onSaveInvoice={onSaveShowInvoice} onDelInvoice={onDelShowInvoice}
+              onSaveSettings={onSaveShowInvCfg} onSaveCustomer={onSaveShowCustomer}
+              onSellStock={onSellStock} onRestoreStock={onRestoreStock}
+              showToast={onToast}
+            />
+          )}
+
           {/* ── SALES ── */}
           {showTab==="sales"&&isAdmin&&(
             <div style={{padding:"14px 16px"}}>
@@ -17371,6 +18304,23 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                 <Field label="Notes"><textarea value={saleNotes} onChange={e=>setSaleNotes(e.target.value)} rows={2} placeholder="Buyer, item, details…" style={{...FI,fontSize:11,resize:"none",marginBottom:8}}/></Field>
                 <button className="bp" style={{width:"100%",fontSize:12,padding:"8px"}} onClick={e=>{e.stopPropagation();const amt=rawAmt(saleAmt);if(!amt)return;onAddDailySale(show.id,{id:uid(),date:saleDate,amount:amt,currency:saleCur,notes:saleNotes,createdAt:new Date().toISOString()});setSaleAmt("");setSaleNotes("");}}>+ Log Sale</button>
               </div>
+              {myShowInvoices.length>0&&(
+                <div style={{border:`1px solid ${C.border}`,borderRadius:8,background:C.card,padding:"10px 12px",marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:7,flexWrap:"wrap"}}>
+                    <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Invoiced at this show</span>
+                    <button onClick={e=>{e.stopPropagation();setShowTab("invoice");}} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>Open invoicing →</button>
+                  </div>
+                  {[...myShowInvoices].sort((a,b)=>String(b.invNo||"").localeCompare(String(a.invNo||""))).map(inv=>{
+                    const it=showInvTotals(inv);
+                    return(
+                      <div key={inv.id} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11.5,padding:"3px 0",color:C.inkMid}}>
+                        <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}><b style={{color:C.ink}}>{inv.invNo}</b> · {inv.customer?.name||inv.customer?.email||"—"}</span>
+                        <span style={{flexShrink:0,fontWeight:700,color:it.balance>0.005?C.red:C.green}}>{showMoney(it.total,inv.currency)}{it.balance>0.005?` · ${showMoney(it.balance,inv.currency)} due`:""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               {dailySales.length===0&&<div style={{fontSize:11,color:C.inkFaint,textAlign:"center",padding:"12px 0"}}>No sales logged yet</div>}
               {[...dailySales].sort((a,b)=>b.date.localeCompare(a.date)).map(sale=>(
                 <div key={sale.id} style={{display:"grid",gridTemplateColumns:mob?"1fr":"120px 1fr 90px 2fr 20px",gap:7,alignItems:"start",padding:"8px 10px",background:C.card,borderRadius:6,marginBottom:6,border:`1px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>

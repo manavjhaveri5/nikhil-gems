@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK } from "./utils.js";
+import { EARTH_LOGO_URL } from "./constants.js";
 import CampaignComposer from "./CampaignComposer.jsx";
 
 const LIST_KEY = "ng-listings-v1";
@@ -460,7 +461,7 @@ function WelcomeTemplate({ onClose, showToast, forCustomer }) {
         brand: "Earth Editions", heading,
         intro: forCustomer ? intro.replace(/\[\[contact\.firstName\]\]/g, first || "there") : intro,
         dateLine: false,
-        headerImage: "https://cdn.shopify.com/s/files/1/0799/9576/4953/files/White_Background_-_Black_-_Vertical_f86e2e99-211d-4ab6-84a2-b67ff247af3f.png?v=1786605155",
+        headerImage: EARTH_LOGO_URL,
         logoWidth: 150, font: "serif", cornerStyle: "square",
         pageBg: "#e5e6e6", cardBg: "#ffffff", ink: "#1a1308",
         tradeEyebrow: "Trade access", tradeLine: "View full catalogue & wholesale pricing",

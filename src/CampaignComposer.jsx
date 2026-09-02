@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, upsertItemK } from "./utils.js";
+import { EARTH_LOGO_URL } from "./constants.js";
 
 /* Listings live in the one store the Listing Manager writes; a send stamps the
    pieces it went out with, so the next mailer can see what has already been
@@ -68,7 +69,7 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     font: "serif", showPrice: true, showMeta: true, showCta: true, showDivider: false,
     cornerStyle: "square", ctaStyle: "outline", ctaLabel: "Shop now",
     headingSize: 26, footer: "",
-    headerImage: "https://cdn.shopify.com/s/files/1/0799/9576/4953/files/White_Background_-_Black_-_Vertical_f86e2e99-211d-4ab6-84a2-b67ff247af3f.png?v=1786605155",
+    headerImage: EARTH_LOGO_URL,
     logoWidth: 150,
     // Editorial furniture — the standing trade CTA is pre-filled because it is
     // the same invitation on every mailer; blank the line to drop the panel.

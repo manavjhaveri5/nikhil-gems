@@ -11,3 +11,9 @@ export const SHAPE_TO_PRODUCT_TYPE={"3D Butterfly":"Carvings","3D Heart":"Carvin
 export const DEFAULT_EXP_CATS=["Rent","Salary","Train / Flight","Hotels","Packaging & Supplies","Taxes & Duties","Car Loan","Sea Freight","Air Freight","Land Freight / Courier","Electricity","Internet","Petrol","Bank Charges","Petty Cash","Other"];
 export const PIE_COLORS=["#B07D12","#2A6845","#1A4A8A","#8B2020","#5A3A8A","#1A6A6A","#A85E08","#3D7A5A","#6A3A8A","#8A4A1A"];
 export const DEFAULT_STONES=["Agate","Amazonite","Amethyst","Ametrine","Apatite","Aquamarine","Aventurine","Azurite","Black Tourmaline","Bloodstone","Blue Kyanite","Blue Lace Agate","Carnelian","Celestite","Chalcedony","Chrysocolla","Chrysoprase","Citrine","Clear Quartz","Dalmatian Jasper","Dumortierite","Emerald","Fluorite","Garnet","Golden Healer Quartz","Hematite","Howlite","Iolite","Jade","Jasper","K2 Stone","Labradorite","Lapis Lazuli","Larimar","Lepidolite","Malachite","Moldavite","Moonstone","Moss Agate","Obsidian","Ocean Jasper","Onyx","Opal","Peridot","Prehnite","Pyrite","Rainbow Moonstone","Red Jasper","Rhodochrosite","Rhodonite","Rose Quartz","Ruby","Ruby Fuschite","Ruby Zoisite","Rutilated Quartz","Sapphire","Selenite","Serpentine","Shungite","Smoky Quartz","Sodalite","Strawberry Quartz","Sunstone","Super Seven","Tiger Eye","Topaz","Tourmaline","Turquoise","Unakite","Vanadinite","Yellow Jasper"];
+
+/* The Earth Editions wordmark, served from the Shopify CDN. It is a vertical
+   wordmark on white rather than an icon, so anything that renders it has to say
+   how wide — 46px would print "EARTH EDITIONS" as a smudge. Shared by the mailer
+   composer and the show invoice so a logo change is one edit. */
+export const EARTH_LOGO_URL="https://cdn.shopify.com/s/files/1/0799/9576/4953/files/White_Background_-_Black_-_Vertical_f86e2e99-211d-4ab6-84a2-b67ff247af3f.png?v=1786605155";
