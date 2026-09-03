@@ -12695,6 +12695,9 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
     }
     showToast(inv&&inv.stockRestoredOnCancel?"Invoice deleted":"Invoice deleted · stock restored");setView("list");setDraft(null);
   };
+  // Where the packing list came from, so ← Invoice lands back on the screen the
+  // seller left rather than always on the preview.
+  const [packBack,setPackBack]=useState("preview");
   const newDraft=(type="commercial")=>({
     id:uid(),invNo:nextInvNo(),type,date:today(),dueDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),
     buyerId:"",consigneeId:"",consigneeSameAsBuyer:true,
@@ -13022,7 +13025,10 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                           {isPaid?"Paid ✓":"Paid?"}
                         </label>
                       </div>
-                      <div><button className="bs" style={{fontSize:10,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();setDraft({...inv});setView("preview");}}>Preview</button></div>
+                      <div style={{display:"flex",gap:6}}>
+                        <button className="bs" style={{fontSize:10,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();setDraft({...inv});setView("preview");}}>Preview</button>
+                        <button className="bs" style={{fontSize:10,padding:"2px 8px"}} title="Packing list for this invoice" onClick={e=>{e.stopPropagation();setDraft({...inv});setPackBack("list");setView("packing");}}>📦{inv.packingList?" ✓":""}</button>
+                      </div>
                     </div>
                   );
                 })}
@@ -13031,8 +13037,9 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
-	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} isSaved={invoices.some(i=>i.id===draft.id)} onCancelInvoice={cancelInvoice} onReinstate={reinstateInvoice} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
-	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")}/>}
+	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} isSaved={invoices.some(i=>i.id===draft.id)} onCancelInvoice={cancelInvoice} onReinstate={reinstateInvoice} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} onPackingList={()=>{setPackBack("form");setView("packing");}} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
+	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")} onPackingList={()=>{setPackBack("preview");setView("packing");}}/>}
+	      {loaded&&view==="packing"&&draft&&<PackingListBuilder inv={draft} buyers={buyers} company={company} onBack={()=>setView(packBack)} backLabel={packBack==="list"?"← Invoices":"← Invoice"} onSave={async(next,opts)=>{setDraft(next);return saveInvoice(next,opts);}} showToast={showToast}/>}
 	      {loaded&&view==="bulk-inv"&&<InvBulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} buyers={buyers} company={company} extractInvoice={extractInvoice} onSave={async inv=>{await saveInvoice(inv,{navigateAway:false});if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);}else{showToast(`${bulkQueue.length} invoice${bulkQueue.length>1?"s":""} processed`);setView("list");setDraft(null);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
     </Shell>
   );
@@ -13247,7 +13254,7 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
   );
 }
 
-function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],isSaved=false,onCancelInvoice,onReinstate,onSave,onDelete,onPreview,showToast,onRefreshStock,onCancelPaymentSource}) {
+function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],isSaved=false,onCancelInvoice,onReinstate,onSave,onDelete,onPreview,onPackingList,showToast,onRefreshStock,onCancelPaymentSource}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
   // Cancelled invoices are read-only: printed and issued, so nothing about them may change.
   // A printed invoice is locked the same way, but an admin can unlock it for this sitting.
@@ -13579,6 +13586,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           {!invCancelled(draft)&&isSaved&&onCancelInvoice&&!cancelBox&&
             <button className="bs" style={{color:C.red,borderColor:C.red}} onClick={()=>setCancelBox({reason:"",restoreStock:true})}>⛔ Cancel Invoice</button>}
           <button className="bs" onClick={onPreview}>👁 Preview</button>
+          {onPackingList&&<button className="bs" onClick={onPackingList} title="Build the packing list from these invoice lines">📦 Packing List{draft.packingList?" ✓":""}</button>}
           {isSaved&&!invCancelled(draft)&&
             <button className="bs" disabled={printing} onClick={printDraft} title="Prints and marks this invoice as printed">{printing?"Printing…":invPrinted(draft)?"🖨 Reprint":"🖨 Print"}</button>}
           {printedLock&&<button className="bs" onClick={()=>{if(window.confirm("This invoice has already been printed. Edit it anyway?\n\nIf the printed copy is already with the buyer, cancel this invoice and raise a new one instead."))setUnlocked(true);}}>✏ Edit anyway</button>}
@@ -14567,7 +14575,378 @@ async function attachInvoiceToExportReconPacket(inv,buyers,company){
   });
 }
 
-function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
+/* ══════════════════════════════════════════════════════════════════════════
+   PACKING LIST — the invoice, written as boxes
+
+   The shipper's packing list has always been retyped by hand from the invoice,
+   which is where the mistakes come from: a carton that says 36 pcs when the
+   invoice sold 24, a stone that never made it into a box at all. This builds it
+   from the invoice's own lines and keeps score, so what's packed and what's
+   sold have to agree before it prints.
+
+   Two shapes, both taken from the lists actually sent:
+     detailed — one block per carton, each listing its stones and piece counts
+                (retail mixed cartons: "N.G.-1 / RHODONITE BOWL 2" - 36 PCS")
+     bulk     — one block per run of identical bags, numbered as a range
+                ("N.G.-1 to N.G.-20 / XIAMEN · GUNNY BAGS · 20 BAGS")
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const packingLine=(seed={})=>({id:uid(),desc:"",pcs:"",kgs:"",...seed});
+const packingBlock=(seed={})=>({id:uid(),lines:[packingLine()],net:"",gross:"",packing:"GUNNY BAGS",bags:"1",dest:"",...seed});
+
+/* Marks are derived, never typed: a block covers as many marks as it holds
+   bags (bulk) or exactly one carton (detailed), so the ranges can't drift out
+   of step the way hand-numbered lists do. */
+function packingMarks(blocks,mode){
+  let n=0;
+  return (blocks||[]).map(b=>{
+    const span=mode==="bulk"?Math.max(1,parseInt(b.bags,10)||1):1;
+    const from=n+1,to=n+span;n=to;
+    return{from,to,span};
+  });
+}
+const packMarkLabel=(prefix,m)=>m.from===m.to?`${prefix}-${m.from}`:`${prefix}-${m.from} to ${prefix}-${m.to}`;
+
+const packNum=v=>{const n=parseFloat(String(v).replace(/,/g,""));return isFinite(n)?n:0;};
+/* Weights print as typed — "5.400" and "0.791" are how the shipper writes them,
+   and rounding them to 5.4 makes the list look re-keyed. Only totals are
+   computed, and they keep three decimals unless they land whole. */
+const packWeight=n=>{
+  const r=Math.round(n*1000)/1000;
+  return Number.isInteger(r)?r.toLocaleString("en-US"):r.toFixed(3);
+};
+/* The shipper's two date shapes, taken off the lists as sent: 26/08/26 in the
+   corner, 26-AUG-2026 in the heading. Parsed off the string rather than through
+   Date(), which reads a bare YYYY-MM-DD as UTC and can slip a day. */
+const PACK_MONTHS=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+const packDateParts=v=>{
+  const m=String(v||"").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m)return{y:+m[1],mo:+m[2],d:+m[3]};
+  const x=new Date(v);
+  return isNaN(x)?null:{y:x.getFullYear(),mo:x.getMonth()+1,d:x.getDate()};
+};
+const packDateShort=v=>{const p=packDateParts(v);return p?`${String(p.d).padStart(2,"0")}/${String(p.mo).padStart(2,"0")}/${String(p.y).slice(-2)}`:"";};
+const packDateLong=v=>{const p=packDateParts(v);return p?`${String(p.d).padStart(2,"0")}-${PACK_MONTHS[p.mo-1]}-${p.y}`:"";};
+const packDescKey=d=>String(d||"").trim().toUpperCase().replace(/\s+/g," ");
+const packItemDesc=it=>String(it?.acctDesc||it?.desc||"").trim();
+
+/* What the invoice sold, per description, split by unit — pieces and kilos
+   can't be added together, so they're kept apart here as they are on the
+   invoice itself. */
+function packingInvoiceTotals(inv){
+  const map=new Map();
+  (inv?.items||[]).forEach(it=>{
+    const desc=packItemDesc(it);if(!desc)return;
+    const key=packDescKey(desc);
+    const unit=String(it.unit||"pcs").toLowerCase();
+    const row=map.get(key)||{desc,pcs:0,kgs:0};
+    if(unit.startsWith("kg"))row.kgs+=packNum(it.qty);else row.pcs+=packNum(it.qty);
+    map.set(key,row);
+  });
+  return map;
+}
+/* A bulk block is one stone in identical bags, and the only quantity typed for
+   it is the net weight — so that, not a seeded line figure, is what counts as
+   packed. In detailed mode the carton's own lines are the record. */
+function packingPackedTotals(blocks,mode){
+  const map=new Map();
+  (blocks||[]).forEach(b=>{
+    if(mode==="bulk"){
+      const desc=String(b.lines?.[0]?.desc||"").trim();if(!desc)return;
+      const key=packDescKey(desc);
+      const row=map.get(key)||{desc,pcs:0,kgs:0};
+      row.kgs+=packNum(b.net);
+      map.set(key,row);
+      return;
+    }
+    (b.lines||[]).forEach(l=>{
+      const desc=String(l.desc||"").trim();if(!desc)return;
+      const key=packDescKey(desc);
+      const row=map.get(key)||{desc,pcs:0,kgs:0};
+      row.pcs+=packNum(l.pcs);row.kgs+=packNum(l.kgs);
+      map.set(key,row);
+    });
+  });
+  return map;
+}
+/* Every description on either side, with the gap between them. A line the
+   invoice never sold shows up here too — that's the other half of the check. */
+function packingReconciliation(inv,blocks,mode){
+  const invT=packingInvoiceTotals(inv),packT=packingPackedTotals(blocks,mode);
+  const keys=[...new Set([...invT.keys(),...packT.keys()])];
+  return keys.map(k=>{
+    const i=invT.get(k)||{desc:packT.get(k).desc,pcs:0,kgs:0};
+    const p=packT.get(k)||{pcs:0,kgs:0};
+    const dPcs=+(p.pcs-i.pcs).toFixed(3),dKgs=+(p.kgs-i.kgs).toFixed(3);
+    return{key:k,desc:i.desc,invPcs:i.pcs,invKgs:i.kgs,packPcs:p.pcs,packKgs:p.kgs,dPcs,dKgs,
+      ok:Math.abs(dPcs)<0.001&&Math.abs(dKgs)<0.001,onInvoice:invT.has(k)};
+  }).sort((a,b)=>(a.ok===b.ok?a.desc.localeCompare(b.desc):a.ok?1:-1));
+}
+
+function packingTotals(blocks){
+  return (blocks||[]).reduce((s,b)=>({
+    net:s.net+packNum(b.net),gross:s.gross+packNum(b.gross),
+    pcs:s.pcs+(b.lines||[]).reduce((t,l)=>t+packNum(l.pcs),0),
+  }),{net:0,gross:0,pcs:0});
+}
+
+/* Seed: one carton per invoice line, in the same order the invoice prints, so
+   the first draft already matches and only the packing has to be arranged. */
+function seedPackingBlocks(inv,mode){
+  const items=printOrderInvItems(inv?.items).filter(it=>packItemDesc(it));
+  if(!items.length)return[packingBlock()];
+  return items.map(it=>{
+    const unit=String(it.unit||"pcs").toLowerCase();
+    const isKg=unit.startsWith("kg");
+    const qty=packNum(it.qty);
+    return packingBlock({
+      lines:[packingLine({desc:packItemDesc(it),pcs:isKg?"":String(it.qty||""),kgs:isKg?String(it.qty||""):""})],
+      net:isKg?String(it.qty||""):"",gross:"",bags:mode==="bulk"?String(Math.max(1,Math.round(qty)||1)):"1",
+    });
+  });
+}
+
+/* ── The printed document ──────────────────────────────────────────────────── */
+function buildPackingBodyHTML(inv,buyers,company,pl){
+  const co=companyProfileFromKey(company);
+  const sigSrc=signatureForCompany(company);
+  const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv);
+  const consignee=inv.consigneeSameAsBuyer
+    ?{name:buyer?.name,address:buyer?.shippingSameAsBilling!==false?(buyer?.billingAddress||buyer?.address||""):(buyer?.shippingAddress||buyer?.billingAddress||buyer?.address||""),country:buyer?.country}
+    :{name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
+  const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const marks=packingMarks(pl.blocks,pl.mode);
+  const tot=packingTotals(pl.blocks);
+  const prefix=pl.prefix||"N.G.";
+
+  const blocksHTML=(pl.blocks||[]).map((b,i)=>{
+    const mark=packMarkLabel(prefix,marks[i]);
+    const head=`<div style="font-weight:700;margin-bottom:2px">${esc(mark)}${b.dest?` / ${esc(b.dest)}`:""}</div>`;
+    const body=pl.mode==="bulk"
+      ? (()=>{
+          const n=Math.max(1,parseInt(b.bags,10)||1);
+          const noun=String(b.packing||"").toUpperCase().includes("BAG")?"BAG":"PKG";
+          return `<div>Description: ${esc((b.lines?.[0]?.desc)||"").toUpperCase()}</div>
+         <div>Packing: ${esc(b.packing||"").toUpperCase()}</div>
+         <div>Quantity: ${n} ${noun}${n===1?"":"S"}</div>`;
+        })()
+      : (b.lines||[]).filter(l=>String(l.desc||"").trim()).map(l=>{
+          const bits=[l.pcs?`${esc(l.pcs)} PCS`:"",l.kgs?`${esc(l.kgs)} KGS`:""].filter(Boolean).join(" - ");
+          return `<div>${esc(l.desc).toUpperCase()}${bits?` - ${bits}`:""}</div>`;
+        }).join("");
+    return `<div style="margin:0 0 12px;page-break-inside:avoid">${head}${body}
+      <div>Net Weight: ${esc(b.net||"—")} KGS</div>
+      <div>Gross Weight: ${esc(b.gross||"—")} KGS</div>
+    </div>`;
+  }).join("");
+
+  return `
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+    <div>${pl.letterhead?`<div class="co-name">${esc(co.name)}</div>
+      <div style="font-size:10px;color:#444;white-space:pre-line;line-height:1.5">${esc(co.address)}\nTEL: ${esc(co.tel)}\nE.Mail: ${esc(co.email)}</div>`:""}</div>
+    <div style="text-align:right;font-size:11px">Date: ${esc(packDateShort(pl.date||inv.date))}</div>
+  </div>
+  <div style="margin-bottom:10px">
+    <div>To</div>
+    <div style="font-weight:700">${esc(consignee?.name||buyer?.name||"—")}</div>
+    <div style="white-space:pre-line;line-height:1.5">${esc(consignee?.address||"")}${consignee?.country?`\n${esc(consignee.country)}`:""}</div>
+  </div>
+  <div style="font-weight:700;text-decoration:underline;margin:14px 0 10px">
+    ${pl.mode==="bulk"?"PACKING LIST":"DETAILED PACKING LIST"} FOR INV ${esc(inv.invNo)} DTD ${esc(packDateLong(inv.date))}
+  </div>
+  ${blocksHTML}
+  <div style="margin-top:14px;font-weight:700;page-break-inside:avoid">
+    <div>Total Packages: ${marks.length?marks[marks.length-1].to:0}${pl.mode!=="bulk"&&tot.pcs?` &nbsp;·&nbsp; Total Pieces: ${packWeight(tot.pcs)}`:""}</div>
+    <div>Total Net Weight: ${packWeight(tot.net)} KGS</div>
+    <div>Total Gross Weight: ${packWeight(tot.gross)} KGS</div>
+  </div>
+  ${sigSrc?`<div class="sig-block"><img src="${sigSrc}" style="height:54px"/><div style="font-size:10px">For ${esc(co.name)}</div></div>`
+          :`<div class="sig-block" style="font-size:10px">For ${esc(co.name)}</div>`}`;
+}
+
+function PackingListBuilder({inv,buyers,company="ng",onBack,backLabel="← Invoice",onSave,showToast}){
+  const saved=inv.packingList;
+  const [pl,setPl]=useState(()=>({
+    mode:saved?.mode||"detailed",
+    prefix:saved?.prefix||"N.G.",
+    date:saved?.date||inv.date||today(),
+    letterhead:saved?.letterhead!==false,
+    blocks:(saved?.blocks?.length?saved.blocks:seedPackingBlocks(inv,saved?.mode||"detailed")),
+  }));
+  const [saving,setSaving]=useState(false);
+  const set=(k,v)=>setPl(p=>({...p,[k]:v}));
+  const setBlock=(i,patch)=>setPl(p=>{const blocks=[...p.blocks];blocks[i]={...blocks[i],...patch};return{...p,blocks};});
+  const setLine=(bi,li,patch)=>setPl(p=>{
+    const blocks=[...p.blocks];const lines=[...(blocks[bi].lines||[])];
+    lines[li]={...lines[li],...patch};blocks[bi]={...blocks[bi],lines};return{...p,blocks};
+  });
+
+  const marks=packingMarks(pl.blocks,pl.mode);
+  const tot=packingTotals(pl.blocks);
+  const recon=packingReconciliation(inv,pl.blocks,pl.mode);
+  const offBy=recon.filter(r=>!r.ok);
+  const descList=[...new Set((inv.items||[]).map(packItemDesc).filter(Boolean))];
+
+  const doPrint=()=>{
+    const w=window.open("","_blank");
+    if(!w)return showToast?.("Allow pop-ups to print the packing list");
+    w.document.write(wrapInvDoc(`Packing List ${inv.invNo}`,[buildPackingBodyHTML(inv,buyers,company,pl)]));
+    w.document.close();w.focus();setTimeout(()=>w.print(),600);
+  };
+  const doSave=async(alsoPrint=false)=>{
+    setSaving(true);
+    try{
+      await onSave?.({...inv,packingList:{...pl,updatedAt:new Date().toISOString()}},{navigateAway:false});
+      showToast?.("Packing list saved");
+      if(alsoPrint)doPrint();
+    }catch(e){
+      showToast?.(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));
+    }
+    setSaving(false);
+  };
+
+  const box={background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10};
+  const inp={...FI,fontSize:12,padding:"6px 8px",borderRadius:7,boxSizing:"border-box",width:"100%"};
+  const lbl={fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.4,marginBottom:3};
+
+  return(
+    <div style={{maxWidth:960}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}>
+        <div>
+          <button className="bs" style={{fontSize:12}} onClick={onBack}>{backLabel}</button>
+          <span style={{marginLeft:10,fontSize:13,fontWeight:700,color:C.ink}}>Packing List · {inv.invNo}</span>
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button className="bs" disabled={saving} onClick={()=>doSave(false)}>💾 Save</button>
+          <button className="bs" onClick={doPrint}>👁 Print preview</button>
+          <button className="bp" disabled={saving} onClick={()=>doSave(true)}>🖨 Save & Print</button>
+        </div>
+      </div>
+
+      {/* Settings */}
+      <div style={{...box,display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.2fr 1fr 1fr 1.4fr",gap:10,alignItems:"end"}}>
+        <div>
+          <div style={lbl}>Layout</div>
+          <select value={pl.mode} onChange={e=>set("mode",e.target.value)} style={inp}>
+            <option value="detailed">Detailed — carton by carton</option>
+            <option value="bulk">Bulk — bags in ranges</option>
+          </select>
+        </div>
+        <div><div style={lbl}>Mark prefix</div><input value={pl.prefix} onChange={e=>set("prefix",e.target.value)} style={inp}/></div>
+        <div><div style={lbl}>Date</div><input type="date" value={pl.date} onChange={e=>set("date",e.target.value)} style={{...inp,colorScheme:"light"}}/></div>
+        <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
+          <label style={{display:"flex",gap:6,alignItems:"center",fontSize:12,color:C.ink,cursor:"pointer"}}>
+            <input type="checkbox" checked={pl.letterhead} onChange={e=>set("letterhead",e.target.checked)}/>
+            Print company header
+          </label>
+          <button className="bs" style={{fontSize:11,padding:"4px 9px"}}
+            onClick={()=>{if(confirm("Rebuild the list from the invoice lines? Anything arranged here is lost."))set("blocks",seedPackingBlocks(inv,pl.mode));}}>
+            ↻ Reseed from invoice
+          </button>
+        </div>
+      </div>
+
+      {/* Reconciliation — the whole point: packed vs sold, always visible */}
+      <div style={{...box,borderColor:offBy.length?C.red:C.green,background:offBy.length?"#fff6f5":"#f2fbf5"}}>
+        <div style={{fontSize:12,fontWeight:800,color:offBy.length?C.red:C.green,marginBottom:offBy.length?8:0}}>
+          {offBy.length?`⚠ ${offBy.length} line${offBy.length>1?"s":""} don't match the invoice`:"✓ Every invoice line is packed, and nothing extra"}
+        </div>
+        {offBy.length>0&&(
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+              <thead><tr style={{color:C.inkFaint,textAlign:"left"}}>
+                {["Description","Invoice","Packed","Difference"].map(h=><th key={h} style={{padding:"3px 6px",fontWeight:700}}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                {offBy.map(r=>{
+                  const q=(p,k)=>[p?`${packWeight(p)} pcs`:"",k?`${packWeight(k)} kgs`:""].filter(Boolean).join(" · ")||"—";
+                  const d=[r.dPcs?`${r.dPcs>0?"+":""}${packWeight(r.dPcs)} pcs`:"",r.dKgs?`${r.dKgs>0?"+":""}${packWeight(r.dKgs)} kgs`:""].filter(Boolean).join(" · ");
+                  return(
+                    <tr key={r.key} style={{borderTop:`1px solid ${C.border}`}}>
+                      <td style={{padding:"4px 6px"}}>{r.desc}{!r.onInvoice&&<span style={{color:C.red,fontSize:10}}> · not on the invoice</span>}</td>
+                      <td style={{padding:"4px 6px"}}>{q(r.invPcs,r.invKgs)}</td>
+                      <td style={{padding:"4px 6px"}}>{q(r.packPcs,r.packKgs)}</td>
+                      <td style={{padding:"4px 6px",color:C.red,fontWeight:700}}>{d||"—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Blocks */}
+      {pl.blocks.map((b,i)=>(
+        <div key={b.id} style={box}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
+            <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{packMarkLabel(pl.prefix,marks[i])}</div>
+            <div style={{display:"flex",gap:6}}>
+              <button className="bs" style={{fontSize:10,padding:"3px 8px"}}
+                onClick={()=>setPl(p=>{const copy={...p.blocks[i],id:uid(),lines:(p.blocks[i].lines||[]).map(l=>({...l,id:uid()}))};
+                  return{...p,blocks:[...p.blocks.slice(0,i+1),copy,...p.blocks.slice(i+1)]};})}>⧉ Duplicate</button>
+              <button className="bs" style={{fontSize:10,padding:"3px 8px",color:C.red,borderColor:C.red}}
+                onClick={()=>setPl(p=>({...p,blocks:p.blocks.length>1?p.blocks.filter((_,j)=>j!==i):p.blocks}))}>✕</button>
+            </div>
+          </div>
+
+          {pl.mode==="bulk"?(
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"2fr 1fr 1fr 1fr",gap:8,marginBottom:8}}>
+              <div><div style={lbl}>Description</div>
+                <input list="pl-desc-list" value={b.lines?.[0]?.desc||""} onChange={e=>setLine(i,0,{desc:e.target.value})} style={inp}/></div>
+              <div><div style={lbl}>Packing</div><input value={b.packing||""} onChange={e=>setBlock(i,{packing:e.target.value})} style={inp}/></div>
+              <div><div style={lbl}>Bags / pkgs</div><input value={b.bags||""} inputMode="numeric" onChange={e=>setBlock(i,{bags:e.target.value})} style={inp}/></div>
+              <div><div style={lbl}>Destination</div><input value={b.dest||""} onChange={e=>setBlock(i,{dest:e.target.value})} placeholder="XIAMEN" style={inp}/></div>
+            </div>
+          ):(
+            <div style={{marginBottom:8}}>
+              {(b.lines||[]).map((l,li)=>(
+                <div key={l.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 60px 60px 26px":"1fr 110px 110px 30px",gap:8,marginBottom:6}}>
+                  <input list="pl-desc-list" value={l.desc} placeholder="RHODONITE BOWL 2”" onChange={e=>setLine(i,li,{desc:e.target.value})} style={inp}/>
+                  <input value={l.pcs} placeholder="PCS" inputMode="decimal" onChange={e=>setLine(i,li,{pcs:e.target.value})} style={inp}/>
+                  <input value={l.kgs} placeholder="KGS" inputMode="decimal" onChange={e=>setLine(i,li,{kgs:e.target.value})} style={inp}/>
+                  <button className="bs" style={{fontSize:11,padding:0,color:C.red,borderColor:"transparent",background:"none",cursor:"pointer"}}
+                    onClick={()=>setPl(p=>{const blocks=[...p.blocks];const lines=(blocks[i].lines||[]).filter((_,j)=>j!==li);
+                      blocks[i]={...blocks[i],lines:lines.length?lines:[packingLine()]};return{...p,blocks};})}>✕</button>
+                </div>
+              ))}
+              <button className="bs" style={{fontSize:11,padding:"4px 9px"}}
+                onClick={()=>setPl(p=>{const blocks=[...p.blocks];blocks[i]={...blocks[i],lines:[...(blocks[i].lines||[]),packingLine()]};return{...p,blocks};})}>+ Stone</button>
+            </div>
+          )}
+
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"160px 160px 1fr",gap:8,alignItems:"end"}}>
+            <div><div style={lbl}>Net weight (kgs)</div><input value={b.net} inputMode="decimal" onChange={e=>setBlock(i,{net:e.target.value})} style={inp}/></div>
+            <div><div style={lbl}>Gross weight (kgs)</div><input value={b.gross} inputMode="decimal" onChange={e=>setBlock(i,{gross:e.target.value})} style={inp}/></div>
+            <div style={{fontSize:10,color:C.inkFaint}}>
+              {packNum(b.gross)&&packNum(b.net)&&packNum(b.gross)<packNum(b.net)?<span style={{color:C.red,fontWeight:700}}>Gross is under net</span>
+                :packNum(b.net)?`Packing weight: ${packWeight(Math.max(0,packNum(b.gross)-packNum(b.net)))} kgs`:""}
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <datalist id="pl-desc-list">{descList.map(d=><option key={d} value={d}/>)}</datalist>
+
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+        <button className="bs" onClick={()=>setPl(p=>({...p,blocks:[...p.blocks,packingBlock()]}))}>+ Carton</button>
+        <button className="bs" onClick={()=>{
+          const last=pl.blocks[pl.blocks.length-1];
+          setPl(p=>({...p,blocks:[...p.blocks,packingBlock({net:last?.net||"",gross:last?.gross||"",packing:last?.packing||"GUNNY BAGS",dest:last?.dest||"",bags:last?.bags||"1"})]}));
+        }}>+ Carton, same weights</button>
+      </div>
+
+      <div style={{...box,display:"flex",gap:22,flexWrap:"wrap",fontSize:12,fontWeight:700,color:C.ink}}>
+        <span>Packages: {marks.length?marks[marks.length-1].to:0}</span>
+        {pl.mode!=="bulk"&&tot.pcs>0&&<span>Pieces: {packWeight(tot.pcs)}</span>}
+        <span>Net: {packWeight(tot.net)} KGS</span>
+        <span>Gross: {packWeight(tot.gross)} KGS</span>
+      </div>
+    </div>
+  );
+}
+
+function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit,onPackingList}){
   const co=companyProfileFromKey(company);
   const sigSrc=signatureForCompany(company);
   const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv);
@@ -14609,6 +14988,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
         <button className="bs" style={{fontSize:12}} onClick={onBack}>← Edit</button>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {onEdit&&<button className="bs" onClick={onEdit}>✏ Edit</button>}
+          {onPackingList&&<button className="bs" onClick={onPackingList} title="Build the packing list from these invoice lines">📦 Packing List</button>}
           <button className="bs" onClick={async()=>{const html=generateHTML();const w=window.open("","_blank");w.document.write(html);w.document.close();if(onSave)try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>🔗 Open / Share</button>
           {onSave&&<button className="bs" style={{color:"#1a7a4a",borderColor:"#1a7a4a",background:"#f0faf4"}} onClick={async()=>{try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>💾 Save Invoice</button>}
           <button className="bp" onClick={printAndSave} title={invCancelled(inv)?"Cancelled invoices are reprinted without restamping":"Prints and marks this invoice as printed"}>🖨 Print{invCancelled(inv)?"":" & Mark Printed"}</button>
