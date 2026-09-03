@@ -12695,9 +12695,6 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
     }
     showToast(inv&&inv.stockRestoredOnCancel?"Invoice deleted":"Invoice deleted · stock restored");setView("list");setDraft(null);
   };
-  // Where the packing list came from, so ← Invoice lands back on the screen the
-  // seller left rather than always on the preview.
-  const [packBack,setPackBack]=useState("preview");
   const newDraft=(type="commercial")=>({
     id:uid(),invNo:nextInvNo(),type,date:today(),dueDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),
     buyerId:"",consigneeId:"",consigneeSameAsBuyer:true,
@@ -13025,10 +13022,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                           {isPaid?"Paid ✓":"Paid?"}
                         </label>
                       </div>
-                      <div style={{display:"flex",gap:6}}>
-                        <button className="bs" style={{fontSize:10,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();setDraft({...inv});setView("preview");}}>Preview</button>
-                        <button className="bs" style={{fontSize:10,padding:"2px 8px"}} title="Packing list for this invoice" onClick={e=>{e.stopPropagation();setDraft({...inv});setPackBack("list");setView("packing");}}>📦{inv.packingList?" ✓":""}</button>
-                      </div>
+                      <div><button className="bs" style={{fontSize:10,padding:"2px 8px"}} onClick={e=>{e.stopPropagation();setDraft({...inv});setView("preview");}}>Preview</button></div>
                     </div>
                   );
                 })}
@@ -13037,9 +13031,9 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
-	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} isSaved={invoices.some(i=>i.id===draft.id)} onCancelInvoice={cancelInvoice} onReinstate={reinstateInvoice} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} onPackingList={()=>{setPackBack("form");setView("packing");}} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
-	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")} onPackingList={()=>{setPackBack("preview");setView("packing");}}/>}
-	      {loaded&&view==="packing"&&draft&&<PackingListBuilder inv={draft} buyers={buyers} company={company} onBack={()=>setView(packBack)} backLabel={packBack==="list"?"← Invoices":"← Invoice"} onSave={async(next,opts)=>{setDraft(next);return saveInvoice(next,opts);}} showToast={showToast}/>}
+	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} isSaved={invoices.some(i=>i.id===draft.id)} onCancelInvoice={cancelInvoice} onReinstate={reinstateInvoice} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} onPackingList={()=>setView("packing")} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
+	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")}/>}
+	      {loaded&&view==="packing"&&draft&&<PackingListBuilder inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={async(next,opts)=>{setDraft(next);return saveInvoice(next,opts);}} showToast={showToast}/>}
 	      {loaded&&view==="bulk-inv"&&<InvBulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} buyers={buyers} company={company} extractInvoice={extractInvoice} onSave={async inv=>{await saveInvoice(inv,{navigateAway:false});if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);}else{showToast(`${bulkQueue.length} invoice${bulkQueue.length>1?"s":""} processed`);setView("list");setDraft(null);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
     </Shell>
   );
@@ -13586,7 +13580,6 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           {!invCancelled(draft)&&isSaved&&onCancelInvoice&&!cancelBox&&
             <button className="bs" style={{color:C.red,borderColor:C.red}} onClick={()=>setCancelBox({reason:"",restoreStock:true})}>⛔ Cancel Invoice</button>}
           <button className="bs" onClick={onPreview}>👁 Preview</button>
-          {onPackingList&&<button className="bs" onClick={onPackingList} title="Build the packing list from these invoice lines">📦 Packing List{draft.packingList?" ✓":""}</button>}
           {isSaved&&!invCancelled(draft)&&
             <button className="bs" disabled={printing} onClick={printDraft} title="Prints and marks this invoice as printed">{printing?"Printing…":invPrinted(draft)?"🖨 Reprint":"🖨 Print"}</button>}
           {printedLock&&<button className="bs" onClick={()=>{if(window.confirm("This invoice has already been printed. Edit it anyway?\n\nIf the printed copy is already with the buyer, cancel this invoice and raise a new one instead."))setUnlocked(true);}}>✏ Edit anyway</button>}
@@ -13903,6 +13896,30 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             </button>
           </div>
         )}
+
+        {/* Packing list — the one shipment document the ERP writes rather than
+            takes in, so it sits with the rest of the paperwork instead of
+            crowding the toolbar. The line under it is the same check the
+            builder runs, surfaced here so a list that no longer matches the
+            invoice is visible without opening it. */}
+        {onPackingList&&(()=>{
+          const pl=draft.packingList;
+          const marks=pl?packingMarks(pl.blocks,pl.mode):[];
+          const tot=pl?packingTotals(pl.blocks):null;
+          const off=pl?packingReconciliation(draft,pl.blocks,pl.mode).filter(r=>!r.ok):[];
+          return(
+            <div style={{borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:10,marginBottom:10,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <button type="button" onClick={onPackingList}
+                style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${pl?C.border:C.gold}`,borderRadius:5,background:pl?C.card:C.goldBg,color:C.ink,fontFamily:"inherit"}}>
+                📦 {pl?"Edit Packing List":"Create Packing List"}
+              </button>
+              {pl&&<span style={{fontSize:11,color:C.inkFaint}}>
+                {marks.length?marks[marks.length-1].to:0} package{(marks.length?marks[marks.length-1].to:0)===1?"":"s"} · Net {packWeight(tot.net)} · Gross {packWeight(tot.gross)} KGS
+              </span>}
+              {pl&&off.length>0&&<span style={{fontSize:11,fontWeight:700,color:C.red}}>⚠ {off.length} {off.length>1?"lines don't":"line doesn't"} match this invoice</span>}
+            </div>
+          );
+        })()}
 
         {/* Shipped toggle */}
         {draft.goodsShipped
@@ -14764,7 +14781,7 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
           :`<div class="sig-block" style="font-size:10px">For ${esc(co.name)}</div>`}`;
 }
 
-function PackingListBuilder({inv,buyers,company="ng",onBack,backLabel="← Invoice",onSave,showToast}){
+function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
   const saved=inv.packingList;
   const [pl,setPl]=useState(()=>({
     mode:saved?.mode||"detailed",
@@ -14813,7 +14830,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,backLabel="← Invoi
     <div style={{maxWidth:960}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:14}}>
         <div>
-          <button className="bs" style={{fontSize:12}} onClick={onBack}>{backLabel}</button>
+          <button className="bs" style={{fontSize:12}} onClick={onBack}>← Invoice</button>
           <span style={{marginLeft:10,fontSize:13,fontWeight:700,color:C.ink}}>Packing List · {inv.invNo}</span>
         </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -14946,7 +14963,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,backLabel="← Invoi
   );
 }
 
-function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit,onPackingList}){
+function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
   const co=companyProfileFromKey(company);
   const sigSrc=signatureForCompany(company);
   const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv);
@@ -14988,7 +15005,6 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit,onPackingL
         <button className="bs" style={{fontSize:12}} onClick={onBack}>← Edit</button>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {onEdit&&<button className="bs" onClick={onEdit}>✏ Edit</button>}
-          {onPackingList&&<button className="bs" onClick={onPackingList} title="Build the packing list from these invoice lines">📦 Packing List</button>}
           <button className="bs" onClick={async()=>{const html=generateHTML();const w=window.open("","_blank");w.document.write(html);w.document.close();if(onSave)try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>🔗 Open / Share</button>
           {onSave&&<button className="bs" style={{color:"#1a7a4a",borderColor:"#1a7a4a",background:"#f0faf4"}} onClick={async()=>{try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>💾 Save Invoice</button>}
           <button className="bp" onClick={printAndSave} title={invCancelled(inv)?"Cancelled invoices are reprinted without restamping":"Prints and marks this invoice as printed"}>🖨 Print{invCancelled(inv)?"":" & Mark Printed"}</button>
