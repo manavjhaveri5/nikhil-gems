@@ -29,6 +29,18 @@ import {
    which of the two it is about to do, in the export button itself. */
 
 const FILMSTRIP = 12;
+
+/* Spend the 15 seconds from the front: each take keeps what is left of the
+   budget when its turn comes, and a take that starts past the end is dropped.
+   Only the cut points move — nothing is thrown away. */
+const etsyCut = clips => {
+  let left = ETSY_MAX_SECONDS;
+  return clips.map(c => {
+    const keep = Math.min(clipLength(c), Math.max(0, left));
+    left -= keep;
+    return { ...c, out: c.in + keep };
+  }).filter(c => clipLength(c) > 0.05);
+};
 const fmt = s => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
 
 /* Quality only matters on the re-encoded path, and it is a quantizer, not a
@@ -126,7 +138,7 @@ function ClipTrack({ clip, strip, active, playhead, onTrim, onSeek, onRemove, on
    three takes, and the seller shouldn't have to upload one, edit, upload the
    next: hand them all in together and they arrive as a joined timeline, in the
    order they were picked, ready to be trimmed. */
-export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
+export default function VideoEditor({ url, urls, recipe, onSave, onClose, showToast }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);
   const sinksRef = useRef(new Map());     // clip id → CanvasSink, built once per clip
@@ -157,6 +169,7 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
   const [prog, setProg] = useState(0);
   const [err, setErr] = useState("");
   const [showOriginal, setShowOriginal] = useState(false);
+  const [note, setNote] = useState("");        // something the editor did on the seller's behalf
   const [snaps, setSnaps] = useState({});     // clip id → where a copied cut really starts
   const [narrow, setNarrow] = useState(mob);
   useEffect(() => {
@@ -206,9 +219,9 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
      clip holds a decoder, and racing them on a phone is how the tab runs out
      of memory. The order the seller picked is the order they play in. */
   const addClips = useCallback(async list => {
-    let last = null;
-    for (const src of list) last = (await addClip(src)) || last;
-    return last;
+    const opened = [];
+    for (const src of list) { const c = await addClip(src); if (c) opened.push(c); }
+    return opened;
   }, [addClip]);
 
   useEffect(() => {
@@ -221,8 +234,35 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
         if (!ctx) throw new Error("This browser has no WebGL, so the editor can't run here.");
         glRef.current = ctx;
         const seeds = (urls && urls.length ? urls : [url]).filter(Boolean);
-        const clip = await addClips(seeds);
-        if (cancelled || !clip) return;
+        const opened = await addClips(seeds);
+        if (cancelled || !opened.length) return;
+
+        /* An edit is stored as its ingredients, not as its result: the takes it
+           was cut from, where each one starts and stops, and the look. So
+           reopening it puts every slider and handle back where the last person
+           left them — the picture on screen is rebuilt from the original takes,
+           not from their export, and no generation of quality is lost however
+           many times the listing is revisited. */
+        if (recipe) {
+          const cuts = recipe.clips || [];
+          if (cuts.length) setClips(cs => cs.map((c, i) => (cuts[i]
+            ? { ...c, in: clamp(+cuts[i].in || 0, 0, c.duration), out: clamp(+cuts[i].out ?? c.duration, 0, c.duration) }
+            : c)));
+          const look = recipe.look || {};
+          if (look.adjust) setAdjust({ ...NEUTRAL, ...look.adjust });
+          if (look.bands) setBands(look.bands);
+          if (look.curves) setCurves(look.curves);
+          if (look.mixer) setMixer(look.mixer);
+          if (look.geo) setGeo(look.geo);
+          if (recipe.quality) setQuality(recipe.quality);
+        } else if (seeds.length > 1 && totalLength(opened) > ETSY_MAX_SECONDS + 0.05) {
+          /* Several takes handed in at once will almost always overrun Etsy's
+             15 seconds together. Cutting them back is what the seller was going
+             to do anyway, so it is done for them — and said, because the frames
+             are only hidden, not gone, and the handles pull them back. */
+          setClips(etsyCut);
+          setNote(`Cut to Etsy's ${ETSY_MAX_SECONDS}s across ${opened.length} takes — drag the handles to choose what to keep.`);
+        }
         setReady(true);
       } catch (e) { if (!cancelled) setErr(e.message || String(e)); }
     })();
@@ -362,9 +402,26 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
         onProgress: p => setProg(p),
         cancelled: () => cancelRef.current,
       });
+      /* Every take has to outlive this export, or the edit stops being an edit
+         and becomes the only copy. A take dragged in from the desktop has no
+         URL yet, so it is stored now — untouched, exactly as it was shot — and
+         the recipe points at it. That is what lets the next person open this
+         video, see the original, move one slider, and re-render from the
+         source rather than from someone else's compression. */
+      const sources = [];
+      for (const c of clips) {
+        if (c.url) { sources.push(c.url); continue; }
+        const sname = `take-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+        sources.push(await uploadToStorage(`listing-videos/${sname}`, new File([c.blob], sname, { type: c.blob.type || "video/mp4" })));
+      }
       const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
       const saved = await uploadToStorage(`listing-videos/${name}`, new File([blob], name, { type: "video/mp4" }));
-      onSave(saved);
+      onSave(saved, {
+        sources,
+        clips: clips.map((c, i) => ({ src: sources[i], in: c.in, out: c.out, label: c.label })),
+        look: { adjust, bands, curves, mixer, geo },
+        quality, seconds: +total.toFixed(2), lossless, at: new Date().toISOString(),
+      });
       showToast?.(lossless
         ? `✓ Video re-cut to ${total.toFixed(1)}s — same frames, nothing re-encoded`
         : `✓ Video rebuilt at ${total.toFixed(1)}s`);
@@ -399,15 +456,16 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
 
   /* Cut the tail off wherever the 15 seconds run out, clip by clip. Anything
      past the limit goes; a clip that starts beyond it is dropped whole. */
-  const trimToEtsy = () => {
-    let left = ETSY_MAX_SECONDS;
-    setClips(cs => cs.map(c => {
-      const len = clipLength(c);
-      if (left <= 0) return { ...c, out: c.in };
-      const keep = Math.min(len, left);
-      left -= keep;
-      return { ...c, out: c.in + keep };
-    }).filter(c => clipLength(c) > 0.05));
+  const trimToEtsy = () => setClips(etsyCut);
+
+  /* Back to the takes as they were shot: full length, no grade, no crop. The
+     files themselves were never touched, so this is always available. */
+  const resetAll = () => {
+    stop();
+    setClips(cs => cs.map(c => ({ ...c, in: 0, out: c.duration })));
+    setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer());
+    setGeo(NO_GEO); setSummary(""); setNote("Back to the original takes.");
+    setPlayhead(0);
   };
 
   const btn = (bg, fg) => ({ background: bg, color: fg, border: bg === "transparent" ? `1px solid ${C.border}` : "none",
@@ -424,7 +482,11 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px",
           background: C.surface, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>🎬 Edit video</div>
-          <div style={{ fontSize: 11, color: C.inkFaint }}>Trim, join, crop and grade · Etsy takes {ETSY_MAX_SECONDS}s</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>
+            {recipe?.at
+              ? `Reopened from the original takes · last edited ${recipe.by ? `by ${recipe.by} ` : ""}${new Date(recipe.at).toLocaleDateString()}`
+              : `Trim, join, crop and grade · Etsy takes ${ETSY_MAX_SECONDS}s`}
+          </div>
           <div style={{ flex: 1 }} />
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
@@ -436,6 +498,15 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
           {/* ── Picture and timeline ── */}
           <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0,
             overflowY: narrow ? "visible" : "auto" }}>
+            {note && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, lineHeight: 1.5,
+                background: C.card, border: `1px solid ${C.border}`, borderRadius: 9, padding: "7px 10px", color: C.inkMid }}>
+                <span>{note}</span>
+                <span style={{ flex: 1 }} />
+                <button type="button" onClick={() => setNote("")}
+                  style={{ background: "none", border: "none", color: C.inkFaint, fontSize: 15, cursor: "pointer", lineHeight: 1 }}>×</button>
+              </div>
+            )}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 10,
               display: "grid", placeItems: "center", minHeight: 220 }}>
               <canvas ref={canvasRef}
@@ -549,6 +620,11 @@ export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
               <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setGeo(NO_GEO); setSummary(""); }}
                 disabled={!graded} style={{ ...btn("transparent", C.ink), opacity: graded ? 1 : .45 }}>
                 Reset the look
+              </button>
+              <button type="button" onClick={resetAll} disabled={!ready || !touched}
+                style={{ ...btn("transparent", C.ink), opacity: ready && touched ? 1 : .45 }}
+                title="Full length, no grade, no crop — the takes exactly as they were shot">
+                Start over
               </button>
               <span style={{ flex: 1 }} />
               {busy === "save" && (

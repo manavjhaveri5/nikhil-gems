@@ -105,17 +105,144 @@ const ETSY_SECTIONS = {
   "Collector": 58168978,
 };
 
-// Etsy taxonomy IDs for crystal/mineral products
+/* Etsy taxonomy IDs, verified against /v3/application/seller-taxonomy/nodes.
+   The old numbers here were guesses and every one of them was wrong — 1003 is
+   "Decorative Bowls", not "Crystals & Healing Stones", which is why geodes were
+   publishing as bowls. The listing form now sends an explicit
+   `etsy_taxonomy_id` per category preset; this map is only the fallback for a
+   listing saved before that existed. */
 const ETSY_TAXONOMY = {
-  "Jewellery": 1994,    // Jewelry
-  "Healing/Reiki": 1003, // Crystals & Healing Stones
-  "Lapidary": 1003,
-  "Carvings": 1003,
-  "Decor": 903,          // Home Decor
-  "Mineral": 1003,
-  "Rough": 1003,
-  "default": 1003,
+  "Jewellery":      1195,  // Jewelry > Bracelets > Beaded Bracelets
+  "Healing/Reiki":  1158,  // Spirituality & Religion > Prayer Beads & Charms > Metaphysical Crystals
+  "Lapidary":       1158,
+  "Carvings":       2869,  // Home Decor > Home Accents > Statues
+  "Decor":         12490,  // Home Decor > Home Accents
+  "Mineral":        1893,  // Home Decor > Home Accents > Rocks & Geodes
+  "Rough":          1959,  // Spirituality & Religion > Natural Curios > Mineral
+  "default":        1158,
 };
+
+/* ── Dimensions & weight ──────────────────────────────────────────────────────
+   Etsy carries physical size twice: as listing-level item_* fields, and again as
+   per-taxonomy attributes (the Width/Height/Depth boxes on the listing page,
+   whose property ids differ between categories). Both were being left empty, so
+   Etsy fell back to suggesting numbers it had read off the photos. */
+const DIM_UNITS = {
+  mm: { api: "mm", scale: "Millimeters", toMm: 1 },
+  cm: { api: "cm", scale: "Centimeters", toMm: 10 },
+  m:  { api: "m",  scale: "Meters",      toMm: 1000 },
+  in: { api: "in", scale: "Inches",      toMm: 25.4 },
+  ft: { api: "ft", scale: "Feet",        toMm: 304.8 },
+  yd: { api: "yd", scale: "Yards",       toMm: 914.4 },
+};
+const WEIGHT_UNITS = { g: "g", kg: "kg", oz: "oz", lb: "lb" };
+
+function normDimUnit(u) {
+  const k = String(u || "").trim().toLowerCase();
+  if (DIM_UNITS[k]) return k;
+  if (/^milli|^mm/.test(k)) return "mm";
+  if (/^centi|^cm/.test(k)) return "cm";
+  if (/^inch|^in\b|^"/.test(k)) return "in";
+  if (/^feet|^foot|^ft/.test(k)) return "ft";
+  if (/^met|^m$/.test(k)) return "m";
+  if (/^yard|^yd/.test(k)) return "yd";
+  return "";
+}
+
+/* "969g", "1.2 kg", "12.5" (bare number = grams, the unit the shop weighs in). */
+function parseWeight(raw) {
+  const m = String(raw ?? "").match(/([\d.]+)\s*(kgs?|kilograms?|g|gm|grams?|oz|ounces?|lbs?|pounds?)?/i);
+  if (!m || !m[1] || !isFinite(+m[1]) || +m[1] <= 0) return null;
+  const u = String(m[2] || "g").toLowerCase();
+  const unit = /^k/.test(u) ? "kg" : /^o/.test(u) ? "oz" : /^(lb|pound)/.test(u) ? "lb" : "g";
+  return { value: +(+m[1]).toFixed(2), unit: WEIGHT_UNITS[unit] };
+}
+
+/* The form's own width/height/depth win; a plain "92 x 133 x 50 mm" or "45mm"
+   typed in the free-text Size box is read as a fallback rather than dropped. */
+function listingDimensions(listing) {
+  const unit = normDimUnit(listing.dim_unit) || "mm";
+  const num = v => { const n = parseFloat(v); return isFinite(n) && n > 0 ? +n.toFixed(2) : null; };
+  let width = num(listing.width), height = num(listing.height), depth = num(listing.depth);
+
+  if (!width && !height && !depth) {
+    const size = String(listing.size || "");
+    const parts = size.match(/([\d.]+)\s*(?:[x×*]\s*([\d.]+))?\s*(?:[x×*]\s*([\d.]+))?/);
+    const su = normDimUnit((size.match(/(mm|cm|m|in|inch(?:es)?|ft|feet|yd)\b/i) || [])[1]) || unit;
+    if (parts && parts[1]) {
+      const scaled = [parts[1], parts[2], parts[3]].map(v => (v ? num(v) : null));
+      [width, height, depth] = scaled;
+      return { width, height, depth, unit: su };
+    }
+  }
+  return { width, height, depth, unit };
+}
+
+/* Etsy names each taxonomy's Width/Height/Depth with its own property id and its
+   own set of scales (Rocks & Geodes offers Millimeters, Metaphysical Crystals
+   only Inches/Centimeters), so the ids and the unit are resolved per listing and
+   the value converted into a scale the category actually offers. */
+async function etsyTaxonomyProperties(taxonomyId, hdrs) {
+  try {
+    const r = await fetch(
+      `https://openapi.etsy.com/v3/application/seller-taxonomy/nodes/${taxonomyId}/properties`,
+      { headers: { "x-api-key": ETSY_API_KEY, Accept: "application/json" } }
+    );
+    if (!r.ok) return [];
+    return (await r.json())?.results || [];
+  } catch { return []; }
+}
+
+async function applyEtsyDimensions(listingId, taxonomyId, dims, hdrs) {
+  if (!dims || (!dims.width && !dims.height && !dims.depth)) return [];
+  const props = await etsyTaxonomyProperties(taxonomyId, hdrs);
+  if (!props.length) return [];
+
+  const warnings = [];
+  const wanted = [["Width", dims.width], ["Height", dims.height], ["Depth", dims.depth]];
+
+  for (const [name, value] of wanted) {
+    if (!value) continue;
+    const prop = props.find(p => String(p.display_name).toLowerCase() === name.toLowerCase());
+    if (!prop) continue;
+
+    // Prefer the scale matching the seller's unit; otherwise convert into one
+    // the category does offer (cm for the metric-less "Inches/Centimeters" set).
+    const from = DIM_UNITS[dims.unit] || DIM_UNITS.mm;
+    let scale = (prop.scales || []).find(s => s.display_name === from.scale);
+    let out = value;
+    if (!scale) {
+      for (const key of ["cm", "in", "mm", "m"]) {
+        const cand = (prop.scales || []).find(s => s.display_name === DIM_UNITS[key].scale);
+        if (cand) { scale = cand; out = +(value * from.toMm / DIM_UNITS[key].toMm).toFixed(2); break; }
+      }
+    }
+    if (!scale) continue;
+
+    const body = { values: [String(out)], value_ids: [], scale_id: scale.scale_id };
+    let r = await fetch(
+      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/properties/${prop.property_id}`,
+      { method: "PUT", headers: hdrs, body: JSON.stringify(body) }
+    );
+    if (!r.ok) {
+      // Same JSON-vs-form split the tag update already works around.
+      const form = new URLSearchParams();
+      form.set("values", String(out));
+      form.set("scale_id", String(scale.scale_id));
+      const { "Content-Type": _drop, ...bare } = hdrs;
+      r = await fetch(
+        `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/properties/${prop.property_id}`,
+        { method: "PUT", headers: { ...bare, "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }
+      );
+    }
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      console.error(`Etsy ${name} property failed:`, r.status, JSON.stringify(d));
+      warnings.push(name);
+    }
+  }
+  return warnings;
+}
 
 /* ── Claude AI helper ──────────────────────────────────────────────────────── */
 async function aiGenerate(listing) {
@@ -228,6 +355,30 @@ async function uploadEtsyVideo(listingId, videoUrl, authHdrs, name = "video") {
   } catch (e) { console.error("Etsy video upload failed:", e.message); return false; }
 }
 
+/* ── Etsy: what video the listing is holding, and taking it off ───────────────
+   Etsy allows one video per listing and does not swap it in place: an edited
+   clip only arrives if the old one is deleted first. */
+async function etsyListingVideos(listingId, authHdrs) {
+  try {
+    const { "Content-Type": _ct, ...bare } = authHdrs;
+    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/videos`, { headers: bare });
+    if (!r.ok) return [];
+    const d = await r.json().catch(() => ({}));
+    return Array.isArray(d?.results) ? d.results : [];
+  } catch { return []; }
+}
+
+async function deleteEtsyVideo(listingId, videoId, authHdrs) {
+  try {
+    const { "Content-Type": _ct, ...bare } = authHdrs;
+    const r = await fetch(
+      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/videos/${videoId}`,
+      { method: "DELETE", headers: bare }
+    );
+    return r.ok || r.status === 404;
+  } catch { return false; }
+}
+
 /* ── Tags: the form is the record, the AI is a suggestion ──────────────────── */
 /* Generate merges its tags into the listing's own chips, and those chips are
    what the seller then edits by hand — so the list on the form is the only one
@@ -297,6 +448,9 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
   const returnPolicyId = listing.etsy_return_policy_id    || ETSY_RETURN_POLICY;
   const quantity       = type === "unique" ? 1 : Math.max(1, +qty || 1);
 
+  const dims   = listingDimensions(listing);
+  const weight = parseWeight(listing.weight);
+
   const payload = {
     quantity,
     title:       etsyTitle.slice(0, 140),
@@ -311,6 +465,14 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
     materials: material ? [material] : [],
     is_supply: false,
     is_digital: false,
+    // Shipping-side dimensions; the Width/Height/Depth boxes buyers see are
+    // taxonomy attributes and are set separately once the listing exists.
+    ...(dims.width  ? { item_width:  dims.width  } : {}),
+    ...(dims.height ? { item_height: dims.height } : {}),
+    ...(dims.depth  ? { item_length: dims.depth  } : {}),
+    ...(dims.width || dims.height || dims.depth
+      ? { item_dimensions_unit: (DIM_UNITS[dims.unit] || DIM_UNITS.mm).api } : {}),
+    ...(weight ? { item_weight: weight.value, item_weight_unit: weight.unit } : {}),
     should_auto_renew: listing.etsy_auto_renew ?? false,
     ...(listing.etsy_ads ? { is_on_etsy_ads: true } : {}),
     ...(sectionId ? { shop_section_id: sectionId } : {}),
@@ -347,8 +509,9 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
   }
 
   // Optional listing video (one per listing)
+  let videoSrc = "";
   if (listing.video && typeof listing.video === "string" && listing.video.startsWith("http")) {
-    await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle);
+    if (await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle)) videoSrc = listing.video;
   }
 
   let finalStatus = "draft";
@@ -381,9 +544,19 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
   }
 
   const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
+  const dimFailed   = await applyEtsyDimensions(listingId, taxonomyId, dims, hdrs);
+
+  const gaps = [];
+  if (!etsyTags.length) gaps.push("no tags");
+  if (!payload.materials.length) gaps.push("no materials");
+  if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
+  if (!weight) gaps.push("no weight");
+  if (dimFailed.length) gaps.push(`Etsy rejected ${dimFailed.join("/")}`);
+
   return {
     listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
-    tags_applied: etsyTags.length, ...(tagsWarning ? { tagsWarning } : {}),
+    tags_applied: etsyTags.length, videoSrc, ...(tagsWarning ? { tagsWarning } : {}),
+    ...(gaps.length ? { fieldsWarning: `Published with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}),
   };
 }
 
@@ -393,6 +566,11 @@ async function updateEtsyListing(listingId, listing, ai) {
   const etsyDesc  = ai?.etsy_description || listing.description || listing.title;
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
   const quantity  = listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1);
+  const dims      = listingDimensions(listing);
+  const weight    = parseWeight(listing.weight);
+  // Re-sync is also the repair path for the listings published under the old,
+  // wrong taxonomy ids — the category on the form is what the listing gets.
+  const taxonomyId = listing.etsy_taxonomy_id || ETSY_TAXONOMY[listing.productType] || ETSY_TAXONOMY.default;
 
   const hdrs = await etsyHeaders();
   const patchBody = {
@@ -401,7 +579,15 @@ async function updateEtsyListing(listingId, listing, ai) {
     price:       parseFloat((+listing.price_etsy || 0).toFixed(2)),
     quantity,
     tags:        etsyTags,
+    taxonomy_id: taxonomyId,
+    ...(listing.material ? { materials: [listing.material] } : {}),
     should_auto_renew: listing.etsy_auto_renew ?? false,
+    ...(dims.width  ? { item_width:  dims.width  } : {}),
+    ...(dims.height ? { item_height: dims.height } : {}),
+    ...(dims.depth  ? { item_length: dims.depth  } : {}),
+    ...(dims.width || dims.height || dims.depth
+      ? { item_dimensions_unit: (DIM_UNITS[dims.unit] || DIM_UNITS.mm).api } : {}),
+    ...(weight ? { item_weight: weight.value, item_weight_unit: weight.unit } : {}),
     ...(listingSku(listing) ? { skus: [listingSku(listing)] } : {}),
   };
 
@@ -442,13 +628,35 @@ async function updateEtsyListing(listingId, listing, ai) {
     if (i < imgUrls.length - 1) await new Promise(r => setTimeout(r, 400));
   }
 
-  // Optional listing video — best-effort (Etsy ignores/replaces if one already exists)
+  /* Optional listing video — best-effort. The listing remembers the file it
+     last sent to Etsy; an unchanged one is left alone rather than re-uploaded
+     (it is a ~100MB round trip on every save), and a changed one replaces what
+     is there, so an edit made here actually shows on the listing. */
+  let videoSrc = listing.platforms?.etsy?.videoSrc || "";
   if (listing.video && typeof listing.video === "string" && listing.video.startsWith("http")) {
-    await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle);
+    const live = await etsyListingVideos(listingId, hdrs);
+    // As on Shopify: no record of what was sent means leave it be, unless the
+    // clip was edited here and the listing is holding the older cut.
+    const changed = videoSrc ? videoSrc !== listing.video : !!listing.videoEdit?.at;
+    if (!live.length || changed) {
+      if (changed) for (const v of live) await deleteEtsyVideo(listingId, v.video_id || v.listing_video_id, hdrs);
+      if (await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle)) videoSrc = listing.video;
+    } else { videoSrc = listing.video; }
   }
 
   const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
-  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, ...(tagsWarning ? { tagsWarning } : {}) };
+  const dimFailed   = await applyEtsyDimensions(listingId, taxonomyId, dims, hdrs);
+
+  const gaps = [];
+  if (!etsyTags.length) gaps.push("no tags");
+  if (!listing.material) gaps.push("no materials");
+  if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
+  if (!weight) gaps.push("no weight");
+  if (dimFailed.length) gaps.push(`Etsy rejected ${dimFailed.join("/")}`);
+
+  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc,
+    ...(tagsWarning ? { tagsWarning } : {}),
+    ...(gaps.length ? { fieldsWarning: `Synced with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}) };
 }
 
 /* ── Etsy: delete/end listing ──────────────────────────────────────────────── */
@@ -623,6 +831,32 @@ async function pushShopifyVideo(store, token, productId, videoUrl) {
   }
 }
 
+/* ── Shopify: take a media item off a product ──────────────────────────────
+   Shopify won't swap a video in place, so replacing one means removing the old
+   media and staging the new file. Only ever called for a video the ERP itself
+   put there, and only when the source it was made from has changed. */
+async function deleteShopifyMedia(store, token, productId, mediaId) {
+  if (!mediaId) return { ok: false, skipped: true };
+  try {
+    const r = await fetch(`https://${store}/admin/api/2024-04/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+      body: JSON.stringify({
+        query: `mutation productDeleteMedia($productId:ID!,$mediaIds:[ID!]!){productDeleteMedia(productId:$productId,mediaIds:$mediaIds){deletedMediaIds mediaUserErrors{field message}}}`,
+        variables: { productId: `gid://shopify/Product/${productId}`, mediaIds: [mediaId] },
+      }),
+    });
+    const d = await r.json();
+    const e = d?.data?.productDeleteMedia?.mediaUserErrors;
+    if (d?.errors?.length) throw new Error(d.errors.map(x => x.message).join(", "));
+    if (e?.length) throw new Error(e.map(x => x.message).join(", "));
+    return { ok: true, deleted: d?.data?.productDeleteMedia?.deletedMediaIds || [] };
+  } catch (err) {
+    console.error("Shopify media delete failed:", err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 function normalizeShopifyVideoNode(node) {
   if (!node) return null;
   const sources = Array.isArray(node.sources) ? node.sources : [];
@@ -745,6 +979,7 @@ async function publishShopify(store, token, listing, ai) {
     images_uploaded: imageSync.uploaded,
     videoQueued,
     videoErr,
+    videoSrc: listing.video || "",
     ...video,
   };
 }
@@ -1014,16 +1249,35 @@ export default async function handler(req, res) {
         const d = await r.json();
         if (!r.ok) throw new Error(`Shopify update: ${JSON.stringify(d.errors || d)}`);
         const imageSync = await syncShopifyImages(store, token, existingId, listing.images || []);
-        // Video: add it only if the product doesn't already carry one (avoids dupes on re-sync).
-        let videoQueued = false, videoErr = "", video = {};
+        /* Video. A product carries one, so a plain re-sync must not add a second
+           — but an edited clip has to actually reach the store, or the seller's
+           tweak lives only in the ERP. The listing remembers which file it last
+           pushed here (videoSrc); when that differs from the video it now holds,
+           the old media comes off and the new one goes up. Unchanged, nothing
+           happens and the sync stays cheap. */
+        let videoQueued = false, videoErr = "", videoReplaced = false, video = {};
         if (listing.video && typeof listing.video === "string" && listing.video.startsWith("http")) {
-          if (!(await shopifyProductHasVideo(store, token, existingId))) {
+          const pushedSrc = listing.platforms?.[platformKey]?.videoSrc || "";
+          const live = await getShopifyVideoStatus(store, token, existingId);
+          const holds = !!live.mediaId && ["UPLOADED", "PROCESSING", "READY"].includes(String(live.videoStatus || "").toUpperCase());
+          /* Listings published before the ERP started recording what it sent
+             have no videoSrc. Those are left alone unless the clip was actually
+             edited here — an edit is the one case where the store is known to
+             be holding the wrong cut. */
+          const changed = pushedSrc ? pushedSrc !== listing.video : !!listing.videoEdit?.at;
+          if (holds && changed) {
+            const del = await deleteShopifyMedia(store, token, existingId, live.mediaId);
+            videoReplaced = del.ok;
+            if (!del.ok) videoErr = del.error || "Could not remove the old video";
+          }
+          if (!holds || (changed && videoReplaced)) {
             const v = await pushShopifyVideo(store, token, existingId, listing.video);
-            videoQueued = v.ok; videoErr = v.error || "";
+            videoQueued = v.ok; videoErr = v.error || videoErr;
           }
           video = await getShopifyVideoStatus(store, token, existingId);
         }
-        result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded, videoQueued, videoErr, ...video };
+        result = { product_id: existingId, status: "active", images_uploaded: imageSync.uploaded,
+          videoQueued, videoErr, videoReplaced, videoSrc: listing.video || "", ...video };
       } else {
         if (syncOnly && !allowCreate) {
           return res.status(409).json({ ok: false, error: `Skipped ${platformKey} sync: no existing product_id` });

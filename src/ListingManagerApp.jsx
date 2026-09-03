@@ -744,21 +744,25 @@ const MATERIALS = [
 
 const PRODUCT_TYPES = ["Lapidary","Carvings","Jewellery","Healing/Reiki","Decor","Mineral","Rough"];
 
-// Etsy category presets — each maps to the shape + productType the API needs
+// Etsy category presets — each maps to the shape + productType the API needs,
+// plus the Etsy taxonomy id the listing is actually filed under. The ids are
+// read off /seller-taxonomy/nodes; the comment is the category's full path, so
+// a wrong one is visible here rather than only on the published listing.
 const ETSY_CATEGORIES = [
-  { value:"metaphysical", label:"Metaphysical Crystals",   shape:"Mineral",        productType:"Lapidary"      },
-  { value:"rocks_geodes", label:"Rocks & Geodes",          shape:"Specimen",       productType:"Mineral"       },
-  { value:"spheres",      label:"Crystal Spheres",          shape:"Sphere",         productType:"Lapidary"      },
-  { value:"hearts",       label:"Crystal Hearts",           shape:"Heart",          productType:"Lapidary"      },
-  { value:"palmstones",   label:"Palmstones",               shape:"Palmstone",      productType:"Lapidary"      },
-  { value:"towers",       label:"Towers & Points",          shape:"Tower",          productType:"Lapidary"      },
-  { value:"tumbled",      label:"Tumbled Stones",           shape:"Tumbled",        productType:"Lapidary"      },
-  { value:"bowls",        label:"Crystal Bowls",            shape:"Bowl - 4 inch",  productType:"Lapidary"      },
-  { value:"bracelets",    label:"Bracelets",                shape:"Bracelet",       productType:"Jewellery"     },
-  { value:"pendants",     label:"Pendants & Pendulums",     shape:"Pendant",        productType:"Lapidary"      },
-  { value:"rough",        label:"Rough Stones",             shape:"Rough",          productType:"Rough"         },
-  { value:"carvings",     label:"Carvings & Sculptures",    shape:"Mineral",        productType:"Carvings"      },
-  { value:"collector",    label:"Collector's Corner",       shape:"Collector",      productType:"Mineral"       },
+  { value:"metaphysical", label:"Metaphysical Crystals",   shape:"Mineral",        productType:"Lapidary",     taxonomyId: 1158  }, // Spirituality & Religion > Prayer Beads & Charms > Metaphysical Crystals
+  { value:"rocks_geodes", label:"Rocks & Geodes",          shape:"Specimen",       productType:"Mineral",      taxonomyId: 1893  }, // Home Decor > Home Accents > Rocks & Geodes
+  { value:"spheres",      label:"Crystal Spheres",          shape:"Sphere",         productType:"Lapidary",     taxonomyId: 1158  },
+  { value:"hearts",       label:"Crystal Hearts",           shape:"Heart",          productType:"Lapidary",     taxonomyId: 1158  },
+  { value:"palmstones",   label:"Palmstones",               shape:"Palmstone",      productType:"Lapidary",     taxonomyId: 1158  },
+  { value:"towers",       label:"Towers & Points",          shape:"Tower",          productType:"Lapidary",     taxonomyId: 1158  },
+  { value:"tumbled",      label:"Tumbled Stones",           shape:"Tumbled",        productType:"Lapidary",     taxonomyId: 1158  },
+  { value:"bowls",        label:"Crystal Bowls",            shape:"Bowl - 4 inch",  productType:"Lapidary",     taxonomyId: 1003  }, // Home Decor > Decorative Storage > Decorative Bowls
+  { value:"bracelets",    label:"Bracelets",                shape:"Bracelet",       productType:"Jewellery",    taxonomyId: 1195  }, // Jewelry > Bracelets > Beaded Bracelets
+  { value:"pendants",     label:"Pendants & Necklaces",     shape:"Pendant",        productType:"Jewellery",    taxonomyId: 1229  }, // Jewelry > Necklaces > Pendant Necklaces
+  { value:"pendulums",    label:"Pendulums & Dowsing",      shape:"Pendulum",       productType:"Healing/Reiki",taxonomyId: 1964  }, // Spirituality & Religion > Divination Tools > Dowsing
+  { value:"rough",        label:"Rough Stones",             shape:"Rough",          productType:"Rough",        taxonomyId: 1959  }, // Spirituality & Religion > Natural Curios > Mineral
+  { value:"carvings",     label:"Carvings & Sculptures",    shape:"Mineral",        productType:"Carvings",     taxonomyId: 2869  }, // Home Decor > Home Accents > Statues
+  { value:"collector",    label:"Collector's Corner",       shape:"Collector",      productType:"Mineral",      taxonomyId: 1893  },
 ];
 
 // Actual shop sections from the Atyahara Etsy shop
@@ -997,7 +1001,59 @@ const cleanTags = list => {
   return out;
 };
 
-function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoChange }) {
+/* ── Taking the media back off the shelf ──────────────────────────────────────
+   The photos and the clip a listing was published with are the seller's own
+   work, and until now the only copy they could get at was whatever the
+   marketplace re-compressed. This hands back what the ERP holds: the files
+   themselves, named after the listing and numbered in the order they appear on
+   it, saved one at a time because a browser will silently drop a burst.
+
+   Anything the browser refuses to fetch cross-origin is opened in a tab
+   instead, so the seller still ends up with the file. */
+const safeName = t => String(t || "listing").replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 48).toLowerCase() || "listing";
+
+async function downloadMedia(items, onStep) {
+  let done = 0, failed = 0;
+  for (const { url, name } of items) {
+    try {
+      const res = await fetch(url, { mode: "cors" });
+      if (!res.ok) throw new Error(String(res.status));
+      const href = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = href; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 60000);
+      done++;
+    } catch {
+      failed++;
+      window.open(url, "_blank", "noopener");
+    }
+    onStep?.(done + failed, items.length);
+    await new Promise(r => setTimeout(r, 350));
+  }
+  return { done, failed };
+}
+
+/* The list a listing hands over: every photo in order, the video, and — when the
+   clip was cut here — the takes it was cut from, which are the only copies of
+   what the camera actually saw. */
+function listingMedia(listing) {
+  const base = safeName(listing?.sku || listing?.listing_order_id || listing?.title);
+  const ext = u => (String(u).split("?")[0].split(".").pop() || "").slice(0, 4).toLowerCase() || "jpg";
+  const items = (listing?.images || [])
+    .filter(u => typeof u === "string" && /^https?:/.test(u))
+    .map((u, i) => ({ url: u, name: `${base}-${String(i + 1).padStart(2, "0")}.${ext(u)}` }));
+  if (listing?.video && /^https?:/.test(listing.video)) items.push({ url: listing.video, name: `${base}-video.${ext(listing.video)}` });
+  const takes = listing?.videoEdit?.sources || [];
+  takes.forEach((u, i) => {
+    if (typeof u === "string" && /^https?:/.test(u) && u !== listing.video) {
+      items.push({ url: u, name: `${base}-take-${String(i + 1).padStart(2, "0")}.${ext(u)}` });
+    }
+  });
+  return items;
+}
+
+function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoChange, videoEdit, onVideoEditChange, who }) {
   const [allLibImages, setAllLibImages] = useState([]);
   const [uploading,    setUploading]    = useState(false);
   const [vidUploading, setVidUploading] = useState(false);
@@ -1033,6 +1089,7 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const [undoEdit, setUndoEdit] = useState(null);
   const [editedUrls, setEditedUrls] = useState(() => new Set());
   const [undoVideo, setUndoVideo] = useState(null);   // the clip as it was before the last edit
+  const [seeOriginal, setSeeOriginal] = useState(""); // the untouched take, played beside the cut
   const noteEdit = (urls, next) => {
     const changed = next.filter((u, i) => u !== urls[i]);
     setUndoEdit({ urls, next, count: changed.length || next.length });
@@ -1287,10 +1344,39 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
           <VideoEditor
             key={editVideo.urls.length}
             urls={editVideo.urls}
-            onSave={newUrl => { setUndoVideo(video); onVideoChange(newUrl); }}
+            recipe={editVideo.recipe || null}
+            onSave={(newUrl, made) => {
+              setUndoVideo(video);
+              onVideoChange(newUrl);
+              /* The edit is kept beside the video, not folded into it: the takes
+                 it came from, the cuts, the look, and who last touched it. That
+                 is what lets whoever opens this listing next see the original,
+                 move one thing, and re-render — rather than inheriting a file
+                 nobody can undo. */
+              onVideoEditChange?.(made ? { ...made, by: who || "" } : null);
+            }}
             onClose={() => setEditVideo(null)}
           />
         </Suspense>
+      )}
+
+      {seeOriginal && (
+        <div onMouseDown={e => e.target === e.currentTarget && setSeeOriginal("")}
+          style={{ position: "fixed", inset: 0, zIndex: 2100, background: "rgba(20,15,8,.78)",
+            display: "grid", placeItems: "center", padding: 20 }}>
+          <div style={{ background: C.bg, borderRadius: 14, padding: 14, display: "grid", gap: 10,
+            width: "min(760px,100%)", boxShadow: "0 24px 80px rgba(0,0,0,.45)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>The original take</span>
+              <span style={{ fontSize: 11, color: C.inkFaint }}>as it was shot — the edit was made from this</span>
+              <span style={{ flex: 1 }} />
+              <button onClick={() => setSeeOriginal("")}
+                style={{ background: "none", border: "none", fontSize: 22, color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
+            </div>
+            <video src={seeOriginal} controls autoPlay playsInline
+              style={{ width: "100%", maxHeight: "70vh", background: "#000", borderRadius: 10 }} />
+          </div>
+        </div>
       )}
 
       {editIdx != null && selectedUrls[editIdx] && (
@@ -1326,7 +1412,9 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                   the reason it exists, and it costs nothing: a cut that leaves
                   the colour alone copies the original frames across. */}
               <div style={{ display: "grid", gap: 6 }}>
-                <button onClick={() => setEditVideo({ urls: [video] })}
+                <button onClick={() => setEditVideo(videoEdit?.sources?.length
+                  ? { urls: videoEdit.sources, recipe: videoEdit }
+                  : { urls: [video] })}
                   style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8,
                     padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: "pointer" }}>
                   🎬 Edit video
@@ -1335,7 +1423,14 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                     it goes straight onto the timeline behind this clip, and the
                     listing keeps the one video it is allowed. */}
                 <input ref={takeRef} type="file" accept="video/*" multiple style={{ display: "none" }}
-                  onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; if (fs.length) setEditVideo({ urls: [video, ...fs] }); }} />
+                  onChange={e => {
+                    const fs = [...(e.target.files || [])]; e.target.value = "";
+                    if (!fs.length) return;
+                    // New takes go behind whatever is already on the timeline —
+                    // the edited cut if there is one, the raw clip otherwise.
+                    const base = videoEdit?.sources?.length ? videoEdit.sources : [video];
+                    setEditVideo({ urls: [...base, ...fs], recipe: videoEdit?.sources?.length ? videoEdit : null });
+                  }} />
                 <button onClick={() => takeRef.current?.click()}
                   style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8,
                     padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
@@ -1352,8 +1447,39 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                     <button onClick={() => { onVideoChange(undoVideo); setUndoVideo(null); }}
                       style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
                         padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
-                      Put the original back
+                      Undo that edit
                     </button>
+                  </div>
+                )}
+                {/* Who cut this, from what, and the way back — kept with the
+                    listing rather than in this browser tab, so the person who
+                    opens it tomorrow gets the same offer. */}
+                {videoEdit?.sources?.length > 0 && (
+                  <div style={{ display: "grid", gap: 6, maxWidth: 230,
+                    background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 9px" }}>
+                    <div style={{ fontSize: 11, color: C.inkMid, lineHeight: 1.5 }}>
+                      Cut from {videoEdit.sources.length} take{videoEdit.sources.length !== 1 ? "s" : ""}
+                      {videoEdit.seconds ? ` · ${(+videoEdit.seconds).toFixed(1)}s` : ""}
+                      {videoEdit.by ? ` · by ${videoEdit.by}` : ""}
+                      {videoEdit.at ? ` · ${new Date(videoEdit.at).toLocaleDateString()}` : ""}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button onClick={() => setSeeOriginal(videoEdit.sources[0])}
+                        style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
+                          padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                        See the original
+                      </button>
+                      <button onClick={() => {
+                        if (!confirm("Put the original take back as the listing video? The edit is thrown away; the takes are kept.")) return;
+                        setUndoVideo(null);
+                        onVideoChange(videoEdit.sources[0]);
+                        onVideoEditChange?.(null);
+                      }}
+                        style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
+                          padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>
+                        Reset to the original
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1580,12 +1706,19 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING FORM
 ══════════════════════════════════════════════════════════════════════════ */
-function ListingForm({ initial, stock, onSave, onClose }) {
+function ListingForm({ initial, stock, onSave, onClose, who }) {
   const editing = !!initial?.id;
+  const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
 
   // Derive initial category from existing shape/productType
   const inferCategory = () => {
     if (!initial) return "metaphysical";
+    // A saved taxonomy id is the exact answer; shape is the fallback for
+    // listings created before the picker carried one.
+    const byTax = initial.etsy_taxonomy_id
+      && ETSY_CATEGORIES.find(c => c.taxonomyId === initial.etsy_taxonomy_id
+        && (c.shape === initial.shape || c.productType === initial.productType));
+    if (byTax) return byTax.value;
     const hit = ETSY_CATEGORIES.find(c => c.shape === initial.shape);
     return hit ? hit.value : "metaphysical";
   };
@@ -1595,10 +1728,11 @@ function ListingForm({ initial, stock, onSave, onClose }) {
       id: uid(), title: "", description: "", material: "", shape: "Mineral",
       origin: "", size: "", weight: "", sku: "", listing_order_id: listingOrderId(), productType: "Lapidary",
       type: "unique", qty: 1, linked_stock_id: "", officeLocation: "",
-      tags: [], images: [], video: "",
+      tags: [], images: [], video: "", videoEdit: null,
       price_etsy: "", price_shopify_earth: "", price_shopify_aty: "", price_ebay: "",
       platforms: { etsy: {}, shopify_earth: {}, shopify_aty: {}, ebay: {} },
-      variations: [], etsy_section_id: null, created_at: now(),
+      width: "", height: "", depth: "", dim_unit: "mm",
+      variations: [], etsy_section_id: null, etsy_taxonomy_id: null, created_at: now(),
       etsy_shipping_profile_id: null, etsy_return_policy_id: null,
       etsy_auto_renew: false, etsy_ads: false,
     };
@@ -1615,6 +1749,15 @@ function ListingForm({ initial, stock, onSave, onClose }) {
   const [showOptional,setShowOptional]= useState(false);
   const [etsyShippingProfiles, setEtsyShippingProfiles] = useState([]);
   const [etsyReturnPolicies,   setEtsyReturnPolicies]   = useState([]);
+
+  /* Listings saved before the picker carried a taxonomy id publish under the
+     API's fallback rather than the category shown here. Stamp the shown one on
+     so the form and the listing agree, and a re-sync repairs the old ones. */
+  useEffect(() => {
+    if (form.etsy_taxonomy_id) return;
+    const cat = ETSY_CATEGORIES.find(c => c.value === category);
+    if (cat) setForm(f => (f.etsy_taxonomy_id ? f : { ...f, etsy_taxonomy_id: cat.taxonomyId }));
+  }, [category, form.etsy_taxonomy_id]);
 
   useEffect(() => {
     fetch("/api/listing-manager?action=get_etsy_settings")
@@ -1670,7 +1813,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const applyCategory = val => {
     setCategory(val);
     const cat = ETSY_CATEGORIES.find(c => c.value === val);
-    if (cat) setForm(f => ({ ...f, shape: cat.shape, productType: cat.productType }));
+    if (cat) setForm(f => ({ ...f, shape: cat.shape, productType: cat.productType, etsy_taxonomy_id: cat.taxonomyId }));
   };
 
   const validate = () => {
@@ -1828,14 +1971,32 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
           {/* ── Photos & video ───────────────────────────────────────────── */}
           <Section title="Photos & Video" action={
-            <span style={{ fontSize: 11, color: C.inkFaint }}>
-              {form.images.length} photo{form.images.length !== 1 ? "s" : ""}{form.video ? " · 1 video" : ""}
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, color: C.inkFaint }}>
+                {form.images.length} photo{form.images.length !== 1 ? "s" : ""}{form.video ? " · 1 video" : ""}
+              </span>
+              {listingMedia(form).length > 0 && (
+                <button type="button" onClick={async () => {
+                  const items = listingMedia(form);
+                  setDlProg(`0/${items.length}`);
+                  const { failed } = await downloadMedia(items, (n, t) => setDlProg(`${n}/${t}`));
+                  setDlProg("");
+                  if (failed) alert(`${failed} file${failed !== 1 ? "s" : ""} opened in a tab instead — save from there.`);
+                }} disabled={!!dlProg}
+                  title="Save every photo, the video, and any takes it was cut from"
+                  style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
+                    padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: dlProg ? "wait" : "pointer" }}>
+                  {dlProg ? `Downloading ${dlProg}…` : "⤓ Download media"}
+                </button>
+              )}
             </span>
           }>
             <ImagePicker
               material={form.material} shape={form.shape}
               selectedUrls={form.images || []} onChange={urls => set("images", urls)}
               video={form.video || ""} onVideoChange={url => set("video", url)}
+              videoEdit={form.videoEdit || null} onVideoEditChange={r => set("videoEdit", r)}
+              who={who}
             />
           </Section>
 
@@ -2227,6 +2388,19 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   <div><Label>Size</Label><input value={form.size} onChange={e => set("size", e.target.value)} placeholder="4 inch, 45mm…" style={FI()} /></div>
                   <div><Label>Weight</Label><input value={form.weight} onChange={e => set("weight", e.target.value)} placeholder="500g, 1.2kg…" style={FI()} /></div>
                 </Grid>
+                {/* Etsy shows Width / Height / Depth boxes on the listing and, left
+                    empty, guesses at them off the photos. These fill them. */}
+                <div style={{ marginTop: 12 }}>
+                  <Label>Dimensions <span style={{ fontWeight: 400, color: C.inkFaint }}>(publishes to Etsy — left blank, Etsy guesses)</span></Label>
+                  <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 8 }}>
+                    <input value={form.width  || ""} onChange={e => set("width",  e.target.value)} placeholder="Width"  inputMode="decimal" style={FI()} />
+                    <input value={form.height || ""} onChange={e => set("height", e.target.value)} placeholder="Height" inputMode="decimal" style={FI()} />
+                    <input value={form.depth  || ""} onChange={e => set("depth",  e.target.value)} placeholder="Depth"  inputMode="decimal" style={FI()} />
+                    <select value={form.dim_unit || "mm"} onChange={e => set("dim_unit", e.target.value)} style={FI()}>
+                      {["mm", "cm", "m", "in", "ft"].map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                </div>
                 <div style={{ marginTop: 12 }}>
                   <Label>📦 Office / Storage Location (internal only — not on Etsy/eBay)</Label>
                   <input
@@ -2394,6 +2568,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 ══════════════════════════════════════════════════════════════════════════ */
 function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo }) {
   const [expanded,   setExpanded]   = useState(false);
+  const [dl,         setDl]         = useState("");   // media download progress, "3/11"
   const [publishing, setPublishing] = useState({});
   const [toast,      setToast]      = useState("");
 
@@ -2556,6 +2731,19 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                 borderRadius: 6, fontSize: 11, cursor: "pointer", color: C.ink, fontWeight: 600 }}>
               Edit
             </button>
+            {listingMedia(listing).length > 0 && (
+              <button onClick={async () => {
+                const items = listingMedia(listing);
+                setDl(`0/${items.length}`);
+                await downloadMedia(items, (n, t) => setDl(`${n}/${t}`));
+                setDl("");
+              }} disabled={!!dl}
+                title="Download this listing's photos and video"
+                style={{ padding: "5px 10px", background: C.surface, border: `1.5px solid ${C.border}`,
+                  borderRadius: 6, fontSize: 11, cursor: dl ? "wait" : "pointer", color: C.inkMid, fontWeight: 600 }}>
+                {dl ? `⤓ ${dl}` : "⤓"}
+              </button>
+            )}
             <button onClick={() => setExpanded(e => !e)}
               style={{ padding: "5px 8px", background: C.surface, border: `1.5px solid ${C.border}`,
                 borderRadius: 6, fontSize: 11, cursor: "pointer", color: C.inkMid }}>
@@ -8233,7 +8421,10 @@ function DealsDuePopup() {
 /* ══════════════════════════════════════════════════════════════════════════
    MAIN
 ══════════════════════════════════════════════════════════════════════════ */
-export default function ListingManagerApp({ onHome, startTab = "listings", onOpenInvoice, onViewInvoicePdf }) {
+export default function ListingManagerApp({ onHome, startTab = "listings", onOpenInvoice, onViewInvoicePdf, currentUser }) {
+  // Whose name goes on an edit. Several people work the same catalogue, and a
+  // clip that was recut yesterday is worth attributing.
+  const who = currentUser?.name || currentUser?.email || "";
   const [listings,   setListings]   = useState([]);
   const [orders,     setOrders]     = useState([]);
   const [stock,      setStock]      = useState([]);
@@ -8494,8 +8685,32 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     return listing;
   };
 
+  /* What Etsy will show as blank if this goes out as it stands. Etsy doesn't
+     reject an under-filled listing — it accepts it and then offers the seller
+     AI guesses for the empty boxes, which is how geodes reached the shop with
+     no tags, no materials and no size. */
+  const etsyGaps = listing => {
+    const gaps = [];
+    if (!(listing.tags || []).length)          gaps.push("Tags — Etsy allows 13 and drives search off them");
+    if (!String(listing.material || "").trim()) gaps.push("Material / stone");
+    const hasDims = ["width", "height", "depth"].some(k => parseFloat(listing[k]) > 0)
+      || /\d/.test(String(listing.size || ""));
+    if (!hasDims)                               gaps.push("Dimensions (width / height / depth)");
+    if (!String(listing.weight || "").trim())   gaps.push("Weight");
+    return gaps;
+  };
+
   /* publish — syncOnly=true means update fields only, never activate */
   const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly } = {}) => {
+    // Only on the first trip to Etsy: once the listing exists, a re-sync
+    // shouldn't stop to ask about fields the seller has already left blank.
+    if (pkey === "etsy" && allowCreate && !listing.platforms?.etsy?.listing_id) {
+      const gaps = etsyGaps(listing);
+      if (gaps.length && !confirm(
+        `This listing publishes to Etsy with these fields empty:\n\n• ${gaps.join("\n• ")}\n\n`
+        + `Etsy will leave them blank and suggest its own guesses. Publish anyway?`
+      )) throw new Error("Publish cancelled — fill the missing Etsy fields first");
+    }
     // Apply per-platform title/description overrides into _ai so the API picks them up
     const ai = { ...(listing._ai || {}) };
     if (pkey === "etsy") {
@@ -8557,7 +8772,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       if (listing.video && result?.videoErr) showToast(`⚠ ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} video: ${result.videoErr}`);
       // Etsy takes the listing and then keeps whichever tags it liked. The API
       // reads them back, so say so rather than showing a plain ✓.
-      if (result?.tagsWarning) showToast(`⚠ ${result.tagsWarning}`);
+      if (result?.tagsWarning)   showToast(`⚠ ${result.tagsWarning}`);
+      if (result?.fieldsWarning) showToast(`⚠ ${result.fieldsWarning}`, 9000);
       // ⭐ Deal-on-publish: drop the just-published product into the store's Deals
       // collection and start its remind-to-delete timer.
       if (listing._dealOnPublish && result?.product_id && (storeKey === "earth" || storeKey === "atyahara")) {
@@ -9002,6 +9218,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         <ListingForm
           initial={editing}
           stock={stock}
+          who={who}
           onSave={handleSave}
           onClose={() => { setShowForm(false); setEditing(null); }}
         />
