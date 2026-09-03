@@ -302,19 +302,19 @@ Return JSON with these fields:
    to order". The shop's own profiles are read instead: ready-to-ship, shortest
    turnaround, unless the listing is ticked made-to-order.
 
-   Etsy hasn't settled the field names on this one, so each row is read
-   tolerantly and the whole feature degrades to "send nothing" rather than
-   sending the wrong profile. */
+   The shop's rows come back as {readiness_state, min/max_processing_days};
+   with none of them readable the feature degrades to sending nothing rather
+   than sending the wrong profile. */
 function readinessInfo(row = {}) {
-  const id  = row.readiness_state_id ?? row.id ?? null;
-  const min = +(row.min_processing_time ?? row.processing_time_min ?? row.min ?? 0) || 0;
-  const max = +(row.max_processing_time ?? row.processing_time_max ?? row.max ?? min) || min;
-  const unit = String(row.processing_time_unit ?? row.unit ?? "days").replace(/s$/, "") + "s";
-  const madeToOrder = row.is_made_to_order ?? row.made_to_order
-    ?? (row.type ? /made.?to.?order/i.test(String(row.type)) : undefined)
-    ?? !(row.is_ready_to_ship ?? true);
-  const days = max && max !== min ? `${min}-${max} ${unit}` : `${min || 1} ${unit}`;
-  return { id, min, max, madeToOrder: !!madeToOrder, label: `${madeToOrder ? "Made to order" : "Ready to ship"} · ${days}` };
+  const min = +row.min_processing_days || 0;
+  const max = +row.max_processing_days || min;
+  const madeToOrder = String(row.readiness_state || "") === "made_to_order";
+  const days = row.processing_days_display_label || (max && max !== min ? `${min}-${max} days` : `${min} day${min === 1 ? "" : "s"}`);
+  return {
+    id: row.readiness_state_id ?? null,
+    min, max, madeToOrder,
+    label: `${madeToOrder ? "Made to order" : "Ready to ship"} · ${days}`,
+  };
 }
 
 async function etsyReadinessStates(hdrs) {
@@ -327,7 +327,7 @@ async function etsyReadinessStates(hdrs) {
     if (!r.ok) return [];
     // The raw row rides along: Etsy has changed these field names before, and
     // seeing them beats guessing at why every profile reads "1 days".
-    return ((await r.json())?.results || []).map(row => ({ ...readinessInfo(row), raw: row })).filter(x => x.id);
+    return ((await r.json())?.results || []).map(readinessInfo).filter(x => x.id);
   } catch { return []; }
 }
 
