@@ -325,7 +325,9 @@ async function etsyReadinessStates(hdrs) {
       { headers: bare }
     );
     if (!r.ok) return [];
-    return ((await r.json())?.results || []).map(readinessInfo).filter(x => x.id);
+    // The raw row rides along: Etsy has changed these field names before, and
+    // seeing them beats guessing at why every profile reads "1 days".
+    return ((await r.json())?.results || []).map(row => ({ ...readinessInfo(row), raw: row })).filter(x => x.id);
   } catch { return []; }
 }
 
