@@ -1008,6 +1008,7 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const [libText,      setLibText]      = useState("");
   const fileRef = useRef(null);
   const videoRef = useRef(null);
+  const takeRef = useRef(null);
   const dragSrc = useRef(null);
 
   // Click-to-view a selected photo + run the Canva white-background remover on it.
@@ -1020,7 +1021,10 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   // The native editor — colour and tone, AI-directed, applied here rather than
   // in another tab. Background work stays with Canva alongside it.
   const [editIdx, setEditIdx] = useState(null);
-  const [editVideo, setEditVideo] = useState(false);
+  /* The video editor's sources: null while it's closed, otherwise the clips it
+     opens on — the listing's own clip first, then any extra takes the seller
+     just picked. More than one and they arrive as a joined timeline to trim. */
+  const [editVideo, setEditVideo] = useState(null);
   /* What the photos and the video were before the editor last wrote over them.
      Editing replaces the listing's picture with a new file, and the seller only
      finds out whether they liked it by looking at it afterwards — so the way
@@ -1124,14 +1128,21 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
     if (newUrls.length) onChange([...selectedUrls, ...newUrls]);
   };
 
-  // Single listing video — Etsy/eBay each allow one. Uploaded to its own prefix.
-  const handleVideoFile = async file => {
-    if (!file || !onVideoChange) return;
+  /* One listing video — Etsy/eBay each allow exactly one — but a listing is
+     often shot in two or three takes. So several files can be handed in at
+     once: the first is uploaded and becomes the listing's clip, and the rest
+     are carried straight into the editor as extra takes, unuploaded, to be
+     trimmed and joined into that single video. Only what the seller keeps is
+     ever uploaded twice. */
+  const handleVideoFiles = async files => {
+    const [first, ...rest] = [...(files || [])];
+    if (!first || !onVideoChange) return;
     setVidUploading(true);
     try {
-      const ext = (file.name.split(".").pop() || "mp4").toLowerCase();
-      const url = await uploadToStorage(`listing-videos/${uid()}.${ext}`, file);
+      const ext = (first.name.split(".").pop() || "mp4").toLowerCase();
+      const url = await uploadToStorage(`listing-videos/${uid()}.${ext}`, first);
       onVideoChange(url);
+      if (rest.length) setEditVideo({ urls: [url, ...rest] });
     } catch (e) { /* surfaced by caller toast if needed */ }
     setVidUploading(false);
   };
@@ -1274,9 +1285,10 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
           </div>
         }>
           <VideoEditor
-            url={video}
+            key={editVideo.urls.length}
+            urls={editVideo.urls}
             onSave={newUrl => { setUndoVideo(video); onVideoChange(newUrl); }}
-            onClose={() => setEditVideo(false)}
+            onClose={() => setEditVideo(null)}
           />
         </Suspense>
       )}
@@ -1297,7 +1309,7 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
         <div>
           <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .6,
             color: C.inkFaint, marginBottom: 6 }}>
-            Video (optional) · MP4 · one per listing
+            Video (optional) · MP4 · several takes, trimmed into one
           </div>
           {video ? (
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -1314,14 +1326,24 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                   the reason it exists, and it costs nothing: a cut that leaves
                   the colour alone copies the original frames across. */}
               <div style={{ display: "grid", gap: 6 }}>
-                <button onClick={() => setEditVideo(true)}
+                <button onClick={() => setEditVideo({ urls: [video] })}
                   style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8,
                     padding: "9px 15px", fontSize: 13, fontWeight: 850, cursor: "pointer" }}>
                   🎬 Edit video
                 </button>
+                {/* A second take, shot after the first was already attached:
+                    it goes straight onto the timeline behind this clip, and the
+                    listing keeps the one video it is allowed. */}
+                <input ref={takeRef} type="file" accept="video/*" multiple style={{ display: "none" }}
+                  onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; if (fs.length) setEditVideo({ urls: [video, ...fs] }); }} />
+                <button onClick={() => takeRef.current?.click()}
+                  style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8,
+                    padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                  ＋ Add another video
+                </button>
                 <div style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.5, maxWidth: 230 }}>
-                  Trim to Etsy's 15 seconds, join takes, crop and grade. A trim on its own
-                  is lossless — the original frames, re-cut.
+                  Trim to Etsy's 15 seconds, join takes, crop and grade. A trim or a join on
+                  its own is lossless — the original frames, re-cut.
                 </div>
                 {undoVideo && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
@@ -1340,11 +1362,14 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
             <div onClick={() => !vidUploading && videoRef.current?.click()}
               style={{ border: `2px dashed ${C.border}`, borderRadius: 8, padding: "12px",
                 textAlign: "center", cursor: vidUploading ? "default" : "pointer", background: C.card }}>
-              <input ref={videoRef} type="file" accept="video/*" style={{ display: "none" }}
-                onChange={e => { handleVideoFile(e.target.files?.[0]); e.target.value = ""; }} />
+              <input ref={videoRef} type="file" accept="video/*" multiple style={{ display: "none" }}
+                onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; handleVideoFiles(fs); }} />
               {vidUploading
                 ? <div style={{ fontSize: 12, color: C.inkMid, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Spinner /> Uploading video…</div>
-                : <div style={{ fontSize: 12, fontWeight: 600, color: C.inkMid }}>🎬 Add a video</div>}
+                : <>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: C.inkMid }}>🎬 Add a video</div>
+                    <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 3 }}>Pick several takes and they open in the editor, joined, to trim into one.</div>
+                  </>}
             </div>
           )}
         </div>

@@ -122,7 +122,11 @@ function ClipTrack({ clip, strip, active, playhead, onTrim, onSeek, onRemove, on
   );
 }
 
-export default function VideoEditor({ url, onSave, onClose, showToast }) {
+/* The editor opens on one clip or on several. A listing can be shot in two or
+   three takes, and the seller shouldn't have to upload one, edit, upload the
+   next: hand them all in together and they arrive as a joined timeline, in the
+   order they were picked, ready to be trimmed. */
+export default function VideoEditor({ url, urls, onSave, onClose, showToast }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);
   const sinksRef = useRef(new Map());     // clip id → CanvasSink, built once per clip
@@ -198,6 +202,15 @@ export default function VideoEditor({ url, onSave, onClose, showToast }) {
     finally { setBusy(""); }
   }, []);
 
+  /* Several at once, opened one after another rather than in parallel: each
+     clip holds a decoder, and racing them on a phone is how the tab runs out
+     of memory. The order the seller picked is the order they play in. */
+  const addClips = useCallback(async list => {
+    let last = null;
+    for (const src of list) last = (await addClip(src)) || last;
+    return last;
+  }, [addClip]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -207,7 +220,8 @@ export default function VideoEditor({ url, onSave, onClose, showToast }) {
         const ctx = createPipeline(canvas);
         if (!ctx) throw new Error("This browser has no WebGL, so the editor can't run here.");
         glRef.current = ctx;
-        const clip = await addClip(url);
+        const seeds = (urls && urls.length ? urls : [url]).filter(Boolean);
+        const clip = await addClips(seeds);
         if (cancelled || !clip) return;
         setReady(true);
       } catch (e) { if (!cancelled) setErr(e.message || String(e)); }
@@ -492,11 +506,11 @@ export default function VideoEditor({ url, onSave, onClose, showToast }) {
                 <span style={lab}>Clips</span>
                 <span style={{ fontSize: 9.5, color: C.inkFaint }}>played in this order</span>
                 <span style={{ flex: 1 }} />
-                <input ref={fileRef} type="file" accept="video/*" style={{ display: "none" }}
-                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) addClip(f); }} />
+                <input ref={fileRef} type="file" accept="video/*" multiple style={{ display: "none" }}
+                  onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; if (fs.length) addClips(fs); }} />
                 <button type="button" onClick={() => fileRef.current?.click()} disabled={!!busy}
                   style={{ ...btn("transparent", C.ink), padding: "5px 10px", fontSize: 11.5 }}>
-                  {busy === "open" ? "Reading…" : "+ Add a take"}
+                  {busy === "open" ? "Reading…" : "+ Add takes"}
                 </button>
               </div>
               {clips.map((c, i) => (
