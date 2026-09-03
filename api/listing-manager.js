@@ -296,6 +296,61 @@ Return JSON with these fields:
   return JSON.parse(match[0]);
 }
 
+/* ── Etsy: processing profile ("readiness state") ─────────────────────────────
+   Publishing used to borrow whichever readiness_state_id the shop's most recent
+   active listing happened to carry, so a ready-to-ship geode went out as "Made
+   to order". The shop's own profiles are read instead: ready-to-ship, shortest
+   turnaround, unless the listing is ticked made-to-order.
+
+   Etsy hasn't settled the field names on this one, so each row is read
+   tolerantly and the whole feature degrades to "send nothing" rather than
+   sending the wrong profile. */
+function readinessInfo(row = {}) {
+  const id  = row.readiness_state_id ?? row.id ?? null;
+  const min = +(row.min_processing_time ?? row.processing_time_min ?? row.min ?? 0) || 0;
+  const max = +(row.max_processing_time ?? row.processing_time_max ?? row.max ?? min) || min;
+  const unit = String(row.processing_time_unit ?? row.unit ?? "days").replace(/s$/, "") + "s";
+  const madeToOrder = row.is_made_to_order ?? row.made_to_order
+    ?? (row.type ? /made.?to.?order/i.test(String(row.type)) : undefined)
+    ?? !(row.is_ready_to_ship ?? true);
+  const days = max && max !== min ? `${min}-${max} ${unit}` : `${min || 1} ${unit}`;
+  return { id, min, max, madeToOrder: !!madeToOrder, label: `${madeToOrder ? "Made to order" : "Ready to ship"} · ${days}` };
+}
+
+async function etsyReadinessStates(hdrs) {
+  try {
+    const { "Content-Type": _drop, ...bare } = hdrs;
+    const r = await fetch(
+      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/readiness-state-definitions`,
+      { headers: bare }
+    );
+    if (!r.ok) return [];
+    return ((await r.json())?.results || []).map(readinessInfo).filter(x => x.id);
+  } catch { return []; }
+}
+
+/* The listing's own pick wins; otherwise the fastest profile of the right kind. */
+async function pickReadinessState(listing, hdrs) {
+  if (listing.etsy_readiness_state_id) return +listing.etsy_readiness_state_id;
+  const wantMadeToOrder = !!listing.etsy_made_to_order;
+  const all = await etsyReadinessStates(hdrs);
+  const pool = all.filter(x => x.madeToOrder === wantMadeToOrder);
+  const best = (pool.length ? pool : all).sort((a, b) => (a.min - b.min) || (a.max - b.max))[0];
+  if (best) return best.id;
+
+  // No definitions to go on: copy a live listing, but only one that isn't
+  // made-to-order when this listing isn't — better nothing than the wrong one.
+  try {
+    const { "Content-Type": _drop, ...bare } = hdrs;
+    const sample = await fetch(
+      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=1`,
+      { headers: bare }
+    );
+    const rid = (await sample.json())?.results?.[0]?.readiness_state_id;
+    return wantMadeToOrder ? null : (rid || null);
+  } catch { return null; }
+}
+
 /* ── Etsy: pick shipping profile based on price ────────────────────────────── */
 function etsyShippingProfile(priceUSD) {
   const p = +priceUSD || 0;
@@ -481,16 +536,8 @@ async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   const hdrs = await etsyHeaders();
 
-  // Borrow readiness_state_id from an existing listing (it's shop-specific)
-  try {
-    const sample = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=1`,
-      { headers: hdrs }
-    );
-    const sd = await sample.json();
-    const rid = sd.results?.[0]?.readiness_state_id;
-    if (rid) payload.readiness_state_id = rid;
-  } catch {}
+  const readinessId = await pickReadinessState(listing, hdrs);
+  if (readinessId) payload.readiness_state_id = readinessId;
 
   const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings`, {
     method: "POST", headers: hdrs, body: JSON.stringify(payload),
@@ -573,6 +620,10 @@ async function updateEtsyListing(listingId, listing, ai) {
   const taxonomyId = listing.etsy_taxonomy_id || ETSY_TAXONOMY[listing.productType] || ETSY_TAXONOMY.default;
 
   const hdrs = await etsyHeaders();
+  // Re-sync is the repair path for listings that went out under whatever
+  // profile the API happened to inherit: unticked means ready to ship, and a
+  // listing saved before the tick existed counts as unticked.
+  const readinessId = await pickReadinessState(listing, hdrs);
   const patchBody = {
     title:       etsyTitle.slice(0, 140),
     description: etsyDesc,
@@ -580,6 +631,7 @@ async function updateEtsyListing(listingId, listing, ai) {
     quantity,
     tags:        etsyTags,
     taxonomy_id: taxonomyId,
+    ...(readinessId ? { readiness_state_id: readinessId } : {}),
     ...(listing.material ? { materials: [listing.material] } : {}),
     should_auto_renew: listing.etsy_auto_renew ?? false,
     ...(dims.width  ? { item_width:  dims.width  } : {}),
@@ -1134,9 +1186,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Unknown GET action" });
     try {
       const hdrs = await etsyHeaders(false); // no Content-Type for GETs
-      const [spResp, rpResp] = await Promise.all([
+      const [spResp, rpResp, readinessProfiles] = await Promise.all([
         fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/shipping-profiles`, { headers: hdrs }),
         fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/return-policies`, { headers: hdrs }),
+        etsyReadinessStates(hdrs),
       ]);
       const [spData, rpData] = await Promise.all([spResp.json(), rpResp.json()]);
       const shippingProfiles = (spData.results || []).map(p => ({
@@ -1149,7 +1202,7 @@ export default async function handler(req, res) {
           ? `Returns accepted (${p.return_deadline || "?"} days)`
           : "No returns",
       }));
-      return res.json({ shippingProfiles, returnPolicies });
+      return res.json({ shippingProfiles, returnPolicies, readinessProfiles });
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }

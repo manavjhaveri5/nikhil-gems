@@ -1734,6 +1734,8 @@ function ListingForm({ initial, stock, onSave, onClose, who }) {
       width: "", height: "", depth: "", dim_unit: "mm",
       variations: [], etsy_section_id: null, etsy_taxonomy_id: null, created_at: now(),
       etsy_shipping_profile_id: null, etsy_return_policy_id: null,
+      // Stock is on the shelf: a piece only becomes made-to-order if it's ticked.
+      etsy_made_to_order: false, etsy_readiness_state_id: null,
       etsy_auto_renew: false, etsy_ads: false,
     };
     return { ...ensureListingOrderId(base), variations: base.variations || [] };
@@ -1749,6 +1751,7 @@ function ListingForm({ initial, stock, onSave, onClose, who }) {
   const [showOptional,setShowOptional]= useState(false);
   const [etsyShippingProfiles, setEtsyShippingProfiles] = useState([]);
   const [etsyReturnPolicies,   setEtsyReturnPolicies]   = useState([]);
+  const [etsyReadinessProfiles, setEtsyReadinessProfiles] = useState([]);
 
   /* Listings saved before the picker carried a taxonomy id publish under the
      API's fallback rather than the category shown here. Stamp the shown one on
@@ -1765,6 +1768,7 @@ function ListingForm({ initial, stock, onSave, onClose, who }) {
       .then(d => {
         if (d.shippingProfiles) setEtsyShippingProfiles(d.shippingProfiles);
         if (d.returnPolicies)   setEtsyReturnPolicies(d.returnPolicies);
+        if (d.readinessProfiles) setEtsyReadinessProfiles(d.readinessProfiles);
       })
       .catch(() => {});
   }, []);
@@ -2339,6 +2343,20 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   ))}
                 </select>
               </div>
+              {/* Processing profile — Etsy calls it a readiness state. Left to
+                  the API this used to inherit whatever the last active listing
+                  carried, which is how ready stock published as made to order. */}
+              <div>
+                <Label>Processing Profile</Label>
+                <select value={form.etsy_readiness_state_id || ""}
+                  onChange={e => set("etsy_readiness_state_id", e.target.value ? +e.target.value : null)}
+                  style={FI()}>
+                  <option value="">{form.etsy_made_to_order ? "— Auto (fastest made-to-order)" : "— Auto (fastest ready to ship)"}</option>
+                  {etsyReadinessProfiles.map(p => (
+                    <option key={p.id} value={p.id}>{p.label}</option>
+                  ))}
+                </select>
+              </div>
               {/* Return policy */}
               <div>
                 <Label>Return Policy</Label>
@@ -2355,6 +2373,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             {/* Toggles row */}
             <div style={{ display: "flex", gap: 24, marginTop: 12 }}>
               {[
+                { field: "etsy_made_to_order", label: "Made to order",   sub: "Off = ready to ship from stock" },
                 { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "₹0.20/renewal every 4 months" },
                 { field: "etsy_ads",        label: "Run Etsy Ads",       sub: "Promotes listing in search" },
               ].map(({ field, label, sub }) => (
