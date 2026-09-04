@@ -13258,6 +13258,12 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   const [unlocked,setUnlocked]=useState(false);
   const printedLock=invPrinted(draft)&&!unlocked&&!invCancelled(draft);
   const locked=invCancelled(draft)||printedLock;
+  /* Printing locks the invoice, not the shipment. Payments, the shipping bill,
+     the packing list and "goods shipped" all happen after the document goes
+     out — greying them the moment it prints locks the seller out of the half
+     of the record that has yet to be filled in. Only a cancelled invoice, which
+     is void rather than issued, freezes those too. */
+  const shipLock=invCancelled(draft);
   const [cancelBox,setCancelBox]=useState(null); // {reason,restoreStock} while confirming
   const [printing,setPrinting]=useState(false);
   // Print straight from the form: same document as the preview, and it stamps the record.
@@ -13837,6 +13843,10 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         </div>
       </div>
 
+      </fieldset>
+
+      <fieldset disabled={shipLock} style={{border:0,padding:0,margin:0,minWidth:0,opacity:shipLock?.7:1}}>
+
       {/* Payment tracking */}
       <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 17px",marginBottom:13}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
@@ -13938,7 +13948,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             invoice is visible without opening it. */}
         {onPackingList&&(()=>{
           const pl=draft.packingList;
-          const marks=pl?packingMarks(pl.blocks,pl.mode):[];
+          const marks=pl?packingMarks(pl.blocks,pl.mode,pl.startAt):[];
           const tot=pl?packingTotals(pl.blocks):null;
           const off=pl?packingReconciliation(draft,pl.blocks,pl.mode).filter(r=>!r.ok):[];
           return(
@@ -13948,7 +13958,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                 📦 {pl?"Edit Packing List":"Create Packing List"}
               </button>
               {pl&&<span style={{fontSize:11,color:C.inkFaint}}>
-                {marks.length?marks[marks.length-1].to:0} package{(marks.length?marks[marks.length-1].to:0)===1?"":"s"} · Net {packWeight(tot.net)} · Gross {packWeight(tot.gross)} KGS
+                {packCount(marks)} package{packCount(marks)===1?"":"s"} · Net {packWeight(tot.net)} · Gross {packWeight(tot.gross)} KGS
               </span>}
               {pl&&off.length>0&&<span style={{fontSize:11,fontWeight:700,color:C.red}}>⚠ {off.length} {off.length>1?"lines don't":"line doesn't"} match this invoice</span>}
             </div>
@@ -14009,6 +14019,11 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           </div>
         );
       })()}
+
+      </fieldset>
+
+      {/* Notes and terms print on the invoice, so they lock with it. */}
+      <fieldset disabled={locked} style={{border:0,padding:0,margin:0,minWidth:0,opacity:locked?.7:1}}>
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         <Field label="Notes"><textarea value={draft.notes||""} onChange={e=>set("notes",e.target.value)} rows={3} style={{...FI,resize:"vertical",fontSize:12}} placeholder="Certificate of Origin..."/></Field>
@@ -14658,14 +14673,17 @@ const packingBlock=(seed={})=>({id:uid(),lines:[packingLine()],net:"",gross:"",p
 /* Marks are derived, never typed: a block covers as many marks as it holds
    bags (bulk) or exactly one carton (detailed), so the ranges can't drift out
    of step the way hand-numbered lists do. */
-function packingMarks(blocks,mode){
-  let n=0;
+function packingMarks(blocks,mode,startAt=1){
+  let n=Math.max(0,(parseInt(startAt,10)||1)-1);
   return (blocks||[]).map(b=>{
     const span=mode==="bulk"?Math.max(1,parseInt(b.bags,10)||1):1;
     const from=n+1,to=n+span;n=to;
     return{from,to,span};
   });
 }
+/* Packages are counted, not read off the last mark — a consignment carrying on
+   from the previous one starts at N.G.-296 without holding 296 bags. */
+const packCount=marks=>(marks||[]).reduce((n,m)=>n+m.span,0);
 const packMarkLabel=(prefix,m)=>m.from===m.to?`${prefix}-${m.from}`:`${prefix}-${m.from} to ${prefix}-${m.to}`;
 
 const packNum=v=>{const n=parseFloat(String(v).replace(/,/g,""));return isFinite(n)?n:0;};
@@ -14776,7 +14794,7 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
     ?{name:buyer?.name,address:buyer?.shippingSameAsBilling!==false?(buyer?.billingAddress||buyer?.address||""):(buyer?.shippingAddress||buyer?.billingAddress||buyer?.address||""),country:buyer?.country}
     :{name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
   const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  const marks=packingMarks(pl.blocks,pl.mode);
+  const marks=packingMarks(pl.blocks,pl.mode,pl.startAt);
   const tot=packingTotals(pl.blocks);
   const prefix=pl.prefix||"N.G.";
 
@@ -14817,7 +14835,7 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
   </div>
   ${blocksHTML}
   <div style="margin-top:14px;font-weight:700;page-break-inside:avoid">
-    <div>Total Packages: ${marks.length?marks[marks.length-1].to:0}${pl.mode!=="bulk"&&tot.pcs?` &nbsp;·&nbsp; Total Pieces: ${packWeight(tot.pcs)}`:""}</div>
+    <div>Total Packages: ${packCount(marks)}${pl.mode!=="bulk"&&tot.pcs?` &nbsp;·&nbsp; Total Pieces: ${packWeight(tot.pcs)}`:""}</div>
     <div>Total Net Weight: ${packWeight(tot.net)} KGS</div>
     <div>Total Gross Weight: ${packWeight(tot.gross)} KGS</div>
   </div>
@@ -14830,6 +14848,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
   const [pl,setPl]=useState(()=>({
     mode:saved?.mode||"detailed",
     prefix:saved?.prefix||"N.G.",
+    startAt:saved?.startAt||1,
     date:saved?.date||inv.date||today(),
     letterhead:saved?.letterhead!==false,
     blocks:(saved?.blocks?.length?saved.blocks:seedPackingBlocks(inv,saved?.mode||"detailed")),
@@ -14842,7 +14861,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
     lines[li]={...lines[li],...patch};blocks[bi]={...blocks[bi],lines};return{...p,blocks};
   });
 
-  const marks=packingMarks(pl.blocks,pl.mode);
+  const marks=packingMarks(pl.blocks,pl.mode,pl.startAt);
   const tot=packingTotals(pl.blocks);
   const recon=packingReconciliation(inv,pl.blocks,pl.mode);
   const offBy=recon.filter(r=>!r.ok);
@@ -14885,7 +14904,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
       </div>
 
       {/* Settings */}
-      <div style={{...box,display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.2fr 1fr 1fr 1.4fr",gap:10,alignItems:"end"}}>
+      <div style={{...box,display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.3fr .8fr .8fr 1fr 1.6fr",gap:10,alignItems:"end"}}>
         <div>
           <div style={lbl}>Layout</div>
           <select value={pl.mode} onChange={e=>set("mode",e.target.value)} style={inp}>
@@ -14894,6 +14913,12 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
           </select>
         </div>
         <div><div style={lbl}>Mark prefix</div><input value={pl.prefix} onChange={e=>set("prefix",e.target.value)} style={inp}/></div>
+        {/* A consignment carrying on from an earlier one starts where that one
+            left off, so the first mark is set rather than assumed to be 1. */}
+        <div>
+          <div style={lbl}>First mark</div>
+          <input value={pl.startAt} inputMode="numeric" onChange={e=>set("startAt",e.target.value.replace(/[^0-9]/g,"")||1)} style={inp}/>
+        </div>
         <div><div style={lbl}>Date</div><input type="date" value={pl.date} onChange={e=>set("date",e.target.value)} style={{...inp,colorScheme:"light"}}/></div>
         <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
           <label style={{display:"flex",gap:6,alignItems:"center",fontSize:12,color:C.ink,cursor:"pointer"}}>
@@ -15004,7 +15029,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
       </div>
 
       <div style={{...box,display:"flex",gap:22,flexWrap:"wrap",fontSize:12,fontWeight:700,color:C.ink}}>
-        <span>Packages: {marks.length?marks[marks.length-1].to:0}</span>
+        <span>Packages: {packCount(marks)}</span>
         {pl.mode!=="bulk"&&tot.pcs>0&&<span>Pieces: {packWeight(tot.pcs)}</span>}
         <span>Net: {packWeight(tot.net)} KGS</span>
         <span>Gross: {packWeight(tot.gross)} KGS</span>
