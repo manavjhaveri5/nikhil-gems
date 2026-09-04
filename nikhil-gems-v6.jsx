@@ -11871,6 +11871,11 @@ const COMPANIES={nikhil:CO,atyahara:CO_ATYAHARA};
 const companyProfileFromKey=company=>company==="at"||company==="atyahara"?CO_ATYAHARA:CO;
 const companySlugFromKey=company=>company==="at"||company==="atyahara"?"atyahara":"nikhil";
 const signatureForCompany=company=>companySlugFromKey(company)==="atyahara"?"/atyahara-sign-stamp.jpg":SIG_SRC;
+/* The printed stationery, scanned: the header band that tops the page and the
+   gem mark that sits behind the text. Documents mailed as PDFs go out on this
+   rather than on a typed-out approximation of it. */
+const letterheadForCompany=company=>companySlugFromKey(company)==="atyahara"?null:"/ng-letterhead.jpg";
+const letterheadMarkForCompany=company=>companySlugFromKey(company)==="atyahara"?null:"/ng-letterhead-mark.jpg";
 // Resolve buyer details for display/printing: prefer the linked buyer record, but
 // fall back to the buyer/consignee fields stored on the invoice itself so a buyers
 // list that hasn't synced yet never blanks out the name + address. Etsy-sourced
@@ -14785,6 +14790,15 @@ function seedPackingBlocks(inv,mode){
   });
 }
 
+/* Lists saved before the letterhead existed carry a boolean here; a shop with no
+   scanned stationery falls back to the typed block rather than printing nothing. */
+function packHeaderMode(pl,company){
+  const v=pl?.letterhead;
+  const mode=typeof v==="boolean"?(v?"typed":"none"):(v||"paper");
+  if(mode==="paper"&&!letterheadForCompany(company))return "typed";
+  return mode;
+}
+
 /* ── The printed document ──────────────────────────────────────────────────── */
 function buildPackingBodyHTML(inv,buyers,company,pl){
   const co=companyProfileFromKey(company);
@@ -14819,10 +14833,19 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
     </div>`;
   }).join("");
 
+  const head=packHeaderMode(pl,company);
+  const art=letterheadForCompany(company), mark=letterheadMarkForCompany(company);
+
   return `
-  <div style="font-size:12.5px;line-height:1.5">
+  <div style="font-size:12.5px;line-height:1.5;position:relative">
+  ${head==="paper"&&mark
+    // Fixed from the top of the sheet rather than a share of the content, so a
+    // short list and a long one both carry the mark where the paper has it.
+    ?`<img src="${mark}" style="position:absolute;left:50%;top:400px;width:300px;transform:translateX(-50%);opacity:.35;z-index:0"/>`:""}
+  <div style="position:relative;z-index:1">
+  ${head==="paper"&&art?`<img src="${art}" style="width:100%;display:block;margin-bottom:6px"/>`:""}
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-    <div>${pl.letterhead?`<div class="co-name">${esc(co.name)}</div>
+    <div>${head==="typed"?`<div class="co-name">${esc(co.name)}</div>
       <div style="font-size:10px;color:#444;white-space:pre-line;line-height:1.5">${esc(co.address)}\nTEL: ${esc(co.tel)}\nE.Mail: ${esc(co.email)}</div>`:""}</div>
     <div style="text-align:right">Date: ${esc(packDateShort(pl.date||inv.date))}</div>
   </div>
@@ -14847,6 +14870,7 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
       :`<div style="font-size:9px;letter-spacing:1px;font-weight:700;margin-bottom:2px">FOR ${esc(co.name).toUpperCase()}</div>
         <div style="font-size:10px;margin-top:26px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>`}
   </div>
+  </div>
   </div>`;
 }
 
@@ -14857,7 +14881,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
     prefix:saved?.prefix||"N.G.",
     startAt:saved?.startAt||1,
     date:saved?.date||inv.date||today(),
-    letterhead:saved?.letterhead!==false,
+    letterhead:typeof saved?.letterhead==="boolean"?(saved.letterhead?"typed":"none"):(saved?.letterhead||"paper"),
     blocks:(saved?.blocks?.length?saved.blocks:seedPackingBlocks(inv,saved?.mode||"detailed")),
   }));
   const [saving,setSaving]=useState(false);
@@ -14911,7 +14935,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
       </div>
 
       {/* Settings */}
-      <div style={{...box,display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.3fr .8fr .8fr 1fr 1.6fr",gap:10,alignItems:"end"}}>
+      <div style={{...box,display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1.25fr .7fr .7fr .9fr 1.3fr 1fr",gap:10,alignItems:"end"}}>
         <div>
           <div style={lbl}>Layout</div>
           <select value={pl.mode} onChange={e=>set("mode",e.target.value)} style={inp}>
@@ -14927,12 +14951,16 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
           <input value={pl.startAt} inputMode="numeric" onChange={e=>set("startAt",e.target.value.replace(/[^0-9]/g,"")||1)} style={inp}/>
         </div>
         <div><div style={lbl}>Date</div><input type="date" value={pl.date} onChange={e=>set("date",e.target.value)} style={{...inp,colorScheme:"light"}}/></div>
-        <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
-          <label style={{display:"flex",gap:6,alignItems:"center",fontSize:12,color:C.ink,cursor:"pointer"}}>
-            <input type="checkbox" checked={pl.letterhead} onChange={e=>set("letterhead",e.target.checked)}/>
-            Print company header
-          </label>
-          <button className="bs" style={{fontSize:11,padding:"4px 9px"}}
+        <div>
+          <div style={lbl}>Header</div>
+          <select value={pl.letterhead} onChange={e=>set("letterhead",e.target.value)} style={inp}>
+            <option value="paper">Letterhead</option>
+            <option value="typed">Typed name & address</option>
+            <option value="none">Nothing — printing on stationery</option>
+          </select>
+        </div>
+        <div>
+          <button className="bs" style={{fontSize:11,padding:"7px 10px",width:"100%"}}
             onClick={()=>{if(confirm("Rebuild the list from the invoice lines? Anything arranged here is lost."))set("blocks",seedPackingBlocks(inv,pl.mode));}}>
             ↻ Reseed from invoice
           </button>
