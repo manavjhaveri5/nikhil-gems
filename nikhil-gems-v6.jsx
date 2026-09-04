@@ -14802,6 +14802,26 @@ function packHeaderMode(pl,company){
 }
 
 /* ── The printed document ──────────────────────────────────────────────────── */
+/* Measured off the lists actually sent (NG-37, NG-39) rather than guessed:
+   Arial throughout, a one-inch text margin, the body set in 12pt bold on a
+   16.6pt rhythm, the title 12pt bold indented a further 24pt, and the buyer
+   block small and tight at 9pt. Sizes are held in points here and converted
+   once, so they can be read straight against a sample PDF. */
+const PL_PT=pt=>+(pt*4/3).toFixed(1);        // pt → CSS px at 96dpi
+const PL={
+  margin:  PL_PT(72-26),  // 1" from the sheet, less the page margin + body padding
+  date:    PL_PT(11),
+  to:      PL_PT(11),
+  buyer:   PL_PT(9),
+  body:    PL_PT(12),
+  lead:    16.6/12,       // 16.6pt between body lines
+  titleIn: PL_PT(23.8),   // the title sits in from the body's left edge
+  titleTop:PL_PT(43.8),
+  titleGap:PL_PT(25.9),
+  blockGap:PL_PT(12),
+  totalGap:PL_PT(21),
+};
+
 function buildPackingBodyHTML(inv,buyers,company,pl){
   const co=companyProfileFromKey(company);
   const sigSrc=signatureForCompany(company);
@@ -14816,20 +14836,20 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
 
   const blocksHTML=(pl.blocks||[]).map((b,i)=>{
     const mark=packMarkLabel(prefix,marks[i]);
-    const head=`<div style="font-weight:700;margin-bottom:2px">${esc(mark)}${b.dest?` / ${esc(b.dest)}`:""}</div>`;
+    const head=`<div>${esc(mark)}${b.dest?` / ${esc(b.dest)}`:""}</div>`;
     const body=pl.mode==="bulk"
       ? (()=>{
           const n=Math.max(1,parseInt(b.bags,10)||1);
           const noun=String(b.packing||"").toUpperCase().includes("BAG")?"BAG":"PKG";
           return `<div>Description: ${esc((b.lines?.[0]?.desc)||"").toUpperCase()}</div>
-         <div>Packing: ${esc(b.packing||"").toUpperCase()}</div>
-         <div>Quantity: ${n} ${noun}${n===1?"":"S"}</div>`;
+        <div>Packing: ${esc(b.packing||"").toUpperCase()}</div>
+        <div>Quantity: ${n} ${noun}${n===1?"":"S"}</div>`;
         })()
       : (b.lines||[]).filter(l=>String(l.desc||"").trim()).map(l=>{
           const bits=[l.pcs?`${esc(l.pcs)} PCS`:"",l.kgs?`${esc(l.kgs)} KGS`:""].filter(Boolean).join(" - ");
           return `<div>${esc(l.desc).toUpperCase()}${bits?` - ${bits}`:""}</div>`;
         }).join("");
-    return `<div style="margin:0 0 15px;page-break-inside:avoid">${head}${body}
+    return `<div style="margin:0 0 ${PL.blockGap}px;page-break-inside:avoid">${head}${body}
       <div>Net Weight: ${esc(b.net||"—")} KGS</div>
       <div>Gross Weight: ${esc(b.gross||"—")} KGS</div>
     </div>`;
@@ -14839,38 +14859,42 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
   const art=letterheadForCompany(company), mark=letterheadMarkForCompany(company);
 
   return `
-  <div style="font-size:12.5px;line-height:1.5;position:relative">
+  <div style="font-family:Arial,Helvetica,sans-serif;position:relative">
   ${head==="paper"&&mark
     // Fixed from the top of the sheet rather than a share of the content, so a
     // short list and a long one both carry the mark where the paper has it.
     ?`<img src="${mark}" style="position:absolute;left:50%;top:400px;width:300px;transform:translateX(-50%);opacity:.35;z-index:0"/>`:""}
   <div style="position:relative;z-index:1">
-  ${head==="paper"&&art?`<img src="${art}" style="width:100%;display:block;margin-bottom:6px"/>`:""}
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-    <div>${head==="typed"?`<div class="co-name">${esc(co.name)}</div>
-      <div style="font-size:10px;color:#444;white-space:pre-line;line-height:1.5">${esc(co.address)}\nTEL: ${esc(co.tel)}\nE.Mail: ${esc(co.email)}</div>`:""}</div>
-    <div style="text-align:right">Date: ${esc(packDateShort(pl.date||inv.date))}</div>
-  </div>
-  <div style="margin-bottom:10px">
-    <div>To</div>
-    <div style="font-weight:700">${esc(consignee?.name||buyer?.name||"—")}</div>
-    <div style="white-space:pre-line;line-height:1.5">${esc(consignee?.address||"")}${consignee?.country?`\n${esc(consignee.country)}`:""}</div>
-  </div>
-  <div style="font-weight:700;text-decoration:underline;margin:18px 0 14px">
-    DETAILED PACKING LIST FOR INV ${esc(inv.invNo)} DTD ${esc(packDateLong(inv.date))}
-  </div>
-  ${blocksHTML}
-  <div style="margin-top:16px;font-weight:700;page-break-inside:avoid">
-    <div>Total Net Weight: ${packWeight(tot.net)} KGS</div>
-    <div>Total Gross Weight: ${packWeight(tot.gross)} KGS</div>
-  </div>
-  <div class="sig-block" style="margin-top:26px">
-    ${sigSrc
-      // The stamp is a scan that already reads "For <company> / Authorized
-      // Signatory", so setting the same words around it prints them twice.
-      ?`<img src="${sigSrc}" style="height:80px;max-width:220px;object-fit:contain"/>`
-      :`<div style="font-size:9px;letter-spacing:1px;font-weight:700;margin-bottom:2px">FOR ${esc(co.name).toUpperCase()}</div>
-        <div style="font-size:10px;margin-top:26px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>`}
+  ${head==="paper"&&art?`<img src="${art}" style="width:100%;display:block"/>`:""}
+  <div style="padding:0 ${PL.margin}px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-top:${PL_PT(12)}px">
+      <div>${head==="typed"?`<div class="co-name">${esc(co.name)}</div>
+        <div style="font-size:10px;color:#444;white-space:pre-line;line-height:1.5">${esc(co.address)}\nTEL: ${esc(co.tel)}\nE.Mail: ${esc(co.email)}</div>`:""}</div>
+      <div style="font-size:${PL.date}px">Date: ${esc(packDateShort(pl.date||inv.date))}</div>
+    </div>
+    <div style="font-size:${PL.to}px;margin-top:${PL_PT(4)}px">To</div>
+    <div style="font-size:${PL.buyer}px;line-height:1.15">
+      <div style="font-weight:700">${esc(consignee?.name||buyer?.name||"—")}</div>
+      <div style="white-space:pre-line">${esc(consignee?.address||"")}${consignee?.country?`\n${esc(consignee.country)}`:""}</div>
+    </div>
+    <div style="font-size:${PL.body}px;font-weight:700;text-decoration:underline;margin:${PL.titleTop}px 0 ${PL.titleGap}px ${PL.titleIn}px">
+      DETAILED PACKING LIST FOR INV ${esc(inv.invNo)} DTD ${esc(packDateLong(inv.date))}
+    </div>
+    <div style="font-size:${PL.body}px;font-weight:700;line-height:${PL.lead}">
+      ${blocksHTML}
+      <div style="margin-top:${PL.totalGap}px;page-break-inside:avoid">
+        <div>Total Net Weight: ${packWeight(tot.net)} KGS</div>
+        <div>Total Gross Weight: ${packWeight(tot.gross)} KGS</div>
+      </div>
+    </div>
+    <div class="sig-block" style="margin-top:${PL_PT(26)}px">
+      ${sigSrc
+        // The stamp is a scan that already reads "For <company> / Authorized
+        // Signatory", so setting the same words around it prints them twice.
+        ?`<img src="${sigSrc}" style="height:80px;max-width:220px;object-fit:contain"/>`
+        :`<div style="font-size:9px;letter-spacing:1px;font-weight:700;margin-bottom:2px">FOR ${esc(co.name).toUpperCase()}</div>
+          <div style="font-size:10px;margin-top:26px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>`}
+    </div>
   </div>
   </div>
   </div>`;
