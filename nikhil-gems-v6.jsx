@@ -15376,6 +15376,9 @@ const DEFAULT_SHOW_INV_SETTINGS={
   customItems:[],
   logoDataUrl:"",
   terms:"",
+  // Sales tax is a fact about the hall, not about the sale — typing it onto
+  // every invoice is how a booth ends up under-charging on the busy ones.
+  taxPct:"",
 };
 const showInvSettings=raw=>({
   ...DEFAULT_SHOW_INV_SETTINGS,...(raw||{}),
@@ -15585,10 +15588,10 @@ function buildShowInvoiceHTML(inv,settings,show){
    localStorage the way the buying plan is, so a stray refresh mid-sale does not
    cost the invoice. */
 const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city:"",state:"",country:"",notes:"",addToList:true});
-const emptyShowInvDraft=show=>({
+const emptyShowInvDraft=(show,settings)=>({
   id:uid(),invNo:"",showId:show?.id||"",showName:show?.name||"",showSlug:showTagSlug(show),
   date:today(),currency:"USD",customer:emptyShowInvCustomer(),lines:[],
-  discount:"",discountMode:"amt",taxPct:"",payments:[],showMethods:[],notes:"",status:"draft",
+  discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),payments:[],showMethods:[],notes:"",status:"draft",
   createdAt:new Date().toISOString(),
 });
 const readShowInvDraft=sid=>{
@@ -15604,7 +15607,7 @@ const writeShowInvDraft=(sid,draft)=>{
 function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSaveInvoice,onDelInvoice,onSaveSettings,onSaveCustomer,onSellStock,onRestoreStock,showToast}){
   const S=showInvSettings(settings);
   const [view,setView]=useState("new");
-  const [draft,setDraft]=useState(()=>readShowInvDraft(show.id)||emptyShowInvDraft(show));
+  const [draft,setDraft]=useState(()=>readShowInvDraft(show.id)||emptyShowInvDraft(show,showInvSettings(settings)));
   const [pick,setPick]=useState("");
   const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"pcs",rate:"",save:true});
   const [busy,setBusy]=useState("");
@@ -15752,13 +15755,26 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
   const issue=async()=>{
     if(!draft.lines.length){showToast?.("Add something to sell first");return;}
     if(!String(draft.customer.name||"").trim()&&!String(draft.customer.email||"").trim()){showToast?.("Name the customer");return;}
-    const over=draft.lines.find(l=>{
-      if(!l.stockId)return false;
-      const item=atShow.find(s=>s.id===l.stockId);
-      if(!item)return false;
-      return showInvNum(l.qty)>(parseFloat(item[l.basis||"qty"])||0)+0.0001;
+    /* Two lines can name the same card — the picker nets them off as they are
+       added, but the qty box is editable afterwards. Checking each line on its
+       own let the pair through, and the second one then sold whatever the first
+       had left: the customer was billed for stock that never moved, and a void
+       could not put back what was never taken. */
+    const wanted=new Map();
+    draft.lines.forEach(l=>{
+      if(!l.stockId)return;
+      const key=`${l.stockId}|${l.basis==="qty2"?"qty2":"qty"}`;
+      const cur=wanted.get(key)||{qty:0,desc:l.desc};
+      wanted.set(key,{qty:cur.qty+showInvNum(l.qty),desc:cur.desc||l.desc});
     });
-    if(over){showToast?.(`More ${over.desc} than is at the show`);return;}
+    const over=[...wanted.entries()].map(([key,v])=>{
+      const [stockId,basis]=key.split("|");
+      const item=atShow.find(s=>s.id===stockId);
+      return item&&v.qty>(parseFloat(item[basis])||0)+0.0001
+        ? {desc:v.desc,want:v.qty,have:parseFloat(item[basis])||0,unit:basis==="qty2"?(item.unit2||"kg"):(item.unit||"pcs")}
+        : null;
+    }).find(Boolean);
+    if(over){showToast?.(`${over.desc}: this invoice sells ${showInvQty(over.want)} ${over.unit}, the show has ${showInvQty(over.have)||0}`);return;}
     setBusy("issue");
     try{
       const custId=draft.customer.id||uid();
@@ -15769,14 +15785,30 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
         customer:{...draft.customer,id:custId},
         issuedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),
       };
-      const effects=await onSellStock?.(inv);
-      const saved={...inv,stockEffects:effects||[]};
-      await onSaveInvoice(saved);
+      /* The invoice is what the customer walks away with, so it is written
+         first. A write that fails here has moved nothing — the draft is still
+         on screen and pressing Issue again sells the cards once rather than
+         twice, which is what selling the stock first used to do every time the
+         hall wifi answered but went nowhere. */
+      await onSaveInvoice({...inv,stockEffects:[]});
+      let effects=[];
+      try{
+        effects=(await onSellStock?.(inv))||[];
+        if(effects.length)await onSaveInvoice({...inv,stockEffects:effects});
+      }catch(e){
+        // The paper is right and the customer is served; the cards can be put
+        // right afterwards, so say so rather than failing the sale.
+        showToast?.("⚠ Invoice saved — but the stock didn't move. Check the cards in Stock.",9000);
+      }
+      const saved={...inv,stockEffects:effects};
       if(String(saved.customer.name||"").trim()||String(saved.customer.email||"").trim()){
-        await onSaveCustomer?.({...saved.customer,lastShowId:show.id,lastInvoiceNo:saved.invNo,updatedAt:new Date().toISOString()});
+        // Filing the customer is housekeeping — it cannot be allowed to throw
+        // past a sale that has already happened and leave the draft standing.
+        try{await onSaveCustomer?.({...saved.customer,lastShowId:show.id,lastInvoiceNo:saved.invNo,updatedAt:new Date().toISOString()});}
+        catch{showToast?.("⚠ Customer not filed — add them from Saved later");}
       }
       writeShowInvDraft(show.id,null);
-      setDraft(emptyShowInvDraft(show));
+      setDraft(emptyShowInvDraft(show,S));
       setView("list");
       showToast?.(`✓ ${saved.invNo} · ${showMoney(showInvTotals(saved).total,saved.currency)}`);
       printInv(saved);
@@ -15995,7 +16027,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
             </button>
             <button onClick={()=>printInv({...draft,invNo:draft.invNo||"DRAFT"})} style={{flex:"1 1 120px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 14px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>👁 Preview</button>
             {(draft.lines.length>0||draft.customer.name)&&(
-              <button onClick={()=>{if(window.confirm("Clear this invoice?")){writeShowInvDraft(show.id,null);setDraft(emptyShowInvDraft(show));}}}
+              <button onClick={()=>{if(window.confirm("Clear this invoice?")){writeShowInvDraft(show.id,null);setDraft(emptyShowInvDraft(show,S));}}}
                 style={{flex:"0 0 auto",background:"none",border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 14px",fontSize:12,color:C.inkFaint,cursor:"pointer"}}>Clear</button>
             )}
           </div>
@@ -16054,6 +16086,19 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
               <Field label="Phone"><input value={S.seller.phone} onChange={e=>onSaveSettings({...S,seller:{...S.seller,phone:e.target.value}})} style={sIn}/></Field>
               <Field label="Email"><input value={S.seller.email} onChange={e=>onSaveSettings({...S,seller:{...S.seller,email:e.target.value}})} style={sIn}/></Field>
               <div style={{gridColumn:mob?"auto":"1 / -1"}}><Field label="Address"><input value={S.seller.address} onChange={e=>onSaveSettings({...S,seller:{...S.seller,address:e.target.value}})} placeholder="Printed under the wordmark" style={sIn}/></Field></div>
+            </div>
+          </div>
+          <div style={box}>
+            <div style={{...lab,marginBottom:9}}>Sales tax</div>
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"180px 1fr",gap:9,alignItems:"center"}}>
+              <Field label="Default rate %">
+                <input value={S.taxPct||""} inputMode="decimal" placeholder="e.g. 8.81"
+                  onChange={e=>onSaveSettings({...S,taxPct:e.target.value.replace(/[^0-9.]/g,"")})} style={sIn}/>
+              </Field>
+              <div style={{fontSize:10.5,color:C.inkFaint}}>
+                Filled into every new invoice at this booth, and still editable on the one in front of you.
+                Leave it empty where the sale isn't taxed.
+              </div>
             </div>
           </div>
           <div style={box}>
@@ -16259,11 +16304,15 @@ function ShowsApp({onHome,isAdmin=true}){
   };
 
   // ── Invoicing at the booth ───────────────────────────────────────────────
+  /* The write comes first, the list second. Updating state up front meant a
+     failed write still left an invoice sitting in Saved that no other device
+     would ever see — and the booth would issue a second one beside it. Offline
+     is unaffected: saveK queues the write and returns. */
   const saveShowInvoice=async(inv)=>{
     const cur=showInvoicesRef.current;
     const next=cur.some(i=>i.id===inv.id)?cur.map(i=>i.id===inv.id?{...i,...inv}:i):[inv,...cur];
-    showInvoicesRef.current=next;setShowInvoices(next);
     await saveK(SHOW_INV_KEY,next);
+    showInvoicesRef.current=next;setShowInvoices(next);
   };
   const delShowInvoice=async(id)=>{
     const next=showInvoicesRef.current.filter(i=>i.id!==id);
