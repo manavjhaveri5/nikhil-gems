@@ -14956,7 +14956,13 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
               <div><div style={lbl}>Description</div>
                 <input list="pl-desc-list" value={b.lines?.[0]?.desc||""} onChange={e=>setLine(i,0,{desc:e.target.value})} style={inp}/></div>
               <div><div style={lbl}>Packing</div><input value={b.packing||""} onChange={e=>setBlock(i,{packing:e.target.value})} style={inp}/></div>
-              <div><div style={lbl}>Bags / pkgs</div><input value={b.bags||""} inputMode="numeric" onChange={e=>setBlock(i,{bags:e.target.value})} style={inp}/></div>
+              {/* This is the range control: a block covers as many marks as it
+                  holds bags, so the count is typed and the numbering follows. */}
+              <div>
+                <div style={lbl}>Bags / pkgs <span style={{textTransform:"none",letterSpacing:0,fontWeight:600}}>— sets the range</span></div>
+                <input value={b.bags||""} inputMode="numeric" onChange={e=>setBlock(i,{bags:e.target.value})} style={inp}/>
+                <div style={{fontSize:10,color:C.inkFaint,marginTop:3}}>{packMarkLabel(pl.prefix,marks[i])}</div>
+              </div>
               <div><div style={lbl}>Destination</div><input value={b.dest||""} onChange={e=>setBlock(i,{dest:e.target.value})} placeholder="XIAMEN" style={inp}/></div>
             </div>
           ):(
