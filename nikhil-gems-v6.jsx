@@ -11936,6 +11936,9 @@ const formatInvQty=v=>{
   return raw.replace(/(\.\d*?[1-9])0+$/,"$1").replace(/\.0+$/,"");
 };
 const unitOptionsFor=u=>{const v=String(u||"").trim();return v&&!UNITS.includes(v)?[v,...UNITS]:UNITS;};
+// Who the valuation certificate is asked of. One valuer, one address — kept
+// here rather than typed into a mail draft each time.
+const VALUER_EMAIL="kanse.rupali5@gmail.com";
 const newInvItem=(seed={})=>{
   const {buyer,...rest}=seed;
   const hsn=rest.hsn||"71031029";
@@ -13273,6 +13276,37 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     setPrinting(false);
   };
 	  const co=companyProfileFromKey(company);
+
+  /* Valuation certificate: the same request typed out every time, to the same
+     valuer, with the invoice attached. The PDF is rendered and downloaded here
+     and the Gmail draft opens beside it — a compose link cannot carry a file,
+     so the attaching is the one step left to do by hand. */
+  const [valuationBusy,setValuationBusy]=useState(false);
+  const requestValuation=async()=>{
+    if(valuationBusy)return;
+    setValuationBusy(true);
+    try{
+      const bytes=await renderInvoicePacketPdf(draft,buyers,company);
+      const file=`${(draft.invNo||"invoice").replace(/[\\/]/g,"-")}.pdf`;
+      const url=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
+      const a=document.createElement("a");a.href=url;a.download=file;a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+
+      const subject=`Valuation Certificate — Invoice ${draft.invNo||""}`.trim();
+      const body=`Dear Madam,\n\nPFA invoice ${draft.invNo||""}${draft.date?` dated ${fmtDate(draft.date)}`:""}. Please give the valuation certificate.\n\nThanks,\n${co.name}`;
+      const gmail=`https://mail.google.com/mail/?view=cm&fs=1&tf=1&to=${encodeURIComponent(VALUER_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      // No "noopener" feature string here: some browsers return null for it even
+      // when the tab opened, and that reads as a blocked pop-up.
+      const w=window.open(gmail,"_blank");
+      if(w)w.opener=null;
+      if(!w)showToast?.("Allow pop-ups to open Gmail — the invoice PDF has downloaded");
+      else showToast?.(`${file} downloaded — attach it to the Gmail draft`,7000);
+    }catch(e){
+      showToast?.("Couldn't prepare the invoice PDF: "+(e?.message||"try again"));
+    }
+    setValuationBusy(false);
+  };
+
   const gstBuyer=buyers.find(b=>b.id===draft.buyerId);
   const gstMode=getGSTMode(gstBuyer); // "cgst_sgst" | "igst" | "none"
   const calcTotalAmt=(items,sc,disc)=>{
@@ -13920,6 +13954,16 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             </div>
           );
         })()}
+
+        {/* Valuation certificate — asked for, not uploaded, so it sits with the
+            packing list on the side of the paperwork this ERP starts. */}
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
+          <button type="button" disabled={valuationBusy} onClick={requestValuation}
+            style={{cursor:valuationBusy?"default":"pointer",opacity:valuationBusy?0.6:1,display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
+            📧 {valuationBusy?"Preparing invoice…":"Request Valuation Certificate"}
+          </button>
+          <span style={{fontSize:11,color:C.inkFaint}}>Downloads the invoice PDF and opens a Gmail draft to {VALUER_EMAIL} — attach the file there</span>
+        </div>
 
         {/* Shipped toggle */}
         {draft.goodsShipped
