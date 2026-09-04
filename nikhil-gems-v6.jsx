@@ -14813,34 +14813,41 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
           const bits=[l.pcs?`${esc(l.pcs)} PCS`:"",l.kgs?`${esc(l.kgs)} KGS`:""].filter(Boolean).join(" - ");
           return `<div>${esc(l.desc).toUpperCase()}${bits?` - ${bits}`:""}</div>`;
         }).join("");
-    return `<div style="margin:0 0 12px;page-break-inside:avoid">${head}${body}
+    return `<div style="margin:0 0 15px;page-break-inside:avoid">${head}${body}
       <div>Net Weight: ${esc(b.net||"—")} KGS</div>
       <div>Gross Weight: ${esc(b.gross||"—")} KGS</div>
     </div>`;
   }).join("");
 
   return `
+  <div style="font-size:12.5px;line-height:1.5">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
     <div>${pl.letterhead?`<div class="co-name">${esc(co.name)}</div>
       <div style="font-size:10px;color:#444;white-space:pre-line;line-height:1.5">${esc(co.address)}\nTEL: ${esc(co.tel)}\nE.Mail: ${esc(co.email)}</div>`:""}</div>
-    <div style="text-align:right;font-size:11px">Date: ${esc(packDateShort(pl.date||inv.date))}</div>
+    <div style="text-align:right">Date: ${esc(packDateShort(pl.date||inv.date))}</div>
   </div>
   <div style="margin-bottom:10px">
     <div>To</div>
     <div style="font-weight:700">${esc(consignee?.name||buyer?.name||"—")}</div>
     <div style="white-space:pre-line;line-height:1.5">${esc(consignee?.address||"")}${consignee?.country?`\n${esc(consignee.country)}`:""}</div>
   </div>
-  <div style="font-weight:700;text-decoration:underline;margin:14px 0 10px">
-    ${pl.mode==="bulk"?"PACKING LIST":"DETAILED PACKING LIST"} FOR INV ${esc(inv.invNo)} DTD ${esc(packDateLong(inv.date))}
+  <div style="font-weight:700;text-decoration:underline;margin:18px 0 14px">
+    DETAILED PACKING LIST FOR INV ${esc(inv.invNo)} DTD ${esc(packDateLong(inv.date))}
   </div>
   ${blocksHTML}
-  <div style="margin-top:14px;font-weight:700;page-break-inside:avoid">
-    <div>Total Packages: ${packCount(marks)}${pl.mode!=="bulk"&&tot.pcs?` &nbsp;·&nbsp; Total Pieces: ${packWeight(tot.pcs)}`:""}</div>
+  <div style="margin-top:16px;font-weight:700;page-break-inside:avoid">
     <div>Total Net Weight: ${packWeight(tot.net)} KGS</div>
     <div>Total Gross Weight: ${packWeight(tot.gross)} KGS</div>
   </div>
-  ${sigSrc?`<div class="sig-block"><img src="${sigSrc}" style="height:54px"/><div style="font-size:10px">For ${esc(co.name)}</div></div>`
-          :`<div class="sig-block" style="font-size:10px">For ${esc(co.name)}</div>`}`;
+  <div class="sig-block" style="margin-top:26px">
+    ${sigSrc
+      // The stamp is a scan that already reads "For <company> / Authorized
+      // Signatory", so setting the same words around it prints them twice.
+      ?`<img src="${sigSrc}" style="height:80px;max-width:220px;object-fit:contain"/>`
+      :`<div style="font-size:9px;letter-spacing:1px;font-weight:700;margin-bottom:2px">FOR ${esc(co.name).toUpperCase()}</div>
+        <div style="font-size:10px;margin-top:26px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>`}
+  </div>
+  </div>`;
 }
 
 function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
