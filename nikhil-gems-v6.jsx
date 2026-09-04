@@ -14790,11 +14790,13 @@ function seedPackingBlocks(inv,mode){
   });
 }
 
-/* Lists saved before the letterhead existed carry a boolean here; a shop with no
-   scanned stationery falls back to the typed block rather than printing nothing. */
+/* Lists saved before the letterhead existed carry a boolean here. It meant
+   "print the company header", and the letterhead is now how a company header
+   prints — so those lists get the stationery, not the typed block they were
+   stuck with. A shop with no scan on file falls back to typed. */
 function packHeaderMode(pl,company){
   const v=pl?.letterhead;
-  const mode=typeof v==="boolean"?(v?"typed":"none"):(v||"paper");
+  const mode=typeof v==="boolean"?(v?"paper":"none"):(v||"paper");
   if(mode==="paper"&&!letterheadForCompany(company))return "typed";
   return mode;
 }
@@ -14881,7 +14883,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
     prefix:saved?.prefix||"N.G.",
     startAt:saved?.startAt||1,
     date:saved?.date||inv.date||today(),
-    letterhead:typeof saved?.letterhead==="boolean"?(saved.letterhead?"typed":"none"):(saved?.letterhead||"paper"),
+    letterhead:typeof saved?.letterhead==="boolean"?(saved.letterhead?"paper":"none"):(saved?.letterhead||"paper"),
     blocks:(saved?.blocks?.length?saved.blocks:seedPackingBlocks(inv,saved?.mode||"detailed")),
   }));
   const [saving,setSaving]=useState(false);
