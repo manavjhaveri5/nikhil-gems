@@ -13303,8 +13303,14 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
       const a=document.createElement("a");a.href=url;a.download=file;a.click();
       setTimeout(()=>URL.revokeObjectURL(url),4000);
 
+      /* Outlook junks a first-contact Gmail carrying an invoice number, three
+         template lines and no signature — it is the exact shape of invoice
+         fraud. The request is the same request; it just now says who is asking,
+         spells out "please find attached" rather than PFA, and signs off with
+         the details a real business has. */
       const subject=`Valuation Certificate — Invoice ${draft.invNo||""}`.trim();
-      const body=`Dear Madam,\n\nPFA invoice ${draft.invNo||""}${draft.date?` dated ${fmtDate(draft.date)}`:""}. Please give the valuation certificate.\n\nThanks,\n${co.name}`;
+      const sign=[co.name,String(co.address||"").replace(/\n/g," "),`Tel: ${co.tel}`,`GST: ${co.gstin}`,co.email].filter(Boolean).join("\n");
+      const body=`Dear Madam,\n\nPlease find attached our invoice ${draft.invNo||""}${draft.date?` dated ${fmtDate(draft.date)}`:""}. Kindly issue the valuation certificate for this shipment.\n\nThank you,\n\n${sign}`;
       const gmail=`https://mail.google.com/mail/?view=cm&fs=1&tf=1&to=${encodeURIComponent(VALUER_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       // No "noopener" feature string here: some browsers return null for it even
       // when the tab opened, and that reads as a blocked pop-up.
@@ -15713,11 +15719,18 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
         url=await supabaseUpload(`show-invoices/${show.id}/${inv.invNo||inv.id}-${uid()}.pdf`,file);
         await onSaveInvoice({...inv,pdfUrl:url});
       }
-      const subject=`${S.seller.name||"Earth Editions"} — Invoice ${inv.invNo||""}`.trim();
+      /* A first-contact mail from a personal address, carrying an invoice number
+         and a bare link to a storage domain nobody recognises, is what a spam
+         filter is built to catch — and a customer who never sees it never
+         knows to look. The link stays (there is no attaching from a compose
+         window), but the mail around it now introduces itself. */
+      const seller=S.seller.name||"Earth Editions";
+      const sign=[seller,S.seller.phone?`Tel: ${S.seller.phone}`:"",S.seller.email||"",S.seller.website||""].filter(Boolean).join("\n");
       const body=[`Hi ${String(inv.customer?.name||"").split(" ")[0]||"there"},`,"",
-        `Thank you for stopping by our booth at ${show.name}. Your invoice ${inv.invNo||""} is here:`,"",url,"",
-        `Total ${showMoney(showInvTotals(inv).total,inv.currency||"USD")}.`,"",
-        S.seller.name||"Earth Editions"].join("\n");
+        `Thank you for stopping by the ${seller} booth at ${show.name}. It was good to meet you.`,"",
+        `Your invoice ${inv.invNo||""} comes to ${showMoney(showInvTotals(inv).total,inv.currency||"USD")}. You can download the PDF here:`,"",url,"",
+        `Do write back if anything on it needs changing.`,"",
+        `Best regards,`,sign].join("\n");
       const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       const w=window.open(gmail,"_blank");
       if(!w)window.location.href=`mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
