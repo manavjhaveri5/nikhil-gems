@@ -13295,13 +13295,31 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   const [valuationBusy,setValuationBusy]=useState(false);
   const requestValuation=async()=>{
     if(valuationBusy)return;
+    /* The rupee value on the sheet is struck at the rate on the invoice date,
+       which is a number only the seller has. Asked for once and remembered, so
+       the next invoice offers what was used last. */
+    const lastRate=(()=>{try{return localStorage.getItem(VALUATION_RATE_KEY)||"";}catch{return "";}})();
+    const entered=window.prompt(`${draft.currency||"USD"} → INR rate as on ${fmtDate(draft.date)}\n(the rate the valuation is struck at)`,lastRate);
+    if(entered===null)return;
+    const fx=parseFloat(String(entered).replace(/,/g,""));
+    if(!isFinite(fx)||fx<=0){showToast?.("That rate didn't read as a number");return;}
+    try{localStorage.setItem(VALUATION_RATE_KEY,String(fx));}catch{}
+
     setValuationBusy(true);
+    const stem=(draft.invNo||"invoice").replace(/[\\/]/g,"-");
+    const save=(bytes,name,type)=>{
+      const url=URL.createObjectURL(new Blob([bytes],{type}));
+      const a=document.createElement("a");a.href=url;a.download=name;a.click();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+    };
     try{
       const bytes=await renderInvoicePacketPdf(draft,buyers,company);
-      const file=`${(draft.invNo||"invoice").replace(/[\\/]/g,"-")}.pdf`;
-      const url=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
-      const a=document.createElement("a");a.href=url;a.download=file;a.click();
-      setTimeout(()=>URL.revokeObjectURL(url),4000);
+      const file=`${stem}.pdf`;
+      save(bytes,file,"application/pdf");
+      // The valuer works off his own form, so the working sheet goes with it.
+      const xlsxName=`${stem}_valuation.xlsx`;
+      save(await buildValuationXlsx(draft,company,fx),xlsxName,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 
       /* Outlook junks a first-contact Gmail carrying an invoice number, three
          template lines and no signature — it is the exact shape of invoice
@@ -13310,16 +13328,16 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
          the details a real business has. */
       const subject=`Valuation Certificate — Invoice ${draft.invNo||""}`.trim();
       const sign=[co.name,String(co.address||"").replace(/\n/g," "),`Tel: ${co.tel}`,`GST: ${co.gstin}`,co.email].filter(Boolean).join("\n");
-      const body=`Dear Madam,\n\nPlease find attached our invoice ${draft.invNo||""}${draft.date?` dated ${fmtDate(draft.date)}`:""}. Kindly issue the valuation certificate for this shipment.\n\nThank you,\n\n${sign}`;
+      const body=`Dear Madam,\n\nPlease find attached our invoice ${draft.invNo||""}${draft.date?` dated ${fmtDate(draft.date)}`:""} along with the valuation working sheet. Kindly issue the valuation certificate for this shipment.\n\nThank you,\n\n${sign}`;
       const gmail=`https://mail.google.com/mail/?view=cm&fs=1&tf=1&to=${encodeURIComponent(VALUER_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       // No "noopener" feature string here: some browsers return null for it even
       // when the tab opened, and that reads as a blocked pop-up.
       const w=window.open(gmail,"_blank");
       if(w)w.opener=null;
-      if(!w)showToast?.("Allow pop-ups to open Gmail — the invoice PDF has downloaded");
-      else showToast?.(`${file} downloaded — attach it to the Gmail draft`,7000);
+      if(!w)showToast?.("Allow pop-ups to open Gmail — both files have downloaded");
+      else showToast?.(`${file} and ${xlsxName} downloaded — attach both to the Gmail draft`,9000);
     }catch(e){
-      showToast?.("Couldn't prepare the invoice PDF: "+(e?.message||"try again"));
+      showToast?.("Couldn't prepare the valuation files: "+(e?.message||"try again"));
     }
     setValuationBusy(false);
   };
@@ -13981,9 +13999,9 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:10}}>
           <button type="button" disabled={valuationBusy} onClick={requestValuation}
             style={{cursor:valuationBusy?"default":"pointer",opacity:valuationBusy?0.6:1,display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
-            📧 {valuationBusy?"Preparing invoice…":"Request Valuation Certificate"}
+            📧 {valuationBusy?"Preparing files…":"Request Valuation Certificate"}
           </button>
-          <span style={{fontSize:11,color:C.inkFaint}}>Downloads the invoice PDF and opens a Gmail draft to {VALUER_EMAIL} — attach the file there</span>
+          <span style={{fontSize:11,color:C.inkFaint}}>Downloads the invoice PDF and the valuation sheet, and opens a Gmail draft to {VALUER_EMAIL} — attach both there</span>
         </div>
 
         {/* Shipped toggle */}
@@ -14660,6 +14678,105 @@ async function attachInvoiceToExportReconPacket(inv,buyers,company){
     ...meta,
     shippingBills:shippingBills.map(sb=>sb.id===inv.sourceSbId?{...sb,hasInvPdf:true,invoiceId:inv.id,invoiceNo:inv.invNo,invoiceAttachedAt:new Date().toISOString()}:sb),
   });
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   VALUATION WORKING SHEET
+
+   The valuer signs his own form, so what he is sent is his layout filled in
+   from the invoice rather than ours for him to re-key: his letterhead, our
+   details under it, one row per invoice line, and the rupee conversion at the
+   rate on the invoice date. Built from the same invoice the PDF is built from,
+   so the two can never disagree about what is being valued.
+   ══════════════════════════════════════════════════════════════════════════ */
+const VALUER={
+  name:"JAY D. PAREKH",
+  title:"GOVERNMENT APPOINTED REGISTERED VALUER",
+  regn:"Regn. No VIII-383 of 2013",
+  address:"6, NEW VOHRA BUILDING, 59 NAKHODA STREET, MUMBAI 400 003. M:9821558844. O:23476666. www.jayjewellers.in",
+  form:"REPORT OF VALUATION OF JEWELLERY    (FORM 0-8) (SEE RULE 8-D)",
+  signName:"Jay D. Parekh",
+  note:["Pls Note :- I have Examined The Items / contents mentioned above doesn’t consist of ",
+        "any precious Stones, Precious Metals, gold, silver.  It is purely metal based artificial jewelery."],
+};
+const VALUATION_RATE_KEY="ng-valuation-usd-inr";
+// The unit as the form writes it: a column of weights and a rate per unit.
+const VAL_UNITS={kg:["Kgs","Kg"],kgs:["Kgs","Kg"],gm:["Grms","Grm"],g:["Grms","Grm"],grams:["Grms","Grm"],ct:["Cts","Ct"],cts:["Cts","Ct"],pcs:["Pcs","Pc"],pc:["Pcs","Pc"],piece:["Pcs","Pc"]};
+const valUnit=u=>VAL_UNITS[String(u||"").trim().toLowerCase()]||[String(u||"").trim()||"Units",String(u||"").trim()||"Unit"];
+/* The form writes money plainly — "USD 4529.82", no thousands separators — and
+   keeps the commas for the rupee conversion line. */
+const valAmt=n=>(+n||0).toFixed(2);
+const valNum=(n,dp=2)=>(+n||0).toLocaleString("en-US",{minimumFractionDigits:dp,maximumFractionDigits:dp});
+// "18 Aug 2026" on the sheet, where the rest of the app abbreviates the year.
+const valDate=v=>{const p=packDateParts(v);return p?`${String(p.d).padStart(2,"0")} ${PACK_MONTHS[p.mo-1].charAt(0)+PACK_MONTHS[p.mo-1].slice(1).toLowerCase()} ${p.y}`:"";};
+const valTrim=n=>{const r=Math.round((+n||0)*1000)/1000;return Number.isInteger(r)?String(r):String(r);};
+
+/* The line as the valuer reads it: the customs description the invoice already
+   carries, with the seller's own wording for the piece in brackets after it —
+   which is how the sheet he last signed was written. */
+function valuationLineDesc(it){
+  const main=String(it.acctDesc||it.desc||"").trim();
+  const extra=String(it.customDesc||"").trim();
+  if(!extra)return main;
+  if(main.toLowerCase().includes(extra.toLowerCase()))return main;
+  return `${main} (${extra.toUpperCase()})`;
+}
+
+function valuationSheetRows(inv,company,fx){
+  const co=companyProfileFromKey(company);
+  const cur=inv.currency||"USD";
+  const items=printOrderInvItems(inv.items).filter(it=>String(it.acctDesc||it.desc||"").trim());
+  const rows=[];
+  const push=(...cells)=>rows.push(cells);
+  const blank=(n=1)=>{for(let i=0;i<n;i++)rows.push([]);};
+
+  push(VALUER.name); push(VALUER.title); push(VALUER.regn); push(VALUER.address);
+  blank(); push(VALUER.form); blank(2);
+  push("",co.name);
+  push("",String(co.address||"").replace(/\n/g," "));
+  push("",`GSTIN: ${co.gstin} | IEC: ${co.iec}`,"","",valDate(inv.date));
+  push("",`PAN: ${String(co.gstin||"").slice(2,12)}`,"","",inv.invNo||"");
+  blank(2);
+  push("Sr.","Description","Qty",`Gross wt (grms)`,"Metal Value/grm","Total Amt",`TOTAL IN INR`);
+
+  let totalAmt=0;
+  const byUnit={};
+  items.forEach((it,i)=>{
+    const [plural,single]=valUnit(it.unit);
+    const qty=+it.qty||0;
+    const amt=+it.amt||(qty*(+it.rate||0));
+    totalAmt+=amt;
+    byUnit[plural]=(byUnit[plural]||0)+qty;
+    push(i+1,valuationLineDesc(it),1,`${valTrim(qty)} (${plural})`,
+      `${cur} ${valAmt(it.rate)}/${single}`,`${cur} ${valAmt(amt)}`,
+      +(amt*fx).toFixed(2));
+  });
+
+  blank(3);
+  const weights=Object.entries(byUnit).map(([u,q])=>`${valTrim(q)} (${u})`).join(" + ");
+  push("","TOTAL ",items.length,weights,"",`${cur} ${valAmt(totalAmt)}`,+(totalAmt*fx).toFixed(2));
+  blank(2);
+  push(`${cur} ${valAmt(totalAmt)} * ${fx} = ${valNum(totalAmt*fx)} INR RUPEES (Rate as on ${valDate(inv.date)})`);
+  blank(2);
+  push(VALUER.note[0]); push(VALUER.note[1]);
+  blank(2);
+  push("","","","","Signature");
+  blank(2);
+  push("","","","",VALUER.signName);
+  push("","","","",VALUER.regn);
+  return rows;
+}
+
+async function buildValuationXlsx(inv,company,fx){
+  const XLSX=await import("xlsx");
+  const rows=valuationSheetRows(inv,company,fx);
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  // The letterhead lines run across the sheet the way they do on his form.
+  ws["!merges"]=[0,1,2,3,5].map(r=>({s:{c:0,r},e:{c:5,r}}));
+  ws["!cols"]=[{wch:5},{wch:62},{wch:6},{wch:16},{wch:18},{wch:14},{wch:16}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Sheet1");
+  return new Uint8Array(XLSX.write(wb,{bookType:"xlsx",type:"array"}));
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
