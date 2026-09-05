@@ -13295,17 +13295,23 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   const [valuationBusy,setValuationBusy]=useState(false);
   const requestValuation=async()=>{
     if(valuationBusy)return;
-    /* The rupee value on the sheet is struck at the rate on the invoice date,
-       which is a number only the seller has. Asked for once and remembered, so
-       the next invoice offers what was used last. */
+    const cur=draft.currency||"USD";
     const lastRate=(()=>{try{return localStorage.getItem(VALUATION_RATE_KEY)||"";}catch{return "";}})();
-    const entered=window.prompt(`${draft.currency||"USD"} → INR rate as on ${fmtDate(draft.date)}\n(the rate the valuation is struck at)`,lastRate);
-    if(entered===null)return;
+    setValuationBusy(true);
+    let suggested=lastRate,note="last rate used here";
+    try{
+      const got=await fxToInrOn(draft.date,cur);
+      suggested=String(got.rate);
+      note=`ECB rate for ${valDate(got.on)}`;
+    }catch{
+      note=lastRate?"rate lookup failed — last rate used here":"rate lookup failed — type it in";
+    }
+    const entered=window.prompt(`${cur} → INR rate as on ${valDate(draft.date)}\n(${note} — overwrite it if customs notified another)`,suggested);
+    if(entered===null){setValuationBusy(false);return;}
     const fx=parseFloat(String(entered).replace(/,/g,""));
-    if(!isFinite(fx)||fx<=0){showToast?.("That rate didn't read as a number");return;}
+    if(!isFinite(fx)||fx<=0){showToast?.("That rate didn't read as a number");setValuationBusy(false);return;}
     try{localStorage.setItem(VALUATION_RATE_KEY,String(fx));}catch{}
 
-    setValuationBusy(true);
     const stem=(draft.invNo||"invoice").replace(/[\\/]/g,"-");
     const save=(bytes,name,type)=>{
       const url=URL.createObjectURL(new Blob([bytes],{type}));
@@ -14700,6 +14706,26 @@ const VALUER={
         "any precious Stones, Precious Metals, gold, silver.  It is purely metal based artificial jewelery."],
 };
 const VALUATION_RATE_KEY="ng-valuation-usd-inr";
+
+/* The rate the sheet is struck at, looked up rather than typed — and looked up
+   for the invoice's own date, since a certificate raised in September against
+   an August invoice is valued at August's rate. ECB reference rates through
+   Frankfurter: no key, and it answers for a past date. A weekend or a holiday
+   resolves to the last business day, which is what a rate "as on" that date
+   means anyway. The answer is offered, not imposed: customs may have notified
+   another, and the seller can overwrite it. */
+async function fxToInrOn(date,currency="USD"){
+  const cur=String(currency||"USD").toUpperCase();
+  if(cur==="INR")return{rate:1,on:String(date||"").slice(0,10)};
+  const d=String(date||"").slice(0,10);
+  const day=/^\d{4}-\d{2}-\d{2}$/.test(d)?d:"latest";
+  const r=await fetch(`https://api.frankfurter.dev/v1/${day}?base=${encodeURIComponent(cur)}&symbols=INR`);
+  if(!r.ok)throw new Error(`HTTP ${r.status}`);
+  const j=await r.json();
+  const rate=+(j?.rates?.INR);
+  if(!isFinite(rate)||rate<=0)throw new Error("no INR rate returned");
+  return{rate,on:j.date||day};
+}
 // The unit as the form writes it: a column of weights and a rate per unit.
 const VAL_UNITS={kg:["Kgs","Kg"],kgs:["Kgs","Kg"],gm:["Grms","Grm"],g:["Grms","Grm"],grams:["Grms","Grm"],ct:["Cts","Ct"],cts:["Cts","Ct"],pcs:["Pcs","Pc"],pc:["Pcs","Pc"],piece:["Pcs","Pc"]};
 const valUnit=u=>VAL_UNITS[String(u||"").trim().toLowerCase()]||[String(u||"").trim()||"Units",String(u||"").trim()||"Unit"];
