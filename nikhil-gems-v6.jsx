@@ -15753,7 +15753,7 @@ const writeShowInvDraft=(sid,draft)=>{
   }catch{}
 };
 
-function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSaveInvoice,onDelInvoice,onSaveSettings,onSaveCustomer,onSellStock,onRestoreStock,showToast}){
+function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuyers=[],onSaveInvoice,onDelInvoice,onSaveSettings,onSaveCustomer,onSellStock,onRestoreStock,showToast}){
   const S=showInvSettings(settings);
   const [view,setView]=useState("new");
   const [draft,setDraft]=useState(()=>readShowInvDraft(show.id)||emptyShowInvDraft(show,showInvSettings(settings)));
@@ -15761,6 +15761,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
   const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"pcs",rate:"",save:true});
   const [busy,setBusy]=useState("");
   const [custQuery,setCustQuery]=useState("");
+  const [custOpen,setCustOpen]=useState(false);
   const [logo,setLogo]=useState(S.logoDataUrl||"");
   const mine=invoices.filter(i=>i.showId===show.id);
   const cur=draft.currency||"USD";
@@ -15818,11 +15819,39 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
   const delLine=id=>setD(d=>({...d,lines:d.lines.filter(l=>l.id!==id)}));
 
   // ── customers ────────────────────────────────────────────────────────────
+  /* The booth sees the same faces twice in a week, so an empty box offers the
+     ones served most recently rather than nothing at all, and a typed one
+     matches from the first letter. Anything typed that matches nobody is a new
+     customer — the name is already on the draft, and issuing files them. */
   const cq=custQuery.trim().toLowerCase();
-  const custMatches=cq.length>1?customers.filter(c=>`${c.name||""} ${c.email||""} ${c.phone||""} ${c.company||""}`.toLowerCase().includes(cq)).slice(0,6):[];
+  /* An export buyer read as a booth customer: the company is the business, the
+     contact is the person standing there. Kept out of the list when the booth
+     already has them under the same address, so the same person is not offered
+     twice. Nothing is written back to the buyers list from here — it is the
+     invoice module's record, and this only borrows from it. */
+  const custFromBuyer=b=>({
+    id:"",buyerId:b.id,name:b.contactName||b.name||"",company:b.contactName?(b.name||""):"",
+    phone:b.phone||"",email:b.email||"",city:"",state:b.state||"",country:b.country||"",
+    notes:"",addToList:true,_source:"buyer",
+  });
+  const boothEmails=new Set(customers.map(c=>String(c.email||"").trim().toLowerCase()).filter(Boolean));
+  const buyerRows=(ngBuyers||[])
+    .filter(b=>String(b.name||b.contactName||"").trim())
+    .filter(b=>{const e=String(b.email||"").trim().toLowerCase();return !e||!boothEmails.has(e);})
+    .map(custFromBuyer);
+  const custRecent=[...customers.map(c=>({...c,_source:"booth"})),...buyerRows]
+    .sort((a,b)=>(a._source===b._source?0:a._source==="booth"?-1:1)
+      ||String(b.updatedAt||"").localeCompare(String(a.updatedAt||""))
+      ||String(a.name||"").localeCompare(String(b.name||"")));
+  const custMatches=(cq
+    ? custRecent.filter(c=>`${c.name||""} ${c.email||""} ${c.phone||""} ${c.company||""} ${c.country||""}`.toLowerCase().includes(cq))
+    : custRecent).slice(0,8);
+  const custExact=custRecent.some(c=>String(c.name||"").trim().toLowerCase()===cq);
   const pickCustomer=c=>{
-    setCust({...c,addToList:!c.omnisendTagged});
+    const {_source,...rec}=c;
+    setCust({...rec,addToList:!c.omnisendTagged});
     setCustQuery("");
+    setCustOpen(false);
     showToast?.(c.omnisendTagged?`${c.name||c.email} — already on the list`:`${c.name||c.email} loaded`);
   };
 
@@ -16005,17 +16034,33 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],onSave
           <div style={box}>
             <div style={{...lab,marginBottom:9}}>Customer</div>
             <div style={{position:"relative",marginBottom:8}}>
-              <input value={draft.customer.name} placeholder="Name"
-                onChange={e=>{setCust({name:e.target.value,id:""});setCustQuery(e.target.value);}}
-                style={{...sIn,fontWeight:700}}/>
-              {custMatches.length>0&&(
-                <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,marginTop:3,boxShadow:"0 8px 24px rgba(0,0,0,.12)",overflow:"hidden"}}>
+              <input value={draft.customer.name} placeholder={custRecent.length?"Name — or pick from the list":"Name"}
+                onFocus={()=>setCustOpen(true)}
+                onBlur={()=>setTimeout(()=>setCustOpen(false),160)}
+                onKeyDown={e=>{if(e.key==="Escape")setCustOpen(false);}}
+                onChange={e=>{setCust({name:e.target.value,id:""});setCustQuery(e.target.value);setCustOpen(true);}}
+                style={{...sIn,fontWeight:700,paddingRight:34}}/>
+              {custRecent.length>0&&(
+                <button type="button" tabIndex={-1} onMouseDown={e=>e.preventDefault()} onClick={()=>setCustOpen(o=>!o)}
+                  title={`${customers.length} booth customer${customers.length===1?"":"s"}${buyerRows.length?` · ${buyerRows.length} export buyer${buyerRows.length===1?"":"s"}`:""}`}
+                  style={{position:"absolute",right:6,top:0,bottom:0,width:24,background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:11}}>▾</button>
+              )}
+              {custOpen&&(custMatches.length>0||(cq&&!custExact))&&(
+                <div onMouseDown={e=>e.preventDefault()} style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,marginTop:3,boxShadow:"0 8px 24px rgba(0,0,0,.12)",overflow:"hidden",maxHeight:250,overflowY:"auto"}}>
                   {custMatches.map(c=>(
                     <button key={c.id} onClick={()=>pickCustomer(c)} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:"8px 10px",cursor:"pointer",font:"inherit"}}>
-                      <div style={{fontSize:12,fontWeight:700,color:C.ink}}>{c.name||c.email}</div>
-                      <div style={{fontSize:10,color:C.inkFaint}}>{[c.email,c.phone,c.omnisendTagged?"on the list":""].filter(Boolean).join(" · ")}</div>
+                      <div style={{fontSize:12,fontWeight:700,color:C.ink}}>
+                        {c.name||c.email}
+                        {c._source==="buyer"&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,letterSpacing:.5,color:C.blue,background:C.blueBg,borderRadius:4,padding:"1px 5px"}}>BUYER</span>}
+                      </div>
+                      <div style={{fontSize:10,color:C.inkFaint}}>{[c.company,c.email,c.phone,c.country,c.omnisendTagged?"on the list":""].filter(Boolean).join(" · ")||"no details yet"}</div>
                     </button>
                   ))}
+                  {cq&&!custExact&&(
+                    <button onClick={()=>setCustOpen(false)} style={{display:"block",width:"100%",textAlign:"left",background:C.card,border:"none",padding:"8px 10px",cursor:"pointer",font:"inherit",fontSize:11,color:C.inkMid}}>
+                      ＋ New customer · <b style={{color:C.ink}}>{draft.customer.name}</b> — fill in the details below
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -16333,6 +16378,10 @@ function ShowsApp({onHome,isAdmin=true}){
   const [showInvoices,setShowInvoices]=useState([]);
   const [showInvCfg,setShowInvCfg]=useState(DEFAULT_SHOW_INV_SETTINGS);
   const [showCustomers,setShowCustomers]=useState([]);
+  /* The export buyers, read only. A wholesale buyer who walks up to the booth
+     is already on file in the invoice module — asking the seller to type him in
+     again is how the same customer ends up as two records with two spellings. */
+  const [ngBuyers,setNgBuyers]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const [detailId,setDetailId]=useState(null);
   const [toast,setToast]=useState("");
@@ -16341,12 +16390,13 @@ function ShowsApp({onHome,isAdmin=true}){
   const applyShows=list=>{showsRef.current=Array.isArray(list)?list:[];setShows(list);};
 
   useEffect(()=>{
-    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases),loadK(SHOW_INV_KEY),loadK(SHOW_INV_SETTINGS_KEY),loadK(SHOW_CUSTOMERS_KEY)]).then(([s,e,st,p,inv,cfg,cust])=>{
+    Promise.all([loadK(SHOWS_KEY),loadK(CAL_KEY),loadK(KEYS.stock),loadK(KEYS.purchases),loadK(SHOW_INV_KEY),loadK(SHOW_INV_SETTINGS_KEY),loadK(SHOW_CUSTOMERS_KEY),loadK(INV_KEYS.buyers)]).then(([s,e,st,p,inv,cfg,cust,byr])=>{
       const initial=s&&s.length>0?s:DEFAULT_SHOWS.map(sh=>({...sh,checklist:DEFAULT_CHECKLIST.map(item=>({id:uid(),task:item,done:false})),shipments:[],bagItems:[],files:[],notes:""}));
       applyShows(withShowsDraft(initial));
       setCalEvents(e||[]);setStock(st||[]);setPurchases(p||[]);
       showInvoicesRef.current=Array.isArray(inv)?inv:[];setShowInvoices(showInvoicesRef.current);
       showCustomersRef.current=Array.isArray(cust)?cust:[];setShowCustomers(showCustomersRef.current);
+      setNgBuyers(Array.isArray(byr)?byr:[]);
       setShowInvCfg(showInvSettings(cfg));
       setLoaded(true);
     });
@@ -16364,6 +16414,7 @@ function ShowsApp({onHome,isAdmin=true}){
     if(keys.includes(CAL_KEY))loadKFresh(CAL_KEY).then(e=>{if(Array.isArray(e))setCalEvents(e);}).catch(()=>{});
     if(keys.includes(SHOW_INV_KEY))loadKFresh(SHOW_INV_KEY).then(v=>{if(Array.isArray(v)){showInvoicesRef.current=v;setShowInvoices(v);}}).catch(()=>{});
     if(keys.includes(SHOW_CUSTOMERS_KEY))loadKFresh(SHOW_CUSTOMERS_KEY).then(v=>{if(Array.isArray(v)){showCustomersRef.current=v;setShowCustomers(v);}}).catch(()=>{});
+    if(keys.includes(INV_KEYS.buyers))loadKFresh(INV_KEYS.buyers).then(v=>{if(Array.isArray(v))setNgBuyers(v);}).catch(()=>{});
   }),[]);
 
   const save=async(list)=>{
@@ -16631,7 +16682,7 @@ function ShowsApp({onHome,isAdmin=true}){
     onUpdateShowPhotoCaption:updateShowPhotoCaption,
     onAddJournalEntry:addJournalEntry,onDelJournalEntry:delJournalEntry,
     onCreatePOFromBuyingPlan:createPOFromBuyingPlan,
-    showInvoices,showInvCfg,showCustomers,
+    showInvoices,showInvCfg,showCustomers,ngBuyers,
     onSaveShowInvoice:saveShowInvoice,onDelShowInvoice:delShowInvoice,
     onSaveShowInvCfg:saveShowInvCfg,onSaveShowCustomer:saveShowCustomer,
     onSellStock:sellStockForInvoice,onRestoreStock:restoreStockForInvoice,
@@ -16851,7 +16902,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],onSaveShowInvoice,onDelShowInvoice,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],ngBuyers=[],onSaveShowInvoice,onDelShowInvoice,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -19020,7 +19071,7 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
           {showTab==="invoice"&&isAdmin&&(
             <ShowInvoiceTab
               show={show} atShow={shipItems}
-              invoices={showInvoices} settings={showInvCfg} customers={showCustomers}
+              invoices={showInvoices} settings={showInvCfg} customers={showCustomers} ngBuyers={ngBuyers}
               onSaveInvoice={onSaveShowInvoice} onDelInvoice={onDelShowInvoice}
               onSaveSettings={onSaveShowInvCfg} onSaveCustomer={onSaveShowCustomer}
               onSellStock={onSellStock} onRestoreStock={onRestoreStock}
