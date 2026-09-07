@@ -3379,6 +3379,24 @@ function JobWorkApp({onHome}){
 // STOCK JOURNAL — Gate Register (parcel entries & exits)
 // ══════════════════════════════════════════════════════════════════
 const JOURNAL_KEY="ng-journal-v1";
+/* "Green Aventurine", "green aventurine " and "GREEN AVENTURINE" are one stone
+   as far as a filter is concerned, so terms are matched folded and offered back
+   in the spelling the journal most often used. */
+const normJournalTerm=v=>String(v||"").trim().toLowerCase().replace(/\s+/g," ");
+function journalTermOptions(entries,field,lineAllowed=()=>true){
+  const seen=new Map();
+  (entries||[]).forEach(e=>journalLines(e).forEach(it=>{
+    const raw=String(it?.[field]||"").trim();
+    if(!raw||!lineAllowed(it))return;
+    const key=normJournalTerm(raw);
+    const hit=seen.get(key)||{value:key,counts:new Map()};
+    hit.counts.set(raw,(hit.counts.get(raw)||0)+1);
+    seen.set(key,hit);
+  }));
+  return [...seen.values()]
+    .map(h=>({value:h.value,label:[...h.counts.entries()].sort((a,b)=>b[1]-a[1])[0][0]}))
+    .sort((a,b)=>a.label.localeCompare(b.label,undefined,{sensitivity:"base"}));
+}
 const JOURNAL_EXIT_REASONS=["Job work","Sale of goods","Consignment"];
 const JOURNAL_ENTRY_REASONS=["Purchase received","Selection received","Return received","Consignment received"];
 const journalLine=(seed={})=>({id:uid(),vendorId:seed.vendorId||"",vendorName:seed.vendorName||"",material:"",shape:"",qty:"",unit:"kg",qty2:"",unit2:"pcs",retQty:"",retUnit:"kg",retQty2:"",retUnit2:"pcs",notes:""});
@@ -5212,6 +5230,8 @@ function StockJournalApp({onHome,onViewBill,isAdmin=false}){
   const [view,setView]=useState("list"); // "list"|"form"
   const [form,setForm]=useState(null);
   const [filterVendor,setFilterVendor]=useState("all");
+  const [filterStone,setFilterStone]=useState("all");
+  const [filterShape,setFilterShape]=useState("all");
   const [filterType,setFilterType]=useState("all");
   const [filterDateFrom,setFilterDateFrom]=useState("");
   const [filterDateTo,setFilterDateTo]=useState("");
@@ -5540,8 +5560,18 @@ ${vendorBlocks}
     ...vendors.filter(v=>v.name).map(v=>({value:v.id,label:v.name})),
     ...[...new Set(entries.flatMap(e=>[e.vendorName,...journalLines(e).map(it=>it.vendorName)]).filter(Boolean))].filter(name=>!vendors.some(v=>v.name===name)).map(name=>({value:name,label:name}))
   ].sort((a,b)=>a.label.localeCompare(b.label));
+  /* Stone and shape are matched on the same line, not across the entry: a
+     parcel holding Bloodstone hearts and Moss Agate palmstones is not a hit for
+     "Moss Agate + Heart", which is exactly the mistake reading down the page
+     with a browser search makes. */
+  const journalLineHit=it=>(filterStone==="all"||normJournalTerm(it.material)===filterStone)
+    &&(filterShape==="all"||normJournalTerm(it.shape)===filterShape);
+  const stoneOptions=journalTermOptions(entries,"material",it=>filterShape==="all"||normJournalTerm(it.shape)===filterShape);
+  const shapeOptions=journalTermOptions(entries,"shape",it=>filterStone==="all"||normJournalTerm(it.material)===filterStone);
+
   const filtered=entries
     .filter(e=>filterVendor==="all"||e.vendorId===filterVendor||e.vendorName===filterVendor||journalLines(e).some(it=>it.vendorId===filterVendor||it.vendorName===filterVendor)||entries.find(x=>x.id===e.linkedEntryId)?.vendorId===filterVendor||entries.find(x=>x.id===e.linkedEntryId)?.vendorName===filterVendor)
+    .filter(e=>(filterStone==="all"&&filterShape==="all")||journalLines(e).some(journalLineHit))
     .filter(e=>filterType==="all"||e.type===filterType)
     .filter(e=>!filterDateFrom||e.date>=filterDateFrom)
     .filter(e=>!filterDateTo||e.date<=filterDateTo)
@@ -5554,7 +5584,7 @@ ${vendorBlocks}
     byDate[byDate.length-1].items.push(e);
   });
 
-  const anyFilter=filterVendor!=="all"||filterType!=="all"||filterDateFrom||filterDateTo;
+  const anyFilter=filterVendor!=="all"||filterType!=="all"||filterStone!=="all"||filterShape!=="all"||filterDateFrom||filterDateTo;
   const purchaseOrders=purchases.filter(p=>p.type==="po").sort((a,b)=>new Date(b.date||b.createdAt||0)-new Date(a.date||a.createdAt||0));
   const openCustomerOrders=customerOrders.filter(o=>!["Fulfilled","Cancelled"].includes(o.status||"Open")).length;
   const openPOs=purchaseOrders.filter(p=>!["closed","cancelled","paid"].includes(p.status||"open")).length;
@@ -5777,6 +5807,14 @@ ${vendorBlocks}
           <option value="all">{t("All Vendors")}</option>
           {vendorFilterOptions.map(v=><option key={v.value} value={v.value}>{v.label}</option>)}
         </select>
+        <select value={filterStone} onChange={e=>setFilterStone(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",minWidth:mob?130:150,flexShrink:0,cursor:"pointer",borderRadius:8}}>
+          <option value="all">All stones</option>
+          {stoneOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select value={filterShape} onChange={e=>setFilterShape(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",minWidth:mob?130:150,flexShrink:0,cursor:"pointer",borderRadius:8}}>
+          <option value="all">All shapes</option>
+          {shapeOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
         <div style={{display:"flex",gap:3,flexShrink:0,background:"#F3F4F6",border:"1px solid #E5E7EB",borderRadius:8,padding:3}}>
           {[["all",t("All")],["entry","In"],["exit","Out"]].map(([v,l])=>(
             <button key={v} onClick={()=>setFilterType(v)} style={{fontSize:mob?12:11,padding:mob?"7px 12px":"5px 13px",borderRadius:6,cursor:"pointer",border:"none",background:filterType===v?"#fff":"transparent",boxShadow:filterType===v?"0 1px 4px rgba(0,0,0,.12)":"none",color:filterType===v?"#111827":"#6B7280",fontWeight:filterType===v?700:600,whiteSpace:"nowrap",minHeight:mob?38:undefined}}>{l}</button>
@@ -5784,7 +5822,7 @@ ${vendorBlocks}
         </div>
         <input type="date" value={filterDateFrom} onChange={e=>setFilterDateFrom(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",flexShrink:0,width:mob?undefined:138,borderRadius:8}}/>
         <input type="date" value={filterDateTo} onChange={e=>setFilterDateTo(e.target.value)} style={{...FI,fontSize:mob?14:12,padding:mob?"8px 9px":"6px 10px",flexShrink:0,width:mob?undefined:138,borderRadius:8}}/>
-        {anyFilter&&<button onClick={()=>{setFilterVendor("all");setFilterType("all");setFilterDateFrom("");setFilterDateTo("");}} style={{fontSize:11,padding:"6px 12px",borderRadius:8,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint,flexShrink:0,whiteSpace:"nowrap"}}>Clear</button>}
+        {anyFilter&&<button onClick={()=>{setFilterVendor("all");setFilterType("all");setFilterStone("all");setFilterShape("all");setFilterDateFrom("");setFilterDateTo("");}} style={{fontSize:11,padding:"6px 12px",borderRadius:8,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint,flexShrink:0,whiteSpace:"nowrap"}}>Clear</button>}
       </div>
 
       {/* Timeline */}
@@ -5827,12 +5865,17 @@ ${vendorBlocks}
                     </div>
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:4,marginTop:8}}>
-                    {lines.map((it,i)=>(
-                      <div key={it.id||i} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"baseline"}}>
+                    {lines.map((it,i)=>{
+                      // With a stone or shape chosen, the lines that aren't it
+                      // fade back — the parcel still reads whole, but the eye
+                      // goes where the filter pointed.
+                      const dim=(filterStone!=="all"||filterShape!=="all")&&!journalLineHit(it);
+                      return(
+                      <div key={it.id||i} style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr auto",gap:8,alignItems:"baseline",opacity:dim?.4:1}}>
                         <div style={{fontSize:14,fontWeight:650,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[it.material,it.shape].filter(Boolean).join(" · ")||"—"}</div>
                         <div style={{fontSize:12,color:C.inkMid,whiteSpace:"nowrap"}}>{journalQtyText(it)}{it.notes?` · ${it.notes}`:""}</div>
-                      </div>
-                    ))}
+                      </div>);
+                    })}
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginTop:8}}>
                     {(entry.photos||[]).length>0&&(
