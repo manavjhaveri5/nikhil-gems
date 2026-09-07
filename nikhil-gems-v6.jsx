@@ -15563,7 +15563,10 @@ const SHOW_PAY_METHODS=[
   {key:"check",label:"Check",fields:[{k:"payee",label:"Payable to"}]},
 ];
 const DEFAULT_SHOW_INV_SETTINGS={
-  seller:{name:"Earth Editions",address:"",phone:"",email:"",website:"eartheditions.co"},
+  // The booth sells under Nikhil Gems, so that is the name and the mark on the
+  // document. Address, phone and email stay empty by default: the letterhead
+  // band already carries them, and filling them here prints them twice.
+  seller:{name:"Nikhil Gems",address:"",phone:"",email:"",website:"nikhilgemsindia.com"},
   methods:{cash:{on:true}},
   customItems:[],
   logoDataUrl:"",
@@ -15607,6 +15610,12 @@ const showMoney=(n,cur="USD")=>{
   return `${SHOW_CUR_SYM[cur]||cur+" "}${(+n||0).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d})}`;
 };
 const showInvEsc=v=>String(v==null?"":v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+/* Everything at the booth is sold one of three ways: by the kilo, by the piece,
+   or as a lot at one price. "flat" is that lot — the quantity is the lot itself,
+   so it is pinned to 1 and the rate column holds the whole price, which keeps
+   one multiplication behind every total on the invoice. */
+const SHOW_UNITS=["kgs","pcs","flat"];
+const isFlatUnit=u=>String(u||"").trim().toLowerCase()==="flat";
 const showInvNum=v=>{const n=parseFloat(v);return Number.isFinite(n)?n:0;};
 const showInvQty=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";};
 
@@ -15637,8 +15646,10 @@ const nextShowInvNo=(invoices,year)=>{
    that fails. Fetched once and cached as a data URL in the settings blob, so the
    second invoice of the show — and every one after the network drops — still
    prints with the logo on it. */
+const SHOW_INV_LOGO_SRC="/ng-letterhead.jpg";   // logo, name and tagline in one band
+const SHOW_INV_LOGO_V=2;                        // bumped when the mark changes
 async function showInvLogoDataUrl(){
-  const r=await fetch(EARTH_LOGO_URL,{mode:"cors"});
+  const r=await fetch(SHOW_INV_LOGO_SRC);
   if(!r.ok)throw new Error(`logo ${r.status}`);
   const blob=await r.blob();
   return await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob);});
@@ -15653,7 +15664,7 @@ function buildShowInvoiceHTML(inv,settings,show){
   const cur=inv.currency||"USD";
   const t=showInvTotals(inv);
   const c=inv.customer||{};
-  const logo=s.logoDataUrl||EARTH_LOGO_URL;
+  const logo=s.logoDataUrl||SHOW_INV_LOGO_SRC;
   const money=n=>showInvEsc(showMoney(n,cur));
   const sellerBits=[s.seller.address,s.seller.phone,s.seller.email,s.seller.website].map(x=>String(x||"").trim()).filter(Boolean);
   const custBits=[c.company,c.phone,c.email,[c.city,c.state,c.country].filter(Boolean).join(", ")].map(x=>String(x||"").trim()).filter(Boolean);
@@ -15663,7 +15674,7 @@ function buildShowInvoiceHTML(inv,settings,show){
     return `<tr>
       <td class="d">${showInvEsc(l.desc||"—")}${l.note?`<div class="sub">${showInvEsc(l.note)}</div>`:""}</td>
       <td class="d sh">${showInvEsc(l.shape||"")}</td>
-      <td class="d n">${showInvEsc(showInvQty(l.qty)||"—")}${l.unit?` <span class="u">${showInvEsc(l.unit)}</span>`:""}</td>
+      <td class="d n">${isFlatUnit(l.unit)?`<span class="u">lot</span>`:`${showInvEsc(showInvQty(l.qty)||"—")}${l.unit?` <span class="u">${showInvEsc(l.unit)}</span>`:""}`}</td>
       <td class="d n">${money(l.rate)}</td>
       <td class="d n b">${money(amt)}</td>
     </tr>`;
@@ -15696,7 +15707,7 @@ function buildShowInvoiceHTML(inv,settings,show){
   body{margin:0;background:#e5e6e6;font-family:Georgia,'Times New Roman',serif;color:#1a1308;}
   .ee-inv{width:794px;margin:0 auto;background:#fff;padding:46px 54px 40px;}
   .mast{text-align:center;padding-bottom:22px;border-bottom:1px solid #d8d3c8;}
-  .mast img{width:150px;height:auto;display:inline-block;}
+  .mast img{width:100%;max-width:470px;height:auto;display:inline-block;}
   .mast .name{font-size:22px;letter-spacing:6px;text-transform:uppercase;font-weight:400;}
   .mast .bits{font-size:10.5px;color:#6b6255;margin-top:9px;letter-spacing:.3px;}
   .head{display:flex;justify-content:space-between;align-items:flex-end;margin:26px 0 20px;gap:24px;}
@@ -15745,7 +15756,7 @@ function buildShowInvoiceHTML(inv,settings,show){
   </div>
   <div class="head">
     <div class="ttl">Invoice</div>
-    <div class="no"><div><b>${showInvEsc(inv.invNo||"—")}</b></div><div>${showInvEsc(inv.date||"")}</div>${showLine?`<div>${showInvEsc(showLine)}</div>`:""}</div>
+    <div class="no"><div><b>${showInvEsc(inv.invNo||"—")}</b></div><div>${showInvEsc(inv.date||"")}</div>${inv.tptNo?`<div>TPT No. ${showInvEsc(inv.tptNo)}</div>`:""}${showLine?`<div>${showInvEsc(showLine)}</div>`:""}</div>
   </div>
   <div class="parties">
     <div>
@@ -15783,7 +15794,7 @@ const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city
 const emptyShowInvDraft=(show,settings)=>({
   id:uid(),invNo:"",showId:show?.id||"",showName:show?.name||"",showSlug:showTagSlug(show),
   date:today(),currency:"USD",customer:emptyShowInvCustomer(),lines:[],
-  discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),payments:[],showMethods:[],notes:"",status:"draft",
+  discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),payments:[],showMethods:[],notes:"",tptNo:"",status:"draft",
   createdAt:new Date().toISOString(),
 });
 const readShowInvDraft=sid=>{
@@ -15801,7 +15812,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [view,setView]=useState("new");
   const [draft,setDraft]=useState(()=>readShowInvDraft(show.id)||emptyShowInvDraft(show,showInvSettings(settings)));
   const [pick,setPick]=useState("");
-  const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"pcs",rate:"",save:true});
+  const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"kgs",rate:"",save:true});
   const [busy,setBusy]=useState("");
   const [custQuery,setCustQuery]=useState("");
   const [custOpen,setCustOpen]=useState(false);
@@ -15817,9 +15828,10 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   // wifi that dies is never the one you were using a second ago.
   useEffect(()=>{
     loadInvoiceHtmlPdfLibs().catch(()=>{});
-    if(S.logoDataUrl){setLogo(S.logoDataUrl);return;}
+    // A mark cached before the shop's own was used has to be replaced, not kept.
+    if(S.logoDataUrl&&S.logoV===SHOW_INV_LOGO_V){setLogo(S.logoDataUrl);return;}
     let live=true;
-    showInvLogoDataUrl().then(url=>{if(!live)return;setLogo(url);onSaveSettings?.({...S,logoDataUrl:url});}).catch(()=>{});
+    showInvLogoDataUrl().then(url=>{if(!live)return;setLogo(url);onSaveSettings?.({...S,logoDataUrl:url,logoV:SHOW_INV_LOGO_V});}).catch(()=>{});
     return()=>{live=false;};
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
 
@@ -15849,9 +15861,9 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const addCustomLine=()=>{
     const desc=newLine.desc.trim();
     if(!desc){showToast?.("Name the stone first");return;}
-    setD(d=>({...d,lines:[...d.lines,{id:uid(),stockId:null,basis:null,desc,shape:newLine.shape.trim(),qty:newLine.qty||"1",unit:newLine.unit||"pcs",rate:newLine.rate,note:""}]}));
+    setD(d=>({...d,lines:[...d.lines,{id:uid(),stockId:null,basis:null,desc,shape:newLine.shape.trim(),qty:isFlatUnit(newLine.unit)?"1":(newLine.qty||"1"),unit:newLine.unit||"kgs",rate:newLine.rate,note:""}]}));
     if(newLine.save&&showInvNum(newLine.rate)>0){
-      const item={id:uid(),desc,shape:newLine.shape.trim(),unit:newLine.unit||"pcs",rate:newLine.rate};
+      const item={id:uid(),desc,shape:newLine.shape.trim(),unit:newLine.unit||"kgs",rate:newLine.rate};
       const dup=(S.customItems||[]).some(x=>x.desc===item.desc&&x.shape===item.shape&&x.rate===item.rate);
       if(!dup)onSaveSettings?.({...S,customItems:[item,...(S.customItems||[])].slice(0,60)});
     }
@@ -16157,9 +16169,14 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"minmax(0,2fr) minmax(0,1fr) 70px 80px 90px",gap:6,alignItems:"end"}}>
               <input value={newLine.desc} onChange={e=>setNewLine({...newLine,desc:e.target.value})} placeholder="New stone" list="ng-stones-dl" style={sIn}/>
               <input value={newLine.shape} onChange={e=>setNewLine({...newLine,shape:e.target.value})} placeholder="Shape" list="ng-shapes-dl" style={sIn}/>
-              <input value={newLine.qty} onChange={e=>setNewLine({...newLine,qty:e.target.value})} placeholder="Qty" inputMode="decimal" style={sIn}/>
-              <input value={newLine.unit} onChange={e=>setNewLine({...newLine,unit:e.target.value})} placeholder="pcs" style={sIn}/>
-              <input value={newLine.rate} onChange={e=>setNewLine({...newLine,rate:e.target.value})} placeholder={`Rate ${SHOW_CUR_SYM[cur]||""}`} inputMode="decimal" style={sIn}/>
+              <input value={isFlatUnit(newLine.unit)?"1":newLine.qty} disabled={isFlatUnit(newLine.unit)}
+                onChange={e=>setNewLine({...newLine,qty:e.target.value})} placeholder="Qty" inputMode="decimal"
+                style={{...sIn,...(isFlatUnit(newLine.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
+              <select value={SHOW_UNITS.includes(newLine.unit)?newLine.unit:"kgs"} onChange={e=>setNewLine({...newLine,unit:e.target.value})} style={{...sIn,cursor:"pointer"}}>
+                {SHOW_UNITS.map(u=><option key={u} value={u}>{u}</option>)}
+              </select>
+              <input value={newLine.rate} onChange={e=>setNewLine({...newLine,rate:e.target.value})}
+                placeholder={`${isFlatUnit(newLine.unit)?"Price":"Rate"} ${SHOW_CUR_SYM[cur]||""}`} inputMode="decimal" style={sIn}/>
             </div>
             <datalist id="ng-stones-dl">{DEFAULT_STONES.map(s=><option key={s} value={s}/>)}</datalist>
             <datalist id="ng-shapes-dl">{SHAPES.map(s=><option key={s} value={s}/>)}</datalist>
@@ -16190,8 +16207,16 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                         <button onClick={()=>delLine(l.id)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:16,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
                       </div>
                       <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr 92px",gap:6,alignItems:"center"}}>
-                        <input value={l.qty} onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty" style={sIn}/>
-                        <input value={l.unit} onChange={e=>setLine(l.id,{unit:e.target.value})} style={sIn}/>
+                        <input value={isFlatUnit(l.unit)?"1":l.qty} disabled={isFlatUnit(l.unit)}
+                          onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty"
+                          style={{...sIn,...(isFlatUnit(l.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
+                        {/* A card off the show floor leaves stock by the quantity
+                            on this line, so it cannot be sold "flat" — that would
+                            pin it to 1 and send one kilo out for the whole lot.
+                            Off-catalogue lines have no card to answer to. */}
+                        <select value={l.unit||"kgs"} onChange={e=>setLine(l.id,e.target.value==="flat"?{unit:"flat",qty:"1"}:{unit:e.target.value})} style={{...sIn,cursor:"pointer"}}>
+                          {[...new Set([...(l.stockId?SHOW_UNITS.filter(u=>u!=="flat"):SHOW_UNITS),...(l.unit?[l.unit]:[])])].map(u=><option key={u} value={u}>{u}</option>)}
+                        </select>
                         <input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={sIn}/>
                         <div style={{textAlign:"right",fontSize:13,fontWeight:750,color:C.ink}}>{showMoney(showInvNum(l.qty)*showInvNum(l.rate),cur)}</div>
                       </div>
@@ -16263,6 +16288,13 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
           <div style={box}>
             <div style={{...lab,marginBottom:7}}>Note on the invoice</div>
             <textarea value={draft.notes} onChange={e=>setD({notes:e.target.value})} rows={2} placeholder="Anything the customer should read" style={{...sIn,resize:"vertical"}}/>
+            {/* Goods that travel rather than leave in the customer's hand carry a
+                transport docket, and the number belongs on the invoice they are
+                travelling under. Blank on a counter sale, and it prints nothing. */}
+            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:8,alignItems:"center",marginTop:8}}>
+              <input value={draft.tptNo||""} onChange={e=>setD({tptNo:e.target.value})} placeholder="TPT No. (optional)" style={sIn}/>
+              <span style={{fontSize:10.5,color:C.inkFaint}}>Transport docket for goods being shipped — printed under the invoice number</span>
+            </div>
           </div>
 
           <div style={{display:"flex",gap:8,flexWrap:"wrap",position:"sticky",bottom:0,background:C.bg,padding:"10px 0 2px"}}>
