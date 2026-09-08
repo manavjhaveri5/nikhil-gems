@@ -15556,9 +15556,14 @@ const SHOW_PAY_METHODS=[
   {key:"card",label:"Card",fields:[{k:"note",label:"Line on the invoice",placeholder:"Visa / Mastercard taken at the booth"}]},
   {key:"wire",label:"Bank wire / ACH",fields:[
     {k:"beneficiary",label:"Beneficiary"},{k:"bank",label:"Bank"},
-    {k:"account",label:"Account no."},{k:"routing",label:"Routing / ABA"},
+    {k:"account",label:"Account no."},
+    // A US account routes one way for a direct deposit and another for a wire,
+    // and an invoice that gives only one of them sends somebody to the phone.
+    {k:"routing",label:"Routing — ACH / direct deposit"},
+    {k:"wireRouting",label:"Routing — wire transfer"},
     {k:"swift",label:"SWIFT"},{k:"bankAddress",label:"Bank address"},
   ]},
+  {key:"cheque",label:"Cheque",fields:[{k:"payee",label:"Payable to"},{k:"note",label:"Where to send it",placeholder:"Address, if it is posted"}]},
   {key:"paypal",label:"PayPal",fields:[{k:"email",label:"PayPal email"}]},
   {key:"check",label:"Check",fields:[{k:"payee",label:"Payable to"}]},
 ];
@@ -15566,7 +15571,7 @@ const DEFAULT_SHOW_INV_SETTINGS={
   // The booth sells under Nikhil Gems, so that is the name and the mark on the
   // document. Address, phone and email stay empty by default — filling them
   // here prints them under the mark, which is a choice rather than a given.
-  seller:{name:"Nikhil Gems",address:"",phone:"",email:"sejal.nikhilgems@gmail.com",website:"www.eartheditions.co",instagram:"@eartheditions_",instagramUrl:"https://www.instagram.com/eartheditions_/",signupUrl:""},
+  seller:{name:"Earth Editions",address:"",phone:"",email:"sejal.nikhilgems@gmail.com",website:"www.eartheditions.co",instagram:"@eartheditions_",instagramUrl:"https://www.instagram.com/eartheditions_/",signupUrl:""},
   methods:{cash:{on:true}},
   // Methods the shop invents for itself, beyond the ones every stall has.
   extraMethods:[],
@@ -15577,15 +15582,9 @@ const DEFAULT_SHOW_INV_SETTINGS={
   // every invoice is how a booth ends up under-charging on the busy ones.
   taxPct:"",
 };
-/* The booth ran under the Earth Editions name before it ran under the shop's
-   own, and that name was saved into the settings of every device that opened
-   it. Read as the leftover default it is, so the document carries the shop's
-   name without anyone having to find the box it was typed in. */
-const LEGACY_SELLER_NAMES=["earth editions"];
 const showInvSettings=raw=>{
   const seller={...DEFAULT_SHOW_INV_SETTINGS.seller,...(raw?.seller||{})};
-  if(LEGACY_SELLER_NAMES.includes(String(seller.name||"").trim().toLowerCase()))seller.name=DEFAULT_SHOW_INV_SETTINGS.seller.name;
-  // The shop that was never given a way to be reached takes the one it has.
+  // A shop that was never given a way to be reached takes the one it has.
   if(!String(seller.email||"").trim())seller.email=DEFAULT_SHOW_INV_SETTINGS.seller.email;
   if(!String(seller.website||"").trim())seller.website=DEFAULT_SHOW_INV_SETTINGS.seller.website;
   return{
@@ -15683,12 +15682,21 @@ const nextShowInvNo=(invoices,year)=>{
    that fails. Fetched once and cached as a data URL in the settings blob, so the
    second invoice of the show — and every one after the network drops — still
    prints with the logo on it. */
-/* The shop's own mark, the one the app is wearing in its header — already a
-   data URL, so the document carries it into a print window with nothing to
-   fetch and nothing to fail on a show hall's wifi. */
-const SHOW_INV_LOGO_SRC=LOGO_SRC;
-const SHOW_INV_LOGO_V=3;                        // bumped when the mark changes
-async function showInvLogoDataUrl(){return SHOW_INV_LOGO_SRC;}
+/* The booth trades as Earth Editions, so that is the mark on what the customer
+   carries away. It lives on a CDN, which a show hall is exactly the place to
+   lose, so it is fetched once and kept in the settings as a data URL — after
+   that the document carries it and nothing has to be reached for. The app's own
+   gem stands in if the fetch never lands. */
+const SHOW_INV_LOGO_SRC=EARTH_LOGO_URL;
+const SHOW_INV_LOGO_V=4;                        // bumped when the mark changes
+async function showInvLogoDataUrl(){
+  try{
+    const r=await fetch(SHOW_INV_LOGO_SRC,{mode:"cors"});
+    if(!r.ok)throw new Error(`logo ${r.status}`);
+    const blob=await r.blob();
+    return await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob);});
+  }catch(e){console.warn("show logo:",e?.message||e);return LOGO_SRC;}
+}
 
 /* The document. Deliberately not the Nikhil Gems export invoice — no HSN, no
    IGST, no IEC; this is a US retail counter sale. Inline styles and a self
@@ -15777,7 +15785,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   body{margin:0;background:#e5e6e6;font-family:Georgia,'Times New Roman',serif;color:#1a1308;}
   .ee-inv{width:794px;margin:0 auto;background:#fff;padding:46px 54px 40px;}
   .mast{text-align:center;padding-bottom:22px;border-bottom:1px solid #d8d3c8;}
-  .mast img{width:96px;height:auto;display:inline-block;}
+  .mast img{width:150px;height:auto;display:inline-block;}
   .mast .co{font-size:19px;letter-spacing:3px;text-transform:uppercase;font-weight:400;margin-top:8px;}
   .mast .name{font-size:22px;letter-spacing:6px;text-transform:uppercase;font-weight:400;}
   .mast .bits{font-size:10.5px;color:#6b6255;margin-top:9px;letter-spacing:.3px;}
@@ -15826,8 +15834,10 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   }
 </style></head><body><div class="ee-inv">
   <div class="mast">
-    ${logo?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`:""}
-    ${s.seller.name?`<div class="co">${showInvEsc(s.seller.name)}</div>`:""}
+    ${logo
+      // The mark is a wordmark: setting the name under it prints it twice.
+      ?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`
+      :(s.seller.name?`<div class="co">${showInvEsc(s.seller.name)}</div>`:"")}
     ${sellerBits.length?`<div class="bits">${sellerBits.map(showInvEsc).join(" &nbsp;·&nbsp; ")}</div>`:""}
   </div>
   <div class="head">
