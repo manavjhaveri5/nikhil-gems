@@ -15912,6 +15912,29 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [moreTotals,setMoreTotals]=useState(false);
   const [focusLineId,setFocusLineId]=useState(null);
   const [newMethod,setNewMethod]=useState("");
+  /* A logo goes into the settings as a data URL, and from there into every
+     invoice HTML and every PDF — so it is scaled down on the way in. A 4MB
+     photograph of a sign would otherwise ride along in each one. */
+  const uploadLogo=async file=>{
+    if(!file)return;
+    if(!/^image\//.test(file.type||"")){showToast?.("That is not an image");return;}
+    try{
+      const src=await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(file);});
+      const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src;});
+      const max=640;
+      const scale=Math.min(1,max/Math.max(img.width||max,img.height||max));
+      const cv=document.createElement("canvas");
+      cv.width=Math.max(1,Math.round((img.width||max)*scale));
+      cv.height=Math.max(1,Math.round((img.height||max)*scale));
+      // PNG, because a wordmark is usually cut out and a white box behind it
+      // on a printed invoice looks like a mistake.
+      cv.getContext("2d").drawImage(img,0,0,cv.width,cv.height);
+      const out=cv.toDataURL("image/png");
+      setLogo(out);
+      onSaveSettings?.({...S,logoDataUrl:out,logoV:SHOW_INV_LOGO_V,logoCustom:true});
+      showToast?.("✓ Logo set");
+    }catch(e){showToast?.("⚠ Could not read that image: "+(e?.message||e));}
+  };
   // What was just issued, so the Saved list opens on it rather than on a
   // stack the seller has to read back through to find their own sale.
   const [justIssued,setJustIssued]=useState(null);
@@ -15938,8 +15961,9 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   // wifi that dies is never the one you were using a second ago.
   useEffect(()=>{
     loadInvoiceHtmlPdfLibs().catch(()=>{});
-    // A mark cached before the shop's own was used has to be replaced, not kept.
-    if(S.logoDataUrl&&S.logoV===SHOW_INV_LOGO_V){setLogo(S.logoDataUrl);return;}
+    // A mark cached before the shop's own was used has to be replaced, not kept
+    // — but one the shop uploaded is its own choice and stands.
+    if(S.logoDataUrl&&(S.logoCustom||S.logoV===SHOW_INV_LOGO_V)){setLogo(S.logoDataUrl);return;}
     let live=true;
     showInvLogoDataUrl().then(url=>{if(!live)return;setLogo(url);onSaveSettings?.({...S,logoDataUrl:url,logoV:SHOW_INV_LOGO_V});}).catch(()=>{});
     return()=>{live=false;};
@@ -16724,10 +16748,18 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
           <div style={box}>
             <div style={{...lab,marginBottom:7}}>Logo</div>
             <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-              {logo?<img src={logo} alt="" style={{width:110,height:"auto",background:"#fff",border:`1px solid ${C.border}`,borderRadius:6,padding:6}}/>:<span style={{fontSize:11,color:C.amber}}>Not cached yet</span>}
-              <button onClick={async()=>{try{const u=await showInvLogoDataUrl();setLogo(u);onSaveSettings({...S,logoDataUrl:u});showToast?.("✓ Logo cached for offline printing");}catch(e){showToast?.("⚠ Could not fetch the logo: "+(e.message||e));}}}
-                style={pill(false)}>↻ Re-cache</button>
-              <span style={{fontSize:10.5,color:C.inkFaint,flex:"1 1 180px"}}>Stored with the settings so invoices still print with the wordmark when the hall wifi is gone.</span>
+              {logo?<img src={logo} alt="" style={{width:110,height:"auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:6}}/>:<span style={{fontSize:11,color:C.amber}}>Not cached yet</span>}
+              <label style={{...pill(true),display:"inline-flex",alignItems:"center"}}>
+                Upload a logo
+                <input type="file" accept="image/*" style={{display:"none"}}
+                  onChange={e=>{const f=e.target.files?.[0];e.target.value="";uploadLogo(f);}}/>
+              </label>
+              <button onClick={async()=>{try{const u=await showInvLogoDataUrl();setLogo(u);onSaveSettings({...S,logoDataUrl:u,logoV:SHOW_INV_LOGO_V,logoCustom:false});showToast?.("✓ Back to the Earth Editions wordmark");}catch(e){showToast?.("⚠ Could not fetch the logo: "+(e.message||e));}}}
+                style={pill(false)}>{S.logoCustom?"↻ Use the default":"↻ Re-cache"}</button>
+              <span style={{fontSize:10.5,color:C.inkFaint,flex:"1 1 200px"}}>
+                {S.logoCustom?"Your own mark, kept with the settings and printed on every invoice.":"Stored with the settings so invoices still print with the wordmark when the hall wifi is gone."}
+                {" "}A cut-out PNG prints best; it is scaled to 640px on the way in.
+              </span>
             </div>
           </div>
         </>
