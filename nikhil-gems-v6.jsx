@@ -15816,6 +15816,14 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [busy,setBusy]=useState("");
   const [custQuery,setCustQuery]=useState("");
   const [custOpen,setCustOpen]=useState(false);
+  /* A booth screen is read standing up, over a customer's shoulder. What is
+     always needed stays out — the name, the search, the cart, the total — and
+     what is needed occasionally opens when it is asked for. */
+  const [custMore,setCustMore]=useState(false);
+  const [browseAll,setBrowseAll]=useState(false);
+  const [showCustomLine,setShowCustomLine]=useState(false);
+  const [moreTotals,setMoreTotals]=useState(false);
+  const [focusLineId,setFocusLineId]=useState(null);
   const [logo,setLogo]=useState(S.logoDataUrl||"");
   const mine=invoices.filter(i=>i.showId===show.id);
   const cur=draft.currency||"USD";
@@ -15841,6 +15849,9 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const availOf=item=>{const b=basisOf(item);return Math.max(0,(parseFloat(item[b])||0)-takenQty(item.id));};
   const sellable=atShow.filter(s=>!s.soldDate&&((parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0));
   const q=pick.trim().toLowerCase();
+  // The list of cards is a tool, not scenery: open while it is being searched or
+  // browsed, and while the cart is still empty, otherwise out of the way.
+  const pickerOpen=!!q||browseAll||draft.lines.length===0;
   const matches=(q?sellable.filter(s=>`${s.material||""} ${s.shape||""} ${s.size||""} ${s.origin||""} ${s.sku||""} ${s.location||""}`.toLowerCase().includes(q)):sellable)
     .sort((a,b)=>`${a.material||""} ${a.shape||""}`.localeCompare(`${b.material||""} ${b.shape||""}`,undefined,{numeric:true,sensitivity:"base"}))
     .slice(0,q?60:25);
@@ -15848,14 +15859,16 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     const b=basisOf(item);
     const avail=availOf(item);
     if(avail<=0){showToast?.("Nothing left of that card");return;}
+    const id=uid();
     setD(d=>({...d,lines:[...d.lines,{
-      id:uid(),stockId:item.id,basis:b,
+      id,stockId:item.id,basis:b,
       desc:[item.material,item.origin,item.size].filter(Boolean).join(" · ")||item.material||"Item",
       shape:item.shape||"",
       qty:String(Math.min(1,avail)||avail),
       unit:b==="qty"?(item.unit||"pcs"):(item.unit2||"kg"),
       rate:String(item.listPrice||""),note:"",
     }]}));
+    setFocusLineId(id);
     setPick("");
   };
   const addCustomLine=()=>{
@@ -15878,6 +15891,8 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
      ones served most recently rather than nothing at all, and a typed one
      matches from the first letter. Anything typed that matches nobody is a new
      customer — the name is already on the draft, and issuing files them. */
+  const c0=draft.customer||{};
+  const hasCustAddress=!!(String(c0.company||"").trim()||String(c0.city||"").trim()||String(c0.state||"").trim()||String(c0.country||"").trim());
   const cq=custQuery.trim().toLowerCase();
   /* An export buyer read as a booth customer: the company is the business, the
      contact is the person standing there. Kept out of the list when the booth
@@ -16122,13 +16137,19 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,marginBottom:7}}>
               <input value={draft.customer.phone} onChange={e=>setCust({phone:e.target.value})} placeholder="Phone" inputMode="tel" style={sIn}/>
               <input value={draft.customer.email} onChange={e=>setCust({email:e.target.value})} placeholder="Email" inputMode="email" autoCapitalize="none" style={sIn}/>
-              <input value={draft.customer.company} onChange={e=>setCust({company:e.target.value})} placeholder="Business (optional)" style={sIn}/>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 70px 1fr",gap:6}}>
-                <input value={draft.customer.city} onChange={e=>setCust({city:e.target.value})} placeholder="City" style={sIn}/>
-                <input value={draft.customer.state} onChange={e=>setCust({state:e.target.value})} placeholder="ST" style={sIn}/>
-                <input value={draft.customer.country} onChange={e=>setCust({country:e.target.value})} placeholder="Country" style={sIn}/>
-              </div>
             </div>
+            {(custMore||hasCustAddress)?(
+              <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,marginBottom:7}}>
+                <input value={draft.customer.company} onChange={e=>setCust({company:e.target.value})} placeholder="Business (optional)" style={sIn}/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 70px 1fr",gap:6}}>
+                  <input value={draft.customer.city} onChange={e=>setCust({city:e.target.value})} placeholder="City" style={sIn}/>
+                  <input value={draft.customer.state} onChange={e=>setCust({state:e.target.value})} placeholder="ST" style={sIn}/>
+                  <input value={draft.customer.country} onChange={e=>setCust({country:e.target.value})} placeholder="Country" style={sIn}/>
+                </div>
+              </div>
+            ):(
+              <button onClick={()=>setCustMore(true)} style={{background:"none",border:"none",padding:"0 0 7px",fontSize:11,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>＋ Business & address</button>
+            )}
             <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.inkMid,cursor:"pointer"}}>
               <input type="checkbox" checked={!!draft.customer.addToList} onChange={e=>setCust({addToList:e.target.checked})} style={{width:17,height:17,cursor:"pointer"}}/>
               Add to the mailing list as <b style={{color:C.ink}}>{slug}</b>
@@ -16137,8 +16158,14 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
 
           <div style={box}>
             <div style={{...lab,marginBottom:9}}>What sold</div>
-            <input value={pick} onChange={e=>setPick(e.target.value)} placeholder={`Search the ${sellable.length} card${sellable.length===1?"":"s"} at the show…`} style={{...sIn,marginBottom:8}}/>
-            <div style={{maxHeight:mob?200:230,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,marginBottom:10}}>
+            <input value={pick} onChange={e=>{setPick(e.target.value);if(e.target.value)setBrowseAll(true);}} onFocus={()=>setBrowseAll(true)}
+              placeholder={`Search the ${sellable.length} card${sellable.length===1?"":"s"} at the show…`} style={{...sIn,marginBottom:pickerOpen?8:0}}/>
+            {!pickerOpen&&sellable.length>0&&(
+              <button onClick={()=>setBrowseAll(true)} style={{background:"none",border:"none",padding:"7px 0 0",fontSize:11,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>
+                Browse all {sellable.length} card{sellable.length===1?"":"s"}
+              </button>
+            )}
+            {pickerOpen&&<div style={{maxHeight:mob?200:230,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,marginBottom:10}}>
               {matches.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:14,textAlign:"center"}}>{sellable.length?"No card matches that":"Nothing is at this show yet — send stock from the Stock module"}</div>}
               {matches.map(item=>{
                 const avail=availOf(item);
@@ -16154,8 +16181,55 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   </button>
                 );
               })}
-            </div>
+            </div>}
+          </div>
 
+          {/* The cart sits straight under the search, not below the ways of
+              adding to it: tap a card and it lands where the eye already is,
+              with the money for the line beside it. */}
+          {draft.lines.length>0&&(
+            <div style={box}>
+              <div style={{...lab,marginBottom:9,display:"flex",justifyContent:"space-between"}}>
+                <span>{draft.lines.length} line{draft.lines.length===1?"":"s"}</span>
+                <span style={{color:C.ink}}>{showMoney(T.subtotal,cur)}</span>
+              </div>
+              <div style={{display:"grid",gap:6}}>
+                {draft.lines.map(l=>{
+                  const item=l.stockId?atShow.find(s=>s.id===l.stockId):null;
+                  const cap=item?(parseFloat(item[l.basis||"qty"])||0):null;
+                  const over=cap!=null&&showInvNum(l.qty)>cap+0.0001;
+                  return(
+                    <div key={l.id} style={{border:`1px solid ${over?C.red:C.border}`,borderRadius:8,padding:mob?"9px 10px":"8px 10px",background:C.surface}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",marginBottom:6}}>
+                        <div style={{minWidth:0}}>
+                          <div style={{fontSize:12.5,fontWeight:700,color:C.ink,wordBreak:"break-word"}}>{l.desc}{l.shape?` · ${l.shape}`:""}</div>
+                          <div style={{fontSize:9.5,color:over?C.red:C.inkFaint}}>{over?`only ${showInvQty(cap)} at the show`:(l.stockId?`from stock${cap!=null?` · ${showInvQty(cap)} ${l.unit} there`:""}`:"off-catalogue")}</div>
+                        </div>
+                        <button onClick={()=>delLine(l.id)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:16,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr 92px",gap:6,alignItems:"center"}}>
+                        <input value={isFlatUnit(l.unit)?"1":l.qty} disabled={isFlatUnit(l.unit)}
+                          ref={el=>{if(el&&focusLineId===l.id){el.focus();el.select?.();setFocusLineId(null);}}}
+                          onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty"
+                          style={{...sIn,...(isFlatUnit(l.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
+                        {/* A card off the show floor leaves stock by the quantity
+                            on this line, so it cannot be sold "flat" — that would
+                            pin it to 1 and send one kilo out for the whole lot.
+                            Off-catalogue lines have no card to answer to. */}
+                        <select value={l.unit||"kgs"} onChange={e=>setLine(l.id,e.target.value==="flat"?{unit:"flat",qty:"1"}:{unit:e.target.value})} style={{...sIn,cursor:"pointer"}}>
+                          {[...new Set([...(l.stockId?SHOW_UNITS.filter(u=>u!=="flat"):SHOW_UNITS),...(l.unit?[l.unit]:[])])].map(u=><option key={u} value={u}>{u}</option>)}
+                        </select>
+                        <input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={sIn}/>
+                        <div style={{textAlign:"right",fontSize:13,fontWeight:750,color:C.ink}}>{showMoney(showInvNum(l.qty)*showInvNum(l.rate),cur)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={box}>
             {(S.customItems||[]).length>0&&(
               <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
                 {S.customItems.slice(0,12).map(it=>(
@@ -16166,6 +16240,12 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 ))}
               </div>
             )}
+            {!showCustomLine&&(
+              <button onClick={()=>setShowCustomLine(true)} style={{background:"none",border:"none",padding:0,fontSize:11.5,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>
+                ＋ Something not on a card
+              </button>
+            )}
+            {showCustomLine&&<>
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"minmax(0,2fr) minmax(0,1fr) 70px 80px 90px",gap:6,alignItems:"end"}}>
               <input value={newLine.desc} onChange={e=>setNewLine({...newLine,desc:e.target.value})} placeholder="New stone" list="ng-stones-dl" style={sIn}/>
               <input value={newLine.shape} onChange={e=>setNewLine({...newLine,shape:e.target.value})} placeholder="Shape" list="ng-shapes-dl" style={sIn}/>
@@ -16187,49 +16267,20 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
               </label>
               <button onClick={addCustomLine} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:mob?"8px 16px":"6px 14px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>+ Add line</button>
             </div>
+            </>}
           </div>
 
-          {draft.lines.length>0&&(
-            <div style={box}>
-              <div style={{...lab,marginBottom:9}}>{draft.lines.length} line{draft.lines.length===1?"":"s"}</div>
-              <div style={{display:"grid",gap:6}}>
-                {draft.lines.map(l=>{
-                  const item=l.stockId?atShow.find(s=>s.id===l.stockId):null;
-                  const cap=item?(parseFloat(item[l.basis||"qty"])||0):null;
-                  const over=cap!=null&&showInvNum(l.qty)>cap+0.0001;
-                  return(
-                    <div key={l.id} style={{border:`1px solid ${over?C.red:C.border}`,borderRadius:8,padding:mob?"9px 10px":"8px 10px",background:C.surface}}>
-                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",marginBottom:6}}>
-                        <div style={{minWidth:0}}>
-                          <div style={{fontSize:12.5,fontWeight:700,color:C.ink,wordBreak:"break-word"}}>{l.desc}{l.shape?` · ${l.shape}`:""}</div>
-                          <div style={{fontSize:9.5,color:over?C.red:C.inkFaint}}>{over?`only ${showInvQty(cap)} at the show`:(l.stockId?`from stock${cap!=null?` · ${showInvQty(cap)} ${l.unit} there`:""}`:"off-catalogue")}</div>
-                        </div>
-                        <button onClick={()=>delLine(l.id)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:16,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
-                      </div>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr 92px",gap:6,alignItems:"center"}}>
-                        <input value={isFlatUnit(l.unit)?"1":l.qty} disabled={isFlatUnit(l.unit)}
-                          onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty"
-                          style={{...sIn,...(isFlatUnit(l.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
-                        {/* A card off the show floor leaves stock by the quantity
-                            on this line, so it cannot be sold "flat" — that would
-                            pin it to 1 and send one kilo out for the whole lot.
-                            Off-catalogue lines have no card to answer to. */}
-                        <select value={l.unit||"kgs"} onChange={e=>setLine(l.id,e.target.value==="flat"?{unit:"flat",qty:"1"}:{unit:e.target.value})} style={{...sIn,cursor:"pointer"}}>
-                          {[...new Set([...(l.stockId?SHOW_UNITS.filter(u=>u!=="flat"):SHOW_UNITS),...(l.unit?[l.unit]:[])])].map(u=><option key={u} value={u}>{u}</option>)}
-                        </select>
-                        <input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={sIn}/>
-                        <div style={{textAlign:"right",fontSize:13,fontWeight:750,color:C.ink}}>{showMoney(showInvNum(l.qty)*showInvNum(l.rate),cur)}</div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           <div style={box}>
-            <div style={{...lab,marginBottom:9}}>Totals</div>
-            <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:7,marginBottom:10}}>
+            {/* The money is what the customer is waiting on, so it is never
+                behind a tap. Date, currency, discount and tax are set once a
+                show and asked for by name when they are not. */}
+            <div style={{...lab,marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span>Totals</span>
+              <button onClick={()=>setMoreTotals(v=>!v)} style={{background:"none",border:"none",padding:0,fontSize:11,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600,textTransform:"none",letterSpacing:0}}>
+                {moreTotals?"Hide":"Date, discount & tax"}
+              </button>
+            </div>
+            {(moreTotals||showInvNum(draft.discount)>0||showInvNum(draft.taxPct)>0)&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:7,marginBottom:10}}>
               <Field label="Date"><input type="date" value={draft.date} onChange={e=>setD({date:e.target.value})} style={sIn}/></Field>
               <Field label="Currency"><select value={cur} onChange={e=>setD({currency:e.target.value})} style={{...sIn,cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select></Field>
               <Field label="Discount">
@@ -16239,7 +16290,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 </div>
               </Field>
               <Field label="Sales tax %"><input value={draft.taxPct} onChange={e=>setD({taxPct:e.target.value})} inputMode="decimal" placeholder="0" style={sIn}/></Field>
-            </div>
+            </div>}
             <div style={{borderTop:`1px solid ${C.border}`,paddingTop:9}}>
               {[["Subtotal",T.subtotal],...(T.discount>0?[["Discount",-T.discount]]:[]),...(T.taxAmt>0?[["Sales tax",T.taxAmt]]:[])].map(([k,v])=>(
                 <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.inkMid,padding:"2px 0"}}><span>{k}</span><span>{showMoney(v,cur)}</span></div>
