@@ -15646,14 +15646,12 @@ const nextShowInvNo=(invoices,year)=>{
    that fails. Fetched once and cached as a data URL in the settings blob, so the
    second invoice of the show — and every one after the network drops — still
    prints with the logo on it. */
-const SHOW_INV_LOGO_SRC="/ng-letterhead.jpg";   // logo, name and tagline in one band
-const SHOW_INV_LOGO_V=2;                        // bumped when the mark changes
-async function showInvLogoDataUrl(){
-  const r=await fetch(SHOW_INV_LOGO_SRC);
-  if(!r.ok)throw new Error(`logo ${r.status}`);
-  const blob=await r.blob();
-  return await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob);});
-}
+/* The shop's own mark, the one the app is wearing in its header — already a
+   data URL, so the document carries it into a print window with nothing to
+   fetch and nothing to fail on a show hall's wifi. */
+const SHOW_INV_LOGO_SRC=LOGO_SRC;
+const SHOW_INV_LOGO_V=3;                        // bumped when the mark changes
+async function showInvLogoDataUrl(){return SHOW_INV_LOGO_SRC;}
 
 /* The document. Deliberately not the Nikhil Gems export invoice — no HSN, no
    IGST, no IEC; this is a US retail counter sale. Inline styles and a self
@@ -15707,7 +15705,8 @@ function buildShowInvoiceHTML(inv,settings,show){
   body{margin:0;background:#e5e6e6;font-family:Georgia,'Times New Roman',serif;color:#1a1308;}
   .ee-inv{width:794px;margin:0 auto;background:#fff;padding:46px 54px 40px;}
   .mast{text-align:center;padding-bottom:22px;border-bottom:1px solid #d8d3c8;}
-  .mast img{width:100%;max-width:470px;height:auto;display:inline-block;}
+  .mast img{width:96px;height:auto;display:inline-block;}
+  .mast .co{font-size:19px;letter-spacing:3px;text-transform:uppercase;font-weight:400;margin-top:8px;}
   .mast .name{font-size:22px;letter-spacing:6px;text-transform:uppercase;font-weight:400;}
   .mast .bits{font-size:10.5px;color:#6b6255;margin-top:9px;letter-spacing:.3px;}
   .head{display:flex;justify-content:space-between;align-items:flex-end;margin:26px 0 20px;gap:24px;}
@@ -15751,7 +15750,8 @@ function buildShowInvoiceHTML(inv,settings,show){
   }
 </style></head><body><div class="ee-inv">
   <div class="mast">
-    ${logo?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`:`<div class="name">${showInvEsc(s.seller.name)}</div>`}
+    ${logo?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`:""}
+    ${s.seller.name?`<div class="co">${showInvEsc(s.seller.name)}</div>`:""}
     ${sellerBits.length?`<div class="bits">${sellerBits.map(showInvEsc).join(" &nbsp;·&nbsp; ")}</div>`:""}
   </div>
   <div class="head">
@@ -15790,7 +15790,7 @@ function buildShowInvoiceHTML(inv,settings,show){
    is what it is used on: a customer is standing there. The draft is mirrored to
    localStorage the way the buying plan is, so a stray refresh mid-sale does not
    cost the invoice. */
-const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city:"",state:"",country:"",notes:"",addToList:true});
+const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city:"",state:"",country:"",resaleNo:"",notes:"",addToList:true});
 const emptyShowInvDraft=(show,settings)=>({
   id:uid(),invNo:"",showId:show?.id||"",showName:show?.name||"",showSlug:showTagSlug(show),
   date:today(),currency:"USD",customer:emptyShowInvCustomer(),lines:[],
@@ -15812,7 +15812,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [view,setView]=useState("new");
   const [draft,setDraft]=useState(()=>readShowInvDraft(show.id)||emptyShowInvDraft(show,showInvSettings(settings)));
   const [pick,setPick]=useState("");
-  const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"kgs",rate:"",save:true});
+  const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"kgs",rate:""});
   const [busy,setBusy]=useState("");
   const [custQuery,setCustQuery]=useState("");
   const [custOpen,setCustOpen]=useState(false);
@@ -15871,16 +15871,35 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     setFocusLineId(id);
     setPick("");
   };
+  /* The price of a stone in a shape is worth remembering the first time it is
+     typed, not the times the seller thinks to tick a box. Saved on every line
+     that carries one, and offered back the moment the same pair is typed
+     again — which is what makes the second day of a show quick. */
+  const savedPriceFor=(desc,shape)=>{
+    const d=String(desc||"").trim().toLowerCase(),sh=String(shape||"").trim().toLowerCase();
+    if(!d)return null;
+    const hit=(S.customItems||[]).find(x=>String(x.desc||"").trim().toLowerCase()===d&&String(x.shape||"").trim().toLowerCase()===sh);
+    return hit?String(hit.rate??""):null;
+  };
+  const rememberPrice=(desc,shape,unit,rate)=>{
+    if(!(showInvNum(rate)>0))return;
+    const d=String(desc||"").trim(),sh=String(shape||"").trim();
+    if(!d)return;
+    const same=x=>String(x.desc||"").trim().toLowerCase()===d.toLowerCase()&&String(x.shape||"").trim().toLowerCase()===sh.toLowerCase();
+    const rest=(S.customItems||[]).filter(x=>!same(x));
+    onSaveSettings?.({...S,customItems:[{id:uid(),desc:d,shape:sh,unit:unit||"kgs",rate:String(rate)},...rest].slice(0,60)});
+  };
+
   const addCustomLine=()=>{
     const desc=newLine.desc.trim();
     if(!desc){showToast?.("Name the stone first");return;}
     setD(d=>({...d,lines:[...d.lines,{id:uid(),stockId:null,basis:null,desc,shape:newLine.shape.trim(),qty:isFlatUnit(newLine.unit)?"1":(newLine.qty||"1"),unit:newLine.unit||"kgs",rate:newLine.rate,note:""}]}));
-    if(newLine.save&&showInvNum(newLine.rate)>0){
-      const item={id:uid(),desc,shape:newLine.shape.trim(),unit:newLine.unit||"kgs",rate:newLine.rate};
-      const dup=(S.customItems||[]).some(x=>x.desc===item.desc&&x.shape===item.shape&&x.rate===item.rate);
-      if(!dup)onSaveSettings?.({...S,customItems:[item,...(S.customItems||[])].slice(0,60)});
-    }
-    setNewLine({desc:"",shape:"",qty:"1",unit:"pcs",rate:"",save:true});
+    rememberPrice(desc,newLine.shape,newLine.unit,newLine.rate);
+    // The unit the seller chose is the unit the stall is selling in today, so
+    // the next line starts there rather than snapping back.
+    setNewLine({desc:"",shape:"",qty:"1",unit:newLine.unit||"kgs",rate:""});
+    setShowCustomLine(false);
+    setPick("");
   };
   const addSavedItem=it=>setD(d=>({...d,lines:[...d.lines,{id:uid(),stockId:null,basis:null,desc:it.desc,shape:it.shape||"",qty:"1",unit:it.unit||"pcs",rate:it.rate,note:""}]}));
   const setLine=(id,patch)=>setD(d=>({...d,lines:d.lines.map(l=>l.id===id?{...l,...patch}:l)}));
@@ -15892,7 +15911,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
      matches from the first letter. Anything typed that matches nobody is a new
      customer — the name is already on the draft, and issuing files them. */
   const c0=draft.customer||{};
-  const hasCustAddress=!!(String(c0.company||"").trim()||String(c0.city||"").trim()||String(c0.state||"").trim()||String(c0.country||"").trim());
+  const hasCustAddress=!!(String(c0.company||"").trim()||String(c0.city||"").trim()||String(c0.state||"").trim()||String(c0.country||"").trim()||String(c0.resaleNo||"").trim());
   const cq=custQuery.trim().toLowerCase();
   /* An export buyer read as a booth customer: the company is the business, the
      contact is the person standing there. Kept out of the list when the booth
@@ -16123,7 +16142,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                         {c.name||c.email}
                         {c._source==="buyer"&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,letterSpacing:.5,color:C.blue,background:C.blueBg,borderRadius:4,padding:"1px 5px"}}>BUYER</span>}
                       </div>
-                      <div style={{fontSize:10,color:C.inkFaint}}>{[c.company,c.email,c.phone,c.country,c.omnisendTagged?"on the list":""].filter(Boolean).join(" · ")||"no details yet"}</div>
+                      <div style={{fontSize:10,color:C.inkFaint}}>{[c.company,c.email,c.phone,c.country,c.resaleNo?"resale on file":"",c.omnisendTagged?"on the list":""].filter(Boolean).join(" · ")||"no details yet"}</div>
                     </button>
                   ))}
                   {cq&&!custExact&&(
@@ -16146,6 +16165,10 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   <input value={draft.customer.state} onChange={e=>setCust({state:e.target.value})} placeholder="ST" style={sIn}/>
                   <input value={draft.customer.country} onChange={e=>setCust({country:e.target.value})} placeholder="Country" style={sIn}/>
                 </div>
+                {/* A US buyer selling on gives a resale number instead of paying
+                    the tax. Kept on the customer for the shop's own records; it
+                    is not printed on what the customer walks away with. */}
+                <input value={draft.customer.resaleNo||""} onChange={e=>setCust({resaleNo:e.target.value})} placeholder="Sales tax / resale licence — our records only" style={sIn}/>
               </div>
             ):(
               <button onClick={()=>setCustMore(true)} style={{background:"none",border:"none",padding:"0 0 7px",fontSize:11,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>＋ Business & address</button>
@@ -16167,6 +16190,15 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             )}
             {pickerOpen&&<div style={{maxHeight:mob?200:230,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,marginBottom:10}}>
               {matches.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:14,textAlign:"center"}}>{sellable.length?"No card matches that":"Nothing is at this show yet — send stock from the Stock module"}</div>}
+              {/* Whatever was typed is either a card or a line waiting to be
+                  written, so the way to write it sits at the end of the search
+                  rather than in a section of its own further down. */}
+              {!!q&&(
+                <button onClick={()=>{setNewLine(n=>({...n,desc:pick.trim(),rate:savedPriceFor(pick.trim(),n.shape)||n.rate}));setShowCustomLine(true);}}
+                  style={{display:"block",width:"100%",textAlign:"left",background:C.card,border:"none",padding:mob?"10px":"9px 10px",cursor:"pointer",font:"inherit",fontSize:11.5,color:C.inkMid}}>
+                  ＋ Sell <b style={{color:C.ink}}>{pick.trim()}</b> without a card
+                </button>
+              )}
               {matches.map(item=>{
                 const avail=availOf(item);
                 const b=basisOf(item);
@@ -16193,35 +16225,55 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 <span>{draft.lines.length} line{draft.lines.length===1?"":"s"}</span>
                 <span style={{color:C.ink}}>{showMoney(T.subtotal,cur)}</span>
               </div>
-              <div style={{display:"grid",gap:6}}>
+              {/* A bill of sale reads down its columns, so it is set as one:
+                  what it is, how much, at what, and what that comes to. On a
+                  phone the row stacks, because five columns on a 380px screen
+                  is not a table, it is a puzzle. */}
+              <div style={{display:"grid",gap:mob?6:0}}>
+                {!mob&&(
+                  <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 84px 74px 96px 96px 22px",gap:8,alignItems:"center",padding:"0 2px 6px",borderBottom:`1px solid ${C.border}`}}>
+                    {["Item","Qty","Unit","Rate","Amount",""].map((h,i)=>(
+                      <span key={h+i} style={{fontSize:9,fontWeight:800,letterSpacing:.6,textTransform:"uppercase",color:C.inkFaint,textAlign:i>=1&&i<=4?"right":"left"}}>{h}</span>
+                    ))}
+                  </div>
+                )}
                 {draft.lines.map(l=>{
                   const item=l.stockId?atShow.find(s=>s.id===l.stockId):null;
                   const cap=item?(parseFloat(item[l.basis||"qty"])||0):null;
                   const over=cap!=null&&showInvNum(l.qty)>cap+0.0001;
-                  return(
-                    <div key={l.id} style={{border:`1px solid ${over?C.red:C.border}`,borderRadius:8,padding:mob?"9px 10px":"8px 10px",background:C.surface}}>
-                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",marginBottom:6}}>
-                        <div style={{minWidth:0}}>
-                          <div style={{fontSize:12.5,fontWeight:700,color:C.ink,wordBreak:"break-word"}}>{l.desc}{l.shape?` · ${l.shape}`:""}</div>
-                          <div style={{fontSize:9.5,color:over?C.red:C.inkFaint}}>{over?`only ${showInvQty(cap)} at the show`:(l.stockId?`from stock${cap!=null?` · ${showInvQty(cap)} ${l.unit} there`:""}`:"off-catalogue")}</div>
-                        </div>
-                        <button onClick={()=>delLine(l.id)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:16,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
-                      </div>
+                  const qtyBox=(
+                    <input value={isFlatUnit(l.unit)?"1":l.qty} disabled={isFlatUnit(l.unit)}
+                      ref={el=>{if(el&&focusLineId===l.id){el.focus();el.select?.();setFocusLineId(null);}}}
+                      onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty"
+                      style={{...sIn,textAlign:"right",...(isFlatUnit(l.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
+                  );
+                  /* A card off the show floor leaves stock by the quantity on
+                     this line, so it cannot be sold "flat" — that would pin it
+                     to 1 and send one kilo out for the whole lot. */
+                  const unitBox=(
+                    <select value={l.unit||"kgs"} onChange={e=>setLine(l.id,e.target.value==="flat"?{unit:"flat",qty:"1"}:{unit:e.target.value})} style={{...sIn,cursor:"pointer"}}>
+                      {[...new Set([...(l.stockId?SHOW_UNITS.filter(u=>u!=="flat"):SHOW_UNITS),...(l.unit?[l.unit]:[])])].map(u=><option key={u} value={u}>{u}</option>)}
+                    </select>
+                  );
+                  const rateBox=<input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={{...sIn,textAlign:"right"}}/>;
+                  const amount=<span style={{fontSize:13,fontWeight:750,color:C.ink}}>{showMoney(showInvNum(l.qty)*showInvNum(l.rate),cur)}</span>;
+                  const kill=<button onClick={()=>delLine(l.id)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:16,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>;
+                  const name=(
+                    <span style={{minWidth:0,display:"block"}}>
+                      <span style={{display:"block",fontSize:12.5,fontWeight:700,color:C.ink,wordBreak:"break-word"}}>{l.desc}{l.shape?` · ${l.shape}`:""}</span>
+                      {(over||l.stockId)&&<span style={{display:"block",fontSize:9.5,color:over?C.red:C.inkFaint}}>{over?`only ${showInvQty(cap)} at the show`:`${showInvQty(cap)} ${l.unit} at the show`}</span>}
+                    </span>
+                  );
+                  return mob?(
+                    <div key={l.id} style={{border:`1px solid ${over?C.red:C.border}`,borderRadius:8,padding:"9px 10px",background:C.surface}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",marginBottom:6}}>{name}{kill}</div>
                       <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr 92px",gap:6,alignItems:"center"}}>
-                        <input value={isFlatUnit(l.unit)?"1":l.qty} disabled={isFlatUnit(l.unit)}
-                          ref={el=>{if(el&&focusLineId===l.id){el.focus();el.select?.();setFocusLineId(null);}}}
-                          onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty"
-                          style={{...sIn,...(isFlatUnit(l.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
-                        {/* A card off the show floor leaves stock by the quantity
-                            on this line, so it cannot be sold "flat" — that would
-                            pin it to 1 and send one kilo out for the whole lot.
-                            Off-catalogue lines have no card to answer to. */}
-                        <select value={l.unit||"kgs"} onChange={e=>setLine(l.id,e.target.value==="flat"?{unit:"flat",qty:"1"}:{unit:e.target.value})} style={{...sIn,cursor:"pointer"}}>
-                          {[...new Set([...(l.stockId?SHOW_UNITS.filter(u=>u!=="flat"):SHOW_UNITS),...(l.unit?[l.unit]:[])])].map(u=><option key={u} value={u}>{u}</option>)}
-                        </select>
-                        <input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={sIn}/>
-                        <div style={{textAlign:"right",fontSize:13,fontWeight:750,color:C.ink}}>{showMoney(showInvNum(l.qty)*showInvNum(l.rate),cur)}</div>
+                        {qtyBox}{unitBox}{rateBox}<div style={{textAlign:"right"}}>{amount}</div>
                       </div>
+                    </div>
+                  ):(
+                    <div key={l.id} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 84px 74px 96px 96px 22px",gap:8,alignItems:"center",padding:"7px 2px",borderBottom:`1px solid ${C.border}`,background:over?"#fff6f5":"transparent"}}>
+                      {name}{qtyBox}{unitBox}{rateBox}<div style={{textAlign:"right"}}>{amount}</div>{kill}
                     </div>
                   );
                 })}
@@ -16240,15 +16292,15 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 ))}
               </div>
             )}
-            {!showCustomLine&&(
+            {!showCustomLine&&(S.customItems||[]).length===0&&(
               <button onClick={()=>setShowCustomLine(true)} style={{background:"none",border:"none",padding:0,fontSize:11.5,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>
                 ＋ Something not on a card
               </button>
             )}
             {showCustomLine&&<>
             <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"minmax(0,2fr) minmax(0,1fr) 70px 80px 90px",gap:6,alignItems:"end"}}>
-              <input value={newLine.desc} onChange={e=>setNewLine({...newLine,desc:e.target.value})} placeholder="New stone" list="ng-stones-dl" style={sIn}/>
-              <input value={newLine.shape} onChange={e=>setNewLine({...newLine,shape:e.target.value})} placeholder="Shape" list="ng-shapes-dl" style={sIn}/>
+              <input value={newLine.desc} autoFocus onChange={e=>{const v=e.target.value;const pr=savedPriceFor(v,newLine.shape);setNewLine({...newLine,desc:v,...(pr&&!newLine.rate?{rate:pr}:{})});}} placeholder="Stone" list="ng-stones-dl" style={sIn}/>
+              <input value={newLine.shape} onChange={e=>{const v=e.target.value;const pr=savedPriceFor(newLine.desc,v);setNewLine({...newLine,shape:v,...(pr&&!newLine.rate?{rate:pr}:{})});}} placeholder="Shape" list="ng-shapes-dl" style={sIn}/>
               <input value={isFlatUnit(newLine.unit)?"1":newLine.qty} disabled={isFlatUnit(newLine.unit)}
                 onChange={e=>setNewLine({...newLine,qty:e.target.value})} placeholder="Qty" inputMode="decimal"
                 style={{...sIn,...(isFlatUnit(newLine.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
@@ -16261,10 +16313,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <datalist id="ng-stones-dl">{DEFAULT_STONES.map(s=><option key={s} value={s}/>)}</datalist>
             <datalist id="ng-shapes-dl">{SHAPES.map(s=><option key={s} value={s}/>)}</datalist>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:8,flexWrap:"wrap"}}>
-              <label style={{display:"flex",alignItems:"center",gap:7,fontSize:11,color:C.inkMid,cursor:"pointer"}}>
-                <input type="checkbox" checked={newLine.save} onChange={e=>setNewLine({...newLine,save:e.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
-                Save this price to reuse
-              </label>
+              <span style={{fontSize:10.5,color:C.inkFaint}}>The price is kept for this stone and shape.</span>
               <button onClick={addCustomLine} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:mob?"8px 16px":"6px 14px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>+ Add line</button>
             </div>
             </>}
