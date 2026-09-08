@@ -15566,7 +15566,7 @@ const DEFAULT_SHOW_INV_SETTINGS={
   // The booth sells under Nikhil Gems, so that is the name and the mark on the
   // document. Address, phone and email stay empty by default — filling them
   // here prints them under the mark, which is a choice rather than a given.
-  seller:{name:"Nikhil Gems",address:"",phone:"",email:"",website:"nikhilgemsindia.com",instagram:"@eartheditions_",signupUrl:""},
+  seller:{name:"Nikhil Gems",address:"",phone:"",email:"sejal.nikhilgems@gmail.com",website:"www.eartheditions.co",instagram:"@eartheditions_",signupUrl:""},
   methods:{cash:{on:true}},
   // Methods the shop invents for itself, beyond the ones every stall has.
   extraMethods:[],
@@ -15584,10 +15584,10 @@ const DEFAULT_SHOW_INV_SETTINGS={
 const LEGACY_SELLER_NAMES=["earth editions"];
 const showInvSettings=raw=>{
   const seller={...DEFAULT_SHOW_INV_SETTINGS.seller,...(raw?.seller||{})};
-  if(LEGACY_SELLER_NAMES.includes(String(seller.name||"").trim().toLowerCase())){
-    seller.name=DEFAULT_SHOW_INV_SETTINGS.seller.name;
-    if(/eartheditions/i.test(String(seller.website||"")))seller.website=DEFAULT_SHOW_INV_SETTINGS.seller.website;
-  }
+  if(LEGACY_SELLER_NAMES.includes(String(seller.name||"").trim().toLowerCase()))seller.name=DEFAULT_SHOW_INV_SETTINGS.seller.name;
+  // The shop that was never given a way to be reached takes the one it has.
+  if(!String(seller.email||"").trim())seller.email=DEFAULT_SHOW_INV_SETTINGS.seller.email;
+  if(!String(seller.website||"").trim())seller.website=DEFAULT_SHOW_INV_SETTINGS.seller.website;
   return{
     ...DEFAULT_SHOW_INV_SETTINGS,...(raw||{}),
     seller,
@@ -15706,7 +15706,9 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const c=inv.customer||{};
   const logo=s.logoDataUrl||SHOW_INV_LOGO_SRC;
   const money=n=>showInvEsc(showMoney(n,cur));
-  const sellerBits=[s.seller.address,s.seller.phone,s.seller.email,s.seller.website].map(x=>String(x||"").trim()).filter(Boolean);
+  // Under the mark: the address, if the shop has chosen to print one. The way
+  // to reach it belongs at the foot, with the invitation to do so.
+  const sellerBits=[s.seller.address,s.seller.phone].map(x=>String(x||"").trim()).filter(Boolean);
   const custBits=[c.company,c.phone,c.email,[c.city,c.state,c.country].filter(Boolean).join(", ")].map(x=>String(x||"").trim()).filter(Boolean);
   const allMethods=showPayMethods(s);
   const methodKeys=(inv.showMethods&&inv.showMethods.length?inv.showMethods:allMethods.map(m=>m.key)).filter(k=>showInvMethodOn(s,k));
@@ -15742,6 +15744,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
       ${(inv.payments||[]).filter(p=>showInvNum(p.amount)>0).map(p=>`<div class="rec">Received ${money(p.amount)} · ${showInvEsc(allMethods.find(m=>m.key===p.method)?.label||p.method||"")}${p.ref?` · ${showInvEsc(p.ref)}`:""}</div>`).join("")}
     </div>`:"";
   const showLine=[show?.name,show?.year||String(show?.startDate||"").slice(0,4)].filter(Boolean).join(" · ");
+  const footBits=[s.seller.name,s.seller.instagram,s.seller.website,s.seller.email,showLine].map(x=>String(x||"").trim()).filter(Boolean);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${showInvEsc(inv.invNo||"Invoice")}</title>
 <style>
   *{box-sizing:border-box;}
@@ -15802,7 +15805,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   </div>
   <div class="head">
     <div class="ttl">Invoice</div>
-    <div class="no"><div><b>${showInvEsc(inv.invNo||"—")}</b></div><div>${showInvEsc(inv.date||"")}</div>${inv.tptNo?`<div>TPT No. ${showInvEsc(inv.tptNo)}</div>`:""}${showLine?`<div>${showInvEsc(showLine)}</div>`:""}</div>
+    <div class="no"><div><b>${showInvEsc(inv.invNo||"—")}</b></div><div>${showInvEsc(inv.date||"")}</div>${showLine?`<div>${showInvEsc(showLine)}</div>`:""}</div>
   </div>
   <div class="parties">
     <div>
@@ -15827,7 +15830,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   ${s.terms?`<div class="notes">${showInvEsc(s.terms)}</div>`:""}
   <div class="foot">
     <div class="ty">Thank you</div>
-    <div class="sm">${showInvEsc([s.seller.name,s.seller.instagram,showLine].filter(Boolean).join(" · "))}</div>
+    <div class="sm">${showInvEsc(footBits.join(" · "))}</div>
     ${qrPng?`<div class="qr"><img src="${qrPng}" alt="Sign up"/><div class="qrcap">Scan to hear about new stones</div></div>`:""}
   </div>
 </div></body></html>`;
@@ -15841,7 +15844,7 @@ const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city
 const emptyShowInvDraft=(show,settings)=>({
   id:uid(),invNo:"",showId:show?.id||"",showName:show?.name||"",showSlug:showTagSlug(show),
   date:today(),currency:"USD",customer:emptyShowInvCustomer(),lines:[],
-  discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),payments:[],showMethods:[],notes:"",tptNo:"",status:"draft",
+  discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),payments:[],showMethods:[],notes:"",status:"draft",
   createdAt:new Date().toISOString(),
 });
 const readShowInvDraft=sid=>{
@@ -15872,6 +15875,9 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [moreTotals,setMoreTotals]=useState(false);
   const [focusLineId,setFocusLineId]=useState(null);
   const [newMethod,setNewMethod]=useState("");
+  // What was just issued, so the Saved list opens on it rather than on a
+  // stack the seller has to read back through to find their own sale.
+  const [justIssued,setJustIssued]=useState(null);
   /* A stall takes money in ways no fixed list predicts, so the list is not
      fixed. A method the shop adds is switched on straight away — nobody types
      a name in to leave it off — and carries one line of detail to print. */
@@ -16143,6 +16149,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
       }
       writeShowInvDraft(show.id,null);
       setDraft(emptyShowInvDraft(show,S));
+      setJustIssued(saved);
       setView("list");
       showToast?.(`✓ ${saved.invNo} · ${showMoney(showInvTotals(saved).total,saved.currency)}`);
       printInv(saved);
@@ -16161,15 +16168,33 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     setBusy("");
   };
 
-  const lab={fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7};
-  const box={border:`1px solid ${C.border}`,borderRadius:9,background:C.card,padding:mob?"11px 12px":"13px 15px",marginBottom:12};
-  const sIn={...FI,fontSize:mob?16:12,padding:mob?"8px 9px":"6px 8px"};
-  const pill=(on)=>({background:on?C.ink:"none",color:on?"#fff":C.inkMid,border:`1px solid ${on?C.ink:C.border}`,borderRadius:6,padding:mob?"7px 13px":"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"});
+  /* The booth screen is the one thing a customer sees over the seller's
+     shoulder, so it is set quietly: no ruled boxes, sections held apart by air
+     and a single soft shadow, fields sunk rather than outlined, and type large
+     enough to read at arm's length. Four tokens do it, which is also why the
+     whole tab moves together. */
+  const lab={fontSize:11.5,fontWeight:650,color:C.inkMid,letterSpacing:.1};
+  const box={border:"none",borderRadius:16,background:"#fff",padding:mob?"16px 15px":"20px 22px",marginBottom:14,
+    boxShadow:"0 1px 2px rgba(20,14,4,.04), 0 10px 30px -18px rgba(20,14,4,.22)"};
+  const sIn={...FI,background:"#F6F4EF",border:"1px solid transparent",borderRadius:11,
+    fontSize:mob?16:13.5,padding:mob?"12px 13px":"10px 12px"};
+  const pill=(on)=>({background:on?C.ink:"#F6F4EF",color:on?"#fff":C.inkMid,border:"1px solid transparent",borderRadius:999,padding:mob?"8px 15px":"6px 14px",fontSize:11.5,fontWeight:650,cursor:"pointer"});
 
   return(
-    <div style={{padding:mob?"12px":"14px 16px"}} onClick={e=>e.stopPropagation()}>
+    <div className="bi" style={{padding:mob?"12px 10px 6px":"18px 18px 6px"}} onClick={e=>e.stopPropagation()}>
+      {/* What inline styles cannot say: what a field does when it is touched. */}
+      <style>{`
+        .bi input,.bi select,.bi textarea{transition:background .18s ease,border-color .18s ease,box-shadow .18s ease;}
+        .bi input:focus,.bi select:focus,.bi textarea:focus{outline:none;background:#fff !important;border-color:rgba(20,14,4,.14) !important;box-shadow:0 0 0 4px rgba(197,160,74,.18) !important;}
+        .bi input::placeholder,.bi textarea::placeholder{color:#A9A193;}
+        .bi input:disabled{color:#A9A193;}
+        .bi button{transition:transform .12s ease,box-shadow .2s ease,background .2s ease,opacity .2s ease;}
+        .bi button:not(:disabled):active{transform:scale(.985);}
+        .bi ::-webkit-scrollbar{width:10px;height:10px}
+        .bi ::-webkit-scrollbar-thumb{background:rgba(20,14,4,.14);border:3px solid transparent;background-clip:content-box;border-radius:99px}
+      `}</style>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-        <span style={lab}>Invoicing · {show.name} · tag <b style={{color:C.ink}}>{slug}</b></span>
+        <span style={{fontSize:12,color:C.inkFaint,letterSpacing:.1}}>{show.name} · list tag <b style={{color:C.inkMid,fontWeight:650}}>{slug}</b></span>
         <div style={{display:"flex",gap:6}}>
           {[["new","🧾 New"],["list",`📄 Saved${mine.length?` (${mine.length})`:""}`],["settings","⚙ Settings"]].map(([v,l])=>(
             <button key={v} onClick={()=>setView(v)} style={pill(view===v)}>{l}</button>
@@ -16248,7 +16273,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 Browse all {sellable.length} card{sellable.length===1?"":"s"}
               </button>
             )}
-            {pickerOpen&&<div style={{maxHeight:mob?200:230,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,marginBottom:10}}>
+            {pickerOpen&&<div style={{maxHeight:mob?230:280,overflowY:"auto",background:"#FBFAF7",border:"1px solid rgba(20,14,4,.06)",borderRadius:12,marginBottom:10}}>
               {matches.length===0&&<div style={{fontSize:11,color:C.inkFaint,padding:14,textAlign:"center"}}>{sellable.length?"No card matches that":"Nothing is at this show yet — send stock from the Stock module"}</div>}
               {/* Whatever was typed is either a card or a line waiting to be
                   written, so the way to write it sits at the end of the search
@@ -16264,7 +16289,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 const b=basisOf(item);
                 return(
                   <button key={item.id} disabled={avail<=0} onClick={()=>addStockLine(item)}
-                    style={{display:"flex",width:"100%",gap:8,alignItems:"center",justifyContent:"space-between",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:mob?"10px":"8px 10px",cursor:avail>0?"pointer":"default",opacity:avail>0?1:.42,font:"inherit"}}>
+                    style={{display:"flex",width:"100%",gap:8,alignItems:"center",justifyContent:"space-between",textAlign:"left",background:"none",border:"none",borderBottom:"1px solid rgba(20,14,4,.05)",padding:mob?"12px 13px":"11px 14px",cursor:avail>0?"pointer":"default",opacity:avail>0?1:.42,font:"inherit"}}>
                     <span style={{minWidth:0}}>
                       <span style={{display:"block",fontSize:12.5,fontWeight:700,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{[item.material,item.shape,item.size].filter(Boolean).join(" · ")||"Item"}</span>
                       <span style={{display:"block",fontSize:10,color:C.inkFaint}}>{[showInvQty(avail)?`${showInvQty(avail)} ${b==="qty"?(item.unit||"pcs"):(item.unit2||"kg")} left`:"none left",item.location,item.sku].filter(Boolean).join(" · ")}</span>
@@ -16408,7 +16433,10 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
               {[["Subtotal",T.subtotal],...(T.discount>0?[["Discount",-T.discount]]:[]),...(T.taxAmt>0?[["Sales tax",T.taxAmt]]:[])].map(([k,v])=>(
                 <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.inkMid,padding:"2px 0"}}><span>{k}</span><span>{showMoney(v,cur)}</span></div>
               ))}
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:17,fontWeight:800,color:C.ink,padding:"7px 0 3px",borderTop:`1px solid ${C.border}`,marginTop:5}}><span>Total</span><span>{showMoney(T.total,cur)}</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"12px 0 2px",borderTop:`1px solid ${C.border}`,marginTop:8}}>
+                <span style={{fontSize:13,fontWeight:600,color:C.inkMid}}>Total</span>
+                <span style={{fontSize:mob?26:30,fontWeight:700,color:C.ink,letterSpacing:-.6,fontVariantNumeric:"tabular-nums"}}>{showMoney(T.total,cur)}</span>
+              </div>
               {T.paid>0&&<div style={{display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700,color:T.balance>0.005?C.red:C.green,padding:"2px 0"}}><span>{T.balance>0.005?"Balance due":"Paid in full"}</span><span>{showMoney(T.balance,cur)}</span></div>}
             </div>
           </div>
@@ -16452,26 +16480,45 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
           <div style={box}>
             <div style={{...lab,marginBottom:7}}>Note on the invoice</div>
             <textarea value={draft.notes} onChange={e=>setD({notes:e.target.value})} rows={2} placeholder="Anything the customer should read" style={{...sIn,resize:"vertical"}}/>
-            {/* Goods that travel rather than leave in the customer's hand carry a
-                transport docket, and the number belongs on the invoice they are
-                travelling under. Blank on a counter sale, and it prints nothing. */}
-            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:8,alignItems:"center",marginTop:8}}>
-              <input value={draft.tptNo||""} onChange={e=>setD({tptNo:e.target.value})} placeholder="TPT No. (optional)" style={sIn}/>
-              <span style={{fontSize:10.5,color:C.inkFaint}}>Transport docket for goods being shipped — printed under the invoice number</span>
-            </div>
           </div>
 
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",position:"sticky",bottom:0,background:C.bg,padding:"10px 0 2px"}}>
-            <button onClick={issue} disabled={busy==="issue"} style={{flex:mob?"1 1 100%":"1 1 240px",background:C.ink,color:"#fff",border:"none",borderRadius:9,padding:"13px 18px",fontSize:14,fontWeight:750,cursor:"pointer",opacity:busy==="issue"?.6:1}}>
+          <div style={{display:"flex",gap:9,flexWrap:"wrap",position:"sticky",bottom:0,zIndex:5,
+            background:"rgba(250,248,244,.82)",backdropFilter:"blur(12px)",WebkitBackdropFilter:"blur(12px)",
+            padding:mob?"12px 0 14px":"14px 0 16px",margin:"0 -2px"}}>
+            <button onClick={issue} disabled={busy==="issue"} style={{flex:mob?"1 1 100%":"1 1 260px",background:C.ink,color:"#fff",border:"none",borderRadius:999,padding:mob?"15px 20px":"14px 22px",fontSize:14.5,fontWeight:650,letterSpacing:.1,cursor:"pointer",opacity:busy==="issue"?.55:1,boxShadow:"0 10px 24px -12px rgba(20,14,4,.7)"}}>
               {busy==="issue"?"Issuing…":`Issue & print · ${showMoney(T.total,cur)}`}
             </button>
-            <button onClick={()=>printInv({...draft,invNo:draft.invNo||"DRAFT"})} style={{flex:"1 1 120px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 14px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>👁 Preview</button>
+            <button onClick={()=>printInv({...draft,invNo:draft.invNo||"DRAFT"})} style={{flex:"1 1 120px",background:"#fff",border:"1px solid rgba(20,14,4,.10)",borderRadius:999,padding:mob?"15px 16px":"14px 18px",fontSize:13,fontWeight:600,color:C.ink,cursor:"pointer"}}>Preview</button>
             {(draft.lines.length>0||draft.customer.name)&&(
               <button onClick={()=>{if(window.confirm("Clear this invoice?")){writeShowInvDraft(show.id,null);setDraft(emptyShowInvDraft(show,S));}}}
-                style={{flex:"0 0 auto",background:"none",border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 14px",fontSize:12,color:C.inkFaint,cursor:"pointer"}}>Clear</button>
+                style={{flex:"0 0 auto",background:"none",border:"1px solid rgba(20,14,4,.10)",borderRadius:999,padding:mob?"15px 16px":"14px 18px",fontSize:13,color:C.inkFaint,cursor:"pointer"}}>Clear</button>
             )}
           </div>
         </>
+      )}
+
+      {/* Issued, and the customer is still standing there — so the two things
+          that follow a sale sit where the seller lands rather than being hunted
+          for in the list. */}
+      {view==="list"&&justIssued&&(
+        <div style={{...box,background:"#F3FAF5",boxShadow:"0 1px 2px rgba(20,14,4,.04)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>✓ {justIssued.invNo} · {showMoney(showInvTotals(justIssued).total,justIssued.currency||"USD")}</div>
+              <div style={{fontSize:11,color:C.inkMid}}>{[justIssued.customer?.name,justIssued.customer?.email].filter(Boolean).join(" · ")||"No customer details"}</div>
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {String(justIssued.customer?.email||"").trim()&&(
+                <button disabled={busy==="email"} onClick={()=>emailInv(justIssued)}
+                  style={{background:C.ink,color:"#fff",border:"none",borderRadius:999,padding:"10px 18px",fontSize:12.5,fontWeight:650,cursor:"pointer",opacity:busy==="email"?.55:1}}>
+                  {busy==="email"?"Preparing…":"Email it now"}
+                </button>
+              )}
+              <button onClick={()=>printInv(justIssued)} style={{background:"#fff",border:"1px solid rgba(20,14,4,.10)",borderRadius:999,padding:"10px 16px",fontSize:12.5,fontWeight:600,color:C.ink,cursor:"pointer"}}>Print again</button>
+              <button onClick={()=>setJustIssued(null)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:12.5,cursor:"pointer",padding:"10px 6px"}}>Done</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── SAVED ── */}
