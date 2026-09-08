@@ -325,6 +325,119 @@ function parseOrder(block) {
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
+/* ── eBay: publish (or revise) one listing ────────────────────────────────────
+   eBay has no draft state on this path: AddItem puts the item live. Callers are
+   responsible for only reaching here when that is what was asked for. */
+export async function publishEbayListing(body = {}) {
+  if (!USER_TOKEN) return { ok: false, status: 401, error: "EBAY_USER_TOKEN not set" };
+  const {
+    title, description, price, quantity = 1, images = [],
+    conditionId = "3000", shippingCost = 0, itemId: existingId,
+    categoryId = "4218", // Crystals & Mineral Specimens
+    video, sku, syncOnly = false, allowCreate = !syncOnly,
+  } = body;
+  const itemSku = String(sku || "").trim();
+
+  if (!title) return { ok: false, status: 400, error: "title required" };
+  if (!price)  return { ok: false, status: 400, error: "price required" };
+  console.log("[ebay publish_listing] description preview:", JSON.stringify((description || "").slice(0, 200)));
+
+  const picXml = images.slice(0, 12).map(u => `<PictureURL>${esc(u)}</PictureURL>`).join("");
+
+  // Optional listing video via the Media API (OAuth). Non-fatal: if it fails we
+  // still publish the listing and surface a warning to the caller.
+  let videoXml = "";
+  let videoWarning = null;
+  if (video && typeof video === "string" && video.startsWith("http")) {
+    // Non-fatal: a thrown error here (e.g. missing eBay OAuth) must not crash
+    // the publish — fall back to listing without the video and warn the caller.
+    try {
+      const v = await uploadEbayVideo(video);
+      if (v.ok && v.videoId) videoXml = `<VideoDetails><VideoID>${esc(v.videoId)}</VideoID></VideoDetails>`;
+      else videoWarning = v.error || "video upload failed";
+    } catch (e) {
+      videoWarning = e?.message || "video upload failed";
+    }
+  }
+
+  if (existingId) {
+    // ReviseItem — update existing listing
+    const fields = [
+      `<ItemID>${esc(existingId)}</ItemID>`,
+      `<Title>${esc(title.slice(0, 80))}</Title>`,
+      ...(itemSku ? [`<SKU>${esc(itemSku.slice(0, 50))}</SKU>`] : []),
+      `<Description><![CDATA[${plainToHtml(description || title)}]]></Description>`,
+      `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
+      `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
+      ...(picXml ? [`<PictureDetails>${picXml}</PictureDetails>`] : []),
+      ...(videoXml ? [videoXml] : []),
+      `<ShippingDetails><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>USPSMedia</ShippingService><ShippingServiceCost>${Number(shippingCost).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails>`,
+    ];
+    const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
+    if (!ok) {
+      // Item gone on eBay — fall through to create a fresh one below
+      const errCode = xmlTag("ErrorCode", xml);
+      if (errCode !== "17" && errCode !== "291") {
+        return { ok: false, status: 500, error: xmlTag("LongMessage", xml) || "ReviseItem failed" };
+      }
+      if (syncOnly && !allowCreate) {
+        return { ok: false, status: 409, error: xmlTag("LongMessage", xml) || "Skipped eBay sync: existing item could not be revised" };
+      }
+    } else {
+      return { ok: true, itemId: xmlTag("ItemID", xml), isNew: false, ...(videoWarning ? { videoWarning } : {}) };
+    }
+  }
+
+  if (syncOnly && !allowCreate) {
+    return { ok: false, status: 409, error: "Skipped eBay sync: no existing eBay item ID" };
+  }
+
+  // AddItem — create new listing
+  const itemXml = `
+    <Title>${esc(title.slice(0, 80))}</Title>
+    ${itemSku ? `<SKU>${esc(itemSku.slice(0, 50))}</SKU>` : ""}
+    <Description><![CDATA[${plainToHtml(description || title)}]]></Description>
+    <PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>
+    <StartPrice>${Number(price).toFixed(2)}</StartPrice>
+    <ConditionID>${esc(String(conditionId))}</ConditionID>
+    <Country>IN</Country>
+    <Location>India</Location>
+    <Currency>USD</Currency>
+    <ItemSpecifics>
+      <NameValueList>
+        <Name>Brand</Name>
+        <Value>Unbranded</Value>
+      </NameValueList>
+      <NameValueList>
+        <Name>Type</Name>
+        <Value>Crystal</Value>
+      </NameValueList>
+    </ItemSpecifics>
+    <DispatchTimeMax>5</DispatchTimeMax>
+    <ListingDuration>GTC</ListingDuration>
+    <ListingType>FixedPriceItem</ListingType>
+    <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
+    ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
+    ${videoXml}
+    <ShippingDetails>
+      <ShippingServiceOptions>
+        <ShippingServicePriority>1</ShippingServicePriority>
+        <ShippingService>USPSMedia</ShippingService>
+        <ShippingServiceCost>${Number(shippingCost).toFixed(2)}</ShippingServiceCost>
+      </ShippingServiceOptions>
+    </ShippingDetails>
+    <Site>US</Site>
+  `;
+  const { ok, xml } = await trading("AddItem", `<Item>${itemXml}</Item>`);
+  if (!ok) {
+    return { ok: false, status: 500, error: xmlTag("LongMessage", xml) || "AddItem failed" };
+  }
+  const newItemId = xmlTag("ItemID", xml);
+  return { ok: true, itemId: newItemId, isNew: true,
+    url: `https://www.ebay.com/itm/${newItemId}`, ...(videoWarning ? { videoWarning } : {}) };
+}
+
+
 export default async function handler(req, res) {
   // Guarantee a JSON response: an unhandled throw otherwise returns Vercel's
   // plain-text "A server error has occurred", which the client can't JSON.parse.
@@ -583,113 +696,9 @@ async function handleEbay(req, res) {
 
   // ── publish_listing — AddItem (new) or ReviseItem (existing) ────────────
   if (action === "publish_listing" && req.method === "POST") {
-    if (!USER_TOKEN) return res.status(401).json({ error: "EBAY_USER_TOKEN not set" });
-    const body = req.body || {};
-    const {
-      title, description, price, quantity = 1, images = [],
-      conditionId = "3000", shippingCost = 0, itemId: existingId,
-      categoryId = "4218", // Crystals & Mineral Specimens
-      video, sku, syncOnly = false, allowCreate = !syncOnly,
-    } = body;
-    const itemSku = String(sku || "").trim();
-
-    if (!title) return res.status(400).json({ error: "title required" });
-    if (!price)  return res.status(400).json({ error: "price required" });
-    console.log("[ebay publish_listing] description preview:", JSON.stringify((description || "").slice(0, 200)));
-
-    const picXml = images.slice(0, 12).map(u => `<PictureURL>${esc(u)}</PictureURL>`).join("");
-
-    // Optional listing video via the Media API (OAuth). Non-fatal: if it fails we
-    // still publish the listing and surface a warning to the caller.
-    let videoXml = "";
-    let videoWarning = null;
-    if (video && typeof video === "string" && video.startsWith("http")) {
-      // Non-fatal: a thrown error here (e.g. missing eBay OAuth) must not crash
-      // the publish — fall back to listing without the video and warn the caller.
-      try {
-        const v = await uploadEbayVideo(video);
-        if (v.ok && v.videoId) videoXml = `<VideoDetails><VideoID>${esc(v.videoId)}</VideoID></VideoDetails>`;
-        else videoWarning = v.error || "video upload failed";
-      } catch (e) {
-        videoWarning = e?.message || "video upload failed";
-      }
-    }
-
-    if (existingId) {
-      // ReviseItem — update existing listing
-      const fields = [
-        `<ItemID>${esc(existingId)}</ItemID>`,
-        `<Title>${esc(title.slice(0, 80))}</Title>`,
-        ...(itemSku ? [`<SKU>${esc(itemSku.slice(0, 50))}</SKU>`] : []),
-        `<Description><![CDATA[${plainToHtml(description || title)}]]></Description>`,
-        `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
-        `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
-        ...(picXml ? [`<PictureDetails>${picXml}</PictureDetails>`] : []),
-        ...(videoXml ? [videoXml] : []),
-        `<ShippingDetails><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>USPSMedia</ShippingService><ShippingServiceCost>${Number(shippingCost).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails>`,
-      ];
-      const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
-      if (!ok) {
-        // Item gone on eBay — fall through to create a fresh one below
-        const errCode = xmlTag("ErrorCode", xml);
-        if (errCode !== "17" && errCode !== "291") {
-          return res.status(500).json({ error: xmlTag("LongMessage", xml) || "ReviseItem failed" });
-        }
-        if (syncOnly && !allowCreate) {
-          return res.status(409).json({ error: xmlTag("LongMessage", xml) || "Skipped eBay sync: existing item could not be revised" });
-        }
-      } else {
-        return res.json({ ok: true, itemId: xmlTag("ItemID", xml), isNew: false, ...(videoWarning ? { videoWarning } : {}) });
-      }
-    }
-
-    if (syncOnly && !allowCreate) {
-      return res.status(409).json({ error: "Skipped eBay sync: no existing eBay item ID" });
-    }
-
-    // AddItem — create new listing
-    const itemXml = `
-      <Title>${esc(title.slice(0, 80))}</Title>
-      ${itemSku ? `<SKU>${esc(itemSku.slice(0, 50))}</SKU>` : ""}
-      <Description><![CDATA[${plainToHtml(description || title)}]]></Description>
-      <PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>
-      <StartPrice>${Number(price).toFixed(2)}</StartPrice>
-      <ConditionID>${esc(String(conditionId))}</ConditionID>
-      <Country>IN</Country>
-      <Location>India</Location>
-      <Currency>USD</Currency>
-      <ItemSpecifics>
-        <NameValueList>
-          <Name>Brand</Name>
-          <Value>Unbranded</Value>
-        </NameValueList>
-        <NameValueList>
-          <Name>Type</Name>
-          <Value>Crystal</Value>
-        </NameValueList>
-      </ItemSpecifics>
-      <DispatchTimeMax>5</DispatchTimeMax>
-      <ListingDuration>GTC</ListingDuration>
-      <ListingType>FixedPriceItem</ListingType>
-      <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
-      ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
-      ${videoXml}
-      <ShippingDetails>
-        <ShippingServiceOptions>
-          <ShippingServicePriority>1</ShippingServicePriority>
-          <ShippingService>USPSMedia</ShippingService>
-          <ShippingServiceCost>${Number(shippingCost).toFixed(2)}</ShippingServiceCost>
-        </ShippingServiceOptions>
-      </ShippingDetails>
-      <Site>US</Site>
-    `;
-    const { ok, xml } = await trading("AddItem", `<Item>${itemXml}</Item>`);
-    if (!ok) {
-      return res.status(500).json({ error: xmlTag("LongMessage", xml) || "AddItem failed" });
-    }
-    const newItemId = xmlTag("ItemID", xml);
-    return res.json({ ok: true, itemId: newItemId, isNew: true,
-      url: `https://www.ebay.com/itm/${newItemId}`, ...(videoWarning ? { videoWarning } : {}) });
+    const out = await publishEbayListing(req.body || {});
+    if (!out.ok) return res.status(out.status || 500).json({ error: out.error });
+    return res.json(out);
   }
 
   // ── end_item — EndItem (delete/end listing) ──────────────────────────────

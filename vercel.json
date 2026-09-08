@@ -11,6 +11,12 @@
     },
     "api/canva.js": {
       "maxDuration": 120
+    },
+    "api/telegram.js": {
+      "maxDuration": 300
+    },
+    "api/listing-manager.js": {
+      "maxDuration": 300
     }
   },
   "rewrites": [
