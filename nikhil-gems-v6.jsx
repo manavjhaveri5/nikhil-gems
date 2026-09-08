@@ -15564,10 +15564,12 @@ const SHOW_PAY_METHODS=[
 ];
 const DEFAULT_SHOW_INV_SETTINGS={
   // The booth sells under Nikhil Gems, so that is the name and the mark on the
-  // document. Address, phone and email stay empty by default: the letterhead
-  // band already carries them, and filling them here prints them twice.
-  seller:{name:"Nikhil Gems",address:"",phone:"",email:"",website:"nikhilgemsindia.com"},
+  // document. Address, phone and email stay empty by default — filling them
+  // here prints them under the mark, which is a choice rather than a given.
+  seller:{name:"Nikhil Gems",address:"",phone:"",email:"",website:"nikhilgemsindia.com",instagram:"@eartheditions_",signupUrl:""},
   methods:{cash:{on:true}},
+  // Methods the shop invents for itself, beyond the ones every stall has.
+  extraMethods:[],
   customItems:[],
   logoDataUrl:"",
   terms:"",
@@ -15575,17 +15577,37 @@ const DEFAULT_SHOW_INV_SETTINGS={
   // every invoice is how a booth ends up under-charging on the busy ones.
   taxPct:"",
 };
-const showInvSettings=raw=>({
-  ...DEFAULT_SHOW_INV_SETTINGS,...(raw||{}),
-  seller:{...DEFAULT_SHOW_INV_SETTINGS.seller,...(raw?.seller||{})},
-  methods:{...DEFAULT_SHOW_INV_SETTINGS.methods,...(raw?.methods||{})},
-  customItems:Array.isArray(raw?.customItems)?raw.customItems:[],
-});
+/* The booth ran under the Earth Editions name before it ran under the shop's
+   own, and that name was saved into the settings of every device that opened
+   it. Read as the leftover default it is, so the document carries the shop's
+   name without anyone having to find the box it was typed in. */
+const LEGACY_SELLER_NAMES=["earth editions"];
+const showInvSettings=raw=>{
+  const seller={...DEFAULT_SHOW_INV_SETTINGS.seller,...(raw?.seller||{})};
+  if(LEGACY_SELLER_NAMES.includes(String(seller.name||"").trim().toLowerCase())){
+    seller.name=DEFAULT_SHOW_INV_SETTINGS.seller.name;
+    if(/eartheditions/i.test(String(seller.website||"")))seller.website=DEFAULT_SHOW_INV_SETTINGS.seller.website;
+  }
+  return{
+    ...DEFAULT_SHOW_INV_SETTINGS,...(raw||{}),
+    seller,
+    methods:{...DEFAULT_SHOW_INV_SETTINGS.methods,...(raw?.methods||{})},
+    extraMethods:Array.isArray(raw?.extraMethods)?raw.extraMethods:[],
+    customItems:Array.isArray(raw?.customItems)?raw.customItems:[],
+  };
+};
+/* Every method the invoice knows about: the ones every stall has, and the ones
+   this one added. A shop-made method carries a single line of detail, which is
+   all a printed invoice ever needs of it. */
+const showPayMethods=settings=>[
+  ...SHOW_PAY_METHODS,
+  ...(settings?.extraMethods||[]).filter(m=>m&&m.key&&m.label).map(m=>({key:m.key,label:m.label,fields:[{k:"note",label:"Line on the invoice"}],custom:true})),
+];
 const showInvMethodOn=(settings,key)=>!!settings?.methods?.[key]?.on;
 // What a method actually prints under its name. Cash says nothing beyond "Cash".
 const showInvMethodDetail=(settings,key)=>{
   const cfg=settings?.methods?.[key]||{};
-  const def=SHOW_PAY_METHODS.find(m=>m.key===key);
+  const def=showPayMethods(settings).find(m=>m.key===key);
   return (def?.fields||[]).map(f=>{
     const v=String(cfg[f.k]||"").trim();
     if(!v)return "";
@@ -15633,13 +15655,16 @@ const showInvTotals=inv=>{
 };
 // EE-2026-0001. Sequence runs per calendar year across every show, so the books
 // read as one series rather than one per booth.
+const SHOW_INV_PREFIX="NG";
 const nextShowInvNo=(invoices,year)=>{
   const y=String(year||new Date().getFullYear());
+  // Numbers already issued under the old EE series still count, so the run
+  // carries on rather than starting again at one beside them.
   const seq=(invoices||[]).reduce((max,i)=>{
-    const m=/^EE-(\d{4})-(\d+)$/.exec(i?.invNo||"");
+    const m=/^(?:NG|EE)-(\d{4})-(\d+)$/.exec(i?.invNo||"");
     return m&&m[1]===y?Math.max(max,+m[2]):max;
   },0);
-  return `EE-${y}-${String(seq+1).padStart(4,"0")}`;
+  return `${SHOW_INV_PREFIX}-${y}-${String(seq+1).padStart(4,"0")}`;
 };
 
 /* The wordmark lives on the Shopify CDN, and a show hall's wifi is exactly where
@@ -15657,7 +15682,24 @@ async function showInvLogoDataUrl(){return SHOW_INV_LOGO_SRC;}
    IGST, no IEC; this is a US retail counter sale. Inline styles and a self
    contained <style> because it is written into a print window and an offscreen
    iframe, neither of which has the app's stylesheet. */
-function buildShowInvoiceHTML(inv,settings,show){
+/* The QR is drawn before the document is built and passed in as a data URL:
+   the builder is used by the print window and the PDF alike, and neither can
+   wait on a promise — nor should either be reaching out to a QR service from a
+   hall with no signal. */
+let showInvQrCache={url:"",png:""};
+async function showInvQrPng(url){
+  const link=String(url||"").trim();
+  if(!link)return "";
+  if(showInvQrCache.url===link)return showInvQrCache.png;
+  try{
+    const QR=await import("qrcode");
+    const png=await (QR.toDataURL||QR.default.toDataURL)(link,{margin:1,width:220,color:{dark:"#1a1308",light:"#ffffff"}});
+    showInvQrCache={url:link,png};
+    return png;
+  }catch(e){console.warn("qr:",e?.message||e);return "";}
+}
+
+function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const s=showInvSettings(settings);
   const cur=inv.currency||"USD";
   const t=showInvTotals(inv);
@@ -15666,7 +15708,8 @@ function buildShowInvoiceHTML(inv,settings,show){
   const money=n=>showInvEsc(showMoney(n,cur));
   const sellerBits=[s.seller.address,s.seller.phone,s.seller.email,s.seller.website].map(x=>String(x||"").trim()).filter(Boolean);
   const custBits=[c.company,c.phone,c.email,[c.city,c.state,c.country].filter(Boolean).join(", ")].map(x=>String(x||"").trim()).filter(Boolean);
-  const methodKeys=(inv.showMethods&&inv.showMethods.length?inv.showMethods:SHOW_PAY_METHODS.map(m=>m.key)).filter(k=>showInvMethodOn(s,k));
+  const allMethods=showPayMethods(s);
+  const methodKeys=(inv.showMethods&&inv.showMethods.length?inv.showMethods:allMethods.map(m=>m.key)).filter(k=>showInvMethodOn(s,k));
   const rows=(inv.lines||[]).map(l=>{
     const amt=showInvNum(l.qty)*showInvNum(l.rate);
     return `<tr>
@@ -15691,12 +15734,12 @@ function buildShowInvoiceHTML(inv,settings,show){
       <div class="lab">Payment</div>
       <div class="paygrid">
         ${methodKeys.map(k=>{
-          const def=SHOW_PAY_METHODS.find(m=>m.key===k);
+          const def=allMethods.find(m=>m.key===k);
           const det=showInvMethodDetail(s,k);
           return `<div class="paycell"><div class="pm">${showInvEsc(def?.label||k)}</div>${det.map(d=>`<div class="pd">${showInvEsc(d)}</div>`).join("")}</div>`;
         }).join("")}
       </div>
-      ${(inv.payments||[]).filter(p=>showInvNum(p.amount)>0).map(p=>`<div class="rec">Received ${money(p.amount)} · ${showInvEsc(SHOW_PAY_METHODS.find(m=>m.key===p.method)?.label||p.method||"")}${p.ref?` · ${showInvEsc(p.ref)}`:""}</div>`).join("")}
+      ${(inv.payments||[]).filter(p=>showInvNum(p.amount)>0).map(p=>`<div class="rec">Received ${money(p.amount)} · ${showInvEsc(allMethods.find(m=>m.key===p.method)?.label||p.method||"")}${p.ref?` · ${showInvEsc(p.ref)}`:""}</div>`).join("")}
     </div>`:"";
   const showLine=[show?.name,show?.year||String(show?.startDate||"").slice(0,4)].filter(Boolean).join(" · ");
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${showInvEsc(inv.invNo||"Invoice")}</title>
@@ -15741,6 +15784,9 @@ function buildShowInvoiceHTML(inv,settings,show){
   .rec{font-size:11px;color:#2a6845;margin-top:9px;font-weight:700;}
   .notes{font-size:11.5px;color:#544c40;line-height:1.7;margin-bottom:20px;white-space:pre-wrap;}
   .foot{border-top:1px solid #e6e1d8;padding-top:14px;text-align:center;}
+  .foot .qr{margin-top:12px;}
+  .foot .qr img{width:74px;height:74px;display:inline-block;}
+  .foot .qrcap{font-size:9px;color:#8a8175;letter-spacing:.4px;margin-top:3px;}
   .foot .ty{font-size:14px;letter-spacing:1.5px;}
   .foot .sm{font-size:10px;color:#9a8f7d;margin-top:6px;letter-spacing:.4px;}
   @media print{
@@ -15781,7 +15827,8 @@ function buildShowInvoiceHTML(inv,settings,show){
   ${s.terms?`<div class="notes">${showInvEsc(s.terms)}</div>`:""}
   <div class="foot">
     <div class="ty">Thank you</div>
-    <div class="sm">${showInvEsc([s.seller.name,showLine].filter(Boolean).join(" · "))}</div>
+    <div class="sm">${showInvEsc([s.seller.name,s.seller.instagram,showLine].filter(Boolean).join(" · "))}</div>
+    ${qrPng?`<div class="qr"><img src="${qrPng}" alt="Sign up"/><div class="qrcap">Scan to hear about new stones</div></div>`:""}
   </div>
 </div></body></html>`;
 }
@@ -15824,6 +15871,18 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [showCustomLine,setShowCustomLine]=useState(false);
   const [moreTotals,setMoreTotals]=useState(false);
   const [focusLineId,setFocusLineId]=useState(null);
+  const [newMethod,setNewMethod]=useState("");
+  /* A stall takes money in ways no fixed list predicts, so the list is not
+     fixed. A method the shop adds is switched on straight away — nobody types
+     a name in to leave it off — and carries one line of detail to print. */
+  const addMethod=()=>{
+    const label=newMethod.trim();
+    if(!label)return;
+    const key=`x-${label.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")||uid()}`;
+    if(showPayMethods(S).some(m=>m.key===key)){showToast?.(`${label} is already there`);return;}
+    onSaveSettings?.({...S,extraMethods:[...(S.extraMethods||[]),{key,label}],methods:{...S.methods,[key]:{on:true}}});
+    setNewMethod("");
+  };
   const [logo,setLogo]=useState(S.logoDataUrl||"");
   const mine=invoices.filter(i=>i.showId===show.id);
   const cur=draft.currency||"USD";
@@ -15945,15 +16004,16 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   };
 
   // ── the document ─────────────────────────────────────────────────────────
-  const docFor=inv=>buildShowInvoiceHTML(inv,{...S,logoDataUrl:logo||S.logoDataUrl},show);
-  const printInv=inv=>{
+  const docFor=(inv,qr="")=>buildShowInvoiceHTML(inv,{...S,logoDataUrl:logo||S.logoDataUrl},show,qr);
+  const printInv=async inv=>{
+    const qr=await showInvQrPng(S.seller.signupUrl);
     const w=window.open("","_blank");
     if(!w){showToast?.("Allow pop-ups to print");return;}
-    w.document.write(docFor(inv));
+    w.document.write(docFor(inv,qr));
     w.document.close();
     setTimeout(()=>{try{w.focus();w.print();}catch{}},700);
   };
-  const pdfBytes=inv=>htmlToPdfBytes(docFor(inv),".ee-inv");
+  const pdfBytes=async inv=>htmlToPdfBytes(docFor(inv,await showInvQrPng(S.seller.signupUrl)),".ee-inv");
   const downloadPdf=async inv=>{
     setBusy("pdf");
     try{
@@ -16329,7 +16389,11 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 {moreTotals?"Hide":"Date, discount & tax"}
               </button>
             </div>
-            {(moreTotals||showInvNum(draft.discount)>0||showInvNum(draft.taxPct)>0)&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:7,marginBottom:10}}>
+            {(moreTotals||showInvNum(draft.discount)>0||showInvNum(draft.taxPct)>0)&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(5,1fr)",gap:7,marginBottom:10}}>
+              {/* The number is given on issue and shown here so it can be set by
+                  hand — a book carried on from somewhere else has to be able to
+                  say where it is up to. */}
+              <Field label="Invoice no."><input value={draft.invNo||""} onChange={e=>setD({invNo:e.target.value})} placeholder={nextShowInvNo(invoices,String(draft.date||today()).slice(0,4))} style={sIn}/></Field>
               <Field label="Date"><input type="date" value={draft.date} onChange={e=>setD({date:e.target.value})} style={sIn}/></Field>
               <Field label="Currency"><select value={cur} onChange={e=>setD({currency:e.target.value})} style={{...sIn,cursor:"pointer"}}>{SHOW_CURS.map(c=><option key={c}>{c}</option>)}</select></Field>
               <Field label="Discount">
@@ -16352,15 +16416,15 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
           <div style={box}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9,flexWrap:"wrap"}}>
               <span style={lab}>Payment taken</span>
-              <button onClick={()=>setD(d=>({...d,payments:[...(d.payments||[]),{id:uid(),method:(SHOW_PAY_METHODS.find(m=>showInvMethodOn(S,m.key))||{}).key||"cash",amount:String(+(showInvTotals(d).balance||0).toFixed(2)),ref:""}]}))}
+              <button onClick={()=>setD(d=>({...d,payments:[...(d.payments||[]),{id:uid(),method:(showPayMethods(S).find(m=>showInvMethodOn(S,m.key))||{}).key||"cash",amount:String(+(showInvTotals(d).balance||0).toFixed(2)),ref:""}]}))}
                 style={{background:"none",border:"none",fontSize:11,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>+ Record payment</button>
             </div>
             {(draft.payments||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint}}>Nothing recorded — the invoice prints the full amount as due.</div>}
             {(draft.payments||[]).map(p=>(
               <div key={p.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr 24px":"150px 110px 1fr 24px",gap:6,alignItems:"center",marginBottom:6}}>
                 <select value={p.method} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,method:e.target.value}:x)}))} style={{...sIn,cursor:"pointer"}}>
-                  {SHOW_PAY_METHODS.filter(m=>showInvMethodOn(S,m.key)).map(m=><option key={m.key} value={m.key}>{m.label}</option>)}
-                  {!SHOW_PAY_METHODS.some(m=>showInvMethodOn(S,m.key))&&<option value="cash">Cash</option>}
+                  {showPayMethods(S).filter(m=>showInvMethodOn(S,m.key)).map(m=><option key={m.key} value={m.key}>{m.label}</option>)}
+                  {!showPayMethods(S).some(m=>showInvMethodOn(S,m.key))&&<option value="cash">Cash</option>}
                 </select>
                 <input value={p.amount} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,amount:e.target.value}:x)}))} inputMode="decimal" placeholder="Amount" style={sIn}/>
                 <input value={p.ref} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,ref:e.target.value}:x)}))} placeholder="Ref (optional)" style={sIn}/>
@@ -16370,17 +16434,17 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <div style={{marginTop:10}}>
               <div style={{...lab,marginBottom:6}}>Methods to print</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                {SHOW_PAY_METHODS.filter(m=>showInvMethodOn(S,m.key)).map(m=>{
+                {showPayMethods(S).filter(m=>showInvMethodOn(S,m.key)).map(m=>{
                   const chosen=!draft.showMethods?.length||draft.showMethods.includes(m.key);
                   return(
                     <button key={m.key} onClick={()=>setD(d=>{
-                      const base=d.showMethods?.length?d.showMethods:SHOW_PAY_METHODS.filter(x=>showInvMethodOn(S,x.key)).map(x=>x.key);
+                      const base=d.showMethods?.length?d.showMethods:showPayMethods(S).filter(x=>showInvMethodOn(S,x.key)).map(x=>x.key);
                       const next=base.includes(m.key)?base.filter(x=>x!==m.key):[...base,m.key];
                       return{...d,showMethods:next};
                     })} style={{...pill(chosen),borderRadius:14,padding:"4px 11px",fontWeight:600}}>{m.label}</button>
                   );
                 })}
-                {!SHOW_PAY_METHODS.some(m=>showInvMethodOn(S,m.key))&&<span style={{fontSize:11,color:C.amber}}>No payment method set up yet — add one under ⚙ Settings.</span>}
+                {!showPayMethods(S).some(m=>showInvMethodOn(S,m.key))&&<span style={{fontSize:11,color:C.amber}}>No payment method set up yet — add one under ⚙ Settings.</span>}
               </div>
             </div>
           </div>
@@ -16461,7 +16525,14 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
               <Field label="Website"><input value={S.seller.website} onChange={e=>onSaveSettings({...S,seller:{...S.seller,website:e.target.value}})} style={sIn}/></Field>
               <Field label="Phone"><input value={S.seller.phone} onChange={e=>onSaveSettings({...S,seller:{...S.seller,phone:e.target.value}})} style={sIn}/></Field>
               <Field label="Email"><input value={S.seller.email} onChange={e=>onSaveSettings({...S,seller:{...S.seller,email:e.target.value}})} style={sIn}/></Field>
-              <div style={{gridColumn:mob?"auto":"1 / -1"}}><Field label="Address"><input value={S.seller.address} onChange={e=>onSaveSettings({...S,seller:{...S.seller,address:e.target.value}})} placeholder="Printed under the wordmark" style={sIn}/></Field></div>
+              <div style={{gridColumn:mob?"auto":"1 / -1"}}><Field label="Address"><input value={S.seller.address} onChange={e=>onSaveSettings({...S,seller:{...S.seller,address:e.target.value}})} placeholder="Printed under the mark" style={sIn}/></Field></div>
+              <Field label="Instagram"><input value={S.seller.instagram||""} onChange={e=>onSaveSettings({...S,seller:{...S.seller,instagram:e.target.value}})} placeholder="@eartheditions_" style={sIn}/></Field>
+              <Field label="Mailing list sign-up link">
+                <input value={S.seller.signupUrl||""} onChange={e=>onSaveSettings({...S,seller:{...S.seller,signupUrl:e.target.value}})} placeholder="https://… — printed as a QR code" style={sIn}/>
+              </Field>
+              <div style={{gridColumn:mob?"auto":"1 / -1",fontSize:10.5,color:C.inkFaint}}>
+                The link becomes a QR at the foot of every invoice — paste the Omnisend sign-up form. Leave it empty and no code is printed.
+              </div>
             </div>
           </div>
           <div style={box}>
@@ -16480,13 +16551,22 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
           <div style={box}>
             <div style={{...lab,marginBottom:4}}>Payment methods</div>
             <div style={{fontSize:10.5,color:C.inkFaint,marginBottom:10}}>Only the methods switched on here can be printed or recorded. Details are stored in the database, never in the code.</div>
-            {SHOW_PAY_METHODS.map(m=>{
+            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+              <input value={newMethod} onChange={e=>setNewMethod(e.target.value)} placeholder="Add your own — Wise, UPI, cheque…" style={{...sIn,flex:"1 1 200px"}}
+                onKeyDown={e=>{if(e.key==="Enter")addMethod();}}/>
+              <button onClick={addMethod} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 13px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>+ Method</button>
+            </div>
+            {showPayMethods(S).map(m=>{
               const cfg=S.methods?.[m.key]||{};
               return(
                 <div key={m.key} style={{borderTop:`1px solid ${C.border}`,padding:"10px 0"}}>
                   <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:cfg.on&&m.fields.length?8:0}}>
                     <input type="checkbox" checked={!!cfg.on} onChange={e=>onSaveSettings({...S,methods:{...S.methods,[m.key]:{...cfg,on:e.target.checked}}})} style={{width:17,height:17,cursor:"pointer"}}/>
-                    <span style={{fontSize:13,fontWeight:700,color:cfg.on?C.ink:C.inkFaint}}>{m.label}</span>
+                    <span style={{fontSize:13,fontWeight:700,color:cfg.on?C.ink:C.inkFaint,flex:1}}>{m.label}</span>
+                    {m.custom&&(
+                      <button onClick={e=>{e.preventDefault();if(window.confirm(`Remove ${m.label}?`)){const{[m.key]:_drop,...rest}=S.methods||{};onSaveSettings({...S,methods:rest,extraMethods:(S.extraMethods||[]).filter(x=>x.key!==m.key)});}}}
+                        style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
+                    )}
                   </label>
                   {cfg.on&&m.fields.length>0&&(
                     <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,paddingLeft:26}}>

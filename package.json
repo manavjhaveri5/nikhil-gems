@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@supabase/supabase-js": "^2.99.1",
