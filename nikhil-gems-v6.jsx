@@ -15615,6 +15615,36 @@ const methodEntries=(settings,key)=>{
   return Object.values(flat).some(v=>String(v||"").trim())?[{id:"legacy",on:true,...flat}]:[];
 };
 // What a method actually prints under its name. Cash says nothing beyond "Cash".
+/* What the seller can put on an invoice: not "Zelle", but this Zelle handle
+   and that one, this bank account and the personal one. Each is a token the
+   invoice can carry, so a customer paying by one of them is not handed the
+   details of all the others. */
+const showInvPayOptions=settings=>{
+  const out=[];
+  showPayMethods(settings).filter(m=>showInvMethodOn(settings,m.key)).forEach(m=>{
+    const entries=methodEntries(settings,m.key).filter(e=>e.on!==false);
+    if(!m.fields.length||!entries.length){out.push({token:m.key,methodKey:m.key,label:m.label,detail:[]});return;}
+    entries.forEach((e,i)=>{
+      const detail=m.fields.map(f=>{
+        const v=String(e[f.k]||"").trim();
+        return v?(m.key==="wire"?`${f.label}: ${v}`:v):"";
+      }).filter(Boolean);
+      out.push({token:`${m.key}#${e.id||i}`,methodKey:m.key,label:m.label,
+        hint:String(e[m.fields[0].k]||"").trim(),detail});
+    });
+  });
+  return out;
+};
+const showInvChosenPay=(inv,settings)=>{
+  const opts=showInvPayOptions(settings);
+  // Invoices written before the choice existed carry method keys; those still
+  // mean "everything filed under that method".
+  const legacy=Array.isArray(inv?.showMethods)?inv.showMethods:null;
+  const picked=Array.isArray(inv?.showPay)?inv.showPay:null;
+  if(picked)return opts.filter(o=>picked.includes(o.token));
+  if(legacy&&legacy.length)return opts.filter(o=>legacy.includes(o.methodKey));
+  return [];
+};
 const showInvMethodDetail=(settings,key)=>{
   const def=showPayMethods(settings).find(m=>m.key===key);
   return methodEntries(settings,key)
@@ -15731,7 +15761,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const sellerBits=[s.seller.address,s.seller.phone].map(x=>String(x||"").trim()).filter(Boolean);
   const custBits=[c.company,c.phone,c.email,[c.city,c.state,c.country].filter(Boolean).join(", ")].map(x=>String(x||"").trim()).filter(Boolean);
   const allMethods=showPayMethods(s);
-  const methodKeys=(inv.showMethods&&inv.showMethods.length?inv.showMethods:allMethods.map(m=>m.key)).filter(k=>showInvMethodOn(s,k));
+  const chosenPay=showInvChosenPay(inv,s);
   const rows=(inv.lines||[]).map(l=>{
     const amt=showInvNum(l.qty)*showInvNum(l.rate);
     return `<tr>
@@ -15751,15 +15781,13 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
     t.paid>0?totalRow("Paid",`−${money(t.paid)}`):"",
     t.paid>0||t.balance!==t.total?totalRow("Balance due",money(t.balance),"due"):"",
   ].filter(Boolean).join("");
-  const payBlock=methodKeys.length?`
+  const payBlock=(chosenPay.length||(inv.payments||[]).some(p=>showInvNum(p.amount)>0))?`
     <div class="pay">
       <div class="lab">Payment</div>
       <div class="paygrid">
-        ${methodKeys.map(k=>{
-          const def=allMethods.find(m=>m.key===k);
-          const det=showInvMethodDetail(s,k);
-          return `<div class="paycell"><div class="pm">${showInvEsc(def?.label||k)}</div>${det.map(d=>`<div class="pd">${showInvEsc(d)}</div>`).join("")}</div>`;
-        }).join("")}
+        ${chosenPay.map(o=>
+          `<div class="paycell"><div class="pm">${showInvEsc(o.label)}</div>${o.detail.map(d=>`<div class="pd">${showInvEsc(d)}</div>`).join("")}</div>`
+        ).join("")}
       </div>
       ${(inv.payments||[]).filter(p=>showInvNum(p.amount)>0).map(p=>`<div class="rec">Received ${money(p.amount)} · ${showInvEsc(allMethods.find(m=>m.key===p.method)?.label||p.method||"")}${p.ref?` · ${showInvEsc(p.ref)}`:""}</div>`).join("")}
     </div>`:"";
@@ -15953,6 +15981,8 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const mine=invoices.filter(i=>i.showId===show.id);
   const cur=draft.currency||"USD";
   const T=showInvTotals(draft);
+  const payOptions=showInvPayOptions(S);
+  const chosenPay=showInvChosenPay(draft,S).map(o=>o.token);
   const slug=showTagSlug(show);
   const setD=patch=>setDraft(d=>{const next=typeof patch==="function"?patch(d):{...d,...patch};writeShowInvDraft(show.id,next);return next;});
   const setCust=patch=>setD(d=>({...d,customer:{...d.customer,...patch}}));
@@ -16513,13 +16543,21 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
           <div style={box}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9,flexWrap:"wrap"}}>
               <span style={lab}>Payment taken</span>
-              <button onClick={()=>setD(d=>({...d,payments:[...(d.payments||[]),{id:uid(),method:(showPayMethods(S).find(m=>showInvMethodOn(S,m.key))||{}).key||"cash",amount:String(+(showInvTotals(d).balance||0).toFixed(2)),ref:""}]}))}
+              <button onClick={()=>setD(d=>({...d,payments:[...(d.payments||[]),{id:uid(),method:(showPayMethods(S).find(m=>showInvMethodOn(S,m.key))||{}).key||"cash",_seed:1,amount:String(+(showInvTotals(d).balance||0).toFixed(2)),ref:""}]}))}
                 style={{background:"none",border:"none",fontSize:11,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>+ Record payment</button>
             </div>
             {(draft.payments||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint}}>Nothing recorded — the invoice prints the full amount as due.</div>}
             {(draft.payments||[]).map(p=>(
               <div key={p.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr 24px":"150px 110px 1fr 24px",gap:6,alignItems:"center",marginBottom:6}}>
-                <select value={p.method} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,method:e.target.value}:x)}))} style={{...sIn,cursor:"pointer"}}>
+                {/* Paid by Zelle means the Zelle details are the ones worth
+                    printing, so choosing the method here offers it there. */}
+                <select value={p.method} onChange={e=>setD(d=>{
+                  const method=e.target.value;
+                  const add=showInvPayOptions(S).filter(o=>o.methodKey===method).map(o=>o.token);
+                  const base=Array.isArray(d.showPay)?d.showPay:[];
+                  return{...d,payments:d.payments.map(x=>x.id===p.id?{...x,method}:x),
+                    showPay:[...base,...add.filter(t=>!base.includes(t))],showMethods:[]};
+                })} style={{...sIn,cursor:"pointer"}}>
                   {showPayMethods(S).filter(m=>showInvMethodOn(S,m.key)).map(m=><option key={m.key} value={m.key}>{m.label}</option>)}
                   {!showPayMethods(S).some(m=>showInvMethodOn(S,m.key))&&<option value="cash">Cash</option>}
                 </select>
@@ -16528,21 +16566,29 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 <button onClick={()=>setD(d=>({...d,payments:d.payments.filter(x=>x.id!==p.id)}))} style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0}}>&times;</button>
               </div>
             ))}
-            <div style={{marginTop:10}}>
-              <div style={{...lab,marginBottom:6}}>Methods to print</div>
+            <div style={{marginTop:12}}>
+              {/* One tap per way this customer is actually paying. Nothing is
+                  chosen to begin with, because an invoice that hands over every
+                  account the shop holds is not a courtesy. */}
+              <div style={{...lab,marginBottom:6}}>What to print for paying</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                {showPayMethods(S).filter(m=>showInvMethodOn(S,m.key)).map(m=>{
-                  const chosen=!draft.showMethods?.length||draft.showMethods.includes(m.key);
+                {payOptions.map(o=>{
+                  const on=chosenPay.includes(o.token);
                   return(
-                    <button key={m.key} onClick={()=>setD(d=>{
-                      const base=d.showMethods?.length?d.showMethods:showPayMethods(S).filter(x=>showInvMethodOn(S,x.key)).map(x=>x.key);
-                      const next=base.includes(m.key)?base.filter(x=>x!==m.key):[...base,m.key];
-                      return{...d,showMethods:next};
-                    })} style={{...pill(chosen),borderRadius:14,padding:"4px 11px",fontWeight:600}}>{m.label}</button>
+                    <button key={o.token} onClick={()=>setD(d=>{
+                      const base=Array.isArray(d.showPay)?d.showPay:[];
+                      return{...d,showPay:base.includes(o.token)?base.filter(x=>x!==o.token):[...base,o.token],showMethods:[]};
+                    })} title={o.detail.join(" · ")}
+                      style={{...pill(on),borderRadius:14,padding:"5px 12px",fontWeight:600}}>
+                      {o.label}{o.hint?<span style={{opacity:.7,fontWeight:500}}> · {o.hint.length>22?o.hint.slice(0,21)+"…":o.hint}</span>:""}
+                    </button>
                   );
                 })}
-                {!showPayMethods(S).some(m=>showInvMethodOn(S,m.key))&&<span style={{fontSize:11,color:C.amber}}>No payment method set up yet — add one under ⚙ Settings.</span>}
+                {!payOptions.length&&<span style={{fontSize:11,color:C.amber}}>No payment method set up yet — add one under ⚙ Settings.</span>}
               </div>
+              {!chosenPay.length&&payOptions.length>0&&(
+                <div style={{fontSize:10.5,color:C.inkFaint,marginTop:6}}>Nothing chosen — the invoice prints no payment details.</div>
+              )}
             </div>
           </div>
 
