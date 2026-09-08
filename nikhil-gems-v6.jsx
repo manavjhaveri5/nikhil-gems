@@ -15749,6 +15749,22 @@ async function showInvQrPng(url){
   }catch(e){console.warn("qr:",e?.message||e);return "";}
 }
 
+/* The app's words-for-numbers counts in lakhs and crores, which is right for
+   an export invoice raised in Mumbai and wrong for a receipt handed over in
+   Denver. This one counts the way the reader does. */
+function showInvWords(n){
+  const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+  const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+  const under1000=x=>x<20?a[x]:x<100?(b[Math.floor(x/10)]+(x%10?"-"+a[x%10]:"")):(a[Math.floor(x/100)]+" Hundred"+(x%100?" "+under1000(x%100):""));
+  const whole=Math.floor(Math.abs(+n||0));
+  const cents=Math.round((Math.abs(+n||0)-whole)*100);
+  const scale=[[1e9,"Billion"],[1e6,"Million"],[1e3,"Thousand"]];
+  let left=whole,out=[];
+  for(const [v,name] of scale){ if(left>=v){out.push(under1000(Math.floor(left/v))+" "+name);left%=v;} }
+  if(left||!out.length)out.push(under1000(left)||"Zero");
+  return `${out.join(" ")}${cents?` and ${cents}/100`:""}`.replace(/\s+/g," ").trim();
+}
+
 function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const s=showInvSettings(settings);
   const cur=inv.currency||"USD";
@@ -15762,9 +15778,12 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const custBits=[c.company,c.phone,c.email,[c.city,c.state,c.country].filter(Boolean).join(", ")].map(x=>String(x||"").trim()).filter(Boolean);
   const allMethods=showPayMethods(s);
   const chosenPay=showInvChosenPay(inv,s);
-  const rows=(inv.lines||[]).map(l=>{
+  // Numbered rows, banded in pairs — a long counter sale has to be readable
+  // down the page as well as across it.
+  const rows=(inv.lines||[]).map((l,i)=>{
     const amt=showInvNum(l.qty)*showInvNum(l.rate);
-    return `<tr>
+    return `<tr${i%2?' class="zebra"':""}>
+      <td class="d c">${i+1}</td>
       <td class="d">${showInvEsc(l.desc||"—")}${l.note?`<div class="sub">${showInvEsc(l.note)}</div>`:""}</td>
       <td class="d sh">${showInvEsc(l.shape||"")}</td>
       <td class="d n">${isFlatUnit(l.unit)?`<span class="u">lot</span>`:`${showInvEsc(showInvQty(l.qty)||"—")}${l.unit?` <span class="u">${showInvEsc(l.unit)}</span>`:""}`}</td>
@@ -15807,96 +15826,146 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
     mail?`<a href="mailto:${showInvEsc(mail)}">${showInvEsc(mail)}</a>`:"",
     showLine?showInvEsc(showLine):"",
   ].filter(Boolean);
+  const curWord={USD:"US Dollars",EUR:"Euro",GBP:"Pounds Sterling",JPY:"Japanese Yen",INR:"Indian Rupees"}[cur]||cur;
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${showInvEsc(inv.invNo||"Invoice")}</title>
 <style>
   *{box-sizing:border-box;}
-  body{margin:0;background:#e5e6e6;font-family:Georgia,'Times New Roman',serif;color:#1a1308;}
-  .ee-inv{width:794px;margin:0 auto;background:#fff;padding:46px 54px 40px;}
-  .mast{text-align:center;padding-bottom:22px;border-bottom:1px solid #d8d3c8;}
-  .mast img{width:150px;height:auto;display:inline-block;}
-  .mast .co{font-size:19px;letter-spacing:3px;text-transform:uppercase;font-weight:400;margin-top:8px;}
-  .mast .name{font-size:22px;letter-spacing:6px;text-transform:uppercase;font-weight:400;}
-  .mast .bits{font-size:10.5px;color:#6b6255;margin-top:9px;letter-spacing:.3px;}
-  .head{display:flex;justify-content:space-between;align-items:flex-end;margin:26px 0 20px;gap:24px;}
-  .head .ttl{font-size:26px;letter-spacing:8px;text-transform:uppercase;font-weight:400;}
-  .head .no{text-align:right;font-size:12px;color:#6b6255;line-height:1.7;}
-  .head .no b{color:#1a1308;font-weight:700;letter-spacing:.6px;}
-  .parties{display:flex;gap:34px;border-top:1px solid #e6e1d8;border-bottom:1px solid #e6e1d8;padding:16px 0;margin-bottom:22px;}
-  .parties>div{flex:1;min-width:0;}
-  .lab{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#9a8f7d;font-family:Helvetica,Arial,sans-serif;font-weight:700;margin-bottom:7px;}
-  .who{font-size:14px;font-weight:700;margin-bottom:3px;}
-  .bit{font-size:11.5px;color:#544c40;line-height:1.65;}
-  table.items{width:100%;border-collapse:collapse;margin-bottom:18px;}
-  table.items th{font-family:Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:1.6px;text-transform:uppercase;color:#9a8f7d;text-align:left;padding:0 8px 8px;border-bottom:1.5px solid #1a1308;font-weight:700;}
+  body{margin:0;background:#e5e6e6;font-family:Georgia,'Times New Roman',serif;color:#15100a;}
+  .ee-inv{width:794px;margin:0 auto;background:#fff;padding:40px 44px 34px;}
+  .sans{font-family:Helvetica,Arial,sans-serif;}
+  /* Masthead: who is billing, and the document it is. */
+  .top{display:flex;justify-content:space-between;align-items:flex-start;gap:28px;padding-bottom:16px;border-bottom:2px solid #15100a;}
+  .top .who img{width:150px;height:auto;display:block;margin-bottom:8px;}
+  .top .who .co{font-size:17px;letter-spacing:2px;text-transform:uppercase;}
+  .top .who .bits{font-size:10.5px;color:#5b5346;line-height:1.6;margin-top:5px;white-space:pre-line;}
+  .top .doc{text-align:right;flex-shrink:0;}
+  .top .doc .ttl{font-size:27px;letter-spacing:7px;text-transform:uppercase;line-height:1;}
+  .top .doc table{border-collapse:collapse;margin-top:12px;margin-left:auto;}
+  .top .doc td{font-size:11px;padding:2px 0 2px 14px;text-align:right;color:#5b5346;}
+  .top .doc td.k{text-align:left;padding-left:0;font-family:Helvetica,Arial,sans-serif;font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:#8d8578;}
+  .top .doc td.v{font-weight:700;color:#15100a;}
+  /* Parties */
+  .parties{display:flex;margin:18px 0 0;border:1px solid #cfc8bb;}
+  .parties>div{flex:1;min-width:0;padding:12px 14px;}
+  .parties>div+div{border-left:1px solid #cfc8bb;}
+  .lab{font-family:Helvetica,Arial,sans-serif;font-size:8.5px;letter-spacing:1.6px;text-transform:uppercase;color:#8d8578;font-weight:700;margin-bottom:6px;}
+  .who2{font-size:13.5px;font-weight:700;margin-bottom:2px;}
+  .bit{font-size:11px;color:#4d4639;line-height:1.6;}
+  /* Items */
+  table.items{width:100%;border-collapse:collapse;margin-top:18px;}
+  table.items th{font-family:Helvetica,Arial,sans-serif;font-size:8.5px;letter-spacing:1.3px;text-transform:uppercase;color:#fff;background:#15100a;text-align:left;padding:8px;font-weight:700;border:1px solid #15100a;}
   table.items th.n,table.items td.n{text-align:right;}
-  td.d{padding:10px 8px;border-bottom:1px solid #eceae4;font-size:12.5px;vertical-align:top;}
+  table.items th.c,table.items td.c{text-align:center;}
+  td.d{padding:9px 8px;border:1px solid #cfc8bb;font-size:12px;vertical-align:top;}
   td.d.b{font-weight:700;}
-  td.d .sub{font-size:10.5px;color:#8a8073;margin-top:2px;}
-  td.d.sh{color:#544c40;}
-  td.d .u{font-size:10px;color:#9a8f7d;}
-  .totwrap{display:flex;justify-content:flex-end;margin-bottom:24px;}
-  table.tot{border-collapse:collapse;min-width:270px;}
-  table.tot td{padding:5px 0;font-size:12.5px;}
-  table.tot td.tl{color:#544c40;padding-right:26px;}
+  td.d .sub{font-size:10px;color:#7d7568;margin-top:2px;}
+  td.d .u{font-size:9.5px;color:#8d8578;}
+  tr.zebra td.d{background:#faf9f6;}
+  /* Totals and the sum written out */
+  .sums{display:flex;gap:20px;margin-top:14px;align-items:flex-start;}
+  .words{flex:1;font-size:11px;color:#4d4639;line-height:1.6;border:1px solid #cfc8bb;padding:10px 12px;min-height:64px;}
+  .words b{font-family:Helvetica,Arial,sans-serif;font-size:8.5px;letter-spacing:1.4px;text-transform:uppercase;color:#8d8578;display:block;margin-bottom:4px;}
+  table.tot{border-collapse:collapse;min-width:286px;}
+  table.tot td{padding:6px 12px;font-size:12px;border:1px solid #cfc8bb;}
+  table.tot td.tl{color:#4d4639;}
   table.tot td.tv{text-align:right;font-variant-numeric:tabular-nums;}
-  table.tot tr.grand td{border-top:1px solid #1a1308;border-bottom:1px solid #1a1308;font-size:16px;font-weight:700;padding:9px 0;}
-  table.tot tr.due td{font-weight:700;padding-top:8px;}
-  .pay{border:1px solid #e6e1d8;background:#faf9f6;padding:15px 18px;margin-bottom:20px;}
-  .paygrid{display:flex;flex-wrap:wrap;gap:10px 26px;}
+  table.tot tr.grand td{background:#15100a;color:#fff;font-size:14.5px;font-weight:700;border-color:#15100a;}
+  table.tot tr.due td{font-weight:700;color:#8a1c12;}
+  /* Payment, notes, signature */
+  .pay{border:1px solid #cfc8bb;margin-top:16px;}
+  .pay .lab{margin:0;padding:7px 12px;background:#f2efe8;border-bottom:1px solid #cfc8bb;}
+  .paygrid{display:flex;flex-wrap:wrap;gap:12px 26px;padding:12px;}
   .paycell{min-width:150px;}
   .pm{font-size:11.5px;font-weight:700;}
-  .pd{font-size:11px;color:#544c40;line-height:1.6;}
-  .rec{font-size:11px;color:#2a6845;margin-top:9px;font-weight:700;}
-  .notes{font-size:11.5px;color:#544c40;line-height:1.7;margin-bottom:20px;white-space:pre-wrap;}
-  .foot{border-top:1px solid #e6e1d8;padding-top:14px;text-align:center;}
-  .foot .sm a{color:inherit;text-decoration:none;border-bottom:1px solid rgba(26,19,8,.22);}
-  .foot .qr{margin-top:12px;}
-  .foot .qr img{width:74px;height:74px;display:inline-block;}
-  .foot .qrcap{font-size:9px;color:#8a8175;letter-spacing:.4px;margin-top:3px;}
-  .foot .ty{font-size:14px;letter-spacing:1.5px;}
-  .foot .sm{font-size:10px;color:#9a8f7d;margin-top:6px;letter-spacing:.4px;}
+  .pd{font-size:10.5px;color:#4d4639;line-height:1.55;}
+  .rec{font-size:10.5px;color:#1f5c3d;font-weight:700;padding:0 12px 12px;}
+  .notes{font-size:10.5px;color:#4d4639;line-height:1.6;margin-top:14px;white-space:pre-wrap;}
+  .sign{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-top:26px;}
+  .sign .sigbox{text-align:center;min-width:210px;}
+  .sign .sigline{border-top:1px solid #15100a;margin-top:46px;padding-top:5px;font-size:10px;letter-spacing:.8px;color:#4d4639;}
+  .sign .sigfor{font-size:11px;font-weight:700;}
+  .foot{border-top:1px solid #cfc8bb;margin-top:22px;padding-top:12px;display:flex;justify-content:space-between;align-items:center;gap:18px;}
+  .foot .ty{font-size:12.5px;letter-spacing:1.2px;}
+  .foot .sm{font-size:9.5px;color:#8d8578;margin-top:4px;letter-spacing:.3px;}
+  .foot .sm a{color:inherit;text-decoration:none;border-bottom:1px solid rgba(21,16,10,.25);}
+  .foot .qr{text-align:center;flex-shrink:0;}
+  .foot .qr img{width:66px;height:66px;display:block;}
+  .foot .qrcap{font-size:8px;color:#8d8578;letter-spacing:.3px;margin-top:2px;}
   @media print{
     body{background:#fff;}
     .ee-inv{width:auto;padding:0;}
-    @page{size:A4;margin:14mm 13mm;}
+    table.items{page-break-inside:auto;}
+    tr{page-break-inside:avoid;}
+    @page{size:A4;margin:13mm 12mm;}
   }
 </style></head><body><div class="ee-inv">
-  <div class="mast">
-    ${logo
-      // The mark is a wordmark: setting the name under it prints it twice.
-      ?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`
-      :(s.seller.name?`<div class="co">${showInvEsc(s.seller.name)}</div>`:"")}
-    ${sellerBits.length?`<div class="bits">${sellerBits.map(showInvEsc).join(" &nbsp;·&nbsp; ")}</div>`:""}
+  <div class="top">
+    <div class="who">
+      ${logo?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`:`<div class="co">${showInvEsc(s.seller.name)}</div>`}
+      ${sellerBits.length?`<div class="bits">${sellerBits.map(showInvEsc).join("\n")}</div>`:""}
+    </div>
+    <div class="doc">
+      <div class="ttl">Invoice</div>
+      <table><tbody>
+        <tr><td class="k">Invoice no.</td><td class="v">${showInvEsc(inv.invNo||"—")}</td></tr>
+        <tr><td class="k">Date</td><td class="v">${showInvEsc(inv.date||"")}</td></tr>
+        ${showLine?`<tr><td class="k">Sold at</td><td>${showInvEsc(showLine)}</td></tr>`:""}
+        <tr><td class="k">Currency</td><td>${showInvEsc(cur)}</td></tr>
+      </tbody></table>
+    </div>
   </div>
-  <div class="head">
-    <div class="ttl">Invoice</div>
-    <div class="no"><div><b>${showInvEsc(inv.invNo||"—")}</b></div><div>${showInvEsc(inv.date||"")}</div>${showLine?`<div>${showInvEsc(showLine)}</div>`:""}</div>
-  </div>
+
   <div class="parties">
     <div>
-      <div class="lab">Billed to</div>
-      <div class="who">${showInvEsc(c.name||"—")}</div>
+      <div class="lab">Bill to</div>
+      <div class="who2">${showInvEsc(c.name||"—")}</div>
       ${custBits.map(b=>`<div class="bit">${showInvEsc(b)}</div>`).join("")}
     </div>
     <div>
       <div class="lab">Sold at</div>
-      <div class="who">${showInvEsc(show?.name||"—")}</div>
+      <div class="who2">${showInvEsc(show?.name||"—")}</div>
       ${show?.city?`<div class="bit">${showInvEsc(show.city)}</div>`:""}
       <div class="bit">${showInvEsc(inv.date||"")}</div>
     </div>
   </div>
+
   <table class="items">
-    <thead><tr><th>Item</th><th>Shape</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Amount</th></tr></thead>
-    <tbody>${rows||`<tr><td class="d" colspan="5">No items</td></tr>`}</tbody>
+    <thead><tr>
+      <th class="c" style="width:34px">#</th><th>Description</th><th style="width:90px">Shape</th>
+      <th class="n" style="width:78px">Qty</th><th class="n" style="width:92px">Rate</th><th class="n" style="width:100px">Amount</th>
+    </tr></thead>
+    <tbody>${rows||`<tr><td class="d" colspan="6">No items</td></tr>`}</tbody>
   </table>
-  <div class="totwrap"><table class="tot"><tbody>${totals}</tbody></table></div>
+
+  <div class="sums">
+    <div class="words">
+      <b>Amount in words</b>
+      ${showInvEsc(curWord)} ${showInvEsc(showInvWords(t.total))}
+      ${inv.notes?`<div style="margin-top:8px;white-space:pre-wrap">${showInvEsc(inv.notes)}</div>`:""}
+    </div>
+    <table class="tot"><tbody>${totals}</tbody></table>
+  </div>
+
   ${payBlock}
-  ${inv.notes?`<div class="notes">${showInvEsc(inv.notes)}</div>`:""}
   ${s.terms?`<div class="notes">${showInvEsc(s.terms)}</div>`:""}
+
+  <div class="sign">
+    <div style="font-size:10px;color:#8d8578;max-width:340px;line-height:1.6">
+      Goods sold at the show are checked and accepted by the buyer at the counter.
+    </div>
+    <div class="sigbox">
+      <div class="sigfor">For ${showInvEsc(s.seller.name)}</div>
+      <div class="sigline">Authorised Signatory</div>
+    </div>
+  </div>
+
   <div class="foot">
-    <div class="ty">Thank you</div>
-    <div class="sm">${footBits.join(" · ")}</div>
-    ${qrPng?`<div class="qr"><img src="${qrPng}" alt="Sign up"/><div class="qrcap">Scan to hear about new stones</div></div>`:""}
+    <div>
+      <div class="ty">Thank you</div>
+      <div class="sm">${footBits.join(" · ")}</div>
+    </div>
+    ${qrPng?`<div class="qr"><img src="${qrPng}" alt="Sign up"/><div class="qrcap">Scan to join our list</div></div>`:""}
   </div>
 </div></body></html>`;
 }
