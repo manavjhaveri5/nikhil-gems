@@ -15604,15 +15604,27 @@ const showPayMethods=settings=>[
   ...(settings?.extraMethods||[]).filter(m=>m&&m.key&&m.label).map(m=>({key:m.key,label:m.label,fields:[{k:"note",label:"Line on the invoice"}],custom:true})),
 ];
 const showInvMethodOn=(settings,key)=>!!settings?.methods?.[key]?.on;
+/* A shop can hold two Zelle handles, or an account in each of two banks, and
+   which of them goes on a given invoice is its own decision. So a method holds
+   a list rather than a single set of details, and each one is ticked on its
+   own. Settings saved before this held the details flat on the method; those
+   are read as the single entry they are. */
+const methodEntries=(settings,key)=>{
+  const cfg=settings?.methods?.[key]||{};
+  if(Array.isArray(cfg.entries))return cfg.entries.filter(Boolean);
+  const{on:_on,entries:_e,...flat}=cfg;
+  return Object.values(flat).some(v=>String(v||"").trim())?[{id:"legacy",on:true,...flat}]:[];
+};
 // What a method actually prints under its name. Cash says nothing beyond "Cash".
 const showInvMethodDetail=(settings,key)=>{
-  const cfg=settings?.methods?.[key]||{};
   const def=showPayMethods(settings).find(m=>m.key===key);
-  return (def?.fields||[]).map(f=>{
-    const v=String(cfg[f.k]||"").trim();
-    if(!v)return "";
-    return key==="wire"?`${f.label}: ${v}`:v;
-  }).filter(Boolean);
+  return methodEntries(settings,key)
+    .filter(e=>e.on!==false)
+    .flatMap(e=>(def?.fields||[]).map(f=>{
+      const v=String(e[f.k]||"").trim();
+      if(!v)return "";
+      return key==="wire"?`${f.label}: ${v}`:v;
+    }).filter(Boolean));
 };
 
 /* The Omnisend tag for a show. "Denver Mineral Show" is what the show is called;
@@ -16639,15 +16651,45 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                         style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
                     )}
                   </label>
-                  {cfg.on&&m.fields.length>0&&(
-                    <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,paddingLeft:26}}>
-                      {m.fields.map(f=>(
-                        <Field key={f.k} label={f.label}>
-                          <input value={cfg[f.k]||""} placeholder={f.placeholder||""} onChange={e=>onSaveSettings({...S,methods:{...S.methods,[m.key]:{...cfg,[f.k]:e.target.value}}})} style={sIn}/>
-                        </Field>
-                      ))}
-                    </div>
-                  )}
+                  {cfg.on&&m.fields.length>0&&(()=>{
+                    /* One method, as many sets of details as the shop keeps.
+                       Writing any of them saves the whole list back, so a
+                       method that had its details held flat becomes a list of
+                       one the first time it is touched. */
+                    const list=methodEntries(S,m.key);
+                    const rows=list.length?list:[{id:uid(),on:true}];
+                    const writeEntries=next=>onSaveSettings({...S,methods:{...S.methods,[m.key]:{on:cfg.on,entries:next}}});
+                    const patch=(i,p)=>writeEntries(rows.map((e,j)=>j===i?{...e,...p}:e));
+                    return(
+                      <div style={{paddingLeft:26,display:"grid",gap:9}}>
+                        {rows.map((e,i)=>(
+                          <div key={e.id||i} style={{border:`1px solid ${C.border}`,borderRadius:11,padding:"10px 11px",background:C.card}}>
+                            <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:7}}>
+                              <input type="checkbox" checked={e.on!==false} onChange={ev=>patch(i,{on:ev.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
+                              <span style={{fontSize:11,fontWeight:650,color:e.on!==false?C.inkMid:C.inkFaint,flex:1}}>
+                                {rows.length>1?`${m.label} ${i+1}`:m.label}{e.on===false?" · not printed":""}
+                              </span>
+                              {rows.length>1&&(
+                                <button onClick={()=>writeEntries(rows.filter((_,j)=>j!==i))}
+                                  style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
+                              )}
+                            </div>
+                            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7}}>
+                              {m.fields.map(f=>(
+                                <Field key={f.k} label={f.label}>
+                                  <input value={e[f.k]||""} placeholder={f.placeholder||""} onChange={ev=>patch(i,{[f.k]:ev.target.value})} style={sIn}/>
+                                </Field>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        <button onClick={()=>writeEntries([...rows,{id:uid(),on:true}])}
+                          style={{justifySelf:"start",background:"none",border:"none",padding:0,fontSize:11.5,fontWeight:650,color:C.blue,cursor:"pointer",font:"inherit"}}>
+                          ＋ Another {m.label.toLowerCase()}
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
