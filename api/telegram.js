@@ -1817,10 +1817,18 @@ const HOUSE_STYLE_EXAMPLES = [
     g: "natural ruby hexagon, raw ruby crystal, indian ruby crystal, ruby healing stone, collectible ruby gem, ruby collector stone" },
 ].map(e => `• ${e.t}\n  tags: ${e.g}`).join("\n");
 
-async function aiListingDraft({ caption, imageUrls = [], hints = {}, _retry = false }) {
+/* The call that writes the copy is worth insisting on: everything else about a
+   listing survives a bad moment on the network, but this one failing turns the
+   seller's shorthand into the shop's title. */
+const LISTING_AI_ATTEMPTS = 4;
+const LISTING_AI_TIMEOUT_MS = 60000;
+// The API's way of saying it could not fetch a photo, not that the call was bad.
+const LISTING_AI_IMAGE_FAIL_RE = /invalid_image|image_url|timeout while downloading|downloading the image|unsupported image|failed to (?:download|fetch) image/i;
+
+async function aiListingDraft({ caption, imageUrls = [], hints = {} }) {
   if (!process.env.OPENAI_KEY) return null;
   const model = process.env.TELEGRAM_LISTING_MODEL || process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
-  const prompt = `You write Etsy listings for Nikhil Gems / Earth Editions, a crystal
+  const promptFor = photos => `You write Etsy listings for Nikhil Gems / Earth Editions, a crystal
 and mineral shop. Match the shop's own titles and tags — here are real ones:
 
 ${HOUSE_STYLE_EXAMPLES}
@@ -1845,7 +1853,7 @@ characters. Cover the stone and its common variants and misspellings, the form,
 the colour, the locality, the use (altar, reiki, desk, collector), and a gift
 angle. No hashtags, no duplicates of one another.
 
-${imageUrls.length ? `The ${imageUrls.length} photo(s) below are the product.` : "There are no photos — work from the note alone."}
+${photos.length ? `The ${photos.length} photo(s) below are the product.` : "There are no photos — work from the note alone."}
 Seller's note (facts, not the title): ${caption ? `"${caption}"` : "(none)"}
 Known already: ${JSON.stringify({ size: hints.size || "", weight: hints.weight || "", origin: hints.origin || "", qty: hints.qty || "" })}
 
@@ -1890,31 +1898,135 @@ Return ONLY JSON:
   "notes_for_seller": "one short line on anything you were unsure about, else \\"\\""
 }`;
 
-  const content = [{ type: "text", text: prompt },
-    ...imageUrls.slice(0, 4).map(url => ({ type: "image_url", image_url: { url } }))];
+  const callOnce = async photos => {
+    const content = [{ type: "text", text: promptFor(photos) },
+      ...photos.map(url => ({ type: "image_url", image_url: { url } }))];
 
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
-    body: JSON.stringify({
-      model, max_tokens: 900, temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content }],
-    }),
-  });
-  /* One listing came back titled off the caption because this call failed while
-     the next one worked — a rate limit or a slow read on four photos, not a
-     wrong key. A second attempt costs a moment and saves the copy. */
-  if (!r.ok && !_retry && (r.status === 429 || r.status >= 500)) {
-    await sleep(1500);
-    return aiListingDraft({ caption, imageUrls, hints, _retry: true });
+    /* A read that hangs would otherwise sit here until the whole webhook dies,
+       taking the Etsy draft with it. Cut it loose and let the loop try again. */
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), LISTING_AI_TIMEOUT_MS);
+    let r;
+    try {
+      r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        signal: abort.signal,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
+        body: JSON.stringify({
+          model, max_tokens: 900, temperature: 0.3,
+          response_format: { type: "json_object" },
+          messages: [{ role: "user", content }],
+        }),
+      });
+    } finally { clearTimeout(timer); }
+
+    if (!r.ok) {
+      const detail = (await r.text()).slice(0, 400);
+      const err = new Error(`Listing AI ${r.status}: ${detail.slice(0, 160)}`);
+      err.status = r.status;
+      err.retryAfterMs = Math.round((Number(r.headers.get("retry-after")) || 0) * 1000);
+      err.imageProblem = LISTING_AI_IMAGE_FAIL_RE.test(detail);
+      err.outOfQuota = /insufficient_quota|exceeded your current quota|billing/i.test(detail);
+      throw err;
+    }
+    const data = await r.json();
+    const text = data.choices?.[0]?.message?.content || "";
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("Listing AI returned no JSON");
+    return JSON.parse(match[0]);
+  };
+
+  /* Two stones posted one after the other are two four-photo vision calls
+     seconds apart, which is exactly when this API answers 429 — and the listing
+     that loses the call falls back to the caption as its title while its
+     neighbour reads properly. So the call is given real attempts: backing off
+     far enough to clear a rate limit, waiting as long as the API asks when it
+     says, and retrying a dropped or timed-out connection too, not only a status
+     code. If the complaint is about the photos themselves, one attempt is made
+     on the seller's note alone — copy written blind still beats no copy. */
+  let photos = imageUrls.slice(0, 4);
+  let blind = false;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await callOnce(photos);
+    } catch (e) {
+      if (e?.imageProblem && photos.length && !blind) {
+        console.error("Listing AI could not read the photos, retrying on the note alone:", e.message);
+        photos = [];
+        blind = true;
+        continue;
+      }
+      /* A spent quota also answers 429, but no amount of waiting clears it —
+         retrying it only delays telling the seller what is actually wrong. */
+      const retryable = (!e?.status || e.status === 429 || e.status >= 500) && !e?.outOfQuota;
+      if (!retryable || attempt >= LISTING_AI_ATTEMPTS - 1) throw e;
+      const backoff = Math.min(Math.max(e?.retryAfterMs || 0, 2000 * 2 ** attempt), 20000);
+      console.error(`Listing AI attempt ${attempt + 1} failed (${e.message}), retrying in ${backoff}ms`);
+      await sleep(backoff + Math.floor(Math.random() * 400));
+    }
   }
-  if (!r.ok) throw new Error(`Listing AI ${r.status}: ${(await r.text()).slice(0, 160)}`);
-  const data = await r.json();
-  const text = data.choices?.[0]?.message?.content || "";
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("Listing AI returned no JSON");
-  return JSON.parse(match[0]);
+}
+
+
+/* ── Is the copywriter answering? ───────────────────────────────────────── */
+/* A failed listing now says why in the reply, but that is after the stone is
+   posted. This asks the API the two questions that separate the faults: does
+   the key and model work at all, and can it reach the photos we hand it. A dead
+   key, a model name that no longer exists, a spent quota and a storage bucket
+   the API cannot read all look identical from the phone otherwise. */
+async function aiHealthReport(ctx) {
+  if (!process.env.OPENAI_KEY) {
+    return "<b>Listing AI check</b>\n\n❌ No OPENAI_KEY is set, so every listing takes its title straight off your caption. Add the key in the Vercel project settings and redeploy.";
+  }
+  const model = process.env.TELEGRAM_LISTING_MODEL || process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
+  const lines = ["<b>Listing AI check</b>", `Model: <code>${esc(model)}</code>`];
+
+  const probe = async content => {
+    const started = Date.now();
+    try {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
+        body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content }] }),
+      });
+      const ms = Date.now() - started;
+      if (r.ok) return { ok: true, ms };
+      let detail = (await r.text()).slice(0, 500);
+      try { detail = JSON.parse(detail)?.error?.message || detail; } catch {}
+      return { ok: false, ms, status: r.status, detail: detail.slice(0, 200) };
+    } catch (e) {
+      return { ok: false, ms: Date.now() - started, detail: e.message };
+    }
+  };
+
+  const key = await probe([{ type: "text", text: "Reply with the word ok." }]);
+  lines.push(key.ok
+    ? `✅ Key and model answer (${key.ms} ms)`
+    : `❌ Key/model: ${esc(String(key.status || "no reply"))} — ${esc(key.detail || "")}`);
+
+  const url = ((await loadK(ctx.listings)) || []).map(l => l?.images?.[0]).find(Boolean);
+  if (!url) {
+    lines.push("No listing photo saved yet, so the photo half is untested.");
+  } else {
+    /* Two separate things can be wrong with a photo: our own storage may not be
+       serving it, or it may be serving it only to us. Both are checked. */
+    try {
+      const head = await fetch(url, { method: "GET" });
+      lines.push(head.ok
+        ? `✅ Photo is public (${head.status}, ${esc(head.headers.get("content-type") || "?")})`
+        : `❌ Photo is not readable: ${head.status} — the ng-media bucket may not be public.`);
+    } catch (e) { lines.push(`❌ Photo fetch failed: ${esc(e.message)}`); }
+
+    const vision = await probe([{ type: "text", text: "Reply with the word ok." }, { type: "image_url", image_url: { url } }]);
+    lines.push(vision.ok
+      ? `✅ The model can read our photos (${vision.ms} ms)`
+      : `❌ Photo read: ${esc(String(vision.status || "no reply"))} — ${esc(vision.detail || "")}`);
+  }
+
+  if (lines.every(l => !l.startsWith("❌"))) {
+    lines.push("", "All good — a failure now would be a passing one, and the listing reply says which.");
+  }
+  return lines.join("\n");
 }
 
 /* ── Draft assembly ──────────────────────────────────────────────────────── */
@@ -2005,7 +2117,6 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
     variations: [],
     etsy_section_id: sectionIdForCategory(category.value),
     etsy_taxonomy_id: category.taxonomyId,
-    etsy_shipping_profile_id: null,
     etsy_return_policy_id: null,
     etsy_made_to_order: false,
     etsy_readiness_state_id: null,
@@ -2045,7 +2156,7 @@ function listingReply({ listing, category, priceUsd, priceInr, converted, aiFail
     esc(price),
     listing.tags.length ? `Tags: ${esc(listing.tags.join(", "))}` : "",
     `<code>${esc(listing.listing_order_id)}</code>`,
-    aiFailed ? "⚠️ AI copy failed, so the title is straight off your caption — worth a look." : "",
+    aiFailed ? `⚠️ AI copy failed (${esc(String(aiFailed).slice(0, 120))}), so the title is straight off your caption — worth a look. Send the photos again to have another go.` : "",
     aiNote ? `Note: ${esc(aiNote)}` : "",
     tail,
   ].filter(Boolean).join("\n");
@@ -2164,11 +2275,13 @@ async function finishMediaListing({ chatId, caption, media, ctx }) {
   const images = media.filter(m => m.kind !== "video");
   const video = media.find(m => m.kind === "video");
   const parsed = parseListingCaption(caption);
-  let ai = null, aiFailed = false;
+  let ai = null, aiFailed = "";
   try {
     ai = await aiListingDraft({ caption: parsed.text || parsed.raw, imageUrls: images.map(i => i.url), hints: parsed });
   } catch (e) {
-    aiFailed = true;
+    // Kept as the reason, not just a flag: a rate limit and a dead key both land
+    // here and want different things doing about them.
+    aiFailed = e.message || "unknown error";
     console.error("Listing AI failed:", e.message);
   }
   const draft = buildListingDraft({ parsed, ai, images, video: video?.url || "", source: video ? "telegram-media" : "telegram-photo" });
@@ -2514,6 +2627,7 @@ export default async function handler(req, res) {
           { command: "listmode", description: "on / off — every photo becomes a listing" },
           { command: "listings", description: "Recent listings and where they are live" },
           { command: "memory",   description: "Facts the bot has saved" },
+          { command: "aicheck",  description: "Is the listing copywriter answering?" },
           { command: "clear",    description: "Reset the conversation" },
           { command: "help",     description: "What this bot can do" },
         ] }, _ctx.token).catch(() => {});
@@ -2548,7 +2662,15 @@ export default async function handler(req, res) {
           `/listings — the last few, and where they are live`,
           `/clear — reset conversation`,
           `/memory — show saved facts`,
+          `/aicheck — why the listing copy failed, if it did`,
         ].join("\n"));
+        return;
+      }
+
+      if (cmd === "/aicheck" || cmd === "/aitest") {
+        await saveSession(chatId, { ...session, lastUpdateId: updateId });
+        tg("sendChatAction", { chat_id: chatId, action: "typing" }, _ctx.token).catch(() => {});
+        await send(chatId, await aiHealthReport(_ctx));
         return;
       }
 
@@ -2599,9 +2721,9 @@ export default async function handler(req, res) {
           await send(chatId, "Tell me what to list — <code>/list amethyst sphere 60mm $45</code> — or send photos with that caption.");
           return;
         }
-        let ai = null, aiFailed = false;
+        let ai = null, aiFailed = "";
         try { ai = await aiListingDraft({ caption: parsed.text, imageUrls: [], hints: parsed }); }
-        catch (e) { aiFailed = true; console.error("Listing AI failed:", e.message); }
+        catch (e) { aiFailed = e.message || "unknown error"; console.error("Listing AI failed:", e.message); }
         const draft = buildListingDraft({ parsed, ai, images: [], source: "telegram-text" });
         await saveListingDraft(draft.listing, _ctx);
         await send(chatId, listingReply({ ...draft, aiFailed, aiNote: ai?.notes_for_seller,
