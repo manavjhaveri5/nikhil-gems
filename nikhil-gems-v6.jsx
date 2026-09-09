@@ -16418,7 +16418,14 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     boxShadow:"0 1px 2px rgba(20,14,4,.05), 0 14px 32px -22px rgba(20,14,4,.35)"};
   const sIn={...FI,background:C.card,border:`1px solid ${C.borderHi}`,color:C.ink,borderRadius:11,
     fontSize:mob?16:13.5,padding:mob?"12px 13px":"10px 12px"};
-  const pill=(on)=>({background:on?C.ink:C.card,color:on?C.surface:C.inkMid,border:`1px solid ${on?C.ink:C.border}`,borderRadius:999,padding:mob?"8px 15px":"6px 14px",fontSize:11.5,fontWeight:650,cursor:"pointer"});
+  const pill=(on)=>({background:on?C.ink:C.card,color:on?C.surface:C.inkMid,border:`1px solid ${on?C.ink:C.border}`,borderRadius:999,padding:mob?"11px 16px":"6px 14px",fontSize:mob?13:11.5,fontWeight:650,cursor:"pointer",...(mob?{minHeight:44}:{})});
+  /* This screen is worked with one thumb while a customer stands waiting, so
+     everything that can be tapped is given a thumb's worth of room. A 9px ×
+     beside a rate box is not a button, it is a dare. */
+  const txtBtn={background:"none",border:"none",cursor:"pointer",font:"inherit",fontWeight:600,color:C.blue,
+    fontSize:mob?13:11.5,padding:mob?"0 2px":0,...(mob?{minHeight:44,display:"inline-flex",alignItems:"center"}:{})};
+  const killBtn={background:"none",border:"none",color:C.inkFaint,cursor:"pointer",lineHeight:1,
+    fontSize:mob?22:16,padding:0,...(mob?{width:44,height:44,flexShrink:0,display:"inline-flex",alignItems:"center",justifyContent:"center",margin:"-9px -9px -9px 0"}:{})};
 
   return(
     <div className="bi" style={{padding:mob?"12px 10px 6px":"18px 18px 6px"}} onClick={e=>e.stopPropagation()}>
@@ -16457,16 +16464,16 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 onBlur={()=>setTimeout(()=>setCustOpen(false),160)}
                 onKeyDown={e=>{if(e.key==="Escape")setCustOpen(false);}}
                 onChange={e=>{setCust({name:e.target.value,id:""});setCustQuery(e.target.value);setCustOpen(true);}}
-                style={{...sIn,fontWeight:700,paddingRight:34}}/>
+                style={{...sIn,fontWeight:700,paddingRight:mob?46:34}}/>
               {custRecent.length>0&&(
                 <button type="button" tabIndex={-1} onMouseDown={e=>e.preventDefault()} onClick={()=>setCustOpen(o=>!o)}
                   title={`${customers.length} booth customer${customers.length===1?"":"s"}${buyerRows.length?` · ${buyerRows.length} export buyer${buyerRows.length===1?"":"s"}`:""}`}
-                  style={{position:"absolute",right:6,top:0,bottom:0,width:24,background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:11}}>▾</button>
+                  style={{position:"absolute",right:2,top:0,bottom:0,width:mob?42:24,background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:mob?15:11}}>▾</button>
               )}
               {custOpen&&(custMatches.length>0||(cq&&!custExact))&&(
                 <div onMouseDown={e=>e.preventDefault()} style={{position:"absolute",top:"100%",left:0,right:0,zIndex:40,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,marginTop:3,boxShadow:"0 8px 24px rgba(0,0,0,.12)",overflow:"hidden",maxHeight:250,overflowY:"auto"}}>
                   {custMatches.map(c=>(
-                    <button key={c.id} onClick={()=>pickCustomer(c)} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:"8px 10px",cursor:"pointer",font:"inherit"}}>
+                    <button key={c.id} onClick={()=>pickCustomer(c)} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",borderBottom:`1px solid ${C.border}`,padding:mob?"12px 12px":"8px 10px",cursor:"pointer",font:"inherit"}}>
                       <div style={{fontSize:12,fontWeight:700,color:C.ink}}>
                         {c.name||c.email}
                         {c._source==="buyer"&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,letterSpacing:.5,color:C.blue,background:C.blueBg,borderRadius:4,padding:"1px 5px"}}>BUYER</span>}
@@ -16500,10 +16507,10 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 <input value={draft.customer.resaleNo||""} onChange={e=>setCust({resaleNo:e.target.value})} placeholder="Sales tax / resale licence — our records only" style={sIn}/>
               </div>
             ):(
-              <button onClick={()=>setCustMore(true)} style={{background:"none",border:"none",padding:"0 0 7px",fontSize:11,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>＋ Business & address</button>
+              <button onClick={()=>setCustMore(true)} style={{...txtBtn,paddingBottom:mob?0:7}}>＋ Business & address</button>
             )}
-            <label style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:C.inkMid,cursor:"pointer"}}>
-              <input type="checkbox" checked={!!draft.customer.addToList} onChange={e=>setCust({addToList:e.target.checked})} style={{width:17,height:17,cursor:"pointer"}}/>
+            <label style={{display:"flex",alignItems:"center",gap:mob?11:8,fontSize:mob?13:12,color:C.inkMid,cursor:"pointer",minHeight:mob?44:0}}>
+              <input type="checkbox" checked={!!draft.customer.addToList} onChange={e=>setCust({addToList:e.target.checked})} style={{width:mob?22:17,height:mob?22:17,flexShrink:0,cursor:"pointer"}}/>
               Add to the mailing list as <b style={{color:C.ink}}>{slug}</b>
             </label>
           </div>
@@ -16513,7 +16520,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <input value={pick} onChange={e=>{setPick(e.target.value);if(e.target.value)setBrowseAll(true);}} onFocus={()=>setBrowseAll(true)}
               placeholder={`Search the ${sellable.length} card${sellable.length===1?"":"s"} at the show…`} style={{...sIn,marginBottom:pickerOpen?8:0}}/>
             {!pickerOpen&&sellable.length>0&&(
-              <button onClick={()=>setBrowseAll(true)} style={{background:"none",border:"none",padding:"7px 0 0",fontSize:11,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>
+              <button onClick={()=>setBrowseAll(true)} style={{...txtBtn,paddingTop:7}}>
                 Browse all {sellable.length} card{sellable.length===1?"":"s"}
               </button>
             )}
@@ -16586,7 +16593,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   );
                   const rateBox=<input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={{...sIn,textAlign:"right"}}/>;
                   const amount=<span style={{fontSize:13,fontWeight:750,color:C.ink}}>{showMoney(showInvNum(l.qty)*showInvNum(l.rate),cur)}</span>;
-                  const kill=<button onClick={()=>delLine(l.id)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:16,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>;
+                  const kill=<button onClick={()=>delLine(l.id)} aria-label="Remove line" style={killBtn}>&times;</button>;
                   const name=(
                     <span style={{minWidth:0,display:"block"}}>
                       <span style={{display:"block",fontSize:12.5,fontWeight:700,color:C.ink,wordBreak:"break-word"}}>{l.desc}{l.shape?` · ${l.shape}`:""}</span>
@@ -16594,10 +16601,17 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                     </span>
                   );
                   return mob?(
-                    <div key={l.id} style={{border:`1px solid ${over?C.red:C.border}`,borderRadius:8,padding:"9px 10px",background:C.surface}}>
-                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",marginBottom:6}}>{name}{kill}</div>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 60px 1fr 92px",gap:6,alignItems:"center"}}>
-                        {qtyBox}{unitBox}{rateBox}<div style={{textAlign:"right"}}>{amount}</div>
+                    /* The line total sits with the name rather than at the end of a
+                       row of boxes: it is the number being read out, and moving it
+                       up buys qty and rate the width they need to be typed into. */
+                    <div key={l.id} style={{border:`1px solid ${over?C.red:C.border}`,borderRadius:10,padding:"10px 11px",background:C.surface}}>
+                      <div style={{display:"flex",gap:9,alignItems:"flex-start",marginBottom:8}}>
+                        {name}
+                        <span style={{marginLeft:"auto",flexShrink:0,paddingTop:1}}>{amount}</span>
+                        {kill}
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 78px 1fr",gap:7,alignItems:"center"}}>
+                        {qtyBox}{unitBox}{rateBox}
                       </div>
                     </div>
                   ):(
@@ -16615,14 +16629,14 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
               <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
                 {S.customItems.slice(0,12).map(it=>(
                   <button key={it.id} onClick={()=>addSavedItem(it)} title="Saved price — tap to add"
-                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"4px 11px",fontSize:11,color:C.ink,cursor:"pointer",font:"inherit"}}>
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:mob?999:14,padding:mob?"11px 15px":"4px 11px",fontSize:mob?13:11,color:C.ink,cursor:"pointer",font:"inherit",...(mob?{minHeight:44}:{})}}>
                     {it.desc}{it.shape?` · ${it.shape}`:""} <b>{showMoney(it.rate,cur)}</b>
                   </button>
                 ))}
               </div>
             )}
             {!showCustomLine&&(S.customItems||[]).length===0&&(
-              <button onClick={()=>setShowCustomLine(true)} style={{background:"none",border:"none",padding:0,fontSize:11.5,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600}}>
+              <button onClick={()=>setShowCustomLine(true)} style={txtBtn}>
                 ＋ Something not on a card
               </button>
             )}
@@ -16654,7 +16668,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 show and asked for by name when they are not. */}
             <div style={{...lab,marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span>Totals</span>
-              <button onClick={()=>setMoreTotals(v=>!v)} style={{background:"none",border:"none",padding:0,fontSize:11,color:C.blue,cursor:"pointer",font:"inherit",fontWeight:600,textTransform:"none",letterSpacing:0}}>
+              <button onClick={()=>setMoreTotals(v=>!v)} style={{...txtBtn,textTransform:"none",letterSpacing:0}}>
                 {moreTotals?"Hide":"Date, discount & tax"}
               </button>
             </div>
@@ -16689,11 +16703,11 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:9,flexWrap:"wrap"}}>
               <span style={lab}>Payment taken</span>
               <button onClick={()=>setD(d=>({...d,payments:[...(d.payments||[]),{id:uid(),method:(showPayMethods(S).find(m=>showInvMethodOn(S,m.key))||{}).key||"cash",_seed:1,amount:String(+(showInvTotals(d).balance||0).toFixed(2)),ref:""}]}))}
-                style={{background:"none",border:"none",fontSize:11,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>+ Record payment</button>
+                style={{...txtBtn,fontWeight:700}}>+ Record payment</button>
             </div>
             {(draft.payments||[]).length===0&&<div style={{fontSize:11,color:C.inkFaint}}>Nothing recorded — the invoice prints the full amount as due.</div>}
             {(draft.payments||[]).map(p=>(
-              <div key={p.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr 24px":"150px 110px 1fr 24px",gap:6,alignItems:"center",marginBottom:6}}>
+              <div key={p.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr 44px":"150px 110px 1fr 24px",gap:6,alignItems:"center",marginBottom:6}}>
                 {/* Paid by Zelle means the Zelle details are the ones worth
                     printing, so choosing the method here offers it there. */}
                 <select value={p.method} onChange={e=>setD(d=>{
@@ -16708,7 +16722,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 </select>
                 <input value={p.amount} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,amount:e.target.value}:x)}))} inputMode="decimal" placeholder="Amount" style={sIn}/>
                 <input value={p.ref} onChange={e=>setD(d=>({...d,payments:d.payments.map(x=>x.id===p.id?{...x,ref:e.target.value}:x)}))} placeholder="Ref (optional)" style={sIn}/>
-                <button onClick={()=>setD(d=>({...d,payments:d.payments.filter(x=>x.id!==p.id)}))} style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0}}>&times;</button>
+                <button onClick={()=>setD(d=>({...d,payments:d.payments.filter(x=>x.id!==p.id)}))} aria-label="Remove payment" style={killBtn}>&times;</button>
               </div>
             ))}
             <div style={{marginTop:12}}>
@@ -16733,7 +16747,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                             const base=Array.isArray(d.showPay)?d.showPay:[];
                             return{...d,showPay:base.includes(o.token)?base.filter(x=>x!==o.token):[...base,o.token],showMethods:[]};
                           })} title={o.detail.join(" · ")}
-                            style={{...pill(on),borderRadius:14,padding:"5px 12px",fontWeight:600}}>
+                            style={{...pill(on),borderRadius:mob?999:14,...(mob?{}:{padding:"5px 12px"}),fontWeight:600}}>
                             {o.label}{o.hint?<span style={{opacity:.7,fontWeight:500}}> · {o.hint.length>22?o.hint.slice(0,21)+"…":o.hint}</span>:""}
                           </button>
                         );
@@ -16782,12 +16796,12 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {String(justIssued.customer?.email||"").trim()&&(
                 <button disabled={busy==="email"} onClick={()=>emailInv(justIssued)}
-                  style={{background:C.ink,color:C.bg,border:"none",borderRadius:999,padding:"10px 18px",fontSize:12.5,fontWeight:650,cursor:"pointer",opacity:busy==="email"?.55:1}}>
+                  style={{background:C.ink,color:C.bg,border:"none",borderRadius:999,padding:mob?"13px 20px":"10px 18px",fontSize:mob?13.5:12.5,fontWeight:650,cursor:"pointer",opacity:busy==="email"?.55:1,...(mob?{minHeight:44,flex:"1 1 100%"}:{})}}>
                   {busy==="email"?"Preparing…":"Email it now"}
                 </button>
               )}
-              <button onClick={()=>printInv(justIssued)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:"10px 16px",fontSize:12.5,fontWeight:600,color:C.ink,cursor:"pointer"}}>Print again</button>
-              <button onClick={()=>setJustIssued(null)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:12.5,cursor:"pointer",padding:"10px 6px"}}>Done</button>
+              <button onClick={()=>printInv(justIssued)} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:mob?"13px 18px":"10px 16px",fontSize:mob?13.5:12.5,fontWeight:600,color:C.ink,cursor:"pointer",...(mob?{minHeight:44,flex:"1 1 auto"}:{})}}>Print again</button>
+              <button onClick={()=>setJustIssued(null)} style={{background:"none",border:"none",color:C.inkFaint,fontSize:mob?13.5:12.5,cursor:"pointer",padding:mob?"13px 14px":"10px 6px",...(mob?{minHeight:44}:{})}}>Done</button>
             </div>
           </div>
         </div>
@@ -16825,7 +16839,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                         ?<button onClick={()=>tagOmnisend(inv)} style={{...pill(false),color:C.amber}}>↻ Retry tagging</button>
                         :null
                   )}
-                  {inv.pdfUrl&&<a href={inv.pdfUrl} target="_blank" rel="noreferrer" style={{fontSize:10,color:C.blue,textDecoration:"none"}}>pdf link</a>}
+                  {inv.pdfUrl&&<a href={inv.pdfUrl} target="_blank" rel="noreferrer" style={{fontSize:mob?12:10,color:C.blue,textDecoration:"none",...(mob?{minHeight:44,display:"inline-flex",alignItems:"center",padding:"0 8px"}:{})}}>pdf link</a>}
                 </div>
                 {inv.omnisend&&!inv.omnisend.tagged&&inv.omnisend.error&&<div style={{fontSize:10,color:C.red,marginTop:6}}>Tagging: {inv.omnisend.error}</div>}
               </div>
@@ -16874,18 +16888,18 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
               <input value={newMethod} onChange={e=>setNewMethod(e.target.value)} placeholder="Add your own — Wise, UPI, cheque…" style={{...sIn,flex:"1 1 200px"}}
                 onKeyDown={e=>{if(e.key==="Enter")addMethod();}}/>
-              <button onClick={addMethod} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 13px",fontSize:12,fontWeight:700,color:C.ink,cursor:"pointer"}}>+ Method</button>
+              <button onClick={addMethod} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:mob?"12px 16px":"7px 13px",fontSize:mob?13:12,fontWeight:700,color:C.ink,cursor:"pointer",...(mob?{minHeight:44}:{})}}>+ Method</button>
             </div>
             {showPayMethods(S).map(m=>{
               const cfg=S.methods?.[m.key]||{};
               return(
                 <div key={m.key} style={{borderTop:`1px solid ${C.border}`,padding:"10px 0"}}>
-                  <label style={{display:"flex",alignItems:"center",gap:9,cursor:"pointer",marginBottom:cfg.on&&m.fields.length?8:0}}>
-                    <input type="checkbox" checked={!!cfg.on} onChange={e=>onSaveSettings({...S,methods:{...S.methods,[m.key]:{...cfg,on:e.target.checked}}})} style={{width:17,height:17,cursor:"pointer"}}/>
+                  <label style={{display:"flex",alignItems:"center",gap:mob?11:9,cursor:"pointer",minHeight:mob?44:0,marginBottom:cfg.on&&m.fields.length?8:0}}>
+                    <input type="checkbox" checked={!!cfg.on} onChange={e=>onSaveSettings({...S,methods:{...S.methods,[m.key]:{...cfg,on:e.target.checked}}})} style={{width:mob?22:17,height:mob?22:17,flexShrink:0,cursor:"pointer"}}/>
                     <span style={{fontSize:13,fontWeight:700,color:cfg.on?C.ink:C.inkFaint,flex:1}}>{m.label}</span>
                     {m.custom&&(
                       <button onClick={e=>{e.preventDefault();if(window.confirm(`Remove ${m.label}?`)){const{[m.key]:_drop,...rest}=S.methods||{};onSaveSettings({...S,methods:rest,extraMethods:(S.extraMethods||[]).filter(x=>x.key!==m.key)});}}}
-                        style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
+                        style={killBtn}>&times;</button>
                     )}
                   </label>
                   {cfg.on&&m.fields.length>0&&(()=>{
@@ -16902,13 +16916,13 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                         {rows.map((e,i)=>(
                           <div key={e.id||i} style={{border:`1px solid ${C.border}`,borderRadius:11,padding:"10px 11px",background:C.card}}>
                             <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:7}}>
-                              <input type="checkbox" checked={e.on!==false} onChange={ev=>patch(i,{on:ev.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
+                              <input type="checkbox" checked={e.on!==false} onChange={ev=>patch(i,{on:ev.target.checked})} style={{width:mob?22:16,height:mob?22:16,flexShrink:0,cursor:"pointer"}}/>
                               <span style={{fontSize:11,fontWeight:650,color:e.on!==false?C.inkMid:C.inkFaint,flex:1}}>
                                 {payBucketLabel(payBucketOf(m.key,e))} {m.label}{rows.length>1?` ${i+1}`:""}{e.on===false?" · not printed":""}
                               </span>
                               {rows.length>1&&(
                                 <button onClick={()=>writeEntries(rows.filter((_,j)=>j!==i))}
-                                  style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
+                                  style={killBtn}>&times;</button>
                               )}
                             </div>
                             {/* Which pile the money lands in. It is not printed — it
@@ -16934,7 +16948,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                           </div>
                         ))}
                         <button onClick={()=>writeEntries([...rows,{id:uid(),on:true}])}
-                          style={{justifySelf:"start",background:"none",border:"none",padding:0,fontSize:11.5,fontWeight:650,color:C.blue,cursor:"pointer",font:"inherit"}}>
+                          style={{...txtBtn,justifySelf:"start",fontWeight:650}}>
                           ＋ Another {m.label.toLowerCase()}
                         </button>
                       </div>
