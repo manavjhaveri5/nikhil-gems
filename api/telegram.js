@@ -1783,21 +1783,58 @@ const cleanListingTags = (list = []) => {
 /* ── AI draft ────────────────────────────────────────────────────────────── */
 // Vision over the photos plus whatever the caption said. Best-effort: a failure
 // downgrades the draft to caption-only copy rather than losing the post.
+/* The shop's own live Etsy titles and tags, so the model writes in the voice the
+   shop already sells in rather than a generic one. Read off the listings as they
+   stand; worth refreshing if the house style moves. */
+const HOUSE_STYLE_EXAMPLES = [
+  { t: "Cavansite with Pentagonite on Matrix — Wagholi, India",
+    g: "indian cavansite, blue mineral, pentagonite crystal, rare indian mineral, crystal specimen, collectors minerals, cavansite specimen" },
+  { t: "40–45mm | Bloodstone Fancy Jasper (Heliotrope) Sphere - Deep Green with Red Flecking",
+    g: "bloodstone sphere, heliotrope sphere, desk crystal orb, handheld crystal, indian bloodstone, red fleck gemstone, altar decor stone" },
+  { t: "Rhodolite Garnet Palmstones: Polished Deep Pink Crystal Stone",
+    g: "rhodolite palm stone, garnet palm crystal, raspberry red stone, burgundy worry stone, crystal palm stone, garnet reiki stone" },
+  { t: "Smoky Quartz Faceted Pendulum Pendant | Gold-Tone Setting | Grounding & Emotional Detox",
+    g: "smoky quartz, pendulum necklace, grounding crystal, metaphysical gift, boho gift for her, meditation necklace" },
+  { t: "3 Inch Rose Quartz & Green Aventurine Elephants - Hand Carved - Pastel Duo",
+    g: "aventurine elephants, pastel stone decor, 3 inch figurines, feng shui elephant, elephant gift idea, boho crystal decor" },
+  { t: "Polished Ruby Corundum Hexagon Crystal: South Indian Healing Stone",
+    g: "natural ruby hexagon, raw ruby crystal, indian ruby crystal, ruby healing stone, collectible ruby gem, ruby collector stone" },
+].map(e => `• ${e.t}\n  tags: ${e.g}`).join("\n");
+
 async function aiListingDraft({ caption, imageUrls = [], hints = {} }) {
   if (!process.env.OPENAI_KEY) return null;
   const model = process.env.TELEGRAM_LISTING_MODEL || process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
-  const prompt = `You write product listings for a crystal and mineral shop (Etsy + Shopify).
+  const prompt = `You write Etsy listings for Nikhil Gems / Earth Editions, a crystal
+and mineral shop. Match the shop's own titles and tags — here are real ones:
+
+${HOUSE_STYLE_EXAMPLES}
+
+House rules for the title, read off those:
+- Name the stone properly. What the seller types is shorthand for a mineral,
+  not the title: "cavansite wagholi" is a Cavansite specimen from Wagholi, and
+  the shop calls that "Cavansite with Pentagonite on Matrix — Wagholi, India".
+- Shape it as: [size or weight, if worth leading with] Stone + Form, then a
+  separator (: | - —) and a short phrase that earns the search — colour, the
+  locality, what it does, or who it is for.
+- Title Case. 45-95 characters. No ALL CAPS, no emoji, no price, no SKU, no box
+  number, and never the seller's shorthand verbatim.
+
+Tags, read off those: 13 of them, lowercase, two or three words each, under 20
+characters. Cover the stone and its common variants and misspellings, the form,
+the colour, the locality, the use (altar, reiki, desk, collector), and a gift
+angle. No hashtags, no duplicates of one another.
 
 ${imageUrls.length ? `The ${imageUrls.length} photo(s) below are the product.` : "There are no photos — work from the note alone."}
-Seller's note: ${caption ? `"${caption}"` : "(none)"}
+Seller's note (facts, not the title): ${caption ? `"${caption}"` : "(none)"}
 Known already: ${JSON.stringify({ size: hints.size || "", weight: hints.weight || "", origin: hints.origin || "", qty: hints.qty || "" })}
 
-The seller's note always wins over what you think you see. Never invent an origin,
-a size or a weight that is neither stated nor plainly visible — leave it "".
+The seller's note always wins on the facts — the stone, the locality, the size —
+over what you think you see. Never invent an origin, a size or a weight that is
+neither stated nor plainly visible: leave it "".
 
 Return ONLY JSON:
 {
-  "title": "buyer-facing title, max 110 chars, no ALL CAPS, no emoji",
+  "title": "the Etsy title, in the house style above",
   "material": "the stone, e.g. Amethyst, Clear Quartz, Labradorite",
   "category": "one of: ${ETSY_CATEGORIES.map(c => c.value).join(", ")}",
   "description": "2-3 short paragraphs: what it is, what it looks like, then a specs line. Plain text.",
@@ -1832,9 +1869,11 @@ Return ONLY JSON:
 function buildListingDraft({ parsed, ai, images = [], video = "", source = "telegram-photo" }) {
   const id = uid();
   const category = categoryByValue(ai?.category) || categoryByValue(inferCategoryValue(`${parsed.text} ${ai?.title || ""}`));
-  // The caption is the name. Whatever the seller typed is what the product is
-  // called on every platform — the AI only names it when nothing was typed.
-  const title = parsed.text || (ai?.title || "").trim() || "Untitled listing";
+  /* The seller's line is shorthand for a mineral — "cavansite wagholi" — and a
+     buyer searching Etsy is not typing that. The AI writes the title in the
+     shop's own style and the line stays on the record as what was said; if the
+     AI is unreachable the line is the name, which is better than nothing. */
+  const title = (ai?.title || "").trim() || parsed.text || "Untitled listing";
 
   const priceUsd = parsed.priceUsd ?? (parsed.priceInr ? Math.round((parsed.priceInr / LISTING_USD_INR) * 100) / 100 : null);
   const priceInr = parsed.priceInr ?? (parsed.priceUsd ? Math.round(parsed.priceUsd * LISTING_USD_INR) : null);
