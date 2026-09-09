@@ -1722,9 +1722,18 @@ function parseListingCaption(caption = "") {
   for (const m of text.matchAll(/#([a-z][a-z0-9 _-]{1,19})(?=$|[,.;|]|\s#)/gi)) tags.push(m[1].trim());
   text = text.replace(/#[a-z][a-z0-9 _-]{1,19}(?=$|[,.;|]|\s#)/gi, " ");
 
-  // \b on the currency words so "colours 3" or "hindustan 4" can't read as a price.
-  const usd    = take(/(?:\$|\busd\s*)\s*([\d,]+(?:\.\d+)?)/i);
-  const inr    = take(/(?:₹|\brs\.?\s*|\binr\s*)([\d,]+(?:\.\d+)?)/i);
+  /* A price is written either way round — "$45" and "650 usd" are both how a
+     dealer types it — so both orders are read. \b on the currency words so
+     "colours 3" or "hindustan 4" can't read as a price. */
+  const takeAmount = patterns => { for (const re of patterns) { const m = take(re); if (m) return m; } return null; };
+  const usd = takeAmount([
+    /(?:us\s*\$|\$|\busd\b)\s*([\d,]+(?:\.\d+)?)/i,
+    /([\d,]+(?:\.\d+)?)\s*(?:\$|\busd\b|\bdollars?\b)/i,
+  ]);
+  const inr = takeAmount([
+    /(?:₹|\brs\.?|\binr\b)\s*([\d,]+(?:\.\d+)?)/i,
+    /([\d,]+(?:\.\d+)?)\s*(?:₹|\binr\b|\brs\b|\brupees?\b|\/-)/i,
+  ]);
   const box    = take(/\b(?:box|stk|stock|location|loc)\s*#?\s*([a-z0-9][a-z0-9-]*)/i);
   const sku    = take(/\bsku\s*[:#]?\s*([a-z0-9][a-z0-9/_-]*)/i);
   const origin = take(/\b(?:from|origin)\s*[:]?\s*([a-z][a-z ]{2,30}?)(?=$|[,.;|]|\s*\d)/i);
@@ -1992,12 +2001,18 @@ async function albumRows(groupId, ctx) {
 }
 
 /* An album item that carries no caption of its own only counts as a listing
-   post if a sibling already filed one. Telegram can deliver those out of order,
-   so a miss is retried once before falling back to normal handling. */
+   post if a sibling filed one. Telegram delivers the five updates of an album at
+   once and Vercel runs them side by side, so "already filed" is a question of
+   milliseconds: the captioned sibling may still be claiming its place when this
+   one asks. Polled until the album has had as long to form as the leader waits
+   for it, rather than asked twice and given up on. */
 async function albumJoinedListing(groupId, ctx) {
-  if ((await albumRows(groupId, ctx)).length) return true;
-  await sleep(1200);
-  return (await albumRows(groupId, ctx)).length > 0;
+  const deadline = Date.now() + ALBUM_SETTLE_MS;
+  for (;;) {
+    if ((await albumRows(groupId, ctx)).length) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(400);
+  }
 }
 
 async function pruneAlbums(ctx) {
@@ -2063,6 +2078,19 @@ async function finishMediaListing({ chatId, caption, media, ctx }) {
 async function handleMediaListing({ chatId, message, caption, file, ctx }) {
   const groupId = message.media_group_id || "";
   const messageId = Number(message.message_id) || Date.now();
+  const rowId = `${groupId}:${messageId}`;
+
+  /* Claim a place in the album before pulling the file, not after. Fetching a
+     photo off Telegram and pushing it to storage takes longer than a sibling
+     will wait, and a sibling that finds an empty album concludes this was never
+     a listing — which is how four photos of one stone ended up described back
+     one at a time by the assistant while the fifth was still uploading. */
+  if (groupId) {
+    await upsertItemK(ctx.albums, {
+      id: rowId, groupId, messageId, chatId: String(chatId),
+      caption: caption || "", kind: file.kind, ts: Date.now(), pending: true,
+    }, { prepend: false });
+  }
 
   const uploaded = await uploadTelegramMedia(file, `listing-${file.uniqueId}`, ctx);
   if (!uploaded) {
@@ -2078,7 +2106,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
   }
 
   await upsertItemK(ctx.albums, {
-    id: `${groupId}:${messageId}`, groupId, messageId, chatId: String(chatId),
+    id: rowId, groupId, messageId, chatId: String(chatId),
     url: media.url, name: media.name, kind: media.kind, caption: caption || "", ts: Date.now(),
   }, { prepend: false });
 
@@ -2088,7 +2116,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
   const done = rows.find(r => r.done);
   if (done) { await appendLateMedia(done.listing_id, media, ctx); return; }
 
-  const items = rows.filter(r => !r.done).sort((a, b) => a.messageId - b.messageId);
+  const items = rows.filter(r => !r.done && r.url).sort((a, b) => a.messageId - b.messageId);
   if (String(items[0]?.messageId) !== String(messageId)) {
     // A sibling is writing this listing — wait for it, then add this file if it missed us.
     await sleep(ALBUM_LEADER_GRACE_MS);
@@ -2481,8 +2509,10 @@ export default async function handler(req, res) {
 
       // Uncaptioned videos keep the old flat workflow: an Earth Editions Shopify
       // draft with a linked stock item, priced later in the ERP. A captioned
-      // video is a listing and was handled above.
-      if (hasVideo) {
+      // video is a listing and was handled above — and a video posted inside an
+      // album belongs to whatever the album is, so it never takes this path on
+      // its own.
+      if (hasVideo && !message.media_group_id) {
         const result = await createTelegramVideoListing(caption);
         await saveSession(chatId, { ...session, lastUpdateId: updateId });
         if (!result.success) {
