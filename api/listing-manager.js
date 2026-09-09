@@ -82,6 +82,32 @@ const ETSY_SHIPPING = {
   above35:  127830730749,  // listings above $35
   above350: 260361925431,  // listings above $350
 };
+
+/* A profile id that the shop has since deleted is rejected by Etsy at publish,
+   and the listing goes nowhere. The shop's live profiles are read once and the
+   chosen id checked against them, falling back to one that does exist rather
+   than to a number that used to. */
+let etsyShippingCache = null;
+async function etsyShippingProfiles(hdrs) {
+  if (etsyShippingCache) return etsyShippingCache;
+  try {
+    const { "Content-Type": _drop, ...bare } = hdrs;
+    const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/shipping-profiles`, { headers: bare });
+    if (!r.ok) return [];
+    etsyShippingCache = ((await r.json())?.results || []).map(p => ({ id: p.shipping_profile_id, label: p.title || "" }));
+    return etsyShippingCache;
+  } catch { return []; }
+}
+async function resolveShippingProfile(wanted, hdrs) {
+  const live = await etsyShippingProfiles(hdrs);
+  if (!live.length) return wanted;                       // nothing to check against
+  if (live.some(p => String(p.id) === String(wanted))) return wanted;
+  // Goods held in the States ship from there; a profile that says so is the one
+  // to fall back on before any other.
+  const usa = live.find(p => /\b(usa|us|domestic|united states)\b/i.test(p.label));
+  console.warn(`Etsy shipping profile ${wanted} is not on the shop any more — using ${(usa || live[0]).label}`);
+  return (usa || live[0]).id;
+}
 const ETSY_RETURN_POLICY = 1290534528477; // 14 days, no exchanges
 
 // Section ID map: shape/type → Etsy section
@@ -337,6 +363,15 @@ async function pickReadinessState(listing, hdrs) {
   const wantMadeToOrder = !!listing.etsy_made_to_order;
   const all = await etsyReadinessStates(hdrs);
   const pool = all.filter(x => x.madeToOrder === wantMadeToOrder);
+  /* Stock sitting in the USA warehouse only moves when the shop is over for
+     Denver or Tucson, so it takes the longest window the shop has rather than
+     the shortest. It is still shorter than the truth — a processing profile of
+     a few weeks has to be made on Etsy itself — but it does not promise
+     tomorrow. */
+  if (listing.etsy_slow_dispatch) {
+    const slowest = (pool.length ? pool : all).sort((a, b) => (b.max - a.max) || (b.min - a.min))[0];
+    if (slowest) return slowest.id;
+  }
   const best = (pool.length ? pool : all).sort((a, b) => (a.min - b.min) || (a.max - b.max))[0];
   if (best) return best.id;
 
@@ -501,12 +536,15 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   const sectionId      = listing.etsy_section_id   || ETSY_SECTIONS[shape] || ETSY_SECTIONS[productType] || null;
   const taxonomyId     = listing.etsy_taxonomy_id  || ETSY_TAXONOMY[productType] || ETSY_TAXONOMY.default;
-  const shippingId     = listing.etsy_shipping_profile_id || etsyShippingProfile(price_etsy_usd || (price_etsy / 84));
+  const wantedShipping = listing.etsy_shipping_profile_id || etsyShippingProfile(price_etsy_usd || (price_etsy / 84));
   const returnPolicyId = listing.etsy_return_policy_id    || ETSY_RETURN_POLICY;
   const quantity       = type === "unique" ? 1 : Math.max(1, +qty || 1);
 
   const dims   = listingDimensions(listing);
   const weight = parseWeight(listing.weight);
+
+  const hdrs = await etsyHeaders();
+  const shippingId = await resolveShippingProfile(wantedShipping, hdrs);
 
   const payload = {
     quantity,
@@ -535,8 +573,6 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
     ...(sectionId ? { shop_section_id: sectionId } : {}),
     ...(listingSku(listing) ? { skus: [listingSku(listing)] } : {}),
   };
-
-  const hdrs = await etsyHeaders();
 
   const readinessId = await pickReadinessState(listing, hdrs);
   if (readinessId) payload.readiness_state_id = readinessId;

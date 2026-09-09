@@ -1790,6 +1790,11 @@ const cleanListingTags = (list = []) => {
    own words out from under it. */
 const ATYAHARA_ABOUT = "Atyāhāra embodies a unique approach to luxury, rooted in mindful sourcing and a deep respect for Mother Earth. Our brand celebrates the beauty of nature’s treasures, not as a necessity, but as a cherished indulgence. Every piece is crafted with a commitment to sustainability, ensuring that the earth’s generosity is honored and preserved for future generations. By choosing Atyāhāra, you are embracing a journey where elegance meets responsibility, and together, we can make a difference.";
 const PHOTO_NOTE = "Photographs were taken in both studio and natural lighting to show the stone as accurately as possible. Please message us for any questions.";
+/* Everything posted from the phone is a piece that has already travelled: it
+   sits in the USA warehouse, which is only opened when the shop is in the
+   country for Denver and Tucson. A buyer needs to know that before they order,
+   not after, so it goes on every listing the bot writes. */
+const USA_WAREHOUSE_NOTE = "Please note: this piece is held in our USA warehouse, which we are only able to access in September, January and February, when we travel over for the Denver and Tucson gem shows. Orders are packed and dispatched during those visits, so kindly plan your purchase accordingly.";
 // One of a kind versus one of several — the shop says which, and says it first.
 const EXACT_LINE = "You will receive the EXACT piece shown in the photographs.";
 const SIMILAR_LINE = "You will receive a very SIMILAR piece. Please message us after purchasing to see available pieces.";
@@ -1943,6 +1948,7 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
     body || title,
     specs,
     images.length ? PHOTO_NOTE : "",
+    USA_WAREHOUSE_NOTE,
     `About Atyāhāra:\n${ATYAHARA_ABOUT}`,
   ].filter(Boolean).join("\n\n");
 
@@ -1976,6 +1982,14 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
     price_shopify_earth: money(priceUsd),
     price_shopify_aty: money(priceInr),
     price_ebay: money(priceUsd),
+    /* Posted from the phone means the piece is already in the USA warehouse, so
+       the Etsy draft is marked as slow to dispatch and takes the longest
+       processing window the shop has rather than promising tomorrow. Point
+       TELEGRAM_ETSY_SHIPPING_PROFILE_ID at a US warehouse profile once one
+       exists and every bot listing will use it. */
+    etsy_slow_dispatch: true,
+    etsy_shipping_profile_id: process.env.TELEGRAM_ETSY_SHIPPING_PROFILE_ID
+      ? Number(process.env.TELEGRAM_ETSY_SHIPPING_PROFILE_ID) : null,
     platforms: { etsy: {}, shopify_earth: {}, shopify_aty: {}, ebay: {} },
     width: "", height: "", depth: "", dim_unit: "mm",
     variations: [],
