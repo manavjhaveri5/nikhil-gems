@@ -1926,6 +1926,7 @@ Return ONLY JSON:
       err.status = r.status;
       err.retryAfterMs = Math.round((Number(r.headers.get("retry-after")) || 0) * 1000);
       err.imageProblem = LISTING_AI_IMAGE_FAIL_RE.test(detail);
+      err.outOfQuota = /insufficient_quota|exceeded your current quota|billing/i.test(detail);
       throw err;
     }
     const data = await r.json();
@@ -1955,7 +1956,9 @@ Return ONLY JSON:
         blind = true;
         continue;
       }
-      const retryable = !e?.status || e.status === 429 || e.status >= 500;
+      /* A spent quota also answers 429, but no amount of waiting clears it —
+         retrying it only delays telling the seller what is actually wrong. */
+      const retryable = (!e?.status || e.status === 429 || e.status >= 500) && !e?.outOfQuota;
       if (!retryable || attempt >= LISTING_AI_ATTEMPTS - 1) throw e;
       const backoff = Math.min(Math.max(e?.retryAfterMs || 0, 2000 * 2 ** attempt), 20000);
       console.error(`Listing AI attempt ${attempt + 1} failed (${e.message}), retrying in ${backoff}ms`);
@@ -1964,6 +1967,67 @@ Return ONLY JSON:
   }
 }
 
+
+/* ── Is the copywriter answering? ───────────────────────────────────────── */
+/* A failed listing now says why in the reply, but that is after the stone is
+   posted. This asks the API the two questions that separate the faults: does
+   the key and model work at all, and can it reach the photos we hand it. A dead
+   key, a model name that no longer exists, a spent quota and a storage bucket
+   the API cannot read all look identical from the phone otherwise. */
+async function aiHealthReport(ctx) {
+  if (!process.env.OPENAI_KEY) {
+    return "<b>Listing AI check</b>\n\n❌ No OPENAI_KEY is set, so every listing takes its title straight off your caption. Add the key in the Vercel project settings and redeploy.";
+  }
+  const model = process.env.TELEGRAM_LISTING_MODEL || process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
+  const lines = ["<b>Listing AI check</b>", `Model: <code>${esc(model)}</code>`];
+
+  const probe = async content => {
+    const started = Date.now();
+    try {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
+        body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content }] }),
+      });
+      const ms = Date.now() - started;
+      if (r.ok) return { ok: true, ms };
+      let detail = (await r.text()).slice(0, 500);
+      try { detail = JSON.parse(detail)?.error?.message || detail; } catch {}
+      return { ok: false, ms, status: r.status, detail: detail.slice(0, 200) };
+    } catch (e) {
+      return { ok: false, ms: Date.now() - started, detail: e.message };
+    }
+  };
+
+  const key = await probe([{ type: "text", text: "Reply with the word ok." }]);
+  lines.push(key.ok
+    ? `✅ Key and model answer (${key.ms} ms)`
+    : `❌ Key/model: ${esc(String(key.status || "no reply"))} — ${esc(key.detail || "")}`);
+
+  const url = ((await loadK(ctx.listings)) || []).map(l => l?.images?.[0]).find(Boolean);
+  if (!url) {
+    lines.push("No listing photo saved yet, so the photo half is untested.");
+  } else {
+    /* Two separate things can be wrong with a photo: our own storage may not be
+       serving it, or it may be serving it only to us. Both are checked. */
+    try {
+      const head = await fetch(url, { method: "GET" });
+      lines.push(head.ok
+        ? `✅ Photo is public (${head.status}, ${esc(head.headers.get("content-type") || "?")})`
+        : `❌ Photo is not readable: ${head.status} — the ng-media bucket may not be public.`);
+    } catch (e) { lines.push(`❌ Photo fetch failed: ${esc(e.message)}`); }
+
+    const vision = await probe([{ type: "text", text: "Reply with the word ok." }, { type: "image_url", image_url: { url } }]);
+    lines.push(vision.ok
+      ? `✅ The model can read our photos (${vision.ms} ms)`
+      : `❌ Photo read: ${esc(String(vision.status || "no reply"))} — ${esc(vision.detail || "")}`);
+  }
+
+  if (lines.every(l => !l.startsWith("❌"))) {
+    lines.push("", "All good — a failure now would be a passing one, and the listing reply says which.");
+  }
+  return lines.join("\n");
+}
 
 /* ── Draft assembly ──────────────────────────────────────────────────────── */
 function buildListingDraft({ parsed, ai, images = [], video = "", source = "telegram-photo" }) {
@@ -2563,6 +2627,7 @@ export default async function handler(req, res) {
           { command: "listmode", description: "on / off — every photo becomes a listing" },
           { command: "listings", description: "Recent listings and where they are live" },
           { command: "memory",   description: "Facts the bot has saved" },
+          { command: "aicheck",  description: "Is the listing copywriter answering?" },
           { command: "clear",    description: "Reset the conversation" },
           { command: "help",     description: "What this bot can do" },
         ] }, _ctx.token).catch(() => {});
@@ -2597,7 +2662,15 @@ export default async function handler(req, res) {
           `/listings — the last few, and where they are live`,
           `/clear — reset conversation`,
           `/memory — show saved facts`,
+          `/aicheck — why the listing copy failed, if it did`,
         ].join("\n"));
+        return;
+      }
+
+      if (cmd === "/aicheck" || cmd === "/aitest") {
+        await saveSession(chatId, { ...session, lastUpdateId: updateId });
+        tg("sendChatAction", { chat_id: chatId, action: "typing" }, _ctx.token).catch(() => {});
+        await send(chatId, await aiHealthReport(_ctx));
         return;
       }
 
