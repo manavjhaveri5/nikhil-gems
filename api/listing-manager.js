@@ -98,16 +98,41 @@ async function etsyShippingProfiles(hdrs) {
     return etsyShippingCache;
   } catch { return []; }
 }
-async function resolveShippingProfile(wanted, hdrs) {
+const USA_PROFILE_RE = /\b(usa|u\.s\.a|domestic|united states)\b/i;
+async function resolveShippingProfile(wanted, hdrs, { preferUsa = false } = {}) {
   const live = await etsyShippingProfiles(hdrs);
   if (!live.length) return wanted;                       // nothing to check against
+  const usa = live.find(p => USA_PROFILE_RE.test(p.label));
+  // Stock already in the States ships from there, whatever the price band says.
+  if (preferUsa && usa) return usa.id;
   if (live.some(p => String(p.id) === String(wanted))) return wanted;
-  // Goods held in the States ship from there; a profile that says so is the one
-  // to fall back on before any other.
-  const usa = live.find(p => /\b(usa|us|domestic|united states)\b/i.test(p.label));
   console.warn(`Etsy shipping profile ${wanted} is not on the shop any more — using ${(usa || live[0]).label}`);
   return (usa || live[0]).id;
 }
+
+/* Sections are named on Etsy and numbered underneath, and the number is what
+   goes out — but the number is also what quietly becomes somebody else's
+   section. Where a listing names the section it wants, the name is looked up
+   against the shop and wins over any id carried along with it. */
+let etsySectionCache = null;
+async function resolveSectionId(listing, hdrs) {
+  const wantName = String(listing.etsy_section_name || "").trim();
+  if (!wantName) return null;
+  try {
+    if (!etsySectionCache) {
+      const { "Content-Type": _drop, ...bare } = hdrs;
+      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/sections`, { headers: bare });
+      if (!r.ok) return null;
+      etsySectionCache = ((await r.json())?.results || []).map(x => ({ id: x.shop_section_id, title: decodeHtmlish(x.title || "") }));
+    }
+    const norm = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const hit = etsySectionCache.find(x => norm(x.title) === norm(wantName))
+      || etsySectionCache.find(x => norm(x.title).startsWith(norm(wantName)));
+    return hit ? hit.id : null;
+  } catch { return null; }
+}
+// Etsy hands section titles back HTML-escaped — "Collector&#39;s Corner".
+const decodeHtmlish = t => String(t).replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g, "&");
 const ETSY_RETURN_POLICY = 1290534528477; // 14 days, no exchanges
 
 // Section ID map: shape/type → Etsy section
@@ -544,7 +569,8 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   const weight = parseWeight(listing.weight);
 
   const hdrs = await etsyHeaders();
-  const shippingId = await resolveShippingProfile(wantedShipping, hdrs);
+  const shippingId = await resolveShippingProfile(wantedShipping, hdrs, { preferUsa: !!listing.etsy_slow_dispatch });
+  const namedSection = await resolveSectionId(listing, hdrs);
 
   const payload = {
     quantity,
@@ -570,7 +596,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
     ...(weight ? { item_weight: weight.value, item_weight_unit: weight.unit } : {}),
     should_auto_renew: listing.etsy_auto_renew ?? false,
     ...(listing.etsy_ads ? { is_on_etsy_ads: true } : {}),
-    ...(sectionId ? { shop_section_id: sectionId } : {}),
+    ...((namedSection || sectionId) ? { shop_section_id: namedSection || sectionId } : {}),
     ...(listingSku(listing) ? { skus: [listingSku(listing)] } : {}),
   };
 

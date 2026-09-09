@@ -1817,7 +1817,7 @@ const HOUSE_STYLE_EXAMPLES = [
     g: "natural ruby hexagon, raw ruby crystal, indian ruby crystal, ruby healing stone, collectible ruby gem, ruby collector stone" },
 ].map(e => `• ${e.t}\n  tags: ${e.g}`).join("\n");
 
-async function aiListingDraft({ caption, imageUrls = [], hints = {} }) {
+async function aiListingDraft({ caption, imageUrls = [], hints = {}, _retry = false }) {
   if (!process.env.OPENAI_KEY) return null;
   const model = process.env.TELEGRAM_LISTING_MODEL || process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
   const prompt = `You write Etsy listings for Nikhil Gems / Earth Editions, a crystal
@@ -1902,6 +1902,13 @@ Return ONLY JSON:
       messages: [{ role: "user", content }],
     }),
   });
+  /* One listing came back titled off the caption because this call failed while
+     the next one worked — a rate limit or a slow read on four photos, not a
+     wrong key. A second attempt costs a moment and saves the copy. */
+  if (!r.ok && !_retry && (r.status === 429 || r.status >= 500)) {
+    await sleep(1500);
+    return aiListingDraft({ caption, imageUrls, hints, _retry: true });
+  }
   if (!r.ok) throw new Error(`Listing AI ${r.status}: ${(await r.text()).slice(0, 160)}`);
   const data = await r.json();
   const text = data.choices?.[0]?.message?.content || "";
@@ -1988,6 +1995,9 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
        TELEGRAM_ETSY_SHIPPING_PROFILE_ID at a US warehouse profile once one
        exists and every bot listing will use it. */
     etsy_slow_dispatch: true,
+    // The shop keeps this stock in its own section, and asks for it by name so a
+    // renumbered section cannot quietly file a stone somewhere else.
+    etsy_section_name: process.env.TELEGRAM_ETSY_SECTION || "Local USA Warehouse",
     etsy_shipping_profile_id: process.env.TELEGRAM_ETSY_SHIPPING_PROFILE_ID
       ? Number(process.env.TELEGRAM_ETSY_SHIPPING_PROFILE_ID) : null,
     platforms: { etsy: {}, shopify_earth: {}, shopify_aty: {}, ebay: {} },
