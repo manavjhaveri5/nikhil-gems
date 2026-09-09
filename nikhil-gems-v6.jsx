@@ -15644,10 +15644,10 @@ const payBucketOf=(methodKey,entry)=>{
   if(SHOW_PAY_BUCKETS.some(x=>x.key===b))return b;
   return methodKey==="cash"?"cash":"business";
 };
-/* Two Zelle handles read as the same chip unless the seller can name them.
-   The nickname is for whoever is picking at the booth — it never prints, so
-   "Dad's account" stays between the shop and its own invoice screen. */
-const payEntryName=(entry,fallback)=>String(entry?.nickname||"").trim()||String(fallback||"").trim();
+/* The pile an account sits under is the only name it needs: under a BUSINESS
+   heading, a chip reading "Zelle · BUSINESS" is saying it twice. What tells two
+   accounts in the same pile apart is the handle itself, so that is the hint. */
+const payBucketLabel=key=>SHOW_PAY_BUCKETS.find(b=>b.key===key)?.label||"";
 /* A shop can hold two Zelle handles, or an account in each of two banks, and
    which of them goes on a given invoice is its own decision. So a method holds
    a list rather than a single set of details, and each one is ticked on its
@@ -15675,7 +15675,7 @@ const showInvPayOptions=settings=>{
         return v?(m.key==="wire"?`${f.label}: ${v}`:v):"";
       }).filter(Boolean);
       out.push({token:`${m.key}#${e.id||i}`,methodKey:m.key,label:m.label,
-        hint:payEntryName(e,e[m.fields[0].k]),bucket:payBucketOf(m.key,e),detail});
+        hint:String(e[m.fields[0].k]||"").trim(),bucket:payBucketOf(m.key,e),detail});
     });
   });
   return out;
@@ -16904,21 +16904,17 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                             <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:7}}>
                               <input type="checkbox" checked={e.on!==false} onChange={ev=>patch(i,{on:ev.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
                               <span style={{fontSize:11,fontWeight:650,color:e.on!==false?C.inkMid:C.inkFaint,flex:1}}>
-                                {payEntryName(e,rows.length>1?`${m.label} ${i+1}`:m.label)}{e.on===false?" · not printed":""}
+                                {payBucketLabel(payBucketOf(m.key,e))} {m.label}{rows.length>1?` ${i+1}`:""}{e.on===false?" · not printed":""}
                               </span>
                               {rows.length>1&&(
                                 <button onClick={()=>writeEntries(rows.filter((_,j)=>j!==i))}
                                   style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
                               )}
                             </div>
-                            {/* Which pile this account belongs to, and what to call it
-                                on the invoice screen. Neither is printed — they are
-                                how the seller tells two Zelle handles apart at a
-                                booth with a queue in front of it. */}
-                            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,marginBottom:7}}>
-                              <Field label="Nickname — for you, not the customer">
-                                <input value={e.nickname||""} placeholder={m.key==="wire"?"e.g. Chase business":"e.g. Personal"} onChange={ev=>patch(i,{nickname:ev.target.value})} style={sIn}/>
-                              </Field>
+                            {/* Which pile the money lands in. It is not printed — it
+                                is how the seller keeps the shop's account and his
+                                own apart at a booth with a queue in front of it. */}
+                            <div style={{marginBottom:7}}>
                               <Field label="Goes under">
                                 <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                                   {SHOW_PAY_BUCKETS.map(b=>(
