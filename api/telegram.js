@@ -1783,6 +1783,17 @@ const cleanListingTags = (list = []) => {
 /* ── AI draft ────────────────────────────────────────────────────────────── */
 // Vision over the photos plus whatever the caption said. Best-effort: a failure
 // downgrades the draft to caption-only copy rather than losing the post.
+/* The parts of a listing the shop writes the same way every time. Read off 400
+   live listings: the "About Atyāhāra" paragraph appears verbatim on 137 of them,
+   the lighting note on 61. Reproduced here rather than left to the model, which
+   would paraphrase them a little differently every time and drift the shop's
+   own words out from under it. */
+const ATYAHARA_ABOUT = "Atyāhāra embodies a unique approach to luxury, rooted in mindful sourcing and a deep respect for Mother Earth. Our brand celebrates the beauty of nature’s treasures, not as a necessity, but as a cherished indulgence. Every piece is crafted with a commitment to sustainability, ensuring that the earth’s generosity is honored and preserved for future generations. By choosing Atyāhāra, you are embracing a journey where elegance meets responsibility, and together, we can make a difference.";
+const PHOTO_NOTE = "Photographs were taken in both studio and natural lighting to show the stone as accurately as possible. Please message us for any questions.";
+// One of a kind versus one of several — the shop says which, and says it first.
+const EXACT_LINE = "You will receive the EXACT piece shown in the photographs.";
+const SIMILAR_LINE = "You will receive a very SIMILAR piece. Please message us after purchasing to see available pieces.";
+
 /* The shop's own live Etsy titles and tags, so the model writes in the voice the
    shop already sells in rather than a generic one. Read off the listings as they
    stand; worth refreshing if the house style moves. */
@@ -1809,6 +1820,11 @@ and mineral shop. Match the shop's own titles and tags — here are real ones:
 
 ${HOUSE_STYLE_EXAMPLES}
 
+Measured across 400 live listings: titles run 55-100 characters (median 69),
+separated by ":" most often, then "-", "|" or "–"; one in four leads with the
+size or weight. Every listing carries 13 tags, two or three words each, under
+20 characters, nearly always lowercase.
+
 House rules for the title, read off those:
 - Name the stone properly. What the seller types is shorthand for a mineral,
   not the title: "cavansite wagholi" is a Cavansite specimen from Wagholi, and
@@ -1832,13 +1848,37 @@ The seller's note always wins on the facts — the stone, the locality, the size
 over what you think you see. Never invent an origin, a size or a weight that is
 neither stated nor plainly visible: leave it "".
 
+A place named in the note is the origin, and the shop writes it out in full —
+"wagholi" is "Wagholi, Maharashtra, India", "jalgaon" is "Jalgaon Quarries,
+Maharashtra, India". Naming the state and country of a locality the seller gave
+is not inventing one; a locality nobody mentioned is.
+
+The description is assembled around you: the shop's opening line, your paragraph,
+a spec block, then the shop's "About Atyāhāra". Write the paragraph only — one
+of them, 45-90 words, in this voice:
+
+  "This Ruby in Rhyolite sphere is a natural ruby-bearing rhyolite featuring a
+  striking central magenta-pink ruby crystal surrounded by creamy white and grey
+  rhyolitic matrix. Additional ruby fragments appear throughout the stone,
+  creating a distinctive scattered pattern, while the polished spherical surface
+  enhances the contrast, lustre, and natural mineral textures. Ideal for display
+  on a desk, shelf, or as a handheld piece."
+
+Open with "This <stone> <form> is a…", describe what is actually in the photo —
+colour, matrix, habit, lustre — and close on where it is at home. British
+spelling (lustre, colour). No hype, no "stunning", no emoji, no claims about
+healing powers, no price.
+
 Return ONLY JSON:
 {
   "title": "the Etsy title, in the house style above",
   "material": "the stone, e.g. Amethyst, Clear Quartz, Labradorite",
   "category": "one of: ${ETSY_CATEGORIES.map(c => c.value).join(", ")}",
-  "description": "2-3 short paragraphs: what it is, what it looks like, then a specs line. Plain text.",
-  "tags": ["up to 13 lowercase search tags", "each under 20 characters"],
+  "body": "the one descriptive paragraph, in the voice above",
+  "finish": "e.g. Polished, Natural, Hand carved, Tumbled — what the surface is",
+  "pantone": "the shop quotes Pantone on most listings: 1-3 codes with names, e.g. \"19-2430 TCX Magenta + 11-4300 TCX Blanc de Blanc\", read off the photo. \"\" if there are no photos",
+  "dimensions": "e.g. 64 x 45 x 23mm or 43mm diameter — only if stated or measurable from the note, else \"\"",
+  "tags": ["exactly 13 lowercase search tags", "two or three words each, under 20 characters"],
   "size": "e.g. 60mm — only if stated or clearly visible, else \\"\\"",
   "weight": "e.g. 320 g — only if stated, else \\"\\"",
   "origin": "country or locality — only if stated, else \\"\\"",
@@ -1879,12 +1919,32 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
   const priceInr = parsed.priceInr ?? (parsed.priceUsd ? Math.round(parsed.priceUsd * LISTING_USD_INR) : null);
   const money = v => (v == null ? "" : String(v));
 
+  /* The description is built the way the shop builds it — what you will receive,
+     the piece itself, the spec block in its own order, then the shop's own
+     paragraph about itself. Only the middle is written for this stone; the rest
+     is the shop's, word for word. */
+  const size = parsed.size || ai?.size || "";
+  const weight = parsed.weight || ai?.weight || "";
+  const dims = (ai?.dimensions || "").trim();
   const specs = [
-    parsed.size || ai?.size ? `Size: ${parsed.size || ai.size}` : "",
-    parsed.weight || ai?.weight ? `Weight: ${parsed.weight || ai.weight}` : "",
-    parsed.origin || ai?.origin ? `Origin: ${parsed.origin || ai.origin}` : "",
-  ].filter(Boolean).join("\n");
-  const description = [ai?.description?.trim() || title, specs].filter(Boolean).join("\n\n");
+    ["Material", (ai?.material || "").trim()],
+    ["Finish", (ai?.finish || "").trim()],
+    ["Origin", parsed.origin || ai?.origin || ""],
+    // The shop writes these on one line when it has both, and separately when not.
+    ...(weight && (dims || size)
+      ? [["Weight / Dimensions", `${weight} / ${dims || size}`]]
+      : [["Weight", weight], ["Dimensions", dims || size]]),
+    ["Pantone Color", (ai?.pantone || "").trim()],
+  ].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("\n");
+
+  const body = (ai?.body || ai?.description || "").trim();
+  const description = [
+    (parsed.qty > 1 ? SIMILAR_LINE : EXACT_LINE),
+    body || title,
+    specs,
+    images.length ? PHOTO_NOTE : "",
+    `About Atyāhāra:\n${ATYAHARA_ABOUT}`,
+  ].filter(Boolean).join("\n\n");
 
   const listing = {
     id,
