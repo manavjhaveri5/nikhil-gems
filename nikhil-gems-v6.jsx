@@ -15495,8 +15495,23 @@ const readShowsDraft=()=>{
     return Array.isArray(draft?.value)?draft:null;
   }catch{return null;}
 };
+/* Photos and uploaded files carry base64 data URLs whenever an upload didn't make
+   it to Supabase, and they are far and away the heaviest thing on a show. Putting
+   them in the draft is what pushes localStorage past its quota — and setItem fails
+   silently, so the draft then freezes at whatever it last managed to write while
+   withShowsDraft keeps replaying that frozen copy over every fresh load. That is
+   how a sale logs, shows on the card, and then vanishes a second later. Keep the
+   heavy fields out of the draft and read them back off the loaded copy instead. */
+const SHOWS_DRAFT_HEAVY=["showPhotos","files"];
+const stripDraftHeavy=show=>{const o={...show};SHOWS_DRAFT_HEAVY.forEach(k=>{delete o[k];});return o;};
 const writeShowsDraft=list=>{
-  try{localStorage.setItem(SHOWS_DRAFT_KEY,JSON.stringify({ts:Date.now(),value:list}));}catch{}
+  const value=(Array.isArray(list)?list:[]).map(stripDraftHeavy);
+  try{localStorage.setItem(SHOWS_DRAFT_KEY,JSON.stringify({ts:Date.now(),value}));}
+  catch{
+    // A draft we can no longer keep up to date is worse than no draft at all:
+    // it would outrank the server copy forever. Drop it rather than leave it stale.
+    try{localStorage.removeItem(SHOWS_DRAFT_KEY);}catch{}
+  }
 };
 const readBuyingPlanDraft=sid=>{
   try{
@@ -15509,11 +15524,23 @@ const writeBuyingPlanDraft=(sid,plan)=>{
 };
 const withShowsDraft=list=>{
   const draft=readShowsDraft();
-  const base=draft?.value||list;
-  return Array.isArray(base)?base.map(show=>{
+  const loaded=Array.isArray(list)?list:[];
+  const loadedById=new Map(loaded.filter(s=>s?.id).map(s=>[s.id,s]));
+  const base=draft?.value||loaded;
+  if(!Array.isArray(base))return base;
+  const merged=base.map(show=>{
+    const server=loadedById.get(show.id);
+    let out=show;
+    // The draft deliberately carries no photos or files — take those from the copy
+    // that was just loaded so nothing on the Photos tab blinks out.
+    if(server&&server!==show)SHOWS_DRAFT_HEAVY.forEach(k=>{if(server[k]!==undefined&&out[k]===undefined)out={...out,[k]:server[k]};});
     const planDraft=readBuyingPlanDraft(show.id);
-    return planDraft?.value?{...show,buyingPlan:planDraft.value}:show;
-  }):base;
+    return planDraft?.value?{...out,buyingPlan:planDraft.value}:out;
+  });
+  // A show added on another device won't be in this device's draft; keep it.
+  const seen=new Set(merged.filter(s=>s?.id).map(s=>s.id));
+  loaded.forEach(s=>{if(s?.id&&!seen.has(s.id))merged.push(s);});
+  return merged;
 };
 
 // The second line on a strip label is whatever the buyers at that show read, so it
@@ -15603,6 +15630,24 @@ const showPayMethods=settings=>[
   ...(settings?.extraMethods||[]).filter(m=>m&&m.key&&m.label).map(m=>({key:m.key,label:m.label,fields:[{k:"note",label:"Line on the invoice"}],custom:true})),
 ];
 const showInvMethodOn=(settings,key)=>!!settings?.methods?.[key]?.on;
+/* Three piles, because that is how the money is actually thought about at the
+   booth: what the business is paid into, what goes to the personal account, and
+   the cash drawer. The pile is a fact about the account, so it is kept on the
+   account rather than decided again on every invoice. */
+const SHOW_PAY_BUCKETS=[
+  {key:"business",label:"Business"},
+  {key:"personal",label:"Personal"},
+  {key:"cash",label:"Cash"},
+];
+const payBucketOf=(methodKey,entry)=>{
+  const b=String(entry?.bucket||"").trim();
+  if(SHOW_PAY_BUCKETS.some(x=>x.key===b))return b;
+  return methodKey==="cash"?"cash":"business";
+};
+/* Two Zelle handles read as the same chip unless the seller can name them.
+   The nickname is for whoever is picking at the booth — it never prints, so
+   "Dad's account" stays between the shop and its own invoice screen. */
+const payEntryName=(entry,fallback)=>String(entry?.nickname||"").trim()||String(fallback||"").trim();
 /* A shop can hold two Zelle handles, or an account in each of two banks, and
    which of them goes on a given invoice is its own decision. So a method holds
    a list rather than a single set of details, and each one is ticked on its
@@ -15623,14 +15668,14 @@ const showInvPayOptions=settings=>{
   const out=[];
   showPayMethods(settings).filter(m=>showInvMethodOn(settings,m.key)).forEach(m=>{
     const entries=methodEntries(settings,m.key).filter(e=>e.on!==false);
-    if(!m.fields.length||!entries.length){out.push({token:m.key,methodKey:m.key,label:m.label,detail:[]});return;}
+    if(!m.fields.length||!entries.length){out.push({token:m.key,methodKey:m.key,label:m.label,detail:[],bucket:payBucketOf(m.key,null)});return;}
     entries.forEach((e,i)=>{
       const detail=m.fields.map(f=>{
         const v=String(e[f.k]||"").trim();
         return v?(m.key==="wire"?`${f.label}: ${v}`:v):"";
       }).filter(Boolean);
       out.push({token:`${m.key}#${e.id||i}`,methodKey:m.key,label:m.label,
-        hint:String(e[m.fields[0].k]||"").trim(),detail});
+        hint:payEntryName(e,e[m.fields[0].k]),bucket:payBucketOf(m.key,e),detail});
     });
   });
   return out;
@@ -15826,6 +15871,26 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
     mail?`<a href="mailto:${showInvEsc(mail)}">${showInvEsc(mail)}</a>`:"",
     showLine?showInvEsc(showLine):"",
   ].filter(Boolean);
+  /* Every way back to the shop, each on its own line so the block reads as a
+     card rather than a run-on. Nothing is invented: a channel that was never
+     filled in on Settings simply does not appear. */
+  const shipWays=[
+    igHandle?["Instagram",igUrl?`<a href="${showInvEsc(igUrl)}">${showInvEsc(igHandle)}</a>`:showInvEsc(igHandle)]:null,
+    mail?["Email",`<a href="mailto:${showInvEsc(mail)}">${showInvEsc(mail)}</a>`]:null,
+    String(s.seller.phone||"").trim()?["Phone",showInvEsc(String(s.seller.phone).trim())]:null,
+    site?["Shop",`<a href="${showInvEsc(siteUrl)}">${showInvEsc(site)}</a>`]:null,
+  ].filter(Boolean);
+  const shipBlock=shipWays.length?`
+    <div class="ship">
+      <div>
+        <div class="hd">Reorders &amp; shipping</div>
+        <div class="big">We ship duty free, worldwide.</div>
+        <div class="sub">Message us for anything you saw at the booth — or anything you didn't.<br/>We'll send photos, hold a piece, and get it to your door.</div>
+      </div>
+      <div class="ways">
+        ${shipWays.map(([k,v])=>`<div><span class="k">${showInvEsc(k)}</span>${v}</div>`).join("")}
+      </div>
+    </div>`:"";
   const curWord={USD:"US Dollars",EUR:"Euro",GBP:"Pounds Sterling",JPY:"Japanese Yen",INR:"Indian Rupees"}[cur]||cur;
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${showInvEsc(inv.invNo||"Invoice")}</title>
@@ -15881,6 +15946,16 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   .pd{font-size:10.5px;color:#4d4639;line-height:1.55;}
   .rec{font-size:10.5px;color:#1f5c3d;font-weight:700;padding:0 12px 12px;}
   .notes{font-size:10.5px;color:#4d4639;line-height:1.6;margin-top:14px;white-space:pre-wrap;}
+  /* The invitation to buy again. A customer who carried one flat home from the
+     booth has no idea the rest of it can follow — so the invoice says so, once,
+     in the shop's own voice rather than as a line of fine print. */
+  .ship{margin-top:18px;border:1px solid #cfc8bb;background:#faf8f3;padding:15px 18px;display:flex;justify-content:space-between;align-items:center;gap:24px;}
+  .ship .hd{font-size:8.5px;font-family:Helvetica,Arial,sans-serif;letter-spacing:1.6px;text-transform:uppercase;color:#8d8578;font-weight:700;margin-bottom:5px;}
+  .ship .big{font-size:16px;letter-spacing:.4px;line-height:1.3;}
+  .ship .sub{font-size:10.5px;color:#4d4639;line-height:1.6;margin-top:5px;}
+  .ship .ways{flex-shrink:0;text-align:right;font-size:11px;line-height:1.8;color:#15100a;}
+  .ship .ways a{color:inherit;text-decoration:none;border-bottom:1px solid rgba(21,16,10,.25);}
+  .ship .ways .k{font-family:Helvetica,Arial,sans-serif;font-size:8.5px;letter-spacing:1.2px;text-transform:uppercase;color:#8d8578;padding-right:7px;}
   .sign{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-top:26px;}
   .sign .sigbox{text-align:center;min-width:210px;}
   .sign .sigline{border-top:1px solid #15100a;margin-top:46px;padding-top:5px;font-size:10px;letter-spacing:.8px;color:#4d4639;}
@@ -15949,6 +16024,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
 
   ${payBlock}
   ${s.terms?`<div class="notes">${showInvEsc(s.terms)}</div>`:""}
+  ${shipBlock}
 
   <div class="sign">
     <div style="font-size:10px;color:#8d8578;max-width:340px;line-height:1.6">
@@ -16640,21 +16716,33 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   chosen to begin with, because an invoice that hands over every
                   account the shop holds is not a courtesy. */}
               <div style={{...lab,marginBottom:6}}>What to print for paying</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                {payOptions.map(o=>{
-                  const on=chosenPay.includes(o.token);
-                  return(
-                    <button key={o.token} onClick={()=>setD(d=>{
-                      const base=Array.isArray(d.showPay)?d.showPay:[];
-                      return{...d,showPay:base.includes(o.token)?base.filter(x=>x!==o.token):[...base,o.token],showMethods:[]};
-                    })} title={o.detail.join(" · ")}
-                      style={{...pill(on),borderRadius:14,padding:"5px 12px",fontWeight:600}}>
-                      {o.label}{o.hint?<span style={{opacity:.7,fontWeight:500}}> · {o.hint.length>22?o.hint.slice(0,21)+"…":o.hint}</span>:""}
-                    </button>
-                  );
-                })}
-                {!payOptions.length&&<span style={{fontSize:11,color:C.amber}}>No payment method set up yet — add one under ⚙ Settings.</span>}
-              </div>
+              {/* Business, personal and cash sit apart, because handing a customer
+                  the personal account when the sale is the shop's is the mistake a
+                  single row of look-alike chips invites. */}
+              {SHOW_PAY_BUCKETS.map(b=>{
+                const inBucket=payOptions.filter(o=>o.bucket===b.key);
+                if(!inBucket.length)return null;
+                return(
+                  <div key={b.key} style={{marginBottom:8}}>
+                    <div style={{fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:5}}>{b.label}</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {inBucket.map(o=>{
+                        const on=chosenPay.includes(o.token);
+                        return(
+                          <button key={o.token} onClick={()=>setD(d=>{
+                            const base=Array.isArray(d.showPay)?d.showPay:[];
+                            return{...d,showPay:base.includes(o.token)?base.filter(x=>x!==o.token):[...base,o.token],showMethods:[]};
+                          })} title={o.detail.join(" · ")}
+                            style={{...pill(on),borderRadius:14,padding:"5px 12px",fontWeight:600}}>
+                            {o.label}{o.hint?<span style={{opacity:.7,fontWeight:500}}> · {o.hint.length>22?o.hint.slice(0,21)+"…":o.hint}</span>:""}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+              {!payOptions.length&&<span style={{fontSize:11,color:C.amber}}>No payment method set up yet — add one under ⚙ Settings.</span>}
               {!chosenPay.length&&payOptions.length>0&&(
                 <div style={{fontSize:10.5,color:C.inkFaint,marginTop:6}}>Nothing chosen — the invoice prints no payment details.</div>
               )}
@@ -16816,12 +16904,29 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                             <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:7}}>
                               <input type="checkbox" checked={e.on!==false} onChange={ev=>patch(i,{on:ev.target.checked})} style={{width:16,height:16,cursor:"pointer"}}/>
                               <span style={{fontSize:11,fontWeight:650,color:e.on!==false?C.inkMid:C.inkFaint,flex:1}}>
-                                {rows.length>1?`${m.label} ${i+1}`:m.label}{e.on===false?" · not printed":""}
+                                {payEntryName(e,rows.length>1?`${m.label} ${i+1}`:m.label)}{e.on===false?" · not printed":""}
                               </span>
                               {rows.length>1&&(
                                 <button onClick={()=>writeEntries(rows.filter((_,j)=>j!==i))}
                                   style={{background:"none",border:"none",color:C.inkFaint,fontSize:15,cursor:"pointer",padding:0,lineHeight:1}}>&times;</button>
                               )}
+                            </div>
+                            {/* Which pile this account belongs to, and what to call it
+                                on the invoice screen. Neither is printed — they are
+                                how the seller tells two Zelle handles apart at a
+                                booth with a queue in front of it. */}
+                            <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7,marginBottom:7}}>
+                              <Field label="Nickname — for you, not the customer">
+                                <input value={e.nickname||""} placeholder={m.key==="wire"?"e.g. Chase business":"e.g. Personal"} onChange={ev=>patch(i,{nickname:ev.target.value})} style={sIn}/>
+                              </Field>
+                              <Field label="Goes under">
+                                <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                                  {SHOW_PAY_BUCKETS.map(b=>(
+                                    <button key={b.key} onClick={()=>patch(i,{bucket:b.key})}
+                                      style={{...pill(payBucketOf(m.key,e)===b.key),borderRadius:13,padding:"5px 11px",fontWeight:600}}>{b.label}</button>
+                                  ))}
+                                </div>
+                              </Field>
                             </div>
                             <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:7}}>
                               {m.fields.map(f=>(
