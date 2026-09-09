@@ -10,6 +10,9 @@ import PhotoEditor from "./PhotoEditor.jsx";
    for. */
 const VideoEditor = lazy(() => import("./VideoEditor.jsx"));
 import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
+/* Etsy category / section / shape tables — shared with the Telegram listing bot,
+   which files its drafts under exactly the same taxonomy. */
+import { ETSY_CATEGORIES, ETSY_SHOP_SECTIONS, SHAPES, PRODUCT_TYPES } from "../lib/listingCategories.js";
 
 /* Detect a video by URL extension (library entries may also carry mediaType/isVideo) */
 const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)/i.test(u);
@@ -730,11 +733,6 @@ const PLATFORMS = [
   { key:"ebay",          label:"eBay",         icon:"🔨", color:"#0064D2", priceField:"price_ebay",          currency:"USD" },
 ];
 
-const SHAPES = [
-  "Sphere","Heart","Palmstone","Tower","Tumbled","Bracelet","Pendant","Pendulum",
-  "Bowl - 2 inch","Bowl - 3 inch","Bowl - 4 inch","Bowl - 5 inch","Bowl - 6 inch","Bowl - 7 inch",
-  "Rough","Mineral","Egg","Skull","Pyramid","Chips","Freeform","Set","Mala","Wand","Point","Slab","Other",
-];
 
 const MATERIALS = [
   "Clear Quartz","Amethyst","Rose Quartz","Citrine","Labradorite","Lapis Lazuli",
@@ -742,48 +740,6 @@ const MATERIALS = [
   "Pyrite","Rhodonite","Amazonite","Aventurine","Carnelian","Garnet","Sodalite","Other",
 ];
 
-const PRODUCT_TYPES = ["Lapidary","Carvings","Jewellery","Healing/Reiki","Decor","Mineral","Rough"];
-
-// Etsy category presets — each maps to the shape + productType the API needs,
-// plus the Etsy taxonomy id the listing is actually filed under. The ids are
-// read off /seller-taxonomy/nodes; the comment is the category's full path, so
-// a wrong one is visible here rather than only on the published listing.
-const ETSY_CATEGORIES = [
-  { value:"metaphysical", label:"Metaphysical Crystals",   shape:"Mineral",        productType:"Lapidary",     taxonomyId: 1158  }, // Spirituality & Religion > Prayer Beads & Charms > Metaphysical Crystals
-  { value:"rocks_geodes", label:"Rocks & Geodes",          shape:"Specimen",       productType:"Mineral",      taxonomyId: 1893  }, // Home Decor > Home Accents > Rocks & Geodes
-  { value:"spheres",      label:"Crystal Spheres",          shape:"Sphere",         productType:"Lapidary",     taxonomyId: 1158  },
-  { value:"hearts",       label:"Crystal Hearts",           shape:"Heart",          productType:"Lapidary",     taxonomyId: 1158  },
-  { value:"palmstones",   label:"Palmstones",               shape:"Palmstone",      productType:"Lapidary",     taxonomyId: 1158  },
-  { value:"towers",       label:"Towers & Points",          shape:"Tower",          productType:"Lapidary",     taxonomyId: 1158  },
-  { value:"tumbled",      label:"Tumbled Stones",           shape:"Tumbled",        productType:"Lapidary",     taxonomyId: 1158  },
-  { value:"bowls",        label:"Crystal Bowls",            shape:"Bowl - 4 inch",  productType:"Lapidary",     taxonomyId: 1003  }, // Home Decor > Decorative Storage > Decorative Bowls
-  { value:"bracelets",    label:"Bracelets",                shape:"Bracelet",       productType:"Jewellery",    taxonomyId: 1195  }, // Jewelry > Bracelets > Beaded Bracelets
-  { value:"pendants",     label:"Pendants & Necklaces",     shape:"Pendant",        productType:"Jewellery",    taxonomyId: 1229  }, // Jewelry > Necklaces > Pendant Necklaces
-  { value:"pendulums",    label:"Pendulums & Dowsing",      shape:"Pendulum",       productType:"Healing/Reiki",taxonomyId: 1964  }, // Spirituality & Religion > Divination Tools > Dowsing
-  { value:"rough",        label:"Rough Stones",             shape:"Rough",          productType:"Rough",        taxonomyId: 1959  }, // Spirituality & Religion > Natural Curios > Mineral
-  { value:"carvings",     label:"Carvings & Sculptures",    shape:"Mineral",        productType:"Carvings",     taxonomyId: 2869  }, // Home Decor > Home Accents > Statues
-  { value:"collector",    label:"Collector's Corner",       shape:"Collector",      productType:"Mineral",      taxonomyId: 1893  },
-];
-
-// Actual shop sections from the Atyahara Etsy shop
-const ETSY_SHOP_SECTIONS = [
-  { id: null,      label: "— Let category decide —" },
-  { id: 58168978,  label: "Collector's Corner" },
-  { id: 28345880,  label: "Spheres" },
-  { id: 58185469,  label: "Hearts" },
-  { id: 30952509,  label: "Palmstones" },
-  { id: 28345876,  label: "Bracelets" },
-  { id: 58218908,  label: "Ganesha" },
-  { id: 30949825,  label: "Gemstone Bowls and More" },
-  { id: 30843294,  label: "Pendants & Pendulums" },
-  { id: 30692617,  label: "Towers & Freeforms" },
-  { id: 50040802,  label: "Chips" },
-  { id: 28345870,  label: "Tumbled Stones" },
-  { id: 28361899,  label: "Mineral Specimens" },
-  { id: 30789512,  label: "Rough Stones" },
-  { id: 58326407,  label: "Eggs & Shivas" },
-  { id: 30146745,  label: "Wellness" },
-];
 
 const USD_RATE = 84; // INR per USD — used by price calculator
 

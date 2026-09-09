@@ -1,5 +1,8 @@
 import { waitUntil } from "@vercel/functions";
 import { createClient } from "@supabase/supabase-js";
+import { ETSY_CATEGORIES, categoryByValue, sectionIdForCategory, inferCategoryValue } from "../lib/listingCategories.js";
+import { publishEtsy } from "./listing-manager.js";
+import { publishEbayListing } from "./ebay.js";
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
 function sb() {
@@ -51,6 +54,7 @@ function botCtx(isAT) {
     invoices: isAT ? "at-invoices-v1"  : "ng-invoices-v2",
     buyers:   isAT ? "at-buyers-v1"    : "ng-buyers-v2",
     listings: "ng-listings-v1",
+    albums:   `${p}-tg-listing-albums-v1`,
     purchases:isAT ? "at-purch-v1"     : "ng-purch-v5",
     vendors:  isAT ? "at-vendors-v1"   : "ng-vendors-v5",
     expenses: isAT ? "at-expenses-v1"  : "ng-expenses-v1",
@@ -72,11 +76,12 @@ async function tg(method, body, token) {
 
 // Resolve a Telegram file_id to a temporary public URL (valid ~1h — long enough
 // for OpenAI to fetch it during a single vision call). Returns null on failure.
-async function tgFileUrl(fileId) {
+async function tgFileUrl(fileId, token = null) {
+  const tok = token || _ctx.token;
   try {
-    const r = await tg("getFile", { file_id: fileId }, _ctx.token);
+    const r = await tg("getFile", { file_id: fileId }, tok);
     const path = r?.result?.file_path;
-    return path ? `https://api.telegram.org/file/bot${_ctx.token}/${path}` : null;
+    return path ? `https://api.telegram.org/file/bot${tok}/${path}` : null;
   } catch { return null; }
 }
 
@@ -94,12 +99,12 @@ function esc(s) {
 }
 
 // Send long messages in chunks; supports basic <b>, <i>, <code> from GPT
-async function send(chatId, text) {
+async function send(chatId, text, token = null) {
   if (!text?.trim()) return;
   // Strip any raw <tag> that isn't an allowed HTML tag (prevent parse errors)
   const safe = text.replace(/<(?!\/?(?:b|i|u|s|code|pre|a|blockquote)[\s>\/])[^>]*>/gi, "");
   for (let i = 0; i < safe.length; i += 4000) {
-    await tg("sendMessage", { chat_id: chatId, text: safe.slice(i, i + 4000), parse_mode: "HTML" }, _ctx.token);
+    await tg("sendMessage", { chat_id: chatId, text: safe.slice(i, i + 4000), parse_mode: "HTML" }, token || _ctx.token);
   }
 }
 
@@ -129,10 +134,11 @@ const parseNum = s => {
 };
 
 // ── Activity log ──────────────────────────────────────────────────────────────
-async function logActivity(entry) {
+async function logActivity(entry, ctx = null) {
   try {
-    const curr = (await loadK(_ctx.activity)) || [];
-    await saveK(_ctx.activity, [{ id: uid(), ts: new Date().toISOString(), ...entry }, ...curr].slice(0, 500));
+    const key = (ctx || _ctx).activity;
+    const curr = (await loadK(key)) || [];
+    await saveK(key, [{ id: uid(), ts: new Date().toISOString(), ...entry }, ...curr].slice(0, 500));
   } catch {}
 }
 
@@ -614,6 +620,47 @@ const TOOLS = [
           notes: { type: "string" }
         },
         required: ["name"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_listing",
+      description: "Create a DRAFT product listing in the Listing Manager (Etsy / Shopify hub). Use when Nikhil describes a piece he wants listed for sale — 'list an amethyst sphere 60mm at $45'. This saves a draft in the ERP only; it never publishes to a live shop. Photos cannot be attached this way — tell him to send the photos to this chat with a caption starting /list.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Buyer-facing product title" },
+          material: { type: "string", description: "The stone, e.g. Amethyst, Labradorite" },
+          category: { type: "string", description: "One of: metaphysical, rocks_geodes, spheres, hearts, palmstones, towers, tumbled, bowls, bracelets, pendants, pendulums, rough, carvings, collector. Guessed from the title if omitted." },
+          description: { type: "string", description: "Product description — 2-3 short paragraphs" },
+          tags: { type: "array", items: { type: "string" }, description: "Up to 13 lowercase search tags, each under 20 characters" },
+          price_usd: { type: "number", description: "Price in USD (Shopify Earth Editions / eBay). The other currency is converted if only one is given." },
+          price_inr: { type: "number", description: "Price in INR (Etsy / Atyahara)" },
+          qty: { type: "number", description: "Quantity available. Default 1." },
+          size: { type: "string", description: "e.g. 60mm" },
+          weight: { type: "string", description: "e.g. 320 g" },
+          origin: { type: "string", description: "Country or locality — only if stated" },
+          sku: { type: "string" },
+          box: { type: "string", description: "Box / storage location" }
+        },
+        required: ["title"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_listings",
+      description: "Get listings from the Listing Manager — what is drafted, what is already live on Etsy/Shopify, and their prices.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search title, material, SKU or listing number" },
+          drafts_only: { type: "boolean", description: "Only listings not published anywhere yet" },
+          limit: { type: "number", description: "Default 10, max 50" }
+        }
       }
     }
   },
@@ -1569,12 +1616,552 @@ async function runTool(name, args) {
       create_vendor: execCreateVendor,
       create_purchase_order: execCreatePurchaseOrder,
       get_purchase_orders: execGetPurchaseOrders,
+      create_listing: execCreateListing, get_listings: execGetListings,
     };
     if (!map[name]) return { error: `Unknown tool: ${name}` };
     return await map[name](args);
   } catch (e) {
     return { error: e.message };
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LISTING BOT — photos in Telegram become Listing Manager drafts
+   ─────────────────────────────────────────────────────────────────────────
+   Nothing here ever touches a live shop. A post from Telegram lands in the
+   shared ERP (`ng-listings-v1`) as a draft with its photos, AI-written copy
+   and whatever price the caption carried; pricing checks and the actual
+   publish stay in Listing Manager, where the platform toggles live.
+══════════════════════════════════════════════════════════════════════════ */
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// A Telegram album arrives as one webhook per photo, all within a second or two.
+// The first photo (lowest message_id) leads: it waits for its siblings to file
+// themselves, then writes the single listing they all belong to.
+const ALBUM_SETTLE_MS = 5000;
+const ALBUM_LEADER_GRACE_MS = 2500;
+const ALBUM_TTL_MS = 2 * 60 * 60 * 1000;
+
+// INR per USD for the second price when a caption only gives one currency. The
+// reply always says the rate it used, so a stale number is visible, not silent.
+const LISTING_USD_INR = Number(process.env.LISTING_USD_INR || 84);
+
+/* Atomic single-item write into a JSON-array key. Album rows land from several
+   concurrent webhooks at once, so a read-modify-write here would lose photos —
+   the RPC takes a row lock and merges server-side. Falls back to a whole-array
+   save only if the migration hasn't been applied to this project. */
+async function upsertItemK(key, item, { prepend = true } = {}) {
+  if (!item?.id) throw new Error("upsertItemK requires item.id");
+  const { data, error } = await sb().rpc("app_data_upsert_item", { p_key: key, p_item: item, p_prepend: prepend });
+  if (!error) return Array.isArray(data) ? data : null;
+  const curr = (await loadK(key)) || [];
+  const idx = curr.findIndex(r => r?.id === item.id);
+  const next = idx >= 0 ? curr.map((r, i) => (i === idx ? item : r)) : (prepend ? [item, ...curr] : [...curr, item]);
+  await saveK(key, next);
+  return next;
+}
+
+/* Album photos can land on one warm instance at the same moment, so the listing
+   path uploads through its own local state rather than the request-scoped
+   _pendingFile slot the assistant path shares. */
+async function uploadTelegramMedia({ fileId, name, mime }, targetId, ctx) {
+  const fileUrl = await tgFileUrl(fileId, ctx.token);
+  if (!fileUrl) return null;
+  try {
+    const resp = await fetch(fileUrl);
+    if (!resp.ok) return null;
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const client = sb();
+    await client.storage.createBucket("ng-media", { public: true }).catch(() => {});
+    const ext = (String(name).split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+    const path = `telegram/${targetId}-${Date.now()}.${ext}`;
+    const { error } = await client.storage.from("ng-media").upload(path, buf, { contentType: mime || "application/octet-stream", upsert: true });
+    if (error) return null;
+    return { id: uid(), url: client.storage.from("ng-media").getPublicUrl(path).data.publicUrl, name, type: mime, uploadedAt: new Date().toISOString() };
+  } catch { return null; }
+}
+
+/* ── Caption directives ──────────────────────────────────────────────────── */
+// "/list amethyst sphere 60mm $45 box A12 #crystal" → structured hints.
+const LISTING_CMD_RE = /^\/(list|listing)(@\w+)?\b[\s:,-]*/i;
+const LISTING_WORD_RE = /^(listing|list this|post this|list it|post|list)\b[\s:,-]+/i;
+
+const isListingCaption = caption => {
+  const c = String(caption || "").trim();
+  return LISTING_CMD_RE.test(c) || LISTING_WORD_RE.test(c);
+};
+
+/* Media captioned with a one-line product note ("amethyst sphere 60mm $45") is
+   a listing. A caption about money or about the stock room is not — those keep
+   going to the assistant, which logs payments and stock notes. Media with no
+   caption at all is left alone too, since that is what a forwarded screenshot
+   looks like. */
+const NOT_A_LISTING_RE = /\b(paid|pay|paying|payment|received|receive|receipt|remit|remittance|transfer|deposit|withdraw|salary|rent|refund|due|outstanding|balance|bill|invoice|expense|upi|neft|rtgs|add to stock|inventory|stock note|stock list|godown)\b/i;
+const looksLikeListingCaption = caption => {
+  const c = String(caption || "").trim();
+  return c.length > 2 && !NOT_A_LISTING_RE.test(c);
+};
+
+function parseListingCaption(caption = "") {
+  const raw = String(caption || "").replace(/\s+/g, " ").trim();
+  let text = raw.replace(LISTING_CMD_RE, "").replace(LISTING_WORD_RE, "").trim();
+
+  const take = re => {
+    const m = text.match(re);
+    if (!m) return null;
+    text = text.replace(m[0], " ");
+    return m;
+  };
+
+  // "ebay" routes the post; it must not survive into the product name.
+  const ebay = /\be-?bay\b/i.test(text);
+  text = text.replace(/\b(?:also\s+|and\s+|\+\s*)?(?:post\s+|list\s+|put\s+)?(?:on\s+|to\s+)?e-?bay\b/ig, " ");
+
+  const tags = [];
+  for (const m of text.matchAll(/#([a-z][a-z0-9 _-]{1,19})(?=$|[,.;|]|\s#)/gi)) tags.push(m[1].trim());
+  text = text.replace(/#[a-z][a-z0-9 _-]{1,19}(?=$|[,.;|]|\s#)/gi, " ");
+
+  // \b on the currency words so "colours 3" or "hindustan 4" can't read as a price.
+  const usd    = take(/(?:\$|\busd\s*)\s*([\d,]+(?:\.\d+)?)/i);
+  const inr    = take(/(?:₹|\brs\.?\s*|\binr\s*)([\d,]+(?:\.\d+)?)/i);
+  const box    = take(/\b(?:box|stk|stock|location|loc)\s*#?\s*([a-z0-9][a-z0-9-]*)/i);
+  const sku    = take(/\bsku\s*[:#]?\s*([a-z0-9][a-z0-9/_-]*)/i);
+  const origin = take(/\b(?:from|origin)\s*[:]?\s*([a-z][a-z ]{2,30}?)(?=$|[,.;|]|\s*\d)/i);
+  const weight = take(/\b([\d.]+)\s*(kgs?|kilograms?|gms?|grams?|g)\b/i);
+  // Bare "in" only counts glued to the number — "60 in stock" is not a size.
+  const size   = take(/\b(\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?)\s*(mm|cm|inch(?:es)?|")/i)
+              || take(/\b(\d+(?:\.\d+)?)(in)\b/i);
+  const qty    = take(/\b(?:qty\s*[:=]?\s*|x\s*)(\d{1,4})\b(?!\s*(?:mm|cm|g|kg|inch))/i)
+              || take(/\b(\d{1,4})\s*(?:pcs?|pieces?|nos?\.?|units?)\b/i);
+
+  const num = m => (m ? Number(String(m[1]).replace(/,/g, "")) : null);
+  const leftover = text.replace(/[,:|]+/g, " ").replace(/\s+/g, " ").trim();
+
+  return {
+    raw,
+    text: leftover,
+    tags,
+    ebay,
+    priceUsd: num(usd),
+    priceInr: num(inr),
+    qty: num(qty),
+    box: box ? box[1] : "",
+    sku: sku ? sku[1] : "",
+    origin: origin ? origin[1].trim() : "",
+    weight: weight ? `${weight[1]} ${weight[2].toLowerCase().replace(/s$/, "")}` : "",
+    size: size ? formatSize(size[1], size[2]) : "",
+  };
+}
+
+// "60mm" reads better closed up; "12 inch" needs the space.
+function formatSize(value, unit) {
+  const u = String(unit).toLowerCase().replace(/^(in|inches)$/, "inch").replace(/^"$/, "inch");
+  return `${String(value).replace(/\s+/g, "")}${u === "mm" || u === "cm" ? "" : " "}${u}`;
+}
+
+const cleanListingTags = (list = []) => {
+  const out = [];
+  for (const t of list) {
+    const tag = String(t || "").toLowerCase().replace(/[^a-z0-9 &'-]/g, "").replace(/\s+/g, " ").trim();
+    if (!tag || tag.length > 20 || out.includes(tag)) continue;
+    out.push(tag);
+    if (out.length === 13) break;   // Etsy's hard cap
+  }
+  return out;
+};
+
+/* ── AI draft ────────────────────────────────────────────────────────────── */
+// Vision over the photos plus whatever the caption said. Best-effort: a failure
+// downgrades the draft to caption-only copy rather than losing the post.
+async function aiListingDraft({ caption, imageUrls = [], hints = {} }) {
+  if (!process.env.OPENAI_KEY) return null;
+  const model = process.env.TELEGRAM_LISTING_MODEL || process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
+  const prompt = `You write product listings for a crystal and mineral shop (Etsy + Shopify).
+
+${imageUrls.length ? `The ${imageUrls.length} photo(s) below are the product.` : "There are no photos — work from the note alone."}
+Seller's note: ${caption ? `"${caption}"` : "(none)"}
+Known already: ${JSON.stringify({ size: hints.size || "", weight: hints.weight || "", origin: hints.origin || "", qty: hints.qty || "" })}
+
+The seller's note always wins over what you think you see. Never invent an origin,
+a size or a weight that is neither stated nor plainly visible — leave it "".
+
+Return ONLY JSON:
+{
+  "title": "buyer-facing title, max 110 chars, no ALL CAPS, no emoji",
+  "material": "the stone, e.g. Amethyst, Clear Quartz, Labradorite",
+  "category": "one of: ${ETSY_CATEGORIES.map(c => c.value).join(", ")}",
+  "description": "2-3 short paragraphs: what it is, what it looks like, then a specs line. Plain text.",
+  "tags": ["up to 13 lowercase search tags", "each under 20 characters"],
+  "size": "e.g. 60mm — only if stated or clearly visible, else \\"\\"",
+  "weight": "e.g. 320 g — only if stated, else \\"\\"",
+  "origin": "country or locality — only if stated, else \\"\\"",
+  "notes_for_seller": "one short line on anything you were unsure about, else \\"\\""
+}`;
+
+  const content = [{ type: "text", text: prompt },
+    ...imageUrls.slice(0, 4).map(url => ({ type: "image_url", image_url: { url } }))];
+
+  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
+    body: JSON.stringify({
+      model, max_tokens: 900, temperature: 0.3,
+      response_format: { type: "json_object" },
+      messages: [{ role: "user", content }],
+    }),
+  });
+  if (!r.ok) throw new Error(`Listing AI ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  const data = await r.json();
+  const text = data.choices?.[0]?.message?.content || "";
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Listing AI returned no JSON");
+  return JSON.parse(match[0]);
+}
+
+/* ── Draft assembly ──────────────────────────────────────────────────────── */
+function buildListingDraft({ parsed, ai, images = [], video = "", source = "telegram-photo" }) {
+  const id = uid();
+  const category = categoryByValue(ai?.category) || categoryByValue(inferCategoryValue(`${parsed.text} ${ai?.title || ""}`));
+  // The caption is the name. Whatever the seller typed is what the product is
+  // called on every platform — the AI only names it when nothing was typed.
+  const title = parsed.text || (ai?.title || "").trim() || "Untitled listing";
+
+  const priceUsd = parsed.priceUsd ?? (parsed.priceInr ? Math.round((parsed.priceInr / LISTING_USD_INR) * 100) / 100 : null);
+  const priceInr = parsed.priceInr ?? (parsed.priceUsd ? Math.round(parsed.priceUsd * LISTING_USD_INR) : null);
+  const money = v => (v == null ? "" : String(v));
+
+  const specs = [
+    parsed.size || ai?.size ? `Size: ${parsed.size || ai.size}` : "",
+    parsed.weight || ai?.weight ? `Weight: ${parsed.weight || ai.weight}` : "",
+    parsed.origin || ai?.origin ? `Origin: ${parsed.origin || ai.origin}` : "",
+  ].filter(Boolean).join("\n");
+  const description = [ai?.description?.trim() || title, specs].filter(Boolean).join("\n\n");
+
+  const listing = {
+    id,
+    listing_order_id: `NG-LST-${new Date().getFullYear()}-${id.slice(-6).toUpperCase()}`,
+    title: title.slice(0, 140),
+    description,
+    material: (ai?.material || "").trim(),
+    shape: category.shape,
+    origin: parsed.origin || ai?.origin || "",
+    size: parsed.size || ai?.size || "",
+    weight: parsed.weight || ai?.weight || "",
+    sku: parsed.sku || "",
+    productType: category.productType,
+    // More than one of the same piece is a stocked line, not a one-off — Shopify
+    // and Etsy both publish quantity 1 for a "unique" listing.
+    type: parsed.qty > 1 ? "repeatable" : "unique",
+    qty: parsed.qty || 1,
+    linked_stock_id: "",
+    officeLocation: "",
+    boxNumber: parsed.box || "",
+    tags: cleanListingTags([...(parsed.tags || []), ...(ai?.tags || [])]),
+    images: images.map(i => i.url).filter(Boolean),
+    video,
+    videoEdit: null,
+    price_etsy: money(priceInr),
+    // Etsy bills in INR here; the USD figure only picks the shipping profile,
+    // so pass the real one rather than letting it be back-converted.
+    price_etsy_usd: money(priceUsd),
+    price_shopify_earth: money(priceUsd),
+    price_shopify_aty: money(priceInr),
+    price_ebay: money(priceUsd),
+    platforms: { etsy: {}, shopify_earth: {}, shopify_aty: {}, ebay: {} },
+    width: "", height: "", depth: "", dim_unit: "mm",
+    variations: [],
+    etsy_section_id: sectionIdForCategory(category.value),
+    etsy_taxonomy_id: category.taxonomyId,
+    etsy_shipping_profile_id: null,
+    etsy_return_policy_id: null,
+    etsy_made_to_order: false,
+    etsy_readiness_state_id: null,
+    etsy_auto_renew: false,
+    etsy_ads: false,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    source,
+    telegram_caption: parsed.raw,
+    pricePending: priceUsd == null && priceInr == null,
+  };
+
+  return { listing, category, priceUsd, priceInr, converted: parsed.priceUsd == null || parsed.priceInr == null };
+}
+
+async function saveListingDraft(listing, ctx) {
+  await upsertItemK(ctx.listings, listing);
+  await logActivity({
+    user: "Telegram", action: "created", module: "listing",
+    label: `Listing draft: ${listing.title}`, targetId: listing.id, targetMod: "listing",
+  }, ctx);
+  return listing;
+}
+
+function mediaSummary(listing) {
+  const photos = listing.images.length;
+  return [photos ? `${photos} photo${photos > 1 ? "s" : ""}` : "", listing.video ? "video" : ""].filter(Boolean).join(" + ") || "no media";
+}
+
+function listingReply({ listing, category, priceUsd, priceInr, converted, aiFailed, aiNote, tail = "" }) {
+  const price = priceUsd == null && priceInr == null
+    ? ""
+    : `${priceUsd != null ? `$${priceUsd}` : ""}${priceUsd != null && priceInr != null ? " · " : ""}${priceInr != null ? fmtMoney(priceInr) : ""}${converted ? ` (second price converted at ${LISTING_USD_INR}/USD)` : ""}`;
+  return [
+    `✓ Saved — <b>${esc(listing.title)}</b>`,
+    [listing.material, category.label, mediaSummary(listing)].filter(Boolean).map(esc).join(" · "),
+    esc(price),
+    listing.tags.length ? `Tags: ${esc(listing.tags.join(", "))}` : "",
+    `<code>${esc(listing.listing_order_id)}</code>`,
+    aiFailed ? "⚠️ AI copy failed, so the title is straight off your caption — worth a look." : "",
+    aiNote ? `Note: ${esc(aiNote)}` : "",
+    tail,
+  ].filter(Boolean).join("\n");
+}
+
+/* ── Publishing ──────────────────────────────────────────────────────────── */
+// Every post gets an Etsy draft (a draft is private — it is not on sale until
+// it is activated in Listing Manager or on Etsy). eBay is opt-in per post
+// because eBay has no draft: AddItem puts the item live at that price.
+const wantsEbay = caption => /\b(e-?bay)\b/i.test(String(caption || ""));
+
+async function publishDraftToPlatforms(listing, { ebay }) {
+  const out = {};
+
+  if (!Number(listing.price_etsy)) {
+    out.etsy = { skipped: "no price in the caption" };
+  } else {
+    try {
+      // activate:false — created on Etsy as a draft, never put on sale from here.
+      const r = await publishEtsy(listing, null, { activate: false });
+      out.etsy = { ok: true, listing_id: r.listing_id, url: r.url, status: r.status,
+        warning: r.fieldsWarning || r.tagsWarning || "" };
+    } catch (e) {
+      out.etsy = { error: e.message };
+    }
+  }
+
+  if (ebay) {
+    const price = Number(listing.price_ebay);
+    if (!price) {
+      out.ebay = { skipped: "no price in the caption" };
+    } else {
+      try {
+        const r = await publishEbayListing({
+          title: listing.title, description: listing.description, price,
+          quantity: listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1),
+          images: listing.images, video: listing.video || "", sku: listing.sku || listing.listing_order_id,
+        });
+        out.ebay = r.ok
+          ? { ok: true, listing_id: r.itemId, url: r.url || `https://www.ebay.com/itm/${r.itemId}`, warning: r.videoWarning || "" }
+          : { error: r.error };
+      } catch (e) {
+        out.ebay = { error: e.message };
+      }
+    }
+  }
+  return out;
+}
+
+// Stamp what came back onto the listing so Listing Manager shows it as published
+// there and re-syncs to the same item instead of creating a second one.
+function withPlatformResults(listing, results) {
+  const platforms = { ...listing.platforms };
+  const now = new Date().toISOString();
+  if (results.etsy?.ok) platforms.etsy = { ...platforms.etsy, listing_id: results.etsy.listing_id, url: results.etsy.url, status: results.etsy.status || "draft", published_at: now, source: "telegram" };
+  if (results.ebay?.ok) platforms.ebay = { ...platforms.ebay, listing_id: results.ebay.listing_id, url: results.ebay.url, status: "active", published_at: now, source: "telegram" };
+  return { ...listing, platforms, updated_at: now };
+}
+
+function platformLines(results) {
+  const line = (label, r) => {
+    if (!r) return "";
+    if (r.ok) return label === "Etsy"
+      ? `Etsy: <a href="${esc(r.url)}">draft created</a> — private until you activate it${r.warning ? ` · ${esc(r.warning)}` : ""}`
+      : `eBay: <a href="${esc(r.url)}">live now</a>${r.warning ? ` — ${esc(r.warning)}` : ""}`;
+    if (r.skipped) return `${label}: skipped — ${esc(r.skipped)}`;
+    return `⚠️ ${label} failed: ${esc(String(r.error).slice(0, 180))}`;
+  };
+  return [line("Etsy", results.etsy), line("eBay", results.ebay)].filter(Boolean);
+}
+
+/* ── Media posts ─────────────────────────────────────────────────────────── */
+async function albumRows(groupId, ctx) {
+  const rows = (await loadK(ctx.albums)) || [];
+  return rows.filter(r => r?.groupId === groupId);
+}
+
+/* An album item that carries no caption of its own only counts as a listing
+   post if a sibling already filed one. Telegram can deliver those out of order,
+   so a miss is retried once before falling back to normal handling. */
+async function albumJoinedListing(groupId, ctx) {
+  if ((await albumRows(groupId, ctx)).length) return true;
+  await sleep(1200);
+  return (await albumRows(groupId, ctx)).length > 0;
+}
+
+async function pruneAlbums(ctx) {
+  const rows = (await loadK(ctx.albums)) || [];
+  const keep = rows.filter(r => (r?.ts || 0) >= Date.now() - ALBUM_TTL_MS);
+  if (keep.length !== rows.length) await saveK(ctx.albums, keep);
+}
+
+// A photo that reached the leader too late still belongs on the listing. It is
+// added in the ERP only — the Etsy draft is already made, and re-syncing it is
+// a Listing Manager action.
+async function appendLateMedia(listingId, media, ctx) {
+  const listings = (await loadK(ctx.listings)) || [];
+  const listing = listings.find(l => l?.id === listingId);
+  if (!listing) return;
+  if (media.kind === "video") {
+    if (listing.video) return;
+    await upsertItemK(ctx.listings, { ...listing, video: media.url, updated_at: new Date().toISOString() });
+    return;
+  }
+  if ((listing.images || []).includes(media.url)) return;
+  await upsertItemK(ctx.listings, { ...listing, images: [...(listing.images || []), media.url], updated_at: new Date().toISOString() });
+}
+
+async function finishMediaListing({ chatId, caption, media, ctx }) {
+  const images = media.filter(m => m.kind !== "video");
+  const video = media.find(m => m.kind === "video");
+  const parsed = parseListingCaption(caption);
+  let ai = null, aiFailed = false;
+  try {
+    ai = await aiListingDraft({ caption: parsed.text || parsed.raw, imageUrls: images.map(i => i.url), hints: parsed });
+  } catch (e) {
+    aiFailed = true;
+    console.error("Listing AI failed:", e.message);
+  }
+  const draft = buildListingDraft({ parsed, ai, images, video: video?.url || "", source: video ? "telegram-media" : "telegram-photo" });
+  await saveListingDraft(draft.listing, ctx);
+
+  // Acknowledge before publishing: uploading a dozen photos to Etsy takes long
+  // enough that a silent wait reads as a dropped post.
+  const ebay = parsed.ebay || wantsEbay(caption);
+  const priced = !!Number(draft.listing.price_etsy);
+  await send(chatId, listingReply({
+    ...draft, aiFailed, aiNote: ai?.notes_for_seller,
+    tail: priced
+      ? `⏳ Making the Etsy draft${ebay ? " — and putting it live on eBay" : ""}…`
+      : "No price in the line, so it stays an ERP draft. Add one in Listing Manager and publish from there.",
+  }), ctx.token);
+
+  if (!priced && !ebay) return draft.listing;
+
+  const results = await publishDraftToPlatforms(draft.listing, { ebay });
+  const published = withPlatformResults(draft.listing, results);
+  if (results.etsy?.ok || results.ebay?.ok) await upsertItemK(ctx.listings, published);
+  const lines = platformLines(results);
+  if (results.etsy?.ok && !draft.listing.images.length) {
+    lines.push("Etsy needs at least one photo before that draft can go on sale — add one in Listing Manager.");
+  }
+  if (lines.length) await send(chatId, lines.join("\n"), ctx.token);
+  return published;
+}
+
+async function handleMediaListing({ chatId, message, caption, file, ctx }) {
+  const groupId = message.media_group_id || "";
+  const messageId = Number(message.message_id) || Date.now();
+
+  const uploaded = await uploadTelegramMedia(file, `listing-${file.uniqueId}`, ctx);
+  if (!uploaded) {
+    await send(chatId, `⚠️ Could not pull that ${file.kind === "video" ? "video" : "photo"} off Telegram. Send it again?`, ctx.token);
+    return;
+  }
+  const media = { ...uploaded, kind: file.kind };
+
+  if (!groupId) {
+    tg("sendChatAction", { chat_id: chatId, action: "typing" }, ctx.token).catch(() => {});
+    await finishMediaListing({ chatId, caption, media: [media], ctx });
+    return;
+  }
+
+  await upsertItemK(ctx.albums, {
+    id: `${groupId}:${messageId}`, groupId, messageId, chatId: String(chatId),
+    url: media.url, name: media.name, kind: media.kind, caption: caption || "", ts: Date.now(),
+  }, { prepend: false });
+
+  // Let the rest of the album land, then the lowest message_id writes the listing.
+  await sleep(ALBUM_SETTLE_MS);
+  const rows = await albumRows(groupId, ctx);
+  const done = rows.find(r => r.done);
+  if (done) { await appendLateMedia(done.listing_id, media, ctx); return; }
+
+  const items = rows.filter(r => !r.done).sort((a, b) => a.messageId - b.messageId);
+  if (String(items[0]?.messageId) !== String(messageId)) {
+    // A sibling is writing this listing — wait for it, then add this file if it missed us.
+    await sleep(ALBUM_LEADER_GRACE_MS);
+    const marker = (await albumRows(groupId, ctx)).find(r => r.done);
+    if (marker) await appendLateMedia(marker.listing_id, media, ctx);
+    return;
+  }
+
+  tg("sendChatAction", { chat_id: chatId, action: "typing" }, ctx.token).catch(() => {});
+  const albumCaption = items.map(p => p.caption).find(c => c && c.trim()) || caption;
+  const listing = await finishMediaListing({
+    chatId, caption: albumCaption, ctx,
+    media: items.map(p => ({ url: p.url, name: p.name, kind: p.kind || "photo" })),
+  });
+  await upsertItemK(ctx.albums, { id: `${groupId}:done`, groupId, done: true, listing_id: listing.id, ts: Date.now() }, { prepend: false });
+  await pruneAlbums(ctx);
+}
+
+/* ── Tools: listings from plain text ─────────────────────────────────────── */
+async function execCreateListing(args = {}) {
+  const bits = [args.title, args.material, args.size, args.weight,
+    args.origin && `from ${args.origin}`, args.box && `box ${args.box}`].filter(Boolean).join(" ");
+  const parsed = parseListingCaption(bits);
+  parsed.raw = "";
+  parsed.priceUsd = args.price_usd != null ? Number(args.price_usd) : parsed.priceUsd;
+  parsed.priceInr = args.price_inr != null ? Number(args.price_inr) : parsed.priceInr;
+  parsed.qty = args.qty != null ? Number(args.qty) : parsed.qty;
+  parsed.sku = args.sku || parsed.sku;
+  parsed.tags = Array.isArray(args.tags) ? args.tags : parsed.tags;
+
+  const ai = {
+    title: args.title,
+    material: args.material || "",
+    category: args.category || inferCategoryValue(`${args.title || ""} ${args.material || ""}`),
+    description: args.description || "",
+    tags: Array.isArray(args.tags) ? args.tags : [],
+    size: args.size || "", weight: args.weight || "", origin: args.origin || "",
+  };
+  const draft = buildListingDraft({ parsed, ai, images: [], source: "telegram-text" });
+  await saveListingDraft(draft.listing, _ctx);
+  return {
+    success: true,
+    listing_id: draft.listing.id,
+    listing_order_id: draft.listing.listing_order_id,
+    title: draft.listing.title,
+    category: draft.category.label,
+    price_usd: draft.priceUsd, price_inr: draft.priceInr,
+    price_converted: draft.converted,
+    images: 0,
+    published: false,
+    note: "Saved as an ERP draft only — nothing is live on Etsy or Shopify. Photos and publishing are done in Listing Manager.",
+  };
+}
+
+async function execGetListings({ query, limit = 10, drafts_only = false } = {}) {
+  const listings = (await loadK(_ctx.listings)) || [];
+  const q = String(query || "").toLowerCase().trim();
+  const live = l => Object.entries(l.platforms || {})
+    .filter(([, p]) => p?.listing_id || p?.product_id)
+    .map(([k]) => k);
+  let rows = [...listings].sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  if (q) rows = rows.filter(l => [l.title, l.material, l.sku, l.listing_order_id, l.shape].some(f => String(f || "").toLowerCase().includes(q)));
+  if (drafts_only) rows = rows.filter(l => live(l).length === 0);
+  return {
+    count: rows.length,
+    listings: rows.slice(0, Math.min(limit, 50)).map(l => ({
+      id: l.id, listing_order_id: l.listing_order_id, title: l.title,
+      material: l.material, shape: l.shape,
+      price_usd: l.price_shopify_earth || "", price_inr: l.price_etsy || "",
+      images: (l.images || []).length, source: l.source || "erp",
+      created_at: l.created_at, published_on: live(l),
+    })),
+  };
 }
 
 // ── Build system prompt ───────────────────────────────────────────────────────
@@ -1606,6 +2193,7 @@ You have full access to read AND write everything:
 - Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (one-sided income/expense), log_finance_transfer (internal transfer/conversion)
 - Documents: you CAN attach files to transactions. When a user sends a payment screenshot/receipt and you log that payment, the image is AUTOMATICALLY attached to that transaction — confirm it ("…and saved the screenshot to it"). To attach a file to an EXISTING/older transaction, call attach_document_to_transaction.
 - Vendors: search, create
+- Listings: get_listings (what is drafted / live on Etsy & Shopify), create_listing (a new ERP DRAFT only — it never publishes anywhere and cannot attach photos). Photos or a video sent with a one-line "name price" caption are handled before you see them: they become a listing plus an Etsy draft, and a live eBay item if the line says eBay. So for anything with pictures, tell him to just post the pictures with that one line.
 - Memory: save/delete persistent facts
 
 IMPORTANT RULES:
@@ -1617,6 +2205,7 @@ IMPORTANT RULES:
 5. For any write action, confirm what you're saving in one short line, then do it immediately — don't ask "shall I proceed?"
 6. NEVER ask clarifying questions about a payment/receipt unless both the amount AND account are missing. If there's only one bank account in INR, use it automatically. Just log and confirm.
 7. CRITICAL — act ONLY on the CURRENT message. Log/announce ONLY the payment(s) explicitly in this message or its screenshot. NEVER re-log, re-process, or re-mention a transaction from an earlier message — those are already saved and done. A new screenshot = exactly one new payment to log (unless the screenshot itself clearly shows more than one).
+8a. Any photo or video that was a listing never reaches you — that path runs first. So a photo you DO see is a screenshot, a stock note, or a question about the picture, never a product to list.
 8. NOT every screenshot is a payment. A note/list/photo of stones with shapes, sizes and quantities is INVENTORY. If the user says "add to stock"/"add to inventory" (or it's clearly a stock note), call add_stock_items — one item per stone + shape line — and NEVER ask for payment details. Only ask for payment info when the user is actually logging a payment.
 </tools>
 
@@ -1696,7 +2285,9 @@ async function chatWithOpenAI(history) {
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
-export const config = { api: { bodyParser: true }, maxDuration: 60 };
+// Publishing a post can mean an album upload to Etsy plus an eBay AddItem, all
+// inside the one webhook — 60s was tight before that.
+export const config = { api: { bodyParser: true }, maxDuration: 300 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(200).json({ ok: true }); return; }
@@ -1760,8 +2351,21 @@ export default async function handler(req, res) {
       // Deduplication — skip Telegram retries
       if (updateId && session.lastUpdateId === updateId) return;
 
-      // Commands
-      if (text === "/start" || text === "/help") {
+      // Commands. Normalised first: "/Help@GemBot " and "/listmodeon" are the
+      // same commands as "/help" and "/listmode on".
+      const cmd = text.trim().toLowerCase().replace(/@[a-z0-9_]+/gi, "");
+
+      if (cmd === "/start" || cmd === "/help") {
+        // Keep the bot's command menu in step with what it actually answers, so
+        // these get typed from the menu rather than from memory.
+        tg("setMyCommands", { commands: [
+          { command: "list",     description: "List a product — send photos with a name and price" },
+          { command: "listmode", description: "on / off — every photo becomes a listing" },
+          { command: "listings", description: "Recent listings and where they are live" },
+          { command: "memory",   description: "Facts the bot has saved" },
+          { command: "clear",    description: "Reset the conversation" },
+          { command: "help",     description: "What this bot can do" },
+        ] }, _ctx.token).catch(() => {});
         await saveSession(chatId, { ...session, lastUpdateId: updateId });
         await send(chatId, [
           `<b>${_ctx.name} · Gem</b>`,
@@ -1778,19 +2382,32 @@ export default async function handler(req, res) {
           `"Send all amethyst to the Tokyo show"`,
           `"Mark the moonstone in box 42 sold for ₹8000"`,
           ``,
+          `<b>Listings</b> — send photos or a video with one line: the name and the price.`,
+          `<code>Amethyst sphere 60mm $45</code>`,
+          `→ Listing Manager listing + an <b>Etsy draft</b>. Nothing is on sale.`,
+          `Say <b>ebay</b> in the line and it also goes <b>live on eBay</b> at that price.`,
+          `Several photos sent as one album all land on one listing.`,
+          `Price as <code>$45</code> or <code>₹3800</code> — the other is converted.`,
+          `Extras if you want them: <code>60mm 320g x3 box A12 from Brazil #tag</code>`,
+          `No price in the line → it stays an ERP draft, nothing is sent to Etsy.`,
+          `A caption about money or stock is still a payment/stock note, not a listing.`,
+          ``,
+          `/listmode on — every photo becomes a listing (no caption needed)`,
+          `/listmode off — back to normal`,
+          `/listings — the last few, and where they are live`,
           `/clear — reset conversation`,
           `/memory — show saved facts`,
         ].join("\n"));
         return;
       }
 
-      if (text === "/clear") {
+      if (cmd === "/clear") {
         await clearSession(chatId);
         await send(chatId, "Cleared.");
         return;
       }
 
-      if (text === "/memory") {
+      if (cmd === "/memory") {
         await saveSession(chatId, { ...session, lastUpdateId: updateId });
         const facts = await getMemory();
         if (!facts.length) { await send(chatId, "Nothing saved yet."); return; }
@@ -1798,9 +2415,73 @@ export default async function handler(req, res) {
         return;
       }
 
-      // Videos of flats go straight into the shared Listing Manager as Shopify drafts.
-      // The Telegram caption becomes the working title; price and product details remain
-      // editable in the ERP and no live Shopify product is created at this stage.
+      // Listing mode — for a photo session where captioning every shot is a chore.
+      const listMode = cmd.match(/^\/list\s*mode\s*(on|off|start|stop|yes|no)?\b/);
+      if (listMode) {
+        const arg = listMode[1] || "";
+        const on = /^(on|start|yes)$/.test(arg) ? true : /^(off|stop|no)$/.test(arg) ? false : !session.listingMode;
+        await saveSession(chatId, { ...session, lastUpdateId: updateId, listingMode: on });
+        await send(chatId, on
+          ? "Listing mode <b>on</b> — every photo you send becomes a listing, caption or not. A line with the price still gets it onto Etsy as a draft. <code>/listmode off</code> when you're done."
+          : "Listing mode <b>off</b>. Photos are read as screenshots again; a photo with a name-and-price line is still a listing.", _ctx.token);
+        return;
+      }
+
+      if (/^\/listings\b/.test(cmd)) {
+        await saveSession(chatId, { ...session, lastUpdateId: updateId });
+        const { listings } = await execGetListings({ limit: 8 });
+        if (!listings.length) { await send(chatId, "No listings yet. Send photos with one line — the name and the price."); return; }
+        await send(chatId, `<b>Latest listings</b>\n\n` + listings.map(l => [
+          `• <b>${esc(l.title)}</b>`,
+          [l.price_usd && `$${l.price_usd}`, l.price_inr && fmtMoney(l.price_inr), `${l.images} photo${l.images === 1 ? "" : "s"}`,
+            l.published_on.length ? `live: ${l.published_on.join(", ")}` : "draft"].filter(Boolean).map(esc).join(" · "),
+        ].join("\n  ")).join("\n"));
+        return;
+      }
+
+      // "/list amethyst sphere 60mm $45" with no photo — same draft, no images.
+      if (!hasPhoto && !doc && !hasVideo && isListingCaption(text)) {
+        await saveSession(chatId, { ...session, lastUpdateId: updateId });
+        tg("sendChatAction", { chat_id: chatId, action: "typing" }, _ctx.token).catch(() => {});
+        const parsed = parseListingCaption(text);
+        if (!parsed.text) {
+          await send(chatId, "Tell me what to list — <code>/list amethyst sphere 60mm $45</code> — or send photos with that caption.");
+          return;
+        }
+        let ai = null, aiFailed = false;
+        try { ai = await aiListingDraft({ caption: parsed.text, imageUrls: [], hints: parsed }); }
+        catch (e) { aiFailed = true; console.error("Listing AI failed:", e.message); }
+        const draft = buildListingDraft({ parsed, ai, images: [], source: "telegram-text" });
+        await saveListingDraft(draft.listing, _ctx);
+        await send(chatId, listingReply({ ...draft, aiFailed, aiNote: ai?.notes_for_seller,
+          tail: "ERP draft only — nothing was sent to Etsy without photos. Post the photos with the same line and it goes to Etsy as a draft." }));
+        return;
+      }
+
+      // Photos posted as a listing go to the Listing Manager, not to the assistant.
+      // Explicit by design: a plain photo is still a payment screenshot or a stock
+      // note, so it takes a /list caption — or listing mode — to become a product.
+      const imageDoc = doc && /^image\//i.test(doc.mime_type || "") ? doc : null;
+      if (hasPhoto || imageDoc || hasVideo) {
+        const wantsListing = isListingCaption(caption) || session.listingMode === true || looksLikeListingCaption(caption);
+        const ctx = _ctx;   // pinned: the listing flow outlives this tick
+        const joinsAlbum = !wantsListing && !!message.media_group_id && await albumJoinedListing(message.media_group_id, ctx);
+        if (wantsListing || joinsAlbum) {
+          const photo = hasPhoto ? message.photo[message.photo.length - 1] : null;
+          const file = photo
+            ? { fileId: photo.file_id, uniqueId: photo.file_unique_id, name: `listing-${photo.file_unique_id}.jpg`, mime: "image/jpeg", kind: "photo" }
+            : imageDoc
+              ? { fileId: imageDoc.file_id, uniqueId: imageDoc.file_unique_id, name: imageDoc.file_name || `listing-${imageDoc.file_unique_id}.jpg`, mime: imageDoc.mime_type || "image/jpeg", kind: "photo" }
+              : { fileId: video.file_id, uniqueId: video.file_unique_id || String(message.message_id), name: video.file_name || `listing-${message.message_id}.mp4`, mime: video.mime_type || "video/mp4", kind: "video" };
+          await saveSession(chatId, { ...session, lastUpdateId: updateId });
+          await handleMediaListing({ chatId, message, caption, file, ctx });
+          return;
+        }
+      }
+
+      // Uncaptioned videos keep the old flat workflow: an Earth Editions Shopify
+      // draft with a linked stock item, priced later in the ERP. A captioned
+      // video is a listing and was handled above.
       if (hasVideo) {
         const result = await createTelegramVideoListing(caption);
         await saveSession(chatId, { ...session, lastUpdateId: updateId });

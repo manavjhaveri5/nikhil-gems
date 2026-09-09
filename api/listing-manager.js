@@ -489,7 +489,7 @@ async function verifyEtsyTags(listingId, expected, hdrs) {
 }
 
 /* ── Etsy: publish listing ─────────────────────────────────────────────────── */
-async function publishEtsy(listing, ai, { activate = true } = {}) {
+export async function publishEtsy(listing, ai, { activate = true } = {}) {
   const {
     title, material, shape, productType, qty = 1, type = "repeatable",
     price_etsy, price_etsy_usd, images = [],
