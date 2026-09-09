@@ -2351,8 +2351,21 @@ export default async function handler(req, res) {
       // Deduplication — skip Telegram retries
       if (updateId && session.lastUpdateId === updateId) return;
 
-      // Commands
-      if (text === "/start" || text === "/help") {
+      // Commands. Normalised first: "/Help@GemBot " and "/listmodeon" are the
+      // same commands as "/help" and "/listmode on".
+      const cmd = text.trim().toLowerCase().replace(/@[a-z0-9_]+/gi, "");
+
+      if (cmd === "/start" || cmd === "/help") {
+        // Keep the bot's command menu in step with what it actually answers, so
+        // these get typed from the menu rather than from memory.
+        tg("setMyCommands", { commands: [
+          { command: "list",     description: "List a product — send photos with a name and price" },
+          { command: "listmode", description: "on / off — every photo becomes a listing" },
+          { command: "listings", description: "Recent listings and where they are live" },
+          { command: "memory",   description: "Facts the bot has saved" },
+          { command: "clear",    description: "Reset the conversation" },
+          { command: "help",     description: "What this bot can do" },
+        ] }, _ctx.token).catch(() => {});
         await saveSession(chatId, { ...session, lastUpdateId: updateId });
         await send(chatId, [
           `<b>${_ctx.name} · Gem</b>`,
@@ -2388,13 +2401,13 @@ export default async function handler(req, res) {
         return;
       }
 
-      if (text === "/clear") {
+      if (cmd === "/clear") {
         await clearSession(chatId);
         await send(chatId, "Cleared.");
         return;
       }
 
-      if (text === "/memory") {
+      if (cmd === "/memory") {
         await saveSession(chatId, { ...session, lastUpdateId: updateId });
         const facts = await getMemory();
         if (!facts.length) { await send(chatId, "Nothing saved yet."); return; }
@@ -2403,19 +2416,21 @@ export default async function handler(req, res) {
       }
 
       // Listing mode — for a photo session where captioning every shot is a chore.
-      if (/^\/listmode\b/i.test(text)) {
-        const on = /\b(on|start|yes)\b/i.test(text) ? true : /\b(off|stop|no)\b/i.test(text) ? false : !session.listingMode;
+      const listMode = cmd.match(/^\/list\s*mode\s*(on|off|start|stop|yes|no)?\b/);
+      if (listMode) {
+        const arg = listMode[1] || "";
+        const on = /^(on|start|yes)$/.test(arg) ? true : /^(off|stop|no)$/.test(arg) ? false : !session.listingMode;
         await saveSession(chatId, { ...session, lastUpdateId: updateId, listingMode: on });
         await send(chatId, on
-          ? "Listing mode <b>on</b> — every photo you send becomes a draft listing. Caption still adds price, size, box and tags. <code>/listmode off</code> when you're done."
-          : "Listing mode <b>off</b>. Photos are read as screenshots again; caption with <code>/list</code> for a listing.");
+          ? "Listing mode <b>on</b> — every photo you send becomes a listing, caption or not. A line with the price still gets it onto Etsy as a draft. <code>/listmode off</code> when you're done."
+          : "Listing mode <b>off</b>. Photos are read as screenshots again; a photo with a name-and-price line is still a listing.", _ctx.token);
         return;
       }
 
-      if (text === "/listings") {
+      if (/^\/listings\b/.test(cmd)) {
         await saveSession(chatId, { ...session, lastUpdateId: updateId });
         const { listings } = await execGetListings({ limit: 8 });
-        if (!listings.length) { await send(chatId, "No listings yet. Send photos with a <code>/list</code> caption."); return; }
+        if (!listings.length) { await send(chatId, "No listings yet. Send photos with one line — the name and the price."); return; }
         await send(chatId, `<b>Latest listings</b>\n\n` + listings.map(l => [
           `• <b>${esc(l.title)}</b>`,
           [l.price_usd && `$${l.price_usd}`, l.price_inr && fmtMoney(l.price_inr), `${l.images} photo${l.images === 1 ? "" : "s"}`,
