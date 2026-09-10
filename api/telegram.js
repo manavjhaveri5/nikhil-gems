@@ -2014,10 +2014,15 @@ async function aiHealthReport(ctx) {
         body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content }] }),
       });
       const ms = Date.now() - started;
-      if (r.ok) return { ok: true, ms };
-      let detail = (await r.text()).slice(0, 500);
-      try { detail = JSON.parse(detail)?.error?.message || detail; } catch {}
-      return { ok: false, ms, status: r.status, detail: detail.slice(0, 200) };
+      /* Which account the key actually spends from, in the API's own words:
+         topping up the balance on screen does nothing for a key issued under
+         another organisation or another project, and from the phone the two
+         are indistinguishable. Both headers come back on refusals too. */
+      const org = r.headers.get("openai-organization") || "";
+      const project = r.headers.get("openai-project") || "";
+      if (r.ok) return { ok: true, ms, org, project };
+      const detail = openAiErrorDetail((await r.text()).slice(0, 4000));
+      return { ok: false, ms, status: r.status, detail: detail.slice(0, 200), org, project };
     } catch (e) {
       return { ok: false, ms: Date.now() - started, detail: e.message };
     }
@@ -2027,6 +2032,20 @@ async function aiHealthReport(ctx) {
   lines.push(key.ok
     ? `✅ Key and model answer (${key.ms} ms)`
     : `❌ Key/model: ${esc(String(key.status || "no reply"))} — ${esc(key.detail || "")}`);
+
+  /* Printed whether or not the call worked — when it did not, this is usually
+     the answer: the credits went onto a different account from this one. */
+  const raw = String(process.env.OPENAI_KEY || "");
+  const scope = [
+    key.org && `org <code>${esc(key.org)}</code>`,
+    key.project && `project <code>${esc(key.project)}</code>`,
+    raw.startsWith("sk-proj-") ? "project key" : "user key",
+    `ending <code>${esc(raw.slice(-4))}</code>`,
+  ].filter(Boolean).join(" · ");
+  lines.push(`Spending from: ${scope}`);
+  if (!key.ok && /credits|quota|billing/i.test(key.detail || "")) {
+    lines.push("Top up <i>that</i> account — and if it is a project key, check the project's own budget limit, which stops a key even when the organisation has money.");
+  }
 
   const url = ((await loadK(ctx.listings)) || []).map(l => l?.images?.[0]).find(Boolean);
   if (!url) {
