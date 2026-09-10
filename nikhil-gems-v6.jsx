@@ -15944,7 +15944,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
      in the shop's own voice rather than as a line of fine print. */
   .ship{margin-top:18px;border:1px solid #cfc8bb;background:#faf8f3;padding:15px 18px;display:flex;justify-content:space-between;align-items:center;gap:24px;}
   .ship .hd{font-size:8.5px;font-family:Helvetica,Arial,sans-serif;letter-spacing:1.6px;text-transform:uppercase;color:#8d8578;font-weight:700;margin-bottom:5px;}
-  .ship .big{font-size:14.5px;letter-spacing:.2px;line-height:1.45;max-width:430px;}
+  .ship .big{font-size:11.5px;letter-spacing:.2px;line-height:1.5;max-width:400px;}
   .ship .sub{font-size:10.5px;color:#4d4639;line-height:1.6;margin-top:5px;}
   .ship .ways{flex-shrink:0;text-align:right;font-size:11px;line-height:1.8;color:#15100a;}
   .ship .ways a{color:inherit;text-decoration:none;border-bottom:1px solid rgba(21,16,10,.25);}
