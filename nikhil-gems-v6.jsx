@@ -15864,13 +15864,6 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const site=String(s.seller.website||"").trim();
   const siteUrl=site?(/^https?:\/\//i.test(site)?site:`https://${site.replace(/^www\./i,"www.")}`):"";
   const mail=String(s.seller.email||"").trim();
-  const footBits=[
-    s.seller.name?showInvEsc(s.seller.name):"",
-    igHandle?(igUrl?`<a href="${showInvEsc(igUrl)}">${showInvEsc(igHandle)}</a>`:showInvEsc(igHandle)):"",
-    site?`<a href="${showInvEsc(siteUrl)}">${showInvEsc(site)}</a>`:"",
-    mail?`<a href="mailto:${showInvEsc(mail)}">${showInvEsc(mail)}</a>`:"",
-    showLine?showInvEsc(showLine):"",
-  ].filter(Boolean);
   /* Every way back to the shop, each on its own line so the block reads as a
      card rather than a run-on. Nothing is invented: a channel that was never
      filled in on Settings simply does not appear. */
@@ -15883,9 +15876,9 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const shipBlock=shipWays.length?`
     <div class="ship">
       <div>
-        <div class="hd">Reorders &amp; shipping</div>
-        <div class="big">We ship duty free, worldwide.</div>
-        <div class="sub">Message us for anything you saw at the booth — or anything you didn't.<br/>We'll send photos, hold a piece, and get it to your door.</div>
+        <div class="hd">Global shipping &amp; reorders</div>
+        <div class="big">We offer worldwide shipping, with duty-free options available in most markets.</div>
+        <div class="sub">Reorder pieces from your collection, or contact us for custom sourcing and product requests.</div>
       </div>
       <div class="ways">
         ${shipWays.map(([k,v])=>`<div><span class="k">${showInvEsc(k)}</span>${v}</div>`).join("")}
@@ -15951,7 +15944,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
      in the shop's own voice rather than as a line of fine print. */
   .ship{margin-top:18px;border:1px solid #cfc8bb;background:#faf8f3;padding:15px 18px;display:flex;justify-content:space-between;align-items:center;gap:24px;}
   .ship .hd{font-size:8.5px;font-family:Helvetica,Arial,sans-serif;letter-spacing:1.6px;text-transform:uppercase;color:#8d8578;font-weight:700;margin-bottom:5px;}
-  .ship .big{font-size:16px;letter-spacing:.4px;line-height:1.3;}
+  .ship .big{font-size:14.5px;letter-spacing:.2px;line-height:1.45;max-width:430px;}
   .ship .sub{font-size:10.5px;color:#4d4639;line-height:1.6;margin-top:5px;}
   .ship .ways{flex-shrink:0;text-align:right;font-size:11px;line-height:1.8;color:#15100a;}
   .ship .ways a{color:inherit;text-decoration:none;border-bottom:1px solid rgba(21,16,10,.25);}
@@ -15960,10 +15953,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   .sign .sigbox{text-align:center;min-width:210px;}
   .sign .sigline{border-top:1px solid #15100a;margin-top:46px;padding-top:5px;font-size:10px;letter-spacing:.8px;color:#4d4639;}
   .sign .sigfor{font-size:11px;font-weight:700;}
-  .foot{border-top:1px solid #cfc8bb;margin-top:22px;padding-top:12px;display:flex;justify-content:space-between;align-items:center;gap:18px;}
-  .foot .ty{font-size:12.5px;letter-spacing:1.2px;}
-  .foot .sm{font-size:9.5px;color:#8d8578;margin-top:4px;letter-spacing:.3px;}
-  .foot .sm a{color:inherit;text-decoration:none;border-bottom:1px solid rgba(21,16,10,.25);}
+  .foot{margin-top:18px;display:flex;justify-content:flex-end;align-items:center;}
   .foot .qr{text-align:center;flex-shrink:0;}
   .foot .qr img{width:66px;height:66px;display:block;}
   .foot .qrcap{font-size:8px;color:#8d8578;letter-spacing:.3px;margin-top:2px;}
@@ -16036,13 +16026,9 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
     </div>
   </div>
 
-  <div class="foot">
-    <div>
-      <div class="ty">Thank you</div>
-      <div class="sm">${footBits.join(" · ")}</div>
-    </div>
-    ${qrPng?`<div class="qr"><img src="${qrPng}" alt="Sign up"/><div class="qrcap">Scan to join our list</div></div>`:""}
-  </div>
+  ${qrPng?`<div class="foot">
+    <div class="qr"><img src="${qrPng}" alt="Sign up"/><div class="qrcap">Scan to join our list</div></div>
+  </div>`:""}
 </div></body></html>`;
 }
 
