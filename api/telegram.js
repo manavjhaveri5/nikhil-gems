@@ -1824,6 +1824,25 @@ const LISTING_AI_ATTEMPTS = 4;
 const LISTING_AI_TIMEOUT_MS = 60000;
 // The API's way of saying it could not fetch a photo, not that the call was bad.
 const LISTING_AI_IMAGE_FAIL_RE = /invalid_image|image_url|timeout while downloading|downloading the image|unsupported image|failed to (?:download|fetch) image/i;
+/* An empty account answers 429 exactly as a rate limit does, and says so in
+   several different sentences depending on how the account is billed — a
+   prepaid balance at zero says "no credits remaining", a monthly account says
+   "exceeded your current quota". None of them clear by waiting. */
+const LISTING_AI_QUOTA_RE = /insufficient_quota|exceeded your current quota|no credits remaining|add credits|check your plan and billing|billing_hard_limit/i;
+
+/* The body comes back as JSON with the sentence buried in it, and pasting that
+   raw into a Telegram reply is what turns an explanation into a wall of braces.
+   Take the sentence, put it on one line. */
+function openAiErrorDetail(body) {
+  let msg = String(body || "");
+  try {
+    const j = JSON.parse(msg);
+    msg = j?.error?.message || j?.message || msg;
+    const code = j?.error?.code || j?.error?.type;
+    if (code && !msg.includes(code)) msg = `${msg} (${code})`;
+  } catch {}
+  return msg.replace(/\s+/g, " ").trim();
+}
 
 async function aiListingDraft({ caption, imageUrls = [], hints = {} }) {
   if (!process.env.OPENAI_KEY) return null;
@@ -1921,12 +1940,17 @@ Return ONLY JSON:
     } finally { clearTimeout(timer); }
 
     if (!r.ok) {
-      const detail = (await r.text()).slice(0, 400);
-      const err = new Error(`Listing AI ${r.status}: ${detail.slice(0, 160)}`);
+      /* Read the whole body before deciding what it says: the code that marks a
+         spent account sits after the message in the JSON, so judging a slice of
+         it once had the bot retry an empty account four times over. */
+      const body = (await r.text()).slice(0, 4000);
+      const detail = openAiErrorDetail(body);
+      const err = new Error(`Listing AI ${r.status}: ${detail.slice(0, 200)}`);
       err.status = r.status;
+      err.detail = detail;
       err.retryAfterMs = Math.round((Number(r.headers.get("retry-after")) || 0) * 1000);
-      err.imageProblem = LISTING_AI_IMAGE_FAIL_RE.test(detail);
-      err.outOfQuota = /insufficient_quota|exceeded your current quota|billing/i.test(detail);
+      err.imageProblem = LISTING_AI_IMAGE_FAIL_RE.test(body);
+      err.outOfQuota = LISTING_AI_QUOTA_RE.test(body);
       throw err;
     }
     const data = await r.json();
@@ -1990,10 +2014,15 @@ async function aiHealthReport(ctx) {
         body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content }] }),
       });
       const ms = Date.now() - started;
-      if (r.ok) return { ok: true, ms };
-      let detail = (await r.text()).slice(0, 500);
-      try { detail = JSON.parse(detail)?.error?.message || detail; } catch {}
-      return { ok: false, ms, status: r.status, detail: detail.slice(0, 200) };
+      /* Which account the key actually spends from, in the API's own words:
+         topping up the balance on screen does nothing for a key issued under
+         another organisation or another project, and from the phone the two
+         are indistinguishable. Both headers come back on refusals too. */
+      const org = r.headers.get("openai-organization") || "";
+      const project = r.headers.get("openai-project") || "";
+      if (r.ok) return { ok: true, ms, org, project };
+      const detail = openAiErrorDetail((await r.text()).slice(0, 4000));
+      return { ok: false, ms, status: r.status, detail: detail.slice(0, 200), org, project };
     } catch (e) {
       return { ok: false, ms: Date.now() - started, detail: e.message };
     }
@@ -2003,6 +2032,20 @@ async function aiHealthReport(ctx) {
   lines.push(key.ok
     ? `✅ Key and model answer (${key.ms} ms)`
     : `❌ Key/model: ${esc(String(key.status || "no reply"))} — ${esc(key.detail || "")}`);
+
+  /* Printed whether or not the call worked — when it did not, this is usually
+     the answer: the credits went onto a different account from this one. */
+  const raw = String(process.env.OPENAI_KEY || "");
+  const scope = [
+    key.org && `org <code>${esc(key.org)}</code>`,
+    key.project && `project <code>${esc(key.project)}</code>`,
+    raw.startsWith("sk-proj-") ? "project key" : "user key",
+    `ending <code>${esc(raw.slice(-4))}</code>`,
+  ].filter(Boolean).join(" · ");
+  lines.push(`Spending from: ${scope}`);
+  if (!key.ok && /credits|quota|billing/i.test(key.detail || "")) {
+    lines.push("Top up <i>that</i> account — and if it is a project key, check the project's own budget limit, which stops a key even when the organisation has money.");
+  }
 
   const url = ((await loadK(ctx.listings)) || []).map(l => l?.images?.[0]).find(Boolean);
   if (!url) {
@@ -2146,6 +2189,28 @@ function mediaSummary(listing) {
   return [photos ? `${photos} photo${photos > 1 ? "s" : ""}` : "", listing.video ? "video" : ""].filter(Boolean).join(" + ") || "no media";
 }
 
+/* What the seller is told when the copywriter did not answer. The reason
+   matters more than the status code: an empty account needs a top-up, a busy
+   minute needs another go, and only a fault with no obvious owner is worth
+   quoting the API's own words for — on one line, never as raw JSON. */
+function aiFailureNote(e) {
+  const detail = String(e?.detail || e?.message || "unknown error").replace(/\s+/g, " ").trim();
+  const tail = "so the title is straight off your caption — worth a look.";
+  if (e?.outOfQuota) {
+    return `⚠️ The OpenAI account has no credits left, ${tail}\nTop it up at platform.openai.com/settings/organization/billing — check the balance you are looking at belongs to the same account and project as OPENAI_KEY, since a key on another project cannot spend it. Then send the photos again.`;
+  }
+  if (e?.status === 401 || e?.status === 403) {
+    return `⚠️ The OpenAI key was refused (${e.status}), ${tail}\nCheck OPENAI_KEY in the Vercel project settings and redeploy. <code>/aicheck</code> tests it.`;
+  }
+  if (e?.status === 429) {
+    return `⚠️ The copywriter is rate limited right now, ${tail}\nSend the photos again in a minute.`;
+  }
+  if (e?.imageProblem) {
+    return `⚠️ The copywriter could not read the photos, ${tail}\nSend them again to have another go.`;
+  }
+  return `⚠️ AI copy failed (${esc(detail.slice(0, 160))}), ${tail}\nSend the photos again to have another go.`;
+}
+
 function listingReply({ listing, category, priceUsd, priceInr, converted, aiFailed, aiNote, tail = "" }) {
   const price = priceUsd == null && priceInr == null
     ? ""
@@ -2156,7 +2221,7 @@ function listingReply({ listing, category, priceUsd, priceInr, converted, aiFail
     esc(price),
     listing.tags.length ? `Tags: ${esc(listing.tags.join(", "))}` : "",
     `<code>${esc(listing.listing_order_id)}</code>`,
-    aiFailed ? `⚠️ AI copy failed (${esc(String(aiFailed).slice(0, 120))}), so the title is straight off your caption — worth a look. Send the photos again to have another go.` : "",
+    aiFailed || "",
     aiNote ? `Note: ${esc(aiNote)}` : "",
     tail,
   ].filter(Boolean).join("\n");
@@ -2281,7 +2346,7 @@ async function finishMediaListing({ chatId, caption, media, ctx }) {
   } catch (e) {
     // Kept as the reason, not just a flag: a rate limit and a dead key both land
     // here and want different things doing about them.
-    aiFailed = e.message || "unknown error";
+    aiFailed = aiFailureNote(e);
     console.error("Listing AI failed:", e.message);
   }
   const draft = buildListingDraft({ parsed, ai, images, video: video?.url || "", source: video ? "telegram-media" : "telegram-photo" });
@@ -2723,7 +2788,7 @@ export default async function handler(req, res) {
         }
         let ai = null, aiFailed = "";
         try { ai = await aiListingDraft({ caption: parsed.text, imageUrls: [], hints: parsed }); }
-        catch (e) { aiFailed = e.message || "unknown error"; console.error("Listing AI failed:", e.message); }
+        catch (e) { aiFailed = aiFailureNote(e); console.error("Listing AI failed:", e.message); }
         const draft = buildListingDraft({ parsed, ai, images: [], source: "telegram-text" });
         await saveListingDraft(draft.listing, _ctx);
         await send(chatId, listingReply({ ...draft, aiFailed, aiNote: ai?.notes_for_seller,
