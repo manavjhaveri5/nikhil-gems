@@ -16057,7 +16057,7 @@ const writeShowInvDraft=(sid,draft,kind)=>{
   }catch{}
 };
 
-function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuyers=[],onSaveInvoice,onDelInvoice,onSaveSettings,onSaveCustomer,onSellStock,onRestoreStock,showToast}){
+function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuyers=[],onSaveInvoice,onDelInvoice,onRefreshInvoices,onSaveSettings,onSaveCustomer,onSellStock,onRestoreStock,showToast}){
   const S=showInvSettings(settings);
   const [view,setView]=useState("new");
   /* A saved invoice can be pulled back open. Where that is what was happening
@@ -16146,6 +16146,10 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     showInvLogoDataUrl().then(url=>{if(!live)return;setLogo(url);onSaveSettings?.({...S,logoDataUrl:url,logoV:SHOW_INV_LOGO_V});}).catch(()=>{});
     return()=>{live=false;};
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
+
+  // Opening the book reads it. A seller looking at Saved is checking what the
+  // booth has written, and an answer from a ten-minute-old cache is a guess.
+  useEffect(()=>{if(view==="list")onRefreshInvoices?.();},[view]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // ── picking lines ────────────────────────────────────────────────────────
   const takenQty=(stockId,exceptLineId)=>(draft.lines||[]).filter(l=>l.stockId===stockId&&l.id!==exceptLineId).reduce((s,l)=>s+showInvNum(l.qty),0);
@@ -17163,6 +17167,12 @@ function ShowsApp({onHome,isAdmin=true}){
     // Always reconcile with Supabase on open so a device that missed a live update
     // (was closed/backgrounded) doesn't keep showing a stale buying plan.
     loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)applyShows(withShowsDraft(s));}).catch(()=>{});
+    /* The same is true of the invoice book, and it is read over a customer's
+       shoulder: two phones at one booth showed Saved (8) and Saved (9) because
+       the cache is served for ten minutes before anything goes to the network,
+       and the phone that missed the live update kept its own count. */
+    loadKFresh(SHOW_INV_KEY).then(v=>{if(Array.isArray(v)){showInvoicesRef.current=v;setShowInvoices(v);}}).catch(()=>{});
+    loadKFresh(SHOW_CUSTOMERS_KEY).then(v=>{if(Array.isArray(v)){showCustomersRef.current=v;setShowCustomers(v);}}).catch(()=>{});
   },[]);
 
   // Stay in sync across devices: when another device saves (or we refocus the tab),
@@ -17285,6 +17295,14 @@ function ShowsApp({onHome,isAdmin=true}){
     const next=showInvoicesRef.current.filter(i=>i.id!==id);
     showInvoicesRef.current=next;setShowInvoices(next);
     await saveK(SHOW_INV_KEY,next);
+  };
+  // The Saved list is the booth's book. Opening it asks the server what is in
+  // it rather than trusting a cache that can be ten minutes old.
+  const refreshShowInvoices=async()=>{
+    try{
+      const v=await loadKFresh(SHOW_INV_KEY);
+      if(Array.isArray(v)){showInvoicesRef.current=v;setShowInvoices(v);}
+    }catch{}
   };
   const saveShowInvCfg=async(cfg)=>{
     const next=showInvSettings(cfg);
@@ -17451,7 +17469,7 @@ function ShowsApp({onHome,isAdmin=true}){
     onAddJournalEntry:addJournalEntry,onDelJournalEntry:delJournalEntry,
     onCreatePOFromBuyingPlan:createPOFromBuyingPlan,
     showInvoices,showInvCfg,showCustomers,ngBuyers,
-    onSaveShowInvoice:saveShowInvoice,onDelShowInvoice:delShowInvoice,
+    onSaveShowInvoice:saveShowInvoice,onDelShowInvoice:delShowInvoice,onRefreshShowInvoices:refreshShowInvoices,
     onSaveShowInvCfg:saveShowInvCfg,onSaveShowCustomer:saveShowCustomer,
     onSellStock:sellStockForInvoice,onRestoreStock:restoreStockForInvoice,
     onToast:showToast,
@@ -17670,7 +17688,7 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],ngBuyers=[],onSaveShowInvoice,onDelShowInvoice,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
+function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],ngBuyers=[],onSaveShowInvoice,onDelShowInvoice,onRefreshShowInvoices,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -19916,7 +19934,7 @@ thead{display:table-header-group;}
             <ShowInvoiceTab
               show={show} atShow={shipItems}
               invoices={showInvoices} settings={showInvCfg} customers={showCustomers} ngBuyers={ngBuyers}
-              onSaveInvoice={onSaveShowInvoice} onDelInvoice={onDelShowInvoice}
+              onSaveInvoice={onSaveShowInvoice} onDelInvoice={onDelShowInvoice} onRefreshInvoices={onRefreshShowInvoices}
               onSaveSettings={onSaveShowInvCfg} onSaveCustomer={onSaveShowCustomer}
               onSellStock={onSellStock} onRestoreStock={onRestoreStock}
               showToast={onToast}
