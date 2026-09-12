@@ -16043,20 +16043,34 @@ const emptyShowInvDraft=(show,settings)=>({
   discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),payments:[],showMethods:[],notes:"",status:"draft",
   createdAt:new Date().toISOString(),
 });
-const readShowInvDraft=sid=>{
-  try{const d=JSON.parse(localStorage.getItem(SHOW_INV_DRAFT_PREFIX+sid)||"null");return d&&d.id?d:null;}catch{return null;}
+/* Two drafts can be open at a booth: the sale being written now, and a saved
+   invoice pulled back open to correct. They are kept under separate keys so
+   opening one never eats the other, and both survive the tab being left. */
+const showInvDraftKey=(sid,kind)=>SHOW_INV_DRAFT_PREFIX+(kind==="edit"?"edit:":"")+sid;
+const readShowInvDraft=(sid,kind)=>{
+  try{const d=JSON.parse(localStorage.getItem(showInvDraftKey(sid,kind))||"null");return d&&d.id?d:null;}catch{return null;}
 };
-const writeShowInvDraft=(sid,draft)=>{
+const writeShowInvDraft=(sid,draft,kind)=>{
   try{
-    if(!draft)localStorage.removeItem(SHOW_INV_DRAFT_PREFIX+sid);
-    else localStorage.setItem(SHOW_INV_DRAFT_PREFIX+sid,JSON.stringify(draft));
+    if(!draft)localStorage.removeItem(showInvDraftKey(sid,kind));
+    else localStorage.setItem(showInvDraftKey(sid,kind),JSON.stringify(draft));
   }catch{}
 };
 
 function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuyers=[],onSaveInvoice,onDelInvoice,onSaveSettings,onSaveCustomer,onSellStock,onRestoreStock,showToast}){
   const S=showInvSettings(settings);
   const [view,setView]=useState("new");
-  const [draft,setDraft]=useState(()=>readShowInvDraft(show.id)||emptyShowInvDraft(show,showInvSettings(settings)));
+  /* A saved invoice can be pulled back open. Where that is what was happening
+     when the tab was last left, it is what the tab comes back to — a half-made
+     correction that vanishes because a customer asked a question is worse than
+     no correction at all. The invoice has to still be there and still be live:
+     one voided or deleted on another device drops the edit. */
+  const openEdit=()=>{
+    const d=readShowInvDraft(show.id,"edit");
+    return d&&invoices.some(i=>i.id===d.id&&i.status!=="void")?d:null;
+  };
+  const [editingId,setEditingId]=useState(()=>openEdit()?.id||null);
+  const [draft,setDraft]=useState(()=>openEdit()||readShowInvDraft(show.id)||emptyShowInvDraft(show,showInvSettings(settings)));
   const [pick,setPick]=useState("");
   const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"kgs",rate:""});
   const [busy,setBusy]=useState("");
@@ -16117,7 +16131,8 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const payOptions=showInvPayOptions(S);
   const chosenPay=showInvChosenPay(draft,S).map(o=>o.token);
   const slug=showTagSlug(show);
-  const setD=patch=>setDraft(d=>{const next=typeof patch==="function"?patch(d):{...d,...patch};writeShowInvDraft(show.id,next);return next;});
+  const editingInv=editingId?invoices.find(i=>i.id===editingId):null;
+  const setD=patch=>setDraft(d=>{const next=typeof patch==="function"?patch(d):{...d,...patch};writeShowInvDraft(show.id,next,editingId?"edit":undefined);return next;});
   const setCust=patch=>setD(d=>({...d,customer:{...d.customer,...patch}}));
 
   // Warm the print/PDF engines and the logo the moment the tab opens — the hall
@@ -16134,9 +16149,21 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
 
   // ── picking lines ────────────────────────────────────────────────────────
   const takenQty=(stockId,exceptLineId)=>(draft.lines||[]).filter(l=>l.stockId===stockId&&l.id!==exceptLineId).reduce((s,l)=>s+showInvNum(l.qty),0);
-  const basisOf=item=>(parseFloat(item.qty)||0)>0?"qty":((parseFloat(item.qty2)||0)>0?"qty2":"qty");
-  const availOf=item=>{const b=basisOf(item);return Math.max(0,(parseFloat(item[b])||0)-takenQty(item.id));};
-  const sellable=atShow.filter(s=>!s.soldDate&&((parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0));
+  /* A card sold down to nothing reads as neither basis, so while an invoice is
+     being edited the basis it was sold on is the one that stands. */
+  const editedBasis=stockId=>(editingInv?.stockEffects||[]).find(fx=>fx.stockId===stockId)?.basis;
+  const basisOf=item=>editedBasis(item.id)||((parseFloat(item.qty)||0)>0?"qty":((parseFloat(item.qty2)||0)>0?"qty2":"qty"));
+  /* The cards an invoice sold are gone from the show the moment it is issued,
+     so re-opening it would read as nothing left to sell. What this invoice
+     itself took is credited back while it is being edited — anything beyond
+     that is a genuine overage and is still challenged. */
+  const creditFor=(stockId,basis)=>(editingInv?.stockEffects||[])
+    .filter(fx=>fx.stockId===stockId&&(fx.basis==="qty2"?"qty2":"qty")===basis)
+    .reduce((n,fx)=>n+(parseFloat(fx.qty)||0),0);
+  const onHandOf=(item,basis)=>(parseFloat(item[basis])||0)+creditFor(item.id,basis);
+  const availOf=item=>{const b=basisOf(item);return Math.max(0,onHandOf(item,b)-takenQty(item.id));};
+  const editedStockIds=new Set((editingInv?.stockEffects||[]).map(fx=>fx.stockId));
+  const sellable=atShow.filter(s=>(!s.soldDate&&((parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0))||editedStockIds.has(s.id));
   const q=pick.trim().toLowerCase();
   // The list of cards is a tool, not scenery: open while it is being searched or
   // browsed, and while the cart is still empty, otherwise out of the way.
@@ -16316,9 +16343,13 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   };
 
   // ── issue ────────────────────────────────────────────────────────────────
-  const issue=async()=>{
-    if(!draft.lines.length){showToast?.("Add something to sell first");return;}
-    if(!String(draft.customer.name||"").trim()&&!String(draft.customer.email||"").trim()){showToast?.("Name the customer");return;}
+  /* Everything that has to be true before a booth invoice is written down,
+     whether it is being issued for the first time or corrected afterwards.
+     Returns true when the seller has been told something and the press should
+     stop there. */
+  const notReady=()=>{
+    if(!draft.lines.length){showToast?.("Add something to sell first");return true;}
+    if(!String(draft.customer.name||"").trim()&&!String(draft.customer.email||"").trim()){showToast?.("Name the customer");return true;}
     /* Two lines can name the same card — the picker nets them off as they are
        added, but the qty box is editable afterwards. Checking each line on its
        own let the pair through, and the second one then sold whatever the first
@@ -16334,8 +16365,9 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     const over=[...wanted.entries()].map(([key,v])=>{
       const [stockId,basis]=key.split("|");
       const item=atShow.find(s=>s.id===stockId);
-      return item&&v.qty>(parseFloat(item[basis])||0)+0.0001
-        ? {desc:v.desc,want:v.qty,have:parseFloat(item[basis])||0,unit:basis==="qty2"?(item.unit2||"kg"):(item.unit||"pcs")}
+      const have=item?onHandOf(item,basis):0;
+      return item&&v.qty>have+0.0001
+        ? {desc:v.desc,want:v.qty,have,unit:basis==="qty2"?(item.unit2||"kg"):(item.unit||"pcs")}
         : null;
     }).find(Boolean);
     /* The count on a card is what somebody typed before the hall opened; the
@@ -16346,9 +16378,13 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     const overSig=over?`${over.desc}|${over.want}|${over.have}`:"";
     if(over&&overAck!==overSig){
       setOverAck(overSig);
-      showToast?.(`${over.desc}: this invoice sells ${showInvQty(over.want)} ${over.unit}, the show has ${showInvQty(over.have)||0} — press Issue again to sell it anyway`,7000);
-      return;
+      showToast?.(`${over.desc}: this invoice sells ${showInvQty(over.want)} ${over.unit}, the show has ${showInvQty(over.have)||0} — press ${editingId?"Save":"Issue"} again to sell it anyway`,7000);
+      return true;
     }
+    return false;
+  };
+  const issue=async()=>{
+    if(notReady())return;
     setBusy("issue");
     try{
       const custId=draft.customer.id||uid();
@@ -16391,12 +16427,81 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     }catch(e){showToast?.("⚠ Could not issue: "+(e.message||e));}
     setBusy("");
   };
+  // ── editing a saved invoice ──────────────────────────────────────────────
+  /* A price read wrong, a line billed twice, a name spelled from hearing it —
+     at a booth these surface a minute after the paper is handed over, and the
+     old answer was to void the whole thing and write it again under a new
+     number. An invoice is now simply opened back up. The sale being written at
+     the time is parked under its own key and comes back when the correction is
+     done or dropped. */
+  const startEdit=inv=>{
+    if(inv.status==="void"){showToast?.("That one is voided — write a new invoice");return;}
+    const copy=JSON.parse(JSON.stringify(inv));
+    writeShowInvDraft(show.id,copy,"edit");
+    setEditingId(inv.id);
+    setDraft(copy);
+    setOverAck("");
+    setJustIssued(null);
+    setView("new");
+  };
+  const leaveEdit=()=>{
+    writeShowInvDraft(show.id,null,"edit");
+    setEditingId(null);
+    setOverAck("");
+    setDraft(readShowInvDraft(show.id)||emptyShowInvDraft(show,S));
+  };
+  const cancelEdit=()=>{
+    if(!window.confirm("Leave this invoice as it was saved?"))return;
+    leaveEdit();
+    setView("list");
+  };
+  /* The cards move in two steps and in this order: what the invoice took is put
+     back first and written down, then the invoice as it now reads takes what it
+     needs from that list. A failure between the two leaves the stock at the
+     show and the invoice holding nothing — wrong, but wrong in the direction a
+     seller can see and fix, rather than stock quietly sold twice. */
+  const saveEdit=async()=>{
+    const before=editingInv;
+    if(!before){showToast?.("That invoice is no longer here");leaveEdit();return;}
+    if(notReady())return;
+    setBusy("issue");
+    try{
+      const inv={
+        ...draft,
+        invNo:draft.invNo||before.invNo||nextShowInvNo(invoices,String(draft.date||today()).slice(0,4)),
+        status:before.status==="void"?"issued":(before.status||"issued"),
+        customer:{...draft.customer,id:draft.customer.id||before.customer?.id||uid()},
+        editedAt:new Date().toISOString(),updatedAt:new Date().toISOString(),
+      };
+      let base=null;
+      try{base=await onRestoreStock?.(before);}
+      catch(e){showToast?.("⚠ Could not put the stock back — nothing changed: "+(e.message||e));setBusy("");return;}
+      await onSaveInvoice({...inv,stockEffects:[]});
+      let effects=[];
+      try{
+        effects=(await onSellStock?.(inv,base))||[];
+        if(effects.length)await onSaveInvoice({...inv,stockEffects:effects});
+      }catch(e){
+        showToast?.("⚠ Invoice saved — but the stock didn't move. Check the cards in Stock.",9000);
+      }
+      const saved={...inv,stockEffects:effects};
+      if(String(saved.customer.name||"").trim()||String(saved.customer.email||"").trim()){
+        try{await onSaveCustomer?.({...saved.customer,lastShowId:show.id,lastInvoiceNo:saved.invNo,updatedAt:new Date().toISOString()});}catch{}
+      }
+      leaveEdit();
+      setJustIssued(saved);
+      setView("list");
+      showToast?.(`✓ ${saved.invNo} updated · ${showMoney(showInvTotals(saved).total,saved.currency)}`);
+    }catch(e){showToast?.("⚠ Could not save the change: "+(e.message||e));}
+    setBusy("");
+  };
   const voidInv=async inv=>{
     if(!window.confirm(`Void ${inv.invNo}? The stock goes back to the show.`))return;
     setBusy("void");
     try{
       await onRestoreStock?.(inv);
       await onSaveInvoice({...inv,status:"void",voidedAt:new Date().toISOString(),stockEffects:[]});
+      if(editingId===inv.id)leaveEdit();
       showToast?.(`${inv.invNo} voided`);
     }catch(e){showToast?.("⚠ Void failed: "+(e.message||e));}
     setBusy("");
@@ -16445,7 +16550,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
         <span style={{fontSize:12,color:C.inkFaint,letterSpacing:.1}}>{show.name} · list tag <b style={{color:C.inkMid,fontWeight:650}}>{slug}</b></span>
         <div style={{display:"flex",gap:6}}>
-          {[["new","🧾 New"],["list",`📄 Saved${mine.length?` (${mine.length})`:""}`],["settings","⚙ Settings"]].map(([v,l])=>(
+          {[["new",editingId?`✏️ Editing ${editingInv?.invNo||""}`.trim():"🧾 New"],["list",`📄 Saved${mine.length?` (${mine.length})`:""}`],["settings","⚙ Settings"]].map(([v,l])=>(
             <button key={v} onClick={()=>setView(v)} style={pill(view===v)}>{l}</button>
           ))}
         </div>
@@ -16454,6 +16559,19 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
       {/* ── NEW INVOICE ── */}
       {view==="new"&&(
         <>
+          {/* An edit looks nothing like a new sale, and the screen has to say so
+              before a line is touched — the seller is one tap from correcting
+              a customer's invoice while believing they are writing a fresh one. */}
+          {editingId&&(
+            <div style={{...box,background:C.amberBg,border:`1px solid ${C.amber}`,boxShadow:"none",
+              display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:750,color:C.ink}}>✏️ Editing {editingInv?.invNo||"invoice"}</div>
+                <div style={{fontSize:11,color:C.inkMid}}>The stock moves with it, and the invoice keeps its number. Your unfinished sale is waiting.</div>
+              </div>
+              <button onClick={cancelEdit} style={{...pill(false),fontWeight:650}}>Leave it as it was</button>
+            </div>
+          )}
           <div style={box}>
             <div style={{...lab,marginBottom:9}}>Customer</div>
             <div style={{position:"relative",marginBottom:8}}>
@@ -16769,14 +16887,17 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
           <div style={{display:"flex",gap:9,flexWrap:"wrap",position:"sticky",bottom:0,zIndex:5,
             background:C.bg,borderTop:`1px solid ${C.border}`,
             padding:mob?"12px 0 14px":"14px 0 16px",margin:"0 -2px"}}>
-            <button onClick={issue} disabled={busy==="issue"} style={{flex:mob?"1 1 100%":"1 1 260px",background:C.ink,color:C.bg,border:"none",borderRadius:999,padding:mob?"15px 20px":"14px 22px",fontSize:14.5,fontWeight:650,letterSpacing:.1,cursor:"pointer",opacity:busy==="issue"?.55:1,boxShadow:"0 10px 24px -12px rgba(20,14,4,.7)"}}>
-              {busy==="issue"?"Issuing…":`Issue & print · ${showMoney(T.total,cur)}`}
+            <button onClick={editingId?saveEdit:issue} disabled={busy==="issue"} style={{flex:mob?"1 1 100%":"1 1 260px",background:C.ink,color:C.bg,border:"none",borderRadius:999,padding:mob?"15px 20px":"14px 22px",fontSize:14.5,fontWeight:650,letterSpacing:.1,cursor:"pointer",opacity:busy==="issue"?.55:1,boxShadow:"0 10px 24px -12px rgba(20,14,4,.7)"}}>
+              {busy==="issue"?(editingId?"Saving…":"Issuing…"):editingId?`Save changes · ${showMoney(T.total,cur)}`:`Issue & print · ${showMoney(T.total,cur)}`}
             </button>
             <button onClick={()=>printInv({...draft,invNo:draft.invNo||"DRAFT"})} style={{flex:"1 1 120px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:mob?"15px 16px":"14px 18px",fontSize:13,fontWeight:600,color:C.ink,cursor:"pointer"}}>Preview</button>
-            {(draft.lines.length>0||draft.customer.name)&&(
-              <button onClick={()=>{if(window.confirm("Clear this invoice?")){writeShowInvDraft(show.id,null);setDraft(emptyShowInvDraft(show,S));}}}
-                style={{flex:"0 0 auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:mob?"15px 16px":"14px 18px",fontSize:13,color:C.inkMid,cursor:"pointer"}}>Clear</button>
-            )}
+            {editingId
+              ?<button onClick={cancelEdit}
+                style={{flex:"0 0 auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:mob?"15px 16px":"14px 18px",fontSize:13,color:C.inkMid,cursor:"pointer"}}>Cancel</button>
+              :(draft.lines.length>0||draft.customer.name)&&(
+                <button onClick={()=>{if(window.confirm("Clear this invoice?")){writeShowInvDraft(show.id,null);setDraft(emptyShowInvDraft(show,S));}}}
+                  style={{flex:"0 0 auto",background:C.surface,border:`1px solid ${C.border}`,borderRadius:999,padding:mob?"15px 16px":"14px 18px",fontSize:13,color:C.inkMid,cursor:"pointer"}}>Clear</button>
+              )}
           </div>
         </>
       )}
@@ -16788,7 +16909,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
         <div style={{...box,background:C.greenBg,border:`1px solid ${C.green}`,boxShadow:"none"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap"}}>
             <div style={{minWidth:0}}>
-              <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>✓ {justIssued.invNo} · {showMoney(showInvTotals(justIssued).total,justIssued.currency||"USD")}</div>
+              <div style={{fontSize:13.5,fontWeight:700,color:C.ink}}>✓ {justIssued.invNo}{justIssued.editedAt?" updated":""} · {showMoney(showInvTotals(justIssued).total,justIssued.currency||"USD")}</div>
               <div style={{fontSize:11,color:C.inkMid}}>{[justIssued.customer?.name,justIssued.customer?.email].filter(Boolean).join(" · ")||"No customer details"}</div>
             </div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
@@ -16826,6 +16947,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   </div>
                 </div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {!voided&&<button onClick={()=>startEdit(inv)} style={{...pill(editingId===inv.id),fontWeight:700}}>{editingId===inv.id?"✏️ Editing":"✏️ Edit"}</button>}
                   <button onClick={()=>printInv(inv)} style={pill(false)}>🖨 Print</button>
                   <button onClick={()=>downloadPdf(inv)} disabled={busy==="pdf"} style={pill(false)}>{busy==="pdf"?"…":"⬇ PDF"}</button>
                   {inv.customer?.email&&<button onClick={()=>emailInv(inv)} disabled={busy==="email"} style={pill(false)}>{busy==="email"?"…":"✉ Email"}</button>}
@@ -17187,12 +17309,17 @@ function ShowsApp({onHome,isAdmin=true}){
      clone starts unversioned, hence newStockRowFrom) and the original keeps the
      balance. What each line did is handed back, so voiding undoes exactly that
      and nothing more. */
-  const sellStockForInvoice=async(inv)=>{
+  /* An edit re-sells the invoice after its old effects have been put back, and
+     the put-back list is handed straight across rather than read from state —
+     a setStock from a moment ago is not in this closure yet, and selling off
+     the stale list would take the same cards down twice. */
+  const sellStockForInvoice=async(inv,baseStock)=>{
     const lines=(inv.lines||[]).filter(l=>l.stockId);
+    const base=Array.isArray(baseStock)?baseStock:stock;
     if(!lines.length)return[];
     const effects=[];
     const now=new Date().toISOString();
-    let out=[...stock];
+    let out=[...base];
     lines.forEach(l=>{
       const idx=out.findIndex(s=>s.id===l.stockId);
       if(idx<0)return;
@@ -17239,9 +17366,11 @@ function ShowsApp({onHome,isAdmin=true}){
     setStock(syncStockVersions(out,saved));
     return effects;
   };
+  // Hands back the stock list it wrote, so a caller that sells again in the
+  // same breath (an edit) starts from the cards as they now stand.
   const restoreStockForInvoice=async(inv)=>{
     const effects=inv?.stockEffects||[];
-    if(!effects.length)return;
+    if(!effects.length)return stock;
     const now=new Date().toISOString();
     const clearSold={soldDate:"",soldRate:"",soldPrice:"",soldCurrency:"",soldQty:"",soldQty2:"",soldFromShow:"",soldFromShowId:"",showInvoiceId:"",showInvoiceNo:""};
     let out=[...stock];
@@ -17266,6 +17395,7 @@ function ShowsApp({onHome,isAdmin=true}){
     setStock(out);
     const saved=await saveStockK(out);
     setStock(syncStockVersions(out,saved));
+    return out;
   };
   const toggleCheck=(sid,i)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],done:!c[i].done};return{...s,checklist:c};}));
   const editCheckTask=(sid,i,task)=>save(shows.map(s=>{if(s.id!==sid)return s;const c=[...s.checklist];c[i]={...c[i],task};return{...s,checklist:c};}));
