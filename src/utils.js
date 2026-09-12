@@ -339,6 +339,13 @@ export const saveK=async(k,d,{merge=true}={})=>{
   _keyFetchedAt.set(k,Date.now());
   _persistLS();
   await _putValueK(k,value);
+  /* The merge can bring back rows this device never had — an invoice another
+     booth phone wrote while this one was asleep. They went to the server and
+     into the cache, but the screen that called saveK is still rendering the
+     list it passed in, and nothing else was ever going to tell it: two phones
+     at the same show would sit on different counts until one was reloaded.
+     A save that changed what this device holds is itself news. */
+  if(_jsonStable(value)!==_jsonStable(persisted))_notifyRefresh([k]);
 };
 
 const _arrayValue=v=>Array.isArray(v)?v:[];
