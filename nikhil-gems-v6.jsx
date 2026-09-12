@@ -15722,7 +15722,7 @@ const showInvEsc=v=>String(v==null?"":v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":
    or as a lot at one price. "flat" is that lot — the quantity is the lot itself,
    so it is pinned to 1 and the rate column holds the whole price, which keeps
    one multiplication behind every total on the invoice. */
-const SHOW_UNITS=["kgs","pcs","flat"];
+const SHOW_UNITS=["kgs","grams","pcs","flat"];
 const isFlatUnit=u=>String(u||"").trim().toLowerCase()==="flat";
 const showInvNum=v=>{const n=parseFloat(v);return Number.isFinite(n)?n:0;};
 const showInvQty=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";};
