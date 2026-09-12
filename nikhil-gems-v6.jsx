@@ -18367,6 +18367,79 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
 </body></html>`);
     w.document.close();
   };
+  /* The price list. A stone is priced per kilo or per piece, so the unit travels
+     with the number — "$450 / kg" is a price, "$450" on a 2 kg lot is a guess.
+     Cost, margin and vendor are deliberately not on it: this is a sheet that
+     gets left on the table, read upside down by whoever is standing there. */
+  const priceUnitOf=s=>((parseFloat(s.qty)||0)>0?(s.unit||"pcs"):(s.unit2||"kg"));
+  const priceListRows=()=>shipSent
+    .filter(s=>hasStockQty(s)&&!s.soldDate&&(+s.listPrice||0)>0)
+    .map(s=>({
+      item:[s.material||"Item",s.shape,s.size].filter(Boolean).join(" · "),
+      origin:s.origin||"",
+      box:s.location?`Box ${s.location}`:"",
+      have:flowQtyLines(s).join(" · ")||"—",
+      price:`$${(+s.listPrice).toLocaleString("en-US",{maximumFractionDigits:2})} / ${priceUnitOf(s)}`,
+    }));
+  const printPriceList=()=>{
+    const rows=priceListRows();
+    if(!rows.length){onToast?.("Nothing to list yet — put a price on a card first");return;}
+    const held=shipSent.filter(s=>hasStockQty(s)&&!s.soldDate);
+    const unpriced=held.length-rows.length;
+    const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const w=window.open("","_blank");
+    if(!w){onToast?.("Allow pop-ups to open the price list");return;}
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Price list — ${esc(show.name||"")}</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&display=swap" rel="stylesheet"><style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Cormorant Garamond',Georgia,serif;background:#f2ede7;padding:20px;color:#1a1a1a;}
+.toolbar{max-width:210mm;margin:0 auto 16px;background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.08);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;}
+.toolbar h1{font-size:13px;font-weight:400;color:#666;letter-spacing:.06em;}
+.btn-print{background:#8B6F47;color:#fff;border:none;padding:7px 18px;font-family:inherit;font-size:13px;letter-spacing:.08em;cursor:pointer;border-radius:5px;}
+.sheet{width:210mm;background:#fff;margin:0 auto;padding:14mm 14mm 12mm;}
+.head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;border-bottom:.6mm solid #1a1a1a;padding-bottom:4mm;}
+.head .ttl{font-size:21pt;letter-spacing:.12em;text-transform:uppercase;line-height:1;}
+.head .whr{font-size:9.5pt;color:#6B5344;letter-spacing:.1em;text-transform:uppercase;margin-top:2.5mm;}
+.head .cnt{font-size:9pt;color:#8a8177;letter-spacing:.08em;text-align:right;white-space:nowrap;}
+table{width:100%;border-collapse:collapse;margin-top:5mm;}
+th{font-size:8pt;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:#8a8177;text-align:left;padding:0 2mm 2mm 0;border-bottom:.25mm solid #d4c4b0;}
+th.n,td.n{text-align:right;padding-right:0;}
+td{font-size:10.5pt;padding:2.2mm 2mm 2.2mm 0;border-bottom:.2mm solid #efe8e0;vertical-align:top;}
+tr{break-inside:avoid;page-break-inside:avoid;}
+thead{display:table-header-group;}
+.it{font-weight:600;}
+.og{font-size:8.5pt;color:#8a8177;letter-spacing:.06em;text-transform:uppercase;}
+.bx{font-size:9pt;color:#8a8177;white-space:nowrap;}
+.hv{font-size:9.5pt;color:#6B5344;white-space:nowrap;}
+.pr{font-weight:600;white-space:nowrap;}
+.note{margin-top:5mm;font-size:9pt;color:#8a8177;font-style:italic;}
+@media print{@page{size:A4;margin:0;}*{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}
+  body{background:#fff !important;padding:0 !important;}.toolbar{display:none !important;}
+  .sheet{width:auto !important;margin:0 !important;padding:12mm 12mm 10mm !important;}}
+</style></head><body>
+<div class="toolbar"><h1>${esc(show.name||"")} &nbsp;·&nbsp; ${rows.length} priced card${rows.length===1?"":"s"}</h1><button class="btn-print" onclick="window.print()">🖨 Print / Save as PDF</button></div>
+<div class="sheet">
+  <div class="head">
+    <div>
+      <div class="ttl">Price list</div>
+      <div class="whr">${esc(show.name||"")}${show.city?` · ${esc(show.city)}`:""}</div>
+    </div>
+    <div class="cnt">${rows.length} card${rows.length===1?"":"s"}<br/>${esc(fmtDate(today()))}</div>
+  </div>
+  <table>
+    <thead><tr><th>Item</th><th>Box</th><th>At the show</th><th class="n">Price</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr>
+      <td><div class="it">${esc(r.item)}</div>${r.origin?`<div class="og">${esc(r.origin)}</div>`:""}</td>
+      <td class="bx">${esc(r.box)||"&mdash;"}</td>
+      <td class="hv">${esc(r.have)}</td>
+      <td class="n pr">${esc(r.price)}</td>
+    </tr>`).join("")}</tbody>
+  </table>
+  ${unpriced>0?`<div class="note">${unpriced} more card${unpriced===1?"":"s"} at the show ${unpriced===1?"has":"have"} no price yet, so ${unpriced===1?"it is":"they are"} not listed here.</div>`:""}
+</div>
+</body></html>`);
+    w.document.close();
+  };
   const dailySales=show.dailySales||[];
   const showExpenses=show.showExpenses||[];
   const showPhotos=show.showPhotos||[];
@@ -19455,7 +19528,10 @@ body{font-family:'Cormorant Garamond',serif;background:var(--bg);padding:20px;}
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
                     <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Cards at the show</span>
                     {shipSent.length>0&&(
-                      <button onClick={()=>setSentOpen(prev=>prev.size?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>{sentOpen.size?"Collapse all":"Expand all"}</button>
+                      <span style={{display:"flex",gap:12,alignItems:"center"}}>
+                        <button onClick={e=>{e.stopPropagation();printPriceList();}} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>🖨 Price list</button>
+                        <button onClick={()=>setSentOpen(prev=>prev.size?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>{sentOpen.size?"Collapse all":"Expand all"}</button>
+                      </span>
                     )}
                   </div>
 
