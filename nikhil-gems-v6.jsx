@@ -16071,6 +16071,8 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [moreTotals,setMoreTotals]=useState(false);
   const [focusLineId,setFocusLineId]=useState(null);
   const [newMethod,setNewMethod]=useState("");
+  // The overage the seller has already been told about and pressed through.
+  const [overAck,setOverAck]=useState("");
   /* A logo goes into the settings as a data URL, and from there into every
      invoice HTML and every PDF — so it is scaled down on the way in. A 4MB
      photograph of a sign would otherwise ride along in each one. */
@@ -16336,7 +16338,17 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
         ? {desc:v.desc,want:v.qty,have:parseFloat(item[basis])||0,unit:basis==="qty2"?(item.unit2||"kg"):(item.unit||"pcs")}
         : null;
     }).find(Boolean);
-    if(over){showToast?.(`${over.desc}: this invoice sells ${showInvQty(over.want)} ${over.unit}, the show has ${showInvQty(over.have)||0}`);return;}
+    /* The count on a card is what somebody typed before the hall opened; the
+       sale in front of the seller is real. So an overage says its piece once and
+       then gets out of the way — press Issue again and it goes through, and the
+       card is taken down to zero rather than into a negative. It still speaks up
+       again if the numbers change, because that is a different mistake. */
+    const overSig=over?`${over.desc}|${over.want}|${over.have}`:"";
+    if(over&&overAck!==overSig){
+      setOverAck(overSig);
+      showToast?.(`${over.desc}: this invoice sells ${showInvQty(over.want)} ${over.unit}, the show has ${showInvQty(over.have)||0} — press Issue again to sell it anyway`,7000);
+      return;
+    }
     setBusy("issue");
     try{
       const custId=draft.customer.id||uid();
@@ -17011,7 +17023,7 @@ function ShowsApp({onHome,isAdmin=true}){
   const [loaded,setLoaded]=useState(false);
   const [detailId,setDetailId]=useState(null);
   const [toast,setToast]=useState("");
-  const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
+  const showToast=(m,ms=3000)=>{setToast(m);setTimeout(()=>setToast(""),ms);};
   const todayStr=today();
   const applyShows=list=>{showsRef.current=Array.isArray(list)?list:[];setShows(list);};
 
