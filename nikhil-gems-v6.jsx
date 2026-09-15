@@ -15777,6 +15777,10 @@ const showBasisForUnit=(item,unit)=>{
 const showLineQtyInBasis=(line,item)=>{
   if(!item)return null;
   const basis=line?.basis==="qty2"?"qty2":"qty";
+  /* Sold flat means the lot goes, whole, for one price. The quantity box reads 1
+     because that is what the rate is multiplied by — but what leaves the show is
+     everything the card still holds, not one kilo of it. */
+  if(isFlatUnit(line?.unit))return parseFloat(item[basis])||0;
   const cardUnit=basis==="qty2"?(item.unit2||"kg"):(item.unit||"pcs");
   const k=showUnitConv(line?.unit||cardUnit,cardUnit);
   return k==null?null:showInvNum(line?.qty)*k;
@@ -16792,18 +16796,28 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   const capRaw=item?onHandOf(item,lBasis):null;
                   const cap=capRaw!=null&&capConv!=null?capRaw*capConv:capRaw;
                   const capUnit=capConv!=null?(l.unit||cardUnit):cardUnit;
-                  const over=cap!=null&&showInvNum(l.qty)>cap+0.0001;
+                  const over=!isFlatUnit(l.unit)&&cap!=null&&showInvNum(l.qty)>cap+0.0001;
                   const qtyBox=(
                     <input value={isFlatUnit(l.unit)?"1":l.qty} disabled={isFlatUnit(l.unit)}
                       ref={el=>{if(el&&focusLineId===l.id){el.focus();el.select?.();setFocusLineId(null);}}}
                       onChange={e=>setLine(l.id,{qty:e.target.value})} inputMode="decimal" placeholder="Qty"
                       style={{...sIn,textAlign:"right",...(isFlatUnit(l.unit)?{background:C.card,color:C.inkFaint}:{})}}/>
                   );
-                  /* A card off the show floor leaves stock by the quantity on
-                     this line, so it cannot be sold "flat" — that would pin it
-                     to 1 and send one kilo out for the whole lot. */
+                  /* One list, one spelling. A card carries its unit as "kg" and
+                     the invoice offers "kgs"; both were being listed, so the
+                     dropdown read kgs / grams / pcs / kg. They are folded
+                     together under the invoice's own spelling — everything that
+                     measures a line normalises anyway. */
+                  const unitOpts=(()=>{
+                    const seen=new Map();
+                    const add=u=>{const k=normalizeStockUnit(u);if(u&&!seen.has(k))seen.set(k,u);};
+                    SHOW_UNITS.forEach(add);
+                    add(l.unit);
+                    return [...seen.values()];
+                  })();
+                  const unitVal=unitOpts.find(u=>normalizeStockUnit(u)===normalizeStockUnit(l.unit||"kgs"))||l.unit||"kgs";
                   const unitBox=(
-                    <select value={l.unit||"kgs"} onChange={e=>{
+                    <select value={unitVal} onChange={e=>{
                       const u=e.target.value;
                       if(u==="flat"){setLine(l.id,{unit:"flat",qty:"1"});return;}
                       /* Switching a line to pieces means it should come off the
@@ -16811,7 +16825,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                       const b=item?showBasisForUnit(item,u):null;
                       setLine(l.id,b?{unit:u,basis:b}:{unit:u});
                     }} style={{...sIn,cursor:"pointer"}}>
-                      {[...new Set([...(l.stockId?SHOW_UNITS.filter(u=>u!=="flat"):SHOW_UNITS),...(l.unit?[l.unit]:[])])].map(u=><option key={u} value={u}>{u}</option>)}
+                      {unitOpts.map(u=><option key={u} value={u}>{u}</option>)}
                     </select>
                   );
                   const rateBox=<input value={l.rate} onChange={e=>setLine(l.id,{rate:e.target.value})} inputMode="decimal" placeholder="Rate" style={{...sIn,textAlign:"right"}}/>;
