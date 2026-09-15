@@ -15755,6 +15755,32 @@ const showInvEsc=v=>String(v==null?"":v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":
    one multiplication behind every total on the invoice. */
 const SHOW_UNITS=["kgs","grams","pcs","flat"];
 const isFlatUnit=u=>String(u||"").trim().toLowerCase()==="flat";
+/* A card held in kilos and a line sold in grams are the same substance counted
+   differently. Comparing the two numbers raw is how 209 grams read as more than
+   a 0.68 kg card and, worse, took the whole card down when it sold. Everything
+   that measures a line against a card goes through here first. */
+const SHOW_UNIT_KG={kg:1,gm:0.001,ct:0.0002};
+const showUnitConv=(from,to)=>{
+  const f=normalizeStockUnit(from),t=normalizeStockUnit(to);
+  if(f===t)return 1;
+  const a=SHOW_UNIT_KG[f],b=SHOW_UNIT_KG[t];
+  return a&&b?a/b:null;      // null: not the same kind of thing — pcs against kg
+};
+// Which of the card's two quantities a line counted in this unit belongs against.
+const showBasisForUnit=(item,unit)=>{
+  if(!item)return null;
+  if(showUnitConv(unit,item.unit||"pcs")!=null)return "qty";
+  if(item.unit2&&showUnitConv(unit,item.unit2)!=null)return "qty2";
+  return null;
+};
+// What a line takes off its card, said in the unit the card is held in.
+const showLineQtyInBasis=(line,item)=>{
+  if(!item)return null;
+  const basis=line?.basis==="qty2"?"qty2":"qty";
+  const cardUnit=basis==="qty2"?(item.unit2||"kg"):(item.unit||"pcs");
+  const k=showUnitConv(line?.unit||cardUnit,cardUnit);
+  return k==null?null:showInvNum(line?.qty)*k;
+};
 const showInvNum=v=>{const n=parseFloat(v);return Number.isFinite(n)?n:0;};
 const showInvQty=v=>{const n=parseFloat(v);return Number.isFinite(n)&&n>0?String(+n.toFixed(4)):"";};
 
@@ -16201,11 +16227,16 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   useEffect(()=>{if(view==="list")onRefreshInvoices?.();},[view]);// eslint-disable-line react-hooks/exhaustive-deps
 
   // ── picking lines ────────────────────────────────────────────────────────
-  const takenQty=(stockId,exceptLineId)=>(draft.lines||[]).filter(l=>l.stockId===stockId&&l.id!==exceptLineId).reduce((s,l)=>s+showInvNum(l.qty),0);
   /* A card sold down to nothing reads as neither basis, so while an invoice is
      being edited the basis it was sold on is the one that stands. */
   const editedBasis=stockId=>(editingInv?.stockEffects||[]).find(fx=>fx.stockId===stockId)?.basis;
   const basisOf=item=>editedBasis(item.id)||((parseFloat(item.qty)||0)>0?"qty":((parseFloat(item.qty2)||0)>0?"qty2":"qty"));
+  // Summed in the card's own unit, so a line in grams and one in kilos add up.
+  const takenQty=(item,exceptLineId)=>{
+    const b=basisOf(item);
+    return (draft.lines||[]).filter(l=>l.stockId===item.id&&l.id!==exceptLineId&&(l.basis==="qty2"?"qty2":"qty")===b)
+      .reduce((s,l)=>{const q=showLineQtyInBasis(l,item);return s+(q==null?showInvNum(l.qty):q);},0);
+  };
   /* The cards an invoice sold are gone from the show the moment it is issued,
      so re-opening it would read as nothing left to sell. What this invoice
      itself took is credited back while it is being edited — anything beyond
@@ -16214,7 +16245,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     .filter(fx=>fx.stockId===stockId&&(fx.basis==="qty2"?"qty2":"qty")===basis)
     .reduce((n,fx)=>n+(parseFloat(fx.qty)||0),0);
   const onHandOf=(item,basis)=>(parseFloat(item[basis])||0)+creditFor(item.id,basis);
-  const availOf=item=>{const b=basisOf(item);return Math.max(0,onHandOf(item,b)-takenQty(item.id));};
+  const availOf=item=>{const b=basisOf(item);return Math.max(0,onHandOf(item,b)-takenQty(item));};
   const editedStockIds=new Set((editingInv?.stockEffects||[]).map(fx=>fx.stockId));
   const sellable=atShow.filter(s=>(!s.soldDate&&((parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0))||editedStockIds.has(s.id));
   const q=pick.trim().toLowerCase();
@@ -16414,9 +16445,12 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     const wanted=new Map();
     draft.lines.forEach(l=>{
       if(!l.stockId)return;
+      const item=atShow.find(s=>s.id===l.stockId);
       const key=`${l.stockId}|${l.basis==="qty2"?"qty2":"qty"}`;
+      // Summed in the card's own unit, so a line in grams and one in kilos add up.
+      const q=showLineQtyInBasis(l,item);
       const cur=wanted.get(key)||{qty:0,desc:l.desc};
-      wanted.set(key,{qty:cur.qty+showInvNum(l.qty),desc:cur.desc||l.desc});
+      wanted.set(key,{qty:cur.qty+(q==null?showInvNum(l.qty):q),desc:cur.desc||l.desc});
     });
     const over=[...wanted.entries()].map(([key,v])=>{
       const [stockId,basis]=key.split("|");
@@ -16747,7 +16781,17 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 )}
                 {draft.lines.map(l=>{
                   const item=l.stockId?atShow.find(s=>s.id===l.stockId):null;
-                  const cap=item?(parseFloat(item[l.basis||"qty"])||0):null;
+                  const lBasis=l.basis==="qty2"?"qty2":"qty";
+                  const cardUnit=item?(lBasis==="qty2"?(item.unit2||"kg"):(item.unit||"pcs")):null;
+                  /* The card's holding is said back in the unit this line is being
+                     typed in — 0.68 kg is 680 grams, and a seller counting out
+                     grams should be told grams. */
+                  const capConv=item?showUnitConv(cardUnit,l.unit||cardUnit):null;
+                  // What this invoice itself took is credited back while it is
+                  // being edited, so a saved line does not re-open as an overage.
+                  const capRaw=item?onHandOf(item,lBasis):null;
+                  const cap=capRaw!=null&&capConv!=null?capRaw*capConv:capRaw;
+                  const capUnit=capConv!=null?(l.unit||cardUnit):cardUnit;
                   const over=cap!=null&&showInvNum(l.qty)>cap+0.0001;
                   const qtyBox=(
                     <input value={isFlatUnit(l.unit)?"1":l.qty} disabled={isFlatUnit(l.unit)}
@@ -16759,7 +16803,14 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                      this line, so it cannot be sold "flat" — that would pin it
                      to 1 and send one kilo out for the whole lot. */
                   const unitBox=(
-                    <select value={l.unit||"kgs"} onChange={e=>setLine(l.id,e.target.value==="flat"?{unit:"flat",qty:"1"}:{unit:e.target.value})} style={{...sIn,cursor:"pointer"}}>
+                    <select value={l.unit||"kgs"} onChange={e=>{
+                      const u=e.target.value;
+                      if(u==="flat"){setLine(l.id,{unit:"flat",qty:"1"});return;}
+                      /* Switching a line to pieces means it should come off the
+                         card's piece count, not off its weight. */
+                      const b=item?showBasisForUnit(item,u):null;
+                      setLine(l.id,b?{unit:u,basis:b}:{unit:u});
+                    }} style={{...sIn,cursor:"pointer"}}>
                       {[...new Set([...(l.stockId?SHOW_UNITS.filter(u=>u!=="flat"):SHOW_UNITS),...(l.unit?[l.unit]:[])])].map(u=><option key={u} value={u}>{u}</option>)}
                     </select>
                   );
@@ -16769,7 +16820,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   const name=(
                     <span style={{minWidth:0,display:"block"}}>
                       <span style={{display:"block",fontSize:12.5,fontWeight:700,color:C.ink,wordBreak:"break-word"}}>{l.desc}{l.shape?` · ${l.shape}`:""}</span>
-                      {(over||l.stockId)&&<span style={{display:"block",fontSize:9.5,color:over?C.red:C.inkFaint}}>{over?`only ${showInvQty(cap)} at the show`:`${showInvQty(cap)} ${l.unit} at the show`}</span>}
+                      {(over||l.stockId)&&<span style={{display:"block",fontSize:9.5,color:over?C.red:C.inkFaint}}>{over?`only ${showInvQty(cap)} ${capUnit} at the show`:`${showInvQty(cap)} ${capUnit} at the show`}</span>}
                     </span>
                   );
                   return mob?(
@@ -17396,7 +17447,9 @@ function ShowsApp({onHome,isAdmin=true}){
       const item=out[idx];
       const basis=l.basis==="qty2"?"qty2":"qty";
       const have=parseFloat(item[basis])||0;
-      const soldQ=Math.min(showInvNum(l.qty),have);
+      // 209 grams off a card held in kilos is 0.209, not 209.
+      const want=showLineQtyInBasis(l,item);
+      const soldQ=Math.min(want==null?showInvNum(l.qty):want,have);
       if(soldQ<=0)return;
       const rest=+(have-soldQ).toFixed(4);
       const sentKey=basis==="qty2"?"showSentQty2":"showSentQty";
@@ -17404,7 +17457,9 @@ function ShowsApp({onHome,isAdmin=true}){
       const stamp={
         soldDate:inv.date||today(),
         soldRate:String(l.rate||""),
-        soldPrice:String(+(showInvNum(l.rate)*soldQ).toFixed(2)),
+        // What the line actually billed — rate is per the unit the line was typed
+        // in, so it is priced against that, not against the converted quantity.
+        soldPrice:String(+(showInvNum(l.rate)*showInvNum(l.qty)).toFixed(2)),
         soldCurrency:inv.currency||"USD",
         soldFromShow:inv.showName||"",soldFromShowId:inv.showId||"",
         showInvoiceId:inv.id,showInvoiceNo:inv.invNo||"",
