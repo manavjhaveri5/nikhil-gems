@@ -14675,19 +14675,50 @@ async function htmlToPdfBytes(html,selector=".inv-page"){
     if(doc.fonts?.ready)await doc.fonts.ready.catch(()=>{});
     await Promise.all([...doc.images].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=resolve;img.onerror=resolve;})));
     const el=doc.querySelector(selector)||doc.body;
+    const elBox=el.getBoundingClientRect();
     const canvas=await html2canvas(el,{scale:2,useCORS:true,backgroundColor:"#ffffff",windowWidth:794});
     const pdf=new jsPDF({orientation:"p",unit:"pt",format:"a4"});
     const pageW=595.28,pageH=841.89;
     const imgW=pageW;
-    const imgH=canvas.height*imgW/canvas.width;
-    const data=canvas.toDataURL("image/jpeg",0.96);
-    let y=0;
-    pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
-    while(imgH+y>pageH){
-      y-=pageH;
-      pdf.addPage();
-      pdf.addImage(data,"JPEG",0,y,imgW,imgH,undefined,"FAST");
+    const pxPerPt=canvas.width/imgW;        // canvas pixels to a PDF point
+    const pageHpx=pageH*pxPerPt;            // one sheet, in canvas pixels
+    /* html2canvas hands back one tall image. Cutting it at exact page heights
+       cuts through whatever is standing there — the top half of a row on one
+       sheet and its bottom half on the next, or a signature sliced off the end.
+       So the cuts are made where something finishes instead: the bottom edges of
+       the blocks on the page are the only places a sheet may end. */
+    const cssToPx=canvas.height/(elBox.height||1);
+    const stops=[];
+    el.querySelectorAll("tr,table,div,p,img,h1,h2,h3").forEach(n=>{
+      const b=n.getBoundingClientRect();
+      if(b.height>0)stops.push((b.bottom-elBox.top)*cssToPx);
+    });
+    stops.sort((a,b)=>a-b);
+    const slices=[];
+    for(let start=0;start<canvas.height-1;){
+      let end=start+pageHpx;
+      if(end>=canvas.height-1)end=canvas.height;
+      else{
+        // The last block finishing on this sheet — but not so early that a page
+        // comes out nearly empty, in which case a plain cut is the lesser evil.
+        let cut=0;
+        for(const stop of stops){if(stop>start+pageHpx*0.4&&stop<=end)cut=stop;}
+        if(cut>start+8)end=cut;
+      }
+      slices.push([start,Math.min(end,canvas.height)]);
+      start=end;
+      if(slices.length>40)break;   // a runaway loop is worse than a rough cut
     }
+    const sheet=document.createElement("canvas");
+    const ctx=sheet.getContext("2d");
+    slices.forEach(([y0,y1],i)=>{
+      const h=Math.max(1,Math.round(y1-y0));
+      sheet.width=canvas.width;sheet.height=h;
+      ctx.fillStyle="#ffffff";ctx.fillRect(0,0,sheet.width,h);
+      ctx.drawImage(canvas,0,y0,canvas.width,h,0,0,canvas.width,h);
+      if(i)pdf.addPage();
+      pdf.addImage(sheet.toDataURL("image/jpeg",0.96),"JPEG",0,0,imgW,h/pxPerPt,undefined,"FAST");
+    });
     const pageCount=pdf.getNumberOfPages();
     if(pageCount>1){
       for(let p=1;p<=pageCount;p++){
@@ -15962,7 +15993,25 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
     .ee-inv{width:auto;padding:0;}
     table.items{page-break-inside:auto;}
     tr{page-break-inside:avoid;}
-    @page{size:A4;margin:13mm 12mm;}
+    /* A block that means one thing has to print as one thing: a signature with
+       its line under it, an account with its routing numbers, the shipping band
+       whole. Without this the page boundary lands wherever it likes, and what it
+       lands on comes out halved — which is how a signature block printed as the
+       words "For Earth Editions" and nothing beneath them. */
+    .parties,.sums,.words,table.tot,.pay,.paycell,.ship,.sign,.foot{break-inside:avoid;page-break-inside:avoid;}
+    /* The tail of the document is where the air is. On paper it gives some back,
+       so a ten-line invoice with full bank details still lands on one sheet. */
+    .parties{margin-top:12px;}
+    table.items{margin-top:12px;}
+    .sums{margin-top:10px;}
+    .pay{margin-top:11px;}
+    .pay .lab{padding:5px 12px;}
+    .paygrid{padding:10px;}
+    .ship{margin-top:12px;padding:11px 14px;}
+    .sign{margin-top:14px;}
+    .sign .sigline{margin-top:30px;}
+    .foot{margin-top:10px;}
+    @page{size:A4;margin:11mm 12mm;}
   }
 </style></head><body><div class="ee-inv">
   <div class="top">
@@ -16313,6 +16362,9 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
         `Your invoice ${inv.invNo||""} comes to ${showMoney(showInvTotals(inv).total,inv.currency||"USD")}. You can download the PDF here:`,"",url,"",
         `Do write back if anything on it needs changing.`,"",
         `Best regards,`,sign].join("\n");
+      /* The subject is the other half of introducing itself: a shop name and an
+         invoice number, so the mail is recognised in a list before it is opened. */
+      const subject=`${seller} · Invoice ${inv.invNo||""}`.trim().replace(/\s*·\s*Invoice$/,"");
       const gmail=`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(to)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       const w=window.open(gmail,"_blank");
       if(!w)window.location.href=`mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
