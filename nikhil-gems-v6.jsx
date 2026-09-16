@@ -14674,6 +14674,10 @@ async function htmlToPdfBytes(html,selector=".inv-page"){
     await new Promise(resolve=>setTimeout(resolve,150));
     if(doc.fonts?.ready)await doc.fonts.ready.catch(()=>{});
     await Promise.all([...doc.images].map(img=>img.complete?Promise.resolve():new Promise(resolve=>{img.onload=resolve;img.onerror=resolve;})));
+    /* The document may shrink itself to a page. Its own fit ran before the
+       logo and the QR had loaded, so it is asked once more now that they have —
+       otherwise the measurement is of a document missing its pictures. */
+    try{iframe.contentWindow.__fitInvoice?.();}catch{}
     const el=doc.querySelector(selector)||doc.body;
     const elBox=el.getBoundingClientRect();
     const canvas=await html2canvas(el,{scale:2,useCORS:true,backgroundColor:"#ffffff",windowWidth:794});
@@ -15796,9 +15800,12 @@ const showInvTotals=inv=>{
   const discount=Math.min(subtotal,inv?.discountMode==="pct"?subtotal*showInvNum(inv?.discount)/100:showInvNum(inv?.discount));
   const taxable=Math.max(0,subtotal-discount);
   const taxAmt=taxable*showInvNum(inv?.taxPct)/100;
-  const total=taxable+taxAmt;
+  /* What it costs to send it is not what the stone sold for, so it sits outside
+     the discount and outside the tax and is simply added at the end. */
+  const shipping=showInvNum(inv?.shipping);
+  const total=taxable+taxAmt+shipping;
   const paid=(inv?.payments||[]).reduce((s,p)=>s+showInvNum(p.amount),0);
-  return{subtotal,discount,taxable,taxAmt,total,paid,balance:total-paid};
+  return{subtotal,discount,taxable,taxAmt,shipping,total,paid,balance:total-paid};
 };
 // EE-2026-0001. Sequence runs per calendar year across every show, so the books
 // read as one series rather than one per booth.
@@ -15871,6 +15878,14 @@ function showInvWords(n){
   return `${out.join(" ")}${cents?` and ${cents}/100`:""}`.replace(/\s+/g," ").trim();
 }
 
+/* The shape of a sheet of A4, in the pixels the browser lays out in: the width
+   left between the margins, and the height a page can hold. The printed page
+   and the PDF renderer land within a few pixels of each other, so one pair of
+   numbers serves both, cut a little short so neither is ever the one that
+   overflows. */
+const SHOW_INV_FIT_W=706;
+const SHOW_INV_FIT_H=1030;
+const SHOW_INV_FIT_MIN=0.6;      // smaller than this and it is no longer readable
 function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   const s=showInvSettings(settings);
   const cur=inv.currency||"USD";
@@ -15902,6 +15917,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
     totalRow("Subtotal",money(t.subtotal)),
     t.discount>0?totalRow(`Discount${inv.discountMode==="pct"?` (${showInvEsc(inv.discount)}%)`:""}`,`−${money(t.discount)}`):"",
     t.taxAmt>0?totalRow(`Sales tax (${showInvEsc(inv.taxPct)}%)`,money(t.taxAmt)):"",
+    t.shipping>0?totalRow("Shipping",money(t.shipping)):"",
     totalRow("Total",money(t.total),"grand"),
     t.paid>0?totalRow("Paid",`−${money(t.paid)}`):"",
     t.paid>0||t.balance!==t.total?totalRow("Balance due",money(t.balance),"due"):"",
@@ -16041,9 +16057,15 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
     .sign{margin-top:14px;}
     .sign .sigline{margin-top:30px;}
     .foot{margin-top:10px;}
-    @page{size:A4;margin:11mm 12mm;}
+    /* A hair more room than the fitted block asks for, so a sheet is never
+       taken by three stray pixels. */
+    @page{size:A4;margin:10mm 11mm;}
   }
-</style></head><body><div class="ee-inv">
+  /* Shrink-to-fit. The document is laid out at a fixed width and then scaled
+     as a whole, so an invoice with a dozen lines and full bank details comes
+     out on one sheet rather than spilling four rows onto a second. */
+  .ee-fit{transform-origin:top left;}
+</style></head><body><div class="ee-inv"><div class="ee-fit">
   <div class="top">
     <div class="who">
       ${logo?`<img src="${showInvEsc(logo)}" alt="${showInvEsc(s.seller.name)}"/>`:`<div class="co">${showInvEsc(s.seller.name)}</div>`}
@@ -16108,7 +16130,40 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   ${qrPng?`<div class="foot">
     <div class="qr"><img src="${qrPng}" alt="Sign up"/><div class="qrcap">Scan to join our list</div></div>
   </div>`:""}
-</div></body></html>`;
+</div></div>
+<script>
+/* One sheet. The document is laid out at ${SHOW_INV_FIT_W}px — the content width of an
+   A4 page in both the print dialogue and the PDF renderer — and then scaled
+   down bodily until it is shorter than a page. Laying out wider and scaling
+   back means the type shrinks and the lines re-wrap rather than the columns
+   being squeezed, so what comes out reads as the same document, slightly
+   smaller. Past ${Math.round(SHOW_INV_FIT_MIN*100)}% it stops and lets the invoice run onto a second
+   sheet: a bill nobody can read is worse than a bill on two pages. */
+(function(){
+  var W=${SHOW_INV_FIT_W},H=${SHOW_INV_FIT_H},MIN=${SHOW_INV_FIT_MIN};
+  function fit(){
+    var inv=document.querySelector(".ee-inv"),el=document.querySelector(".ee-fit");
+    if(!inv||!el)return;
+    var cs=getComputedStyle(inv),pad=parseFloat(cs.paddingTop)+parseFloat(cs.paddingBottom);
+    var k=1;
+    for(var i=0;i<6;i++){
+      el.style.width=(W/k)+"px";
+      el.style.transform=k<1?"scale("+k+")":"";
+      var h=el.scrollHeight*k;
+      if(h<=H||k<=MIN)break;
+      k=Math.max(MIN,k*(H/h)*0.995);
+    }
+    // The scaled block no longer takes the room it occupies, so the page is
+    // told what it actually comes to — otherwise the PDF still cuts a sheet
+    // around the empty space underneath.
+    inv.style.height=(pad+Math.ceil(el.scrollHeight*k))+"px";
+    inv.style.overflow="hidden";
+  }
+  window.__fitInvoice=fit;
+  if(document.readyState==="complete")fit();else window.addEventListener("load",fit);
+})();
+</script>
+</body></html>`;
 }
 
 /* The booth screen. Everything on it is one thumb wide on a phone, because that
@@ -16119,7 +16174,7 @@ const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city
 const emptyShowInvDraft=(show,settings)=>({
   id:uid(),invNo:"",showId:show?.id||"",showName:show?.name||"",showSlug:showTagSlug(show),
   date:today(),currency:"USD",customer:emptyShowInvCustomer(),lines:[],
-  discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),payments:[],showMethods:[],notes:"",status:"draft",
+  discount:"",discountMode:"amt",taxPct:String(settings?.taxPct||""),shipping:"",payments:[],showMethods:[],notes:"",status:"draft",
   createdAt:new Date().toISOString(),
 });
 /* Two drafts can be open at a booth: the sale being written now, and a saved
@@ -16906,10 +16961,10 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
             <div style={{...lab,marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span>Totals</span>
               <button onClick={()=>setMoreTotals(v=>!v)} style={{...txtBtn,textTransform:"none",letterSpacing:0}}>
-                {moreTotals?"Hide":"Date, discount & tax"}
+                {moreTotals?"Hide":"Date, discount, tax & shipping"}
               </button>
             </div>
-            {(moreTotals||showInvNum(draft.discount)>0||showInvNum(draft.taxPct)>0)&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(5,1fr)",gap:7,marginBottom:10}}>
+            {(moreTotals||showInvNum(draft.discount)>0||showInvNum(draft.taxPct)>0||showInvNum(draft.shipping)>0)&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(6,1fr)",gap:7,marginBottom:10}}>
               {/* The number is given on issue and shown here so it can be set by
                   hand — a book carried on from somewhere else has to be able to
                   say where it is up to. */}
@@ -16923,9 +16978,13 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 </div>
               </Field>
               <Field label="Sales tax %"><input value={draft.taxPct} onChange={e=>setD({taxPct:e.target.value})} inputMode="decimal" placeholder="0" style={sIn}/></Field>
+              {/* Posted rather than carried: what the box costs to send is typed
+                  once here and added after the tax, not squeezed in as a line
+                  that would take a discount with it. */}
+              <Field label={`Shipping ${SHOW_CUR_SYM[cur]||cur}`}><input value={draft.shipping||""} onChange={e=>setD({shipping:e.target.value})} inputMode="decimal" placeholder="0" style={sIn}/></Field>
             </div>}
             <div style={{borderTop:`1px solid ${C.border}`,paddingTop:9}}>
-              {[["Subtotal",T.subtotal],...(T.discount>0?[["Discount",-T.discount]]:[]),...(T.taxAmt>0?[["Sales tax",T.taxAmt]]:[])].map(([k,v])=>(
+              {[["Subtotal",T.subtotal],...(T.discount>0?[["Discount",-T.discount]]:[]),...(T.taxAmt>0?[["Sales tax",T.taxAmt]]:[]),...(T.shipping>0?[["Shipping",T.shipping]]:[])].map(([k,v])=>(
                 <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.inkMid,padding:"2px 0"}}><span>{k}</span><span>{showMoney(v,cur)}</span></div>
               ))}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"12px 0 2px",borderTop:`1px solid ${C.border}`,marginTop:8}}>
