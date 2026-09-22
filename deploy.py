@@ -120,10 +120,21 @@ deploy_body = {
     "name": "project",
     "files": deploy_files,
     "target": "production",
-    "buildCommand": None,
-    "installCommand": None,
-    "outputDirectory": None,
-    "framework": None,
+    # What is uploaded is already built: dist/ flattened to the root, plus the
+    # api/ functions. Vercel must not build it again — the payload carries no
+    # src/, no index.html and no vite.config for a build to work from.
+    #
+    # These four belong under projectSettings. Sent at the top level the API
+    # ignores them, the project's own Vite setting stands, and Vercel runs
+    # `npm run build` against a source tree that isn't there. An empty string
+    # is the way to say "no command"; null means "inherit", which is how this
+    # went unnoticed.
+    "projectSettings": {
+        "framework": None,
+        "buildCommand": "",
+        "installCommand": "",
+        "outputDirectory": ".",
+    },
     "functions": functions_config,
     "routes": [
         {"src": "/api/(.*)", "dest": "/api/$1"},   # API functions
