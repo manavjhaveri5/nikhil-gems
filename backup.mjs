@@ -7,8 +7,19 @@ import { writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
-const SUPABASE_URL      = "https://bxnqnbspibvbnxbojrhe.supabase.co";
-const SERVICE_ROLE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4bnFuYnNwaWJ2Ym54Ym9qcmhlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzU0NTM3MywiZXhwIjoyMDg5MTIxMzczfQ.MiAPlsQgVryzW09cK7U-d5RBtaryVaEVdeefTKr-ykc";
+// The service role key bypasses row-level security, so it lives in the
+// environment rather than in the repository. `.env` is gitignored; cron runs
+// this file directly, so it loads that file itself rather than relying on the
+// shell it is started from.
+try { process.loadEnvFile(new URL(".env", import.meta.url)); } catch {}
+
+const SUPABASE_URL     = process.env.SUPABASE_URL || "https://bxnqnbspibvbnxbojrhe.supabase.co";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SERVICE_ROLE_KEY) {
+  console.error("[Backup FAILED] SUPABASE_SERVICE_ROLE_KEY is not set. Put it in .env next to this script.");
+  process.exit(1);
+}
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 

@@ -28,8 +28,12 @@ try {
 const BLOB_TOKEN   = process.env.BLOB_READ_WRITE_TOKEN  || env.BLOB_READ_WRITE_TOKEN;
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL       || env.VITE_SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_KEY    || env.SUPABASE_SERVICE_ROLE_KEY
-                     // fallback: derive from known value
-                     || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4bnFuYnNwaWJ2Ym54Ym9qcmhlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzU0NTM3MywiZXhwIjoyMDg5MTIxMzczfQ.MiAPlsQgVryzW09cK7U-d5RBtaryVaEVdeefTKr-ykc";
+                     // fallback: derive from known value;
+
+if (!SERVICE_KEY) {
+  console.error("Missing SUPABASE_SERVICE_ROLE_KEY — put it in .env next to this script.");
+  process.exit(1);
+}
 
 const BUCKET           = "ng-media";
 const VERCEL_BLOB_HOST = "uha1i56xojimnx6c.public.blob.vercel-storage.com";
