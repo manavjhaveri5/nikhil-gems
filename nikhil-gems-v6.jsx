@@ -16208,6 +16208,15 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
   const [pick,setPick]=useState("");
   const [newLine,setNewLine]=useState({desc:"",shape:"",qty:"1",unit:"kgs",rate:""});
   const [busy,setBusy]=useState("");
+  /* Picking invoices off the Saved list. Off by default: the list is read far
+     more often than it is acted on in bulk, and a row of checkboxes on every
+     invoice is noise until the moment it is wanted. */
+  const [picking,setPicking]=useState(false);
+  const [picked,setPicked]=useState(()=>new Set());
+  /* Rendering thirty invoices takes real seconds — each one is drawn in a
+     hidden frame before it becomes a page — so the bar says which one it is on
+     rather than leaving a dead button. */
+  const [bulk,setBulk]=useState(null);
   const [custQuery,setCustQuery]=useState("");
   const [custOpen,setCustOpen]=useState(false);
   /* A booth screen is read standing up, over a customer's shoulder. What is
@@ -16425,6 +16434,93 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     }catch(e){showToast?.("⚠ PDF failed: "+(e.message||e));}
     setBusy("");
   };
+  /* ── taking several at once ───────────────────────────────────────────────
+     A show ends with a folder to assemble: the accountant wants the quarter's
+     invoices, a customer wants their three, the filing wants a list. Doing that
+     one row at a time is thirty-three trips through the same three clicks.
+
+     Each invoice is still drawn by the single-invoice path — the same fitting,
+     the same page breaks — and the results are bound together afterwards.
+     Rendering one is slow enough to see, so the count moves as they go and a
+     failure names the invoice it failed on rather than losing the batch. */
+  const pickedInvoices=()=>[...mine]
+    .filter(i=>picked.has(i.id))
+    .sort((a,b)=>String(a.invNo||"").localeCompare(String(b.invNo||"")));
+
+  const saveBlob=(blob,name)=>{
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;a.download=name;a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),4000);
+  };
+
+  /* One file, in invoice-number order — what gets sent on to an accountant.
+     pdf-lib copies the finished pages across rather than re-laying anything
+     out, so a merged invoice is the same document as its single download. */
+  const bulkMergedPdf=async()=>{
+    const list=pickedInvoices();
+    if(!list.length)return;
+    setBulk({done:0,total:list.length,label:"Building one PDF"});
+    try{
+      const {PDFDocument}=await import("pdf-lib");
+      const merged=await PDFDocument.create();
+      for(let i=0;i<list.length;i++){
+        setBulk({done:i,total:list.length,label:`Rendering ${list[i].invNo||"invoice"}`});
+        const one=await PDFDocument.load(await pdfBytes(list[i]));
+        (await merged.copyPages(one,one.getPageIndices())).forEach(p=>merged.addPage(p));
+      }
+      saveBlob(new Blob([await merged.save()],{type:"application/pdf"}),
+        `${slug}-invoices-${list.length}.pdf`);
+      showToast?.(`✓ ${list.length} invoice${list.length===1?"":"s"} in one PDF`);
+    }catch(e){showToast?.("⚠ PDF failed: "+(e.message||e),9000);}
+    setBulk(null);
+  };
+
+  /* One file per invoice, named by its number — what gets filed. The browser
+     asks once whether this site may save several files; if it is refused the
+     first lands and the rest do not, so the merged download is the one to
+     reach for when that happens. */
+  const bulkSeparatePdfs=async()=>{
+    const list=pickedInvoices();
+    if(!list.length)return;
+    setBulk({done:0,total:list.length,label:"Saving each one"});
+    try{
+      for(let i=0;i<list.length;i++){
+        setBulk({done:i,total:list.length,label:`Rendering ${list[i].invNo||"invoice"}`});
+        const bytes=await pdfBytes(list[i]);
+        saveBlob(new Blob([bytes],{type:"application/pdf"}),`${list[i].invNo||"invoice"}.pdf`);
+        await new Promise(r=>setTimeout(r,250));   // room for the save to start
+      }
+      showToast?.(`✓ ${list.length} PDF${list.length===1?"":"s"} saved`);
+    }catch(e){showToast?.("⚠ PDF failed: "+(e.message||e),9000);}
+    setBulk(null);
+  };
+
+  /* The list, for the books: one row an invoice, with the buyer's resale
+     licence beside it, because an untaxed wholesale sale is only defensible
+     with that number and a return is where its absence is discovered. */
+  const bulkCsv=()=>{
+    const list=pickedInvoices();
+    if(!list.length)return;
+    const cell=v=>{
+      const s=String(v??"");
+      return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
+    };
+    const rows=[["Invoice","Date","Status","Buyer","Business","Email","Phone","Location",
+      "Resale licence","Currency","Subtotal","Discount","Tax %","Tax","Shipping","Total","Paid","Balance"]];
+    for(const inv of list){
+      const t=showInvTotals(inv),c=inv.customer||{};
+      rows.push([inv.invNo,inv.date,inv.status||"issued",c.name,c.company,c.email,c.phone,
+        [c.city,c.state,c.country].filter(Boolean).join(", "),c.resaleNo,inv.currency||"USD",
+        t.subtotal.toFixed(2),t.discount.toFixed(2),inv.taxPct||"0",t.taxAmt.toFixed(2),
+        t.shipping.toFixed(2),t.total.toFixed(2),t.paid.toFixed(2),t.balance.toFixed(2)]);
+    }
+    // The BOM is what makes Excel read the accented names as they were typed.
+    saveBlob(new Blob(["﻿"+rows.map(r=>r.map(cell).join(",")).join("\r\n")],
+      {type:"text/csv;charset=utf-8"}),`${slug}-invoices-${list.length}.csv`);
+    showToast?.(`✓ ${list.length} row${list.length===1?"":"s"} exported`);
+  };
+
   /* mailto: cannot carry an attachment, so the PDF is uploaded and the Gmail
      compose window opens with the link in the body. The user reads it and sends
      it themselves — nothing leaves this machine unsent. */
@@ -17110,13 +17206,73 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
       {view==="list"&&(
         <>
           {mine.length===0&&<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>No invoices written at this show yet.</div>}
+
+          {/* ── taking several at once ──
+              Closed, this is one word. Opened, it is the only thing on the
+              screen that matters until it is done with. */}
+          {mine.length>0&&(
+            <div style={{...box,padding:mob?"12px 14px":"12px 16px",marginBottom:12,
+              background:picking?C.card:C.surface}}>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <button onClick={()=>{setPicking(p=>!p);setPicked(new Set());}}
+                  style={{...pill(picking),fontWeight:700}}>
+                  {picking?"✕ Done selecting":"☑ Select"}
+                </button>
+                {picking&&(
+                  <>
+                    <button onClick={()=>setPicked(new Set(mine.map(i=>i.id)))} style={pill(false)}>All {mine.length}</button>
+                    <button onClick={()=>setPicked(new Set(mine.filter(i=>i.status!=="void").map(i=>i.id)))} style={pill(false)}>All but voided</button>
+                    {picked.size>0&&<button onClick={()=>setPicked(new Set())} style={pill(false)}>Clear</button>}
+                  </>
+                )}
+              </div>
+
+              {picking&&picked.size>0&&(
+                <>
+                  <div style={{fontSize:12,color:C.inkMid,margin:"11px 0 9px",fontWeight:600}}>
+                    {picked.size} selected ·{" "}
+                    {showMoney(pickedInvoices().reduce((s,i)=>s+showInvTotals(i).total,0),
+                      pickedInvoices()[0]?.currency||"USD")}
+                  </div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    <button onClick={bulkMergedPdf} disabled={!!bulk} style={{...pill(true),opacity:bulk?.6:1}}>⬇ One PDF</button>
+                    <button onClick={bulkSeparatePdfs} disabled={!!bulk} style={{...pill(false),opacity:bulk?.6:1}}>⬇ Separate PDFs</button>
+                    <button onClick={bulkCsv} disabled={!!bulk} style={{...pill(false),opacity:bulk?.6:1}}>⬇ CSV</button>
+                  </div>
+                  {bulk
+                    ?<div style={{fontSize:11,color:C.inkMid,marginTop:9}}>
+                       {bulk.label} — {bulk.done+1} of {bulk.total}
+                     </div>
+                    :<div style={{fontSize:10.5,color:C.inkFaint,marginTop:9,lineHeight:1.5}}>
+                       One PDF binds them in invoice-number order. Separate PDFs saves a file per
+                       invoice, and the browser will ask once whether this site may save several.
+                     </div>}
+                </>
+              )}
+            </div>
+          )}
+
           {[...mine].sort((a,b)=>String(b.invNo||"").localeCompare(String(a.invNo||""))).map(inv=>{
             const it=showInvTotals(inv);
             const voided=inv.status==="void";
+            const isPicked=picked.has(inv.id);
+            const togglePick=()=>setPicked(p=>{
+              const n=new Set(p);
+              n.has(inv.id)?n.delete(inv.id):n.add(inv.id);
+              return n;
+            });
             return(
-              <div key={inv.id} style={{...box,opacity:voided?.55:1}}>
+              <div key={inv.id} style={{...box,opacity:voided?.55:1,
+                ...(picking&&isPicked?{borderColor:C.ink,boxShadow:`0 0 0 1px ${C.ink}`}:{})}}>
                 <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",flexWrap:"wrap",marginBottom:8}}>
-                  <div style={{minWidth:0}}>
+                  {picking&&(
+                    <input type="checkbox" checked={isPicked} onChange={togglePick}
+                      aria-label={`Select ${inv.invNo||"invoice"}`}
+                      style={{width:mob?22:18,height:mob?22:18,marginTop:2,flexShrink:0,
+                        accentColor:C.ink,cursor:"pointer"}}/>
+                  )}
+                  <div style={{minWidth:0,flex:"1 1 auto",cursor:picking?"pointer":"default"}}
+                    onClick={picking?togglePick:undefined}>
                     <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{inv.invNo}{voided?" · VOID":""}</div>
                     <div style={{fontSize:11,color:C.inkMid}}>{inv.customer?.name||inv.customer?.email||"—"}{inv.customer?.email?` · ${inv.customer.email}`:""}</div>
                     <div style={{fontSize:10,color:C.inkFaint}}>{inv.date} · {(inv.lines||[]).length} line{(inv.lines||[]).length===1?"":"s"}</div>
