@@ -16409,6 +16409,27 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
     ? custRecent.filter(c=>`${c.name||""} ${c.email||""} ${c.phone||""} ${c.company||""} ${c.country||""}`.toLowerCase().includes(cq))
     : custRecent).slice(0,8);
   const custExact=custRecent.some(c=>String(c.name||"").trim().toLowerCase()===cq);
+  /* The resale certificate itself, for our records — stays on the customer,
+     never printed. An audit asks for the paper, not just the number. */
+  const [resaleUp,setResaleUp]=useState(false);
+  const uploadResaleDocs=async files=>{
+    const picked=[...(files||[])];
+    if(!picked.length)return;
+    setResaleUp(true);
+    try{
+      const added=[];
+      for(const file of picked){
+        const ext=(file.name||"file").split(".").pop().toLowerCase()||"bin";
+        const url=await supabaseUpload(`resale-certificates/${slug}/${uid()}.${ext}`,file);
+        added.push({id:uid(),name:file.name||`certificate.${ext}`,url,type:file.type||"",size:file.size||0,uploadedAt:new Date().toISOString()});
+      }
+      setD(d=>({...d,customer:{...d.customer,resaleDocs:[...(d.customer.resaleDocs||[]),...added]}}));
+      showToast?.(`${added.length} document${added.length===1?"":"s"} attached`);
+    }catch(e){showToast?.("⚠ Upload failed: "+(e.message||e),9000);}
+    setResaleUp(false);
+  };
+  const removeResaleDoc=id=>setD(d=>({...d,customer:{...d.customer,resaleDocs:(d.customer.resaleDocs||[]).filter(x=>x.id!==id)}}));
+
   const pickCustomer=c=>{
     const {_source,...rec}=c;
     setCust({...rec,addToList:!c.omnisendTagged});
@@ -16512,11 +16533,11 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
       return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
     };
     const rows=[["Invoice","Date","Status","Buyer","Business","Email","Phone","Location",
-      "Resale licence","Resale state","Currency","Subtotal","Discount","Tax %","Tax","Shipping","Total","Paid","Balance"]];
+      "Resale licence","Resale state","Resale certificate","Currency","Subtotal","Discount","Tax %","Tax","Shipping","Total","Paid","Balance"]];
     for(const inv of list){
       const t=showInvTotals(inv),c=inv.customer||{};
       rows.push([inv.invNo,inv.date,inv.status||"issued",c.name,c.company,c.email,c.phone,
-        [c.city,c.state,c.country].filter(Boolean).join(", "),c.resaleNo,c.resaleState||c.state,inv.currency||"USD",
+        [c.city,c.state,c.country].filter(Boolean).join(", "),c.resaleNo,c.resaleState||c.state,(c.resaleDocs||[]).map(f=>f.url).join(" "),inv.currency||"USD",
         t.subtotal.toFixed(2),t.discount.toFixed(2),inv.taxPct||"0",t.taxAmt.toFixed(2),
         t.shipping.toFixed(2),t.total.toFixed(2),t.paid.toFixed(2),t.balance.toFixed(2)]);
     }
@@ -16844,7 +16865,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                         {c.name||c.email}
                         {c._source==="buyer"&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,letterSpacing:.5,color:C.blue,background:C.blueBg,borderRadius:4,padding:"1px 5px"}}>BUYER</span>}
                       </div>
-                      <div style={{fontSize:10,color:C.inkFaint}}>{[c.company,c.email,c.phone,c.country,c.resaleNo?"resale on file":"",c.omnisendTagged?"on the list":""].filter(Boolean).join(" · ")||"no details yet"}</div>
+                      <div style={{fontSize:10,color:C.inkFaint}}>{[c.company,c.email,c.phone,c.country,c.resaleNo||(c.resaleDocs||[]).length?"resale on file":"",c.omnisendTagged?"on the list":""].filter(Boolean).join(" · ")||"no details yet"}</div>
                     </button>
                   ))}
                   {cq&&!custExact&&(
@@ -16869,7 +16890,23 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                 </div>
                 {/* A US buyer selling on gives a resale number instead of paying
                     the tax. Printed under Bill to, with the address state beside it. */}
-                <input value={draft.customer.resaleNo||""} onChange={e=>setCust({resaleNo:e.target.value})} placeholder="Sales tax ID / resale licence" style={sIn}/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:6,alignItems:"center"}}>
+                  <input value={draft.customer.resaleNo||""} onChange={e=>setCust({resaleNo:e.target.value})} placeholder="Sales tax ID / resale licence" style={sIn}/>
+                  <label title="Attach the resale certificate — kept for our records, not printed" style={{...txtBtn,whiteSpace:"nowrap",opacity:resaleUp?.5:1,pointerEvents:resaleUp?"none":"auto"}}>
+                    {resaleUp?"Uploading…":"📎 Certificate"}
+                    <input type="file" multiple accept="image/*,application/pdf" style={{display:"none"}} onChange={e=>{uploadResaleDocs(e.target.files);e.target.value="";}}/>
+                  </label>
+                </div>
+                {(draft.customer.resaleDocs||[]).length>0&&(
+                  <div style={{gridColumn:"1 / -1",display:"flex",flexWrap:"wrap",gap:6}}>
+                    {draft.customer.resaleDocs.map(f=>(
+                      <span key={f.id} style={{display:"inline-flex",alignItems:"center",gap:6,fontSize:11,background:C.blueBg,color:C.blue,borderRadius:6,padding:"3px 8px"}}>
+                        <a href={f.url} target="_blank" rel="noreferrer" style={{color:"inherit",textDecoration:"none",maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>📄 {f.name}</a>
+                        <button type="button" onClick={()=>removeResaleDoc(f.id)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:"inherit",padding:0,fontSize:12}}>×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ):(
               <button onClick={()=>setCustMore(true)} style={{...txtBtn,paddingBottom:mob?0:7}}>＋ Business & address</button>
