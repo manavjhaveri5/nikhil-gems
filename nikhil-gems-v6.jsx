@@ -15897,6 +15897,9 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
   // to reach it belongs at the foot, with the invitation to do so.
   const sellerBits=[s.seller.address,s.seller.phone].map(x=>String(x||"").trim()).filter(Boolean);
   const custBits=[c.company,c.phone,c.email,[c.city,c.state,c.country].filter(Boolean).join(", ")].map(x=>String(x||"").trim()).filter(Boolean);
+  // The resale licence goes on the sheet: an untaxed sale needs the number
+  // where the buyer and an auditor can both see it, with the issuing state.
+  const resaleNo=String(c.resaleNo||"").trim(),resaleState=String(c.resaleState||"").trim();
   const allMethods=showPayMethods(s);
   const chosenPay=showInvChosenPay(inv,s);
   // Numbered rows, banded in pairs — a long counter sale has to be readable
@@ -16087,6 +16090,8 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
       <div class="lab">Bill to</div>
       <div class="who2">${showInvEsc(c.name||"—")}</div>
       ${custBits.map(b=>`<div class="bit">${showInvEsc(b)}</div>`).join("")}
+      ${resaleNo?`<div class="bit">Sales tax ID: ${showInvEsc(resaleNo)}</div>`:""}
+      ${resaleState?`<div class="bit">Sales tax state: ${showInvEsc(resaleState)}</div>`:""}
     </div>
     <div>
       <div class="lab">Sold at</div>
@@ -16170,7 +16175,7 @@ function buildShowInvoiceHTML(inv,settings,show,qrPng=""){
    is what it is used on: a customer is standing there. The draft is mirrored to
    localStorage the way the buying plan is, so a stray refresh mid-sale does not
    cost the invoice. */
-const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city:"",state:"",country:"",resaleNo:"",notes:"",addToList:true});
+const emptyShowInvCustomer=()=>({id:"",name:"",company:"",phone:"",email:"",city:"",state:"",country:"",resaleNo:"",resaleState:"",notes:"",addToList:true});
 const emptyShowInvDraft=(show,settings)=>({
   id:uid(),invNo:"",showId:show?.id||"",showName:show?.name||"",showSlug:showTagSlug(show),
   date:today(),currency:"USD",customer:emptyShowInvCustomer(),lines:[],
@@ -16379,7 +16384,7 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
      matches from the first letter. Anything typed that matches nobody is a new
      customer — the name is already on the draft, and issuing files them. */
   const c0=draft.customer||{};
-  const hasCustAddress=!!(String(c0.company||"").trim()||String(c0.city||"").trim()||String(c0.state||"").trim()||String(c0.country||"").trim()||String(c0.resaleNo||"").trim());
+  const hasCustAddress=!!(String(c0.company||"").trim()||String(c0.city||"").trim()||String(c0.state||"").trim()||String(c0.country||"").trim()||String(c0.resaleNo||"").trim()||String(c0.resaleState||"").trim());
   const cq=custQuery.trim().toLowerCase();
   /* An export buyer read as a booth customer: the company is the business, the
      contact is the person standing there. Kept out of the list when the booth
@@ -16507,11 +16512,11 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
       return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;
     };
     const rows=[["Invoice","Date","Status","Buyer","Business","Email","Phone","Location",
-      "Resale licence","Currency","Subtotal","Discount","Tax %","Tax","Shipping","Total","Paid","Balance"]];
+      "Resale licence","Resale state","Currency","Subtotal","Discount","Tax %","Tax","Shipping","Total","Paid","Balance"]];
     for(const inv of list){
       const t=showInvTotals(inv),c=inv.customer||{};
       rows.push([inv.invNo,inv.date,inv.status||"issued",c.name,c.company,c.email,c.phone,
-        [c.city,c.state,c.country].filter(Boolean).join(", "),c.resaleNo,inv.currency||"USD",
+        [c.city,c.state,c.country].filter(Boolean).join(", "),c.resaleNo,c.resaleState,inv.currency||"USD",
         t.subtotal.toFixed(2),t.discount.toFixed(2),inv.taxPct||"0",t.taxAmt.toFixed(2),
         t.shipping.toFixed(2),t.total.toFixed(2),t.paid.toFixed(2),t.balance.toFixed(2)]);
     }
@@ -16863,9 +16868,11 @@ function ShowInvoiceTab({show,atShow=[],invoices=[],settings,customers=[],ngBuye
                   <input value={draft.customer.country} onChange={e=>setCust({country:e.target.value})} placeholder="Country" style={sIn}/>
                 </div>
                 {/* A US buyer selling on gives a resale number instead of paying
-                    the tax. Kept on the customer for the shop's own records; it
-                    is not printed on what the customer walks away with. */}
-                <input value={draft.customer.resaleNo||""} onChange={e=>setCust({resaleNo:e.target.value})} placeholder="Sales tax / resale licence — our records only" style={sIn}/>
+                    the tax. Printed under Bill to, with the state that issued it. */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 70px",gap:6}}>
+                  <input value={draft.customer.resaleNo||""} onChange={e=>setCust({resaleNo:e.target.value})} placeholder="Sales tax ID / resale licence" style={sIn}/>
+                  <input value={draft.customer.resaleState||""} onChange={e=>setCust({resaleState:e.target.value})} placeholder="State" style={sIn}/>
+                </div>
               </div>
             ):(
               <button onClick={()=>setCustMore(true)} style={{...txtBtn,paddingBottom:mob?0:7}}>＋ Business & address</button>
