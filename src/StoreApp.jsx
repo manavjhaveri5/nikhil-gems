@@ -387,7 +387,7 @@ function SettingsTab({ settings, reload, showToast }) {
     regions: settings.shipping?.regions?.length ? settings.shipping.regions : [{ name: "United States", countries: ["US"], rate: 0, free_over: 0 }, { name: "Rest of world", countries: ["*"], rate: 0, free_over: 0 }],
     announcement: settings.announcement || "", about: settings.about || "", site_url: settings.site_url || "",
     contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
-    hero: { image: "", video: "", heading: "", eyebrow: "", ...(settings.hero || {}) },
+    hero: { image: "", video: "", heading: "", eyebrow: "", intro: "", ...(settings.hero || {}) },
     dispatch_note: settings.dispatch_note || "", returns_note: settings.returns_note || "",
   }));
   const [busy, setBusy] = useState(false);
@@ -416,7 +416,7 @@ function SettingsTab({ settings, reload, showToast }) {
         { key: "india_shipping", value: { rate: +f.in_rate || 0, free_over: +f.in_free || 0 } },
         { key: "shipping", value: { regions } }, { key: "announcement", value: f.announcement.trim() },
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
-        { key: "hero", value: { image: f.hero.image, video: f.hero.video, heading: f.hero.heading.trim(), eyebrow: f.hero.eyebrow.trim() } },
+        { key: "hero", value: { image: f.hero.image, video: f.hero.video, heading: f.hero.heading.trim(), eyebrow: f.hero.eyebrow.trim(), intro: (f.hero.intro || "").trim() } },
         { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
         { key: "whatsapp", value: f.whatsapp.replace(/[^\d]/g, "") },
         { key: "dispatch_note", value: f.dispatch_note.trim() }, { key: "returns_note", value: f.returns_note.trim() },
@@ -481,9 +481,10 @@ function SettingsTab({ settings, reload, showToast }) {
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 2fr", gap: 10 }}>
-          <div><span style={lab}>Small line above</span><input value={f.hero.eyebrow} onChange={e => setHero({ eyebrow: e.target.value })} placeholder="Crystals · Minerals · Carvings" style={FI()} /></div>
-          <div><span style={lab}>Headline</span><input value={f.hero.heading} onChange={e => setHero({ heading: e.target.value })} placeholder="The exact piece you see." style={FI()} /></div>
+          <div><span style={lab}>Small line above</span><input value={f.hero.eyebrow} onChange={e => setHero({ eyebrow: e.target.value })} placeholder="Rocks · Crystals · Minerals · Carvings & more" style={FI()} /></div>
+          <div><span style={lab}>Headline</span><input value={f.hero.heading} onChange={e => setHero({ heading: e.target.value })} placeholder="From the earth, to your hands." style={FI()} /></div>
         </div>
+        <div><span style={lab}>Intro line under the headline</span><input value={f.hero.intro || ""} onChange={e => setHero({ intro: e.target.value })} placeholder="Natural crystals, mineral specimens, rough stone and hand-carved pieces — sourced close to the mine and shipped worldwide." style={FI()} /></div>
       </div>
       <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
         <div><span style={lab}>Announcement bar (blank = free-shipping line)</span><input value={f.announcement} onChange={e => setF(x => ({ ...x, announcement: e.target.value }))} style={FI()} /></div>
