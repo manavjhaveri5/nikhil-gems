@@ -10,7 +10,8 @@ with open("/Users/manavjhaveri/Downloads/project/.vercel/project.json") as f:
     proj = json.load(f)
 
 TEAM_ID = proj["orgId"]
-ROOT_DIR = "/Users/manavjhaveri/Downloads/project"
+# The checkout this script lives in — a worktree deploys its own files.
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(ROOT_DIR, "dist")
 API_DIR  = os.path.join(ROOT_DIR, "api")
 
@@ -125,6 +126,10 @@ deploy_files = []
 for fi in all_files:
     deploy_files.append({"file": fi["file"], "sha": fi["sha"], "size": fi["size"]})
 
+with open(os.path.join(ROOT_DIR, "vercel.json")) as f:
+    rewrite_routes = [{"src": f"^{r['source']}$", "dest": r["destination"]}
+                      for r in json.load(f).get("rewrites", [])]
+
 deploy_body = {
     "name": "project",
     "files": deploy_files,
@@ -146,6 +151,9 @@ deploy_body = {
     },
     "functions": functions_config,
     "routes": [
+        # vercel.json's rewrites (/api/etsy-auth, /api/canva-auth, /api/openai, …) —
+        # a files-only deploy ignores vercel.json, so they have to be routes here.
+        *rewrite_routes,
         {"src": "/api/(.*)", "dest": "/api/$1"},   # API functions
         {"src": "/sw.js", "dest": "/api/sw.js"},
         {"src": "/manifest.json", "dest": "/api/manifest.js"},
