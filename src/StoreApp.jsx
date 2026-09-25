@@ -11,6 +11,7 @@ import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK } from "./utils.js";
 import { ETSY_SHOP_SECTIONS } from "../lib/listingCategories.js";
+import { retailTitle } from "../lib/retailTitle.js";
 
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
 const SERIF = "'Cormorant Garamond',Georgia,serif";
@@ -40,10 +41,11 @@ const collectionFor = l => {
   if (/tumble/.test(s)) return "Tumbled Stones";
   return "Mineral Specimens";
 };
-// Etsy prices are in rupees; the store sells in dollars.
-export const storePriceFor = (l, fx, rounding = "whole") => {
+// Etsy prices are in rupees; the store sells in dollars. The Etsy list price
+// carries a standing sale, so the store starts from the price Etsy buyers pay.
+export const storePriceFor = (l, fx, rounding = "whole", discountPct = 0) => {
   if (+l.price_store > 0) return +l.price_store;
-  const inr = +l.price_etsy || 0;
+  const inr = (+l.price_etsy || 0) * (1 - (+discountPct || 0) / 100);
   if (!inr || !fx) return 0;
   const v = inr / fx;
   return rounding === "cents" ? Math.round(v * 100) / 100 : rounding === "99" ? Math.max(1, Math.round(v)) - .01 : Math.round(v);
@@ -60,18 +62,21 @@ async function storeSettings() {
   return Object.fromEntries(rows.map(r => [r.key, r.value]));
 }
 
-function rowFromListing(l, { fx, rounding, existing, live }) {
+function rowFromListing(l, { fx, rounding, discount, existing, live }) {
   const images = (l.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
+  // A Shopify title was written by hand for a shop; an Etsy one is keywords.
+  const rt = retailTitle(l.title);
   return {
     id: `lm-${l.id}`, listing_id: l.id,
     handle: existing?.handle || handleFrom(l),
-    title: String(l.shopify_title || l.title || "").trim(),
+    title: String(l.shopify_title || rt.title || l.title || "").trim(),
+    subtitle: rt.size,
     description: String(l.shopify_description || l.description || "").replace(/<[^>]+>/g, "").trim(),
     images, videos: l.video && /^https?:/.test(l.video) ? [l.video] : (existing?.videos || []),
     material: l.material || "", shape: l.shape || "", product_type: l.productType || "",
     tags: Array.isArray(l.tags) ? l.tags : [],
     collections: existing?.collections?.length ? existing.collections : [collectionFor(l)],
-    price: storePriceFor(l, fx, rounding),
+    price: storePriceFor(l, fx, rounding, discount),
     qty: Math.max(1, parseInt(l.qty, 10) || 1),
     is_unique: l.type !== "repeatable",
     status: existing?.status === "sold" ? "sold" : live ? "active" : (existing?.status || "hidden"),
@@ -86,7 +91,7 @@ export async function publishListingToStore(listing, { syncOnly = false } = {}) 
   const s = await storeSettings();
   const id = `lm-${listing.id}`;
   const existing = await q(supabase.from("store_products").select("handle,status,collections,videos").eq("id", id).maybeSingle());
-  let row = rowFromListing(listing, { fx: +s.fx_inr_per_usd || 84, rounding: s.price_rounding, existing, live: !syncOnly });
+  let row = rowFromListing(listing, { fx: +s.fx_inr_per_usd || 84, rounding: s.price_rounding, discount: s.etsy_discount_pct, existing, live: !syncOnly });
   if (!existing) {
     const clash = await q(supabase.from("store_products").select("id").eq("handle", row.handle).maybeSingle());
     if (clash) row = { ...row, handle: `${row.handle}-${String(listing.id).slice(-4)}` };
@@ -260,7 +265,7 @@ export function StoreProductsPanel({ showToast, settings: given, site: givenSite
             </a>
             <div style={{ padding: "10px 12px 6px", flex: 1 }}>
               <div style={{ fontWeight: 600, fontSize: 13.5, lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.title}</div>
-              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 3 }}>{(p.collections || [])[0]}</div>
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 3 }}>{[p.subtitle, (p.collections || [])[0]].filter(Boolean).join(" · ")}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
                 <span style={{ fontSize: 12, color: C.inkMid }}>$</span>
                 <input defaultValue={p.price} inputMode="decimal" onBlur={e => { const v = +e.target.value || 0; if (v !== +p.price) save(p.id, { price: v }); }}
@@ -297,7 +302,7 @@ function ImportFromListings({ settings, existing, onClose, onDone }) {
     loadK(LIST_KEY).then(ls => {
       const arr = Array.isArray(ls) ? ls : [];
       setListings(arr);
-      setPicked(new Set(arr.filter(l => l.platforms?.etsy?.status === "active" && !have.has(l.id) && (l.images || []).length && storePriceFor(l, fx, settings.price_rounding) > 0).map(l => l.id)));
+      setPicked(new Set(arr.filter(l => l.platforms?.etsy?.status === "active" && !have.has(l.id) && (l.images || []).length && storePriceFor(l, fx, settings.price_rounding, settings.etsy_discount_pct) > 0).map(l => l.id)));
     }).catch(() => setListings([]));
   }, []);
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
@@ -308,7 +313,7 @@ function ImportFromListings({ settings, existing, onClose, onDone }) {
     const handles = new Set(existing.map(p => p.handle));
     const rows = [];
     for (const l of chosen) {
-      const r = rowFromListing(l, { fx, rounding: settings.price_rounding, existing: null, live: true });
+      const r = rowFromListing(l, { fx, rounding: settings.price_rounding, discount: settings.etsy_discount_pct, existing: null, live: true });
       if (!r.price || !r.images.length) continue;
       if (handles.has(r.handle)) r.handle = `${r.handle}-${String(l.id).slice(-4)}`;
       handles.add(r.handle);
@@ -334,11 +339,11 @@ function ImportFromListings({ settings, existing, onClose, onDone }) {
           <button onClick={() => setPicked(new Set([...picked, ...list.map(l => l.id)]))} style={btn()}>Tick all shown</button>
           <button onClick={() => setPicked(s => { const n = new Set(s); list.forEach(l => n.delete(l.id)); return n; })} style={btn()}>Untick all shown</button>
         </div>
-        <div style={{ fontSize: 11.5, color: C.inkFaint, padding: "8px 18px 0" }}>Price = Etsy ₹ ÷ {fx}, rounded ({settings.price_rounding || "whole"} dollars) — change the rate in Settings. A Store price set in Listing Manager wins.</div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint, padding: "8px 18px 0" }}>Price = Etsy ₹{+settings.etsy_discount_pct ? ` less ${settings.etsy_discount_pct}%` : ""} ÷ {fx}, rounded ({settings.price_rounding || "whole"} dollars) — change the rate in Settings. A Store price set in Listing Manager wins.</div>
         <div style={{ overflowY: "auto", padding: "6px 18px", flex: 1 }}>
           {!listings && <div style={{ color: C.inkFaint, fontSize: 13, padding: 10 }}>Loading listings…</div>}
           {list.map(l => {
-            const price = storePriceFor(l, fx, settings.price_rounding);
+            const price = storePriceFor(l, fx, settings.price_rounding, settings.etsy_discount_pct);
             const ok = price > 0 && (l.images || []).length;
             return (
               <label key={l.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${C.border}`, cursor: ok ? "pointer" : "default", opacity: ok ? 1 : .5 }}>
@@ -366,7 +371,7 @@ function ImportFromListings({ settings, existing, onClose, onDone }) {
 /* ── Settings ───────────────────────────────────────────────────────────── */
 function SettingsTab({ settings, reload, showToast }) {
   const [f, setF] = useState(() => ({
-    fx: settings.fx_inr_per_usd ?? 84, rounding: settings.price_rounding || "whole",
+    fx: settings.fx_inr_per_usd ?? 84, rounding: settings.price_rounding || "whole", discount: settings.etsy_discount_pct ?? 25,
     regions: settings.shipping?.regions?.length ? settings.shipping.regions : [{ name: "United States", countries: ["US"], rate: 0, free_over: 0 }, { name: "Rest of world", countries: ["*"], rate: 0, free_over: 0 }],
     announcement: settings.announcement || "", about: settings.about || "", site_url: settings.site_url || "",
     contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
@@ -380,6 +385,7 @@ function SettingsTab({ settings, reload, showToast }) {
       const regions = f.regions.map(r => ({ name: String(r.name).trim() || "Region", countries: (Array.isArray(r.countries) ? r.countries : String(r.countries).split(",")).map(c => c.trim().toUpperCase()).filter(Boolean), rate: +r.rate || 0, free_over: +r.free_over || 0 }));
       await q(supabase.from("store_settings").upsert([
         { key: "fx_inr_per_usd", value: +f.fx || 84 }, { key: "price_rounding", value: f.rounding },
+        { key: "etsy_discount_pct", value: Math.max(0, Math.min(90, +f.discount || 0)) },
         { key: "shipping", value: { regions } }, { key: "announcement", value: f.announcement.trim() },
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
         { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
@@ -395,7 +401,8 @@ function SettingsTab({ settings, reload, showToast }) {
     <div style={{ display: "grid", gap: 14, maxWidth: 680 }}>
       <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700 }}>Prices</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr 1fr", gap: 10 }}>
+          <div><span style={lab}>Etsy sale to match (% off list)</span><input value={f.discount} onChange={e => setF(x => ({ ...x, discount: e.target.value.replace(/[^\d.]/g, "") }))} style={FI()} /></div>
           <div><span style={lab}>Rupees per dollar (Etsy ₹ → store $)</span><input value={f.fx} onChange={e => setF(x => ({ ...x, fx: e.target.value.replace(/[^\d.]/g, "") }))} style={FI()} /></div>
           <div><span style={lab}>Rounding</span><select value={f.rounding} onChange={e => setF(x => ({ ...x, rounding: e.target.value }))} style={FI()}><option value="whole">Whole dollars ($84)</option><option value="99">.99 endings ($83.99)</option><option value="cents">Exact ($83.57)</option></select></div>
         </div>

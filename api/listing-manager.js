@@ -1147,6 +1147,7 @@ export default async function handler(req, res) {
               description: l.description || "",
               material: (l.materials || [])[0] || "",
               tags: l.tags || [],
+              etsy_section_id: l.shop_section_id || null,
               images: (l.images || []).map(img => img.url_fullxfull || img.url_570xN).filter(Boolean),
               price_etsy: l.price?.amount ? (l.price.amount / l.price.divisor) : 0,
               type: l.quantity === 1 ? "unique" : "repeatable",
