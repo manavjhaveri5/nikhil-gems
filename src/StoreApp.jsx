@@ -50,8 +50,9 @@ export const storePriceFor = (l, fx, rounding = "whole") => {
 };
 const handleFrom = l => {
   // Keep the Shopify address where there was one, so old links and search results still land.
+  // (Only a storefront handle counts — an admin link ends in the numeric product id.)
   const m = String(l.platforms?.shopify_earth?.url || "").match(/\/products\/([^/?#]+)/);
-  return m ? m[1] : `${slugify(l.title)}-${String(l.id).slice(-5)}`;
+  return m && !/^\d+$/.test(m[1]) ? m[1] : `${slugify(l.title)}-${String(l.id).slice(-5)}`;
 };
 
 async function storeSettings() {
