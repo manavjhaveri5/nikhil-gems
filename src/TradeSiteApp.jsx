@@ -608,7 +608,7 @@ const plain = html => String(html || "").replace(/<\s*br\s*\/?>/gi, "\n").replac
 export async function publishListingToTrade(listing, { syncOnly = false } = {}) {
   const id = listing.platforms?.trade?.product_id || `lm-${listing.id}`;
   const [existing, site] = await Promise.all([
-    q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,collections").eq("id", id).maybeSingle()),
+    q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,collections,videos").eq("id", id).maybeSingle()),
     q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
   ]);
   const price = +listing.price_trade || 0;
@@ -622,6 +622,8 @@ export async function publishListingToTrade(listing, { syncOnly = false } = {}) 
     shape: listing.shape || "", material: listing.material || "", product_type: listing.productType || "",
     tags: Array.isArray(listing.tags) ? listing.tags : [],
     images,
+    // A listing carries one video; keep any others added on the site itself.
+    videos: [...new Set([...(listing.video && /^https?:/.test(listing.video) ? [listing.video] : []), ...(existing?.videos || [])])],
     variants: [{ id: v0.id || uid(), title: "Default Title", price, sku: listing.sku || "", stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null }],
     price,
     stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null,
