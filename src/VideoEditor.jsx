@@ -168,6 +168,9 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState("");
   const [prog, setProg] = useState(0);
+  const abortRef = useRef(null);            // stops the save's uploads
+  const [phase, setPhase] = useState("");     // save: render → takes → upload
+  const [upProg, setUpProg] = useState(0);
   const [err, setErr] = useState("");
   const [showOriginal, setShowOriginal] = useState(false);
   const [note, setNote] = useState("");        // something the editor did on the seller's behalf
@@ -394,7 +397,28 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
     if (!clips.length) return;
     stop();
     cancelRef.current = false;
-    setBusy("save"); setErr(""); setProg(0);
+    setBusy("save"); setErr(""); setProg(0); setPhase("render"); setUpProg(0);
+    const abort = new AbortController();
+    abortRef.current = abort;
+    /* Every take has to outlive this export, or the edit stops being an edit
+       and becomes the only copy. A take dragged in from the phone has no URL
+       yet, so it is stored untouched, exactly as it was shot, and the recipe
+       points at it. That is what lets the next person reopen this video and
+       re-render from the source rather than from someone else's compression.
+       Rendering is the processor's job and uploading the network's, so the
+       takes go up while the frames are being built instead of after. */
+    const pending = clips.filter(c => !c.url);
+    const sizes = pending.map(c => c.blob?.size || 1);
+    const done = pending.map(() => 0);
+    const tick = () => setUpProg(done.reduce((a, d, i) => a + d * sizes[i], 0) / sizes.reduce((a, b) => a + b, 0));
+    const takeUploads = clips.map(c => {
+      if (c.url) return Promise.resolve(c.url);
+      const j = pending.indexOf(c);
+      const sname = `take-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+      return uploadToStorage(`listing-videos/${sname}`, new File([c.blob], sname, { type: c.blob.type || "video/mp4" }),
+        { onProgress: f => { done[j] = f; tick(); }, signal: abort.signal });
+    });
+    takeUploads.forEach(p => p.catch(() => {}));   // surfaced by the Promise.all below
     try {
       const { blob, lossless } = await exportVideo({
         clips,
@@ -403,20 +427,12 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
         onProgress: p => setProg(p),
         cancelled: () => cancelRef.current,
       });
-      /* Every take has to outlive this export, or the edit stops being an edit
-         and becomes the only copy. A take dragged in from the desktop has no
-         URL yet, so it is stored now — untouched, exactly as it was shot — and
-         the recipe points at it. That is what lets the next person open this
-         video, see the original, move one slider, and re-render from the
-         source rather than from someone else's compression. */
-      const sources = [];
-      for (const c of clips) {
-        if (c.url) { sources.push(c.url); continue; }
-        const sname = `take-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-        sources.push(await uploadToStorage(`listing-videos/${sname}`, new File([c.blob], sname, { type: c.blob.type || "video/mp4" })));
-      }
+      if (pending.length) setPhase("takes");
+      const sources = await Promise.all(takeUploads);
+      setPhase("upload"); setUpProg(0);
       const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-      const saved = await uploadToStorage(`listing-videos/${name}`, new File([blob], name, { type: "video/mp4" }));
+      const saved = await uploadToStorage(`listing-videos/${name}`, new File([blob], name, { type: "video/mp4" }),
+        { onProgress: setUpProg, signal: abort.signal });
       onSave(saved, {
         sources,
         clips: clips.map((c, i) => ({ src: sources[i], in: c.in, out: c.out, label: c.label })),
@@ -427,8 +443,8 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
         ? `✓ Video re-cut to ${total.toFixed(1)}s — same frames, nothing re-encoded`
         : `✓ Video rebuilt at ${total.toFixed(1)}s`);
       onClose();
-    } catch (e) { setErr(e.message || String(e)); }
-    finally { setBusy(""); setProg(0); }
+    } catch (e) { abort.abort(); setErr(e.message || String(e)); }
+    finally { setBusy(""); setProg(0); setPhase(""); }
   };
 
   /* ── Dragging the picture inside the crop ───────────────────────────────── */
@@ -639,14 +655,16 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
               </button>
               <span style={{ flex: 1 }} />
               {busy === "save" && (
-                <button type="button" onClick={() => { cancelRef.current = true; }} style={{ ...btn("transparent", C.ink), padding: "8px 12px" }}>
+                <button type="button" onClick={() => { cancelRef.current = true; abortRef.current?.abort(); }} style={{ ...btn("transparent", C.ink), padding: "8px 12px" }}>
                   Stop
                 </button>
               )}
               <button type="button" onClick={save} disabled={!ready || !!busy || !touched || overEtsy || !total}
                 style={{ ...btn(C.ink, "#FAF0DC"), opacity: !ready || busy || !touched || overEtsy || !total ? .5 : 1 }}>
                 {busy === "save"
-                  ? `${copy.ok ? "Re-cutting" : "Rendering"} ${Math.round(prog * 100)}%…`
+                  ? phase === "takes" ? `Saving your takes ${Math.round(upProg * 100)}%…`
+                  : phase === "upload" ? `Uploading ${Math.round(upProg * 100)}%…`
+                  : `${copy.ok ? "Re-cutting" : "Rendering"} ${Math.round(prog * 100)}%…`
                   : copy.ok ? "Save to listing · lossless" : "Save to listing"}
               </button>
             </div>

@@ -43,8 +43,43 @@ export async function downscaleImageFile(file) {
   return new File([blob], `${baseName}.${outExt}`, { type: outType });
 }
 
-export async function uploadToStorage(path, file) {
+/* Big uploads (video takes) report how far along they are. supabase-js has no
+   progress events, so this posts to the same Storage endpoint over XHR. */
+async function uploadWithProgress(path, file, onProgress, signal) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/${BUCKET}/${path.split("/").map(encodeURIComponent).join("/")}`;
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Authorization", `Bearer ${session?.access_token || key}`);
+    xhr.setRequestHeader("apikey", key);
+    xhr.setRequestHeader("x-upsert", "true");
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      let msg = `Upload failed (${xhr.status})`;
+      try { msg = JSON.parse(xhr.responseText).message || msg; } catch {}
+      reject(new Error(msg));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed — check the connection and try again."));
+    xhr.onabort = () => reject(new Error("Upload stopped."));
+    if (signal) {
+      if (signal.aborted) return xhr.abort();
+      signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    }
+    xhr.send(file);
+  });
+  onProgress(1);
+}
+
+export async function uploadToStorage(path, file, { onProgress, signal } = {}) {
   await ensureBucket();
+  if (onProgress) {
+    await uploadWithProgress(path, file, onProgress, signal);
+    return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+  }
   const resized = await downscaleImageFile(file);
   const { error } = await supabase.storage.from(BUCKET).upload(path, resized, {
     upsert: true,
