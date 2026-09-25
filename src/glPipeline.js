@@ -239,10 +239,14 @@ export async function loadBitmap(url, { onProgress } = {}) {
   /* The listing already showed this photo, so the browser usually has it:
      take the cached copy rather than pulling megabytes again over a phone
      connection. If the cached copy can't be used cross-origin, fetch fresh. */
-  let res = null;
-  try { res = await fetch(url, { mode: "cors", cache: "force-cache" }); } catch { res = null; }
-  if (!res || !res.ok) res = await fetch(url, { mode: "cors", cache: "reload" });
-  if (!res.ok) throw new Error(`Couldn't load the photo (${res.status})`);
+  const attempt = async (u, cache) => { try { const r = await fetch(u, { mode: "cors", cache }); return r.ok ? r : null; } catch { return null; } };
+  let res = await attempt(url, "force-cache") || await attempt(url, "reload");
+  /* Hosts that won't share pixels with the page (Etsy's CDN) go through our
+     own relay, which fetches the photo server-side. */
+  if (!res && /^https?:/i.test(url) && !url.startsWith(location.origin)) {
+    res = await attempt(`/api/listing-manager?action=image&url=${encodeURIComponent(url)}`, "default");
+  }
+  if (!res) throw new Error("Couldn't load the photo — check the connection and try again.");
   return fitToTexture(await createImageBitmap(await readWithProgress(res, onProgress)));
 }
 

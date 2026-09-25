@@ -1121,6 +1121,34 @@ export default async function handler(req, res) {
     const url = new URL(req.url, `https://${req.headers.host}`);
     const action = url.searchParams.get("action");
 
+    /* Photo relay for the in-app editor. Etsy's image CDN sends no CORS
+       header, so the browser can't read those pixels itself (Safari just says
+       "Load failed"). Only known photo hosts, so this can't be pointed at
+       anything else. */
+    if (action === "image") {
+      let src;
+      try { src = new URL(url.searchParams.get("url") || ""); } catch { return res.status(400).json({ error: "bad url" }); }
+      const okHost = /(^|\.)(etsystatic\.com|shopify\.com|shopifycdn\.com|ebayimg\.com|supabase\.co|vercel-storage\.com)$/i;
+      if (src.protocol !== "https:" || !okHost.test(src.hostname)) return res.status(400).json({ error: "host not allowed" });
+      try {
+        const pull = async u => {
+          const r = await fetch(u);
+          if (!r.ok) throw new Error(`upstream ${r.status}`);
+          return { buf: Buffer.from(await r.arrayBuffer()), type: r.headers.get("content-type") || "image/jpeg" };
+        };
+        let img = await pull(src.href);
+        /* A function reply tops out around 4.5 MB. Etsy keeps a 1588px copy of
+           every photo; fall back to it for the rare original that's bigger. */
+        if (img.buf.length > 4_300_000 && /il_fullxfull/.test(src.href)) img = await pull(src.href.replace("il_fullxfull", "il_1588xN"));
+        if (!/^image\//.test(img.type)) return res.status(415).json({ error: "not an image" });
+        res.setHeader("Content-Type", img.type);
+        res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400");
+        return res.status(200).send(img.buf);
+      } catch (e) {
+        return res.status(502).json({ error: e.message });
+      }
+    }
+
     /* Import all shop listings from Etsy → reconstruct listing objects */
     if (action === "import_etsy_listings") {
       try {
