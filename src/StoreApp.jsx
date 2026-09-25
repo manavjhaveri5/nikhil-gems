@@ -9,7 +9,8 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
-import { loadK } from "./utils.js";
+import { loadK, uid } from "./utils.js";
+import { uploadToStorage } from "./storageUtils.js";
 import { ETSY_SHOP_SECTIONS } from "../lib/listingCategories.js";
 import { retailTitle } from "../lib/retailTitle.js";
 
@@ -386,9 +387,24 @@ function SettingsTab({ settings, reload, showToast }) {
     regions: settings.shipping?.regions?.length ? settings.shipping.regions : [{ name: "United States", countries: ["US"], rate: 0, free_over: 0 }, { name: "Rest of world", countries: ["*"], rate: 0, free_over: 0 }],
     announcement: settings.announcement || "", about: settings.about || "", site_url: settings.site_url || "",
     contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
+    hero: { image: "", video: "", heading: "", eyebrow: "", ...(settings.hero || {}) },
     dispatch_note: settings.dispatch_note || "", returns_note: settings.returns_note || "",
   }));
   const [busy, setBusy] = useState(false);
+  const [heroBusy, setHeroBusy] = useState("");
+  const setHero = patch => setF(x => ({ ...x, hero: { ...x.hero, ...patch } }));
+  // A home-page photo or video, stored with the rest of the ERP's media.
+  const uploadHero = async (file, kind) => {
+    if (!file) return;
+    setHeroBusy(kind);
+    try {
+      const ext = (file.name.split(".").pop() || (kind === "video" ? "mp4" : "jpg")).toLowerCase();
+      const url = await uploadToStorage(`store/hero/${uid()}.${ext}`, file);
+      setHero(kind === "video" ? { video: url } : { image: url });
+      showToast("Uploaded — press Save settings to put it live");
+    } catch (e) { showToast("⚠ " + e.message); }
+    setHeroBusy("");
+  };
   const setR = (i, k, v) => setF(x => ({ ...x, regions: x.regions.map((r, j) => j === i ? { ...r, [k]: v } : r) }));
   const save = async () => {
     setBusy(true);
@@ -400,6 +416,7 @@ function SettingsTab({ settings, reload, showToast }) {
         { key: "india_shipping", value: { rate: +f.in_rate || 0, free_over: +f.in_free || 0 } },
         { key: "shipping", value: { regions } }, { key: "announcement", value: f.announcement.trim() },
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
+        { key: "hero", value: { image: f.hero.image, video: f.hero.video, heading: f.hero.heading.trim(), eyebrow: f.hero.eyebrow.trim() } },
         { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
         { key: "whatsapp", value: f.whatsapp.replace(/[^\d]/g, "") },
         { key: "dispatch_note", value: f.dispatch_note.trim() }, { key: "returns_note", value: f.returns_note.trim() },
@@ -440,6 +457,32 @@ function SettingsTab({ settings, reload, showToast }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div><span style={lab}>Shipping ₹</span><input value={f.in_rate} onChange={e => setF(x => ({ ...x, in_rate: e.target.value.replace(/[^\d.]/g, "") }))} style={FI()} /></div>
           <div><span style={lab}>Free over ₹ (0 = never)</span><input value={f.in_free} onChange={e => setF(x => ({ ...x, in_free: e.target.value.replace(/[^\d.]/g, "") }))} style={FI()} /></div>
+        </div>
+      </div>
+      <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
+        <div style={{ fontWeight: 700 }}>Home page</div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint }}>The big picture at the top of eartheditions.co. Use a wide, sharp photo (at least 2400px across) or a short, silent video. Without one, the store uses the photo of a ★ featured piece.</div>
+        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 12 }}>
+          <div>
+            <span style={lab}>Photo</span>
+            {f.hero.image ? <img src={f.hero.image} alt="" style={{ width: "100%", aspectRatio: "16/9", objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}` }} /> : <div style={{ aspectRatio: "16/9", background: C.card, borderRadius: 8, display: "grid", placeItems: "center", fontSize: 12, color: C.inkFaint }}>none</div>}
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <label style={{ ...btn(), cursor: "pointer" }}>{heroBusy === "image" ? "Uploading…" : "Upload photo"}<input type="file" accept="image/*" hidden onChange={e => { uploadHero(e.target.files?.[0], "image"); e.target.value = ""; }} /></label>
+              {f.hero.image && <button onClick={() => setHero({ image: "" })} style={btn()}>Remove</button>}
+            </div>
+          </div>
+          <div>
+            <span style={lab}>Video (optional — plays instead of the photo)</span>
+            {f.hero.video ? <video src={f.hero.video} muted playsInline loop autoPlay style={{ width: "100%", aspectRatio: "16/9", objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}` }} /> : <div style={{ aspectRatio: "16/9", background: C.card, borderRadius: 8, display: "grid", placeItems: "center", fontSize: 12, color: C.inkFaint }}>none</div>}
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <label style={{ ...btn(), cursor: "pointer" }}>{heroBusy === "video" ? "Uploading…" : "Upload video"}<input type="file" accept="video/*" hidden onChange={e => { uploadHero(e.target.files?.[0], "video"); e.target.value = ""; }} /></label>
+              {f.hero.video && <button onClick={() => setHero({ video: "" })} style={btn()}>Remove</button>}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 2fr", gap: 10 }}>
+          <div><span style={lab}>Small line above</span><input value={f.hero.eyebrow} onChange={e => setHero({ eyebrow: e.target.value })} placeholder="Crystals · Minerals · Carvings" style={FI()} /></div>
+          <div><span style={lab}>Headline</span><input value={f.hero.heading} onChange={e => setHero({ heading: e.target.value })} placeholder="The exact piece you see." style={FI()} /></div>
         </div>
       </div>
       <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
