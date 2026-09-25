@@ -190,7 +190,7 @@ export const ASPECTS = [
   { key: "9:16", label: "9:16",  hint: "full-screen on a phone", ratio: 9 / 16, video: true },
   { key: "16:9", label: "16:9",  hint: "widescreen", ratio: 16 / 9, video: true },
 ];
-export const NO_GEO = { rotate: 0, straighten: 0, crop: { on: false, aspect: "1:1", zoom: 0, cx: 0.5, cy: 0.5 } };
+export const NO_GEO = { rotate: 0, straighten: 0, flipH: false, flipV: false, crop: { on: false, aspect: "1:1", zoom: 0, cx: 0.5, cy: 0.5 } };
 export const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 /* The crop rectangle, in source pixels. Rotating the photo tilts the rectangle
@@ -218,7 +218,7 @@ export function cropGeometry(src, geo) {
   const cy = clamp(geo.crop.cy * H, bh / 2, H - bh / 2);
   return { w, h, cx, cy, cos, sin, W, H };
 }
-export const geoTouched = g => g.rotate !== 0 || g.straighten !== 0 || g.crop.on;
+export const geoTouched = g => g.rotate !== 0 || g.straighten !== 0 || !!g.flipH || !!g.flipV || g.crop.on;
 
 export async function fitToTexture(bitmap) {
   const longest = Math.max(bitmap.width, bitmap.height);
@@ -352,9 +352,12 @@ export function renderPipeline(ctx, canvas, o) {
   if (canvas.width !== ow || canvas.height !== oh) { canvas.width = ow; canvas.height = oh; }
   gl.viewport(0, 0, ow, oh);
 
+  // A mirror is the output's own axis read backwards: flipping the x column
+  // mirrors left↔right, the y column top↔bottom, after the turn and crop.
+  const fx = o.geo?.flipH ? -1 : 1, fy = o.geo?.flipV ? -1 : 1;
   gl.uniform4f(uniforms.uvM,
-    (g.cos * g.w * 0.5) / g.W, (g.sin * g.h * 0.5) / g.W,
-    (g.sin * g.w * 0.5) / g.H, (-g.cos * g.h * 0.5) / g.H);
+    fx * (g.cos * g.w * 0.5) / g.W, fy * (g.sin * g.h * 0.5) / g.W,
+    fx * (g.sin * g.w * 0.5) / g.H, fy * (-g.cos * g.h * 0.5) / g.H);
   gl.uniform2f(uniforms.uvOff, g.cx / g.W, g.cy / g.H);
   gl.uniform2f(uniforms.texel, 1 / o.sw, 1 / o.sh);
 

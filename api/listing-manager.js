@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 /**
  * Listing Manager API — cross-platform publishing hub
  * Supports: Etsy, Shopify (Earth Editions), Shopify (Atyahara), eBay (future)
@@ -8,6 +9,7 @@
 
 import { getEtsyAccessToken } from "../lib/etsy-auth.js";
 import { createClient } from "@supabase/supabase-js";
+import { endEbayItem } from "./ebay.js";
 
 const MEDIA_BUCKET = "ng-media";
 
@@ -1115,6 +1117,10 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
+  // store_sold is the retail store's webhook and checks its own secret below.
+  const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids");
+  if (!storeAction && !(await requireUser(req, res))) return;
 
   /* ── GET: fetch Etsy shop settings OR import all Etsy listings ── */
   if (req.method === "GET") {
@@ -1170,6 +1176,7 @@ export default async function handler(req, res) {
               description: l.description || "",
               material: (l.materials || [])[0] || "",
               tags: l.tags || [],
+              etsy_section_id: l.shop_section_id || null,
               images: (l.images || []).map(img => img.url_fullxfull || img.url_570xN).filter(Boolean),
               price_etsy: l.price?.amount ? (l.price.amount / l.price.divisor) : 0,
               type: l.quantity === 1 ? "unique" : "repeatable",
@@ -1306,6 +1313,70 @@ export default async function handler(req, res) {
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); } }
 
   const { action, listing, platform, store_key } = body;
+
+  /* ── STORE ORDER (called by eartheditions.co's Stripe webhook) ────────────
+     Files the paid order under Orders — one row per piece, as Mark sold does.
+     Taking one-of-a-kind pieces down from Etsy/eBay is approved by hand from
+     that order. Stock counts are left alone on purpose; adjusted by hand. Only the store can
+     call this: it must present the shared secret. */
+  /* The store's daily check: which Etsy listings are still live. A piece that
+     sold (or was taken down) on Etsy must not stay for sale on the store. */
+  if (action === "etsy_active_ids") {
+    const secret = process.env.STORE_SYNC_SECRET;
+    if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });
+    const hdrs = await etsyHeaders(false);
+    const ids = [];
+    for (let offset = 0; ; offset += 100) {
+      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=100&offset=${offset}`, { headers: hdrs });
+      const d = await r.json();
+      if (!r.ok) return res.status(502).json({ error: d?.error || `Etsy ${r.status}` });
+      ids.push(...(d.results || []).map(l => String(l.listing_id)));
+      if ((d.results || []).length < 100) break;
+    }
+    return res.json({ ok: true, ids });
+  }
+
+  if (action === "store_sold") {
+    const secret = process.env.STORE_SYNC_SECRET;
+    if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });
+    const order = body.order || {};
+    const sb = createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+    const readKey = async k => {
+      const { data } = await sb.from("app_data").select("value").eq("key", k).maybeSingle();
+      const v = typeof data?.value === "string" ? JSON.parse(data.value) : data?.value;
+      return Array.isArray(v) ? v : [];
+    };
+    const upsert = (k, item, prepend = true) => sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: prepend });
+    const [orders, listings] = await Promise.all([readKey("ng-orders-v1"), readKey("ng-listings-v1")]);
+    let n = orders.reduce((m, o) => Math.max(m, parseInt(String(o.order_number || "").replace(/\D/g, ""), 10) || 0), 0);
+    const addr = order.shipping || {};
+    const results = [];
+    for (const [i, line] of (order.lines || []).entries()) {
+      const L = listings.find(x => x.id === line.listing_id);
+      const id = `store-${order.number}-${i + 1}`;
+      if (!orders.some(o => o.id === id)) {
+        n += 1;
+        await upsert("ng-orders-v1", {
+          id, order_number: `ORD-${String(n).padStart(4, "0")}`,
+          listing_id: line.listing_id || "", listing_title: line.title || L?.title || "",
+          listing_material: L?.material || "", listing_shape: L?.shape || "", listing_sku: line.sku || L?.sku || "",
+          listing_order_id: L?.listing_order_id || "", listing_image: line.image || L?.images?.[0] || "",
+          platform: "store", platform_order_id: order.number, sale_price: String((line.price || 0) * (line.qty || 1)),
+          currency: "USD", qty: line.qty || 1, buyer_name: order.name || "", buyer_email: order.email || "",
+          buyer_country: addr.country || "", ship_to: addr, status: "sold",
+          date: String(order.created_at || new Date().toISOString()).slice(0, 10),
+          notes: order.notes || "", created_at: new Date().toISOString(),
+        });
+      }
+      // Taking the piece down elsewhere is approved by hand from the order in
+      // Listing Manager → Orders; here only the store's own status is recorded.
+      if (line.unique && L) {
+        await upsert("ng-listings-v1", { ...L, platforms: { ...(L.platforms || {}), store: { ...(L.platforms?.store || {}), status: "sold" } }, updated_at: new Date().toISOString() }, false);
+        results.push({ listing: L.id });
+      }
+    }
+    return res.json({ ok: true, results });
+  }
 
   try {
 

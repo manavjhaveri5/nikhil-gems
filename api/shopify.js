@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 // ── Shopify OAuth callback (GET /api/shopify?code=xxx&shop=xxx) ───────────────
@@ -403,6 +404,7 @@ export default async function handler(req, res) {
   // Shopify OAuth callback comes in as GET with code+shop params
   if (req.method === "GET") return handleOAuthCallback(req, res);
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  if (!(await requireUser(req, res))) return;
 
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); } }

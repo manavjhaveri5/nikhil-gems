@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 export const config = {
   api: {
     bodyParser: {
@@ -134,6 +135,8 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+  // The daily ops-check workflow (no user session) presents the store secret.
+  if (!(await requireUser(req, res, { allowStoreSecret: true }))) return;
 
   const key = process.env.OPENAI_KEY || process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: { message: "OPENAI_KEY not set" } });

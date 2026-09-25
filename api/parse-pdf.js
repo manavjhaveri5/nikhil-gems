@@ -1,7 +1,9 @@
+import { requireUser } from "../lib/auth.js";
 export const config = { api: { bodyParser: { sizeLimit: "20mb" } }, maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!(await requireUser(req, res))) return;
 
   try {
     const { images, account = "" } = req.body || {};

@@ -66,7 +66,11 @@ const _persistLS=()=>{
     _cache.forEach((v,k)=>{if(!DEPRECATED_KEYS.includes(k))obj[k]=_safeForLocalCache(v);});
     localStorage.setItem(LS_CACHE_KEY,JSON.stringify(obj));
     localStorage.setItem(LS_CACHE_TS,String(Date.now()));
-  }catch(e){/* quota exceeded — ignore */}
+  }catch(e){
+    /* Quota exceeded. The old snapshot must not survive a failed write: the
+       next reload would paint it as current, so a saved edit would look undone. */
+    try{localStorage.removeItem(LS_CACHE_KEY);localStorage.removeItem(LS_CACHE_TS);}catch{}
+  }
 };
 
 // Load localStorage cache into _cache at startup (zero-latency first paint)

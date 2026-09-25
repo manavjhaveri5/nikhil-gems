@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 /**
  * eBay Trading API proxy — uses Auth'n'Auth token (no OAuth flow needed).
  *
@@ -438,6 +439,16 @@ export async function publishEbayListing(body = {}) {
 }
 
 
+// Also called directly by listing-manager's store_sold, which has no user session.
+export async function endEbayItem(itemId) {
+  const { ok, xml } = await trading("EndItem", `
+      <ItemID>${esc(itemId)}</ItemID>
+      <EndingReason>NotAvailable</EndingReason>
+    `);
+  if (!ok) return { ok: false, error: xmlTag("LongMessage", xml) || "EndItem failed" };
+  return { ok: true, itemId };
+}
+
 export default async function handler(req, res) {
   // Guarantee a JSON response: an unhandled throw otherwise returns Vercel's
   // plain-text "A server error has occurred", which the client can't JSON.parse.
@@ -452,6 +463,8 @@ export default async function handler(req, res) {
 async function handleEbay(req, res) {
   const url    = new URL(req.url, `https://${req.headers.host}`);
   const action = url.searchParams.get("action");
+  // sync_orders is the Vercel cron and has its own check below.
+  if (action !== "sync_orders" && !(await requireUser(req, res))) return;
 
   // ── ping ──────────────────────────────────────────────────────────────────
   if (action === "ping") {
@@ -705,12 +718,8 @@ async function handleEbay(req, res) {
   if (action === "end_item") {
     const itemId = url.searchParams.get("item_id");
     if (!itemId) return res.status(400).json({ error: "item_id required" });
-    const { ok, xml } = await trading("EndItem", `
-      <ItemID>${itemId}</ItemID>
-      <EndingReason>NotAvailable</EndingReason>
-    `);
-    if (!ok) return res.status(500).json({ ok: false, error: xmlTag("LongMessage", xml) || "EndItem failed" });
-    return res.json({ ok: true, itemId });
+    const out = await endEbayItem(itemId);
+    return res.status(out.ok ? 200 : 500).json(out);
   }
 
   return res.status(400).json({ error: "Unknown action" });

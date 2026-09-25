@@ -10,7 +10,8 @@ with open("/Users/manavjhaveri/Downloads/project/.vercel/project.json") as f:
     proj = json.load(f)
 
 TEAM_ID = proj["orgId"]
-ROOT_DIR = "/Users/manavjhaveri/Downloads/project"
+# The checkout this script lives in — a worktree deploys its own files.
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(ROOT_DIR, "dist")
 API_DIR  = os.path.join(ROOT_DIR, "api")
 
@@ -48,6 +49,13 @@ def curl_upload(path, sha, size):
         return True, result.stdout
     return result.returncode == 0, result.stderr[:200]
 
+# A build made without .env (e.g. in a fresh worktree) has no Supabase URL baked
+# in and ships a blank page. Refuse it.
+_assets = os.path.join(DIST_DIR, "assets")
+if not any(".supabase.co" in open(os.path.join(_assets, fn), errors="ignore").read()
+           for fn in os.listdir(_assets) if fn.endswith(".js")):
+    sys.exit("dist/ has no Supabase URL — copy .env into this checkout and rebuild before deploying.")
+
 # Collect dist/ files (mapped to root paths)
 files = []
 for root, dirs, filenames in os.walk(DIST_DIR):
@@ -67,6 +75,15 @@ for fn in os.listdir(API_DIR):
         sha = sha1_of_file(full)
         size = os.path.getsize(full)
         api_files.append({"file": rel, "sha": sha, "size": size, "path": full, "kind": "function"})
+
+# lib/ holds helpers the functions import (etsy-auth, canva-auth,
+# listingCategories). Without it every function that imports ../lib crashes
+# at load with FUNCTION_INVOCATION_FAILED, since nothing is built on Vercel.
+LIB_DIR = os.path.join(ROOT_DIR, "lib")
+for fn in sorted(os.listdir(LIB_DIR)):
+    if fn.endswith(".js"):
+        full = os.path.join(LIB_DIR, fn)
+        api_files.append({"file": f"lib/{fn}", "sha": sha1_of_file(full), "size": os.path.getsize(full), "path": full, "kind": "support"})
 
 # Also include package.json (needed so Vercel knows it's ESM: "type":"module")
 pkg_path = os.path.join(ROOT_DIR, "package.json")
@@ -101,7 +118,7 @@ max_durations = {
     "telegram.js": 60, "openai.js": 30, "embed.js": 30,
     "parse-pdf.js": 60, "etsy-auth.js": 30, "listing-manager.js": 30,
     "blob-upload.js": 30, "admin-create-user.js": 30,
-    "ebay.js": 30,
+    "ebay.js": 30, "mail.js": 15,
 }
 for fi in api_files:
     if fi["kind"] == "function":
@@ -116,16 +133,34 @@ deploy_files = []
 for fi in all_files:
     deploy_files.append({"file": fi["file"], "sha": fi["sha"], "size": fi["size"]})
 
+with open(os.path.join(ROOT_DIR, "vercel.json")) as f:
+    rewrite_routes = [{"src": f"^{r['source']}$", "dest": r["destination"]}
+                      for r in json.load(f).get("rewrites", [])]
+
 deploy_body = {
     "name": "project",
     "files": deploy_files,
     "target": "production",
-    "buildCommand": None,
-    "installCommand": None,
-    "outputDirectory": None,
-    "framework": None,
+    # What is uploaded is already built: dist/ flattened to the root, plus the
+    # api/ functions. Vercel must not build it again — the payload carries no
+    # src/, no index.html and no vite.config for a build to work from.
+    #
+    # These four belong under projectSettings. Sent at the top level the API
+    # ignores them, the project's own Vite setting stands, and Vercel runs
+    # `npm run build` against a source tree that isn't there. An empty string
+    # is the way to say "no command"; null means "inherit", which is how this
+    # went unnoticed.
+    "projectSettings": {
+        "framework": None,
+        "buildCommand": "",
+        "installCommand": "",
+        "outputDirectory": ".",
+    },
     "functions": functions_config,
     "routes": [
+        # vercel.json's rewrites (/api/etsy-auth, /api/canva-auth, /api/openai, …) —
+        # a files-only deploy ignores vercel.json, so they have to be routes here.
+        *rewrite_routes,
         {"src": "/api/(.*)", "dest": "/api/$1"},   # API functions
         {"src": "/sw.js", "dest": "/api/sw.js"},
         {"src": "/manifest.json", "dest": "/api/manifest.js"},

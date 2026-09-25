@@ -2555,6 +2555,10 @@ export const config = { api: { bodyParser: true }, maxDuration: 300 };
 
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(200).json({ ok: true }); return; }
+  // Telegram signs each webhook call with the secret_token given to setWebhook.
+  // Enforced once TELEGRAM_WEBHOOK_SECRET is set (and the webhook re-registered with it).
+  const hookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (hookSecret && req.headers["x-telegram-bot-api-secret-token"] !== hookSecret) { res.status(401).json({ error: "Unauthorized" }); return; }
 
   // Respond immediately so Telegram never retries
   res.status(200).json({ ok: true });
