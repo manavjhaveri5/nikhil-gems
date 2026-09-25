@@ -13,6 +13,7 @@ import { loadK, uid } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { ETSY_SHOP_SECTIONS } from "../lib/listingCategories.js";
 import { retailTitle } from "../lib/retailTitle.js";
+const esc = s => s.replace(/[%_]/g, m => "\\" + m);
 
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
 const SERIF = "'Cormorant Garamond',Georgia,serif";
@@ -65,13 +66,14 @@ async function storeSettings() {
 
 function rowFromListing(l, { fx, rounding, discount, existing, live }) {
   const images = (l.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
-  // A Shopify title was written by hand for a shop; an Etsy one is keywords.
-  const rt = retailTitle(l.title);
+  // The store's own short name: "Ruby in Matrix Specimen #3", size on its own line.
+  const rt = retailTitle(l.shopify_title || l.title);
+  const size = rt.size || retailTitle(l.title).size;
   return {
     id: `lm-${l.id}`, listing_id: l.id,
     handle: existing?.handle || handleFrom(l),
-    title: String(l.shopify_title || rt.title || l.title || "").trim(),
-    subtitle: rt.size,
+    title: existing?.title || (rt.number ? `${rt.title} #${rt.number}` : rt.title || String(l.title || "").trim()),
+    subtitle: size,
     description: String(l.shopify_description || l.description || "").replace(/<[^>]+>/g, "").trim(),
     images, videos: l.video && /^https?:/.test(l.video) ? [l.video] : (existing?.videos || []),
     material: l.material || "", shape: l.shape || "", product_type: l.productType || "",
@@ -93,9 +95,17 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
 export async function publishListingToStore(listing, { syncOnly = false } = {}) {
   const s = await storeSettings();
   const id = `lm-${listing.id}`;
-  const existing = await q(supabase.from("store_products").select("handle,status,collections,videos").eq("id", id).maybeSingle());
+  const existing = await q(supabase.from("store_products").select("handle,status,collections,videos,title").eq("id", id).maybeSingle());
   let row = rowFromListing(listing, { fx: +s.fx_inr_per_usd || 84, rounding: s.price_rounding, discount: s.etsy_discount_pct, existing, live: !syncOnly });
   if (!existing) {
+    // Another piece already has this name: this one takes the next number.
+    if (!/ #\d+$/.test(row.title)) {
+      const same = await q(supabase.from("store_products").select("title").or(`title.eq.${row.title.replace(/[,()]/g, "")},title.like.${esc(row.title.replace(/[,()]/g, ""))} #*`));
+      if (same.length) {
+        const nums = same.map(x => +(x.title.match(/ #(\d+)$/) || [0, 1])[1]);
+        row = { ...row, title: `${row.title} #${Math.max(...nums) + 1}` };
+      }
+    }
     const clash = await q(supabase.from("store_products").select("id").eq("handle", row.handle).maybeSingle());
     if (clash) row = { ...row, handle: `${row.handle}-${String(listing.id).slice(-4)}` };
   }
