@@ -1119,7 +1119,8 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
-  if (!(req.method === "POST" && bodyAction === "store_sold") && !(await requireUser(req, res))) return;
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids");
+  if (!storeAction && !(await requireUser(req, res))) return;
 
   /* ── GET: fetch Etsy shop settings OR import all Etsy listings ── */
   if (req.method === "GET") {
@@ -1290,6 +1291,23 @@ export default async function handler(req, res) {
      and takes one-of-a-kind pieces off Etsy and eBay. Stock counts are left
      alone on purpose; they're adjusted by hand for now. Only the store can
      call this: it must present the shared secret. */
+  /* The store's daily check: which Etsy listings are still live. A piece that
+     sold (or was taken down) on Etsy must not stay for sale on the store. */
+  if (action === "etsy_active_ids") {
+    const secret = process.env.STORE_SYNC_SECRET;
+    if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });
+    const hdrs = await etsyHeaders(false);
+    const ids = [];
+    for (let offset = 0; ; offset += 100) {
+      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=100&offset=${offset}`, { headers: hdrs });
+      const d = await r.json();
+      if (!r.ok) return res.status(502).json({ error: d?.error || `Etsy ${r.status}` });
+      ids.push(...(d.results || []).map(l => String(l.listing_id)));
+      if ((d.results || []).length < 100) break;
+    }
+    return res.json({ ok: true, ids });
+  }
+
   if (action === "store_sold") {
     const secret = process.env.STORE_SYNC_SECRET;
     if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });
