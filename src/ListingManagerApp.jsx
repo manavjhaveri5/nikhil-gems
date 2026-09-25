@@ -1260,6 +1260,22 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
           <div onMouseDown={e => e.stopPropagation()} style={{ width: "min(560px,100%)", background: C.surface, borderRadius: 14, overflow: "hidden", boxShadow: "0 24px 80px rgba(0,0,0,.4)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>Photo {viewIdx + 1} of {selectedUrls.length}</div>
+              <div style={{ flex: 1 }} />
+              {/* Fetched to a blob: a plain download link to another origin just opens the image. */}
+              <button onClick={async () => {
+                const url = bgResult || selectedUrls[viewIdx];
+                const base = ([material, shape].filter(Boolean).join(" ") || "photo").replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "photo";
+                try {
+                  const blob = await (await fetch(url, { mode: "cors" })).blob();
+                  const ext = (blob.type.split("/")[1] || "jpg").replace("jpeg", "jpg").split("+")[0];
+                  const a = document.createElement("a");
+                  a.href = URL.createObjectURL(blob);
+                  a.download = `${base}-${viewIdx + 1}.${ext}`;
+                  a.click();
+                  setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+                } catch { window.open(url, "_blank"); }
+              }} title="Download this photo"
+                style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", marginRight: 10 }}>⤓ Download</button>
               <button onClick={() => setViewIdx(null)} style={{ background: "none", border: "none", fontSize: 22, color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
             </div>
             <div style={{ padding: 16 }}>
