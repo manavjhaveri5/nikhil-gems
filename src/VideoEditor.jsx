@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { C, mob, FI } from "./lmTheme.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { CurveEditor, emptyCurves, curvesTouched } from "./ToneCurve.jsx";
@@ -470,13 +471,17 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
 
   const btn = (bg, fg) => ({ background: bg, color: fg, border: bg === "transparent" ? `1px solid ${C.border}` : "none",
     borderRadius: 8, padding: "9px 15px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" });
+  const stack = gap => ({ display: "grid", gridTemplateColumns: "minmax(0,1fr)", alignContent: "start", gap, flexShrink: 0 });
   const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 10 };
 
-  return (
+  /* Portalled to <body> so no parent stacking context (the phone tab bar's
+     among them) can end up drawn over the editor. */
+  return createPortal(
     <div onMouseDown={e => e.target === e.currentTarget && onClose()}
       style={{ position: "fixed", inset: 0, zIndex: 2100, background: "rgba(20,15,8,.78)",
         display: "grid", placeItems: "center", padding: narrow ? 0 : 20 }}>
       <div style={{ background: C.bg, borderRadius: narrow ? 0 : 14, width: "min(1100px,100%)", maxHeight: "100%",
+        height: narrow ? "100%" : "auto",
         display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 80px rgba(0,0,0,.45)" }}>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px",
@@ -491,13 +496,18 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: C.inkMid, cursor: "pointer", lineHeight: 1 }}>×</button>
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gap: 14, padding: 14,
-          overflowY: narrow ? "auto" : "hidden",
-          gridTemplateColumns: narrow ? "1fr" : "1fr 320px" }}>
+        {/* On a phone the two columns stack and the body scrolls as one. Flex
+            with nothing allowed to shrink: a grid here squeezed its rows to
+            the screen height and the panels piled on top of each other. */}
+        <div style={{ flex: 1, minHeight: 0, gap: 14, padding: 14,
+          ...(narrow
+            ? { display: "flex", flexDirection: "column", overflowY: "auto", WebkitOverflowScrolling: "touch",
+                paddingBottom: "calc(14px + env(safe-area-inset-bottom))" }
+            : { display: "grid", overflowY: "hidden", gridTemplateColumns: "1fr 320px" }) }}>
 
           {/* ── Picture and timeline ── */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0,
-            overflowY: narrow ? "visible" : "auto" }}>
+          <div style={narrow ? stack(10)
+            : { display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0, overflowY: "auto" }}>
             {note && (
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, lineHeight: 1.5,
                 background: C.card, border: `1px solid ${C.border}`, borderRadius: 9, padding: "7px 10px", color: C.inkMid }}>
@@ -508,11 +518,12 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
               </div>
             )}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 10,
-              display: "grid", placeItems: "center", minHeight: 220 }}>
+              display: "grid", placeItems: "center", minHeight: narrow ? 160 : 220, flexShrink: 0 }}>
               <canvas ref={canvasRef}
                 onPointerDown={onDragStart} onPointerMove={onDragMove}
                 onPointerUp={onDragEnd} onPointerCancel={onDragEnd}
-                style={{ maxWidth: "100%", maxHeight: narrow ? 300 : "min(46vh, 420px)", borderRadius: 8,
+                style={{ maxWidth: "100%", width: "auto", height: "auto",
+                  maxHeight: narrow ? "min(300px, 42vh)" : "min(46vh, 420px)", borderRadius: 8,
                   display: ready ? "block" : "none", background: "#000",
                   touchAction: geo.crop.on ? "none" : "auto", cursor: geo.crop.on ? "grab" : "default" }} />
               {!ready && <div style={{ fontSize: 12, color: C.inkFaint }}>{err ? "—" : "Reading the video…"}</div>}
@@ -645,8 +656,8 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
           </div>
 
           {/* ── Controls ── */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0, minHeight: 0,
-            overflowY: narrow ? "visible" : "auto", paddingRight: narrow ? 0 : 4 }}>
+          <div style={narrow ? stack(12)
+            : { display: "flex", flexDirection: "column", gap: 12, minWidth: 0, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
 
             <div style={{ ...panel, gap: 8 }}>
               <label style={lab}>Tell it what you want</label>
@@ -802,6 +813,7 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
