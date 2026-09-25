@@ -17,6 +17,8 @@ const translations = {
     misc: "Miscellaneous",
     journal: "Stock Journal",
     documents: "Documents",
+    trade: "Trade Site",
+    omnisend: "Omnisend",
     users: "Users",
     datasets: "Datasets",
 
@@ -362,6 +364,8 @@ const translations = {
     misc: "विविध",
     journal: "स्टॉक जर्नल",
     documents: "कागदपत्रे",
+    trade: "ट्रेड साइट",
+    omnisend: "Omnisend",
     users: "वापरकर्ते",
     datasets: "डेटासेट",
 
