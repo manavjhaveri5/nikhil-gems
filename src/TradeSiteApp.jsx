@@ -224,6 +224,14 @@ function BuyersTab({ showToast, siteUrl }) {
   const approve = async b => {
     setBusy(true);
     try {
+      // Someone who already has a password (a paused account, say) just gets
+      // switched back on — no second welcome email, no new set-up link.
+      if (b.has_password) {
+        await patch(b.id, { status: "approved" });
+        showToast(`✓ ${b.company || b.name || b.email} is active again`);
+        setBusy(false);
+        return;
+      }
       await patch(b.id, { status: "approved", approved_at: new Date().toISOString() });
       const link = await invite(b);
       const omni = async payload => {
@@ -260,6 +268,19 @@ function BuyersTab({ showToast, siteUrl }) {
       showToast(`${list.length} links made — links last 14 days`);
     } catch (e) { showToast("⚠ " + e.message); }
     setBusy(false);
+  };
+
+  // Gone for good: the account, its login and its uploaded certificates.
+  // Their past enquiries stay (the buyer's details are copied onto each one).
+  const remove = async b => {
+    if (!window.confirm(`Delete ${b.company || b.name || b.email} (${b.email})?\n\nTheir login stops working and they'd have to apply again. Past enquiries are kept.`)) return;
+    try {
+      const paths = (b.resale_docs || []).map(d => d.path).filter(Boolean);
+      if (paths.length) await supabase.storage.from("trade-private").remove(paths);
+      await q(supabase.from("trade_buyers").delete().eq("id", b.id));
+      setRows(r => r.filter(x => x.id !== b.id));
+      showToast("Deleted");
+    } catch (e) { showToast("⚠ " + e.message); }
   };
 
   const openDoc = async d => {
@@ -326,10 +347,12 @@ function BuyersTab({ showToast, siteUrl }) {
               <Pill k={b.status}>{b.status === "pending" ? "waiting" : b.status}</Pill>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-              {b.status !== "approved" && <button disabled={busy} onClick={() => approve(b)} style={btn(C.green, "#fff")}>✓ Approve</button>}
+              {b.status !== "approved" && <button disabled={busy} onClick={() => approve(b)} style={btn(C.green, "#fff")}>{b.status === "paused" && b.has_password ? "▶ Reactivate" : "✓ Approve"}</button>}
               {b.status === "approved" && <button onClick={() => patch(b.id, { status: "paused" })} style={btn()}>Pause</button>}
               {b.status === "pending" && <button onClick={() => patch(b.id, { status: "declined" })} style={btn()}>Decline</button>}
               {b.status === "approved" && <button onClick={() => invite(b).catch(e => showToast("⚠ " + e.message))} style={btn()}>🔗 {b.has_password ? "Password reset link" : "Set-up link"}</button>}
+              <div style={{ flex: 1 }} />
+              <button onClick={() => remove(b)} style={{ ...btn(), color: C.red }} title="Delete this account">Delete</button>
             </div>
             {links[b.id] && (
               <div style={{ marginTop: 10, background: C.card, borderRadius: 8, padding: 10, fontSize: 12 }}>
