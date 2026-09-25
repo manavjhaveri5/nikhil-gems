@@ -195,7 +195,7 @@ function BuyersTab({ showToast, siteUrl }) {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => loadAll("trade_buyers",
-    "id,email,name,company,phone,city,state,country,resale_no,resale_docs,status,created_at,approved_at,last_login,shopify_id,notes,invite_expires,has_password",
+    "id,email,name,company,phone,city,state,country,resale_no,resale_docs,status,created_at,approved_at,last_login,shopify_id,notes,invite_expires,has_password,sells_on,marketing_opt_in,prefs",
     "created_at").then(setRows).catch(e => { showToast("⚠ " + e.message); setRows(r => r || []); }), [showToast]);
   useEffect(() => { load(); }, [load]);
 
@@ -214,6 +214,36 @@ function BuyersTab({ showToast, siteUrl }) {
     const link = `${siteUrl}/set-password?t=${token}`;
     setLinks(l => ({ ...l, [b.id]: link }));
     return link;
+  };
+
+  /* Approve = the whole welcome in one click: open the account, make the
+     set-password link, put an opted-in buyer on the mailing list, and fire the
+     same Omnisend event the Shopify approvals used, now carrying the link, so
+     the existing automation sends it. The link also stays on screen for
+     WhatsApp in case the email is slow or filtered. */
+  const approve = async b => {
+    setBusy(true);
+    try {
+      await patch(b.id, { status: "approved", approved_at: new Date().toISOString() });
+      const link = await invite(b);
+      const omni = async payload => {
+        const r = await fetch("/api/omnisend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.error) throw new Error(d.error || `Omnisend ${r.status}`);
+        return d;
+      };
+      const first = String(b.name || "").split(" ")[0];
+      const notes = [];
+      if (b.marketing_opt_in) {
+        await omni({ action: "contact_tag", email: b.email, addTags: ["approved", "active", "trade"], firstName: first, lastName: String(b.name || "").split(" ").slice(1).join(" ") })
+          .then(() => notes.push("added to the mailing list")).catch(e => notes.push(`⚠ list: ${e.message}`));
+      }
+      await omni({ action: "trigger_event", eventName: "wholesale_approved", email: b.email,
+        properties: { setup_url: link, first_name: first, company: b.company || "", site_url: siteUrl } })
+        .then(() => notes.push("approval email sent")).catch(e => notes.push(`⚠ email: ${e.message}`));
+      showToast(`✓ ${b.company || b.name} approved — ${notes.join(", ")}`);
+    } catch (e) { showToast("⚠ " + e.message); }
+    setBusy(false);
   };
 
   const bulkInvites = async () => {
@@ -268,7 +298,25 @@ function BuyersTab({ showToast, siteUrl }) {
                   {b.shopify_id ? "From Shopify" : `Applied ${fmtDate(b.created_at)}`}
                   {" · "}{b.has_password ? (b.last_login ? `last in ${fmtDate(b.last_login)}` : "password set") : "no password yet"}
                   {b.resale_no ? ` · Sales tax ID ${b.resale_no}` : ""}
+                  {b.marketing_opt_in ? " · ✉ opted in to emails" : ""}
                 </div>
+                {(b.sells_on?.channels || []).length > 0 && (
+                  <div style={{ fontSize: 12, color: C.inkMid, marginTop: 4 }}>
+                    <b style={{ fontWeight: 600 }}>Sells on:</b> {b.sells_on.channels.map(c => {
+                      const label = { instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", retail: "Retail store", website: "Online shop", other: "Other", collector: "Collector (bulk)" }[c] || c;
+                      const h = b.sells_on.handles?.[c];
+                      const href = !h ? null : c === "instagram" ? `https://instagram.com/${h.replace(/^@/, "").replace(/.*instagram\.com\//, "")}`
+                        : c === "tiktok" ? `https://www.tiktok.com/@${h.replace(/^@/, "").replace(/.*tiktok\.com\/@?/, "")}`
+                        : /^(https?:\/\/|www\.|[\w-]+\.[a-z]{2,})/i.test(h) ? (h.startsWith("http") ? h : `https://${h}`) : null;
+                      return <span key={c} style={{ marginRight: 10 }}>{label}{h ? <>: {href ? <a href={href} target="_blank" rel="noreferrer" style={{ color: C.blue }}>{h}</a> : h}</> : null}</span>;
+                    })}
+                  </div>
+                )}
+                {(b.prefs?.interests?.length > 0 || b.prefs?.buys || b.prefs?.contact) && (
+                  <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 2 }}>
+                    {[b.prefs.interests?.length ? `Likes ${b.prefs.interests.join(", ")}` : "", b.prefs.buys ? `buys ${b.prefs.buys}` : "", b.prefs.contact ? `prefers ${b.prefs.contact}` : ""].filter(Boolean).join(" · ")}
+                  </div>
+                )}
                 {(b.resale_docs || []).length > 0 && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
                     {b.resale_docs.map((d, i) => <button key={i} onClick={() => openDoc(d)} style={{ ...btn(C.blueBg, C.blue), padding: "3px 9px", fontSize: 11 }}>📄 {d.name}</button>)}
@@ -278,7 +326,7 @@ function BuyersTab({ showToast, siteUrl }) {
               <Pill k={b.status}>{b.status === "pending" ? "waiting" : b.status}</Pill>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-              {b.status !== "approved" && <button onClick={() => patch(b.id, { status: "approved", approved_at: new Date().toISOString() })} style={btn(C.green, "#fff")}>✓ Approve</button>}
+              {b.status !== "approved" && <button disabled={busy} onClick={() => approve(b)} style={btn(C.green, "#fff")}>✓ Approve</button>}
               {b.status === "approved" && <button onClick={() => patch(b.id, { status: "paused" })} style={btn()}>Pause</button>}
               {b.status === "pending" && <button onClick={() => patch(b.id, { status: "declined" })} style={btn()}>Decline</button>}
               {b.status === "approved" && <button onClick={() => invite(b).catch(e => showToast("⚠ " + e.message))} style={btn()}>🔗 {b.has_password ? "Password reset link" : "Set-up link"}</button>}
