@@ -233,8 +233,9 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
   const onDragMove = e => {
     const d = dragRef.current, g = geoRef.current;
     if (!d || !g) return;
-    const px = -((e.clientX - d.x) / d.rect.width) * g.w;
-    const py = -((e.clientY - d.y) / d.rect.height) * g.h;
+    // A mirrored frame reads the photo backwards along that axis, so the drag does too.
+    const px = -((e.clientX - d.x) / d.rect.width) * g.w * (geo.flipH ? -1 : 1);
+    const py = -((e.clientY - d.y) / d.rect.height) * g.h * (geo.flipV ? -1 : 1);
     setCrop({
       cx: clamp(d.cx + (g.cos * px - g.sin * py) / g.W, 0, 1),
       cy: clamp(d.cy + (g.sin * px + g.cos * py) / g.H, 0, 1),
@@ -357,6 +358,10 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                   style={{ ...btn("transparent", C.ink), padding: "5px 9px", fontSize: 13 }}>↺</button>
                 <button type="button" title="Turn right" onClick={() => setGeo(g => ({ ...g, rotate: (g.rotate + 1) % 4 }))}
                   style={{ ...btn("transparent", C.ink), padding: "5px 9px", fontSize: 13 }}>↻</button>
+                <button type="button" title="Flip left ↔ right" aria-pressed={!!geo.flipH} onClick={() => setGeo(g => ({ ...g, flipH: !g.flipH }))}
+                  style={{ ...btn(geo.flipH ? C.teal : "transparent", geo.flipH ? "#fff" : C.ink), padding: "5px 9px", fontSize: 13 }}>⇋</button>
+                <button type="button" title="Flip top ↕ bottom" aria-pressed={!!geo.flipV} onClick={() => setGeo(g => ({ ...g, flipV: !g.flipV }))}
+                  style={{ ...btn(geo.flipV ? C.teal : "transparent", geo.flipV ? "#fff" : C.ink), padding: "5px 9px", fontSize: 13 }}>⇵</button>
               </div>
 
               <Slider label="Straighten" hint="a hand-held shot is never quite level" min={-15} max={15} step={0.5} unit="°"
