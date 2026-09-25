@@ -594,3 +594,51 @@ function SettingsTab({ settings, reload, showToast }) {
     </div>
   );
 }
+
+/* ── Listing Manager hooks ────────────────────────────────────────────────
+   The trade site is a platform in Listing Manager like Etsy or Shopify: its
+   tab is the products panel above, and a listing can be pushed to it. Both
+   write the same trade_products rows the site reads, so a change shows on
+   trade.eartheditions.co as soon as it's saved. */
+export { ProductsTab as TradeProductsPanel };
+
+const plain = html => String(html || "").replace(/<\s*br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n\n")
+  .replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\n{3,}/g, "\n\n").trim();
+
+export async function publishListingToTrade(listing, { syncOnly = false } = {}) {
+  const id = listing.platforms?.trade?.product_id || `lm-${listing.id}`;
+  const [existing, site] = await Promise.all([
+    q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,collections").eq("id", id).maybeSingle()),
+    q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
+  ]);
+  const price = +listing.price_trade || 0;
+  const v0 = existing?.variants?.[0] || {};
+  const images = (listing.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
+  const live = syncOnly ? (existing ? existing.live : false) : true;
+  const row = {
+    id,
+    title: String(listing.shopify_title || listing.title || "").trim(),
+    description: plain(listing.shopify_description || listing.description),
+    shape: listing.shape || "", material: listing.material || "", product_type: listing.productType || "",
+    tags: Array.isArray(listing.tags) ? listing.tags : [],
+    images,
+    variants: [{ id: v0.id || uid(), title: "Default Title", price, sku: listing.sku || "", stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null }],
+    price,
+    stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null,
+    unit: existing?.unit || "piece",
+    live,
+    is_new: existing ? existing.is_new : true,
+    new_at: existing?.new_at || new Date().toISOString(),
+    is_deal: !!(existing?.is_deal || listing._dealOnPublish),
+    source: { listing_id: listing.id, sku: listing.sku || "" },
+    updated_at: new Date().toISOString(),
+  };
+  await q(supabase.from("trade_products").upsert(row, { onConflict: "id" }));
+  const base = String(site?.value || "https://trade.eartheditions.co").replace(/\/+$/, "");
+  return { product_id: id, url: `${base}/p/${id}`, status: live ? "active" : "draft" };
+}
+
+export async function hideTradeProduct(productId) {
+  if (!productId) throw new Error("Not on the trade site");
+  await q(supabase.from("trade_products").update({ live: false, updated_at: new Date().toISOString() }).eq("id", productId));
+}
