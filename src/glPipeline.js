@@ -235,10 +235,32 @@ export async function fitToTexture(bitmap) {
 
 /* Fetched rather than pointed at with <img src>, so the canvas is never tainted
    and the edited pixels can be read back out on save. */
-export async function loadBitmap(url) {
-  const res = await fetch(url, { mode: "cors" });
+export async function loadBitmap(url, { onProgress } = {}) {
+  /* The listing already showed this photo, so the browser usually has it:
+     take the cached copy rather than pulling megabytes again over a phone
+     connection. If the cached copy can't be used cross-origin, fetch fresh. */
+  let res = null;
+  try { res = await fetch(url, { mode: "cors", cache: "force-cache" }); } catch { res = null; }
+  if (!res || !res.ok) res = await fetch(url, { mode: "cors", cache: "reload" });
   if (!res.ok) throw new Error(`Couldn't load the photo (${res.status})`);
-  return fitToTexture(await createImageBitmap(await res.blob()));
+  return fitToTexture(await createImageBitmap(await readWithProgress(res, onProgress)));
+}
+
+/* Stream the body so a slow download can show how far along it is. */
+async function readWithProgress(res, onProgress) {
+  const total = +res.headers.get("content-length") || 0;
+  if (!onProgress || !total || !res.body?.getReader) return res.blob();
+  const reader = res.body.getReader();
+  const chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    onProgress(Math.min(1, got / total));
+  }
+  return new Blob(chunks, { type: res.headers.get("content-type") || "image/jpeg" });
 }
 
 /* ── The pipeline itself ──────────────────────────────────────────────────── */

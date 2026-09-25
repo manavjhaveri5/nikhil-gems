@@ -37,6 +37,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
      never one photo's problem — a lot is shot in one sitting under one light. */
   const all = Array.isArray(photos) && photos.length > 1 && typeof onSaveAll === "function" ? photos : null;
   const [ready, setReady] = useState(false);
+  const [loadPct, setLoadPct] = useState(0);
   const [adjust, setAdjust] = useState(NEUTRAL);
   const [bands, setBands] = useState([]);
   const [curves, setCurves] = useState(emptyCurves);
@@ -119,7 +120,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     let cancelled = false;
     (async () => {
       try {
-        const bitmap = await loadBitmap(url);
+        const bitmap = await loadBitmap(url, { onProgress: f => { if (!cancelled) setLoadPct(Math.round(f * 100)); } });
         if (cancelled) return;
         bitmapRef.current = bitmap;
         setDims({ w: bitmap.width, h: bitmap.height });
@@ -299,7 +300,19 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                     boxShadow: "inset 0 0 0 1px rgba(255,255,255,.6)" }} />
                 )}
               </div>
-              {!ready && <div style={{ fontSize: 12, color: C.inkFaint }}>{err ? "—" : "Loading the photo…"}</div>}
+              {/* The plain photo shows straight away (the browser has it from the
+                  listing) while the editable copy loads behind it. */}
+              {!ready && (err
+                ? <div style={{ fontSize: 12, color: C.inkFaint }}>—</div>
+                : <div style={{ position: "relative", lineHeight: 0 }}>
+                    <img src={url} alt="" style={{ maxWidth: "100%", maxHeight: narrow ? "min(320px, 45vh)" : "min(52vh, 460px)",
+                      borderRadius: 8, display: "block", opacity: .55 }} />
+                    <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
+                      background: "rgba(20,15,8,.72)", color: "#FAF0DC", borderRadius: 20, padding: "6px 12px",
+                      fontSize: 11.5, fontWeight: 700, lineHeight: 1.3, whiteSpace: "nowrap" }}>
+                      {loadPct > 0 && loadPct < 100 ? `Loading ${loadPct}%` : "Getting it ready…"}
+                    </div>
+                  </div>)}
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
