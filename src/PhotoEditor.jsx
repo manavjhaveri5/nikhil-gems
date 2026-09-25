@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { C, mob, FI } from "./lmTheme.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { CurveEditor, emptyCurves, curvesTouched } from "./ToneCurve.jsx";
@@ -248,11 +249,15 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
   const btn = (bg, fg) => ({ background: bg, color: fg, border: bg === "transparent" ? `1px solid ${C.border}` : "none",
     borderRadius: 8, padding: "9px 15px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" });
 
-  return (
+  /* Portalled to <body> so no parent stacking context (the phone tab bar's
+     among them) can end up drawn over the editor. */
+  const stack = gap => ({ display: "grid", gridTemplateColumns: "minmax(0,1fr)", alignContent: "start", gap, flexShrink: 0 });
+  return createPortal(
     <div onMouseDown={e => e.target === e.currentTarget && onClose()}
       style={{ position: "fixed", inset: 0, zIndex: 2100, background: "rgba(20,15,8,.78)",
         display: "grid", placeItems: "center", padding: narrow ? 0 : 20 }}>
       <div style={{ background: C.bg, borderRadius: narrow ? 0 : 14, width: "min(1040px,100%)", maxHeight: "100%",
+        height: narrow ? "100%" : "auto",
         display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 24px 80px rgba(0,0,0,.45)" }}>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px",
@@ -266,20 +271,26 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
         {/* Two columns that scroll on their own: the controls are a long list and
             the picture is the thing being judged, so scrolling the sliders must
             never carry the preview off the top of the screen. */}
-        <div style={{ flex: 1, minHeight: 0, display: "grid", gap: 14, padding: 14,
-          overflowY: narrow ? "auto" : "hidden",
-          gridTemplateColumns: narrow ? "1fr" : "1fr 320px" }}>
+        {/* On a phone the columns stack and the body scrolls as one. Flex with
+            nothing allowed to shrink: a grid here squeezed its rows to the
+            screen height, so the photo spilled over the buttons below it. */}
+        <div style={{ flex: 1, minHeight: 0, gap: 14, padding: 14,
+          ...(narrow
+            ? { display: "flex", flexDirection: "column", overflowY: "auto", WebkitOverflowScrolling: "touch",
+                paddingBottom: "calc(14px + env(safe-area-inset-bottom))" }
+            : { display: "grid", overflowY: "hidden", gridTemplateColumns: "1fr 320px" }) }}>
 
           {/* Canvas */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0,
-            overflowY: narrow ? "visible" : "auto" }}>
+          <div style={narrow ? stack(10)
+            : { display: "flex", flexDirection: "column", gap: 10, minWidth: 0, minHeight: 0, overflowY: "auto" }}>
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 10,
-              display: "grid", placeItems: "center", minHeight: 240 }}>
+              display: "grid", placeItems: "center", minHeight: narrow ? 180 : 240 }}>
               <div style={{ position: "relative", display: ready ? "block" : "none", lineHeight: 0 }}>
                 <canvas ref={canvasRef}
                   onPointerDown={onDragStart} onPointerMove={onDragMove}
                   onPointerUp={onDragEnd} onPointerCancel={onDragEnd}
-                  style={{ maxWidth: "100%", maxHeight: narrow ? 320 : "min(52vh, 460px)", borderRadius: 8,
+                  style={{ maxWidth: "100%", width: "auto", height: "auto",
+                    maxHeight: narrow ? "min(320px, 45vh)" : "min(52vh, 460px)", borderRadius: 8,
                     display: "block", touchAction: geo.crop.on ? "none" : "auto",
                     cursor: geo.crop.on ? (dragging ? "grabbing" : "grab") : "default" }} />
                 {dragging && (
@@ -325,8 +336,8 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
           </div>
 
           {/* Controls */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0, minHeight: 0,
-            overflowY: narrow ? "visible" : "auto", paddingRight: narrow ? 0 : 4 }}>
+          <div style={narrow ? stack(12)
+            : { display: "flex", flexDirection: "column", gap: 12, minWidth: 0, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 8 }}>
               <label style={lab}>Tell it what you want</label>
               <textarea value={ask} onChange={e => setAsk(e.target.value)} rows={2}
@@ -506,6 +517,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
