@@ -1279,6 +1279,67 @@ export default async function handler(req, res) {
 
   const { action, listing, platform, store_key } = body;
 
+  /* ── STORE ORDER (called by eartheditions.co's Stripe webhook) ────────────
+     Files the paid order under Orders — one row per piece, as Mark sold does —
+     and takes one-of-a-kind pieces off Etsy and eBay. Stock counts are left
+     alone on purpose; they're adjusted by hand for now. Only the store can
+     call this: it must present the shared secret. */
+  if (action === "store_sold") {
+    const secret = process.env.STORE_SYNC_SECRET;
+    if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });
+    const order = body.order || {};
+    const sb = createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+    const readKey = async k => {
+      const { data } = await sb.from("app_data").select("value").eq("key", k).maybeSingle();
+      const v = typeof data?.value === "string" ? JSON.parse(data.value) : data?.value;
+      return Array.isArray(v) ? v : [];
+    };
+    const upsert = (k, item, prepend = true) => sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: prepend });
+    const [orders, listings] = await Promise.all([readKey("ng-orders-v1"), readKey("ng-listings-v1")]);
+    let n = orders.reduce((m, o) => Math.max(m, parseInt(String(o.order_number || "").replace(/\D/g, ""), 10) || 0), 0);
+    const addr = order.shipping || {};
+    const results = [];
+    for (const [i, line] of (order.lines || []).entries()) {
+      const L = listings.find(x => x.id === line.listing_id);
+      const id = `store-${order.number}-${i + 1}`;
+      if (!orders.some(o => o.id === id)) {
+        n += 1;
+        await upsert("ng-orders-v1", {
+          id, order_number: `ORD-${String(n).padStart(4, "0")}`,
+          listing_id: line.listing_id || "", listing_title: line.title || L?.title || "",
+          listing_material: L?.material || "", listing_shape: L?.shape || "", listing_sku: line.sku || L?.sku || "",
+          listing_order_id: L?.listing_order_id || "", listing_image: line.image || L?.images?.[0] || "",
+          platform: "store", platform_order_id: order.number, sale_price: String((line.price || 0) * (line.qty || 1)),
+          currency: "USD", qty: line.qty || 1, buyer_name: order.name || "", buyer_email: order.email || "",
+          buyer_country: addr.country || "", ship_to: addr, status: "sold",
+          date: String(order.created_at || new Date().toISOString()).slice(0, 10),
+          notes: order.notes || "", created_at: new Date().toISOString(),
+        });
+      }
+      // A one-off piece can only sell once: pull it everywhere else.
+      if (line.unique && L) {
+        const plats = { ...(L.platforms || {}) };
+        const done = [];
+        if (plats.etsy?.listing_id && plats.etsy.status === "active") {
+          try { await unpublishEtsy(plats.etsy.listing_id); plats.etsy = { ...plats.etsy, status: "deleted" }; done.push("etsy"); }
+          catch (e) { done.push(`etsy failed: ${e.message}`); }
+        }
+        if (plats.ebay?.item_id && plats.ebay.status === "active") {
+          try {
+            const r = await fetch(`https://${req.headers.host}/api/ebay?action=end_item&item_id=${encodeURIComponent(plats.ebay.item_id)}`, { method: "POST" });
+            const d = await r.json().catch(() => ({}));
+            if (!d.ok) throw new Error(d.error || r.status);
+            plats.ebay = { status: "deleted" }; done.push("ebay");
+          } catch (e) { done.push(`ebay failed: ${e.message}`); }
+        }
+        plats.store = { ...(plats.store || {}), status: "sold" };
+        await upsert("ng-listings-v1", { ...L, platforms: plats, updated_at: new Date().toISOString() }, false);
+        results.push({ listing: L.id, done });
+      }
+    }
+    return res.json({ ok: true, results });
+  }
+
   try {
 
     /* ── AI: generate platform-specific content ──────────────────────────── */

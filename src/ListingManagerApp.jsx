@@ -20,6 +20,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct } from "./TradeSiteApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct } from "./StoreApp.jsx";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -733,6 +734,7 @@ const PLATFORMS = [
   { key:"shopify_aty",   label:"Atyahara",     icon:"💫", color:"#6B3FA0", priceField:"price_shopify_aty",  currency:"INR" },
   { key:"ebay",          label:"eBay",         icon:"🔨", color:"#0064D2", priceField:"price_ebay",          currency:"USD" },
   { key:"trade",         label:"Trade site",   icon:"🤝", color:"#1F8F4E", priceField:"price_trade",         currency:"USD" },
+  { key:"store",         label:"EE store",     icon:"🛒", color:"#141210", priceField:"price_store",         currency:"USD" },
 ];
 
 
@@ -2461,7 +2463,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 if (p.key === "etsy" && pd.listing_id) return true;
                 if (p.key === "ebay" && pd.item_id) return true;
                 if ((p.key === "shopify_aty" || p.key === "shopify_earth") && pd.product_id) return true;
-                if (p.key === "trade" && pd.product_id) return true;
+                if ((p.key === "trade" || p.key === "store") && pd.product_id) return true;
                 return false;
               });
               const linkedKeys = new Set(linkedPlatforms.map(p => p.key));
@@ -8638,7 +8640,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           if (p.key === "etsy" && pd.listing_id) return true;
           if (p.key === "ebay" && pd.item_id) return true;
           if ((p.key === "shopify_aty" || p.key === "shopify_earth") && pd.product_id) return true;
-          if (p.key === "trade" && pd.product_id) return true;
+          if ((p.key === "trade" || p.key === "store") && pd.product_id) return true;
           return false;
         }).map(p => p.key)
       : [];
@@ -8728,6 +8730,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (pkey === "trade") {
       // Straight into the trade site's table — no marketplace API in between.
       result = await publishListingToTrade(listing, { syncOnly });
+    } else if (pkey === "store") {
+      // eartheditions.co: price in USD, converted from Etsy's rupees unless set.
+      result = await publishListingToStore(listing, { syncOnly });
     } else if (pkey === "ebay") {
       // eBay — call ebay.js directly
       const existingItemId = listing.platforms?.ebay?.item_id;
@@ -8871,6 +8876,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (pkey === "etsy")             { action = "unpublish_etsy"; }
     else if (pkey === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
     else if (pkey === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
+    else if (pkey === "store") {
+      await hideStoreProduct(listing.platforms?.store?.product_id);
+      await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, store: { ...current.platforms?.store, status: "draft" } }, updated_at: now() }));
+      return;
+    }
     else if (pkey === "trade") {
       await hideTradeProduct(listing.platforms?.trade?.product_id);
       await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, trade: { ...current.platforms?.trade, status: "draft" } }, updated_at: now() }));
@@ -8935,6 +8945,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         else if (p.key === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
         else if (p.key === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
         else if (p.key === "trade") { await hideTradeProduct(listing.platforms?.trade?.product_id).catch(e => console.warn("Trade hide failed:", e.message)); return; }
+        else if (p.key === "store") { await hideStoreProduct(listing.platforms?.store?.product_id).catch(e => console.warn("Store hide failed:", e.message)); return; }
         else if (p.key === "ebay") {
           const itemId = listing.platforms?.ebay?.item_id;
           if (!itemId) return;
@@ -9204,7 +9215,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           />
         )}
         {tab === "trade" && <TradeProductsPanel showToast={showToast} />}
-        {activePlatform && tab !== "etsy" && tab !== "ebay" && tab !== "shopify_earth" && tab !== "shopify_aty" && tab !== "trade" && (
+        {tab === "store" && <StoreProductsPanel showToast={showToast} />}
+        {activePlatform && tab !== "etsy" && tab !== "ebay" && tab !== "shopify_earth" && tab !== "shopify_aty" && tab !== "trade" && tab !== "store" && (
           <PlatformView
             platform={activePlatform}
             listings={listings}
