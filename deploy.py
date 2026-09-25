@@ -49,6 +49,13 @@ def curl_upload(path, sha, size):
         return True, result.stdout
     return result.returncode == 0, result.stderr[:200]
 
+# A build made without .env (e.g. in a fresh worktree) has no Supabase URL baked
+# in and ships a blank page. Refuse it.
+_assets = os.path.join(DIST_DIR, "assets")
+if not any(".supabase.co" in open(os.path.join(_assets, fn), errors="ignore").read()
+           for fn in os.listdir(_assets) if fn.endswith(".js")):
+    sys.exit("dist/ has no Supabase URL — copy .env into this checkout and rebuild before deploying.")
+
 # Collect dist/ files (mapped to root paths)
 files = []
 for root, dirs, filenames in os.walk(DIST_DIR):
