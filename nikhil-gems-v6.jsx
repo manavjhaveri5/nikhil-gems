@@ -22753,6 +22753,11 @@ const ALL_STAFF_MODS=[
   {id:"bgremove",label:"Background Remover"},
   {id:"misc",label:"Miscellaneous"},
   {id:"journal",label:"Stock Journal"},
+  {id:"omnisend",label:"Omnisend"},
+  {id:"trade",label:"Trade Site"},
+  // Books and personal papers: assignable, but never ticked by default.
+  {id:"finance",label:"Finance",sensitive:true},
+  {id:"documents",label:"Documents",sensitive:true},
 ];
 const TODO_KEY_FOR=(email)=>email?`ng-todos-${email.replace(/[^a-z0-9]/gi,"-")}-v1`:"ng-todos-v1";
 
@@ -22780,7 +22785,7 @@ function UsersApp({onHome}){
 
   const saveUsers=async(next)=>{setUsers(next);await saveK("ng-users-v1",next);};
 
-  const openNew=()=>setForm({name:"",email:"",password:"",allowedModules:ALL_STAFF_MODS.map(m=>m.id),supabaseId:""});
+  const openNew=()=>setForm({name:"",email:"",password:"",allowedModules:ALL_STAFF_MODS.filter(m=>!m.sensitive).map(m=>m.id),supabaseId:""});
   const openEdit=(u)=>setForm({...u,password:""});
 
   const toggleMod=(id)=>setForm(f=>{
@@ -23294,7 +23299,7 @@ export default function Root({onSignOut}){
     else if(mod==="calendar")content=<CalendarApp onHome={goHome}/>;
     else if(mod==="recon")content=<ExportReconShell onHome={goHome} onCreateInvoiceFromSb={(draft,coKey)=>{localStorage.setItem("ng-vendors-company",(coKey==="nikhil"||coKey==="ng")?"ng":"at");setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}}/>;
     else if(mod==="invoices")content=<InvoicesApp onHome={()=>{goHome();setStartInvoiceDraft(null);setStartInvoiceId(null);}} startDraft={startInvoiceDraft} startInvoiceId={startInvoiceId} onInvoiceIdConsumed={()=>setStartInvoiceId(null)}/>;
-    else if(mod==="finance"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><FinanceApp onHome={goHome}/></React.Suspense>;
+    else if(mod==="finance"&&(isAdmin||allowedMods.some(m=>m.id==="finance")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><FinanceApp onHome={goHome}/></React.Suspense>;
     else if(mod==="jobwork")content=<JobWorkApp onHome={goHome}/>;
     else if(mod==="etsy")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp currentUser={currentUser} onHome={goHome} onOpenInvoice={openInvoiceModuleTarget} onViewInvoicePdf={viewInvoicePdfTarget}/></React.Suspense>;
     else if(mod==="orders")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ListingManagerApp currentUser={currentUser} onHome={goHome} startTab="orders" onOpenInvoice={openInvoiceModuleTarget} onViewInvoicePdf={viewInvoicePdfTarget}/></React.Suspense>;
@@ -23316,7 +23321,7 @@ export default function Root({onSignOut}){
     else if(mod==="images")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ImageLibraryApp onHome={goHome}/></React.Suspense>;
     else if(mod==="bgremove")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><BgRemoveSandbox onHome={goHome}/></React.Suspense>;
     else if(mod==="misc")content=<MiscApp onHome={goHome}/>;
-    else if(mod==="documents"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DocumentsApp onHome={goHome} currentUser={currentUser}/></React.Suspense>;
+    else if(mod==="documents"&&(isAdmin||allowedMods.some(m=>m.id==="documents")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DocumentsApp onHome={goHome} currentUser={currentUser}/></React.Suspense>;
     else if(mod==="journal")content=<StockJournalApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
   }
   const handleGoToActivity=act=>{
