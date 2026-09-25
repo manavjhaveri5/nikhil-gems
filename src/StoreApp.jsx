@@ -369,6 +369,8 @@ function SettingsTab({ settings, reload, showToast }) {
     fx: settings.fx_inr_per_usd ?? 84, rounding: settings.price_rounding || "whole",
     regions: settings.shipping?.regions?.length ? settings.shipping.regions : [{ name: "United States", countries: ["US"], rate: 0, free_over: 0 }, { name: "Rest of world", countries: ["*"], rate: 0, free_over: 0 }],
     announcement: settings.announcement || "", about: settings.about || "", site_url: settings.site_url || "",
+    contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
+    dispatch_note: settings.dispatch_note || "", returns_note: settings.returns_note || "",
   }));
   const [busy, setBusy] = useState(false);
   const setR = (i, k, v) => setF(x => ({ ...x, regions: x.regions.map((r, j) => j === i ? { ...r, [k]: v } : r) }));
@@ -380,6 +382,9 @@ function SettingsTab({ settings, reload, showToast }) {
         { key: "fx_inr_per_usd", value: +f.fx || 84 }, { key: "price_rounding", value: f.rounding },
         { key: "shipping", value: { regions } }, { key: "announcement", value: f.announcement.trim() },
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
+        { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
+        { key: "whatsapp", value: f.whatsapp.replace(/[^\d]/g, "") },
+        { key: "dispatch_note", value: f.dispatch_note.trim() }, { key: "returns_note", value: f.returns_note.trim() },
       ], { onConflict: "key" }));
       await reload();
       showToast("Saved — the store picks it up within a minute");
@@ -414,6 +419,16 @@ function SettingsTab({ settings, reload, showToast }) {
         <div><span style={lab}>Announcement bar (blank = free-shipping line)</span><input value={f.announcement} onChange={e => setF(x => ({ ...x, announcement: e.target.value }))} style={FI()} /></div>
         <div><span style={lab}>About page (blank line = new paragraph)</span><textarea value={f.about} onChange={e => setF(x => ({ ...x, about: e.target.value }))} style={FI({ minHeight: 120, resize: "vertical" })} /></div>
         <div><span style={lab}>Store address</span><input value={f.site_url} onChange={e => setF(x => ({ ...x, site_url: e.target.value }))} style={FI()} /></div>
+      </div>
+      <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
+        <div style={{ fontWeight: 700 }}>Contact & policies <span style={{ fontWeight: 400, fontSize: 12, color: C.inkFaint }}>— shown on Contact and Shipping & returns</span></div>
+        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr 1fr", gap: 10 }}>
+          <div><span style={lab}>Email</span><input value={f.contact_email} onChange={e => setF(x => ({ ...x, contact_email: e.target.value }))} placeholder="hello@eartheditions.co" style={FI()} /></div>
+          <div><span style={lab}>Instagram</span><input value={f.instagram} onChange={e => setF(x => ({ ...x, instagram: e.target.value }))} placeholder="@eartheditions" style={FI()} /></div>
+          <div><span style={lab}>WhatsApp</span><input value={f.whatsapp} onChange={e => setF(x => ({ ...x, whatsapp: e.target.value }))} placeholder="Country code + number" style={FI()} /></div>
+        </div>
+        <div><span style={lab}>Dispatch time (e.g. "Orders ship within 3–5 business days from …")</span><input value={f.dispatch_note} onChange={e => setF(x => ({ ...x, dispatch_note: e.target.value }))} style={FI()} /></div>
+        <div><span style={lab}>Returns policy (blank = 14-day "we'll make it right" wording)</span><textarea value={f.returns_note} onChange={e => setF(x => ({ ...x, returns_note: e.target.value }))} style={FI({ minHeight: 90, resize: "vertical" })} /></div>
       </div>
       <div><button onClick={save} disabled={busy} style={btn(C.ink, "#FAF0DC")}>{busy ? "Saving…" : "Save settings"}</button></div>
     </div>
