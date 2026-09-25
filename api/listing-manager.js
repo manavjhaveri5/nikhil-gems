@@ -1287,9 +1287,9 @@ export default async function handler(req, res) {
   const { action, listing, platform, store_key } = body;
 
   /* ── STORE ORDER (called by eartheditions.co's Stripe webhook) ────────────
-     Files the paid order under Orders — one row per piece, as Mark sold does —
-     and takes one-of-a-kind pieces off Etsy and eBay. Stock counts are left
-     alone on purpose; they're adjusted by hand for now. Only the store can
+     Files the paid order under Orders — one row per piece, as Mark sold does.
+     Taking one-of-a-kind pieces down from Etsy/eBay is approved by hand from
+     that order. Stock counts are left alone on purpose; adjusted by hand. Only the store can
      call this: it must present the shared secret. */
   /* The store's daily check: which Etsy listings are still live. A piece that
      sold (or was taken down) on Etsy must not stay for sale on the store. */
@@ -1340,24 +1340,11 @@ export default async function handler(req, res) {
           notes: order.notes || "", created_at: new Date().toISOString(),
         });
       }
-      // A one-off piece can only sell once: pull it everywhere else.
+      // Taking the piece down elsewhere is approved by hand from the order in
+      // Listing Manager → Orders; here only the store's own status is recorded.
       if (line.unique && L) {
-        const plats = { ...(L.platforms || {}) };
-        const done = [];
-        if (plats.etsy?.listing_id && plats.etsy.status === "active") {
-          try { await unpublishEtsy(plats.etsy.listing_id); plats.etsy = { ...plats.etsy, status: "deleted" }; done.push("etsy"); }
-          catch (e) { done.push(`etsy failed: ${e.message}`); }
-        }
-        if (plats.ebay?.item_id && plats.ebay.status === "active") {
-          try {
-            const d = await endEbayItem(plats.ebay.item_id);
-            if (!d.ok) throw new Error(d.error);
-            plats.ebay = { status: "deleted" }; done.push("ebay");
-          } catch (e) { done.push(`ebay failed: ${e.message}`); }
-        }
-        plats.store = { ...(plats.store || {}), status: "sold" };
-        await upsert("ng-listings-v1", { ...L, platforms: plats, updated_at: new Date().toISOString() }, false);
-        results.push({ listing: L.id, done });
+        await upsert("ng-listings-v1", { ...L, platforms: { ...(L.platforms || {}), store: { ...(L.platforms?.store || {}), status: "sold" } }, updated_at: new Date().toISOString() }, false);
+        results.push({ listing: L.id });
       }
     }
     return res.json({ ok: true, results });

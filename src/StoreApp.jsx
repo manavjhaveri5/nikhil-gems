@@ -103,6 +103,10 @@ export async function publishListingToStore(listing, { syncOnly = false } = {}) 
   const base = String(s.site_url || "https://eartheditions.co").replace(/\/+$/, "");
   return { product_id: id, url: `${base}/products/${row.handle}`, status: row.status === "active" ? "active" : "draft" };
 }
+export async function markStoreSold(productId) {
+  if (!productId) throw new Error("Not on the store");
+  await q(supabase.from("store_products").update({ status: "sold", sold_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", productId));
+}
 export async function hideStoreProduct(productId) {
   if (!productId) throw new Error("Not on the store");
   await q(supabase.from("store_products").update({ status: "hidden", updated_at: new Date().toISOString() }).eq("id", productId).neq("status", "sold"));

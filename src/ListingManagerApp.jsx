@@ -20,7 +20,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold } from "./StoreApp.jsx";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -2913,7 +2913,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 /* ══════════════════════════════════════════════════════════════════════════
    ORDERS VIEW
 ══════════════════════════════════════════════════════════════════════════ */
-function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoice, onViewInvoicePdf }) {
+function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoice, onViewInvoicePdf, onDelist }) {
   const [pFilter,  setPFilter]  = useState("all");
   const [shipFilter, setShipFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("this_month");
@@ -3759,6 +3759,73 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
       setInvoiceState(s => ({ ...s, [receiptId]: { loading: false, error: e.message || "Could not create invoice", success: "" } }));
     }
   };
+  /* ── Sold one-off: take it down elsewhere, with approval ────────────────
+     A unique piece sold on one platform is still live on the others until it
+     comes down. Nothing is removed automatically: this lists where it's live,
+     and removes what's ticked when approved. */
+  const [delistPick, setDelistPick] = useState({});
+  const [delistBusy, setDelistBusy] = useState({});
+  const soldOnKey = o => o.platform === "store" ? "store" : isEtsyOrder(o) ? "etsy" : isEbayOrder(o) ? "ebay" : isAtyahOrder(o) ? "shopify_aty" : o.platform || "";
+  const findOrderListing = o => {
+    const norm = v => String(v || "").trim().toLowerCase();
+    return listings.find(l => o.listing_id && l.id === o.listing_id)
+      || listings.find(l => o.etsy_listing_id && String(l.platforms?.etsy?.listing_id || "") === String(o.etsy_listing_id))
+      || listings.find(l => o.listing_sku && norm(l.sku) === norm(o.listing_sku)) || null;
+  };
+  const liveElsewhere = (o, l) => PLATFORMS.filter(p => !p.coming && p.key !== soldOnKey(o) && l.platforms?.[p.key]?.status === "active"
+    && (p.key !== "store" && p.key !== "trade" ? true : !!l.platforms?.[p.key]?.product_id));
+  const renderDelist = o => {
+    const l = findOrderListing(o);
+    const box = { marginTop: 12, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 };
+    const head = <div style={{ fontSize: 13.5, fontWeight: 850, color: C.ink }}>Take it down elsewhere</div>;
+    if (!l) return <div style={box}>{head}<div style={{ fontSize: 12, color: C.inkFaint, marginTop: 4 }}>No listing linked to this order, so there's nothing to check.</div></div>;
+    if (l.type === "repeatable") return <div style={box}>{head}<div style={{ fontSize: 12, color: C.inkFaint, marginTop: 4 }}>Repeatable listing — it stays up everywhere.</div></div>;
+    const done = o._delisted || [];
+    const live = liveElsewhere(o, l);
+    const picked = delistPick[o.id] || Object.fromEntries(live.map(p => [p.key, true]));
+    const chosen = live.filter(p => picked[p.key]);
+    const approve = async () => {
+      if (!chosen.length) return;
+      if (!window.confirm(`Take "${l.title}" down from ${chosen.map(p => p.label).join(", ")}?${chosen.some(p => p.key === "store") ? "\n(The store keeps it on show, marked Sold.)" : ""}`)) return;
+      setDelistBusy(s => ({ ...s, [o.id]: true }));
+      const results = [];
+      for (const p of chosen) {
+        try { await onDelist?.(l, p.key); results.push({ key: p.key, label: p.label, ok: true }); }
+        catch (e) { results.push({ key: p.key, label: p.label, ok: false, error: e.message || "failed" }); }
+      }
+      await patchOrder(o, { _delisted: [...done.filter(d => !results.some(r => r.key === d.key)), ...results], _delistedAt: new Date().toISOString() });
+      setDelistBusy(s => ({ ...s, [o.id]: false }));
+      const bad = results.filter(r => !r.ok);
+      showToast?.(bad.length ? `⚠ ${bad.map(r => `${r.label}: ${r.error}`).join(" · ")}` : `✓ Taken down from ${results.map(r => r.label).join(", ")}`);
+    };
+    return (
+      <div style={{ ...box, borderLeft: `4px solid ${live.length ? C.amber : C.green}` }}>
+        {head}
+        <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3 }}>One of a kind, sold on {PLATFORMS.find(p => p.key === soldOnKey(o))?.label || "this platform"}.{live.length ? " It's still live on:" : ""}</div>
+        {done.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            {done.map(d => <span key={d.key} title={d.error || ""} style={{ fontSize: 11, fontWeight: 800, borderRadius: 6, padding: "3px 8px", background: d.ok ? C.greenBg : C.redBg, color: d.ok ? C.green : C.red }}>{d.ok ? "✓" : "⚠"} {d.label}{d.ok ? " removed" : " failed"}</span>)}
+          </div>
+        )}
+        {live.length > 0 ? (
+          <>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              {live.map(p => (
+                <label key={p.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, padding: "6px 10px", borderRadius: 8, border: `1px solid ${picked[p.key] ? p.color : C.border}`, background: picked[p.key] ? `${p.color}14` : C.surface, cursor: "pointer" }}>
+                  <input type="checkbox" checked={!!picked[p.key]} onChange={e => setDelistPick(s => ({ ...s, [o.id]: { ...picked, [p.key]: e.target.checked } }))} />
+                  {p.icon} {p.label}{p.key === "store" ? " (→ Sold)" : ""}
+                </label>
+              ))}
+            </div>
+            <button onClick={approve} disabled={!chosen.length || delistBusy[o.id]} style={{ marginTop: 10, background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: chosen.length ? "pointer" : "not-allowed", opacity: chosen.length ? 1 : .5 }}>
+              {delistBusy[o.id] ? "Taking down…" : `Approve — take down from ${chosen.length}`}
+            </button>
+          </>
+        ) : <div style={{ fontSize: 12, color: C.green, fontWeight: 800, marginTop: 6 }}>✓ Not live anywhere else</div>}
+      </div>
+    );
+  };
+
   const findOrderImage = o => {
     if (o.listing_image || o.image || o.images?.[0]) return o.listing_image || o.image || o.images?.[0];
     const norm = v => String(v || "").trim().toLowerCase();
@@ -4818,6 +4885,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                         </div>;
                       })()
                     )}
+                    {!cancelled && order.platform === "store" && <div style={{ marginBottom: 12 }}>{renderDelist(order)}</div>}
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                       {!cancelled ? <button onClick={() => cancelOrder(order)} style={{ border: "none", background: "transparent", color: C.red, fontSize: 11, fontWeight: 800, cursor: "pointer", padding: 0 }}>Cancel order</button> : <span />}
                       <button onClick={() => setDetailsOpen(s => ({ ...s, [order.id]: !s[order.id] }))} style={{ border: "none", background: "transparent", color: C.inkMid, fontSize: 11, fontWeight: 750, cursor: "pointer", padding: 0 }}>{detailsOpen[order.id] ? "Hide order details" : "Order details"}</button>
@@ -4977,6 +5045,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                             </>
                           );
                         })()}
+                        {renderDelist(order)}
                       </div>
                     )}
                     {!cancelled && isFulfilOrder(order) && selStep === 2 && (() => {
@@ -8870,6 +8939,18 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     return result;
   };
 
+  /* A sold one-off coming off another platform, approved from the order's
+     checklist. The store keeps the piece on show as Sold; everywhere else it's
+     taken down as Unpublish would. */
+  const delistFromPlatform = async (listing, pkey) => {
+    if (pkey === "store") {
+      await markStoreSold(listing.platforms?.store?.product_id);
+      await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, store: { ...current.platforms?.store, status: "sold" } }, updated_at: now() }));
+      return;
+    }
+    await handleUnpublish(listing, pkey);
+  };
+
   /* unpublish */
   const handleUnpublish = async (listing, pkey) => {
     let action, storeKey;
@@ -9191,7 +9272,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
 
         {/* ══ ORDERS ══ */}
-        {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} />}
+        {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
 
         {/* ══ PLATFORM TABS ══ */}
         {tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}
