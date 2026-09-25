@@ -68,6 +68,15 @@ for fn in os.listdir(API_DIR):
         size = os.path.getsize(full)
         api_files.append({"file": rel, "sha": sha, "size": size, "path": full, "kind": "function"})
 
+# lib/ holds helpers the functions import (etsy-auth, canva-auth,
+# listingCategories). Without it every function that imports ../lib crashes
+# at load with FUNCTION_INVOCATION_FAILED, since nothing is built on Vercel.
+LIB_DIR = os.path.join(ROOT_DIR, "lib")
+for fn in sorted(os.listdir(LIB_DIR)):
+    if fn.endswith(".js"):
+        full = os.path.join(LIB_DIR, fn)
+        api_files.append({"file": f"lib/{fn}", "sha": sha1_of_file(full), "size": os.path.getsize(full), "path": full, "kind": "support"})
+
 # Also include package.json (needed so Vercel knows it's ESM: "type":"module")
 pkg_path = os.path.join(ROOT_DIR, "package.json")
 pkg_sha  = sha1_of_file(pkg_path)
