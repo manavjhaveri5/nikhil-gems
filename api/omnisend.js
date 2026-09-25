@@ -433,8 +433,10 @@ export default async function handler(req, res) {
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); } }
   const { action } = body || {};
-  // eartheditions.co's newsletter route tags contacts server-to-server with the store secret.
-  if (!(await requireUser(req, res, { allowStoreSecret: action === "contact_tag" }))) return;
+  // eartheditions.co calls in server-to-server with the store secret: newsletter
+  // tags, and its own account emails (events named store_*, e.g. password reset).
+  const storeCall = action === "contact_tag" || (action === "trigger_event" && /^store_[a-z_]+$/.test(String(body?.eventName || "")));
+  if (!(await requireUser(req, res, { allowStoreSecret: storeCall }))) return;
 
   try {
     /* Is the key configured and valid? Used by the ERP to show setup state. */

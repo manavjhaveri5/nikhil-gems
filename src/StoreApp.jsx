@@ -18,7 +18,7 @@ const SERIF = "'Cormorant Garamond',Georgia,serif";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 7, padding: "7px 13px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
 const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
-const usd = n => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(+n || 0);
+const usd = (n, cur = "usd") => new Intl.NumberFormat(cur === "inr" ? "en-IN" : "en-US", { style: "currency", currency: String(cur || "usd").toUpperCase(), maximumFractionDigits: cur === "inr" ? 0 : 2 }).format(+n || 0);
 const fmtDate = v => v ? new Date(v).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
 const q = async p => { const { data, error } = await p; if (error) throw new Error(error.message); return data; };
 const LIST_KEY = "ng-listings-v1";
@@ -77,6 +77,8 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
     tags: Array.isArray(l.tags) ? l.tags : [],
     collections: existing?.collections?.length ? existing.collections : [collectionFor(l)],
     price: storePriceFor(l, fx, rounding, discount),
+    // Indian buyers pay in rupees: the Etsy sale price itself, no dollar round trip.
+    price_inr: +l.price_etsy ? Math.round(+l.price_etsy * (1 - (+discount || 0) / 100) / 10) * 10 : null,
     qty: Math.max(1, parseInt(l.qty, 10) || 1),
     is_unique: l.type !== "repeatable",
     status: existing?.status === "sold" ? "sold" : live ? "active" : (existing?.status || "hidden"),
@@ -159,7 +161,8 @@ function OrdersTab({ showToast }) {
     try { await q(supabase.from("store_orders").update({ ...p, updated_at: new Date().toISOString() }).eq("id", id)); setRows(r => r.map(x => x.id === id ? { ...x, ...p } : x)); }
     catch (e) { showToast("⚠ " + e.message); }
   };
-  const shown = (rows || []).filter(o => filter === "all" || (filter === "open" ? ["paid", "packed"].includes(o.status) : o.status === filter));
+  // "pending" = a Razorpay payment window opened but never paid; kept out of the way.
+  const shown = (rows || []).filter(o => filter === "all" ? o.status !== "pending" : filter === "open" ? ["paid", "packed"].includes(o.status) : o.status === filter);
   const count = f => (rows || []).filter(o => f === "open" ? ["paid", "packed"].includes(o.status) : o.status === f).length;
   return (
     <div>
@@ -183,7 +186,8 @@ function OrdersTab({ showToast }) {
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{o.name || o.email}</div>
                   <div style={{ fontSize: 11.5, color: C.inkFaint }}>{fmtDate(o.created_at)} · {o.lines.length} piece{o.lines.length === 1 ? "" : "s"} · {[a.city, a.country].filter(Boolean).join(", ")}{o.erp_synced ? "" : " · not yet in Orders"}</div>
                 </div>
-                <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700 }}>{usd(o.total)}</div>
+                <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700 }}>{usd(o.total, o.currency)}</div>
+                <span style={{ fontSize: 10, color: C.inkFaint }}>{o.gateway === "razorpay" ? "Razorpay" : "Stripe"}</span>
                 <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, padding: "2px 8px", borderRadius: 4, background: o.status === "paid" ? C.amberBg : o.status === "shipped" || o.status === "delivered" ? C.greenBg : C.card, color: o.status === "paid" ? C.amber : o.status === "shipped" || o.status === "delivered" ? C.green : C.inkMid }}>{o.status}</span>
               </div>
               {isOpen && (
@@ -193,17 +197,19 @@ function OrdersTab({ showToast }) {
                     <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13 }}>
                       {l.image && <img src={l.image} alt="" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6 }} />}
                       <div style={{ flex: 1 }}>{l.title}{l.sku ? <span style={{ color: C.inkFaint }}> · {l.sku}</span> : null}</div>
-                      <div>{l.qty} × {usd(l.price)}</div>
+                      <div>{l.qty} × {usd(l.price, o.currency)}</div>
                     </div>
                   ))}
-                  <div style={{ fontSize: 12.5, color: C.inkMid }}>Subtotal {usd(o.subtotal)} · Shipping {usd(o.shipping_cost)}{o.discount ? ` · Discount −${usd(o.discount)}` : ""} · <b>Total {usd(o.total)}</b></div>
+                  <div style={{ fontSize: 12.5, color: C.inkMid }}>Subtotal {usd(o.subtotal, o.currency)} · Shipping {usd(o.shipping_cost, o.currency)}{o.discount ? ` · Discount −${usd(o.discount, o.currency)}` : ""} · <b>Total {usd(o.total, o.currency)}</b></div>
                   <div style={{ fontSize: 13, whiteSpace: "pre-line", background: C.card, borderRadius: 8, padding: "10px 12px" }}>
                     <b>Ship to</b>{"\n"}{o.name}{"\n"}{[a.line1, a.line2].filter(Boolean).join(", ")}{"\n"}{[a.city, a.state, a.postal_code].filter(Boolean).join(" ")}{"\n"}{a.country}{"\n"}{[o.email, o.phone].filter(Boolean).join(" · ")}
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <select value={o.status} onChange={e => patch(o.id, { status: e.target.value })} style={FI({ width: "auto", padding: "6px 10px" })}>{STATUS.map(s => <option key={s}>{s}</option>)}</select>
                     <input defaultValue={o.tracking} placeholder="Tracking number" onBlur={e => e.target.value !== o.tracking && patch(o.id, { tracking: e.target.value.trim() })} style={FI({ width: 220 })} />
-                    {o.stripe_payment && <a href={`https://dashboard.stripe.com/payments/${o.stripe_payment}`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Stripe ↗</a>}
+                    {o.stripe_payment && (o.gateway === "razorpay"
+                      ? <a href={`https://dashboard.razorpay.com/app/payments/${o.stripe_payment}`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Razorpay ↗</a>
+                      : <a href={`https://dashboard.stripe.com/payments/${o.stripe_payment}`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Stripe ↗</a>)}
                     {o.email && <a href={`mailto:${o.email}?subject=${encodeURIComponent(`Your Earth Editions order ${o.number}`)}`} style={{ ...btn(), textDecoration: "none" }}>✉ Email</a>}
                   </div>
                 </div>
@@ -372,6 +378,7 @@ function ImportFromListings({ settings, existing, onClose, onDone }) {
 function SettingsTab({ settings, reload, showToast }) {
   const [f, setF] = useState(() => ({
     fx: settings.fx_inr_per_usd ?? 84, rounding: settings.price_rounding || "whole", discount: settings.etsy_discount_pct ?? 25,
+    in_rate: settings.india_shipping?.rate ?? 150, in_free: settings.india_shipping?.free_over ?? 5000,
     regions: settings.shipping?.regions?.length ? settings.shipping.regions : [{ name: "United States", countries: ["US"], rate: 0, free_over: 0 }, { name: "Rest of world", countries: ["*"], rate: 0, free_over: 0 }],
     announcement: settings.announcement || "", about: settings.about || "", site_url: settings.site_url || "",
     contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
@@ -386,6 +393,7 @@ function SettingsTab({ settings, reload, showToast }) {
       await q(supabase.from("store_settings").upsert([
         { key: "fx_inr_per_usd", value: +f.fx || 84 }, { key: "price_rounding", value: f.rounding },
         { key: "etsy_discount_pct", value: Math.max(0, Math.min(90, +f.discount || 0)) },
+        { key: "india_shipping", value: { rate: +f.in_rate || 0, free_over: +f.in_free || 0 } },
         { key: "shipping", value: { regions } }, { key: "announcement", value: f.announcement.trim() },
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
         { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
@@ -421,6 +429,14 @@ function SettingsTab({ settings, reload, showToast }) {
           </div>
         ))}
         <div><button onClick={() => setF(x => ({ ...x, regions: [...x.regions, { name: "", countries: "", rate: 0, free_over: 0 }] }))} style={btn()}>＋ Region</button></div>
+      </div>
+      <div style={{ ...card, padding: 18, display: "grid", gap: 10 }}>
+        <div style={{ fontWeight: 700 }}>India (Razorpay, in rupees)</div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint }}>Indian buyers see the Etsy sale price in ₹ and pay with UPI, cards or netbanking.</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div><span style={lab}>Shipping ₹</span><input value={f.in_rate} onChange={e => setF(x => ({ ...x, in_rate: e.target.value.replace(/[^\d.]/g, "") }))} style={FI()} /></div>
+          <div><span style={lab}>Free over ₹ (0 = never)</span><input value={f.in_free} onChange={e => setF(x => ({ ...x, in_free: e.target.value.replace(/[^\d.]/g, "") }))} style={FI()} /></div>
+        </div>
       </div>
       <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
         <div><span style={lab}>Announcement bar (blank = free-shipping line)</span><input value={f.announcement} onChange={e => setF(x => ({ ...x, announcement: e.target.value }))} style={FI()} /></div>
