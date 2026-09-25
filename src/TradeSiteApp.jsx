@@ -246,9 +246,18 @@ function BuyersTab({ showToast, siteUrl }) {
         await omni({ action: "contact_tag", email: b.email, addTags: ["approved", "active", "trade"], firstName: first, lastName: String(b.name || "").split(" ").slice(1).join(" ") })
           .then(() => notes.push("added to the mailing list")).catch(e => notes.push(`⚠ list: ${e.message}`));
       }
-      await omni({ action: "trigger_event", eventName: "wholesale_approved", email: b.email,
-        properties: { setup_url: link, first_name: first, company: b.company || "", site_url: siteUrl } })
-        .then(() => notes.push("approval email sent")).catch(e => notes.push(`⚠ email: ${e.message}`));
+      // The approval email: sent by the ERP itself through Resend (from
+      // eartheditions.co, so it reaches the inbox); until that's set up, the
+      // Omnisend automation on wholesale_approved sends it.
+      const mailed = await fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template: "trade_approved", to: b.email, name: b.name, setup_url: link, site_url: siteUrl }) })
+        .then(async r => ({ ok: r.ok, status: r.status, d: await r.json().catch(() => ({})) })).catch(e => ({ ok: false, d: { error: e.message } }));
+      if (mailed.ok) notes.push("approval email sent");
+      else if (mailed.status === 503) {
+        await omni({ action: "trigger_event", eventName: "wholesale_approved", email: b.email,
+          properties: { setup_url: link, first_name: first, company: b.company || "", site_url: siteUrl } })
+          .then(() => notes.push("approval event sent to Omnisend")).catch(e => notes.push(`⚠ email: ${e.message}`));
+      } else notes.push(`⚠ email: ${mailed.d?.error || mailed.status} — send the set-up link on WhatsApp`);
       showToast(`✓ ${b.company || b.name} approved — ${notes.join(", ")}`);
     } catch (e) { showToast("⚠ " + e.message); }
     setBusy(false);

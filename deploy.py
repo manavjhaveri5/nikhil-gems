@@ -118,7 +118,7 @@ max_durations = {
     "telegram.js": 60, "openai.js": 30, "embed.js": 30,
     "parse-pdf.js": 60, "etsy-auth.js": 30, "listing-manager.js": 30,
     "blob-upload.js": 30, "admin-create-user.js": 30,
-    "ebay.js": 30,
+    "ebay.js": 30, "mail.js": 15,
 }
 for fi in api_files:
     if fi["kind"] == "function":
