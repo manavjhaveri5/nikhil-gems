@@ -21,7 +21,7 @@ export default async function handler(req, res) {
     const setupUrl = String(b.setup_url || "");
     const siteUrl = String(b.site_url || "https://trade.eartheditions.co");
     if (!/^https:\/\/[^/]+\/set-password\?t=[\w-]+$/.test(setupUrl)) return res.status(400).json({ error: "Bad set-up link" });
-    mail = tradeApproved({ name: b.name, setupUrl, siteUrl, logoUrl: process.env.MAIL_LOGO_URL || "https://earth-store-six.vercel.app/logo.png" });
+    mail = tradeApproved({ name: b.name, setupUrl, siteUrl, logoUrl: process.env.MAIL_LOGO_URL || "https://eartheditions.co/logo.png" });
   } else return res.status(400).json({ error: "Unknown template" });
 
   const r = await fetch("https://api.resend.com/emails", {
