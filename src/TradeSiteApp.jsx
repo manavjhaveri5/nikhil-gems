@@ -691,8 +691,10 @@ export async function publishListingToTrade(listing, { syncOnly = false } = {}) 
     q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,collections,videos").eq("id", id).maybeSingle()),
     q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
   ]);
-  const price = +listing.price_trade || 0;
   const v0 = existing?.variants?.[0] || {};
+  /* A piece that came onto the trade site from Shopify has its trade price set
+     there; a listing without one mustn't sync it back to "on request". */
+  const price = +listing.price_trade || (existing ? +existing.price || +v0.price || 0 : 0);
   const images = (listing.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
   const live = syncOnly ? (existing ? existing.live : false) : true;
   const row = {
@@ -739,6 +741,46 @@ export async function refreshTradePhotos(listing) {
   await Promise.all(stale.map(r => q(supabase.from("trade_products")
     .update({ images, updated_at: new Date().toISOString() }).eq("id", r.id))));
   return stale.length;
+}
+
+/* Trade products pulled in from the Earth Editions Shopify store (or added
+   from Stock) are the same pieces as listings here, but nothing tied them
+   together, so the Trade site chip sat unticked and saves never reached them.
+   This finds each listing's trade product and returns the links to record:
+   listing id → { product_id, status, url }. A trade product already claimed
+   by a listing is left alone, and a stock item shared by several listings
+   isn't used to guess. */
+export async function findTradeLinks(listings) {
+  const [rows, site] = await Promise.all([
+    loadAll("trade_products", "id,live,source", "created_at"),
+    q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
+  ]);
+  const base = String(site?.value || "https://trade.eartheditions.co").replace(/\/+$/, "");
+  const claimed = new Set(listings.map(l => l.platforms?.trade?.product_id).filter(Boolean));
+  const digits = v => String(v || "").replace(/\D/g, "");
+  const byListing = new Map(), byShopify = new Map(), byStock = new Map();
+  for (const r of rows) {
+    if (claimed.has(r.id)) continue;
+    const src = r.source || {};
+    if (src.listing_id) byListing.set(String(src.listing_id), r);
+    if (digits(src.shopify_id)) byShopify.set(digits(src.shopify_id), r);
+    if (src.stock_id) byStock.set(String(src.stock_id), r);
+  }
+  const stockUse = new Map();
+  for (const l of listings) if (l.linked_stock_id) stockUse.set(l.linked_stock_id, (stockUse.get(l.linked_stock_id) || 0) + 1);
+  const links = {};
+  const taken = new Set();
+  for (const l of listings) {
+    const pd = l.platforms?.trade;
+    if (pd?.product_id && pd.status !== "deleted") continue;
+    const row = byListing.get(String(l.id))
+      || byShopify.get(digits(l.platforms?.shopify_earth?.product_id))
+      || (stockUse.get(l.linked_stock_id) === 1 ? byStock.get(String(l.linked_stock_id)) : null);
+    if (!row || taken.has(row.id)) continue;
+    taken.add(row.id);
+    links[l.id] = { product_id: row.id, status: row.live ? "active" : "draft", url: `${base}/p/${row.id}` };
+  }
+  return links;
 }
 
 export async function hideTradeProduct(productId) {

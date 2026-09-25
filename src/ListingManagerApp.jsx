@@ -19,7 +19,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
-import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos } from "./TradeSiteApp.jsx";
+import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks } from "./TradeSiteApp.jsx";
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold } from "./StoreApp.jsx";
 const now   = () => new Date().toISOString();
 
@@ -8565,11 +8565,38 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
     } catch {}
   };
 
+  /* Tick "Trade site" on every listing whose piece is already on the trade
+     site (imported from Earth Editions Shopify, or added from Stock), so each
+     later save syncs to it like any other linked platform. Records the link
+     only; nothing on the trade site changes here. */
+  const linkTradeProducts = async (current) => {
+    try {
+      const links = await findTradeLinks(current);
+      const ids = Object.keys(links);
+      if (!ids.length) return;
+      const fresh = await loadKFresh(LIST_KEY).catch(() => null);
+      const base = Array.isArray(fresh) ? fresh : current;
+      const changedRows = [];
+      const next = base.map(l => {
+        const link = links[l.id];
+        if (!link || (l.platforms?.trade?.product_id && l.platforms.trade.status !== "deleted")) return l;
+        const updated = { ...l, platforms: { ...(l.platforms || {}), trade: { ...(l.platforms?.trade || {}), ...link } } };
+        changedRows.push(updated);
+        return updated;
+      });
+      if (!changedRows.length) return;
+      setListings(next);
+      for (const listing of changedRows) await upsertItemK(LIST_KEY, listing, { prepend: false });
+      showToast(`✓ Linked ${changedRows.length} listing${changedRows.length === 1 ? "" : "s"} to the trade site`);
+    } catch (e) { console.warn("trade link:", e); }
+  };
+
   useEffect(() => {
     Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(async ([l, o, s]) => {
       const normalized = await normalizeListingIds(l);
       setListings(normalized); setOrders(o || []); setStock(s || []); setLoaded(true);
       reconcileEtsyStates(normalized);
+      linkTradeProducts(normalized);
       // Pull eBay in the background. eBay strips buyer addresses ~14 days after the
       // sale, so this must not wait for someone to open the eBay tab.
       syncEbayOrdersIntoStore().catch(() => {});
