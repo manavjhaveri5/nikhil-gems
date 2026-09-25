@@ -12382,6 +12382,11 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   // Keep stock/acct stock live: realtime invalidations land here (items added in
   // the Stock module, stock journal, or another device while Invoicing is open).
   useEffect(()=>onCacheRefresh(keys=>{
+    // Buyers and invoices too: on a reload the first paint comes from the
+    // browser's copy, and the server's answer arrives here. Without these a
+    // saved edit looked undone after refresh although the server had it.
+    if(keys.includes(INV_KEYS.buyers))loadK(INV_KEYS.buyers).then(b=>Array.isArray(b)&&setBuyers(b)).catch(()=>{});
+    if(keys.includes(INV_KEYS.invoices))loadK(INV_KEYS.invoices).then(i=>Array.isArray(i)&&setInvoices(reconcileInvoiceList(i).next)).catch(()=>{});
     if(KEYS.stock&&keys.includes(KEYS.stock))loadK(KEYS.stock).then(s=>setStock((s||[]).map(normalizeStockRecord))).catch(()=>{});
     if(keys.includes(KEYS.accStock))loadK(KEYS.accStock).then(a=>setAccStock(a||[])).catch(()=>{});
     if(keys.includes(vk.transactions))loadKFresh(vk.transactions).then(ft=>Array.isArray(ft)&&setFinTxns(ft)).catch(()=>{});
