@@ -326,15 +326,15 @@ function ProductsTab({ showToast }) {
 
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const list = useMemo(() => (rows || []).filter(p =>
-    (filter === "all" || (filter === "live" ? p.live : filter === "hidden" ? !p.live : filter === "new" ? p.is_new : !p.price)) &&
+    (filter === "all" || (filter === "live" ? p.live : filter === "hidden" ? !p.live : filter === "new" ? p.is_new : filter === "deal" ? p.is_deal : !p.price)) &&
     words.every(w => `${p.title} ${p.shape} ${p.product_type} ${(p.collections || []).join(" ")} ${(p.variants || []).map(v => v.sku).join(" ")}`.toLowerCase().includes(w))
   ), [rows, filter, search]);
-  const count = f => (rows || []).filter(p => f === "live" ? p.live : f === "hidden" ? !p.live : f === "new" ? p.is_new : !p.price).length;
+  const count = f => (rows || []).filter(p => f === "live" ? p.live : f === "hidden" ? !p.live : f === "new" ? p.is_new : f === "deal" ? p.is_deal : !p.price).length;
 
   return (
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
-        {[["all", "All"], ["live", "Live"], ["hidden", "Hidden"], ["new", "New"], ["noprice", "No price"]].map(([k, l]) => (
+        {[["all", "All"], ["live", "Live"], ["hidden", "Hidden"], ["new", "New"], ["deal", "Deals"], ["noprice", "No price"]].map(([k, l]) => (
           <button key={k} onClick={() => { setFilter(k); setShown(60); }} style={{ ...btn(filter === k ? C.ink : C.surface, filter === k ? "#fff" : C.ink), borderRadius: 999 }}>
             {l} · {k === "all" ? (rows || []).length : count(k)}
           </button>
@@ -344,25 +344,10 @@ function ProductsTab({ showToast }) {
         <button onClick={() => setPicker(true)} style={btn(C.ink, "#FAF0DC")}>＋ From stock</button>
       </div>
       {!rows && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
-      <div style={{ ...card, overflow: "hidden" }}>
-        {list.slice(0, shown).map(p => (
-          <div key={p.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 14px", borderBottom: `1px solid ${C.border}`, opacity: p.live ? 1 : .55 }}>
-            {p.images?.[0] ? <img src={p.images[0]} alt="" loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, flex: "none" }} /> : <div style={{ width: 44, height: 44, borderRadius: 6, background: C.card, flex: "none" }} />}
-            <div style={{ flex: 1, minWidth: 0, cursor: "pointer" }} onClick={() => setEdit(p)}>
-              <div style={{ fontWeight: 600, fontSize: 13.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.title}</div>
-              <div style={{ fontSize: 11.5, color: C.inkFaint }}>{[p.shape, (p.collections || [])[0], p.variants?.length > 1 ? `${p.variants.length} options` : "", p.stock != null ? `${p.stock} in stock` : ""].filter(Boolean).join(" · ")}</div>
-            </div>
-            <div style={{ fontFamily: SERIF, fontSize: 16, fontWeight: 700, whiteSpace: "nowrap", color: p.price ? C.ink : C.amber }}>{p.price ? money(p.price) : "no price"}</div>
-            <label title="New arrival" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: C.inkMid, cursor: "pointer" }}>
-              <input type="checkbox" checked={!!p.is_new} onChange={e => save(p.id, { is_new: e.target.checked, new_at: e.target.checked ? new Date().toISOString() : p.new_at })} />{mob() ? "" : "New"}
-            </label>
-            <label title="Shown on the site" style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: C.inkMid, cursor: "pointer" }}>
-              <input type="checkbox" checked={!!p.live} onChange={e => save(p.id, { live: e.target.checked })} />{mob() ? "" : "Live"}
-            </label>
-          </div>
-        ))}
-        {rows && !list.length && <div style={{ padding: 24, color: C.inkFaint, fontSize: 13, textAlign: "center" }}>Nothing matches.</div>}
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${mob() ? 160 : 210}px, 1fr))`, gap: mob() ? 10 : 14 }}>
+        {list.slice(0, shown).map(p => <ProductCard key={p.id} p={p} onOpen={() => setEdit(p)} onToggle={patch => save(p.id, patch)} />)}
       </div>
+      {rows && !list.length && <div style={{ ...card, padding: 24, color: C.inkFaint, fontSize: 13, textAlign: "center" }}>Nothing matches.</div>}
       {list.length > shown && <div style={{ textAlign: "center", marginTop: 12 }}><button onClick={() => setShown(s => s + 100)} style={btn()}>Show more ({list.length - shown})</button></div>}
       {edit && <ProductEditor p={edit} onClose={() => setEdit(null)} onSave={async patch => { await save(edit.id, patch); setEdit(null); showToast("Saved — live on the site now"); }} />}
       {picker && <StockPicker onClose={() => setPicker(false)} existing={rows || []} onAdd={async row => {
@@ -374,6 +359,40 @@ function ProductsTab({ showToast }) {
           showToast("Added — set a price, then it's ready");
         } catch (e) { showToast("⚠ " + e.message); }
       }} />}
+    </div>
+  );
+}
+
+/* One product as a card: the photo does the recognising, the toggles sit
+   under it so live / new / deal can be flipped without opening anything. */
+function ProductCard({ p, onOpen, onToggle }) {
+  const tog = (label, key, on, extra = {}) => (
+    <button onClick={e => { e.stopPropagation(); onToggle({ [key]: !on, ...extra }); }}
+      title={label}
+      style={{ flex: 1, border: `1px solid ${on ? "transparent" : C.border}`, background: on ? (key === "is_deal" ? C.green : key === "live" ? C.ink : C.gold) : C.surface,
+        color: on ? "#fff" : C.inkMid, borderRadius: 6, padding: "5px 0", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column", opacity: p.live ? 1 : .6 }}>
+      <div onClick={onOpen} style={{ cursor: "pointer", position: "relative", aspectRatio: "1", background: C.card }}>
+        {p.images?.[0] && <img src={p.images[0]} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+        {!p.price && <span style={{ position: "absolute", top: 8, left: 8, background: C.amberBg, color: C.amber, fontSize: 10, fontWeight: 700, borderRadius: 4, padding: "2px 7px" }}>NO PRICE</span>}
+        {p.is_deal && <span style={{ position: "absolute", top: 8, right: 8, background: C.green, color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 4, padding: "2px 7px" }}>DEAL</span>}
+      </div>
+      <div onClick={onOpen} style={{ padding: "10px 12px 6px", cursor: "pointer", flex: 1 }}>
+        <div style={{ fontWeight: 600, fontSize: 13.5, lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.title}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+          <span style={{ fontSize: 11, color: C.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[p.shape, p.stock != null ? `${p.stock} in stock` : ""].filter(Boolean).join(" · ")}</span>
+          <span style={{ fontFamily: SERIF, fontSize: 16, fontWeight: 700, whiteSpace: "nowrap" }}>{p.price ? money(p.price) : "—"}</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 5, padding: "4px 10px 10px" }}>
+        {tog("Live", "live", !!p.live)}
+        {tog("New", "is_new", !!p.is_new, !p.is_new ? { new_at: new Date().toISOString() } : {})}
+        {tog("Deal", "is_deal", !!p.is_deal)}
+      </div>
     </div>
   );
 }
@@ -396,7 +415,7 @@ function Modal({ title, onClose, children, footer }) {
 function ProductEditor({ p, onClose, onSave }) {
   const [f, setF] = useState(() => ({
     title: p.title, description: p.description, shape: p.shape, product_type: p.product_type, unit: p.unit,
-    collections: (p.collections || []).join(", "), live: p.live, is_new: p.is_new,
+    collections: (p.collections || []).join(", "), live: p.live, is_new: p.is_new, is_deal: !!p.is_deal, deal_note: p.deal_note || "",
     variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(v => ({ ...v, price: v.price || "" })),
   }));
   const [busy, setBusy] = useState(false);
@@ -412,6 +431,7 @@ function ProductEditor({ p, onClose, onSave }) {
         title: f.title.trim(), description: f.description, shape: f.shape.trim(), product_type: f.product_type.trim(), unit: f.unit,
         collections: f.collections.split(",").map(s => s.trim()).filter(Boolean), live: f.live,
         is_new: f.is_new, new_at: f.is_new && !p.is_new ? new Date().toISOString() : p.new_at,
+        is_deal: f.is_deal, deal_note: f.deal_note.trim(),
         variants, price: prices.length ? Math.min(...prices) : 0,
         stock: tracked.length ? tracked.reduce((t, v) => t + v.stock, 0) : null,
       });
@@ -446,7 +466,9 @@ function ProductEditor({ p, onClose, onSave }) {
         <div style={{ display: "flex", gap: 18 }}>
           <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.live} onChange={set("live")} /> Live on the site</label>
           <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.is_new} onChange={set("is_new")} /> New arrival</label>
+          <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.is_deal} onChange={set("is_deal")} /> Mineral deal</label>
         </div>
+        {f.is_deal && <div><span style={lab}>Deal note (shown with “Ready to ship · Free shipping”)</span><input value={f.deal_note} onChange={set("deal_note")} placeholder="e.g. 12 pieces left · was $80" style={FI()} /></div>}
       </div>
     </Modal>
   );
@@ -496,7 +518,16 @@ function SettingsTab({ settings, reload, showToast }) {
   const [f, setF] = useState(() => ({
     whatsapp: settings.whatsapp || "", hide_prices: settings.hide_prices !== false, min_order: settings.min_order || 0,
     currency: settings.currency || "USD", site_url: settings.site_url || "https://trade.eartheditions.co",
+    about: settings.about || "", public_limit: settings.public_limit ?? 50,
+    hidden_shows: Array.isArray(settings.hidden_shows) ? settings.hidden_shows : [],
   }));
+  const [shows, setShows] = useState([]);
+  useEffect(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    loadK("ng-shows-v1").then(l => setShows((Array.isArray(l) ? l : [])
+      .filter(x => x?.name && x.startDate && ((x.endDate >= x.startDate ? x.endDate : x.startDate) >= today))
+      .sort((a, b) => a.startDate.localeCompare(b.startDate)))).catch(() => {});
+  }, []);
   const [busy, setBusy] = useState(false);
   const save = async () => {
     setBusy(true);
@@ -507,6 +538,9 @@ function SettingsTab({ settings, reload, showToast }) {
         { key: "min_order", value: +f.min_order || 0 },
         { key: "currency", value: f.currency },
         { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
+        { key: "about", value: f.about.trim() },
+        { key: "public_limit", value: Math.max(0, parseInt(f.public_limit, 10) || 0) },
+        { key: "hidden_shows", value: f.hidden_shows },
       ], { onConflict: "key" }));
       await reload();
       showToast("Saved");
@@ -527,6 +561,30 @@ function SettingsTab({ settings, reload, showToast }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <div><span style={lab}>Minimum order (0 = none)</span><input value={f.min_order} onChange={e => setF(x => ({ ...x, min_order: e.target.value.replace(/[^\d.]/g, "") }))} inputMode="decimal" style={FI()} /></div>
         <div><span style={lab}>Currency</span><select value={f.currency} onChange={e => setF(x => ({ ...x, currency: e.target.value }))} style={FI()}><option>USD</option><option>EUR</option><option>GBP</option><option>INR</option></select></div>
+      </div>
+      <div>
+        <span style={lab}>Pieces visitors see before signing in</span>
+        <input value={f.public_limit} onChange={e => setF(x => ({ ...x, public_limit: e.target.value.replace(/[^\d]/g, "") }))} inputMode="numeric" style={FI({ width: 120 })} />
+        <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>The newest ones, plus any deals. Everything else needs an approved account.</div>
+      </div>
+      <div>
+        <span style={lab}>About us (blank line = new paragraph)</span>
+        <textarea value={f.about} onChange={e => setF(x => ({ ...x, about: e.target.value }))} style={FI({ minHeight: 120, resize: "vertical" })} />
+      </div>
+      <div>
+        <span style={lab}>Show schedule on the site (from Shows)</span>
+        {!shows.length && <div style={{ fontSize: 12.5, color: C.inkFaint }}>No upcoming shows in the Shows module.</div>}
+        {shows.map(sh => {
+          const hidden = f.hidden_shows.includes(sh.id) || !sh.city || /^new show$/i.test(sh.name);
+          const locked = !sh.city || /^new show$/i.test(sh.name);
+          return (
+            <label key={sh.id} style={{ fontSize: 13, display: "flex", gap: 8, alignItems: "center", padding: "4px 0", color: locked ? C.inkFaint : C.ink }}>
+              <input type="checkbox" disabled={locked} checked={!hidden}
+                onChange={e => setF(x => ({ ...x, hidden_shows: e.target.checked ? x.hidden_shows.filter(id => id !== sh.id) : [...x.hidden_shows, sh.id] }))} />
+              {sh.name} · {sh.city || "no city"} · {sh.startDate}{locked ? " (needs a name and city in Shows)" : ""}
+            </label>
+          );
+        })}
       </div>
       <div>
         <span style={lab}>Site address (used in set-up links)</span>
