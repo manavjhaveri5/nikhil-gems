@@ -7,7 +7,7 @@ import { askGrade } from "./gradeAi.js";
 import { buildBackgroundMask, maskToRgba } from "./backgroundSweep.js";
 import {
   ADJUSTMENTS, NEUTRAL, MIXER, emptyMixer, mixerTouched, mixerBands, MAX_BANDS,
-  ASPECTS, NO_GEO, PREVIEW_EDGE, clamp, cropGeometry, geoTouched, loadBitmap,
+  ASPECTS, NO_GEO, PREVIEW_EDGE, clamp, cropGeometry, geoTouched, loadBitmap, etsySized,
   createPipeline, setPipelineSource, renderPipeline,
 } from "./glPipeline.js";
 import { lab, Slider } from "./EditorControls.jsx";
@@ -52,7 +52,8 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
      nothing and stays live while the sliders move. */
   const [geo, setGeo] = useState(NO_GEO);
   const setCrop = patch => setGeo(g => ({ ...g, crop: { ...g.crop, ...patch } }));
-  const [dims, setDims] = useState(null);   // source pixels, for the crop panel
+  const [dims, setDims] = useState(null);
+  const fullRef = useRef(null);   // the full-size original, when the preview is a lighter copy   // source pixels, for the crop panel
   const [dragging, setDragging] = useState(false);
   const [applyAll, setApplyAll] = useState(false);
   const [mixKey, setMixKey] = useState("blue");
@@ -120,10 +121,21 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     let cancelled = false;
     (async () => {
       try {
-        const bitmap = await loadBitmap(url, { onProgress: f => { if (!cancelled) setLoadPct(Math.round(f * 100)); } });
+        /* An Etsy photo opens on Etsy's own 794px copy, which lands in a
+           moment even on a phone; the original follows in the background and
+           is what gets saved. Editing a preview never needs more pixels. */
+        const light = etsySized(url, "794xN");
+        if (light) {
+          fullRef.current = loadBitmap(url);
+          fullRef.current.then(b => { if (!cancelled) setDims({ w: b.width, h: b.height }); }, () => {});
+        } else fullRef.current = null;
+        const onProgress = f => { if (!cancelled) setLoadPct(Math.round(f * 100)); };
+        const bitmap = light
+          ? await loadBitmap(light, { onProgress }).catch(() => fullRef.current)
+          : await loadBitmap(url, { onProgress });
         if (cancelled) return;
         bitmapRef.current = bitmap;
-        setDims({ w: bitmap.width, h: bitmap.height });
+        if (!light) setDims({ w: bitmap.width, h: bitmap.height });
         if (!initGl(bitmap)) throw new Error("This browser has no WebGL, so the editor can't run here.");
         setReady(true);
       } catch (e) { if (!cancelled) setErr(e.message || String(e)); }
@@ -196,8 +208,14 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     const batch = applyAll && all;
     setBusy("save"); setErr(""); setProg("");
     try {
+      /* Save from the original, not the lighter copy the preview runs on. */
+      let full = bitmapRef.current;
+      if (fullRef.current) {
+        full = await fullRef.current.catch(() => loadBitmap(url));
+      }
+      const ownMask = full === bitmapRef.current ? mask : maskFrom(full);
       if (!batch) {
-        const saved = await writeOne(bitmapRef.current, mask);
+        const saved = await writeOne(full, ownMask);
         onSave(saved);
         showToast?.("✓ Photo replaced — the original is still in the Image Library");
       } else {
@@ -205,8 +223,8 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
         for (let i = 0; i < all.length; i++) {
           setProg(`${i + 1}/${all.length}`);
           const own = i === index;
-          const bitmap = own ? bitmapRef.current : await loadBitmap(all[i]);
-          out[i] = await writeOne(bitmap, own ? mask : maskFrom(bitmap));
+          const bitmap = own ? full : await loadBitmap(all[i]);
+          out[i] = await writeOne(bitmap, own ? ownMask : maskFrom(bitmap));
           if (!own) bitmap.close?.();
         }
         onSaveAll(out);
@@ -306,7 +324,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
               {!ready && (err
                 ? <div style={{ fontSize: 12, color: C.inkFaint }}>—</div>
                 : <div style={{ position: "relative", lineHeight: 0 }}>
-                    <img src={url} alt="" style={{ maxWidth: "100%", maxHeight: narrow ? "min(320px, 45vh)" : "min(52vh, 460px)",
+                    <img src={etsySized(url, "570xN") || url} alt="" style={{ maxWidth: "100%", maxHeight: narrow ? "min(320px, 45vh)" : "min(52vh, 460px)",
                       borderRadius: 8, display: "block", opacity: .55 }} />
                     <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-50%)",
                       background: "rgba(20,15,8,.72)", color: "#FAF0DC", borderRadius: 20, padding: "6px 12px",

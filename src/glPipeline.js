@@ -235,16 +235,25 @@ export async function fitToTexture(bitmap) {
 
 /* Fetched rather than pointed at with <img src>, so the canvas is never tainted
    and the edited pixels can be read back out on save. */
+/* Etsy keeps every photo at several sizes; swap the original for one of them.
+   null when the URL isn't an Etsy original. */
+export const etsySized = (url, size) =>
+  /etsystatic\.com\/.*\/il_fullxfull\./.test(url || "") ? url.replace("/il_fullxfull.", `/il_${size}.`) : null;
+
+const relayed = url => `/api/listing-manager?action=image&url=${encodeURIComponent(url)}`;
+
 export async function loadBitmap(url, { onProgress } = {}) {
   /* The listing already showed this photo, so the browser usually has it:
      take the cached copy rather than pulling megabytes again over a phone
      connection. If the cached copy can't be used cross-origin, fetch fresh. */
   const attempt = async (u, cache) => { try { const r = await fetch(u, { mode: "cors", cache }); return r.ok ? r : null; } catch { return null; } };
-  let res = await attempt(url, "force-cache") || await attempt(url, "reload");
+  /* Etsy's CDN never allows it, so don't spend two downloads finding out. */
+  const noCors = /(^|\.)etsystatic\.com\//i.test(url.replace(/^https?:\/\//, ""));
+  let res = noCors ? null : (await attempt(url, "force-cache") || await attempt(url, "reload"));
   /* Hosts that won't share pixels with the page (Etsy's CDN) go through our
      own relay, which fetches the photo server-side. */
   if (!res && /^https?:/i.test(url) && !url.startsWith(location.origin)) {
-    res = await attempt(`/api/listing-manager?action=image&url=${encodeURIComponent(url)}`, "default");
+    res = await attempt(relayed(url), "default");
   }
   if (!res) throw new Error("Couldn't load the photo — check the connection and try again.");
   return fitToTexture(await createImageBitmap(await readWithProgress(res, onProgress)));
