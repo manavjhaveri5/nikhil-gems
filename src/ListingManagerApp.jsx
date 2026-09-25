@@ -19,7 +19,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
-import { TradeProductsPanel, publishListingToTrade, hideTradeProduct } from "./TradeSiteApp.jsx";
+import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos } from "./TradeSiteApp.jsx";
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold } from "./StoreApp.jsx";
 const now   = () => new Date().toISOString();
 
@@ -8734,6 +8734,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       : [];
     const newTargets  = Object.entries(publishTo).filter(([, v]) => v).map(([k]) => k);
     const targets = [...new Set([...liveTargets, ...newTargets])];
+    // Trade products that are this piece but weren't published from here.
+    if (exists && !targets.includes("trade")) {
+      refreshTradePhotos(savedListing)
+        .then(n => { if (n) showToast(`✓ Photos updated on the trade site`); })
+        .catch(e => console.warn("trade photo refresh:", e));
+    }
     if (targets.length === 0) return;
     showToast(`Syncing to ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…`);
     // Always sync-only on save — never activate. Only the explicit Publish button activates.

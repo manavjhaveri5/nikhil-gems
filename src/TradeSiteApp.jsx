@@ -720,6 +720,27 @@ export async function publishListingToTrade(listing, { syncOnly = false } = {}) 
   return { product_id: id, url: `${base}/p/${id}`, status: live ? "active" : "draft" };
 }
 
+/* A trade product can also come from somewhere other than a publish — pulled
+   in from the Earth Editions Shopify store or added from Stock — and then it
+   isn't linked to the listing, so a new photo in Listing Manager never
+   reached it. After a listing is saved, any trade product that is the same
+   piece (by listing, Shopify product or stock item) takes its photos. Only
+   the photos: titles and prices on the trade site are set for trade. */
+export async function refreshTradePhotos(listing) {
+  const images = (listing.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
+  if (!images.length) return 0;
+  const quote = v => `"${String(v).replace(/"/g, '\\"')}"`;
+  const match = [`source->>listing_id.eq.${quote(listing.id)}`];
+  const sid = String(listing.platforms?.shopify_earth?.product_id || "").replace(/\D/g, "");
+  if (sid) match.push(`source->>shopify_id.eq.${quote(sid)}`, `source->>shopify_id.eq.${quote(`gid://shopify/Product/${sid}`)}`);
+  if (listing.linked_stock_id) match.push(`source->>stock_id.eq.${quote(listing.linked_stock_id)}`);
+  const rows = await q(supabase.from("trade_products").select("id,images").or(match.join(",")));
+  const stale = (rows || []).filter(r => JSON.stringify(r.images || []) !== JSON.stringify(images));
+  await Promise.all(stale.map(r => q(supabase.from("trade_products")
+    .update({ images, updated_at: new Date().toISOString() }).eq("id", r.id))));
+  return stale.length;
+}
+
 export async function hideTradeProduct(productId) {
   if (!productId) throw new Error("Not on the trade site");
   await q(supabase.from("trade_products").update({ live: false, updated_at: new Date().toISOString() }).eq("id", productId));
