@@ -23127,7 +23127,7 @@ export default function Root({onSignOut}){
     <>
       <RootBanners updateReady={updateReady} setUpdateReady={setUpdateReady} isOnline={isOnline} syncingCount={syncingCount} newAssignedTasks={newAssignedTasks} dismissNewTasks={dismissNewTasks}/>
       {showInstall&&(
-        <div style={{
+        <div className="install-banner" style={{
           position:"fixed",
           // Phone: sit above bottom nav; tablet/desktop: corner card bottom-right
           bottom:mob?"calc(66px + env(safe-area-inset-bottom))":"24px",
@@ -23154,8 +23154,8 @@ export default function Root({onSignOut}){
                 </div>
               :<div style={{fontSize:11,color:C.inkMid,marginBottom:9,lineHeight:1.45}}>
                   {isTablet
-                    ?"Tap the <b>Share</b> button in Safari's toolbar, then <b>Add to Home Screen</b>."
-                    :"Tap <b>Share ⎙</b> → <b>Add to Home Screen</b> to install this app."}
+                    ?<>Tap the <b>Share</b> button in Safari's toolbar, then <b>Add to Home Screen</b>.</>
+                    :<>Tap <b>Share ⎙</b> → <b>Add to Home Screen</b> to install this app.</>}
                 </div>
             }
             <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
@@ -23174,7 +23174,7 @@ export default function Root({onSignOut}){
       )}
       {content}
       {mob&&(
-        <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:600,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"stretch",paddingBottom:"env(safe-area-inset-bottom)",boxShadow:"0 -2px 12px rgba(26,19,8,.07)"}}>
+        <div className="mob-tabbar" style={{position:"fixed",bottom:0,left:0,right:0,zIndex:600,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"stretch",paddingBottom:"env(safe-area-inset-bottom)",boxShadow:"0 -2px 12px rgba(26,19,8,.07)"}}>
           {[{id:null,icon:"🏠",label:"Home"},{id:"stock",icon:"💎",label:"Stock"},{id:"purchases",icon:"📦",label:"Purchases"},{id:"shows",icon:"🌐",label:"Shows"},{id:"finance",icon:"💰",label:"Finance"}].filter(item=>!item.id||allowedMods.find(m=>m.id===item.id)).map(item=>{
             const isActive=item.id?mod===item.id&&screen==="app":screen==="welcome";
             return(

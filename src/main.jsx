@@ -6,6 +6,7 @@ import { supabase } from "./supabase.js";
 import LoginScreen from "./LoginScreen.jsx";
 import { warmCache, DEMO_MODE, syncOfflineQueue, getOfflineQueueCount, logActivity } from "./utils.js";
 import { inject as injectAnalytics } from "@vercel/analytics";
+import { watchModals } from "./modalWatch.js";
 
 const clearAppShellAndReload = async () => {
   try {
@@ -112,6 +113,8 @@ function App() {
   if (!session) return <ErrorBoundary><LoginScreen /></ErrorBoundary>;
   return <ErrorBoundary><Root onSignOut={DEMO_MODE ? () => {} : () => supabase.auth.signOut()} /></ErrorBoundary>;
 }
+
+watchModals();
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>

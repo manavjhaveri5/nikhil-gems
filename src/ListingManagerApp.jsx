@@ -1847,17 +1847,25 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   const catLabel = ETSY_CATEGORIES.find(c => c.value === category)?.label || "—";
 
+  /* On a phone the form is a full-screen sheet that scrolls as one page: the
+     sync-to row travels with the form and only Save / Cancel stay pinned, so
+     the fields get the screen instead of a sliver between header and footer. */
+  const phone = mob();
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 200,
-      display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      display: "flex", alignItems: phone ? "stretch" : "center", justifyContent: "center", padding: phone ? 0 : 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: C.bg, borderRadius: 14, width: "100%", maxWidth: 820,
-        maxHeight: "95vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,.3)" }}>
+      <div style={{ background: C.bg, borderRadius: phone ? 0 : 14, width: "100%", maxWidth: 820,
+        display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,.3)",
+        ...(phone ? { height: "100%", overflowY: "auto", WebkitOverflowScrolling: "touch" } : { maxHeight: "95vh" }) }}>
 
         {/* sticky header */}
         <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`,
-          padding: "14px 24px", display: "flex", alignItems: "center", gap: 12,
-          borderRadius: "14px 14px 0 0", flexShrink: 0 }}>
+          padding: phone ? "calc(10px + env(safe-area-inset-top)) 16px 10px" : "14px 24px",
+          display: "flex", alignItems: "center", gap: phone ? 8 : 12,
+          borderRadius: phone ? 0 : "14px 14px 0 0", flexShrink: 0,
+          ...(phone ? { position: "sticky", top: 0, zIndex: 3 } : {}) }}>
           <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700 }}>
             {editing ? "Edit Listing" : "New Listing"}
           </div>
@@ -1873,7 +1881,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         </div>
 
         {/* scrollable body */}
-        <div style={{ overflowY: "auto", flex: 1, padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ padding: phone ? "14px 12px" : "20px 24px", display: "flex", flexDirection: "column", gap: phone ? 12 : 16,
+          ...(phone ? { flexShrink: 0 } : { overflowY: "auto", flex: 1 }) }}>
 
           {/* ── Title + Description ───────────────────────────────────────── */}
           <Section title="Listing Details">
@@ -2327,7 +2336,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               </div>
             </div>
             {/* Toggles row */}
-            <div style={{ display: "flex", gap: 24, marginTop: 12 }}>
+            <div style={{ display: "flex", flexDirection: phone ? "column" : "row", gap: phone ? 12 : 24, marginTop: 12 }}>
               {[
                 { field: "etsy_made_to_order", label: "Made to order",   sub: "Off = ready to ship from stock" },
                 { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "₹0.20/renewal every 4 months" },
@@ -2430,11 +2439,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         </div>{/* end scrollable body */}
 
         {/* sticky footer */}
-        <div style={{ borderTop: `1px solid ${C.border}`, borderRadius: "0 0 14px 14px",
+        <div style={phone ? { display: "contents" } : { borderTop: `1px solid ${C.border}`, borderRadius: "0 0 14px 14px",
           background: C.surface, flexShrink: 0 }}>
 
           {/* Footer platform row */}
-          <div style={{ padding: "12px 24px 0" }}>
+          <div style={phone ? { padding: "12px 16px", background: C.surface, borderTop: `1px solid ${C.border}`, flexShrink: 0 } : { padding: "12px 24px 0" }}>
             {(() => {
               // "linked" = already exists on this platform (has an ID), auto-syncs on save
               const linkedPlatforms = PLATFORMS.filter(p => {
@@ -2519,7 +2528,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             </div>
           </div>
 
-          <div style={{ padding: "10px 24px 14px", display: "flex", gap: 10 }}>
+          <div style={{ padding: phone ? "10px 16px calc(10px + env(safe-area-inset-bottom))" : "10px 24px 14px", display: "flex", gap: 10,
+            ...(phone ? { position: "sticky", bottom: 0, zIndex: 3, marginTop: "auto", flexShrink: 0,
+              background: C.surface, borderTop: `1px solid ${C.border}`, boxShadow: "0 -4px 14px rgba(26,19,8,.06)" } : {}) }}>
             <button onClick={handleSave}
               style={{ flex: 1, background: C.ink, color: "#FAF0DC", border: "none",
                 borderRadius: 8, padding: "12px 0", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>

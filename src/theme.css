@@ -144,3 +144,11 @@ html.dark {
 .ngcard-edit:hover { background: rgba(139, 111, 71, .07); }
 .ngcard-edit:focus { background: rgba(139, 111, 71, .12); }
 
+
+/* ── Popups on phones ─────────────────────────────────────────────────────
+   modalWatch.js sets .modal-open while a popup is up: the page behind stays
+   put and the bottom tab bar steps aside so it can't cover Save buttons. */
+html.modal-open, html.modal-open body { overflow: hidden; overscroll-behavior: none; }
+html.modal-open .mob-tabbar, html.modal-open .install-banner { display: none !important; }
+/* A scroll area that hits its end shouldn't start dragging the page behind. */
+[style*="overflow-y: auto"], [style*="overflow: auto"], [style*="overflow-y: scroll"] { overscroll-behavior: contain; }
