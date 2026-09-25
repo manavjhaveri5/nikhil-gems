@@ -2627,15 +2627,20 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
     ? `${linkedStock.qty} ${linkedStock.unit || "pcs"}`
     : listing.type === "unique" ? "1 (unique)" : `${listing.qty || 1} pcs`;
 
+  /* On a phone the buttons get their own row under the card: squeezed in
+     beside the title they left it a word wide and sat on top of it. */
+  const phone = mob();
+
   return (
     <div style={{ background: C.surface, border: `1.5px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
       <Toast msg={toast} />
 
       {/* main row */}
-      <div style={{ display: "flex", gap: 14, padding: "14px 16px", alignItems: "flex-start" }}>
+      <div style={{ display: "flex", gap: phone ? 12 : 14, padding: phone ? "12px" : "14px 16px", alignItems: "flex-start",
+        flexWrap: phone ? "wrap" : "nowrap" }}>
 
         {/* cover photo */}
-        <div style={{ width: 82, height: 82, borderRadius: 9, flexShrink: 0, overflow: "hidden",
+        <div style={{ width: phone ? 68 : 82, height: phone ? 68 : 82, borderRadius: 9, flexShrink: 0, overflow: "hidden",
           background: C.card, border: `1px solid ${C.border}`, cursor: "pointer" }}
           onClick={() => setExpanded(e => !e)}>
           {img
@@ -2699,12 +2704,15 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
         </div>
 
         {/* right controls */}
-        <div style={{ flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+        <div style={phone
+          ? { flexBasis: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+              borderTop: `1px solid ${C.border}`, paddingTop: 10 }
+          : { flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
           <div style={{ fontSize: 11, color: C.inkFaint }}>{displayQty}</div>
           {liveOn.length > 0 && (
             <div style={{ fontSize: 11, color: C.green, fontWeight: 700 }}>{liveOn.length} live</div>
           )}
-          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: phone ? 6 : 5, flexWrap: "wrap", justifyContent: "flex-end", marginLeft: phone ? "auto" : 0 }}>
             {liveOn.length > 0 && (
               <button onClick={() => onMarkSold(listing)}
                 style={{ padding: "5px 10px", background: C.greenBg, border: `1px solid ${C.green}40`,
