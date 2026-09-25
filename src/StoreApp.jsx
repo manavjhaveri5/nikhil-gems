@@ -388,6 +388,7 @@ function SettingsTab({ settings, reload, showToast }) {
     announcement: settings.announcement || "", about: settings.about || "", site_url: settings.site_url || "",
     contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
     hero: { image: "", video: "", heading: "", eyebrow: "", intro: "", ...(settings.hero || {}) },
+    sourcing: Array.isArray(settings.sourcing_photos) ? settings.sourcing_photos : [],
     dispatch_note: settings.dispatch_note || "", returns_note: settings.returns_note || "",
   }));
   const [busy, setBusy] = useState(false);
@@ -405,6 +406,20 @@ function SettingsTab({ settings, reload, showToast }) {
     } catch (e) { showToast("⚠ " + e.message); }
     setHeroBusy("");
   };
+  // The "From the mine to your shelf" collage on the home page.
+  const addSourcing = async files => {
+    const list = [...(files || [])].filter(f => f.type.startsWith("image/"));
+    if (!list.length) return;
+    setHeroBusy("sourcing");
+    try {
+      const urls = [];
+      for (const file of list) urls.push(await uploadToStorage(`store/sourcing/${uid()}.${(file.name.split(".").pop() || "jpg").toLowerCase()}`, file));
+      setF(x => ({ ...x, sourcing: [...x.sourcing, ...urls] }));
+      showToast(`${urls.length} photo${urls.length === 1 ? "" : "s"} added — press Save settings`);
+    } catch (e) { showToast("⚠ " + e.message); }
+    setHeroBusy("");
+  };
+  const moveSourcing = (i, d) => setF(x => { const a = [...x.sourcing]; const j = i + d; if (j < 0 || j >= a.length) return x; [a[i], a[j]] = [a[j], a[i]]; return { ...x, sourcing: a }; });
   const setR = (i, k, v) => setF(x => ({ ...x, regions: x.regions.map((r, j) => j === i ? { ...r, [k]: v } : r) }));
   const save = async () => {
     setBusy(true);
@@ -417,6 +432,7 @@ function SettingsTab({ settings, reload, showToast }) {
         { key: "shipping", value: { regions } }, { key: "announcement", value: f.announcement.trim() },
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
         { key: "hero", value: { image: f.hero.image, video: f.hero.video, heading: f.hero.heading.trim(), eyebrow: f.hero.eyebrow.trim(), intro: (f.hero.intro || "").trim() } },
+        { key: "sourcing_photos", value: f.sourcing },
         { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
         { key: "whatsapp", value: f.whatsapp.replace(/[^\d]/g, "") },
         { key: "dispatch_note", value: f.dispatch_note.trim() }, { key: "returns_note", value: f.returns_note.trim() },
@@ -485,6 +501,23 @@ function SettingsTab({ settings, reload, showToast }) {
           <div><span style={lab}>Headline</span><input value={f.hero.heading} onChange={e => setHero({ heading: e.target.value })} placeholder="From the earth, to your hands." style={FI()} /></div>
         </div>
         <div><span style={lab}>Intro line under the headline</span><input value={f.hero.intro || ""} onChange={e => setHero({ intro: e.target.value })} placeholder="Natural crystals, mineral specimens, rough stone and hand-carved pieces — sourced close to the mine and shipped worldwide." style={FI()} /></div>
+      </div>
+      <div style={{ ...card, padding: 18, display: "grid", gap: 10 }}>
+        <div style={{ fontWeight: 700 }}>From the mine <span style={{ fontWeight: 400, fontSize: 12, color: C.inkFaint }}>— the sourcing collage on the home page</span></div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint }}>Mines, rough stone, boulders at the source. Any shape works; they're laid out as a collage in this order. Until you add some, three default photos show.</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {f.sourcing.map((u, i) => (
+            <div key={u} style={{ position: "relative", width: 110 }}>
+              <img src={u} alt="" style={{ width: 110, height: 110, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.border}`, display: "block" }} />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+                <button onClick={() => moveSourcing(i, -1)} disabled={!i} style={{ ...btn(), padding: "2px 8px" }}>‹</button>
+                <button onClick={() => setF(x => ({ ...x, sourcing: x.sourcing.filter((_, j) => j !== i) }))} style={{ ...btn(), padding: "2px 8px", color: C.red }}>✕</button>
+                <button onClick={() => moveSourcing(i, 1)} disabled={i === f.sourcing.length - 1} style={{ ...btn(), padding: "2px 8px" }}>›</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div><label style={{ ...btn(), cursor: "pointer", display: "inline-block" }}>{heroBusy === "sourcing" ? "Uploading…" : "＋ Add photos"}<input type="file" accept="image/*" multiple hidden onChange={e => { addSourcing(e.target.files); e.target.value = ""; }} /></label></div>
       </div>
       <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
         <div><span style={lab}>Announcement bar (blank = free-shipping line)</span><input value={f.announcement} onChange={e => setF(x => ({ ...x, announcement: e.target.value }))} style={FI()} /></div>
