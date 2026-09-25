@@ -102,12 +102,15 @@ jobs:
 
       - name: AI report
         id: ai
+        env:
+          # /api/claude needs a signed-in user or this shared secret (repo secret).
+          STORE_SYNC_SECRET: ${{ secrets.STORE_SYNC_SECRET }}
         run: |
           set -uo pipefail
           SYSTEM="You are the ops monitor for the Nikhil Gems ERP (React app on Vercel at $APP_URL, Supabase backend). Below are today's automated health-check results. Write a short plain-English status report for the owner (not a developer): start with one line — either 'All good.' or 'Action needed:' — then briefly explain any problems and exactly what to do about them. No markdown headers."
           REPORT=$(jq -n --rawfile f findings.txt --arg s "$SYSTEM" \
             '{max_tokens: 700, messages: [{role:"system",content:$s},{role:"user",content:$f}]}' \
-            | curl -s --max-time 90 -X POST "$APP_URL/api/claude" -H 'Content-Type: application/json' -d @- \
+            | curl -s --max-time 90 -X POST "$APP_URL/api/claude" -H 'Content-Type: application/json' -H "x-store-secret: $STORE_SYNC_SECRET" -d @- \
             | jq -r '.content[0].text // empty' || true)
           if [ -z "$REPORT" ]; then
             REPORT="(AI summary unavailable — raw findings below.)"

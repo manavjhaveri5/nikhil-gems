@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 // Omnisend — build a "new products" mailer straight from ERP listings.
 //
 // Deliberate design: campaigns are always created as DRAFTS. Creating a draft and
@@ -432,6 +433,8 @@ export default async function handler(req, res) {
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); } }
   const { action } = body || {};
+  // eartheditions.co's newsletter route tags contacts server-to-server with the store secret.
+  if (!(await requireUser(req, res, { allowStoreSecret: action === "contact_tag" }))) return;
 
   try {
     /* Is the key configured and valid? Used by the ERP to show setup state. */

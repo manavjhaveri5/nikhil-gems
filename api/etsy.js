@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 import { getEtsyAccessToken, etsyAuthHandler } from "../lib/etsy-auth.js";
 
 export const maxDuration = 45; // Vercel Pro: allow up to 45s for multi-page listing fetches
@@ -11,8 +12,14 @@ export default async function handler(req, res) {
   // every existing /api/etsy-auth?action=… caller keep working, on one function
   // instead of two. Checked before this file's own `action` routing so the two
   // action namespaces can never collide.
-  if (req.query?._oauth !== undefined) return etsyAuthHandler(req, res);
+  // Only the consent start and Etsy's own callback (?code=…, no action) are open;
+  // get-session / refresh / invalidate hand out or drop the shop token.
+  if (req.query?._oauth !== undefined) {
+    if (req.query.action && req.query.action !== "start" && !(await requireUser(req, res))) return;
+    return etsyAuthHandler(req, res);
+  }
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!(await requireUser(req, res))) return;
 
   // x-api-key must be keystring:sharedsecret for Etsy API v3
   const key = process.env.ETSY_API_KEY ||
@@ -20,10 +27,9 @@ export default async function handler(req, res) {
       ? `${process.env.ETSY_KEYSTRING}:${process.env.ETSY_SHARED_SECRET}`
       : process.env.ETSY_KEYSTRING);
 
-  // Bearer token: prefer client-provided (frontend manages refresh lifecycle),
-  // fall back to server env var for backwards compat.
-  const clientToken = req.headers["x-etsy-token"] ||
-    (req.headers["authorization"]?.startsWith("Bearer ") ? req.headers["authorization"].slice(7) : null);
+  // Etsy token: prefer client-provided (frontend manages refresh lifecycle),
+  // fall back to the stored one. Authorization carries the ERP session, not Etsy's.
+  const clientToken = req.headers["x-etsy-token"] || null;
   const token = clientToken || await getEtsyAccessToken();
 
   const defaultShopId = process.env.ETSY_SHOP_ID;

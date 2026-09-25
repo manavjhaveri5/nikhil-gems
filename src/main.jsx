@@ -1,3 +1,4 @@
+import "./apiAuth.js"; // adds the session to every /api call
 import { StrictMode, useState, useEffect, Component } from "react";
 import "./theme.css";
 import { createRoot } from "react-dom/client";

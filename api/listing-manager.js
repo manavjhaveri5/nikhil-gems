@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 /**
  * Listing Manager API — cross-platform publishing hub
  * Supports: Etsy, Shopify (Earth Editions), Shopify (Atyahara), eBay (future)
@@ -8,6 +9,7 @@
 
 import { getEtsyAccessToken } from "../lib/etsy-auth.js";
 import { createClient } from "@supabase/supabase-js";
+import { endEbayItem } from "./ebay.js";
 
 const MEDIA_BUCKET = "ng-media";
 
@@ -1115,6 +1117,9 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
+  // store_sold is the retail store's webhook and checks its own secret below.
+  const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
+  if (!(req.method === "POST" && bodyAction === "store_sold") && !(await requireUser(req, res))) return;
 
   /* ── GET: fetch Etsy shop settings OR import all Etsy listings ── */
   if (req.method === "GET") {
@@ -1326,9 +1331,8 @@ export default async function handler(req, res) {
         }
         if (plats.ebay?.item_id && plats.ebay.status === "active") {
           try {
-            const r = await fetch(`https://${req.headers.host}/api/ebay?action=end_item&item_id=${encodeURIComponent(plats.ebay.item_id)}`, { method: "POST" });
-            const d = await r.json().catch(() => ({}));
-            if (!d.ok) throw new Error(d.error || r.status);
+            const d = await endEbayItem(plats.ebay.item_id);
+            if (!d.ok) throw new Error(d.error);
             plats.ebay = { status: "deleted" }; done.push("ebay");
           } catch (e) { done.push(`ebay failed: ${e.message}`); }
         }

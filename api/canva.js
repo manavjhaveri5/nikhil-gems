@@ -1,3 +1,4 @@
+import { requireUser } from "../lib/auth.js";
 /**
  * Canva Connect actions for the Background Remover sandbox.
  *
@@ -43,8 +44,14 @@ async function pollJob(token, path, { tries = 63, delay = 1500 } = {}) {
 export default async function handler(req, res) {
   // /api/canva-auth is rewritten here (vercel.json) so the Canva OAuth redirect URI
   // keeps working while costing one serverless function instead of two.
-  if (req.query?._oauth !== undefined) return canvaAuthHandler(req, res);
+  // Only the consent start and Canva's own callback (?code=…, no action) are
+  // open; status/debug/disconnect are the ERP's and need a session.
+  if (req.query?._oauth !== undefined) {
+    if (req.query.action && req.query.action !== "start" && !(await requireUser(req, res))) return;
+    return canvaAuthHandler(req, res);
+  }
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  if (!(await requireUser(req, res))) return;
 
   const token = await getCanvaAccessToken();
   if (!token) return res.status(401).json({ error: "Canva not connected. Connect Canva first.", needsAuth: true });
