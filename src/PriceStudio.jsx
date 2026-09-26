@@ -3,9 +3,9 @@
    profile and its cost — and, as you type, the price for every platform,
    the per-piece price, what's left after fees and the profit.
 
-   Etsy shows a crossed-out full price and a sale price, so the full price is
-   set high enough that during the usual sale, after fees, the piece still
-   makes its margin. The store sells at the Etsy price less its discount.
+   The price is the cost times the multiple (or set for a profit %), and
+   Etsy's usual 25% sale and its fees then show what's really left. The
+   store sells at the Etsy price less its discount.
    Nothing is saved until Apply; the editor then saves as usual.
    The inputs are kept on the listing as price_calc (cost, extra, sale, fees,
    ads …), which the editor's price boxes read for their sale/profit lines. */
@@ -40,33 +40,42 @@ const ROUNDS = {
 };
 const roundUsd99 = v => (v <= 0 ? 0 : Math.max(0.99, Math.ceil(v) - 0.01));
 
-/* Every number the studio shows, from its inputs. */
+/* Every number the studio shows, from its inputs.
+   Cost can be entered per kilo or per piece; with a weight per piece the one
+   gives the other (₹20,000/kg at 100g = ₹2,000 a piece). The retail prices are
+   per piece whenever that's known — Etsy sells pieces — and per kilo if not.
+   × cost: the Etsy price is the cost times the multiple (₹2,000 × 3 = ₹6,000),
+   and the fees and the usual sale then show what's actually left.
+   Profit %: the Etsy price is set so that, in the sale and after fees, the
+   profit is that share of the cost. */
 export function priceMath(i, { liveRate = 84, store = {} } = {}) {
-  const perKg = i.unit === "kg";
   const w = n(i.weight);                                    // grams per piece
   const pcsKg = w > 0 ? 1000 / w : 0;
-  const unitCost = n(i.cost) + n(i.extra) + n(i.shipCost);  // per piece, or per kilo
-  const keep = i.mode === "profit" ? unitCost * (1 + n(i.profitPct) / 100) : unitCost * (n(i.mult) || 1);
+  const perKgIn = i.unit === "kg";
+  const costKg = perKgIn ? n(i.cost) : pcsKg ? n(i.cost) * pcsKg : 0;
+  const costPc = perKgIn ? (w ? n(i.cost) * w / 1000 : 0) : n(i.cost);
+  const perPiece = !perKgIn || w > 0;                       // are retail prices per piece?
+  const base = (perPiece ? costPc : costKg) + n(i.extra) + n(i.shipCost);
   const fee = (n(i.fees) + (i.ads ? 15 : 0)) / 100;
   const sale = n(i.sale) / 100;
-  // What the buyer pays in the sale so that, after fees, `keep` is left.
-  const saleRaw = keep > 0 ? keep / Math.max(.05, 1 - fee) : 0;
-  const fullRaw = saleRaw / Math.max(.05, 1 - sale);
-  const etsy = fullRaw > 0 ? (ROUNDS[i.round] || ROUNDS["99"])(fullRaw) : 0;
+  const raw = i.mode === "profit"
+    ? base * (1 + n(i.profitPct) / 100) / Math.max(.05, 1 - fee) / Math.max(.05, 1 - sale)
+    : base * (n(i.mult) || 1);
+  const etsy = raw > 0 ? (ROUNDS[i.round] || ROUNDS["99"])(raw) : 0;
   const salePrice = Math.round(etsy * (1 - sale));
   const netSale = salePrice * (1 - fee), netFull = etsy * (1 - fee);
-  const profitSale = netSale - unitCost, profitFull = netFull - unitCost;
-  const ebay = keep > 0 ? roundUsd99(keep / Math.max(.05, 1 - n(i.ebayFees) / 100) / (liveRate || 84)) : 0;
+  const profitSale = netSale - base, profitFull = netFull - base;
+  // eBay: the same money in hand as an Etsy sale, after eBay's own fees.
+  const ebay = netSale > 0 ? roundUsd99(netSale / Math.max(.05, 1 - n(i.ebayFees) / 100) / (liveRate || 84)) : 0;
   const fx = +store.fx_inr_per_usd || 84, disc = store.etsy_discount_pct ?? 25;
   const storeUsd = etsy ? storePriceFor({ price_etsy: etsy }, fx, store.price_rounding || "whole", disc) : 0;
   const storeInr = etsy ? Math.round(etsy * (1 - (+disc || 0) / 100) / 10) * 10 : 0;
-  const trade = unitCost > 0 ? Math.round(unitCost * (n(i.tradeMult) || 1) / (liveRate || 84) * 100) / 100 : 0;
-  // The other unit: per kilo ↔ per piece, through the weight.
-  const other = !pcsKg ? null : perKg
-    ? { label: "per piece", etsy: etsy / pcsKg, sale: salePrice / pcsKg, cost: unitCost / pcsKg, trade: trade / pcsKg }
-    : { label: "per kilo", etsy: etsy * pcsKg, sale: salePrice * pcsKg, cost: unitCost * pcsKg, trade: trade * pcsKg };
-  return { perKg, pcsKg, unitCost, keep, fee, sale, etsy, salePrice, netSale, netFull, profitSale, profitFull,
-    marginSale: salePrice ? profitSale / salePrice : 0, ebay, storeUsd, storeInr, trade, other, fx, disc };
+  // Wholesale is per kilo when a kilo cost is known, else per piece.
+  const tradePerKg = costKg > 0;
+  const trade = (tradePerKg ? costKg : costPc) > 0 ? Math.round((tradePerKg ? costKg : costPc) * (n(i.tradeMult) || 1) / (liveRate || 84) * 100) / 100 : 0;
+  return { perPiece, pcsKg, costPc, costKg, base, fee, sale, etsy, salePrice, netSale, netFull, profitSale, profitFull,
+    marginSale: salePrice ? profitSale / salePrice : 0, ebay, storeUsd, storeInr, trade, tradePerKg, fx, disc,
+    etsyKg: perPiece && pcsKg ? etsy * pcsKg : 0 };
 }
 
 export default function PriceStudio({ listing = {}, stockCost = 0, stockWeight = 0, liveRate = 84, loadSettings, shippingProfiles = [], onApply, onClose }) {
@@ -77,7 +86,7 @@ export default function PriceStudio({ listing = {}, stockCost = 0, stockWeight =
     cost: last.cost ?? (stockCost || ""), extra: last.extra ?? "",
     weight: last.weight ?? (grams(listing.weight) || stockWeight || ""),
     mode: last.mode === "profit" ? "profit" : "mult", mult: last.mult ?? prefs.mult ?? 3, profitPct: last.profitPct ?? prefs.profitPct ?? 150,
-    fees: last.fees ?? prefs.fees ?? 11, ads: last.ads ?? prefs.ads ?? false, sale: last.sale ?? prefs.sale ?? 20,
+    fees: last.fees ?? prefs.fees ?? 11, ads: last.ads ?? prefs.ads ?? false, sale: last.sale ?? prefs.sale ?? 25,
     shipProfile: listing.etsy_shipping_profile_id ?? "", shipCost: last.shipCost ?? "",
     round: last.round || prefs.round || "99", ebayFees: last.ebayFees ?? prefs.ebayFees ?? 15, tradeMult: last.tradeMult ?? prefs.tradeMult ?? 1.8,
   }));
@@ -87,7 +96,7 @@ export default function PriceStudio({ listing = {}, stockCost = 0, stockWeight =
   useEffect(() => { const k = e => e.key === "Escape" && onClose(); addEventListener("keydown", k); return () => removeEventListener("keydown", k); }, [onClose]);
   const set = (k, v) => setI(x => ({ ...x, [k]: v }));
   const m = useMemo(() => priceMath(i, { liveRate, store }), [i, liveRate, store]);
-  const per = m.perKg ? "/kg" : "/pc";
+  const per = m.perPiece ? "/pc" : "/kg";
 
   const apply = () => {
     const { shipProfile, ...calc } = i;
@@ -147,11 +156,11 @@ export default function PriceStudio({ listing = {}, stockCost = 0, stockWeight =
               {seg("unit", [["piece", "Per piece"], ["kg", "Per kilo"]])}
             </div>
             <div style={{ display: "flex", gap: 18 }}>
-              {field(`Cost ${m.perKg ? "per kilo" : "per piece"}`, "cost", { hint: stockCost ? `Stock cost: ${inr(stockCost)}` : "What you paid" })}
+              {field(`Cost ${i.unit === "kg" ? "per kilo" : "per piece"}`, "cost", { hint: stockCost ? `Stock cost: ${inr(stockCost)}` : "What you paid" })}
               {field("Extra costs", "extra", { hint: "Polishing, stand, packing" })}
             </div>
             <div style={{ display: "flex", gap: 18 }}>
-              {field("Weight per piece", "weight", { prefix: "", suffix: "g", hint: m.pcsKg ? `≈ ${m.pcsKg >= 10 ? Math.round(m.pcsKg) : m.pcsKg.toFixed(1)} pieces per kilo` : "For the per-piece / per-kilo price" })}
+              {field("Weight per piece", "weight", { prefix: "", suffix: "g", hint: m.pcsKg ? `≈ ${m.pcsKg >= 10 ? Math.round(m.pcsKg) : m.pcsKg.toFixed(1)} pieces per kilo${i.unit === "kg" ? ` · cost ${inr(m.costPc)} a piece` : ` · ${inr(m.costKg)} a kilo`}` : i.unit === "kg" ? "Add it to price per piece" : "For the per-kilo price"})}
               <div style={{ flex: 1 }} />
             </div>
             <div>
@@ -159,7 +168,7 @@ export default function PriceStudio({ listing = {}, stockCost = 0, stockWeight =
               <div style={{ display: "flex", gap: 14, alignItems: "flex-end" }}>
                 <div style={{ width: 210 }}>{seg("mode", [["mult", "× cost"], ["profit", "Profit %"]])}</div>
                 {i.mode === "mult" ? field("", "mult", { prefix: "×", placeholder: "3", w: 110 }) : field("", "profitPct", { prefix: "", suffix: "%", placeholder: "150", w: 110 })}
-                <span style={{ fontSize: 12, color: T.faint, paddingBottom: 6 }}>keep {inr(m.keep)}{per} after fees</span>
+                <span style={{ fontSize: 12, color: T.faint, paddingBottom: 6 }}>{m.base ? `${inr(m.base)}${per} cost ${i.mode === "mult" ? `× ${i.mult || 1} = ${inr(m.base * (n(i.mult) || 1))}` : `+ ${i.profitPct || 0}% profit after fees`}` : ""}</span>
               </div>
             </div>
             <div style={{ display: "flex", gap: 18, alignItems: "flex-end" }}>
@@ -167,7 +176,7 @@ export default function PriceStudio({ listing = {}, stockCost = 0, stockWeight =
               <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13, color: T.mid, paddingBottom: 22, cursor: "pointer" }}>
                 <input type="checkbox" checked={!!i.ads} onChange={e => set("ads", e.target.checked)} style={{ accentColor: T.ink }} /> Offsite ads (+15%)
               </label>
-              {field("Etsy sale", "sale", { prefix: "", suffix: "% off", w: 120, hint: "Your usual sale" })}
+              {field("Etsy sale", "sale", { prefix: "", suffix: "% off", w: 120, hint: "Always 25% unless you change it" })}
             </div>
             <div style={{ display: "flex", gap: 18, alignItems: "flex-end" }}>
               <label style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1.4, minWidth: 0 }}>
@@ -196,19 +205,19 @@ export default function PriceStudio({ listing = {}, stockCost = 0, stockWeight =
             {row("ebay", `eBay${per}`, m.ebay ? usd(m.ebay) : "—", `after ${i.ebayFees || 0}% fees, at ₹${Math.round(liveRate)}/$`)}
             {row("storeUsd", `EE store · USA${per}`, m.storeUsd ? usd(m.storeUsd) : "—", `Etsy less ${m.disc}% ÷ ${m.fx} — leave unticked to keep following Etsy`)}
             {row("storeInr", `EE store · India${per}`, m.storeInr ? inr(m.storeInr) : "—", `Etsy less ${m.disc}%`)}
-            {row("trade", `Wholesale${per}`, m.trade ? usd(m.trade) : "—", `cost × ${i.tradeMult || 1}`)}
+            {row("trade", `Wholesale${m.tradePerKg ? "/kg" : "/pc"}`, m.trade ? usd(m.trade) : "—", `cost${m.tradePerKg ? " per kilo" : ""} × ${i.tradeMult || 1}`)}
 
-            <span style={{ ...lab, marginTop: 18, marginBottom: 2 }}>What you make, per {m.perKg ? "kilo" : "piece"}</span>
-            {row(null, "Cost", m.unitCost ? inr(m.unitCost) : "—", n(i.shipCost) ? `includes ${inr(i.shipCost)} shipping` : null)}
+            <span style={{ ...lab, marginTop: 18, marginBottom: 2 }}>What you make, per {m.perPiece ? "piece" : "kilo"}</span>
+            {row(null, "Cost", m.base ? inr(m.base) : "—", [i.unit === "kg" && m.perPiece && `${inr(n(i.cost))}/kg × ${i.weight}g`, n(i.shipCost) && `includes ${inr(i.shipCost)} shipping`].filter(Boolean).join(" · ") || null)}
             {row(null, `In the ${i.sale || 0}% sale, after fees`, m.netSale ? inr(m.netSale) : "—", `${Math.round(m.fee * 100)}% Etsy fees`)}
             <div style={{ display: "flex", gap: 10, padding: "10px 0", borderBottom: `1px solid ${T.line}` }}>
               <div style={{ flex: 1 }}><div style={{ fontSize: 11, color: T.faint }}>Profit in the sale</div><div style={{ fontFamily: T.serif, fontSize: 28, color: m.profitSale >= 0 ? T.good : T.bad }}>{m.etsy ? inr(m.profitSale) : "—"}</div></div>
               <div style={{ flex: 1 }}><div style={{ fontSize: 11, color: T.faint }}>Margin</div><div style={{ fontFamily: T.serif, fontSize: 28, color: T.ink }}>{m.etsy ? `${Math.round(m.marginSale * 100)}%` : "—"}</div></div>
               <div style={{ flex: 1 }}><div style={{ fontSize: 11, color: T.faint }}>At full price</div><div style={{ fontFamily: T.serif, fontSize: 28, color: T.ink }}>{m.etsy ? inr(m.profitFull) : "—"}</div></div>
             </div>
-            {m.other && m.etsy > 0 && (
+            {m.etsyKg > 0 && (
               <div style={{ marginTop: 14, padding: "10px 12px", background: "#fff", border: `1px solid ${T.line}`, fontSize: 13, color: T.mid, lineHeight: 1.6 }}>
-                <b style={{ color: T.ink }}>{m.other.label}</b> ({m.pcsKg >= 10 ? Math.round(m.pcsKg) : m.pcsKg.toFixed(1)} pcs/kg): Etsy {inr(m.other.etsy)} · in the sale {inr(m.other.sale)} · cost {inr(m.other.cost)}{m.trade ? ` · wholesale ${usd(Math.round(m.other.trade * 100) / 100)}` : ""}
+                <b style={{ color: T.ink }}>Per kilo</b> ({m.pcsKg >= 10 ? Math.round(m.pcsKg) : m.pcsKg.toFixed(1)} pcs/kg): Etsy {inr(m.etsyKg)} · in the sale {inr(m.salePrice * m.pcsKg)} · cost {inr(m.costKg + (n(i.extra) + n(i.shipCost)) * m.pcsKg)}
               </div>
             )}
           </div>

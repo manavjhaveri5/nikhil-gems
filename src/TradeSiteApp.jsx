@@ -9,6 +9,7 @@ import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
 import { classify } from "./aiClient.js";
+import { tradeTitleFor } from "./listingChannels.js";
 import { defaultPieces } from "./listingChannels.js";
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
@@ -833,7 +834,7 @@ export async function loadTradeFacts() {
 export async function publishListingToTrade(listing, { syncOnly = false, ask = null } = {}) {
   const id = listing.platforms?.trade?.product_id || `lm-${listing.id}`;
   const [existing, site] = await Promise.all([
-    q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,origin,collections,videos").eq("id", id).maybeSingle()),
+    q(supabase.from("trade_products").select("id,title,live,is_new,new_at,is_deal,variants,unit,origin,collections,videos").eq("id", id).maybeSingle()),
     q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
   ]);
   /* Deleted on the trade site by an editor: a background save mustn't bring
@@ -849,7 +850,9 @@ export async function publishListingToTrade(listing, { syncOnly = false, ask = n
   const live = syncOnly ? (existing ? existing.live : false) : true;
   const row = {
     id,
-    title: String(listing.trade_title || listing.shopify_title || listing.title || "").trim(),
+    // Its own trade name, else what the trade site already calls it, else the
+    // plain name with what the price buys: "Cobalto Calcite Sphere (1 kg)".
+    title: String(listing.trade_title || existing?.title || tradeTitleFor(listing, unit) || listing.title || "").trim(),
     description: plain(listing.trade_description || listing.shopify_description || listing.description),
     shape: listing.shape || "", material: listing.material || "", product_type: listing.productType || "",
     tags: Array.isArray(listing.tags) ? listing.tags : [],
