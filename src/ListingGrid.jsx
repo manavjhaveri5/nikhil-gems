@@ -92,8 +92,8 @@ function Tile({ l, store, orders, onOpen, onEdit, onPrice, selected, onSelect })
     <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{ background: C.surface, border: `1px solid ${selected ? C.gold : C.border}`, borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column",
         boxShadow: hover ? "0 6px 22px rgba(40,30,15,.10)" : "0 1px 2px rgba(40,30,15,.04)", transition: "box-shadow .2s, transform .2s", transform: hover ? "translateY(-2px)" : "none" }}>
-      <div onClick={() => onOpen(l, "photos")} style={{ position: "relative", aspectRatio: "1", background: C.card, cursor: "pointer" }}>
-        {imgs[i] ? <img src={thumb(imgs[i])} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: sold ? .55 : 1 }} />
+      <div onClick={() => onOpen(l, "photos")} style={{ position: "relative", aspectRatio: "1", background: C.card, cursor: "pointer", overflow: "hidden" }}>
+        {imgs[i] ? <img src={thumb(imgs[i])} alt="" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: sold ? .55 : 1 }} />
           : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34, opacity: .5 }}>💎</div>}
         <label onClick={e => e.stopPropagation()} style={{ position: "absolute", top: 8, left: 8, width: 24, height: 24, borderRadius: 6, background: "rgba(255,255,255,.9)",
           display: hover || selected ? "flex" : "none", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
@@ -244,17 +244,44 @@ const SORTS = {
   az: ["A–Z", (a, b) => String(a.title || "").localeCompare(String(b.title || ""))],
 };
 
+// Checkbox filters: within a group, any ticked option matches; groups combine.
+const toggle = (set, v) => { const n = new Set(set); n.has(v) ? n.delete(v) : n.add(v); return n; };
+
+function Group({ title, children, open: startOpen = true }) {
+  const [open, setOpen] = useState(startOpen);
+  return (
+    <div style={{ borderBottom: `1px solid ${C.border}`, padding: "12px 0" }}>
+      <button onClick={() => setOpen(o => !o)} style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", border: "none", background: "none", padding: 0, cursor: "pointer",
+        fontSize: 11, fontWeight: 800, letterSpacing: .8, textTransform: "uppercase", color: C.inkMid }}>{title}<span style={{ fontSize: 12 }}>{open ? "−" : "+"}</span></button>
+      {open && <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 8 }}>{children}</div>}
+    </div>
+  );
+}
+function Check({ checked, onChange, label, count, color }) {
+  return (
+    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: C.ink, cursor: "pointer", padding: "4px 2px", borderRadius: 6 }}>
+      <input type="checkbox" checked={checked} onChange={onChange} style={{ margin: 0, width: 15, height: 15, accentColor: "#141210", cursor: "pointer" }} />
+      {color && <span style={{ width: 8, height: 8, borderRadius: 4, background: color, flex: "none" }} />}
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: checked ? 700 : 400 }}>{label}</span>
+      {count != null && <span style={{ fontSize: 11, color: C.inkFaint }}>{count}</span>}
+    </label>
+  );
+}
+
 export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, onPrice, onSavePhotos, onMarkSold, onDelete, renderManage, onBulkPrice }) {
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState("all");      // all | live | notlive | sold
-  const [plat, setPlat] = useState("");             // platform key
-  const [platOn, setPlatOn] = useState("on");       // on | off
-  const [type, setType] = useState("");             // unique | repeatable
-  const [material, setMaterial] = useState("");
+  const [status, setStatus] = useState(new Set());   // live | notlive | sold
+  const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
+  const [notOn, setNotOn] = useState(new Set());     // platform keys: not on any of these
+  const [types, setTypes] = useState(new Set());     // unique | repeatable
+  const [stones, setStones] = useState(new Set());
+  const [stoneQ, setStoneQ] = useState("");
+  const [allStones, setAllStones] = useState(false);
   const [erpOnly, setErpOnly] = useState(false);
-  const [issue, setIssue] = useState("");           // noprice | nophotos
+  const [issues, setIssues] = useState(new Set());   // noprice | nophotos | nostore
   const [sort, setSort] = useState("new");
   const [cols, setCols] = useState(() => { try { return +localStorage.getItem("lm-grid-cols") || 0; } catch { return 0; } });
+  const [panel, setPanel] = useState(() => typeof window === "undefined" || window.innerWidth >= 900);
   const [shown, setShown] = useState(60);
   const [open, setOpen] = useState(null);           // { id, tab }
   const [store, setStore] = useState(null);
@@ -266,32 +293,53 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
   useEffect(() => { try { localStorage.setItem("lm-grid-cols", String(cols)); } catch {} }, [cols]);
 
   const materials = useMemo(() => {
+    // "Amethyst" and "amethyst" are one stone; the capitalised spelling names it.
     const m = new Map();
-    for (const l of listings) { const k = String(l.material || "").trim(); if (k) m.set(k, (m.get(k) || 0) + 1); }
-    return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60);
+    for (const l of listings) {
+      const raw = String(l.material || "").trim(), k = raw.toLowerCase();
+      if (!k) continue;
+      const e = m.get(k) || { n: 0, label: raw };
+      e.n++; if (/^[A-Z]/.test(raw) && !/^[A-Z]/.test(e.label)) e.label = raw;
+      m.set(k, e);
+    }
+    return [...m.entries()].map(([k, e]) => [k, e.n, e.label]).sort((a, b) => b[1] - a[1]);
   }, [listings]);
+  const counts = useMemo(() => ({
+    live: listings.filter(isLive).length,
+    sold: listings.filter(l => soldOut(l, orders)).length,
+    unique: listings.filter(l => l.type === "unique").length,
+    erp: listings.filter(l => l._source !== "etsy-import").length,
+    noprice: listings.filter(l => !(+l.price_etsy > 0)).length,
+    nophotos: listings.filter(l => !(l.images || []).length).length,
+    nostore: listings.filter(l => !statusOf(l, "store")).length,
+    plat: Object.fromEntries(PLAT.map(p => [p.key, listings.filter(l => statusOf(l, p.key) === "active").length])),
+  }), [listings, orders]);
 
   const list = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     return listings.filter(l => {
-      if (status === "live" && !isLive(l)) return false;
-      if (status === "notlive" && isLive(l)) return false;
-      if (status === "sold" && !soldOut(l, orders)) return false;
-      if (plat) { const on = statusOf(l, plat) === "active"; if (platOn === "on" ? !on : on) return false; }
-      if (type && l.type !== type) return false;
-      if (material && String(l.material || "").trim() !== material) return false;
+      if (status.size) {
+        const live = isLive(l), sold = soldOut(l, orders);
+        if (!((status.has("live") && live) || (status.has("notlive") && !live) || (status.has("sold") && sold))) return false;
+      }
+      if (liveOn.size && ![...liveOn].some(k => statusOf(l, k) === "active")) return false;
+      if (notOn.size && [...notOn].some(k => statusOf(l, k) === "active")) return false;
+      if (types.size && !types.has(l.type)) return false;
+      if (stones.size && !stones.has(String(l.material || "").trim().toLowerCase())) return false;
       if (erpOnly && l._source === "etsy-import") return false;
-      if (issue === "noprice" && +l.price_etsy > 0) return false;
-      if (issue === "nophotos" && (l.images || []).length) return false;
+      if (issues.size) {
+        const hit = (issues.has("noprice") && !(+l.price_etsy > 0)) || (issues.has("nophotos") && !(l.images || []).length) || (issues.has("nostore") && !statusOf(l, "store"));
+        if (!hit) return false;
+      }
       if (terms.length) {
         const hay = [l.title, l.material, l.shape, l.sku, l.listing_order_id, l.origin, l.productType, l.etsy_title, l.shopify_title, Array.isArray(l.tags) ? l.tags.join(" ") : l.tags].filter(Boolean).join(" ").toLowerCase();
         if (!terms.every(t => hay.includes(t))) return false;
       }
       return true;
     }).sort(SORTS[sort][1]);
-  }, [listings, orders, q, status, plat, platOn, type, material, erpOnly, issue, sort]);
+  }, [listings, orders, q, status, liveOn, notOn, types, stones, erpOnly, issues, sort]);
 
-  useEffect(() => { setShown(60); }, [q, status, plat, platOn, type, material, erpOnly, issue, sort]);
+  useEffect(() => { setShown(60); }, [q, status, liveOn, notOn, types, stones, erpOnly, issues, sort]);
   // Load more as the bottom comes into view.
   useEffect(() => {
     const el = more.current; if (!el) return;
@@ -301,45 +349,26 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
 
   const price = async (l, field, v) => { await onPrice(l, field, v); if (field.startsWith("price_store")) refreshStore(); };
   const openL = open && listings.find(l => l.id === open.id);
-  const toggleSel = id => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleSel = id => setSel(s => toggle(s, id));
   const selected = list.filter(l => sel.has(l.id));
-  const anyFilter = q || status !== "all" || plat || type || material || erpOnly || issue;
-
+  const nFilters = status.size + liveOn.size + notOn.size + types.size + stones.size + issues.size + (erpOnly ? 1 : 0);
+  const clearAll = () => { setStatus(new Set()); setLiveOn(new Set()); setNotOn(new Set()); setTypes(new Set()); setStones(new Set()); setIssues(new Set()); setErpOnly(false); setQ(""); };
+  const stoneList = materials.filter(([k]) => !stoneQ || k.includes(stoneQ.toLowerCase()));
   const chip = on => ({ padding: "6px 12px", borderRadius: 18, fontSize: 12.5, fontWeight: on ? 700 : 500, cursor: "pointer", whiteSpace: "nowrap",
     border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.surface, color: on ? "#FAF0DC" : C.inkMid });
-  const sel_ = { ...FI(), width: "auto", padding: "6px 10px", fontSize: 12.5, borderRadius: 18 };
-  const liveCount = listings.filter(isLive).length;
 
   return (
     <div>
-      {/* filters */}
-      <div style={{ position: "sticky", top: 0, zIndex: 20, background: C.bg, padding: "10px 0 12px", marginBottom: 6, borderBottom: `1px solid ${C.border}` }}>
+      {/* search, sort, layout */}
+      <div style={{ position: "sticky", top: 0, zIndex: 20, background: C.bg, padding: "10px 0 12px", marginBottom: 8, borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={() => setPanel(p => !p)} style={chip(panel)}>☰ Filters{nFilters ? ` · ${nFilters}` : ""}</button>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder={`Search ${listings.length} listings — title, stone, SKU, tag…`}
-            style={{ ...FI(), flex: "1 1 260px", maxWidth: 420, borderRadius: 20, padding: "8px 14px" }} />
-          {[["all", `All ${listings.length}`], ["live", `Live ${liveCount}`], ["notlive", `Not live ${listings.length - liveCount}`], ["sold", "Sold"]].map(([k, t]) => (
-            <button key={k} onClick={() => setStatus(k)} style={chip(status === k)}>{t}</button>
-          ))}
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: C.ink, cursor: "pointer", padding: "6px 12px", borderRadius: 18, border: `1px solid ${erpOnly ? C.gold : C.border}`, background: erpOnly ? C.amberBg : C.surface, whiteSpace: "nowrap" }}>
-            <input type="checkbox" checked={erpOnly} onChange={e => setErpOnly(e.target.checked)} style={{ margin: 0 }} /> Posted from ERP
-          </label>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
-          <select value={plat} onChange={e => setPlat(e.target.value)} style={sel_}>
-            <option value="">Any platform</option>
-            {PLAT.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
-          </select>
-          {plat && <select value={platOn} onChange={e => setPlatOn(e.target.value)} style={sel_}><option value="on">is live on it</option><option value="off">is not on it</option></select>}
-          <select value={material} onChange={e => setMaterial(e.target.value)} style={sel_}>
-            <option value="">Any stone</option>
-            {materials.map(([m, n]) => <option key={m} value={m}>{m} ({n})</option>)}
-          </select>
-          <select value={type} onChange={e => setType(e.target.value)} style={sel_}><option value="">Unique & repeatable</option><option value="unique">One of a kind</option><option value="repeatable">Repeatable</option></select>
-          <select value={issue} onChange={e => setIssue(e.target.value)} style={sel_}><option value="">No issue filter</option><option value="noprice">Missing Etsy price</option><option value="nophotos">No photos</option></select>
-          <select value={sort} onChange={e => setSort(e.target.value)} style={sel_}>{Object.entries(SORTS).map(([k, [t]]) => <option key={k} value={k}>{t}</option>)}</select>
-          {anyFilter && <button onClick={() => { setQ(""); setStatus("all"); setPlat(""); setType(""); setMaterial(""); setErpOnly(false); setIssue(""); }} style={{ ...chip(false), color: C.red }}>Clear</button>}
+            style={{ ...FI(), flex: "1 1 260px", maxWidth: 460, borderRadius: 20, padding: "8px 14px" }} />
+          <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...FI(), width: "auto", padding: "7px 10px", fontSize: 12.5, borderRadius: 18 }}>{Object.entries(SORTS).map(([k, [t]]) => <option key={k} value={k}>Sort: {t}</option>)}</select>
+          {nFilters > 0 && <button onClick={clearAll} style={{ ...chip(false), color: C.red }}>Clear filters</button>}
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 12, color: C.inkFaint }}>{list.length} shown</span>
+          <span style={{ fontSize: 12, color: C.inkFaint }}>{list.length} of {listings.length}</span>
           <div style={{ display: "flex", border: `1px solid ${C.border}`, borderRadius: 18, overflow: "hidden" }} title="Cards per row">
             {[[0, "Auto"], [4, "4"], [5, "5"]].map(([n, t]) => <button key={n} onClick={() => setCols(n)} style={{ padding: "5px 10px", border: "none", fontSize: 12, cursor: "pointer", background: cols === n ? C.ink : C.surface, color: cols === n ? "#FAF0DC" : C.inkMid }}>{t}</button>)}
           </div>
@@ -347,22 +376,58 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
         {selected.length > 0 && (
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, padding: "8px 12px", background: C.amberBg, borderRadius: 10, fontSize: 12.5, flexWrap: "wrap" }}>
             <b>{selected.length} selected</b>
-            <button onClick={() => onBulkPrice(selected, "up").then(refreshStore)} style={{ ...chip(false) }}>Change prices by %…</button>
+            <button onClick={() => onBulkPrice(selected).then(refreshStore)} style={chip(false)}>Change prices by %…</button>
             <button onClick={() => setSel(new Set(list.map(l => l.id)))} style={chip(false)}>Select all {list.length}</button>
             <button onClick={() => setSel(new Set())} style={chip(false)}>Clear selection</button>
           </div>
         )}
       </div>
 
-      {/* grid */}
-      <div style={{ display: "grid", gap: 14, gridTemplateColumns: cols ? `repeat(${cols}, minmax(0, 1fr))` : "repeat(auto-fill, minmax(245px, 1fr))" }}>
-        {list.slice(0, shown).map(l => (
-          <Tile key={l.id} l={l} store={store} orders={orders} selected={sel.has(l.id)} onSelect={toggleSel}
-            onOpen={(x, tab) => setOpen({ id: x.id, tab })} onEdit={onEdit} onPrice={price} />
-        ))}
+      <div style={{ display: "flex", gap: 22, alignItems: "flex-start" }}>
+        {/* checkbox filters */}
+        {panel && (
+          <aside style={{ width: 230, flex: "none", position: "sticky", top: 70, maxHeight: "calc(100vh - 90px)", overflowY: "auto", paddingRight: 4 }}>
+            <Group title="Show">
+              <Check checked={status.has("live")} onChange={() => setStatus(s => toggle(s, "live"))} label="Live" count={counts.live} color={C.green} />
+              <Check checked={status.has("notlive")} onChange={() => setStatus(s => toggle(s, "notlive"))} label="Not live" count={listings.length - counts.live} />
+              <Check checked={status.has("sold")} onChange={() => setStatus(s => toggle(s, "sold"))} label="Sold" count={counts.sold} />
+              <Check checked={erpOnly} onChange={() => setErpOnly(v => !v)} label="Posted from ERP" count={counts.erp} color={C.gold} />
+            </Group>
+            <Group title="Live on">
+              {PLAT.map(p => <Check key={p.key} checked={liveOn.has(p.key)} onChange={() => setLiveOn(s => toggle(s, p.key))} label={p.label} count={counts.plat[p.key]} color={p.color} />)}
+            </Group>
+            <Group title="Not on" open={false}>
+              {PLAT.map(p => <Check key={p.key} checked={notOn.has(p.key)} onChange={() => setNotOn(s => toggle(s, p.key))} label={p.label} count={listings.length - counts.plat[p.key]} color={p.color} />)}
+            </Group>
+            <Group title="Type">
+              <Check checked={types.has("unique")} onChange={() => setTypes(s => toggle(s, "unique"))} label="One of a kind" count={counts.unique} />
+              <Check checked={types.has("repeatable")} onChange={() => setTypes(s => toggle(s, "repeatable"))} label="Repeatable" count={listings.length - counts.unique} />
+            </Group>
+            <Group title={`Stone${stones.size ? ` · ${stones.size}` : ""}`}>
+              <input value={stoneQ} onChange={e => setStoneQ(e.target.value)} placeholder="Find a stone…" style={{ ...FI(), padding: "5px 9px", fontSize: 12, marginBottom: 4 }} />
+              {(allStones || stoneQ ? stoneList : stoneList.slice(0, 12)).map(([k, n, label]) => <Check key={k} checked={stones.has(k)} onChange={() => setStones(s => toggle(s, k))} label={label} count={n} />)}
+              {!stoneQ && stoneList.length > 12 && <button onClick={() => setAllStones(v => !v)} style={{ border: "none", background: "none", color: C.inkMid, fontSize: 12, textAlign: "left", padding: "4px 2px", cursor: "pointer", textDecoration: "underline" }}>{allStones ? "Show fewer" : `Show all ${stoneList.length}`}</button>}
+            </Group>
+            <Group title="Needs attention" open={false}>
+              <Check checked={issues.has("noprice")} onChange={() => setIssues(s => toggle(s, "noprice"))} label="No Etsy price" count={counts.noprice} color={C.red} />
+              <Check checked={issues.has("nophotos")} onChange={() => setIssues(s => toggle(s, "nophotos"))} label="No photos" count={counts.nophotos} color={C.red} />
+              <Check checked={issues.has("nostore")} onChange={() => setIssues(s => toggle(s, "nostore"))} label="Not on the EE store" count={counts.nostore} color={C.amber} />
+            </Group>
+          </aside>
+        )}
+
+        {/* grid */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "grid", gap: 14, gridTemplateColumns: cols ? `repeat(${cols}, minmax(0, 1fr))` : "repeat(auto-fill, minmax(230px, 1fr))" }}>
+            {list.slice(0, shown).map(l => (
+              <Tile key={l.id} l={l} store={store} orders={orders} selected={sel.has(l.id)} onSelect={toggleSel}
+                onOpen={(x, tab) => setOpen({ id: x.id, tab })} onEdit={onEdit} onPrice={price} />
+            ))}
+          </div>
+          {!list.length && <div style={{ textAlign: "center", padding: "60px 0", color: C.inkFaint }}>No listings match these filters.</div>}
+          {shown < list.length && <div ref={more} style={{ textAlign: "center", padding: 24, color: C.inkFaint, fontSize: 12 }}>Loading more…</div>}
+        </div>
       </div>
-      {!list.length && <div style={{ textAlign: "center", padding: "60px 0", color: C.inkFaint }}>No listings match these filters.</div>}
-      {shown < list.length && <div ref={more} style={{ textAlign: "center", padding: 24, color: C.inkFaint, fontSize: 12 }}>Loading more…</div>}
 
       {openL && (
         <Drawer l={openL} tab={open.tab} setTab={t => setOpen(o => ({ ...o, tab: t }))} store={store}
