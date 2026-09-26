@@ -137,6 +137,13 @@ export async function publishListingToStore(listing, { syncOnly = false, overrid
 }
 /* What Listing Manager's grid shows for the store: the live $ and ₹ prices and
    status of each listing's store product, keyed by listing id. */
+/* The store's own copy of one listing: the short name and size line it shows,
+   and its live prices. */
+export async function loadStoreProduct(listingId) {
+  const rows = await q(supabase.from("store_products").select("id,title,subtitle,price,price_inr,status,handle").or(`id.eq.lm-${String(listingId).replace(/[,()]/g, "")},listing_id.eq.${String(listingId).replace(/[,()]/g, "")}`).limit(1));
+  return rows[0] || null;
+}
+
 export async function loadStoreFacts() {
   const out = {};
   for (let from = 0; ; from += 1000) {
