@@ -8,6 +8,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } fro
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
+import { classify } from "./aiClient.js";
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
@@ -552,6 +553,17 @@ const perPcText = (price, { pieces, pieces_max }) => {
   return `≈ ${lo === hi ? lo : `${lo}–${hi}`}/pc`;
 };
 
+// Where a trade product's stone most likely comes from, by AI; "" if unsure.
+export async function suggestOrigin(p) {
+  const t = await classify(`Which country does this wholesale crystal/stone product most likely come from, as sold by an Indian wholesaler? Use an origin stated in the text if there is one; otherwise the stone's main commercial source. Reply "" if it isn't one natural stone (mixed sets, metal, wood, glass) or you're unsure.
+
+Title: ${p.title || ""}
+Description: ${String(p.description || "").replace(/\s+/g, " ").slice(0, 600)}
+
+Reply with ONLY JSON: {"country":"<country in English or empty>"}`, 60);
+  try { return String(JSON.parse(String(t).replace(/```json|```/g, "").trim()).country || "").trim(); } catch { return ""; }
+}
+
 function ProductEditor({ p, onClose, onSave }) {
   const [f, setF] = useState(() => ({
     title: p.title, description: p.description, shape: p.shape, product_type: p.product_type, unit: p.unit, origin: p.origin || "",
@@ -560,6 +572,13 @@ function ProductEditor({ p, onClose, onSave }) {
     variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(({ pcs, ...v }) => ({ ...v, price: v.price || "", pcs: v.pieces ? (v.pieces_max ? `${v.pieces}-${v.pieces_max}` : String(v.pieces)) : "" })),
   }));
   const [busy, setBusy] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const detect = async () => {
+    setDetecting(true);
+    try { const c = await suggestOrigin({ title: f.title, description: f.description }); if (c) setF(x => ({ ...x, origin: c })); else alert("AI couldn't tell — type it in."); }
+    catch (e) { alert(`AI unavailable: ${e.message}`); }
+    setDetecting(false);
+  };
   const [editIdx, setEditIdx] = useState(null);   // photo open in the editor
   const setImages = fn => setF(x => ({ ...x, images: fn(x.images) }));
   const set = k => e => setF(x => ({ ...x, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -625,7 +644,7 @@ function ProductEditor({ p, onClose, onSave }) {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 200px", gap: 10 }}>
           <div><span style={lab}>Collections (comma separated)</span><input value={f.collections} onChange={set("collections")} style={FI()} /></div>
-          <div><span style={lab}>Origin (country)</span><input value={f.origin} onChange={set("origin")} placeholder="e.g. India" style={FI()} /></div>
+          <div><span style={lab}>Origin (country)</span><div style={{ display: "flex", gap: 6 }}><input value={f.origin} onChange={set("origin")} placeholder={detecting ? "Detecting…" : "e.g. India"} style={FI({ flex: 1 })} /><button type="button" onClick={detect} disabled={detecting} title="Suggest with AI" style={{ border: `1px solid ${C.border}`, background: "#fff", borderRadius: 8, padding: "0 10px", cursor: "pointer", fontSize: 13 }}>{detecting ? "…" : "✨"}</button></div></div>
         </div>
         <div>
           <span style={lab}>Trade price per {f.unit === "piece" ? "piece" : f.unit === "lot" ? "lot" : "kilo"}{f.variants.length > 1 ? ", each option" : ""} (USD · blank = on request) · stock · pieces per {f.unit === "lot" ? "lot" : "kilo"}</span>
