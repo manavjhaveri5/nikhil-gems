@@ -81,8 +81,9 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
     tags: Array.isArray(l.tags) ? l.tags : [],
     collections: existing?.collections?.length ? existing.collections : [collectionFor(l)],
     price: storePriceFor(l, fx, rounding, discount),
-    // Indian buyers pay in rupees: the Etsy sale price itself, no dollar round trip.
-    price_inr: +l.price_etsy ? Math.round(+l.price_etsy * (1 - (+discount || 0) / 100) / 10) * 10 : null,
+    // Indian buyers pay in rupees: a store ₹ price set in Listing Manager, else
+    // the Etsy sale price itself, no dollar round trip.
+    price_inr: +l.price_store_inr ? Math.round(+l.price_store_inr) : +l.price_etsy ? Math.round(+l.price_etsy * (1 - (+discount || 0) / 100) / 10) * 10 : null,
     qty: Math.max(1, parseInt(l.qty, 10) || 1),
     is_unique: l.type !== "repeatable",
     status: existing?.status === "sold" ? "sold" : live ? "active" : (existing?.status || "hidden"),
@@ -103,10 +104,13 @@ function keepManual(row, existing) {
 }
 
 /* Listing Manager hooks — the store is a platform there, like Etsy. */
-export async function publishListingToStore(listing, { syncOnly = false } = {}) {
+/* override: fields just set on purpose in Listing Manager (a price typed on
+   its grid) — they win over an earlier hand edit in the store's editor. */
+export async function publishListingToStore(listing, { syncOnly = false, override = [] } = {}) {
   const s = await storeSettings();
   const id = `lm-${listing.id}`;
-  const existing = await q(supabase.from("store_products").select("*").eq("id", id).maybeSingle());
+  let existing = await q(supabase.from("store_products").select("*").eq("id", id).maybeSingle());
+  if (existing && override.length) existing = { ...existing, source: { ...(existing.source || {}), manual: (existing.source?.manual || []).filter(k => !override.includes(k)) } };
   let row = keepManual(rowFromListing(listing, { fx: +s.fx_inr_per_usd || 84, rounding: s.price_rounding, discount: s.etsy_discount_pct, existing, live: !syncOnly }), existing);
   if (!existing) {
     // Another piece already has this name: this one takes the next number.
@@ -125,6 +129,18 @@ export async function publishListingToStore(listing, { syncOnly = false } = {}) 
   const base = String(s.site_url || "https://eartheditions.co").replace(/\/+$/, "");
   return { product_id: id, url: `${base}/products/${row.handle}`, status: row.status === "active" ? "active" : "draft" };
 }
+/* What Listing Manager's grid shows for the store: the live $ and ₹ prices and
+   status of each listing's store product, keyed by listing id. */
+export async function loadStoreFacts() {
+  const out = {};
+  for (let from = 0; ; from += 1000) {
+    const rows = await q(supabase.from("store_products").select("id,listing_id,price,price_inr,status,handle").range(from, from + 999));
+    for (const r of rows) { const lid = r.listing_id || (String(r.id).startsWith("lm-") ? String(r.id).slice(3) : ""); if (lid) out[lid] = r; }
+    if (rows.length < 1000) break;
+  }
+  return out;
+}
+
 export async function markStoreSold(productId) {
   if (!productId) throw new Error("Not on the store");
   await q(supabase.from("store_products").update({ status: "sold", sold_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", productId));

@@ -20,7 +20,8 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts } from "./StoreApp.jsx";
+import ListingGrid from "./ListingGrid.jsx";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -2698,8 +2699,8 @@ function TradeAskModal({ listing, initial, onDone }) {
   );
 }
 
-function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo }) {
-  const [expanded,   setExpanded]   = useState(false);
+function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo, startExpanded = false }) {
+  const [expanded,   setExpanded]   = useState(startExpanded);
   const [dl,         setDl]         = useState("");   // media download progress, "3/11"
   const [publishing, setPublishing] = useState({});
   const [toast,      setToast]      = useState("");
@@ -8648,6 +8649,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [showForm,   setShowForm]   = useState(false);
   const [editing,    setEditing]    = useState(null);
   const [soldModal,  setSoldModal]  = useState(null);
+  const [view,       setView]       = useState(() => { try { return localStorage.getItem("lm-view") || "grid"; } catch { return "grid"; } });
+  useEffect(() => { try { localStorage.setItem("lm-view", view); } catch {} }, [view]);
   const [tradeAsk,   setTradeAsk]   = useState(null);   // { listing, initial, res } while the trade form is open
   const askTrade = (listing, initial) => new Promise(res => setTradeAsk({ listing, initial, res }));
   // Trade details change on the site too: re-read them when coming back to the tab.
@@ -8920,6 +8923,47 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     }
   };
 
+  /* Grid edits: one price at a time, saved on the listing and pushed only to
+     the platform it belongs to. A store price typed here beats an earlier hand
+     edit in the store's own editor. */
+  const linkedTo = (l, pkey) => {
+    const pd = l.platforms?.[pkey];
+    if (!pd || pd.status === "deleted") return false;
+    if (pkey === "etsy") return !!pd.listing_id;
+    if (pkey === "ebay") return !!pd.item_id;
+    return !!pd.product_id;
+  };
+  const PRICE_SYNC = { price_store: ["store"], price_store_inr: ["store"], price_etsy: ["etsy", "store"], price_ebay: ["ebay"],
+    price_shopify_earth: ["shopify_earth"], price_shopify_aty: ["shopify_aty"], price_trade: ["trade"] };
+  const quickPrice = async (listing, field, value) => {
+    const current = listings.find(x => x.id === listing.id) || listing;
+    const next = { ...current, [field]: value, updated_at: new Date().toISOString() };
+    await saveListingItem(next);
+    const targets = (PRICE_SYNC[field] || []).filter(k => linkedTo(next, k))
+      // The store follows the Etsy price only while it has no price of its own.
+      .filter(k => !(field === "price_etsy" && k === "store" && (+next.price_store || +next.price_store_inr)));
+    const storeOverride = field === "price_store" ? ["price"] : field === "price_store_inr" ? ["price_inr"] : [];
+    for (const k of targets) await handlePublish(next, k, { syncOnly: true, allowCreate: false, storeOverride });
+    showToast(targets.length ? `✓ Price saved and updated on ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(" & ")}` : "✓ Price saved");
+  };
+  // Selected cards: every price they have, up or down by a percentage.
+  const bulkPrice = async sel => {
+    const pct = parseFloat(prompt(`Change the prices of ${sel.length} listings by what percent? (e.g. 10 or -15)`) || "");
+    if (!isFinite(pct) || !pct) return;
+    const f = v => +v > 0 ? Math.round(+v * (1 + pct / 100)) : v;
+    if (!confirm(`${pct > 0 ? "Raise" : "Lower"} Etsy and store prices on ${sel.length} listings by ${Math.abs(pct)}% and update the live platforms?`)) return;
+    let n = 0;
+    for (const l of sel) {
+      const next = { ...l, price_etsy: f(l.price_etsy), price_store: f(l.price_store), price_store_inr: f(l.price_store_inr), updated_at: new Date().toISOString() };
+      await saveListingItem(next);
+      for (const k of ["etsy", "store"].filter(k => linkedTo(next, k))) {
+        try { await handlePublish(next, k, { syncOnly: true, allowCreate: false, storeOverride: ["price", "price_inr"] }); } catch (e) { console.warn(k, e); }
+      }
+      showToast(`Updating prices… ${++n}/${sel.length}`);
+    }
+    showToast(`✓ ${sel.length} listings repriced`);
+  };
+
   /* delete */
   const handleDelete = async id => {
     if (!confirm("Delete this listing from your catalog? Won't remove from platforms.")) return;
@@ -8957,7 +9001,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* publish — syncOnly=true means update fields only, never activate */
-  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly } = {}) => {
+  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [] } = {}) => {
     // Only on the first trip to Etsy: once the listing exists, a re-sync
     // shouldn't stop to ask about fields the seller has already left blank.
     if (pkey === "etsy" && allowCreate && !listing.platforms?.etsy?.listing_id) {
@@ -9006,7 +9050,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       refreshTradeFacts();
     } else if (pkey === "store") {
       // eartheditions.co: price in USD, converted from Etsy's rupees unless set.
-      result = await publishListingToStore(listing, { syncOnly });
+      result = await publishListingToStore(listing, { syncOnly, override: storeOverride });
     } else if (pkey === "ebay") {
       // eBay — call ebay.js directly
       const existingItemId = listing.platforms?.ebay?.item_id;
@@ -9361,7 +9405,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       </div>
 
       {/* ── body ── */}
-      <div style={{ maxWidth: 1060, margin: "0 auto", padding: mob() ? "14px" : "24px 28px" }}>
+      <div style={{ maxWidth: tab === "listings" && view === "grid" ? 1720 : 1060, margin: "0 auto", padding: mob() ? "14px" : "24px 28px" }}>
 
         {/* ══ ALL LISTINGS ══ */}
         {tab === "listings" && (
@@ -9387,6 +9431,34 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               ))}
             </div>
 
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: -8, marginBottom: 4 }}>
+              <div style={{ display: "flex", border: `1px solid ${C.border}`, borderRadius: 18, overflow: "hidden" }}>
+                {[["grid", "▦ Cards"], ["list", "☰ List"]].map(([k, t]) => (
+                  <button key={k} onClick={() => setView(k)} style={{ padding: "6px 14px", border: "none", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                    background: view === k ? C.ink : C.surface, color: view === k ? "#FAF0DC" : C.inkMid }}>{t}</button>
+                ))}
+              </div>
+            </div>
+
+            {view === "grid" && loaded && listings.length > 0 ? (
+              <ListingGrid listings={listings} orders={orders} loadStoreFacts={loadStoreFacts}
+                onEdit={l => { setEditing(l); setShowForm(true); }}
+                onPrice={quickPrice}
+                onSavePhotos={(l, images) => handleSave({ ...l, images })}
+                onMarkSold={setSoldModal}
+                onDelete={async id => { await removeListingItem(id); showToast("Deleted"); }}
+                onBulkPrice={bulkPrice}
+                renderManage={l => (
+                  <ListingCard listing={l} stock={stock} orders={orders} startExpanded
+                    onEdit={x => { setEditing(x); setShowForm(true); }}
+                    onDelete={handleDelete}
+                    onPublish={handlePublish}
+                    onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
+                    onUnpublish={handleUnpublish}
+                    onMarkSold={setSoldModal}
+                    onRefreshShopifyVideo={handleRefreshShopifyVideo} />
+                )} />
+            ) : (<>
             {/* filter + search */}
             <div style={{ display: "flex", alignItems: "center", marginBottom: 16,
               borderBottom: `1px solid ${C.border}`, overflowX: "auto" }}>
@@ -9473,6 +9545,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 ))}
               </div>
             )}
+            </>)}
           </>
         )}
 
