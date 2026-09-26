@@ -809,22 +809,38 @@ export async function refreshTradePhotos(listing) {
    isn't used to guess. */
 export async function findTradeLinks(listings) {
   const [rows, site] = await Promise.all([
-    loadAll("trade_products", "id,live,source", "created_at"),
+    loadAll("trade_products", "id,live,source,title,variants", "created_at"),
     q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
   ]);
   const base = String(site?.value || "https://trade.eartheditions.co").replace(/\/+$/, "");
   const claimed = new Set(listings.map(l => l.platforms?.trade?.product_id).filter(Boolean));
   const digits = v => String(v || "").replace(/\D/g, "");
   const byListing = new Map(), byShopify = new Map(), byStock = new Map();
+  /* Fallbacks for a piece whose listing lost (or never had) its Shopify id:
+     same SKU, or the same title. Only when that key picks out exactly one
+     product and exactly one listing — a shared title is no evidence. */
+  const norm = t => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const skus = r => [...new Set((r.variants || []).map(v => String(v.sku || "").trim().toLowerCase()).filter(Boolean))];
+  const once = () => { const m = new Map(); return { add: (k, v) => { if (!k) return; m.set(k, m.has(k) ? null : v); }, get: k => (k ? m.get(k) || null : null) }; };
+  const bySku = once(), byTitle = once();
   for (const r of rows) {
     if (claimed.has(r.id)) continue;
     const src = r.source || {};
     if (src.listing_id) byListing.set(String(src.listing_id), r);
     if (digits(src.shopify_id)) byShopify.set(digits(src.shopify_id), r);
     if (src.stock_id) byStock.set(String(src.stock_id), r);
+    skus(r).forEach(k => bySku.add(k, r));
+    byTitle.add(norm(r.title), r);
   }
-  const stockUse = new Map();
-  for (const l of listings) if (l.linked_stock_id) stockUse.set(l.linked_stock_id, (stockUse.get(l.linked_stock_id) || 0) + 1);
+  const stockUse = new Map(), skuUse = new Map(), titleUse = new Map();
+  const bump = (m, k) => k && m.set(k, (m.get(k) || 0) + 1);
+  const lSku = l => String(l.sku || "").trim().toLowerCase();
+  const lTitles = l => [...new Set([norm(l.shopify_title), norm(l.title)].filter(Boolean))];
+  for (const l of listings) {
+    if (l.linked_stock_id) stockUse.set(l.linked_stock_id, (stockUse.get(l.linked_stock_id) || 0) + 1);
+    bump(skuUse, lSku(l));
+    lTitles(l).forEach(t => bump(titleUse, t));
+  }
   const links = {};
   const taken = new Set();
   for (const l of listings) {
@@ -832,7 +848,9 @@ export async function findTradeLinks(listings) {
     if (pd?.product_id && pd.status !== "deleted") continue;
     const row = byListing.get(String(l.id))
       || byShopify.get(digits(l.platforms?.shopify_earth?.product_id))
-      || (stockUse.get(l.linked_stock_id) === 1 ? byStock.get(String(l.linked_stock_id)) : null);
+      || (stockUse.get(l.linked_stock_id) === 1 ? byStock.get(String(l.linked_stock_id)) : null)
+      || (skuUse.get(lSku(l)) === 1 ? bySku.get(lSku(l)) : null)
+      || lTitles(l).map(t => (titleUse.get(t) === 1 ? byTitle.get(t) : null)).find(Boolean);
     if (!row || taken.has(row.id)) continue;
     taken.add(row.id);
     links[l.id] = { product_id: row.id, status: row.live ? "active" : "draft", url: `${base}/p/${row.id}` };
