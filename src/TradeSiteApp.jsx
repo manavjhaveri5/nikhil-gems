@@ -704,6 +704,9 @@ export async function publishListingToTrade(listing, { syncOnly = false } = {}) 
     q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,collections,videos").eq("id", id).maybeSingle()),
     q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
   ]);
+  /* Deleted on the trade site by an editor: a background save mustn't bring
+     it back. Only an explicit Publish re-creates it. */
+  if (syncOnly && !existing && listing.platforms?.trade?.product_id) return { product_id: id, status: "deleted" };
   const v0 = existing?.variants?.[0] || {};
   /* A piece that came onto the trade site from Shopify has its trade price set
      there; a listing without one mustn't sync it back to "on request". */
