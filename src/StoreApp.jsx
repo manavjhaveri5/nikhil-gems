@@ -600,6 +600,7 @@ function SettingsTab({ settings, reload, showToast }) {
     contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
     hero: { image: "", video: "", heading: "", eyebrow: "", intro: "", ...(settings.hero || {}) },
     sourcing: Array.isArray(settings.sourcing_photos) ? settings.sourcing_photos : [],
+    insta_feed: typeof settings.instagram_feed === "string" ? settings.instagram_feed : "",
     insta: Array.isArray(settings.instagram_photos) ? settings.instagram_photos.map(x => typeof x === "string" ? { src: x, url: "" } : { src: x?.src || "", url: x?.url || "" }).filter(x => x.src) : [],
     dispatch_note: settings.dispatch_note || "", returns_note: settings.returns_note || "",
   }));
@@ -644,12 +645,19 @@ function SettingsTab({ settings, reload, showToast }) {
     } catch (e) { showToast("⚠ " + e.message); }
     setHeroBusy("");
   };
-  // Whether the store's live feed is connected (its /api/instagram says).
-  const [live, setLive] = useState(null);
-  useEffect(() => {
-    const base = String(settings.site_url || "https://eartheditions.co").replace(/\/+$/, "");
-    fetch(`${base}/api/instagram`).then(r => r.json()).then(setLive).catch(() => setLive({ connected: false, reason: "Couldn't reach the store" }));
-  }, [settings.site_url]);
+  // The live feed link (Behold.so or similar): try it, and say how many posts it gives.
+  const [feedCheck, setFeedCheck] = useState("");
+  const checkFeed = async url => {
+    url = url.trim();
+    if (!url) return setFeedCheck("");
+    if (!/^https:\/\//.test(url)) return setFeedCheck("⚠ Paste the full link, starting https://");
+    setFeedCheck("Checking…");
+    try {
+      const d = await (await fetch(url)).json();
+      const posts = Array.isArray(d) ? d : d?.posts || d?.data || [];
+      setFeedCheck(posts.length ? `✓ ${posts.length} posts found — press Save settings` : "⚠ The link works but has no posts");
+    } catch { setFeedCheck("⚠ Couldn't read that link — use the JSON feed link"); }
+  };
   const setInsta = (i, patch) => setF(x => ({ ...x, insta: x.insta.map((p, j) => j === i ? { ...p, ...patch } : p) }));
   const moveInsta = (i, d) => setF(x => { const a = [...x.insta]; const j = i + d; if (j < 0 || j >= a.length) return x; [a[i], a[j]] = [a[j], a[i]]; return { ...x, insta: a }; });
   const moveSourcing = (i, d) => setF(x => { const a = [...x.sourcing]; const j = i + d; if (j < 0 || j >= a.length) return x; [a[i], a[j]] = [a[j], a[i]]; return { ...x, sourcing: a }; });
@@ -666,6 +674,7 @@ function SettingsTab({ settings, reload, showToast }) {
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
         { key: "hero", value: { image: f.hero.image, video: f.hero.video, heading: f.hero.heading.trim(), eyebrow: f.hero.eyebrow.trim(), intro: (f.hero.intro || "").trim() } },
         { key: "sourcing_photos", value: f.sourcing },
+        { key: "instagram_feed", value: /^https:\/\//.test(f.insta_feed.trim()) ? f.insta_feed.trim() : "" },
         { key: "instagram_photos", value: f.insta.map(x => ({ src: x.src, url: /^https:\/\/(www\.)?instagram\.com\//.test(x.url.trim()) ? x.url.trim().split("?")[0] : "" })) },
         { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
         { key: "whatsapp", value: f.whatsapp.replace(/[^\d]/g, "") },
@@ -755,12 +764,14 @@ function SettingsTab({ settings, reload, showToast }) {
       </div>
       <div style={{ ...card, padding: 18, display: "grid", gap: 10 }}>
         <div style={{ fontWeight: 700 }}>On Instagram <span style={{ fontWeight: 400, fontSize: 12, color: C.inkFaint }}>— the photo wall at the foot of the home page</span></div>
-        <div style={{ fontSize: 12.5, borderRadius: 8, padding: "8px 12px", background: live?.connected ? C.greenBg : C.card, color: live?.connected ? C.green : C.inkMid }}>
-          {!live ? "Checking the live feed…"
-            : live.connected ? <>● Live feed on — the wall shows the latest posts from <b>@{live.username}</b>{live.posts != null ? ` (${live.posts} posts)` : ""}, refreshed every half hour. The photos below are only the backup.</>
-            : <>○ Live feed off{live.reason ? ` (${live.reason})` : ""}. To turn it on, put an Instagram access token in <b>INSTAGRAM_TOKEN</b> on the store's Vercel project — the earth-store README has the steps. Until then the wall uses the photos below.</>}
+        <div>
+          <span style={lab}>Live feed link (optional)</span>
+          <input value={f.insta_feed} onChange={e => setF(x => ({ ...x, insta_feed: e.target.value }))} onBlur={e => checkFeed(e.target.value)} placeholder="https://feeds.behold.so/…" style={FI()} />
+          <div style={{ fontSize: 11.5, color: feedCheck.startsWith("⚠") ? C.red : feedCheck.startsWith("✓") ? C.green : C.inkFaint, marginTop: 4 }}>
+            {feedCheck || <>For your latest posts to show by themselves: sign in with Instagram at <a href="https://behold.so" target="_blank" rel="noreferrer" style={{ color: "inherit" }}>behold.so</a> (free), make a <b>JSON</b> feed, and paste its link here. Without one, the photos below show.</>}
+          </div>
         </div>
-        <div style={{ fontSize: 11.5, color: C.inkFaint }}>Five photos: the first shows large. Paste a post's link under a photo to open that post; without one it opens your profile. Without photos here, second photos of pieces on sale show. Needs your handle under Contact below.</div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint }}>Backup photos — five show, the first large. Paste a post's link under a photo to open that post; without one it opens your profile. Without photos here, second photos of pieces on sale show. Needs your handle under Contact below.</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {f.insta.map((ph, i) => (
             <div key={ph.src} style={{ width: 130, opacity: i < 5 ? 1 : .45 }} title={i < 5 ? "" : "Only the first five show"}>
