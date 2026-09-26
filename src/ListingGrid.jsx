@@ -31,8 +31,17 @@ const PRICES = [
 const serif = "'Cormorant Garamond', Georgia, serif";
 const num = v => (v === "" || v == null || !isFinite(+v) ? null : +v);
 const money = (v, cur) => v == null || v === "" ? "—" : `${cur}${Number(v).toLocaleString(cur === "₹" ? "en-IN" : "en-US", { maximumFractionDigits: +v >= 100 ? 0 : 2 })}`;
-const statusOf = (l, k) => l.platforms?.[k]?.status || "";
-const isLive = l => PLAT.some(p => statusOf(l, p.key) === "active");
+/* The store and the trade site keep their own records: a piece hidden or sold
+   in the store's editor, or added or deleted by an editor on the trade site,
+   isn't written back to the listing. Once those records have loaded
+   (f.store, f.trade), they decide; the listing's own note is the fallback. */
+const statusOf = (l, k, f = {}) => {
+  if (k === "store" && f.store) { const r = f.store[l.id]; return !r ? "" : r.status === "active" ? "active" : r.status === "sold" ? "sold" : "draft"; }
+  if (k === "trade" && f.trade) { const r = f.trade[l.id]; return !r ? "" : r.live ? "active" : "draft"; }
+  const st = l.platforms?.[k]?.status || "";
+  return st === "deleted" ? "" : st;
+};
+const isLive = (l, f) => PLAT.some(p => statusOf(l, p.key, f) === "active");
 // Listing-sized images: Etsy and Supabase both resize on request.
 export const thumb = (u, w = 570) => {
   if (!u || typeof u !== "string") return u;
@@ -40,7 +49,7 @@ export const thumb = (u, w = 570) => {
   if (u.includes("/storage/v1/object/public/")) return u.replace("/storage/v1/object/public/", "/storage/v1/render/image/public/") + `?width=${w}&quality=72&resize=contain`;
   return u;
 };
-const soldOut = (l, orders) => l.type === "unique" && (orders || []).some(o => o.listing_id === l.id) && !isLive(l);
+const soldOut = (l, orders, f) => l.type === "unique" && (orders || []).some(o => o.listing_id === l.id) && !isLive(l, f);
 
 /* ── a price you can click and type over ───────────────────────────────── */
 function PriceCell({ flag, cur, value: live, hint, onSave, big = false, title }) {
@@ -108,11 +117,11 @@ function LocationCell({ value, missing, onSave }) {
 }
 
 /* ── one listing ───────────────────────────────────────────────────────── */
-function Tile({ l, store, orders, stock, onOpen, onEdit, onPrice, onLocation, selected, onSelect }) {
+function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocation, selected, onSelect }) {
   const imgs = (l.images || []).filter(u => typeof u === "string");
   const [i, setI] = useState(0);
   const [hover, setHover] = useState(false);
-  const sold = soldOut(l, orders);
+  const sold = soldOut(l, orders, facts);
   const where = locationOf(l, stock);
   const s = store?.[l.id];
   const usd = s ? num(s.price) : num(l.price_store);
@@ -142,7 +151,7 @@ function Tile({ l, store, orders, stock, onOpen, onEdit, onPrice, onLocation, se
       <div style={{ padding: "10px 11px 11px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
         <div onClick={() => onOpen(l, "platforms")} style={{ display: "flex", gap: 3, flexWrap: "wrap", cursor: "pointer" }} title="Platforms — click to manage">
           {PLAT.map(p => {
-            const st = statusOf(l, p.key);
+            const st = statusOf(l, p.key, facts);
             const on = st === "active", draft = st && st !== "active" && st !== "deleted";
             return <span key={p.key} style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 10, letterSpacing: .2,
               background: on ? p.color : "transparent", color: on ? "#fff" : draft ? p.color : C.inkFaint,
@@ -298,7 +307,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, renderManage, onBulkPrice }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, loadTradeFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, renderManage, onBulkPrice }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -320,8 +329,11 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
   const [sel, setSel] = useState(new Set());
   const more = useRef(null);
 
-  const refreshStore = () => loadStoreFacts().then(setStore).catch(() => setStore({}));
-  useEffect(() => { refreshStore(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [trade, setTrade] = useState(null);
+  // Left null when a load fails, so the pills fall back to the listing's own note.
+  const refreshStore = () => loadStoreFacts().then(setStore).catch(() => {});
+  useEffect(() => { refreshStore(); loadTradeFacts?.().then(setTrade).catch(() => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const facts = useMemo(() => ({ store, trade }), [store, trade]);
   useEffect(() => { try { localStorage.setItem("lm-grid-cols", String(cols)); } catch {} }, [cols]);
 
   const materials = useMemo(() => {
@@ -343,34 +355,34 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
     return [...m.entries()].sort((a, b) => (a[0] === "") - (b[0] === "") || b[1].n - a[1].n);
   }, [listings, whereOf]);
   const allPlaces = useMemo(() => knownLocations(listings, stock), [listings, stock]);
-  const lost = l => !whereOf.get(l.id) && needsLocation(l, soldOut(l, orders));
+  const lost = l => !whereOf.get(l.id) && needsLocation(l, soldOut(l, orders, facts));
   const counts = useMemo(() => ({
-    live: listings.filter(isLive).length,
-    sold: listings.filter(l => soldOut(l, orders)).length,
+    live: listings.filter(l => isLive(l, facts)).length,
+    sold: listings.filter(l => soldOut(l, orders, facts)).length,
     unique: listings.filter(l => l.type === "unique").length,
     erp: listings.filter(l => l._source !== "etsy-import").length,
     noprice: listings.filter(l => !(+l.price_etsy > 0)).length,
     nophotos: listings.filter(l => !(l.images || []).length).length,
-    nostore: listings.filter(l => !statusOf(l, "store")).length,
+    nostore: listings.filter(l => !statusOf(l, "store", facts)).length,
     noloc: listings.filter(lost).length,
-    plat: Object.fromEntries(PLAT.map(p => [p.key, listings.filter(l => statusOf(l, p.key) === "active").length])),
-  }), [listings, orders, whereOf]); // eslint-disable-line react-hooks/exhaustive-deps
+    plat: Object.fromEntries(PLAT.map(p => [p.key, listings.filter(l => statusOf(l, p.key, facts) === "active").length])),
+  }), [listings, orders, whereOf, facts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
     return listings.filter(l => {
       if (status.size) {
-        const live = isLive(l), sold = soldOut(l, orders);
+        const live = isLive(l, facts), sold = soldOut(l, orders, facts);
         if (!((status.has("live") && live) || (status.has("notlive") && !live) || (status.has("sold") && sold))) return false;
       }
-      if (liveOn.size && ![...liveOn].some(k => statusOf(l, k) === "active")) return false;
-      if (notOn.size && [...notOn].some(k => statusOf(l, k) === "active")) return false;
+      if (liveOn.size && ![...liveOn].some(k => statusOf(l, k, facts) === "active")) return false;
+      if (notOn.size && [...notOn].some(k => statusOf(l, k, facts) === "active")) return false;
       if (types.size && !types.has(l.type)) return false;
       if (stones.size && !stones.has(String(l.material || "").trim().toLowerCase())) return false;
       if (erpOnly && l._source === "etsy-import") return false;
       if (locs.size && !locs.has(whereOf.get(l.id).toLowerCase())) return false;
       if (issues.size) {
-        const hit = (issues.has("noprice") && !(+l.price_etsy > 0)) || (issues.has("nophotos") && !(l.images || []).length) || (issues.has("nostore") && !statusOf(l, "store")) || (issues.has("noloc") && lost(l));
+        const hit = (issues.has("noprice") && !(+l.price_etsy > 0)) || (issues.has("nophotos") && !(l.images || []).length) || (issues.has("nostore") && !statusOf(l, "store", facts)) || (issues.has("noloc") && lost(l));
         if (!hit) return false;
       }
       if (terms.length) {
@@ -379,7 +391,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
       }
       return true;
     }).sort(SORTS[sort][1]);
-  }, [listings, orders, q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs, whereOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [listings, orders, q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs, whereOf, facts]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setShown(60); }, [q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs]);
   // Load more as the bottom comes into view.
@@ -470,7 +482,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "grid", gap: 14, gridTemplateColumns: cols ? `repeat(${cols}, minmax(0, 1fr))` : "repeat(auto-fill, minmax(230px, 1fr))" }}>
             {list.slice(0, shown).map(l => (
-              <Tile key={l.id} l={l} store={store} orders={orders} stock={stock} selected={sel.has(l.id)} onSelect={toggleSel}
+              <Tile key={l.id} l={l} store={store} facts={facts} orders={orders} stock={stock} selected={sel.has(l.id)} onSelect={toggleSel}
                 onOpen={(x, tab) => setOpen({ id: x.id, tab })} onEdit={onEdit} onPrice={price} onLocation={onLocation} />
             ))}
           </div>
