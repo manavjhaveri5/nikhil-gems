@@ -644,6 +644,12 @@ function SettingsTab({ settings, reload, showToast }) {
     } catch (e) { showToast("⚠ " + e.message); }
     setHeroBusy("");
   };
+  // Whether the store's live feed is connected (its /api/instagram says).
+  const [live, setLive] = useState(null);
+  useEffect(() => {
+    const base = String(settings.site_url || "https://eartheditions.co").replace(/\/+$/, "");
+    fetch(`${base}/api/instagram`).then(r => r.json()).then(setLive).catch(() => setLive({ connected: false, reason: "Couldn't reach the store" }));
+  }, [settings.site_url]);
   const setInsta = (i, patch) => setF(x => ({ ...x, insta: x.insta.map((p, j) => j === i ? { ...p, ...patch } : p) }));
   const moveInsta = (i, d) => setF(x => { const a = [...x.insta]; const j = i + d; if (j < 0 || j >= a.length) return x; [a[i], a[j]] = [a[j], a[i]]; return { ...x, insta: a }; });
   const moveSourcing = (i, d) => setF(x => { const a = [...x.sourcing]; const j = i + d; if (j < 0 || j >= a.length) return x; [a[i], a[j]] = [a[j], a[i]]; return { ...x, sourcing: a }; });
@@ -749,7 +755,12 @@ function SettingsTab({ settings, reload, showToast }) {
       </div>
       <div style={{ ...card, padding: 18, display: "grid", gap: 10 }}>
         <div style={{ fontWeight: 700 }}>On Instagram <span style={{ fontWeight: 400, fontSize: 12, color: C.inkFaint }}>— the photo wall at the foot of the home page</span></div>
-        <div style={{ fontSize: 11.5, color: C.inkFaint }}>Five photos: the first shows large. Paste a post's link under a photo to open that post; without one it opens your profile. Until you add some, second photos of pieces on sale show. Needs your handle under Contact below.</div>
+        <div style={{ fontSize: 12.5, borderRadius: 8, padding: "8px 12px", background: live?.connected ? C.greenBg : C.card, color: live?.connected ? C.green : C.inkMid }}>
+          {!live ? "Checking the live feed…"
+            : live.connected ? <>● Live feed on — the wall shows the latest posts from <b>@{live.username}</b>{live.posts != null ? ` (${live.posts} posts)` : ""}, refreshed every half hour. The photos below are only the backup.</>
+            : <>○ Live feed off{live.reason ? ` (${live.reason})` : ""}. To turn it on, put an Instagram access token in <b>INSTAGRAM_TOKEN</b> on the store's Vercel project — the earth-store README has the steps. Until then the wall uses the photos below.</>}
+        </div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint }}>Five photos: the first shows large. Paste a post's link under a photo to open that post; without one it opens your profile. Without photos here, second photos of pieces on sale show. Needs your handle under Contact below.</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {f.insta.map((ph, i) => (
             <div key={ph.src} style={{ width: 130, opacity: i < 5 ? 1 : .45 }} title={i < 5 ? "" : "Only the first five show"}>
