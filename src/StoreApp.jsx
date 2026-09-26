@@ -600,6 +600,7 @@ function SettingsTab({ settings, reload, showToast }) {
     contact_email: settings.contact_email || "", instagram: settings.instagram || "", whatsapp: settings.whatsapp || "",
     hero: { image: "", video: "", heading: "", eyebrow: "", intro: "", ...(settings.hero || {}) },
     sourcing: Array.isArray(settings.sourcing_photos) ? settings.sourcing_photos : [],
+    insta: Array.isArray(settings.instagram_photos) ? settings.instagram_photos.map(x => typeof x === "string" ? { src: x, url: "" } : { src: x?.src || "", url: x?.url || "" }).filter(x => x.src) : [],
     dispatch_note: settings.dispatch_note || "", returns_note: settings.returns_note || "",
   }));
   const [busy, setBusy] = useState(false);
@@ -630,6 +631,21 @@ function SettingsTab({ settings, reload, showToast }) {
     } catch (e) { showToast("⚠ " + e.message); }
     setHeroBusy("");
   };
+  // The "On Instagram" wall on the home page: five photos, each opening its post.
+  const addInsta = async files => {
+    const list = [...(files || [])].filter(f => f.type.startsWith("image/"));
+    if (!list.length) return;
+    setHeroBusy("insta");
+    try {
+      const got = [];
+      for (const file of list) got.push({ src: await uploadToStorage(`store/instagram/${uid()}.${(file.name.split(".").pop() || "jpg").toLowerCase()}`, file), url: "" });
+      setF(x => ({ ...x, insta: [...x.insta, ...got] }));
+      showToast(`${got.length} photo${got.length === 1 ? "" : "s"} added — press Save settings`);
+    } catch (e) { showToast("⚠ " + e.message); }
+    setHeroBusy("");
+  };
+  const setInsta = (i, patch) => setF(x => ({ ...x, insta: x.insta.map((p, j) => j === i ? { ...p, ...patch } : p) }));
+  const moveInsta = (i, d) => setF(x => { const a = [...x.insta]; const j = i + d; if (j < 0 || j >= a.length) return x; [a[i], a[j]] = [a[j], a[i]]; return { ...x, insta: a }; });
   const moveSourcing = (i, d) => setF(x => { const a = [...x.sourcing]; const j = i + d; if (j < 0 || j >= a.length) return x; [a[i], a[j]] = [a[j], a[i]]; return { ...x, sourcing: a }; });
   const setR = (i, k, v) => setF(x => ({ ...x, regions: x.regions.map((r, j) => j === i ? { ...r, [k]: v } : r) }));
   const save = async () => {
@@ -644,6 +660,7 @@ function SettingsTab({ settings, reload, showToast }) {
         { key: "about", value: f.about.trim() }, { key: "site_url", value: f.site_url.trim().replace(/\/+$/, "") },
         { key: "hero", value: { image: f.hero.image, video: f.hero.video, heading: f.hero.heading.trim(), eyebrow: f.hero.eyebrow.trim(), intro: (f.hero.intro || "").trim() } },
         { key: "sourcing_photos", value: f.sourcing },
+        { key: "instagram_photos", value: f.insta.map(x => ({ src: x.src, url: /^https:\/\/(www\.)?instagram\.com\//.test(x.url.trim()) ? x.url.trim().split("?")[0] : "" })) },
         { key: "contact_email", value: f.contact_email.trim() }, { key: "instagram", value: f.instagram.trim().replace(/^@/, "") },
         { key: "whatsapp", value: f.whatsapp.replace(/[^\d]/g, "") },
         { key: "dispatch_note", value: f.dispatch_note.trim() }, { key: "returns_note", value: f.returns_note.trim() },
@@ -729,6 +746,24 @@ function SettingsTab({ settings, reload, showToast }) {
           ))}
         </div>
         <div><label style={{ ...btn(), cursor: "pointer", display: "inline-block" }}>{heroBusy === "sourcing" ? "Uploading…" : "＋ Add photos"}<input type="file" accept="image/*" multiple hidden onChange={e => { addSourcing(e.target.files); e.target.value = ""; }} /></label></div>
+      </div>
+      <div style={{ ...card, padding: 18, display: "grid", gap: 10 }}>
+        <div style={{ fontWeight: 700 }}>On Instagram <span style={{ fontWeight: 400, fontSize: 12, color: C.inkFaint }}>— the photo wall at the foot of the home page</span></div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint }}>Five photos: the first shows large. Paste a post's link under a photo to open that post; without one it opens your profile. Until you add some, second photos of pieces on sale show. Needs your handle under Contact below.</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {f.insta.map((ph, i) => (
+            <div key={ph.src} style={{ width: 130, opacity: i < 5 ? 1 : .45 }} title={i < 5 ? "" : "Only the first five show"}>
+              <img src={ph.src} alt="" style={{ width: 130, height: 130, objectFit: "cover", borderRadius: 8, border: `2px solid ${i === 0 ? C.gold : C.border}`, display: "block" }} />
+              <input value={ph.url} onChange={e => setInsta(i, { url: e.target.value })} placeholder="Post link (optional)" style={FI({ marginTop: 4, padding: "4px 7px", fontSize: 11, borderColor: ph.url && !/^https:\/\/(www\.)?instagram\.com\//.test(ph.url.trim()) ? C.red : undefined })} />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+                <button onClick={() => moveInsta(i, -1)} disabled={!i} style={{ ...btn(), padding: "2px 8px" }}>‹</button>
+                <button onClick={() => setF(x => ({ ...x, insta: x.insta.filter((_, j) => j !== i) }))} style={{ ...btn(), padding: "2px 8px", color: C.red }}>✕</button>
+                <button onClick={() => moveInsta(i, 1)} disabled={i === f.insta.length - 1} style={{ ...btn(), padding: "2px 8px" }}>›</button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div><label style={{ ...btn(), cursor: "pointer", display: "inline-block" }}>{heroBusy === "insta" ? "Uploading…" : "＋ Add photos"}<input type="file" accept="image/*" multiple hidden onChange={e => { addInsta(e.target.files); e.target.value = ""; }} /></label></div>
       </div>
       <div style={{ ...card, padding: 18, display: "grid", gap: 12 }}>
         <div><span style={lab}>Announcement bar (blank = free-shipping line)</span><input value={f.announcement} onChange={e => setF(x => ({ ...x, announcement: e.target.value }))} style={FI()} /></div>
