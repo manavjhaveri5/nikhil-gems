@@ -11,16 +11,17 @@ const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
 const PLAT = [
   { key: "etsy",          label: "Etsy",       short: "Etsy",  color: "#F56400" },
-  { key: "store",         label: "EE store",   short: "Store", color: "#141210" },
-  { key: "shopify_earth", label: "Earth Ed.",  short: "Earth", color: "#2A6845" },
+  // eartheditions.co and the old Earth Editions Shopify store are one shop to us:
+  // one chip, live if the piece is live on either.
+  { key: "store",         label: "Earth Editions", short: "Earth Ed.", color: "#141210" },
   { key: "shopify_aty",   label: "Atyahara",   short: "Aty",   color: "#6B3FA0" },
   { key: "ebay",          label: "eBay",       short: "eBay",  color: "#0064D2" },
   { key: "trade",         label: "Trade site", short: "Trade", color: "#1F8F4E" },
 ];
 // Every price a listing carries, for the drawer. The grid shows the first three.
 const PRICES = [
-  { field: "price_store",         label: "USA · EE store",  cur: "$", flag: "🇺🇸", sync: "store" },
-  { field: "price_store_inr",     label: "India · EE store", cur: "₹", flag: "🇮🇳", sync: "store" },
+  { field: "price_store",         label: "USA · Earth Editions",  cur: "$", flag: "🇺🇸", sync: "store" },
+  { field: "price_store_inr",     label: "India · Earth Editions", cur: "₹", flag: "🇮🇳", sync: "store" },
   { field: "price_etsy",          label: "Etsy",            cur: "₹", flag: "🏷️", sync: "etsy" },
   { field: "price_ebay",          label: "eBay",            cur: "$", flag: "🔨", sync: "ebay" },
   { field: "price_shopify_earth", label: "Earth Ed.",       cur: "$", flag: "🌍", sync: "shopify_earth" },
@@ -35,11 +36,17 @@ const money = (v, cur) => v == null || v === "" ? "—" : `${cur}${Number(v).toL
    in the store's editor, or added or deleted by an editor on the trade site,
    isn't written back to the listing. Once those records have loaded
    (f.store, f.trade), they decide; the listing's own note is the fallback. */
-const statusOf = (l, k, f = {}) => {
+const rawStatus = (l, k, f = {}) => {
   if (k === "store" && f.store) { const r = f.store[l.id]; return !r ? "" : r.status === "active" ? "active" : r.status === "sold" ? "sold" : "draft"; }
   if (k === "trade" && f.trade) { const r = tradeRowOf(f.trade, l); return !r ? "" : r.live ? "active" : "draft"; }
   const st = l.platforms?.[k]?.status || "";
   return st === "deleted" ? "" : st;
+};
+// Earth Editions is one shop: eartheditions.co or its old Shopify store, whichever is live.
+const statusOf = (l, k, f = {}) => {
+  if (k !== "store") return rawStatus(l, k, f);
+  const a = rawStatus(l, "store", f), b = rawStatus(l, "shopify_earth", f);
+  return a === "active" || b === "active" ? "active" : a || b;
 };
 const isLive = (l, f) => PLAT.some(p => statusOf(l, p.key, f) === "active");
 // Listing-sized images: Etsy and Supabase both resize on request.
@@ -473,7 +480,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
               <Check checked={issues.has("noloc")} onChange={() => setIssues(s => toggle(s, "noloc"))} label="One of a kind, no location" count={counts.noloc} color={C.red} />
               <Check checked={issues.has("noprice")} onChange={() => setIssues(s => toggle(s, "noprice"))} label="No Etsy price" count={counts.noprice} color={C.red} />
               <Check checked={issues.has("nophotos")} onChange={() => setIssues(s => toggle(s, "nophotos"))} label="No photos" count={counts.nophotos} color={C.red} />
-              <Check checked={issues.has("nostore")} onChange={() => setIssues(s => toggle(s, "nostore"))} label="Not on the EE store" count={counts.nostore} color={C.amber} />
+              <Check checked={issues.has("nostore")} onChange={() => setIssues(s => toggle(s, "nostore"))} label="Not on Earth Editions" count={counts.nostore} color={C.amber} />
             </Group>
           </aside>
         )}
