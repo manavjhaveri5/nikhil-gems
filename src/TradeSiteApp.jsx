@@ -552,7 +552,7 @@ function ProductEditor({ p, onClose, onSave }) {
   const setV = (i, k, val) => setF(x => ({ ...x, variants: x.variants.map((v, j) => j === i ? { ...v, [k]: val } : v) }));
   const submit = async () => {
     setBusy(true);
-    const variants = f.variants.map(v => ({ ...v, price: +v.price || 0, stock: v.stock === "" || v.stock == null ? null : +v.stock }));
+    const variants = f.variants.map(v => ({ ...v, price: +v.price || 0, stock: v.stock === "" || v.stock == null ? null : +v.stock, pieces: +v.pieces > 1 ? +v.pieces : null }));
     const prices = variants.map(v => v.price).filter(x => x > 0);
     const tracked = variants.filter(v => v.stock != null);
     try {
@@ -611,12 +611,14 @@ function ProductEditor({ p, onClose, onSave }) {
         </div>
         <div><span style={lab}>Collections (comma separated)</span><input value={f.collections} onChange={set("collections")} style={FI()} /></div>
         <div>
-          <span style={lab}>Trade price{f.variants.length > 1 ? " per option" : ""} (USD · blank = on request)</span>
+          <span style={lab}>Trade price{f.variants.length > 1 ? " per option" : ""} (USD · blank = on request) · stock · pieces per lot</span>
           {f.variants.map((v, i) => (
-            <div key={v.id} style={{ display: "grid", gridTemplateColumns: f.variants.length > 1 ? "1fr 100px 80px" : "120px 80px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+            <div key={v.id} style={{ display: "grid", gridTemplateColumns: f.variants.length > 1 ? "1fr 100px 80px 80px auto" : "120px 80px 80px auto", gap: 8, marginBottom: 6, alignItems: "center" }}>
               {f.variants.length > 1 && <div style={{ fontSize: 12.5, color: C.inkMid }}>{optLabel(v.title)}</div>}
               <input value={v.price} onChange={e => setV(i, "price", e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="$" style={FI()} />
               <input value={v.stock ?? ""} onChange={e => setV(i, "stock", e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" placeholder="stock" title="Stock — blank = not tracked" style={FI()} />
+              <input value={v.pieces ?? ""} onChange={e => setV(i, "pieces", e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" placeholder="pieces" title="Roughly how many pieces one lot / kilo holds — buyers then see the price per piece. Blank for a single piece." style={FI()} />
+              <span style={{ fontSize: 11.5, color: C.inkFaint, whiteSpace: "nowrap" }}>{+v.price > 0 && +v.pieces > 1 ? `≈ ${money(v.price / v.pieces)}/pc` : ""}</span>
             </div>
           ))}
         </div>
@@ -787,7 +789,8 @@ export async function publishListingToTrade(listing, { syncOnly = false } = {}) 
     images,
     // A listing carries one video; keep any others added on the site itself.
     videos: [...new Set([...(listing.video && /^https?:/.test(listing.video) ? [listing.video] : []), ...(existing?.videos || [])])],
-    variants: [{ id: v0.id || uid(), title: "Default Title", price, sku: listing.sku || "", stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null }],
+    // Keep what the site set on the option (e.g. pieces per lot).
+    variants: [{ ...v0, id: v0.id || uid(), title: "Default Title", price, sku: listing.sku || "", stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null }],
     price,
     stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null,
     unit: existing?.unit || "piece",
