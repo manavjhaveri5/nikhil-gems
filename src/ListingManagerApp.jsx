@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from "react";
 import { loadK, loadKFresh, saveK, uid, onCacheRefresh, upsertItemK, deleteItemK } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
@@ -20,8 +20,10 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
+import PriceStudio from "./PriceStudio.jsx";
+import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -760,10 +762,10 @@ function fmt(n) { return Number(n||0).toLocaleString("en-IN"); }
 /* ══════════════════════════════════════════════════════════════════════════
    SHARED UI PRIMITIVES
 ══════════════════════════════════════════════════════════════════════════ */
-function Label({ children, required }) {
+function Label({ children, required, style }) {
   return (
     <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase",
-      letterSpacing: .7, color: C.inkFaint, marginBottom: 5 }}>
+      letterSpacing: .7, color: C.inkFaint, marginBottom: 5, ...style }}>
       {children}{required && <span style={{ color: C.red }}> *</span>}
     </div>
   );
@@ -1683,7 +1685,7 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING FORM
 ══════════════════════════════════════════════════════════════════════════ */
-function ListingForm({ initial, stock, onSave, onClose, who }) {
+function ListingForm({ initial, stock = [], listings = [], sold = false, onSave, onClose, who, startTab = "overview" }) {
   const editing = !!initial?.id;
   const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
 
@@ -1725,10 +1727,22 @@ function ListingForm({ initial, stock, onSave, onClose, who }) {
   const [errors,      setErrors]      = useState({});
   const [publishTo,   setPublishTo]   = useState({});
   const [dealOpt,     setDealOpt]     = useState(() => initial?._dealOnPublish ? { enabled: true, days: initial._dealOnPublish.days || 7, customDate: initial._dealOnPublish.customDate || "" } : { enabled: false, days: 7, customDate: "" });
-  const [showOptional,setShowOptional]= useState(false);
   const [etsyShippingProfiles, setEtsyShippingProfiles] = useState([]);
   const [etsyReturnPolicies,   setEtsyReturnPolicies]   = useState([]);
   const [etsyReadinessProfiles, setEtsyReadinessProfiles] = useState([]);
+  const [tab, setTab] = useState(startTab);
+  const [connectDraft, setConnectDraft] = useState({});
+  const sheetRef = useRef(null), bodyRef = useRef(null), locRef = useRef(null);
+  const tradeFactsMap = useTradeFacts();
+  // A new tab starts at its top, whichever element is doing the scrolling.
+  const goTab = (key, focus) => {
+    setTab(key);
+    requestAnimationFrame(() => {
+      if (focus?.current) { focus.current.scrollIntoView({ block: "center", behavior: "smooth" }); return; }
+      if (bodyRef.current) bodyRef.current.scrollTop = 0;
+      if (sheetRef.current) sheetRef.current.scrollTop = 0;
+    });
+  };
 
   /* Listings saved before the picker carried a taxonomy id publish under the
      API's fallback rather than the category shown here. Stamp the shown one on
@@ -1782,7 +1796,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const txt = (d.content || []).map(i => i.text || "").join("").replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(txt);
       const desc = `Pieces : per kg ${parsed.pieces_per_kg || "___"}\nLocation : ${parsed.location || "___"}\nSize : ${parsed.size || "___"}`;
-      setForm(f => ({ ...f, shopify_title: parsed.simple_title || f.shopify_title || "", shopify_description: desc }));
+      setForm(f => ({ ...f, trade_title: parsed.simple_title || f.trade_title || "", trade_description: desc, origin: f.origin || countryOf(parsed.location) }));
     } catch (e) {
       setAiFillError(e.message || "Could not generate");
     } finally {
@@ -1800,7 +1814,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const validate = () => {
     const e = {};
     if (!form.title.trim()) e.title = "Title required";
+    // Every one-of-a-kind piece that can still sell has to be findable on the shelf.
+    if (needsLocation(form, sold) && !locationOf(form, stock)) e.location = "Where is it? A one-of-a-kind piece needs a location before it's saved.";
     setErrors(e);
+    if (e.title || e.location) goTab("overview", e.location && !e.title ? locRef : null);
     return Object.keys(e).length === 0;
   };
 
@@ -1849,9 +1866,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   });
 
   // Price calculator state
-  const [calcOpen, setCalcOpen] = useState(null); // platform key
-  const [calcCost, setCalcCost] = useState("");
-  const [calcMult, setCalcMult] = useState("3");
+  const [studio, setStudio] = useState(false);
+  const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, [studio]);
+  const stockCost = +(stock.find(s => s.id === form.linked_stock_id)?.costPrice) || 0;
   const [liveUsdRate, setLiveUsdRate] = useState(USD_RATE);
 
   useEffect(() => {
@@ -1863,702 +1880,785 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   const handleSave = () => {
     if (!validate()) return;
-    onSave(ensureListingOrderId({ ...form, tags, _ai: form._ai || null, _dealOnPublish: dealOpt.enabled ? { days: dealOpt.days, customDate: dealOpt.customDate } : null, updated_at: now() }), publishTo);
+    onSave(ensureListingOrderId({ ...withLocationLog(form, initial?.officeLocation, who), tags, _ai: form._ai || null, _dealOnPublish: dealOpt.enabled ? { days: dealOpt.days, customDate: dealOpt.customDate } : null, updated_at: now() }), publishTo);
   };
 
-  const catLabel = ETSY_CATEGORIES.find(c => c.value === category)?.label || "—";
+
+  /* One price box for a PLATFORMS entry. Working a price out happens in
+     Price Studio, which fills these in. */
+  const calc = form.price_calc || null;
+  const priceCard = p => {
+    const v = +form[p.priceField] || 0;
+    // What an Etsy buyer pays during the usual sale, and what's left of it.
+    const salePct = p.key === "etsy" ? +(calc?.sale ?? studioPrefs.sale ?? 0) : 0;
+    const salePrice = v && salePct ? Math.round(v * (1 - salePct / 100)) : 0;
+    const fee = ((+(calc?.fees ?? studioPrefs.fees ?? 11)) + (calc?.ads ? 15 : 0)) / 100;
+    const cost = (+calc?.cost || 0) + (+calc?.extra || 0) || stockCost;
+    const profit = cost && v ? Math.round((salePrice || v) * (1 - fee) - cost) : null;
+    return (
+      <div style={{ background: C.surface, padding: "14px 16px", border: `1px solid ${C.border}`, borderTop: `2px solid ${p.color}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+          <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkMid }}>{p.priceLabel || `${p.label} price`}</span>
+          <div style={{ flex: 1 }} />
+          <button type="button" onClick={() => setStudio(true)} title="Work out this and every other price, step by step"
+            style={{ background: "none", border: `1px solid ${C.border}`, cursor: "pointer", fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: C.ink, padding: "5px 9px" }}>
+            Price Studio
+          </button>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 6, borderBottom: `1px solid ${C.ink}` }}>
+          <span style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 26, color: C.inkMid }}>{p.currency === "USD" ? "$" : "₹"}</span>
+          <input type="number" inputMode="decimal" value={form[p.priceField] || ""}
+            onChange={e => {
+              set(p.priceField, e.target.value);
+              // Auto-prefill eBay from Etsy
+              if (p.key === "etsy" && e.target.value) set("price_ebay", (+e.target.value / liveUsdRate / 0.85).toFixed(2));
+            }}
+            placeholder={p.placeholder || "0"}
+            style={{ flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 32, fontWeight: 500, color: C.ink, padding: "2px 0" }} />
+        </div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 6 }}>
+          {p.currency !== "USD" && v > 0 && <>≈ ${(v / liveUsdRate).toFixed(0)} · </>}
+          {p.currency === "USD" && v > 0 && <>≈ ₹{Math.round(v * liveUsdRate).toLocaleString("en-IN")} · </>}
+          {p.hint || (p.currency === "USD" ? "US dollars" : "Indian rupees")}
+        </div>
+        {p.key === "etsy" && v > 0 && (salePrice > 0 || profit != null) && (
+          <div style={{ display: "flex", gap: 0, marginTop: 12, borderTop: `1px solid ${C.border}` }}>
+            {salePrice > 0 && <div style={{ flex: 1, paddingTop: 10 }}>
+              <div style={{ fontSize: 10, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint }}>In a {salePct}% sale</div>
+              <div style={{ fontSize: 17, fontWeight: 600, marginTop: 2 }}>₹{salePrice.toLocaleString("en-IN")}</div>
+            </div>}
+            {profit != null && <div style={{ flex: 1, paddingTop: 10 }}>
+              <div style={{ fontSize: 10, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint }}>Profit{salePrice ? " in the sale" : ""}</div>
+              <div style={{ fontSize: 17, fontWeight: 600, marginTop: 2, color: profit > 0 ? C.green : C.red }}>₹{profit.toLocaleString("en-IN")}</div>
+            </div>}
+          </div>
+        )}
+      </div>
+    );
+  };
+  const P = key => PLATFORMS.find(p => p.key === key);
+
+  /* Where the piece is on each platform, and what saving will do there. */
+  const plan = key => {
+    const ln = linkOf(form, key);
+    if (ln.linked) return { ...ln, action: "update" };
+    return { ...ln, action: publishTo[key] ? "add" : "" };
+  };
+  const statusChip = key => {
+    const pl = plan(key);
+    const st = pl.linked ? (pl.status === "active" ? ["Live", C.green, C.greenBg] : [pl.status === "draft" ? "Draft" : (pl.status || "Linked"), C.amber, C.amberBg])
+      : pl.action === "add" ? ["Adding on save", C.blue, C.blueBg] : ["Not listed", C.inkFaint, C.card];
+    return <span style={{ fontSize: 11, fontWeight: 800, color: st[1], background: st[2], borderRadius: 20, padding: "3px 10px", whiteSpace: "nowrap" }}>{st[0]}</span>;
+  };
+
+  const connectDraftFor = key => connectDraft[key] || "";
+  const channelHeader = c => {
+    const pl = plan(c.key);
+    const p = P(c.key);
+    const hasPrice = +form[c.priceField] > 0 || (c.key === "store" && (+form.price_store_inr > 0 || +form.price_etsy > 0));
+    const refId = parseRef(c.key, connectDraftFor(c.key));
+    const canConnect = c.key === "etsy" || c.key === "ebay";
+    const cover = (form.images || []).find(u => typeof u === "string");
+    const shownTitle = titleFor({ ...form, tags }, c.key);
+    return (
+      <div style={{ background: C.surface, border: `1.5px solid ${c.color}40`, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: `${c.color}0F`, borderBottom: `1px solid ${c.color}25`, flexWrap: "wrap" }}>
+          <span style={{ width: 10, height: 10, borderRadius: 5, background: c.color }} />
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{c.label}</span>
+          {statusChip(c.key)}
+          <div style={{ flex: 1 }} />
+          {pl.linked && pl.live && <a href={pl.live} target="_blank" rel="noreferrer" style={linkBtn(c.color, true)}>View listing ↗</a>}
+          {pl.linked && pl.admin && <a href={pl.admin} target="_blank" rel="noreferrer" style={linkBtn(c.color)}>Edit on {c.short} ↗</a>}
+        </div>
+        {/* how it looks there */}
+        <div style={{ display: "flex", gap: 12, padding: "12px 16px", alignItems: "center" }}>
+          <div style={{ width: 64, height: 64, borderRadius: 8, overflow: "hidden", background: C.card, flex: "none", border: `1px solid ${C.border}` }}>
+            {cover ? <img src={cover} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", opacity: .5 }}>💎</div>}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 650, color: shownTitle ? C.ink : C.inkFaint, lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{shownTitle || "No title yet"}</div>
+            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3 }}>
+              {c.key === "store"
+                ? [+form.price_store > 0 && `$${form.price_store}`, +form.price_store_inr > 0 && `₹${(+form.price_store_inr).toLocaleString("en-IN")}`].filter(Boolean).join(" · ") || (+form.price_etsy > 0 ? "Price from Etsy" : "No price")
+                : +form[c.priceField] > 0 ? `${c.cur}${(+form[c.priceField]).toLocaleString(c.cur === "₹" ? "en-IN" : "en-US")}` : "No price"}
+              {pl.linked && <span style={{ color: C.inkFaint }}> · ID {pl.id}</span>}
+            </div>
+          </div>
+        </div>
+        <div style={{ padding: "0 16px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+          {c.blurb && <div style={{ fontSize: 11.5, color: C.inkFaint, lineHeight: 1.45 }}>{c.blurb}</div>}
+          {pl.linked ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12, color: C.inkMid, background: C.card, borderRadius: 8, padding: "8px 12px" }}>
+              <span style={{ flex: 1, minWidth: 180 }}>Saving updates this {c.label} listing with the details here{form.platforms?.[c.key]?.connected_at ? " (connected by hand)" : ""}.</span>
+              {canConnect && (
+                <button type="button" onClick={() => {
+                  if (!confirm(`Unlink this ${c.label} listing from the ERP?\n\nIt stays on ${c.label}. Saving here will no longer update it.`)) return;
+                  setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), [c.key]: {} } }));
+                }} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 10px", fontSize: 11.5, cursor: "pointer", color: C.red }}>Unlink</button>
+              )}
+            </div>
+          ) : (
+            <>
+              <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: hasPrice ? "pointer" : "not-allowed", background: publishTo[c.key] ? `${c.color}12` : C.card,
+                border: `1.5px solid ${publishTo[c.key] ? c.color : C.border}`, borderRadius: 9, padding: "10px 12px", opacity: hasPrice ? 1 : .6 }}>
+                <input type="checkbox" checked={!!publishTo[c.key]} disabled={!hasPrice}
+                  onChange={e => setPublishTo(pt => ({ ...pt, [c.key]: e.target.checked }))}
+                  style={{ accentColor: c.color, width: 16, height: 16, margin: 0 }} />
+                <span style={{ flex: 1 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Add to {c.label} when I save</span>
+                  <span style={{ display: "block", fontSize: 11, color: C.inkFaint }}>{hasPrice ? "Goes up as a draft. Publish it from Manage when you're ready." : `Set the ${c.label} price first.`}</span>
+                </span>
+              </label>
+              {canConnect && (
+                <div>
+                  <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>Already on {c.label}? Paste its link to connect it instead of making a new one.</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input value={connectDraftFor(c.key)} onChange={e => setConnectDraft(d => ({ ...d, [c.key]: e.target.value }))}
+                      placeholder={c.key === "etsy" ? "https://www.etsy.com/listing/1234567890/…" : "https://www.ebay.com/itm/1234567890"} style={{ ...FI(), fontSize: 12 }} />
+                    <button type="button" disabled={!refId} onClick={() => {
+                      setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), [c.key]: { ...(f.platforms?.[c.key] || {}), ...connectPatch(c.key, refId) } } }));
+                      setPublishTo(pt => ({ ...pt, [c.key]: false }));
+                      setConnectDraft(d => ({ ...d, [c.key]: "" }));
+                    }} style={{ background: refId ? c.color : C.card, color: refId ? "#fff" : C.inkFaint, border: "none", borderRadius: 7, padding: "0 14px", fontSize: 12, fontWeight: 800, cursor: refId ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>Connect</button>
+                  </div>
+                  {connectDraftFor(c.key) && !refId && <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>That doesn't look like a {c.label} listing link.</div>}
+                </div>
+              )}
+            </>
+          )}
+          {pl.error && <div style={{ fontSize: 12, color: C.red, background: C.redBg, borderRadius: 7, padding: "7px 10px" }}>Last sync: {pl.error}</div>}
+        </div>
+      </div>
+    );
+  };
+
+  const checklist = c => {
+    const checks = readiness({ ...form, tags }, c.key, tags);
+    return (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {checks.map(k => (
+          <span key={k.text} style={{ fontSize: 11.5, borderRadius: 20, padding: "3px 10px", fontWeight: 600,
+            color: k.ok ? C.green : k.blocking ? C.red : C.amber, background: k.ok ? C.greenBg : k.blocking ? C.redBg : C.amberBg }}>
+            {k.ok ? "✓" : k.blocking ? "✕" : "!"} {k.text}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
+  /* The title and description this platform gets, with its own limit. */
+  const overrides = (c, { descPlaceholder, extra, rows = 4 } = {}) => {
+    const own = String(form[c.titleField] || "");
+    const shown = titleFor(form, c.key);
+    const src = titleSource(form, c.key);
+    const over = c.titleMax && shown.length > c.titleMax;
+    return (
+      <Section title={`Title & description on ${c.label}`} action={extra}>
+        <Label style={{ display: "flex" }}>Title</Label>
+        <input value={own} onChange={e => set(c.titleField, e.target.value)}
+          placeholder={shown || "Same as main title"} style={FI(over ? { borderColor: "#C0392B" } : {})} />
+        <div style={{ display: "flex", gap: 8, fontSize: 11, marginTop: 4, color: C.inkFaint }}>
+          <span style={{ flex: 1 }}>{src === "own" ? `Own ${c.label} title.` : src === "shopify" ? "Using the old Shopify title. Type here to set one for this platform." : "Using the main title. Type here to change it only on this platform."}</span>
+          {c.titleMax && <span style={{ fontWeight: 700, color: over ? C.red : shown.length > c.titleMax * .9 ? C.amber : C.inkFaint }}>{shown.length}/{c.titleMax}</span>}
+        </div>
+        {over && <div style={{ fontSize: 11.5, color: C.red, marginTop: 3 }}>{c.label} allows {c.titleMax} characters.{c.key === "ebay" ? " eBay cuts the rest off." : ""}</div>}
+        <Label style={{ marginTop: 12 }}>Description</Label>
+        <textarea value={form[c.descField] || ""} onChange={e => set(c.descField, e.target.value)}
+          rows={rows} placeholder={descPlaceholder || (descFor(form, c.key) ? `Same as ${c.legacy && form.shopify_description ? "the old Shopify description" : "main description"}:\n${String(descFor(form, c.key)).replace(/<[^>]+>/g, "").slice(0, 220)}` : "Same as main description")}
+          style={{ ...FI(), resize: "vertical" }} />
+      </Section>
+    );
+  };
+
+  const knownLocs = useMemo(() => knownLocations(listings || [], stock || []), [listings, stock]);
+  const loc = String(form.officeLocation || "").trim();
+  const linkedStockLoc = form.linked_stock_id ? String(stock.find(s => s.id === form.linked_stock_id)?.location || "") : "";
+  const locRequired = needsLocation(form, sold);
+  const lastMove = Array.isArray(form.location_log) ? form.location_log[0] : null;
+
+  const TABS = [
+    { key: "overview", label: "Overview" },
+    ...CHANNELS.map(c => ({ key: c.key, label: c.label, color: c.color })),
+    { key: "more", label: "More" },
+  ];
+  const tabBadge = key => {
+    if (key === "overview") return locRequired && !loc ? { color: C.red, n: "!" } : null;
+    if (key === "more") return null;
+    const pl = plan(key);
+    if (!pl.linked && pl.action !== "add") return null;
+    const { bad } = readyScore(readiness({ ...form, tags }, key, tags));
+    return bad ? { color: C.red, n: bad } : { color: pl.status === "active" || pl.action === "update" ? C.green : C.blue, n: "" };
+  };
 
   /* On a phone the form is a full-screen sheet that scrolls as one page: the
      sync-to row travels with the form and only Save / Cancel stay pinned, so
      the fields get the screen instead of a sliver between header and footer. */
   const phone = mob();
+  const updates = CHANNELS.concat(OTHER_CHANNELS).filter(c => plan(c.key).action === "update");
+  const adds = CHANNELS.concat(OTHER_CHANNELS).filter(c => plan(c.key).action === "add");
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 200,
       display: "flex", alignItems: phone ? "stretch" : "center", justifyContent: "center", padding: phone ? 0 : 16 }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: C.bg, borderRadius: phone ? 0 : 14, width: "100%", maxWidth: 820,
+      <div ref={sheetRef} style={{ background: C.bg, borderRadius: phone ? 0 : 14, width: "100%", maxWidth: 880,
         display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,.3)",
-        ...(phone ? { height: "100%", overflowY: "auto", WebkitOverflowScrolling: "touch" } : { maxHeight: "95vh" }) }}>
+        ...(phone ? { height: "100%", overflowY: "auto", WebkitOverflowScrolling: "touch" } : { height: "95vh" }) }}>
 
-        {/* sticky header */}
-        <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`,
-          padding: phone ? "calc(10px + env(safe-area-inset-top)) 16px 10px" : "14px 24px",
-          display: "flex", alignItems: "center", gap: phone ? 8 : 12,
-          borderRadius: phone ? 0 : "14px 14px 0 0", flexShrink: 0,
+        {/* sticky header + tabs */}
+        <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, borderRadius: phone ? 0 : "14px 14px 0 0", flexShrink: 0,
           ...(phone ? { position: "sticky", top: 0, zIndex: 3 } : {}) }}>
-          <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700 }}>
-            {editing ? "Edit Listing" : "New Listing"}
+          <div style={{ padding: phone ? "calc(10px + env(safe-area-inset-top)) 14px 8px" : "14px 22px 8px",
+            display: "flex", alignItems: "center", gap: phone ? 8 : 12 }}>
+            {(form.images || [])[0] && typeof form.images[0] === "string" && <img src={form.images[0]} alt="" style={{ width: 36, height: 36, borderRadius: 7, objectFit: "cover", flex: "none" }} />}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 20, fontWeight: 700, lineHeight: 1.1 }}>
+                {editing ? "Edit Listing" : "New Listing"}
+              </div>
+              <div style={{ fontSize: 11, color: loc ? C.inkMid : locRequired ? C.red : C.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {loc ? `📍 ${loc}` : locRequired ? "📍 No location yet" : "📍 —"}{form.sku || form.listing_order_id ? ` · ${form.sku || form.listing_order_id}` : ""}
+              </div>
+            </div>
+            <button type="button" onClick={generateAI} disabled={generating || !form.title}
+              style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 7,
+                padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
+                opacity: generating || !form.title ? .5 : 1 }}>
+              {generating ? "✨ Working…" : "✨ AI Enhance"}
+            </button>
+            <button type="button" onClick={onClose} aria-label="Close"
+              style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 24, lineHeight: 1 }}>×</button>
           </div>
-          <div style={{ flex: 1 }} />
-          <button onClick={generateAI} disabled={generating || !form.title}
-            style={{ background: C.gold, color: "#fff", border: "none", borderRadius: 7,
-              padding: "7px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer",
-              opacity: generating || !form.title ? .5 : 1 }}>
-            {generating ? "✨ Generating…" : "✨ AI Enhance"}
-          </button>
-          <button onClick={onClose}
-            style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 22, lineHeight: 1 }}>×</button>
+          <div style={{ display: "flex", gap: 2, padding: phone ? "0 8px" : "0 16px", overflowX: "auto", scrollbarWidth: "none" }}>
+            {TABS.map(t => {
+              const on = tab === t.key, b = tabBadge(t.key);
+              return (
+                <button key={t.key} type="button" onClick={() => goTab(t.key)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 11px", border: "none", background: "none", cursor: "pointer",
+                  fontSize: 13, whiteSpace: "nowrap", fontWeight: on ? 800 : 500, color: on ? C.ink : C.inkMid,
+                  borderBottom: `3px solid ${on ? (t.color || "#B8860B") : "transparent"}`, marginBottom: -1 }}>
+                  {t.color && <span style={{ width: 7, height: 7, borderRadius: 4, background: t.color, opacity: on ? 1 : .6 }} />}
+                  {t.label}
+                  {b && <span style={{ minWidth: 8, height: b.n === "" ? 8 : 16, borderRadius: 8, background: b.color, color: "#fff", fontSize: 10, fontWeight: 800, padding: b.n === "" ? 0 : "0 5px", lineHeight: "16px" }}>{b.n}</span>}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* scrollable body */}
-        <div style={{ padding: phone ? "14px 12px" : "20px 24px", display: "flex", flexDirection: "column", gap: phone ? 12 : 16,
+        {/* body */}
+        <div ref={bodyRef} style={{ padding: phone ? "14px 12px" : "18px 22px", display: "flex", flexDirection: "column", gap: phone ? 12 : 16,
           ...(phone ? { flexShrink: 0 } : { overflowY: "auto", flex: 1 }) }}>
 
-          {/* ── Title + Description ───────────────────────────────────────── */}
-          <Section title="Listing Details">
-            <div style={{ marginBottom: 12 }}>
-              <Label required>Title</Label>
-              <input value={form.title} onChange={e => set("title", e.target.value)}
-                placeholder="e.g. Alien Amethyst with Hematite — Elestial Specimen from Hyderabad" style={FI()} />
-              {errors.title && <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{errors.title}</div>}
-            </div>
-            <div>
-              <Label>Description</Label>
-              <textarea value={form.description} onChange={e => set("description", e.target.value)}
-                rows={4} placeholder="Describe the piece — origin, colour, energy, size… AI will polish this per platform."
-                style={{ ...FI(), resize: "vertical" }} />
-            </div>
-          </Section>
-
-          {/* ── Per-platform title / description overrides ───────────────── */}
-          <Section title="Platform Overrides" action={
-            <span style={{ fontSize: 11, color: C.inkFaint }}>optional — leave blank to use main title/description</span>
-          }>
-            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 16 }}>
-              <div>
-                <Label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: 12, background: C.goldLight, color: C.gold, borderRadius: 4, padding: "1px 7px", fontWeight: 700 }}>Etsy</span>
-                  Title override
-                </Label>
-                <input value={form.etsy_title || ""} onChange={e => set("etsy_title", e.target.value)}
-                  placeholder={form.title || "Same as main title"} style={FI()} />
-                <Label style={{ marginTop: 10 }}>Description override</Label>
-                <textarea value={form.etsy_description || ""} onChange={e => set("etsy_description", e.target.value)}
-                  rows={3} placeholder="Same as main description"
-                  style={{ ...FI(), resize: "vertical" }} />
+          {tab === "overview" && <>
+            {/* ── Where it is ─────────────────────────────────────────────── */}
+            <div ref={locRef} style={{ background: C.surface, border: `1.5px solid ${errors.location ? "#C0392B" : loc ? C.border : locRequired ? "#D4A017" : C.border}`, borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>📍 Where is this piece?</div>
+                <div style={{ fontSize: 11, color: C.inkFaint }}>{locRequired ? "Required for one-of-a-kind pieces" : "Internal only, never shown to buyers"}</div>
               </div>
-              <div>
-                <Label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontSize: 12, background: C.greenBg, color: C.green, borderRadius: 4, padding: "1px 7px", fontWeight: 700 }}>Shopify</span>
-                  Title override
-                  <button type="button" onClick={aiFillShopify} disabled={aiFillingShopify}
-                    title="Fill a simple title + Pieces/Location/Size block from the main title & description"
-                    style={{ marginLeft: "auto", background: aiFillingShopify ? C.card : C.green, color: aiFillingShopify ? C.inkMid : "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 11, fontWeight: 800, cursor: aiFillingShopify ? "wait" : "pointer" }}>
-                    {aiFillingShopify ? "Filling…" : "✨ AI fill"}
-                  </button>
-                </Label>
-                <input value={form.shopify_title || ""} onChange={e => set("shopify_title", e.target.value)}
-                  placeholder={form.title || "Same as main title"} style={FI()} />
-                <Label style={{ marginTop: 10 }}>Description override</Label>
-                <textarea value={form.shopify_description || ""} onChange={e => set("shopify_description", e.target.value)}
-                  rows={4} placeholder="Same as main description"
-                  style={{ ...FI(), resize: "vertical" }} />
-                {aiFillError && <div style={{ fontSize: 11, color: C.red, marginTop: 4 }}>{aiFillError}</div>}
-              </div>
-            </div>
-          </Section>
-
-          {/* ── Photos & video ───────────────────────────────────────────── */}
-          <Section title="Photos & Video" action={
-            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 11, color: C.inkFaint }}>
-                {form.images.length} photo{form.images.length !== 1 ? "s" : ""}{form.video ? " · 1 video" : ""}
-              </span>
-              {listingMedia(form).length > 0 && (
-                <button type="button" onClick={async () => {
-                  const items = listingMedia(form);
-                  setDlProg(`0/${items.length}`);
-                  const { failed } = await downloadMedia(items, (n, t) => setDlProg(`${n}/${t}`));
-                  setDlProg("");
-                  if (failed) alert(`${failed} file${failed !== 1 ? "s" : ""} opened in a tab instead — save from there.`);
-                }} disabled={!!dlProg}
-                  title="Save every photo, the video, and any takes it was cut from"
-                  style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
-                    padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: dlProg ? "wait" : "pointer" }}>
-                  {dlProg ? `Downloading ${dlProg}…` : "⤓ Download media"}
-                </button>
-              )}
-            </span>
-          }>
-            <ImagePicker
-              material={form.material} shape={form.shape}
-              selectedUrls={form.images || []} onChange={urls => set("images", urls)}
-              video={form.video || ""} onVideoChange={url => set("video", url)}
-              videoEdit={form.videoEdit || null} onVideoEditChange={r => set("videoEdit", r)}
-              who={who}
-            />
-          </Section>
-
-          {/* ── Category ─────────────────────────────────────────────────── */}
-          <Section title="Category & Section">
-            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr 1fr", gap: 12 }}>
-              <div>
-                <Label>Etsy Category <span style={{ fontWeight: 400, color: C.inkFaint }}>(search taxonomy)</span></Label>
-                <select value={category} onChange={e => applyCategory(e.target.value)} style={FI()}>
-                  {ETSY_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <Label>Shop Section <span style={{ fontWeight: 400, color: C.inkFaint }}>(appears in your shop)</span></Label>
-                <select value={form.etsy_section_id ?? ""} onChange={e => set("etsy_section_id", e.target.value ? +e.target.value : null)} style={FI()}>
-                  {ETSY_SHOP_SECTIONS.map(s => <option key={s.id ?? ""} value={s.id ?? ""}>{s.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <Label>Material / Stone</Label>
-                <input value={form.material} onChange={e => set("material", e.target.value)}
-                  list="lm-mat-list2" placeholder="Amethyst, Clear Quartz…" style={FI()} />
-                <datalist id="lm-mat-list2">{MATERIALS.map(m => <option key={m} value={m} />)}</datalist>
-              </div>
-            </div>
-          </Section>
-
-          {/* ── Etsy Tags (13 max) ────────────────────────────────────────── */}
-          <Section title="Etsy Tags"
-            action={
-              <span style={{ fontSize: 11, color: tags.length === 13 ? C.green : C.inkFaint }}>
-                {tags.length}/13{tags.length === 13 ? " ✓ full" : ""}
-              </span>
-            }>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
-              {tags.map((t, i) => (
-                <span key={t + i} style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                  background: C.card, border: `1.5px solid ${C.border}`, borderRadius: 20,
-                  padding: "4px 10px", fontSize: 12, color: C.ink }}>
-                  {t}
-                  <button onClick={() => setTags(ts => ts.filter((_, j) => j !== i))}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint,
-                      fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
-                </span>
-              ))}
-              {tags.length < 13 && (
-                <input value={tagDraft} onChange={e => setTagDraft(e.target.value)}
-                  onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagDraft); } }}
-                  onBlur={() => addTag(tagDraft)}
-                  placeholder={tags.length === 0 ? "Type a tag and press Enter…" : "+ tag"}
-                  style={{ ...FI(), width: tags.length === 0 ? "100%" : 120, fontSize: 12,
-                    border: `1.5px dashed ${C.border}`, borderRadius: 20, padding: "4px 12px" }} />
-              )}
-            </div>
-            <div style={{ fontSize: 11, color: C.inkFaint, display: "flex", alignItems: "center", gap: 8 }}>
-              <span>Each tag max 20 chars. Use long-tail keywords.</span>
-              <button onClick={generateAI} disabled={generating || !form.title}
-                style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.gold}60`,
-                  borderRadius: 5, padding: "2px 8px", cursor: form.title ? "pointer" : "not-allowed",
-                  opacity: form.title ? 1 : .5 }}>
-                {generating ? "…" : "✨ Generate 13 tags"}
-              </button>
-            </div>
-          </Section>
-
-          {/* ── Inventory ─────────────────────────────────────────────────── */}
-          <Section title="Inventory">
-            <div style={{ display: "flex", gap: 10, marginBottom: form.type === "repeatable" ? 12 : 0 }}>
-              {[
-                { v: "unique",     icon: "🔹", label: "Unique",     sub: "One-of-a-kind — auto-removed from all platforms when sold" },
-                { v: "repeatable", icon: "🔁", label: "Repeatable", sub: "Multiple units — quantity tracked across platforms" },
-              ].map(opt => (
-                <button key={opt.v} onClick={() => set("type", opt.v)} style={{
-                  flex: 1, padding: "10px 12px", borderRadius: 8, textAlign: "left", cursor: "pointer",
-                  border: `2px solid ${form.type === opt.v ? C.gold : C.border}`,
-                  background: form.type === opt.v ? C.amberBg : C.surface,
-                }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: form.type === opt.v ? C.ink : C.inkMid }}>{opt.icon} {opt.label}</div>
-                  <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 3, lineHeight: 1.4 }}>{opt.sub}</div>
-                </button>
-              ))}
-            </div>
-            {form.type === "repeatable" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ flex: "0 0 160px" }}>
-                  <Label>Quantity</Label>
-                  <input type="number" min={1} value={form.qty} onChange={e => set("qty", e.target.value)} style={FI()} />
+              <input value={form.officeLocation || ""} onChange={e => { set("officeLocation", e.target.value); setErrors(er => ({ ...er, location: "" })); }}
+                placeholder={linkedStockLoc ? `From stock: ${linkedStockLoc}` : "e.g. Shelf B2 · Blue box 3 · Safe · Showroom cabinet"}
+                list="lm-loc-list" style={FI({ fontSize: 15, padding: "10px 12px", ...(errors.location ? { borderColor: "#C0392B" } : {}) })} />
+              <datalist id="lm-loc-list">{knownLocs.map(l => <option key={l.label} value={l.label} />)}</datalist>
+              {errors.location && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{errors.location}</div>}
+              {knownLocs.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                  {knownLocs.slice(0, 10).map(l => {
+                    const on = l.label.toLowerCase() === loc.toLowerCase();
+                    return <button key={l.label} type="button" onClick={() => { set("officeLocation", l.label); setErrors(er => ({ ...er, location: "" })); }}
+                      style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.card, color: on ? "#FAF0DC" : C.inkMid, fontWeight: on ? 700 : 500 }}>{l.label}</button>;
+                  })}
+                  {linkedStockLoc && !loc && <button type="button" onClick={() => set("officeLocation", linkedStockLoc)} style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px dashed ${C.border}`, background: "none", color: C.inkMid }}>Use stock location: {linkedStockLoc}</button>}
                 </div>
-              </div>
-            )}
-          </Section>
+              )}
+              {lastMove && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Last moved {new Date(lastMove.at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}{lastMove.from ? ` from ${lastMove.from}` : ""}{lastMove.by ? ` by ${lastMove.by}` : ""}.</div>}
+            </div>
 
-          {/* ── Variations ────────────────────────────────────────────────── */}
-          <Section title="Variations"
-            action={
-              <button onClick={addVariation}
-                style={{ fontSize: 11, color: C.blue, background: C.blueBg, border: `1px solid ${C.blue}`,
-                  borderRadius: 5, padding: "3px 10px", cursor: "pointer" }}>
-                + Add Variation
-              </button>
-            }>
-            {form.variations.length === 0 ? (
-              <div style={{ fontSize: 12, color: C.inkFaint, padding: "4px 0" }}>
-                No variations. Use variations to offer different sizes, weights, fillings, etc. Each option can have its own price and quantity — these publish to Shopify (Earth Ed.) as product variants.
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {form.variations.map((v, i) => (
-                  <div key={v.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
-                    {/* Variation header */}
-                    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-                      <input value={v.name} onChange={e => updVar(i, { name: e.target.value })}
-                        placeholder="Variation name (e.g. Size, Filling, Weight)"
-                        style={{ ...FI(), flex: 1, fontWeight: 600 }} />
-                      {/* per-variant pricing toggle */}
-                      <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
-                        fontSize: 11, color: v.perVariantPricing ? C.blue : C.inkFaint, flexShrink: 0, userSelect: "none" }}>
-                        <div onClick={() => updVar(i, { perVariantPricing: !v.perVariantPricing })}
-                          style={{ width: 32, height: 18, borderRadius: 9, background: v.perVariantPricing ? C.blue : C.border,
-                            position: "relative", cursor: "pointer", transition: "background .2s" }}>
-                          <div style={{ position: "absolute", top: 2, left: v.perVariantPricing ? 14 : 2,
-                            width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s" }} />
-                        </div>
-                        Per-variant price & qty
-                      </label>
-                      <button onClick={() => removeVariation(i)}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 20, lineHeight: 1, padding: 0 }}>×</button>
-                    </div>
-
-                    {/* Options */}
-                    {v.perVariantPricing ? (
-                      <div>
-                        {/* Column headers */}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 82px 82px 62px 24px", gap: 6, marginBottom: 4, padding: "0 2px" }}>
-                          {["Option", "₹ Etsy", "$ Earth Ed.", "Qty", ""].map(h => (
-                            <div key={h} style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>{h}</div>
-                          ))}
-                        </div>
-                        {v.options.map((opt, j) => (
-                          <div key={opt.id} style={{ display: "grid", gridTemplateColumns: "1fr 82px 82px 62px 24px", gap: 6, marginBottom: 6, alignItems: "center" }}>
-                            <input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
-                              placeholder="e.g. Small 4 inch" style={{ ...FI(), fontSize: 12 }} />
-                            <input type="number" value={opt.price_etsy} onChange={e => updOpt(i, j, { price_etsy: e.target.value })}
-                              placeholder="0.00" min="0" style={{ ...FI(), fontSize: 12 }} />
-                            <input type="number" value={opt.price_shopify ?? ""} onChange={e => updOpt(i, j, { price_shopify: e.target.value })}
-                              placeholder="0.00" min="0" style={{ ...FI(), fontSize: 12 }} />
-                            <input type="number" value={opt.qty} onChange={e => updOpt(i, j, { qty: e.target.value })}
-                              placeholder="0" min="0" style={{ ...FI(), fontSize: 12 }} />
-                            <button onClick={() => removeOpt(i, j)} disabled={v.options.length <= 1}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 16, lineHeight: 1, padding: 0, opacity: v.options.length <= 1 ? .3 : 1 }}>×</button>
-                          </div>
-                        ))}
-                        <button onClick={() => addOpt(i)}
-                          style={{ fontSize: 11, color: C.blue, background: "none", border: `1px dashed ${C.blue}`,
-                            borderRadius: 5, padding: "4px 12px", cursor: "pointer", marginTop: 2 }}>+ Add option</button>
-                      </div>
-                    ) : (
-                      <div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                          {v.options.map((opt, j) => (
-                            <div key={opt.id} style={{ display: "flex", alignItems: "center", gap: 4,
-                              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 20, padding: "4px 10px" }}>
-                              <input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
-                                placeholder="Option…"
-                                style={{ border: "none", background: "none", outline: "none", fontSize: 12, color: C.ink, width: Math.max(60, (opt.label.length || 6) * 8) }} />
-                              <button onClick={() => removeOpt(i, j)} disabled={v.options.length <= 1}
-                                style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 13, lineHeight: 1, padding: 0, opacity: v.options.length <= 1 ? .3 : 1 }}>×</button>
-                            </div>
-                          ))}
-                          <button onClick={() => addOpt(i)}
-                            style={{ fontSize: 12, color: C.blue, background: "none", border: `1px dashed ${C.blue}`,
-                              borderRadius: 20, padding: "4px 12px", cursor: "pointer" }}>+ option</button>
-                        </div>
-                        <div style={{ fontSize: 10, color: C.inkFaint }}>Toggle "Per-variant price & qty" to set individual prices per option.</div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Section>
-
-          {/* ── Pricing ───────────────────────────────────────────────────── */}
-          <Section title="Pricing">
-            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 12 }}>
-              {PLATFORMS.map(p => {
-                const isCalcOpen = calcOpen === p.key;
-                const costNum  = +calcCost || 0;
-                const multNum  = +calcMult || 1;
-                // Etsy: base × mult / 0.75 divisor; eBay: base × mult / liveRate / 0.85
-                const baseInr  = costNum * multNum;
-                const etsyListed = baseInr > 0 ? Math.round(baseInr / 0.75) : 0;
-                const ebayUsd    = baseInr > 0 ? +(baseInr / liveUsdRate / 0.85).toFixed(2) : 0;
-                const suggested  = p.key === "ebay" ? ebayUsd
-                  : p.key === "etsy" ? etsyListed
-                  : baseInr > 0 ? Math.round(baseInr / 0.75) : 0;
-                const suggestedDisplay = p.currency === "USD"
-                  ? `$${suggested.toFixed(2)}`
-                  : `₹${Math.round(suggested).toLocaleString("en-IN")}`;
-                // After-fees net for display
-                const netEtsy = etsyListed > 0 ? Math.round(etsyListed * 0.89) : 0;
-                const netEbay = ebayUsd > 0 ? +(ebayUsd * 0.85).toFixed(2) : 0;
+            {/* ── Where it's listed ─────────────────────────────────────── */}
+            <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
+              {CHANNELS.map(c => {
+                const pl = plan(c.key);
+                const { bad } = readyScore(readiness({ ...form, tags }, c.key, tags));
+                const price = c.key === "store" ? (+form.price_store > 0 ? `$${form.price_store}` : +form.price_etsy > 0 ? "from Etsy" : "") : +form[c.priceField] > 0 ? `${c.cur}${(+form[c.priceField]).toLocaleString(c.cur === "₹" ? "en-IN" : "en-US")}` : "";
                 return (
-                  <div key={p.key} style={{ background: C.card, borderRadius: 9, padding: 12, position: "relative",
-                    border: `1.5px solid ${p.coming ? C.border : p.color + "35"}`, opacity: p.coming ? .6 : 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                      <span style={{ fontSize: 15 }}>{p.icon}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: p.coming ? C.inkFaint : p.color }}>{p.label}</span>
-                      <div style={{ flex: 1 }} />
-                      {!p.coming && (
-                        <button onClick={() => { setCalcOpen(isCalcOpen ? null : p.key); setCalcCost(""); }}
-                          title="Price calculator"
-                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: isCalcOpen ? p.color : C.inkFaint, padding: 0, lineHeight: 1 }}>
-                          🧮
-                        </button>
-                      )}
+                  <button key={c.key} type="button" onClick={() => goTab(c.key)} style={{ textAlign: "left", background: C.surface, border: `1.5px solid ${pl.linked || pl.action ? c.color + "60" : C.border}`, borderRadius: 10, padding: "10px 12px", cursor: "pointer", display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 4, background: c.color }} />
+                      <span style={{ fontSize: 13, fontWeight: 800, color: C.ink, flex: 1 }}>{c.label}</span>
+                      <span style={{ fontSize: 12, color: C.inkFaint }}>›</span>
                     </div>
-                    <div style={{ fontSize: 10, color: C.inkFaint, marginBottom: 4 }}>
-                      {p.currency === "USD" ? "$ USD" : "₹ INR"}
-                      {p.currency !== "USD" && +form[p.priceField] > 0 &&
-                        <span style={{ marginLeft: 6, color: C.inkFaint }}>≈ ${(+form[p.priceField] / liveUsdRate).toFixed(0)} USD</span>
-                      }
-                      {p.currency === "USD" && +form[p.priceField] > 0 &&
-                        <span style={{ marginLeft: 6, color: C.inkFaint }}>≈ ₹{(+form[p.priceField] * liveUsdRate).toLocaleString("en-IN")}</span>
-                      }
-                    </div>
-                    <input type="number" value={form[p.priceField] || ""}
-                      onChange={e => {
-                        set(p.priceField, e.target.value);
-                        // Auto-prefill eBay from Etsy
-                        if (p.key === "etsy" && e.target.value) {
-                          const etsyInr = +e.target.value;
-                          const autoEbay = (etsyInr / liveUsdRate / 0.85).toFixed(2);
-                          set("price_ebay", autoEbay);
-                        }
-                      }}
-                      disabled={p.coming} placeholder="0.00"
-                      style={FI({ fontSize: 15, fontWeight: 600, padding: "7px 10px", opacity: p.coming ? .5 : 1 })} />
-                    {form.platforms?.[p.key]?.status && (
-                      <div style={{ marginTop: 6 }}><StatusPill status={form.platforms[p.key].status} /></div>
-                    )}
-                    {/* Calculator popover — avant garde dark panel */}
-                    {isCalcOpen && (
-                      <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50, marginTop: 6,
-                        background: "#0F0F0F", border: `1px solid ${p.color}55`, borderRadius: 10,
-                        padding: "16px", boxShadow: `0 12px 40px rgba(0,0,0,.5), 0 0 0 1px ${p.color}22` }}>
-                        {/* Header */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-                          <div style={{ width: 3, height: 18, background: p.color, borderRadius: 2 }} />
-                          <div style={{ fontSize: 9, fontWeight: 800, color: p.color, textTransform: "uppercase", letterSpacing: 2 }}>
-                            Price Calculator
-                          </div>
-                        </div>
-                        {/* Inputs */}
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
-                          <div>
-                            <div style={{ fontSize: 9, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 1 }}>Cost ₹</div>
-                            <input type="number" value={calcCost} onChange={e => setCalcCost(e.target.value)}
-                              placeholder="0" autoFocus
-                              style={{ background: "#1A1A1A", border: "1px solid #333", color: "#fff",
-                                borderRadius: 6, padding: "7px 10px", fontSize: 14, fontWeight: 600,
-                                width: "100%", boxSizing: "border-box" }} />
-                          </div>
-                          <div>
-                            <div style={{ fontSize: 9, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 1 }}>Multiplier</div>
-                            <input type="number" value={calcMult} onChange={e => setCalcMult(e.target.value)}
-                              placeholder="3" min="1" step="0.5"
-                              style={{ background: "#1A1A1A", border: "1px solid #333", color: "#fff",
-                                borderRadius: 6, padding: "7px 10px", fontSize: 14, fontWeight: 600,
-                                width: "100%", boxSizing: "border-box" }} />
-                          </div>
-                        </div>
-                        {/* Breakdown */}
-                        {costNum > 0 && (
-                          <div style={{ marginBottom: 12 }}>
-                            <div style={{ borderTop: "1px solid #1E1E1E", paddingTop: 10 }}>
-                              {[
-                                { label: "Base", val: `₹${Math.round(baseInr).toLocaleString("en-IN")}` },
-                                p.key === "etsy"
-                                  ? { label: "Listed (÷0.75)", val: `₹${etsyListed.toLocaleString("en-IN")}`, hi: true }
-                                  : p.key === "ebay"
-                                  ? { label: `Listed (@ ₹${Math.round(liveUsdRate)}/USD ÷0.85)`, val: `$${ebayUsd.toFixed(2)}`, hi: true }
-                                  : { label: "Listed (÷0.75)", val: `₹${Math.round(baseInr/0.75).toLocaleString("en-IN")}`, hi: true },
-                                p.key === "etsy"
-                                  ? { label: "After 11% fees", val: `₹${netEtsy.toLocaleString("en-IN")}`, dim: true }
-                                  : p.key === "ebay"
-                                  ? { label: "After 15% fees", val: `$${netEbay.toFixed(2)}`, dim: true }
-                                  : { label: "After fees (~11%)", val: `₹${Math.round(baseInr/0.75*0.89).toLocaleString("en-IN")}`, dim: true },
-                              ].map(row => (
-                                <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                                  padding: "3px 0", borderBottom: "1px solid #141414" }}>
-                                  <span style={{ fontSize: 9, color: row.hi ? "#888" : "#555", textTransform: "uppercase", letterSpacing: .8 }}>{row.label}</span>
-                                  <span style={{ fontSize: row.hi ? 14 : 11, fontWeight: row.hi ? 700 : 400,
-                                    color: row.hi ? p.color : row.dim ? "#444" : "#777" }}>{row.val}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        <button disabled={!suggested}
-                          onClick={() => {
-                            if (p.key === "ebay") {
-                              set("price_ebay", ebayUsd.toFixed(2));
-                            } else {
-                              set(p.priceField, Math.round(suggested));
-                              // auto-fill eBay when applying Etsy
-                              if (p.key === "etsy") set("price_ebay", (Math.round(suggested) / liveUsdRate / 0.85).toFixed(2));
-                            }
-                            setCalcOpen(null);
-                          }}
-                          style={{ width: "100%", background: suggested ? p.color : "#1A1A1A", color: suggested ? "#fff" : "#444",
-                            border: "none", borderRadius: 6, padding: "9px 0", fontSize: 11, fontWeight: 800,
-                            letterSpacing: 1.5, textTransform: "uppercase", cursor: suggested ? "pointer" : "not-allowed",
-                            transition: "opacity .15s" }}>
-                          Apply {suggestedDisplay} →
-                        </button>
-                        <div style={{ marginTop: 8, fontSize: 9, color: "#333", textAlign: "center" }}>
-                          1 USD = ₹{liveUsdRate.toFixed(1)} · live rate
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                    {statusChip(c.key)}
+                    <div style={{ fontSize: 12, color: C.inkMid }}>{price || "No price"}{(pl.linked || pl.action) && bad ? <span style={{ color: C.red }}> · {bad} to fix</span> : ""}</div>
+                  </button>
                 );
               })}
             </div>
-          </Section>
 
-          {/* ── Etsy publish settings ────────────────────────────────────── */}
-          <Section title="Etsy Settings" accent="#F56400">
-            <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 12 }}>
-              {/* Shipping profile */}
-              <div>
-                <Label>Shipping Profile</Label>
-                <select value={form.etsy_shipping_profile_id || ""}
-                  onChange={e => set("etsy_shipping_profile_id", e.target.value ? +e.target.value : null)}
-                  style={FI()}>
-                  <option value="">— Auto (by price)</option>
-                  {etsyShippingProfiles.map(p => (
-                    <option key={p.id} value={p.id}>{p.label}</option>
-                  ))}
-                </select>
-              </div>
-              {/* Processing profile — Etsy calls it a readiness state. Left to
-                  the API this used to inherit whatever the last active listing
-                  carried, which is how ready stock published as made to order. */}
-              <div>
-                <Label>Processing Profile</Label>
-                <select value={form.etsy_readiness_state_id || ""}
-                  onChange={e => set("etsy_readiness_state_id", e.target.value ? +e.target.value : null)}
-                  style={FI()}>
-                  <option value="">{form.etsy_made_to_order ? "— Auto (fastest made-to-order)" : "— Auto (fastest ready to ship)"}</option>
-                  {etsyReadinessProfiles.map(p => (
-                    <option key={p.id} value={p.id}>{p.label}</option>
-                  ))}
-                </select>
-              </div>
-              {/* Return policy */}
-              <div>
-                <Label>Return Policy</Label>
-                <select value={form.etsy_return_policy_id || ""}
-                  onChange={e => set("etsy_return_policy_id", e.target.value ? +e.target.value : null)}
-                  style={FI()}>
-                  <option value="">— Default (14-day returns)</option>
-                  {etsyReturnPolicies.map(p => (
-                    <option key={p.id} value={p.id}>{p.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            {/* Toggles row */}
-            <div style={{ display: "flex", flexDirection: phone ? "column" : "row", gap: phone ? 12 : 24, marginTop: 12 }}>
-              {[
-                { field: "etsy_made_to_order", label: "Made to order",   sub: "Off = ready to ship from stock" },
-                { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "₹0.20/renewal every 4 months" },
-                { field: "etsy_ads",        label: "Run Etsy Ads",       sub: "Promotes listing in search" },
-              ].map(({ field, label, sub }) => (
-                <label key={field} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", flex: 1 }}>
-                  <input type="checkbox" checked={!!form[field]}
-                    onChange={e => set(field, e.target.checked)}
-                    style={{ marginTop: 2, accentColor: "#F56400", width: 14, height: 14, flexShrink: 0 }} />
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{label}</div>
-                    <div style={{ fontSize: 10, color: C.inkFaint }}>{sub}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </Section>
-
-          {/* ── Optional details (collapsed) ──────────────────────────────── */}
-          <div>
-            <button onClick={() => setShowOptional(x => !x)}
-              style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint,
-                fontSize: 12, padding: "4px 0", display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 10 }}>{showOptional ? "▼" : "▶"}</span>
-              {showOptional ? "Hide" : "Show"} optional fields (SKU, origin, size, weight, storage, stock link)
+            <button type="button" onClick={() => setStudio(true)} style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: "#141210", color: "#fff", border: "none", padding: "16px 18px", cursor: "pointer", flexShrink: 0 }}>
+              <span style={{ flex: 1 }}>
+                <span style={{ display: "block", fontSize: 10.5, letterSpacing: ".22em", textTransform: "uppercase", opacity: .7 }}>Price Studio</span>
+                <span style={{ display: "block", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, lineHeight: 1.15, marginTop: 4 }}>
+                  {+form.price_etsy > 0 ? `Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")}${form.price_calc?.sale ? ` · ₹${Math.round(form.price_etsy * (1 - form.price_calc.sale / 100)).toLocaleString("en-IN")} in the sale` : ""}` : "Work out the prices, step by step"}
+                </span>
+              </span>
+              <span style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{+form.price_etsy > 0 ? "Rework →" : "Start →"}</span>
             </button>
-            {showOptional && (
-              <div style={{ marginTop: 12, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px" }}>
-                <Grid cols={2}>
-                  <div><Label>Order ID</Label><input value={form.listing_order_id || ""} onChange={e => set("listing_order_id", e.target.value)} placeholder="NG-LST-2026-ABC123" style={FI()} /></div>
-                  <div><Label>SKU</Label><input value={form.sku} onChange={e => set("sku", e.target.value)} placeholder="CQ-SPH-001" style={FI()} /></div>
-                  <div><Label>Origin</Label><input value={form.origin} onChange={e => set("origin", e.target.value)} placeholder="Brazil, India…" style={FI()} /></div>
-                  <div><Label>Size</Label><input value={form.size} onChange={e => set("size", e.target.value)} placeholder="4 inch, 45mm…" style={FI()} /></div>
-                  <div><Label>Weight</Label><input value={form.weight} onChange={e => set("weight", e.target.value)} placeholder="500g, 1.2kg…" style={FI()} /></div>
-                </Grid>
-                {/* Etsy shows Width / Height / Depth boxes on the listing and, left
-                    empty, guesses at them off the photos. These fill them. */}
-                <div style={{ marginTop: 12 }}>
-                  <Label>Dimensions <span style={{ fontWeight: 400, color: C.inkFaint }}>(publishes to Etsy — left blank, Etsy guesses)</span></Label>
-                  <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 8 }}>
-                    <input value={form.width  || ""} onChange={e => set("width",  e.target.value)} placeholder="Width"  inputMode="decimal" style={FI()} />
-                    <input value={form.height || ""} onChange={e => set("height", e.target.value)} placeholder="Height" inputMode="decimal" style={FI()} />
-                    <input value={form.depth  || ""} onChange={e => set("depth",  e.target.value)} placeholder="Depth"  inputMode="decimal" style={FI()} />
-                    <select value={form.dim_unit || "mm"} onChange={e => set("dim_unit", e.target.value)} style={FI()}>
-                      {["mm", "cm", "m", "in", "ft"].map(u => <option key={u} value={u}>{u}</option>)}
-                    </select>
-                  </div>
+
+            {/* ── Title + Description ───────────────────────────────────────── */}
+            <Section title="Listing Details" action={<span style={{ fontSize: 11, color: C.inkFaint }}>Used everywhere unless a platform tab sets its own</span>}>
+              <div style={{ marginBottom: 12 }}>
+                <Label required>Title</Label>
+                <input value={form.title} onChange={e => set("title", e.target.value)}
+                  placeholder="e.g. Alien Amethyst with Hematite — Elestial Specimen from Hyderabad" style={FI()} />
+                {errors.title && <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{errors.title}</div>}
+              </div>
+              <div>
+                <Label>Description</Label>
+                <textarea value={form.description} onChange={e => set("description", e.target.value)}
+                  rows={5} placeholder="Describe the piece — origin, colour, energy, size… AI will polish this per platform."
+                  style={{ ...FI(), resize: "vertical" }} />
+              </div>
+            </Section>
+
+            {/* ── Photos & video ───────────────────────────────────────────── */}
+            <Section title="Photos & Video" action={
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: C.inkFaint }}>
+                  {form.images.length} photo{form.images.length !== 1 ? "s" : ""}{form.video ? " · 1 video" : ""}
+                </span>
+                {listingMedia(form).length > 0 && (
+                  <button type="button" onClick={async () => {
+                    const items = listingMedia(form);
+                    setDlProg(`0/${items.length}`);
+                    const { failed } = await downloadMedia(items, (n, t) => setDlProg(`${n}/${t}`));
+                    setDlProg("");
+                    if (failed) alert(`${failed} file${failed !== 1 ? "s" : ""} opened in a tab instead — save from there.`);
+                  }} disabled={!!dlProg}
+                    title="Save every photo, the video, and any takes it was cut from"
+                    style={{ background: "transparent", color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
+                      padding: "4px 9px", fontSize: 11, fontWeight: 800, cursor: dlProg ? "wait" : "pointer" }}>
+                    {dlProg ? `Downloading ${dlProg}…` : "⤓ Download media"}
+                  </button>
+                )}
+              </span>
+            }>
+              <ImagePicker
+                material={form.material} shape={form.shape}
+                selectedUrls={form.images || []} onChange={urls => set("images", urls)}
+                video={form.video || ""} onVideoChange={url => set("video", url)}
+                videoEdit={form.videoEdit || null} onVideoEditChange={r => set("videoEdit", r)}
+                who={who}
+              />
+            </Section>
+
+            {/* ── Stone & stock ─────────────────────────────────────────────── */}
+            <Section title="Stone & Stock">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <div>
+                  <Label>Material / Stone</Label>
+                  <input value={form.material} onChange={e => set("material", e.target.value)}
+                    list="lm-mat-list2" placeholder="Amethyst, Clear Quartz…" style={FI()} />
+                  <datalist id="lm-mat-list2">{MATERIALS.map(m => <option key={m} value={m} />)}</datalist>
                 </div>
-                <div style={{ marginTop: 12 }}>
-                  <Label>📦 Office / Storage Location (internal only — not on Etsy/eBay)</Label>
-                  <input
-                    value={form.officeLocation || ""}
-                    onChange={e => set("officeLocation", e.target.value)}
-                    placeholder="e.g. Shelf B2, Blue box, Drawer 3, Safe…"
-                    style={FI()}
-                    list="office-loc-list"
-                  />
-                  <datalist id="office-loc-list">
-                    {[...new Set(stock.map(s => s.location).filter(Boolean))].map(l => (
-                      <option key={l} value={l} />
-                    ))}
-                  </datalist>
-                  <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 4 }}>
-                    Where is this piece physically sitting in your office right now?
-                  </div>
-                </div>
-                <div style={{ marginTop: 12 }}>
-                  <Label>Link to Physical Stock Item (reads live quantity)</Label>
-                  <select value={form.linked_stock_id} onChange={e => {
-                    const sid = e.target.value;
-                    set("linked_stock_id", sid);
-                    // Auto-fill officeLocation from the linked stock item's location
-                    if (sid) {
-                      const s = stock.find(x => x.id === sid);
-                      if (s?.location && !form.officeLocation) set("officeLocation", s.location);
-                    }
-                  }} style={FI()}>
-                    <option value="">— None (use manual quantity) —</option>
-                    {stock.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.desc || s.material} — {s.qty} {s.unit || "pcs"}{s.location ? ` · 📦 ${s.location}` : ""}{s.sku ? ` (${s.sku})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {form.linked_stock_id && (() => {
-                    const ls = stock.find(s => s.id === form.linked_stock_id);
-                    return ls ? (
-                      <div style={{ marginTop: 6, background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", fontSize: 12, color: C.inkMid, display: "flex", gap: 14, flexWrap: "wrap" }}>
-                        <span>📦 <b>{ls.qty} {ls.unit || "pcs"}</b> in stock</span>
-                        {ls.location && <span>📍 <b>{ls.location}</b></span>}
-                        {ls.material && <span>💎 {ls.material}{ls.shape ? ` · ${ls.shape}` : ""}</span>}
-                      </div>
-                    ) : null;
-                  })()}
+                <div>
+                  <Label>SKU</Label>
+                  <input value={form.sku} onChange={e => set("sku", e.target.value)} placeholder={form.listing_order_id || "CQ-SPH-001"} style={FI()} />
                 </div>
               </div>
-            )}
-          </div>
+              <div style={{ display: "flex", gap: 10, marginBottom: form.type === "repeatable" ? 12 : 0 }}>
+                {[
+                  { v: "unique",     icon: "🔹", label: "One of a kind", sub: "Comes off every platform when it sells" },
+                  { v: "repeatable", icon: "🔁", label: "Repeatable",    sub: "Several units, quantity tracked" },
+                ].map(opt => (
+                  <button key={opt.v} type="button" onClick={() => set("type", opt.v)} style={{
+                    flex: 1, padding: "10px 12px", borderRadius: 8, textAlign: "left", cursor: "pointer",
+                    border: `2px solid ${form.type === opt.v ? C.gold : C.border}`,
+                    background: form.type === opt.v ? C.amberBg : C.surface,
+                  }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: form.type === opt.v ? C.ink : C.inkMid }}>{opt.icon} {opt.label}</div>
+                    <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 3, lineHeight: 1.4 }}>{opt.sub}</div>
+                  </button>
+                ))}
+              </div>
+              {form.type === "repeatable" && (
+                <div style={{ maxWidth: 180 }}>
+                  <Label>Quantity</Label>
+                  <input type="number" min={1} value={form.qty} onChange={e => set("qty", e.target.value)} style={FI()} />
+                </div>
+              )}
+              <div style={{ marginTop: 12 }}>
+                <Label>Linked stock item <span style={{ fontWeight: 400, color: C.inkFaint }}>(reads live quantity)</span></Label>
+                <select value={form.linked_stock_id} onChange={e => {
+                  const sid = e.target.value;
+                  set("linked_stock_id", sid);
+                  if (sid) {
+                    const s = stock.find(x => x.id === sid);
+                    if (s?.location && !form.officeLocation) set("officeLocation", s.location);
+                  }
+                }} style={FI()}>
+                  <option value="">— None (use manual quantity) —</option>
+                  {stock.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.desc || s.material} — {s.qty} {s.unit || "pcs"}{s.location ? ` · 📦 ${s.location}` : ""}{s.sku ? ` (${s.sku})` : ""}
+                    </option>
+                  ))}
+                </select>
+                {form.linked_stock_id && (() => {
+                  const ls = stock.find(s => s.id === form.linked_stock_id);
+                  return ls ? (
+                    <div style={{ marginTop: 6, background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", fontSize: 12, color: C.inkMid, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                      <span>📦 <b>{ls.qty} {ls.unit || "pcs"}</b> in stock</span>
+                      {ls.location && <span>📍 <b>{ls.location}</b></span>}
+                      {ls.material && <span>💎 {ls.material}{ls.shape ? ` · ${ls.shape}` : ""}</span>}
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            </Section>
 
-        </div>{/* end scrollable body */}
+            {/* ── Physical details ─────────────────────────────────────────── */}
+            <Section title="Size & Origin" action={<span style={{ fontSize: 11, color: C.inkFaint }}>Etsy and the sites read these</span>}>
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "repeat(3, 1fr)", gap: 12 }}>
+                <div><Label>Origin</Label><input value={form.origin} onChange={e => set("origin", e.target.value)} placeholder="Brazil, India…" style={FI()} /></div>
+                <div><Label>Size</Label><input value={form.size} onChange={e => set("size", e.target.value)} placeholder="4 inch, 45mm…" style={FI()} /></div>
+                <div><Label>Weight</Label><input value={form.weight} onChange={e => set("weight", e.target.value)} placeholder="500g, 1.2kg…" style={FI()} /></div>
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <Label>Dimensions <span style={{ fontWeight: 400, color: C.inkFaint }}>(left blank, Etsy guesses)</span></Label>
+                <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 8 }}>
+                  <input value={form.width  || ""} onChange={e => set("width",  e.target.value)} placeholder="Width"  inputMode="decimal" style={FI()} />
+                  <input value={form.height || ""} onChange={e => set("height", e.target.value)} placeholder="Height" inputMode="decimal" style={FI()} />
+                  <input value={form.depth  || ""} onChange={e => set("depth",  e.target.value)} placeholder="Depth"  inputMode="decimal" style={FI()} />
+                  <select value={form.dim_unit || "mm"} onChange={e => set("dim_unit", e.target.value)} style={FI()}>
+                    {["mm", "cm", "m", "in", "ft"].map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ marginTop: 12, maxWidth: phone ? "none" : 300 }}>
+                <Label>Listing ID</Label>
+                <input value={form.listing_order_id || ""} onChange={e => set("listing_order_id", e.target.value)} placeholder="NG-LST-2026-ABC123" style={FI()} />
+              </div>
+            </Section>
 
-        {/* sticky footer */}
-        <div style={phone ? { display: "contents" } : { borderTop: `1px solid ${C.border}`, borderRadius: "0 0 14px 14px",
-          background: C.surface, flexShrink: 0 }}>
-
-          {/* Footer platform row */}
-          <div style={phone ? { padding: "12px 16px", background: C.surface, borderTop: `1px solid ${C.border}`, flexShrink: 0 } : { padding: "12px 24px 0" }}>
-            {(() => {
-              // "linked" = already exists on this platform (has an ID), auto-syncs on save
-              const linkedPlatforms = PLATFORMS.filter(p => {
-                const pd = form.platforms?.[p.key];
-                if (!pd || pd.status === "deleted") return false;
-                if (p.key === "etsy" && pd.listing_id) return true;
-                if (p.key === "ebay" && pd.item_id) return true;
-                if ((p.key === "shopify_aty" || p.key === "shopify_earth") && pd.product_id) return true;
-                if ((p.key === "trade" || p.key === "store") && pd.product_id) return true;
-                return false;
-              });
-              const linkedKeys = new Set(linkedPlatforms.map(p => p.key));
-              const newPlatforms = PLATFORMS.filter(p => !linkedKeys.has(p.key));
-              return (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                  {/* Already linked: show as pills, auto-syncs on every save */}
-                  {linkedPlatforms.length > 0 && (
-                    <>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>On save, sync to</span>
-                      {linkedPlatforms.map(p => {
-                        const st = form.platforms?.[p.key]?.status;
-                        const isDraft = st === "draft";
-                        return (
-                          <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 5,
-                            background: isDraft ? C.amberBg : p.color + "18",
-                            border: `1.5px solid ${isDraft ? C.amber + "80" : p.color + "50"}`,
-                            borderRadius: 8, padding: "4px 10px" }}>
-                            <span style={{ fontSize: 12 }}>{p.icon}</span>
-                            <span style={{ fontSize: 11, fontWeight: 700, color: isDraft ? C.amber : p.color }}>{p.label}</span>
-                            <span style={{ fontSize: 9, color: isDraft ? C.amber : p.color, opacity: .8 }}>{isDraft ? "DRAFT" : "LIVE"}</span>
+            {/* ── Variations ────────────────────────────────────────────────── */}
+            <Section title="Variations"
+              action={
+                <button type="button" onClick={addVariation}
+                  style={{ fontSize: 11, color: C.blue, background: C.blueBg, border: `1px solid ${C.blue}`,
+                    borderRadius: 5, padding: "3px 10px", cursor: "pointer" }}>
+                  + Add Variation
+                </button>
+              }>
+              {form.variations.length === 0 ? (
+                <div style={{ fontSize: 12, color: C.inkFaint, padding: "4px 0" }}>
+                  No variations. Use them for different sizes or weights; each option can have its own price and quantity.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {form.variations.map((v, i) => (
+                    <div key={v.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+                        <input value={v.name} onChange={e => updVar(i, { name: e.target.value })}
+                          placeholder="Variation name (e.g. Size, Filling, Weight)"
+                          style={{ ...FI(), flex: 1, fontWeight: 600 }} />
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer",
+                          fontSize: 11, color: v.perVariantPricing ? C.blue : C.inkFaint, flexShrink: 0, userSelect: "none" }}>
+                          <div onClick={() => updVar(i, { perVariantPricing: !v.perVariantPricing })}
+                            style={{ width: 32, height: 18, borderRadius: 9, background: v.perVariantPricing ? C.blue : C.border,
+                              position: "relative", cursor: "pointer", transition: "background .2s" }}>
+                            <div style={{ position: "absolute", top: 2, left: v.perVariantPricing ? 14 : 2,
+                              width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s" }} />
                           </div>
-                        );
-                      })}
-                    </>
-                  )}
-                  {/* Not-yet-linked: optional checkboxes to also create a draft on save */}
-                  {newPlatforms.length > 0 && (
-                    <>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5, marginLeft: linkedPlatforms.length ? 6 : 0 }}>
-                        {linkedPlatforms.length ? "Also add to" : "Add to"}
-                      </span>
-                      {newPlatforms.map(p => {
-                        const hasPrice = +form[p.priceField] > 0;
-                        const checked  = !!publishTo[p.key];
-                        return (
-                          <label key={p.key} style={{
-                            display: "flex", alignItems: "center", gap: 5,
-                            cursor: hasPrice ? "pointer" : "not-allowed",
-                            background: checked ? p.color + "15" : C.card,
-                            border: `1.5px solid ${checked ? p.color : C.border}`,
-                            borderRadius: 8, padding: "4px 10px",
-                            opacity: hasPrice ? 1 : .4, userSelect: "none",
-                          }}>
-                            <input type="checkbox" checked={checked} disabled={!hasPrice}
-                              onChange={e => setPublishTo(pt => ({ ...pt, [p.key]: e.target.checked }))}
-                              style={{ accentColor: p.color, width: 12, height: 12 }} />
-                            <span style={{ fontSize: 12 }}>{p.icon}</span>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: checked ? p.color : C.inkMid }}>{p.label}</span>
-                            {!hasPrice && <span style={{ fontSize: 9, color: C.inkFaint }}>set price</span>}
-                          </label>
-                        );
-                      })}
-                    </>
+                          Per-variant price & qty
+                        </label>
+                        <button type="button" onClick={() => removeVariation(i)}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 20, lineHeight: 1, padding: 0 }}>×</button>
+                      </div>
+                      {v.perVariantPricing ? (
+                        <div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 82px 82px 62px 24px", gap: 6, marginBottom: 4, padding: "0 2px" }}>
+                            {["Option", "₹ Etsy", "$ Earth Ed.", "Qty", ""].map(h => (
+                              <div key={h} style={{ fontSize: 9, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>{h}</div>
+                            ))}
+                          </div>
+                          {v.options.map((opt, j) => (
+                            <div key={opt.id} style={{ display: "grid", gridTemplateColumns: "1fr 82px 82px 62px 24px", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                              <input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
+                                placeholder="e.g. Small 4 inch" style={{ ...FI(), fontSize: 12 }} />
+                              <input type="number" value={opt.price_etsy} onChange={e => updOpt(i, j, { price_etsy: e.target.value })}
+                                placeholder="0.00" min="0" style={{ ...FI(), fontSize: 12 }} />
+                              <input type="number" value={opt.price_shopify ?? ""} onChange={e => updOpt(i, j, { price_shopify: e.target.value })}
+                                placeholder="0.00" min="0" style={{ ...FI(), fontSize: 12 }} />
+                              <input type="number" value={opt.qty} onChange={e => updOpt(i, j, { qty: e.target.value })}
+                                placeholder="0" min="0" style={{ ...FI(), fontSize: 12 }} />
+                              <button type="button" onClick={() => removeOpt(i, j)} disabled={v.options.length <= 1}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 16, lineHeight: 1, padding: 0, opacity: v.options.length <= 1 ? .3 : 1 }}>×</button>
+                            </div>
+                          ))}
+                          <button type="button" onClick={() => addOpt(i)}
+                            style={{ fontSize: 11, color: C.blue, background: "none", border: `1px dashed ${C.blue}`,
+                              borderRadius: 5, padding: "4px 12px", cursor: "pointer", marginTop: 2 }}>+ Add option</button>
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                            {v.options.map((opt, j) => (
+                              <div key={opt.id} style={{ display: "flex", alignItems: "center", gap: 4,
+                                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 20, padding: "4px 10px" }}>
+                                <input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
+                                  placeholder="Option…"
+                                  style={{ border: "none", background: "none", outline: "none", fontSize: 12, color: C.ink, width: Math.max(60, (opt.label.length || 6) * 8) }} />
+                                <button type="button" onClick={() => removeOpt(i, j)} disabled={v.options.length <= 1}
+                                  style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 13, lineHeight: 1, padding: 0, opacity: v.options.length <= 1 ? .3 : 1 }}>×</button>
+                              </div>
+                            ))}
+                            <button type="button" onClick={() => addOpt(i)}
+                              style={{ fontSize: 12, color: C.blue, background: "none", border: `1px dashed ${C.blue}`,
+                                borderRadius: 20, padding: "4px 12px", cursor: "pointer" }}>+ option</button>
+                          </div>
+                          <div style={{ fontSize: 10, color: C.inkFaint }}>Toggle "Per-variant price & qty" to set individual prices per option.</div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+          </>}
+
+          {/* ── Etsy ─────────────────────────────────────────────────────────── */}
+          {tab === "etsy" && (() => { const c = channel("etsy"); return <>
+            {channelHeader(c)}
+            {checklist(c)}
+            {priceCard(P("etsy"))}
+            {overrides(c, { descPlaceholder: form.description ? "Same as main description" : "" })}
+            <Section title="Category & Section">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
+                <div>
+                  <Label>Etsy Category</Label>
+                  <select value={category} onChange={e => applyCategory(e.target.value)} style={FI()}>
+                    {ETSY_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label>Shop Section</Label>
+                  <select value={form.etsy_section_id ?? ""} onChange={e => set("etsy_section_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    {ETSY_SHOP_SECTIONS.map(s => <option key={s.id ?? ""} value={s.id ?? ""}>{s.label}</option>)}
+                  </select>
+                </div>
+              </div>
+            </Section>
+            <Section title="Tags"
+              action={
+                <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: tags.length === 13 ? C.green : C.inkFaint }}>{tags.length}/13{tags.length === 13 ? " ✓ full" : ""}</span>
+                  <button type="button" onClick={generateAI} disabled={generating || !form.title}
+                    style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.border}`,
+                      borderRadius: 5, padding: "2px 8px", cursor: form.title ? "pointer" : "not-allowed", opacity: form.title ? 1 : .5 }}>
+                    {generating ? "…" : "✨ Fill tags"}
+                  </button>
+                </span>
+              }>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {tags.map((t, i) => (
+                  <span key={t + i} style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                    background: C.card, border: `1.5px solid ${C.border}`, borderRadius: 20,
+                    padding: "4px 10px", fontSize: 12, color: C.ink }}>
+                    {t}
+                    <button type="button" onClick={() => setTags(ts => ts.filter((_, j) => j !== i))}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint,
+                        fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
+                  </span>
+                ))}
+                {tags.length < 13 && (
+                  <input value={tagDraft} onChange={e => setTagDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagDraft); } }}
+                    onBlur={() => addTag(tagDraft)}
+                    placeholder={tags.length === 0 ? "Type a tag and press Enter…" : "+ tag"}
+                    style={{ ...FI(), width: tags.length === 0 ? "100%" : 120, fontSize: 12,
+                      border: `1.5px dashed ${C.border}`, borderRadius: 20, padding: "4px 12px" }} />
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: C.inkFaint }}>Up to 20 characters each. Long phrases buyers type work best.</div>
+            </Section>
+            <Section title="Shipping & Processing" accent="#F56400">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr 1fr", gap: 12 }}>
+                <div>
+                  <Label>Shipping Profile</Label>
+                  <select value={form.etsy_shipping_profile_id || ""}
+                    onChange={e => set("etsy_shipping_profile_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    <option value="">— Auto (by price)</option>
+                    {etsyShippingProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+                {/* Processing profile — Etsy calls it a readiness state. Left to
+                    the API this used to inherit whatever the last active listing
+                    carried, which is how ready stock published as made to order. */}
+                <div>
+                  <Label>Processing Profile</Label>
+                  <select value={form.etsy_readiness_state_id || ""}
+                    onChange={e => set("etsy_readiness_state_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    <option value="">{form.etsy_made_to_order ? "— Auto (fastest made-to-order)" : "— Auto (fastest ready to ship)"}</option>
+                    {etsyReadinessProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label>Return Policy</Label>
+                  <select value={form.etsy_return_policy_id || ""}
+                    onChange={e => set("etsy_return_policy_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    <option value="">— Default (14-day returns)</option>
+                    {etsyReturnPolicies.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: phone ? "column" : "row", gap: phone ? 12 : 24, marginTop: 12 }}>
+                {[
+                  { field: "etsy_made_to_order", label: "Made to order",   sub: "Off = ready to ship from stock" },
+                  { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "₹0.20/renewal every 4 months" },
+                  { field: "etsy_ads",        label: "Run Etsy Ads",       sub: "Promotes listing in search" },
+                ].map(({ field, label, sub }) => (
+                  <label key={field} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", flex: 1 }}>
+                    <input type="checkbox" checked={!!form[field]} onChange={e => set(field, e.target.checked)}
+                      style={{ marginTop: 2, accentColor: "#F56400", width: 14, height: 14, flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{label}</div>
+                      <div style={{ fontSize: 10, color: C.inkFaint }}>{sub}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </Section>
+          </>; })()}
+
+          {/* ── eBay ─────────────────────────────────────────────────────────── */}
+          {tab === "ebay" && (() => { const c = channel("ebay"); return <>
+            {channelHeader(c)}
+            {checklist(c)}
+            {priceCard({ ...P("ebay"), hint: "Filled from the Etsy price at today's rate ÷ 0.85; change it freely" })}
+            {overrides(c, { descPlaceholder: form._ai?.etsy_description ? "Same as the Etsy description" : "Same as main description" })}
+            <Section title="Condition & Shipping" accent="#0064D2">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
+                <div>
+                  <Label>Condition</Label>
+                  <select value={form.conditionId || "3000"} onChange={e => set("conditionId", e.target.value)} style={FI()}>
+                    <option value="1000">New</option>
+                    <option value="3000">Used (default for natural stones)</option>
+                  </select>
+                </div>
+                <div>
+                  <Label>Shipping cost ($)</Label>
+                  <input type="number" inputMode="decimal" value={form.shippingCost ?? ""} onChange={e => set("shippingCost", e.target.value)} placeholder="0 = free shipping" style={FI()} />
+                </div>
+              </div>
+            </Section>
+          </>; })()}
+
+          {/* ── Wholesale (trade site) ───────────────────────────────────────── */}
+          {tab === "trade" && (() => { const c = channel("trade"); const t = tradeFactsMap?.[form.id]; return <>
+            {channelHeader(c)}
+            {checklist(c)}
+            {priceCard({ ...P("trade"), priceLabel: "Wholesale price", hint: t?.unit === "piece" ? "US dollars, per piece" : t?.unit === "lot" ? "US dollars, per lot" : "US dollars, per kilo unless sold per piece" })}
+            <Section title="How it's sold" accent="#1F8F4E">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12 }}>
+                <div><Label>Priced per</Label><div style={factBox}>{t?.unit === "piece" ? "Piece" : t?.unit === "lot" ? "Lot" : t ? "Kilo" : "Asked when first posted"}</div></div>
+                <div><Label>Pieces per kilo</Label><div style={factBox}>{pcsRange(t) || "—"}</div></div>
+                <div><Label>Origin</Label><input value={form.origin} onChange={e => set("origin", e.target.value)} placeholder={t?.origin || "Country"} style={FI()} /></div>
+              </div>
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Priced per and pieces per kilo are set on the trade site's editor, and asked the first time this goes up there.</div>
+            </Section>
+            {overrides(c, { rows: 5, extra: (
+              <button type="button" onClick={aiFillShopify} disabled={aiFillingShopify}
+                title="Fill a simple title and a Pieces / Location / Size block from the main title and description"
+                style={{ background: aiFillingShopify ? C.card : "#1F8F4E", color: aiFillingShopify ? C.inkMid : "#fff", border: "none", borderRadius: 7, padding: "4px 10px", fontSize: 11, fontWeight: 800, cursor: aiFillingShopify ? "wait" : "pointer" }}>
+                {aiFillingShopify ? "Filling…" : "✨ AI fill"}
+              </button>
+            ) })}
+            {aiFillError && <div style={{ fontSize: 11, color: C.red, marginTop: -8 }}>{aiFillError}</div>}
+          </>; })()}
+
+          {/* ── Earth Editions (eartheditions.co) ───────────────────────────── */}
+          {tab === "store" && (() => { const c = channel("store"); return <>
+            {channelHeader(c)}
+            {checklist(c)}
+            <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
+              {priceCard({ ...P("store"), priceLabel: "🇺🇸 USA price", placeholder: "From Etsy", hint: "Left blank: the Etsy price, converted" })}
+              {priceCard({ ...P("store"), key: "store_inr", priceField: "price_store_inr", currency: "INR", priceLabel: "🇮🇳 India price", placeholder: "From Etsy", hint: "Left blank: the Etsy ₹ price less the store discount" })}
+            </div>
+            {overrides(c, { rows: 5 })}
+            <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: -6 }}>A title or description set here replaces one changed by hand in the store's own editor.</div>
+          </>; })()}
+
+          {/* ── More: the Shopify stores and deals ──────────────────────────── */}
+          {tab === "more" && <>
+            <div style={{ fontSize: 12.5, color: C.inkMid }}>The two Shopify stores. They share one title and description.</div>
+            {OTHER_CHANNELS.map(c => {
+              const pl = plan(c.key); const hasPrice = +form[c.priceField] > 0;
+              return (
+                <div key={c.key} style={{ background: C.surface, border: `1.5px solid ${c.color}40`, borderRadius: 12, padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 5, background: c.color }} />
+                    <span style={{ fontSize: 14, fontWeight: 800 }}>{c.label}</span>
+                    {statusChip(c.key)}
+                    <div style={{ flex: 1 }} />
+                    {pl.linked && pl.live && <a href={pl.live} target="_blank" rel="noreferrer" style={linkBtn(c.color, true)}>View ↗</a>}
+                    {pl.linked && pl.admin && <a href={pl.admin} target="_blank" rel="noreferrer" style={linkBtn(c.color)}>Admin ↗</a>}
+                  </div>
+                  {priceCard(P(c.key))}
+                  {!pl.linked && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: hasPrice ? "pointer" : "not-allowed", opacity: hasPrice ? 1 : .6 }}>
+                      <input type="checkbox" checked={!!publishTo[c.key]} disabled={!hasPrice} onChange={e => setPublishTo(pt => ({ ...pt, [c.key]: e.target.checked }))} style={{ accentColor: c.color }} />
+                      Add to {c.label} when I save{hasPrice ? "" : " (set a price first)"}
+                    </label>
                   )}
                 </div>
               );
-            })()}
+            })}
+            <Section title="Shopify title & description">
+              <Label>Title</Label>
+              <input value={form.shopify_title || ""} onChange={e => set("shopify_title", e.target.value)} placeholder={form.title || "Same as main title"} style={FI()} />
+              <Label style={{ marginTop: 10 }}>Description</Label>
+              <textarea value={form.shopify_description || ""} onChange={e => set("shopify_description", e.target.value)} rows={4} placeholder="Same as main description" style={{ ...FI(), resize: "vertical" }} />
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 6 }}>Wholesale and Earth Editions still fall back to these when their own boxes are empty.</div>
+            </Section>
             {/* ⭐ Deal: when this listing publishes to a Shopify store, also drop it into
                 the store's Deals collection with a remind-to-delete timer. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", background: dealOpt.enabled ? "#C8902015" : C.card, border: `1.5px solid ${dealOpt.enabled ? "#C89020" : C.border}`, borderRadius: 8, padding: "4px 10px", userSelect: "none" }}>
-                <input type="checkbox" checked={dealOpt.enabled} onChange={e => setDealOpt(d => ({ ...d, enabled: e.target.checked }))} style={{ accentColor: "#C89020", width: 12, height: 12 }} />
-                <span style={{ fontSize: 12 }}>⭐</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: dealOpt.enabled ? "#9A6200" : C.inkMid }}>Add to Deals</span>
-              </label>
-              {dealOpt.enabled && <>
-                <span style={{ fontSize: 10, color: C.inkFaint }}>remove after</span>
-                {[["3d", 3], ["1wk", 7], ["2wk", 14], ["1mo", 30]].map(([label, n]) => (
-                  <button key={n} type="button" onClick={() => setDealOpt(d => ({ ...d, days: n, customDate: "" }))} style={{ background: !dealOpt.customDate && dealOpt.days === n ? "#C89020" : C.card, color: !dealOpt.customDate && dealOpt.days === n ? "#fff" : C.ink, border: `1px solid ${!dealOpt.customDate && dealOpt.days === n ? "#C89020" : C.border}`, borderRadius: 7, padding: "4px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>{label}</button>
-                ))}
-                <input type="date" value={dealOpt.customDate} min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} onChange={e => setDealOpt(d => ({ ...d, customDate: e.target.value }))} style={{ ...FI(), width: 150, fontSize: 11, padding: "4px 8px" }} />
-              </>}
-            </div>
-          </div>
+            <Section title="Deals">
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", background: dealOpt.enabled ? "#C8902015" : C.card, border: `1.5px solid ${dealOpt.enabled ? "#C89020" : C.border}`, borderRadius: 8, padding: "4px 10px", userSelect: "none" }}>
+                  <input type="checkbox" checked={dealOpt.enabled} onChange={e => setDealOpt(d => ({ ...d, enabled: e.target.checked }))} style={{ accentColor: "#C89020", width: 12, height: 12 }} />
+                  <span style={{ fontSize: 11, fontWeight: 700, color: dealOpt.enabled ? "#9A6200" : C.inkMid }}>⭐ Add to the Shopify Deals collection</span>
+                </label>
+                {dealOpt.enabled && <>
+                  <span style={{ fontSize: 10, color: C.inkFaint }}>remove after</span>
+                  {[["3d", 3], ["1wk", 7], ["2wk", 14], ["1mo", 30]].map(([label, n]) => (
+                    <button key={n} type="button" onClick={() => setDealOpt(d => ({ ...d, days: n, customDate: "" }))} style={{ background: !dealOpt.customDate && dealOpt.days === n ? "#C89020" : C.card, color: !dealOpt.customDate && dealOpt.days === n ? "#fff" : C.ink, border: `1px solid ${!dealOpt.customDate && dealOpt.days === n ? "#C89020" : C.border}`, borderRadius: 7, padding: "4px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>{label}</button>
+                  ))}
+                  <input type="date" value={dealOpt.customDate} min={new Date(Date.now() + 86400000).toISOString().slice(0, 10)} onChange={e => setDealOpt(d => ({ ...d, customDate: e.target.value }))} style={{ ...FI(), width: 150, fontSize: 11, padding: "4px 8px" }} />
+                </>}
+              </div>
+            </Section>
+          </>}
 
-          <div style={{ padding: phone ? "10px 16px calc(10px + env(safe-area-inset-bottom))" : "10px 24px 14px", display: "flex", gap: 10,
-            ...(phone ? { position: "sticky", bottom: 0, zIndex: 3, marginTop: "auto", flexShrink: 0,
-              background: C.surface, borderTop: `1px solid ${C.border}`, boxShadow: "0 -4px 14px rgba(26,19,8,.06)" } : {}) }}>
-            <button onClick={handleSave}
+        </div>{/* end body */}
+
+        {/* footer: what saving will do, then Save / Cancel */}
+        <div style={{ borderTop: `1px solid ${C.border}`, background: C.surface, flexShrink: 0, borderRadius: phone ? 0 : "0 0 14px 14px",
+          padding: phone ? "10px 14px calc(10px + env(safe-area-inset-bottom))" : "10px 22px 14px",
+          ...(phone ? { position: "sticky", bottom: 0, zIndex: 3, marginTop: "auto", boxShadow: "0 -4px 14px rgba(26,19,8,.06)" } : {}) }}>
+          <div style={{ fontSize: 11.5, color: C.inkMid, marginBottom: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {updates.length || adds.length ? <>
+              <span style={{ fontWeight: 700 }}>On save:</span>
+              {updates.length > 0 && <span>updates {updates.map(c => c.label).join(", ")}</span>}
+              {updates.length > 0 && adds.length > 0 && <span>·</span>}
+              {adds.length > 0 && <span style={{ color: C.blue }}>adds to {adds.map(c => c.label).join(", ")} as a draft</span>}
+            </> : <span>Saves in the ERP only. Open a platform tab to list it there.</span>}
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button type="button" onClick={handleSave}
               style={{ flex: 1, background: C.ink, color: "#FAF0DC", border: "none",
                 borderRadius: 8, padding: "12px 0", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-              {editing ? "Save Changes" : (Object.values(publishTo).some(Boolean) ? "Save & Add to Draft →" : "Save Listing")}
+              {editing ? "Save Changes" : adds.length ? "Save & Add as Draft →" : "Save Listing"}
             </button>
-            <button onClick={onClose}
+            <button type="button" onClick={onClose}
               style={{ padding: "12px 20px", background: C.surface, border: `1.5px solid ${C.border}`,
                 borderRadius: 8, fontSize: 13, cursor: "pointer", color: C.ink }}>
               Cancel
@@ -2567,9 +2667,17 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         </div>
 
       </div>
+      {studio && (
+        <PriceStudio listing={{ ...form, tags }} stockCost={stockCost} liveRate={liveUsdRate} loadSettings={storeSettings}
+          onClose={() => setStudio(false)}
+          onApply={patch => { setForm(f => ({ ...f, ...patch })); setStudio(false); }} />
+      )}
     </div>
   );
 }
+const linkBtn = (color, solid = false) => ({ fontSize: 12, fontWeight: 700, textDecoration: "none", borderRadius: 7, padding: "5px 10px", whiteSpace: "nowrap",
+  background: solid ? color : "transparent", color: solid ? "#fff" : color, border: `1px solid ${color}` });
+const factBox = { ...FI(), background: "transparent", color: "inherit", minHeight: 36 };
 
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING CARD
@@ -2607,7 +2715,7 @@ const countryOf = loc => String(loc || "").replace(/_{2,}/g, "").trim().split(",
 /* What the listing already knows: the AI-filled Shopify block ("Pieces : per
    kg 80-100", "Location : …") and the Origin field. */
 function tradeGuess(l) {
-  const d = String(l.shopify_description || "");
+  const d = String(l.trade_description || l.shopify_description || "");
   const pcs = d.match(/Pieces\s*:\s*(?:per\s*kg\s*)?(\d+)\s*(?:[-–]\s*(\d+))?/i) || [];
   return { pieces: pcs[1] || "", pieces_max: pcs[2] && pcs[2] !== pcs[1] ? pcs[2] : "", origin: countryOf((d.match(/Location\s*:\s*(.+)/i) || [])[1]) || countryOf(l.origin) };
 }
@@ -2618,7 +2726,7 @@ Use an origin stated in the text if there is one; otherwise the main commercial 
 Title: ${l.title || ""}
 Material: ${l.material || ""}
 Noted origin: ${l.origin || ""}
-Description: ${String(l.shopify_description || l.description || "").slice(0, 1500)}
+Description: ${String(l.trade_description || l.shopify_description || l.description || "").slice(0, 1500)}
 
 Reply with ONLY JSON: {"country":"<country name in English>","confidence":"high|medium|low"}`, 80);
   const j = JSON.parse(String(txt).replace(/```json|```/g, "").trim());
@@ -8964,6 +9072,22 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     showToast(`✓ ${sel.length} listings repriced`);
   };
 
+  /* Where a piece sits. Each move is logged on the listing. */
+  const setListingLocation = async (listing, place) => {
+    const current = listings.find(x => x.id === listing.id) || listing;
+    await saveListingItem(withLocationLog({ ...current, officeLocation: place, updated_at: now() }, current.officeLocation, who));
+    showToast(place ? `📍 ${place}` : "Location cleared");
+  };
+  const bulkMove = async sel => {
+    const place = (prompt(`Move ${sel.length} piece${sel.length === 1 ? "" : "s"} to which location?`) || "").trim();
+    if (!place) return;
+    for (const l of sel) {
+      const current = listings.find(x => x.id === l.id) || l;
+      await saveListingItem(withLocationLog({ ...current, officeLocation: place, updated_at: now() }, current.officeLocation, who));
+    }
+    showToast(`📍 ${sel.length} moved to ${place}`);
+  };
+
   /* delete */
   const handleDelete = async id => {
     if (!confirm("Delete this listing from your catalog? Won't remove from platforms.")) return;
@@ -9050,7 +9174,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       refreshTradeFacts();
     } else if (pkey === "store") {
       // eartheditions.co: price in USD, converted from Etsy's rupees unless set.
-      result = await publishListingToStore(listing, { syncOnly, override: storeOverride });
+      // A title or description set for Earth Editions here beats a hand edit in the store's editor.
+      const own = [listing.store_title?.trim() && "title", listing.store_description?.trim() && "description"].filter(Boolean);
+      result = await publishListingToStore(listing, { syncOnly, override: [...storeOverride, ...own] });
     } else if (pkey === "ebay") {
       // eBay — call ebay.js directly
       const existingItemId = listing.platforms?.ebay?.item_id;
@@ -9058,8 +9184,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const r = await fetch("/api/ebay?action=publish_listing", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title:        listing.title,
-          description:  listing._ai?.etsy_description || listing.description || listing.title,
+          // eBay cuts titles at 80 characters; its own title comes first.
+          title:        titleFor(listing, "ebay"),
+          description:  listing.ebay_description || listing._ai?.etsy_description || listing.description || listing.title,
           price:        listing.price_ebay,
           quantity:     listing.qty || 1,
           images:       listing.images || [],
@@ -9441,7 +9568,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             </div>
 
             {view === "grid" && loaded && listings.length > 0 ? (
-              <ListingGrid listings={listings} orders={orders} loadStoreFacts={loadStoreFacts}
+              <ListingGrid listings={listings} orders={orders} stock={stock} loadStoreFacts={loadStoreFacts}
+                onLocation={setListingLocation}
+                onBulkMove={bulkMove}
                 onEdit={l => { setEditing(l); setShowForm(true); }}
                 onPrice={quickPrice}
                 onSavePhotos={(l, images) => handleSave({ ...l, images })}
@@ -9594,6 +9723,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         <ListingForm
           initial={editing}
           stock={stock}
+          listings={listings}
+          sold={!!editing && editing.type !== "repeatable" && orders.some(o => o.listing_id === editing.id) && !PLATFORMS.some(p => editing.platforms?.[p.key]?.status === "active")}
           who={who}
           onSave={handleSave}
           onClose={() => { setShowForm(false); setEditing(null); }}

@@ -60,7 +60,7 @@ const handleFrom = l => {
   return m && !/^\d+$/.test(m[1]) ? m[1] : `${slugify(l.title)}-${String(l.id).slice(-5)}`;
 };
 
-async function storeSettings() {
+export async function storeSettings() {
   const rows = await q(supabase.from("store_settings").select("key,value"));
   return Object.fromEntries(rows.map(r => [r.key, r.value]));
 }
@@ -68,14 +68,16 @@ async function storeSettings() {
 function rowFromListing(l, { fx, rounding, discount, existing, live }) {
   const images = (l.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
   // The store's own short name: "Ruby in Matrix Specimen #3", size on its own line.
-  const rt = retailTitle(l.shopify_title || l.title);
+  const own = String(l.store_title || "").trim();
+  const rt = retailTitle(own || l.shopify_title || l.title);
   const size = rt.size || retailTitle(l.title).size;
   return {
     id: `lm-${l.id}`, listing_id: l.id,
     handle: existing?.handle || handleFrom(l),
-    title: existing?.title || (rt.number ? `${rt.title} #${rt.number}` : rt.title || String(l.title || "").trim()),
+    // A title set for Earth Editions in Listing Manager is meant as written.
+    title: own || existing?.title || (rt.number ? `${rt.title} #${rt.number}` : rt.title || String(l.title || "").trim()),
     subtitle: size,
-    description: String(l.shopify_description || l.description || "").replace(/<[^>]+>/g, "").trim(),
+    description: String(l.store_description || l.shopify_description || l.description || "").replace(/<[^>]+>/g, "").trim(),
     images, videos: l.video && /^https?:/.test(l.video) ? [l.video] : (existing?.videos || []),
     material: l.material || "", shape: l.shape || "", product_type: l.productType || "",
     tags: Array.isArray(l.tags) ? l.tags : [],
