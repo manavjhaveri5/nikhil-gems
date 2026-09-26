@@ -23,7 +23,7 @@ import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTra
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import PriceStudio from "./PriceStudio.jsx";
-import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly } from "./listingChannels.js";
+import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -2612,7 +2612,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             <Section title="How it's sold" accent="#1F8F4E">
               <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12 }}>
                 <div><Label>Priced per</Label><div style={factBox}>{t?.unit === "piece" ? "Piece" : t?.unit === "lot" ? "Lot" : t ? "Kilo" : "Asked when first posted"}</div></div>
-                <div><Label>Pieces per kilo</Label><div style={factBox}>{pcsRange(t) || "—"}</div></div>
+                <div><Label>Pieces per kilo</Label><div style={factBox}>{pcsRange(t) || (defaultPieces(form) ? `${defaultPieces(form).pieces}–${defaultPieces(form).pieces_max} (usual)` : "—")}</div></div>
                 <div><Label>Origin</Label><input value={form.origin} onChange={e => set("origin", e.target.value)} placeholder={t?.origin || "Country"} style={FI()} /></div>
               </div>
               <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Priced per and pieces per kilo are set on the trade site's editor, and asked the first time this goes up there.</div>
@@ -9248,9 +9248,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         const t = (await refreshTradeFacts())[listing.id];
         if (!t?.live) {
           const g = tradeGuess(listing);
+          // No count yet: start from the shape's usual pieces per kilo.
+          const d = !t?.pieces && !g.pieces ? defaultPieces(listing) : null;
           ask = await askTrade(listing, {
             unit: t?.unit || "kg",
-            pieces: t?.pieces ? String(t.pieces) : g.pieces, pieces_max: t?.pieces_max ? String(t.pieces_max) : g.pieces_max,
+            pieces: t?.pieces ? String(t.pieces) : g.pieces || (d ? String(d.pieces) : ""),
+            pieces_max: t?.pieces_max ? String(t.pieces_max) : g.pieces ? g.pieces_max : d ? String(d.pieces_max) : "",
             origin: t?.origin || g.origin,
           });
           if (!ask) throw new Error("Not posted — cancelled");

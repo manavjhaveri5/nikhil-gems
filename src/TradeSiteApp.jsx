@@ -9,6 +9,7 @@ import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
 import { classify } from "./aiClient.js";
+import { defaultPieces } from "./listingChannels.js";
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
@@ -569,7 +570,11 @@ function ProductEditor({ p, onClose, onSave }) {
     title: p.title, description: p.description, shape: p.shape, product_type: p.product_type, unit: p.unit, origin: p.origin || "",
     images: [...(p.images || [])],
     collections: (p.collections || []).join(", "), live: p.live, is_new: p.is_new, is_deal: !!p.is_deal, deal_note: p.deal_note || "",
-    variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(({ pcs, ...v }) => ({ ...v, price: v.price || "", pcs: v.pieces ? (v.pieces_max ? `${v.pieces}-${v.pieces_max}` : String(v.pieces)) : "" })),
+    // A per-kilo option with no count starts from the shape's usual range.
+    variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(({ pcs, ...v }) => {
+      const d = !v.pieces && (p.unit || "kg") === "kg" ? defaultPieces(p) : null;
+      return { ...v, price: v.price || "", pcs: v.pieces ? (v.pieces_max ? `${v.pieces}-${v.pieces_max}` : String(v.pieces)) : d ? `${d.pieces}-${d.pieces_max}` : "" };
+    }),
   }));
   const [busy, setBusy] = useState(false);
   const [detecting, setDetecting] = useState(false);
