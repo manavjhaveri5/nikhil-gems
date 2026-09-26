@@ -839,8 +839,8 @@ export async function publishListingToTrade(listing, { syncOnly = false, ask = n
   const live = syncOnly ? (existing ? existing.live : false) : true;
   const row = {
     id,
-    title: String(listing.shopify_title || listing.title || "").trim(),
-    description: plain(listing.shopify_description || listing.description),
+    title: String(listing.trade_title || listing.shopify_title || listing.title || "").trim(),
+    description: plain(listing.trade_description || listing.shopify_description || listing.description),
     shape: listing.shape || "", material: listing.material || "", product_type: listing.productType || "",
     tags: Array.isArray(listing.tags) ? listing.tags : [],
     images,
@@ -920,7 +920,7 @@ export async function findTradeLinks(listings) {
   const stockUse = new Map(), skuUse = new Map(), titleUse = new Map();
   const bump = (m, k) => k && m.set(k, (m.get(k) || 0) + 1);
   const lSku = l => String(l.sku || "").trim().toLowerCase();
-  const lTitles = l => [...new Set([norm(l.shopify_title), norm(l.title)].filter(Boolean))];
+  const lTitles = l => [...new Set([norm(l.trade_title), norm(l.shopify_title), norm(l.title)].filter(Boolean))];
   for (const l of listings) {
     if (l.linked_stock_id) stockUse.set(l.linked_stock_id, (stockUse.get(l.linked_stock_id) || 0) + 1);
     bump(skuUse, lSku(l));

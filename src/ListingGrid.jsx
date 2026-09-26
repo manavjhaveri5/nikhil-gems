@@ -5,6 +5,7 @@
    calls; this file is the view. */
 import { useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
+import { locationOf, needsLocation, knownLocations } from "./listingChannels.js";
 
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
@@ -79,12 +80,40 @@ function PriceCell({ flag, cur, value: live, hint, onSave, big = false, title })
   );
 }
 
+/* ── where it sits: click and type, or pick a place already in use ──────── */
+function LocationCell({ value, missing, onSave }) {
+  const [edit, setEdit] = useState(false);
+  const [v, setV] = useState("");
+  const [state, setState] = useState("");
+  const commit = async () => {
+    setEdit(false);
+    const n = v.trim();
+    if (n === value) return;
+    setState("saving");
+    try { await onSave(n); setState(""); } catch (e) { setState(e.message || "Failed"); setTimeout(() => setState(""), 5000); }
+  };
+  if (edit) return (
+    <input autoFocus value={v} list="lm-grid-locs" onClick={e => e.stopPropagation()} onChange={e => setV(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); if (e.key === "Escape") { setV(value); setEdit(false); } }}
+      placeholder="Shelf, box, drawer…" style={{ ...FI(), padding: "4px 8px", fontSize: 12 }} />
+  );
+  return (
+    <button onClick={e => { e.stopPropagation(); setV(value || ""); setEdit(true); }} title={state && state !== "saving" ? state : "Where it is — click to change"}
+      style={{ display: "flex", alignItems: "center", gap: 5, width: "100%", textAlign: "left", border: `1px ${missing ? "dashed" : "solid"} ${missing ? "#C0392B" : "transparent"}`, cursor: "text",
+        background: missing ? C.redBg : C.bg, borderRadius: 7, padding: "4px 8px", fontSize: 11.5, fontWeight: 600, color: missing ? C.red : value ? C.ink : C.inkFaint, minWidth: 0 }}>
+      <span>📍</span>
+      <span style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{state === "saving" ? "Saving…" : value || (missing ? "Add location" : "No location")}</span>
+    </button>
+  );
+}
+
 /* ── one listing ───────────────────────────────────────────────────────── */
-function Tile({ l, store, orders, onOpen, onEdit, onPrice, selected, onSelect }) {
+function Tile({ l, store, orders, stock, onOpen, onEdit, onPrice, onLocation, selected, onSelect }) {
   const imgs = (l.images || []).filter(u => typeof u === "string");
   const [i, setI] = useState(0);
   const [hover, setHover] = useState(false);
   const sold = soldOut(l, orders);
+  const where = locationOf(l, stock);
   const s = store?.[l.id];
   const usd = s ? num(s.price) : num(l.price_store);
   const inr = s ? num(s.price_inr) : num(l.price_store_inr);
@@ -126,6 +155,7 @@ function Tile({ l, store, orders, onOpen, onEdit, onPrice, selected, onSelect })
             {[l.material, l.shape, l.sku || l.listing_order_id].filter(Boolean).join(" · ")}
           </div>
         </div>
+        {onLocation && <LocationCell value={where} missing={!where && needsLocation(l, sold)} onSave={v => onLocation(l, v)} />}
         <div style={{ display: "flex", gap: 5, marginTop: "auto" }}>
           <PriceCell flag="🇺🇸 USA" cur="$" value={usd} title="USA price on eartheditions.co — click to change" onSave={v => onPrice(l, "price_store", v)} />
           <PriceCell flag="🇮🇳 India" cur="₹" value={inr} title="India price on eartheditions.co — click to change" onSave={v => onPrice(l, "price_store_inr", v)} />
@@ -146,7 +176,7 @@ const btn = (dark = false) => ({ flex: 1, padding: "7px 0", borderRadius: 7, fon
   border: `1px solid ${dark ? C.ink : C.border}`, background: dark ? C.ink : C.surface, color: dark ? "#FAF0DC" : C.ink });
 
 /* ── the drawer: photos, platforms, every price ────────────────────────── */
-function Drawer({ l, tab, setTab, store, onClose, onPrice, onSavePhotos, onEdit, onMarkSold, onDelete, renderManage }) {
+function Drawer({ l, where, tab, setTab, store, onClose, onPrice, onSavePhotos, onEdit, onMarkSold, onDelete, renderManage }) {
   const [imgs, setImgs] = useState(() => (l.images || []).filter(u => typeof u === "string"));
   const [editIdx, setEditIdx] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -163,7 +193,7 @@ function Drawer({ l, tab, setTab, store, onClose, onPrice, onSavePhotos, onEdit,
           {imgs[0] && <img src={thumb(imgs[0], 340)} alt="" style={{ width: 46, height: 46, borderRadius: 8, objectFit: "cover" }} />}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: serif, fontSize: 20, fontWeight: 600, color: C.ink, lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.title}</div>
-            <div style={{ fontSize: 11, color: C.inkFaint }}>{[l.material, l.shape, l.sku || l.listing_order_id, l._source === "etsy-import" ? "imported from Etsy" : "made in the ERP"].filter(Boolean).join(" · ")}</div>
+            <div style={{ fontSize: 11, color: C.inkFaint }}>{[where && `📍 ${where}`, l.material, l.shape, l.sku || l.listing_order_id, l._source === "etsy-import" ? "imported from Etsy" : "made in the ERP"].filter(Boolean).join(" · ")}</div>
           </div>
           <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 24, cursor: "pointer", color: C.inkMid }}>×</button>
         </div>
@@ -268,7 +298,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, onPrice, onSavePhotos, onMarkSold, onDelete, renderManage, onBulkPrice }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, renderManage, onBulkPrice }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -278,7 +308,9 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
   const [stoneQ, setStoneQ] = useState("");
   const [allStones, setAllStones] = useState(false);
   const [erpOnly, setErpOnly] = useState(false);
-  const [issues, setIssues] = useState(new Set());   // noprice | nophotos | nostore
+  const [issues, setIssues] = useState(new Set());   // noprice | nophotos | nostore | noloc
+  const [locs, setLocs] = useState(new Set());       // lower-cased places; "" = none
+  const [locQ, setLocQ] = useState("");
   const [sort, setSort] = useState("new");
   const [cols, setCols] = useState(() => { try { return +localStorage.getItem("lm-grid-cols") || 0; } catch { return 0; } });
   const [panel, setPanel] = useState(() => typeof window === "undefined" || window.innerWidth >= 900);
@@ -304,6 +336,14 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
     }
     return [...m.entries()].map(([k, e]) => [k, e.n, e.label]).sort((a, b) => b[1] - a[1]);
   }, [listings]);
+  const whereOf = useMemo(() => new Map(listings.map(l => [l.id, locationOf(l, stock)])), [listings, stock]);
+  const places = useMemo(() => {
+    const m = new Map();
+    for (const l of listings) { const w = whereOf.get(l.id), k = w.toLowerCase(); const e = m.get(k) || { n: 0, label: w || "No location" }; e.n++; m.set(k, e); }
+    return [...m.entries()].sort((a, b) => (a[0] === "") - (b[0] === "") || b[1].n - a[1].n);
+  }, [listings, whereOf]);
+  const allPlaces = useMemo(() => knownLocations(listings, stock), [listings, stock]);
+  const lost = l => !whereOf.get(l.id) && needsLocation(l, soldOut(l, orders));
   const counts = useMemo(() => ({
     live: listings.filter(isLive).length,
     sold: listings.filter(l => soldOut(l, orders)).length,
@@ -312,8 +352,9 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
     noprice: listings.filter(l => !(+l.price_etsy > 0)).length,
     nophotos: listings.filter(l => !(l.images || []).length).length,
     nostore: listings.filter(l => !statusOf(l, "store")).length,
+    noloc: listings.filter(lost).length,
     plat: Object.fromEntries(PLAT.map(p => [p.key, listings.filter(l => statusOf(l, p.key) === "active").length])),
-  }), [listings, orders]);
+  }), [listings, orders, whereOf]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = useMemo(() => {
     const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -327,19 +368,20 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
       if (types.size && !types.has(l.type)) return false;
       if (stones.size && !stones.has(String(l.material || "").trim().toLowerCase())) return false;
       if (erpOnly && l._source === "etsy-import") return false;
+      if (locs.size && !locs.has(whereOf.get(l.id).toLowerCase())) return false;
       if (issues.size) {
-        const hit = (issues.has("noprice") && !(+l.price_etsy > 0)) || (issues.has("nophotos") && !(l.images || []).length) || (issues.has("nostore") && !statusOf(l, "store"));
+        const hit = (issues.has("noprice") && !(+l.price_etsy > 0)) || (issues.has("nophotos") && !(l.images || []).length) || (issues.has("nostore") && !statusOf(l, "store")) || (issues.has("noloc") && lost(l));
         if (!hit) return false;
       }
       if (terms.length) {
-        const hay = [l.title, l.material, l.shape, l.sku, l.listing_order_id, l.origin, l.productType, l.etsy_title, l.shopify_title, Array.isArray(l.tags) ? l.tags.join(" ") : l.tags].filter(Boolean).join(" ").toLowerCase();
+        const hay = [l.title, l.material, l.shape, l.sku, l.listing_order_id, l.origin, l.productType, whereOf.get(l.id), l.etsy_title, l.ebay_title, l.trade_title, l.store_title, l.shopify_title, Array.isArray(l.tags) ? l.tags.join(" ") : l.tags].filter(Boolean).join(" ").toLowerCase();
         if (!terms.every(t => hay.includes(t))) return false;
       }
       return true;
     }).sort(SORTS[sort][1]);
-  }, [listings, orders, q, status, liveOn, notOn, types, stones, erpOnly, issues, sort]);
+  }, [listings, orders, q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs, whereOf]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { setShown(60); }, [q, status, liveOn, notOn, types, stones, erpOnly, issues, sort]);
+  useEffect(() => { setShown(60); }, [q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs]);
   // Load more as the bottom comes into view.
   useEffect(() => {
     const el = more.current; if (!el) return;
@@ -351,8 +393,9 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
   const openL = open && listings.find(l => l.id === open.id);
   const toggleSel = id => setSel(s => toggle(s, id));
   const selected = list.filter(l => sel.has(l.id));
-  const nFilters = status.size + liveOn.size + notOn.size + types.size + stones.size + issues.size + (erpOnly ? 1 : 0);
-  const clearAll = () => { setStatus(new Set()); setLiveOn(new Set()); setNotOn(new Set()); setTypes(new Set()); setStones(new Set()); setIssues(new Set()); setErpOnly(false); setQ(""); };
+  const nFilters = status.size + liveOn.size + notOn.size + types.size + stones.size + issues.size + locs.size + (erpOnly ? 1 : 0);
+  const clearAll = () => { setStatus(new Set()); setLiveOn(new Set()); setNotOn(new Set()); setTypes(new Set()); setStones(new Set()); setIssues(new Set()); setLocs(new Set()); setErpOnly(false); setQ(""); };
+  const placeList = places.filter(([k, e]) => !locQ || e.label.toLowerCase().includes(locQ.toLowerCase()));
   const stoneList = materials.filter(([k]) => !stoneQ || k.includes(stoneQ.toLowerCase()));
   const chip = on => ({ padding: "6px 12px", borderRadius: 18, fontSize: 12.5, fontWeight: on ? 700 : 500, cursor: "pointer", whiteSpace: "nowrap",
     border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.surface, color: on ? "#FAF0DC" : C.inkMid });
@@ -377,6 +420,7 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, padding: "8px 12px", background: C.amberBg, borderRadius: 10, fontSize: 12.5, flexWrap: "wrap" }}>
             <b>{selected.length} selected</b>
             <button onClick={() => onBulkPrice(selected).then(refreshStore)} style={chip(false)}>Change prices by %…</button>
+            {onBulkMove && <button onClick={() => onBulkMove(selected)} style={chip(false)}>📍 Move to…</button>}
             <button onClick={() => setSel(new Set(list.map(l => l.id)))} style={chip(false)}>Select all {list.length}</button>
             <button onClick={() => setSel(new Set())} style={chip(false)}>Clear selection</button>
           </div>
@@ -408,7 +452,13 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
               {(allStones || stoneQ ? stoneList : stoneList.slice(0, 12)).map(([k, n, label]) => <Check key={k} checked={stones.has(k)} onChange={() => setStones(s => toggle(s, k))} label={label} count={n} />)}
               {!stoneQ && stoneList.length > 12 && <button onClick={() => setAllStones(v => !v)} style={{ border: "none", background: "none", color: C.inkMid, fontSize: 12, textAlign: "left", padding: "4px 2px", cursor: "pointer", textDecoration: "underline" }}>{allStones ? "Show fewer" : `Show all ${stoneList.length}`}</button>}
             </Group>
-            <Group title="Needs attention" open={false}>
+            <Group title={`Location${locs.size ? ` · ${locs.size}` : ""}`}>
+              {places.length > 8 && <input value={locQ} onChange={e => setLocQ(e.target.value)} placeholder="Find a place…" style={{ ...FI(), padding: "5px 9px", fontSize: 12, marginBottom: 4 }} />}
+              {(locQ ? placeList : placeList.slice(0, 12)).map(([k, e]) => <Check key={k || "_none"} checked={locs.has(k)} onChange={() => setLocs(s => toggle(s, k))} label={e.label} count={e.n} color={k ? null : C.red} />)}
+              {!locQ && placeList.length > 12 && <div style={{ fontSize: 11, color: C.inkFaint, padding: "2px" }}>{placeList.length - 12} more — search to find them</div>}
+            </Group>
+            <Group title="Needs attention" open={counts.noloc > 0}>
+              <Check checked={issues.has("noloc")} onChange={() => setIssues(s => toggle(s, "noloc"))} label="One of a kind, no location" count={counts.noloc} color={C.red} />
               <Check checked={issues.has("noprice")} onChange={() => setIssues(s => toggle(s, "noprice"))} label="No Etsy price" count={counts.noprice} color={C.red} />
               <Check checked={issues.has("nophotos")} onChange={() => setIssues(s => toggle(s, "nophotos"))} label="No photos" count={counts.nophotos} color={C.red} />
               <Check checked={issues.has("nostore")} onChange={() => setIssues(s => toggle(s, "nostore"))} label="Not on the EE store" count={counts.nostore} color={C.amber} />
@@ -420,17 +470,18 @@ export default function ListingGrid({ listings, orders, loadStoreFacts, onEdit, 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "grid", gap: 14, gridTemplateColumns: cols ? `repeat(${cols}, minmax(0, 1fr))` : "repeat(auto-fill, minmax(230px, 1fr))" }}>
             {list.slice(0, shown).map(l => (
-              <Tile key={l.id} l={l} store={store} orders={orders} selected={sel.has(l.id)} onSelect={toggleSel}
-                onOpen={(x, tab) => setOpen({ id: x.id, tab })} onEdit={onEdit} onPrice={price} />
+              <Tile key={l.id} l={l} store={store} orders={orders} stock={stock} selected={sel.has(l.id)} onSelect={toggleSel}
+                onOpen={(x, tab) => setOpen({ id: x.id, tab })} onEdit={onEdit} onPrice={price} onLocation={onLocation} />
             ))}
           </div>
+          <datalist id="lm-grid-locs">{allPlaces.map(p => <option key={p.label} value={p.label} />)}</datalist>
           {!list.length && <div style={{ textAlign: "center", padding: "60px 0", color: C.inkFaint }}>No listings match these filters.</div>}
           {shown < list.length && <div ref={more} style={{ textAlign: "center", padding: 24, color: C.inkFaint, fontSize: 12 }}>Loading more…</div>}
         </div>
       </div>
 
       {openL && (
-        <Drawer l={openL} tab={open.tab} setTab={t => setOpen(o => ({ ...o, tab: t }))} store={store}
+        <Drawer l={openL} where={whereOf.get(openL.id)} tab={open.tab} setTab={t => setOpen(o => ({ ...o, tab: t }))} store={store}
           onClose={() => setOpen(null)} onPrice={price} onEdit={x => { setOpen(null); onEdit(x); }}
           onSavePhotos={onSavePhotos} onMarkSold={onMarkSold} onDelete={onDelete} renderManage={renderManage} />
       )}
