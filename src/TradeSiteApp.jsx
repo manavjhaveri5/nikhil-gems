@@ -433,9 +433,9 @@ function ProductsTab({ showToast }) {
   }, [rows]);
   const undealAway = async () => {
     try {
-      await q(supabase.from("trade_products").update({ is_deal: false, updated_at: new Date().toISOString() }).in("id", away.map(a => a.product.id)));
-      setRows(r => r.map(p => away.some(a => a.product.id === p.id) ? { ...p, is_deal: false } : p));
-      toastRef.current?.(`✓ ${away.length} taken out of Deals`);
+      await q(supabase.from("trade_products").update({ is_deal: false, live: false, updated_at: new Date().toISOString() }).in("id", away.map(a => a.product.id)));
+      setRows(r => r.map(p => away.some(a => a.product.id === p.id) ? { ...p, is_deal: false, live: false } : p));
+      toastRef.current?.(`✓ ${away.length} taken off the site — find them under Hidden when the stock is back`);
     } catch (e) { toastRef.current?.("⚠ " + e.message); }
   };
 
@@ -456,7 +456,7 @@ function ProductsTab({ showToast }) {
           <div style={{ fontSize: 12, color: C.inkMid, lineHeight: 1.5, marginBottom: 8 }}>
             {away.map(a => `${a.product.title} (${a.shows.join(", ")})`).join(" · ")}
           </div>
-          <button onClick={undealAway} style={btn(C.ink, "#FAF0DC")}>Take {away.length === 1 ? "it" : "them"} out of Deals</button>
+          <button onClick={undealAway} style={btn(C.ink, "#FAF0DC")}>Take {away.length === 1 ? "it" : "them"} off the site</button>
         </div>
       )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
@@ -910,7 +910,9 @@ export async function dealsAtShows(products) {
   }).filter(Boolean);
 }
 
-/* Stock → Send to show calls this: any deal on those items stops being one. */
+/* Stock → Send to show calls this: a deal on those items comes off the site
+   (hidden, not deleted — tick Live again when the stock is back). Deals are
+   what's on the shelf here, ready to ship; nothing at a show belongs there. */
 export async function undealForStock(stockIds) {
   const ids = new Set([...(stockIds || [])].map(String));
   if (!ids.size) return 0;
@@ -919,7 +921,7 @@ export async function undealForStock(stockIds) {
   const deals = await loadAll("trade_products", "id,is_deal,source", "created_at");
   const hit = deals.filter(p => p.is_deal && (pids.has(p.id) || ids.has(String(p.source?.stock_id || ""))));
   if (!hit.length) return 0;
-  await q(supabase.from("trade_products").update({ is_deal: false, updated_at: new Date().toISOString() }).in("id", hit.map(p => p.id)));
+  await q(supabase.from("trade_products").update({ is_deal: false, live: false, updated_at: new Date().toISOString() }).in("id", hit.map(p => p.id)));
   return hit.length;
 }
 
