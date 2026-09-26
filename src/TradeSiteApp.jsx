@@ -554,7 +554,7 @@ const perPcText = (price, { pieces, pieces_max }) => {
 
 function ProductEditor({ p, onClose, onSave }) {
   const [f, setF] = useState(() => ({
-    title: p.title, description: p.description, shape: p.shape, product_type: p.product_type, unit: p.unit,
+    title: p.title, description: p.description, shape: p.shape, product_type: p.product_type, unit: p.unit, origin: p.origin || "",
     images: [...(p.images || [])],
     collections: (p.collections || []).join(", "), live: p.live, is_new: p.is_new, is_deal: !!p.is_deal, deal_note: p.deal_note || "",
     variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(({ pcs, ...v }) => ({ ...v, price: v.price || "", pcs: v.pieces ? (v.pieces_max ? `${v.pieces}-${v.pieces_max}` : String(v.pieces)) : "" })),
@@ -571,7 +571,7 @@ function ProductEditor({ p, onClose, onSave }) {
     const tracked = variants.filter(v => v.stock != null);
     try {
       await onSave({
-        title: f.title.trim(), description: f.description, images: f.images, shape: f.shape.trim(), product_type: f.product_type.trim(), unit: f.unit,
+        title: f.title.trim(), description: f.description, images: f.images, shape: f.shape.trim(), product_type: f.product_type.trim(), unit: f.unit, origin: f.origin.trim(),
         collections: f.collections.split(",").map(s => s.trim()).filter(Boolean), live: f.live,
         is_new: f.is_new, new_at: f.is_new && !p.is_new ? new Date().toISOString() : p.new_at,
         is_deal: f.is_deal, deal_note: f.deal_note.trim(),
@@ -623,7 +623,10 @@ function ProductEditor({ p, onClose, onSave }) {
           <div><span style={lab}>Type</span><input value={f.product_type} onChange={set("product_type")} style={FI()} /></div>
           <div><span style={lab}>Sold per</span><select value={f.unit} onChange={set("unit")} style={FI()}><option value="kg">kg</option><option value="piece">piece</option><option value="lot">lot</option></select></div>
         </div>
-        <div><span style={lab}>Collections (comma separated)</span><input value={f.collections} onChange={set("collections")} style={FI()} /></div>
+        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 200px", gap: 10 }}>
+          <div><span style={lab}>Collections (comma separated)</span><input value={f.collections} onChange={set("collections")} style={FI()} /></div>
+          <div><span style={lab}>Origin (country)</span><input value={f.origin} onChange={set("origin")} placeholder="e.g. India" style={FI()} /></div>
+        </div>
         <div>
           <span style={lab}>Trade price per {f.unit === "piece" ? "piece" : f.unit === "lot" ? "lot" : "kilo"}{f.variants.length > 1 ? ", each option" : ""} (USD · blank = on request) · stock · pieces per {f.unit === "lot" ? "lot" : "kilo"}</span>
           {f.variants.map((v, i) => (
@@ -779,16 +782,37 @@ export { ProductsTab as TradeProductsPanel };
 const plain = html => String(html || "").replace(/<\s*br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n\n")
   .replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\n{3,}/g, "\n\n").trim();
 
-export async function publishListingToTrade(listing, { syncOnly = false } = {}) {
+/* What Listing Manager shows about each listing's trade copy: how it's sold,
+   pieces per kilo and origin. Read from trade_products, the one place these
+   live, so a change made on the trade site shows in the ERP too. Keyed by
+   listing id. */
+export async function loadTradeFacts() {
+  const rows = await loadAll("trade_products", "id,source,unit,variants,origin,live,price", "created_at");
+  const out = {};
+  for (const r of rows) {
+    const lid = r.source?.listing_id || (String(r.id).startsWith("lm-") ? String(r.id).slice(3) : "");
+    if (!lid) continue;
+    const v = (r.variants || []).find(x => x.pieces) || r.variants?.[0] || {};
+    out[lid] = { id: r.id, unit: r.unit || "kg", pieces: v.pieces || null, pieces_max: v.pieces_max || null, origin: r.origin || "", live: !!r.live, price: +r.price || 0 };
+  }
+  return out;
+}
+
+/* ask: answers from Listing Manager's "Post to the trade site" form —
+   { unit, pieces, pieces_max, origin }. Without it (background syncs) the
+   site's own values are kept. */
+export async function publishListingToTrade(listing, { syncOnly = false, ask = null } = {}) {
   const id = listing.platforms?.trade?.product_id || `lm-${listing.id}`;
   const [existing, site] = await Promise.all([
-    q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,collections,videos").eq("id", id).maybeSingle()),
+    q(supabase.from("trade_products").select("id,live,is_new,new_at,is_deal,variants,unit,origin,collections,videos").eq("id", id).maybeSingle()),
     q(supabase.from("trade_settings").select("value").eq("key", "site_url").maybeSingle()),
   ]);
   /* Deleted on the trade site by an editor: a background save mustn't bring
      it back. Only an explicit Publish re-creates it. */
   if (syncOnly && !existing && listing.platforms?.trade?.product_id) return { product_id: id, status: "deleted" };
-  const v0 = existing?.variants?.[0] || {};
+  const unit = ask?.unit || existing?.unit || "kg";   // trade prices are per kilo unless marked per piece
+  const v0 = { ...(existing?.variants?.[0] || {}),
+    ...(ask ? unit === "piece" ? { pieces: null, pieces_max: null } : { pieces: ask.pieces || null, pieces_max: ask.pieces_max || null } : {}) };
   /* A piece that came onto the trade site from Shopify has its trade price set
      there; a listing without one mustn't sync it back to "on request". */
   const price = +listing.price_trade || (existing ? +existing.price || +v0.price || 0 : 0);
@@ -807,7 +831,8 @@ export async function publishListingToTrade(listing, { syncOnly = false } = {}) 
     variants: [{ ...v0, id: v0.id || uid(), title: "Default Title", price, sku: listing.sku || "", stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null }],
     price,
     stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null,
-    unit: existing?.unit || "kg",   // trade prices are per kilo unless marked per piece
+    unit,
+    origin: ask ? String(ask.origin || "").trim().slice(0, 60) : existing?.origin || "",
     live,
     is_new: existing ? existing.is_new : true,
     new_at: existing?.new_at || new Date().toISOString(),

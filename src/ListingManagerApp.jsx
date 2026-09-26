@@ -19,7 +19,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
-import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks } from "./TradeSiteApp.jsx";
+import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold } from "./StoreApp.jsx";
 const now   = () => new Date().toISOString();
 
@@ -2573,6 +2573,131 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING CARD
 ══════════════════════════════════════════════════════════════════════════ */
+/* ── trade site details: sold per, pieces per kilo, origin ─────────────────
+   They live on the trade product (trade_products), where the site's editors
+   change them too; Listing Manager reads them from there so what's entered
+   on the site shows here. One shared copy for every card. */
+const tradeFacts = { map: null, subs: new Set(), busy: null, at: 0 };
+function refreshTradeFacts() {
+  if (tradeFacts.busy) return tradeFacts.busy;
+  tradeFacts.busy = loadTradeFacts()
+    .then(m => { tradeFacts.map = m; tradeFacts.at = Date.now(); tradeFacts.subs.forEach(f => f(m)); return m; })
+    .catch(() => tradeFacts.map || {})
+    .finally(() => { tradeFacts.busy = null; });
+  return tradeFacts.busy;
+}
+function useTradeFacts() {
+  const [m, setM] = useState(tradeFacts.map);
+  useEffect(() => {
+    tradeFacts.subs.add(setM);
+    if (!tradeFacts.map) refreshTradeFacts();
+    return () => { tradeFacts.subs.delete(setM); };
+  }, []);
+  return m || {};
+}
+const pcsRange = t => t?.pieces ? (t.pieces_max ? `${t.pieces}–${t.pieces_max}` : `${t.pieces}`) : "";
+const tradeFactsLine = t => !t ? "" : [
+  t.unit === "piece" ? "sold per piece" : `per ${t.unit === "lot" ? "lot" : "kg"}${pcsRange(t) ? ` ≈ ${pcsRange(t)} pcs` : ""}`,
+  t.origin && `from ${t.origin}`,
+].filter(Boolean).join(" · ");
+
+// "Hunan Province, China" → "China"; the AI-filled "___" placeholder → "".
+const countryOf = loc => String(loc || "").replace(/_{2,}/g, "").trim().split(",").pop().trim();
+/* What the listing already knows: the AI-filled Shopify block ("Pieces : per
+   kg 80-100", "Location : …") and the Origin field. */
+function tradeGuess(l) {
+  const d = String(l.shopify_description || "");
+  const pcs = d.match(/Pieces\s*:\s*(?:per\s*kg\s*)?(\d+)\s*(?:[-–]\s*(\d+))?/i) || [];
+  return { pieces: pcs[1] || "", pieces_max: pcs[2] && pcs[2] !== pcs[1] ? pcs[2] : "", origin: countryOf((d.match(/Location\s*:\s*(.+)/i) || [])[1]) || countryOf(l.origin) };
+}
+async function detectOrigin(l) {
+  const txt = await classify(`A natural stone or crystal is being listed for sale. Which country does it most likely come from?
+Use an origin stated in the text if there is one; otherwise the main commercial source of this stone as it's sold by Indian wholesalers.
+
+Title: ${l.title || ""}
+Material: ${l.material || ""}
+Noted origin: ${l.origin || ""}
+Description: ${String(l.shopify_description || l.description || "").slice(0, 1500)}
+
+Reply with ONLY JSON: {"country":"<country name in English>","confidence":"high|medium|low"}`, 80);
+  const j = JSON.parse(String(txt).replace(/```json|```/g, "").trim());
+  return { country: String(j.country || "").trim(), confidence: j.confidence || "" };
+}
+
+/* Asked once, when a listing first goes onto the trade site from here: how
+   it's priced, how many pieces a kilo (or lot) holds, and where it's from.
+   Origin comes pre-filled by AI; anything typed wins. */
+function TradeAskModal({ listing, initial, onDone }) {
+  const [f, setF] = useState(() => ({ unit: "kg", pieces: "", pieces_max: "", origin: "", ...initial }));
+  const [ai, setAi] = useState({ busy: false, note: "" });
+  const touched = useRef(false);
+  const set = (k, v) => { if (k === "origin") touched.current = true; setF(x => ({ ...x, [k]: v })); };
+  const detect = useCallback(async () => {
+    setAi({ busy: true, note: "" });
+    try {
+      const r = await detectOrigin(listing);
+      if (r.country && !touched.current) setF(x => ({ ...x, origin: r.country }));
+      setAi({ busy: false, note: r.country ? `AI suggests ${r.country}${r.confidence ? ` (${r.confidence} confidence)` : ""}` : "AI couldn't tell — type it in" });
+    } catch (e) { setAi({ busy: false, note: `AI unavailable (${e.message}) — type it in` }); }
+  }, [listing]);
+  useEffect(() => { if (!initial.origin) detect(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const per = f.unit === "lot" ? "lot" : "kilo";
+  const n = v => { const k = parseInt(v, 10); return k >= 1 ? k : null; };
+  const lo = n(f.pieces), hi = n(f.pieces_max);
+  const price = +listing.price_trade || 0;
+  const each = f.unit !== "piece" && price && (lo || hi) ? `≈ $${(price / Math.max(lo || 0, hi || 0)).toFixed(2)}${lo && hi && lo !== hi ? `–$${(price / Math.min(lo, hi)).toFixed(2)}` : ""} per piece` : "";
+  const submit = () => onDone({
+    unit: f.unit, origin: f.origin.trim(),
+    pieces: f.unit === "piece" ? null : (lo && hi ? Math.min(lo, hi) : lo || hi),
+    pieces_max: f.unit === "piece" || !(lo && hi) || lo === hi ? null : Math.max(lo, hi),
+  });
+  const chip = on => ({ padding: "7px 14px", borderRadius: 20, fontSize: 13, cursor: "pointer", fontWeight: 600,
+    border: `1px solid ${on ? C.gold : C.border}`, background: on ? C.amberBg : "#fff", color: on ? C.ink : C.inkMid });
+  const lab = { fontSize: 12, fontWeight: 700, color: C.inkMid, display: "block", marginBottom: 6 };
+  return (
+    <div onMouseDown={e => e.target === e.currentTarget && onDone(null)}
+      style={{ position: "fixed", inset: 0, zIndex: 3000, background: "rgba(20,15,8,.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 440, padding: 20, display: "flex", flexDirection: "column", gap: 16, boxShadow: "0 20px 60px rgba(0,0,0,.25)" }}>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>Post to the trade site</div>
+          <div style={{ fontSize: 13, color: C.inkMid, marginTop: 3 }}>{listing.title}</div>
+        </div>
+        <div>
+          <span style={lab}>Priced per</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["kg", "Kilo"], ["piece", "Piece"], ["lot", "Lot"]].map(([k, l]) => <button key={k} type="button" onClick={() => set("unit", k)} style={chip(f.unit === k)}>{l}</button>)}
+          </div>
+        </div>
+        {f.unit !== "piece" && (
+          <div>
+            <span style={lab}>Pieces per {per}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input inputMode="numeric" placeholder="from" value={f.pieces} onChange={e => set("pieces", e.target.value.replace(/\D/g, ""))} style={FI({ width: 90 })} />
+              <span style={{ color: C.inkFaint }}>to</span>
+              <input inputMode="numeric" placeholder="to" value={f.pieces_max} onChange={e => set("pieces_max", e.target.value.replace(/\D/g, ""))} style={FI({ width: 90 })} />
+            </div>
+            <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 6 }}>{each || "Buyers see a price per piece when this is filled in."}</div>
+          </div>
+        )}
+        <div>
+          <span style={lab}>Country of origin</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={f.origin} onChange={e => set("origin", e.target.value)} placeholder={ai.busy ? "Detecting…" : "e.g. India"} style={FI({ flex: 1 })} />
+            <button type="button" onClick={() => { touched.current = false; detect(); }} disabled={ai.busy}
+              style={{ ...chip(false), borderRadius: 8, whiteSpace: "nowrap", opacity: ai.busy ? .6 : 1 }}>{ai.busy ? "…" : "✨ Detect"}</button>
+          </div>
+          {ai.note && <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 6 }}>{ai.note}</div>}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button type="button" onClick={() => onDone(null)} style={{ ...chip(false), borderRadius: 8 }}>Cancel</button>
+          <button type="button" onClick={submit} disabled={ai.busy && !f.origin}
+            style={{ padding: "8px 18px", borderRadius: 8, border: "none", background: C.ink, color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>Post to trade site</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo }) {
   const [expanded,   setExpanded]   = useState(false);
   const [dl,         setDl]         = useState("");   // media download progress, "3/11"
@@ -2584,6 +2709,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
   const linkedStock     = stock.find(s => s.id === listing.linked_stock_id);
   const img             = listing.images?.[0];
   const salesCount      = (orders || []).filter(o => o.listing_id === listing.id).length;
+  const trade           = useTradeFacts()[listing.id];
   const liveOn          = PLATFORMS.filter(p => listing.platforms?.[p.key]?.status === "active");
   const shopifyVideoPlatformKey = ["shopify_aty", "shopify_earth"]
     .find(k => listing.platforms?.[k]?.product_id || listing.platforms?.[k]?.videoUrl || listing.platforms?.[k]?.videoStatus || listing.platforms?.[k]?.videoQueued);
@@ -2692,6 +2818,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
           {/* meta */}
           <div style={{ fontSize: 12, color: C.inkMid, marginBottom: storageLocation ? 4 : 6 }}>
             {[listing.material, listing.shape, listing.origin].filter(Boolean).join(" · ")}
+            {trade && <span title="From the trade site — edit in the Trade site tab or on the site" style={{ marginLeft: 8, fontSize: 11, borderRadius: 20, padding: "1px 8px", background: C.card, border: `1px solid ${C.border}`, color: C.inkMid, whiteSpace: "nowrap" }}>Trade: {tradeFactsLine(trade)}</span>}
             {(listing.sku || listing.listing_order_id) && <span style={{ marginLeft: 8, fontFamily: "monospace", fontSize: 11, color: C.inkFaint }}>
               {listing.sku ? `SKU: ${listing.sku}` : `ID: ${listing.listing_order_id}`}
             </span>}
@@ -8518,6 +8645,14 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [showForm,   setShowForm]   = useState(false);
   const [editing,    setEditing]    = useState(null);
   const [soldModal,  setSoldModal]  = useState(null);
+  const [tradeAsk,   setTradeAsk]   = useState(null);   // { listing, initial, res } while the trade form is open
+  const askTrade = (listing, initial) => new Promise(res => setTradeAsk({ listing, initial, res }));
+  // Trade details change on the site too: re-read them when coming back to the tab.
+  useEffect(() => {
+    const on = () => { if (document.visibilityState === "visible" && Date.now() - tradeFacts.at > 60000) refreshTradeFacts(); };
+    document.addEventListener("visibilitychange", on);
+    return () => document.removeEventListener("visibilitychange", on);
+  }, []);
   const [campaignOpen, setCampaignOpen] = useState(false);
   const [toast,      setToast]      = useState("");
 
@@ -8850,7 +8985,22 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
     if (pkey === "trade") {
       // Straight into the trade site's table — no marketplace API in between.
-      result = await publishListingToTrade(listing, { syncOnly });
+      // Going onto the site for the first time: ask how it's sold and where it's from.
+      let ask = null;
+      if (!syncOnly) {
+        const t = (await refreshTradeFacts())[listing.id];
+        if (!t?.live) {
+          const g = tradeGuess(listing);
+          ask = await askTrade(listing, {
+            unit: t?.unit || "kg",
+            pieces: t?.pieces ? String(t.pieces) : g.pieces, pieces_max: t?.pieces_max ? String(t.pieces_max) : g.pieces_max,
+            origin: t?.origin || g.origin,
+          });
+          if (!ask) throw new Error("Not posted — cancelled");
+        }
+      }
+      result = await publishListingToTrade(listing, { syncOnly, ask });
+      refreshTradeFacts();
     } else if (pkey === "store") {
       // eartheditions.co: price in USD, converted from Etsy's rupees unless set.
       result = await publishListingToStore(listing, { syncOnly });
@@ -9372,6 +9522,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           onSave={handleSave}
           onClose={() => { setShowForm(false); setEditing(null); }}
         />
+      )}
+      {tradeAsk && (
+        <TradeAskModal listing={tradeAsk.listing} initial={tradeAsk.initial}
+          onDone={a => { tradeAsk.res(a); setTradeAsk(null); }} />
       )}
       {soldModal && (
         <MarkSoldModal
