@@ -60,7 +60,7 @@ const handleFrom = l => {
   return m && !/^\d+$/.test(m[1]) ? m[1] : `${slugify(l.title)}-${String(l.id).slice(-5)}`;
 };
 
-async function storeSettings() {
+export async function storeSettings() {
   const rows = await q(supabase.from("store_settings").select("key,value"));
   return Object.fromEntries(rows.map(r => [r.key, r.value]));
 }

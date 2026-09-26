@@ -20,8 +20,9 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
+import PriceStudio from "./PriceStudio.jsx";
 import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
@@ -1865,9 +1866,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   });
 
   // Price calculator state
-  const [calcOpen, setCalcOpen] = useState(null); // platform key
-  const [calcCost, setCalcCost] = useState("");
-  const [calcMult, setCalcMult] = useState("3");
+  const [studio, setStudio] = useState(false);
+  const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, [studio]);
+  const stockCost = +(stock.find(s => s.id === form.linked_stock_id)?.costPrice) || 0;
   const [liveUsdRate, setLiveUsdRate] = useState(USD_RATE);
 
   useEffect(() => {
@@ -1883,131 +1884,53 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
 
-  /* One price box for a PLATFORMS entry, with its calculator. */
+  /* One price box for a PLATFORMS entry. Working a price out happens in
+     Price Studio, which fills these in. */
+  const calc = form.price_calc || null;
   const priceCard = p => {
-    const isCalcOpen = calcOpen === p.key;
-    const costNum  = +calcCost || 0;
-    const multNum  = +calcMult || 1;
-    // Etsy: base × mult / 0.75 divisor; eBay: base × mult / liveRate / 0.85
-    const baseInr  = costNum * multNum;
-    const etsyListed = baseInr > 0 ? Math.round(baseInr / 0.75) : 0;
-    const ebayUsd    = baseInr > 0 ? +(baseInr / liveUsdRate / 0.85).toFixed(2) : 0;
-    const usdListed  = baseInr > 0 ? +(baseInr / 0.75 / liveUsdRate).toFixed(2) : 0;
-    const suggested  = p.key === "ebay" ? ebayUsd
-      : p.key === "etsy" ? etsyListed
-      : p.currency === "USD" ? usdListed
-      : baseInr > 0 ? Math.round(baseInr / 0.75) : 0;
-    const suggestedDisplay = p.currency === "USD"
-      ? `$${suggested.toFixed(2)}`
-      : `₹${Math.round(suggested).toLocaleString("en-IN")}`;
-    // After-fees net for display
-    const netEtsy = etsyListed > 0 ? Math.round(etsyListed * 0.89) : 0;
-    const netEbay = ebayUsd > 0 ? +(ebayUsd * 0.85).toFixed(2) : 0;
+    const v = +form[p.priceField] || 0;
+    // What an Etsy buyer pays during the usual sale, and what's left of it.
+    const salePct = p.key === "etsy" ? +(calc?.sale ?? studioPrefs.sale ?? 0) : 0;
+    const salePrice = v && salePct ? Math.round(v * (1 - salePct / 100)) : 0;
+    const fee = ((+(calc?.fees ?? studioPrefs.fees ?? 11)) + (calc?.ads ? 15 : 0)) / 100;
+    const cost = (+calc?.cost || 0) + (+calc?.extra || 0) || stockCost;
+    const profit = cost && v ? Math.round((salePrice || v) * (1 - fee) - cost) : null;
     return (
-      <div style={{ background: C.card, borderRadius: 9, padding: 12, position: "relative", border: `1.5px solid ${p.color}35` }}>
+      <div style={{ background: C.surface, padding: "14px 16px", border: `1px solid ${C.border}`, borderTop: `2px solid ${p.color}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: p.color }}>{p.priceLabel || `${p.label} price`}</span>
+          <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkMid }}>{p.priceLabel || `${p.label} price`}</span>
           <div style={{ flex: 1 }} />
-          <button type="button" onClick={() => { setCalcOpen(isCalcOpen ? null : p.key); setCalcCost(""); }}
-            title="Price calculator"
-            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, cursor: "pointer", fontSize: 11, color: isCalcOpen ? p.color : C.inkMid, padding: "2px 7px" }}>
-            🧮 Calculator
+          <button type="button" onClick={() => setStudio(true)} title="Work out this and every other price, step by step"
+            style={{ background: "none", border: `1px solid ${C.border}`, cursor: "pointer", fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: C.ink, padding: "5px 9px" }}>
+            Price Studio
           </button>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color: C.inkMid }}>{p.currency === "USD" ? "$" : "₹"}</span>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 6, borderBottom: `1px solid ${C.ink}` }}>
+          <span style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 26, color: C.inkMid }}>{p.currency === "USD" ? "$" : "₹"}</span>
           <input type="number" inputMode="decimal" value={form[p.priceField] || ""}
             onChange={e => {
               set(p.priceField, e.target.value);
               // Auto-prefill eBay from Etsy
-              if (p.key === "etsy" && e.target.value) {
-                const etsyInr = +e.target.value;
-                const autoEbay = (etsyInr / liveUsdRate / 0.85).toFixed(2);
-                set("price_ebay", autoEbay);
-              }
+              if (p.key === "etsy" && e.target.value) set("price_ebay", (+e.target.value / liveUsdRate / 0.85).toFixed(2));
             }}
-            placeholder={p.placeholder || "0.00"}
-            style={FI({ fontSize: 17, fontWeight: 700, padding: "8px 10px" })} />
+            placeholder={p.placeholder || "0"}
+            style={{ flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 32, fontWeight: 500, color: C.ink, padding: "2px 0" }} />
         </div>
-        <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 5 }}>
-          {p.currency !== "USD" && +form[p.priceField] > 0 && <>≈ ${(+form[p.priceField] / liveUsdRate).toFixed(0)} USD · </>}
-          {p.currency === "USD" && +form[p.priceField] > 0 && <>≈ ₹{Math.round(+form[p.priceField] * liveUsdRate).toLocaleString("en-IN")} · </>}
+        <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 6 }}>
+          {p.currency !== "USD" && v > 0 && <>≈ ${(v / liveUsdRate).toFixed(0)} · </>}
+          {p.currency === "USD" && v > 0 && <>≈ ₹{Math.round(v * liveUsdRate).toLocaleString("en-IN")} · </>}
           {p.hint || (p.currency === "USD" ? "US dollars" : "Indian rupees")}
         </div>
-        {/* Calculator popover — avant garde dark panel */}
-        {isCalcOpen && (
-          <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50, marginTop: 6,
-            background: "#0F0F0F", border: `1px solid ${p.color}55`, borderRadius: 10,
-            padding: "16px", boxShadow: `0 12px 40px rgba(0,0,0,.5), 0 0 0 1px ${p.color}22` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-              <div style={{ width: 3, height: 18, background: p.color, borderRadius: 2 }} />
-              <div style={{ fontSize: 9, fontWeight: 800, color: p.color, textTransform: "uppercase", letterSpacing: 2 }}>
-                Price Calculator
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
-              <div>
-                <div style={{ fontSize: 9, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 1 }}>Cost ₹</div>
-                <input type="number" value={calcCost} onChange={e => setCalcCost(e.target.value)}
-                  placeholder="0" autoFocus
-                  style={{ background: "#1A1A1A", border: "1px solid #333", color: "#fff",
-                    borderRadius: 6, padding: "7px 10px", fontSize: 14, fontWeight: 600,
-                    width: "100%", boxSizing: "border-box" }} />
-              </div>
-              <div>
-                <div style={{ fontSize: 9, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: 1 }}>Multiplier</div>
-                <input type="number" value={calcMult} onChange={e => setCalcMult(e.target.value)}
-                  placeholder="3" min="1" step="0.5"
-                  style={{ background: "#1A1A1A", border: "1px solid #333", color: "#fff",
-                    borderRadius: 6, padding: "7px 10px", fontSize: 14, fontWeight: 600,
-                    width: "100%", boxSizing: "border-box" }} />
-              </div>
-            </div>
-            {costNum > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ borderTop: "1px solid #1E1E1E", paddingTop: 10 }}>
-                  {[
-                    { label: "Base", val: `₹${Math.round(baseInr).toLocaleString("en-IN")}` },
-                    p.key === "etsy"
-                      ? { label: "Listed (÷0.75)", val: `₹${etsyListed.toLocaleString("en-IN")}`, hi: true }
-                      : p.key === "ebay"
-                      ? { label: `Listed (@ ₹${Math.round(liveUsdRate)}/USD ÷0.85)`, val: `$${ebayUsd.toFixed(2)}`, hi: true }
-                      : { label: "Listed (÷0.75)", val: suggestedDisplay, hi: true },
-                    p.key === "etsy"
-                      ? { label: "After 11% fees", val: `₹${netEtsy.toLocaleString("en-IN")}`, dim: true }
-                      : p.key === "ebay"
-                      ? { label: "After 15% fees", val: `$${netEbay.toFixed(2)}`, dim: true }
-                      : { label: "After fees (~11%)", val: `₹${Math.round(baseInr/0.75*0.89).toLocaleString("en-IN")}`, dim: true },
-                  ].map(row => (
-                    <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                      padding: "3px 0", borderBottom: "1px solid #141414" }}>
-                      <span style={{ fontSize: 9, color: row.hi ? "#888" : "#555", textTransform: "uppercase", letterSpacing: .8 }}>{row.label}</span>
-                      <span style={{ fontSize: row.hi ? 14 : 11, fontWeight: row.hi ? 700 : 400,
-                        color: row.hi ? p.color : row.dim ? "#444" : "#777" }}>{row.val}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            <button type="button" disabled={!suggested}
-              onClick={() => {
-                if (p.key === "ebay") {
-                  set("price_ebay", ebayUsd.toFixed(2));
-                } else {
-                  set(p.priceField, p.currency === "USD" ? suggested.toFixed(2) : Math.round(suggested));
-                  // auto-fill eBay when applying Etsy
-                  if (p.key === "etsy") set("price_ebay", (Math.round(suggested) / liveUsdRate / 0.85).toFixed(2));
-                }
-                setCalcOpen(null);
-              }}
-              style={{ width: "100%", background: suggested ? p.color : "#1A1A1A", color: suggested ? "#fff" : "#444",
-                border: "none", borderRadius: 6, padding: "9px 0", fontSize: 11, fontWeight: 800,
-                letterSpacing: 1.5, textTransform: "uppercase", cursor: suggested ? "pointer" : "not-allowed" }}>
-              Apply {suggestedDisplay} →
-            </button>
-            <div style={{ marginTop: 8, fontSize: 9, color: "#555", textAlign: "center" }}>
-              1 USD = ₹{liveUsdRate.toFixed(1)} · live rate
-            </div>
+        {p.key === "etsy" && v > 0 && (salePrice > 0 || profit != null) && (
+          <div style={{ display: "flex", gap: 0, marginTop: 12, borderTop: `1px solid ${C.border}` }}>
+            {salePrice > 0 && <div style={{ flex: 1, paddingTop: 10 }}>
+              <div style={{ fontSize: 10, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint }}>In a {salePct}% sale</div>
+              <div style={{ fontSize: 17, fontWeight: 600, marginTop: 2 }}>₹{salePrice.toLocaleString("en-IN")}</div>
+            </div>}
+            {profit != null && <div style={{ flex: 1, paddingTop: 10 }}>
+              <div style={{ fontSize: 10, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint }}>Profit{salePrice ? " in the sale" : ""}</div>
+              <div style={{ fontSize: 17, fontWeight: 600, marginTop: 2, color: profit > 0 ? C.green : C.red }}>₹{profit.toLocaleString("en-IN")}</div>
+            </div>}
           </div>
         )}
       </div>
@@ -2269,6 +2192,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 );
               })}
             </div>
+
+            <button type="button" onClick={() => setStudio(true)} style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: "#141210", color: "#fff", border: "none", padding: "16px 18px", cursor: "pointer", flexShrink: 0 }}>
+              <span style={{ flex: 1 }}>
+                <span style={{ display: "block", fontSize: 10.5, letterSpacing: ".22em", textTransform: "uppercase", opacity: .7 }}>Price Studio</span>
+                <span style={{ display: "block", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, lineHeight: 1.15, marginTop: 4 }}>
+                  {+form.price_etsy > 0 ? `Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")}${form.price_calc?.sale ? ` · ₹${Math.round(form.price_etsy * (1 - form.price_calc.sale / 100)).toLocaleString("en-IN")} in the sale` : ""}` : "Work out the prices, step by step"}
+                </span>
+              </span>
+              <span style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{+form.price_etsy > 0 ? "Rework →" : "Start →"}</span>
+            </button>
 
             {/* ── Title + Description ───────────────────────────────────────── */}
             <Section title="Listing Details" action={<span style={{ fontSize: 11, color: C.inkFaint }}>Used everywhere unless a platform tab sets its own</span>}>
@@ -2734,6 +2667,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         </div>
 
       </div>
+      {studio && (
+        <PriceStudio listing={{ ...form, tags }} stockCost={stockCost} liveRate={liveUsdRate} loadSettings={storeSettings}
+          onClose={() => setStudio(false)}
+          onApply={patch => { setForm(f => ({ ...f, ...patch })); setStudio(false); }} />
+      )}
     </div>
   );
 }
