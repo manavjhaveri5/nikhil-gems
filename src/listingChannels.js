@@ -60,8 +60,20 @@ export function linkOf(l, key) {
   // Our own two sites save the public page as `url`; Shopify saves its admin page there.
   else if (key === "trade" || key === "store") { live = pd.storefront_url || pd.url || ""; }
   else { live = pd.storefront_url || ""; admin = pd.url || ""; }
-  return { linked: true, id: String(id), status: pd.status || "active", live, admin, error: pd.error || pd.last_error || "" };
+  return { linked: true, id: String(id), status: pd.status || "active", live, admin, error: pd.error || pd.last_error || "", ref: !!pd.linked_only };
 }
+
+/* The trade product for a listing, from loadTradeFacts' map: the one naming
+   this listing, else the one the listing is linked to. */
+export function tradeRowOf(map, l) {
+  if (!map || !l) return null;
+  const pd = l.platforms?.trade;
+  return map[l.id] || (pd?.product_id && pd.status !== "deleted" ? map[`#${pd.product_id}`] : null) || null;
+}
+/* A trade product connected by hand is another product, e.g. a per-kilo lot
+   of the same stone. It's shown as this listing's Wholesale home, but the
+   listing never writes to it: no sync, no hiding when the piece sells. */
+export const tradeRefOnly = l => !!l?.platforms?.trade?.linked_only;
 
 /* A pasted link or number → the platform's id. Etsy and eBay only: the two
    sites of ours are linked by posting from here. */

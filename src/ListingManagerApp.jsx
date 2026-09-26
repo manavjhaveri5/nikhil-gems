@@ -23,7 +23,7 @@ import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTra
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import PriceStudio from "./PriceStudio.jsx";
-import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog } from "./listingChannels.js";
+import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -1941,7 +1941,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   /* Where the piece is on each platform, and what saving will do there. */
   const plan = key => {
     const ln = linkOf(form, key);
-    if (ln.linked) return { ...ln, action: "update" };
+    if (ln.linked) return { ...ln, action: ln.ref ? "" : "update" };
     return { ...ln, action: publishTo[key] ? "add" : "" };
   };
   const statusChip = key => {
@@ -1958,8 +1958,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const hasPrice = +form[c.priceField] > 0 || (c.key === "store" && (+form.price_store_inr > 0 || +form.price_etsy > 0));
     const refId = parseRef(c.key, connectDraftFor(c.key));
     const canConnect = c.key === "etsy" || c.key === "ebay";
-    const cover = (form.images || []).find(u => typeof u === "string");
-    const shownTitle = titleFor({ ...form, tags }, c.key);
+    // A trade product connected for reference shows as itself, not as this listing.
+    const tr = c.key === "trade" && pl.ref ? tradeRowOf(tradeFactsMap, form) : null;
+    const cover = tr?.image || (form.images || []).find(u => typeof u === "string");
+    const shownTitle = tr?.title || titleFor({ ...form, tags }, c.key);
     return (
       <div style={{ background: C.surface, border: `1.5px solid ${c.color}40`, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: `${c.color}0F`, borderBottom: `1px solid ${c.color}25`, flexWrap: "wrap" }}>
@@ -1978,7 +1980,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13.5, fontWeight: 650, color: shownTitle ? C.ink : C.inkFaint, lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{shownTitle || "No title yet"}</div>
             <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3 }}>
-              {c.key === "store"
+              {tr ? (tr.price ? `$${tr.price} / ${tr.unit === "piece" ? "piece" : tr.unit === "lot" ? "lot" : "kg"}` : "Price on request")
+                : c.key === "store"
                 ? [+form.price_store > 0 && `$${form.price_store}`, +form.price_store_inr > 0 && `₹${(+form.price_store_inr).toLocaleString("en-IN")}`].filter(Boolean).join(" · ") || (+form.price_etsy > 0 ? "Price from Etsy" : "No price")
                 : +form[c.priceField] > 0 ? `${c.cur}${(+form[c.priceField]).toLocaleString(c.cur === "₹" ? "en-IN" : "en-US")}` : "No price"}
               {pl.linked && <span style={{ color: C.inkFaint }}> · ID {pl.id}</span>}
@@ -1989,8 +1992,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           {c.blurb && <div style={{ fontSize: 11.5, color: C.inkFaint, lineHeight: 1.45 }}>{c.blurb}</div>}
           {pl.linked ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12, color: C.inkMid, background: C.card, borderRadius: 8, padding: "8px 12px" }}>
-              <span style={{ flex: 1, minWidth: 180 }}>Saving updates this {c.label} listing with the details here{form.platforms?.[c.key]?.connected_at ? " (connected by hand)" : ""}.</span>
-              {canConnect && (
+              <span style={{ flex: 1, minWidth: 180 }}>{pl.ref
+                ? "Connected for reference. It's its own trade product, so saving here never changes it, and it stays up when this piece sells. Edit it on the trade site."
+                : <>Saving updates this {c.label} listing with the details here{form.platforms?.[c.key]?.connected_at ? " (connected by hand)" : ""}.</>}</span>
+              {(canConnect || pl.ref) && (
                 <button type="button" onClick={() => {
                   if (!confirm(`Unlink this ${c.label} listing from the ERP?\n\nIt stays on ${c.label}. Saving here will no longer update it.`)) return;
                   setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), [c.key]: {} } }));
@@ -2009,6 +2014,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   <span style={{ display: "block", fontSize: 11, color: C.inkFaint }}>{hasPrice ? "Goes up as a draft. Publish it from Manage when you're ready." : `Set the ${c.label} price first.`}</span>
                 </span>
               </label>
+              {c.key === "trade" && tradePicker()}
               {canConnect && (
                 <div>
                   <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>Already on {c.label}? Paste its link to connect it instead of making a new one.</div>
@@ -2027,6 +2033,42 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             </>
           )}
           {pl.error && <div style={{ fontSize: 12, color: C.red, background: C.redBg, borderRadius: 7, padding: "7px 10px" }}>Last sync: {pl.error}</div>}
+        </div>
+      </div>
+    );
+  };
+
+  /* Wholesale sells lots (per kilo, per piece) that are often their own
+     products on the trade site. Connecting one records where this stone is on
+     Wholesale without letting the listing write to it. */
+  const [tradeQ, setTradeQ] = useState("");
+  const tradePicker = () => {
+    const rows = Object.entries(tradeFactsMap || {}).filter(([k]) => k.startsWith("#")).map(([, r]) => r);
+    if (!rows.length) return null;
+    const words = s => String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+    const want = new Set(tradeQ ? words(tradeQ) : words(`${form.material} ${form.shape} ${form.title}`).filter(w => !/^(mm|cm|and|the|with|from|crystal|natural)$/.test(w)));
+    const hits = rows.map(r => ({ r, n: words(r.title).filter(w => want.has(w) || [...want].some(x => x.startsWith(w) || w.startsWith(x))).length }))
+      .filter(x => tradeQ ? x.n >= Math.min(want.size, 1) && words(tradeQ).every(q => words(x.r.title).some(w => w.startsWith(q))) : x.n >= 2)
+      .sort((a, b) => b.n - a.n || b.r.live - a.r.live).slice(0, 6);
+    return (
+      <div>
+        <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>Already on the trade site, e.g. as a per-kilo lot? Connect that product.</div>
+        <input value={tradeQ} onChange={e => setTradeQ(e.target.value)} placeholder="Search trade products…" style={{ ...FI(), fontSize: 12, marginBottom: 6 }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {hits.map(({ r }) => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 6 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 6, overflow: "hidden", background: C.bg, flex: "none" }}>{r.image && <img src={r.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 650, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title || r.id}</div>
+                <div style={{ fontSize: 11, color: C.inkFaint }}>{r.price ? `$${r.price} / ${r.unit === "piece" ? "piece" : r.unit === "lot" ? "lot" : "kg"}` : "Price on request"} · {r.live ? "live" : "hidden"}</div>
+              </div>
+              <button type="button" onClick={() => {
+                setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), trade: { product_id: r.id, status: r.live ? "active" : "draft", url: `https://trade.eartheditions.co/p/${r.id}`, linked_only: true, connected_at: new Date().toISOString() } } }));
+                setPublishTo(pt => ({ ...pt, trade: false }));
+              }} style={{ background: "#1F8F4E", color: "#fff", border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Connect</button>
+            </div>
+          ))}
+          {!hits.length && <div style={{ fontSize: 11.5, color: C.inkFaint }}>{tradeQ ? "No trade product matches." : "No close match. Search by name."}</div>}
         </div>
       </div>
     );
@@ -2086,6 +2128,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (key === "more") return null;
     const pl = plan(key);
     if (!pl.linked && pl.action !== "add") return null;
+    if (pl.ref) return { color: pl.status === "active" ? C.green : C.blue, n: "" };
     const { bad } = readyScore(readiness({ ...form, tags }, key, tags));
     return bad ? { color: C.red, n: bad } : { color: pl.status === "active" || pl.action === "update" ? C.green : C.blue, n: "" };
   };
@@ -2553,7 +2596,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </>; })()}
 
           {/* ── Wholesale (trade site) ───────────────────────────────────────── */}
-          {tab === "trade" && (() => { const c = channel("trade"); const t = tradeFactsMap?.[form.id]; return <>
+          {tab === "trade" && (() => { const c = channel("trade"); const t = tradeRowOf(tradeFactsMap, form); const ref = tradeRefOnly(form); return ref ? <>
+            {channelHeader(c)}
+            <Section title="How it's sold" accent="#1F8F4E">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12 }}>
+                <div><Label>Priced per</Label><div style={factBox}>{t?.unit === "piece" ? "Piece" : t?.unit === "lot" ? "Lot" : t ? "Kilo" : "—"}</div></div>
+                <div><Label>Price</Label><div style={factBox}>{t?.price ? `$${t.price}` : "On request"}</div></div>
+                <div><Label>Pieces per kilo</Label><div style={factBox}>{pcsRange(t) || "—"}</div></div>
+              </div>
+            </Section>
+          </> : <>
             {channelHeader(c)}
             {checklist(c)}
             {priceCard({ ...P("trade"), priceLabel: "Wholesale price", hint: t?.unit === "piece" ? "US dollars, per piece" : t?.unit === "lot" ? "US dollars, per lot" : "US dollars, per kilo unless sold per piece" })}
@@ -2838,7 +2890,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
   const linkedStock     = stock.find(s => s.id === listing.linked_stock_id);
   const img             = listing.images?.[0];
   const salesCount      = (orders || []).filter(o => o.listing_id === listing.id).length;
-  const trade           = useTradeFacts()[listing.id];
+  const trade           = tradeRowOf(useTradeFacts(), listing);
   const liveOn          = PLATFORMS.filter(p => listing.platforms?.[p.key]?.status === "active");
   const storeRows = useStoreFacts();
   const shopifyVideoPlatformKey = ["shopify_aty", "shopify_earth"]
@@ -9036,6 +9088,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           if (p.key === "etsy" && pd.listing_id) return true;
           if (p.key === "ebay" && pd.item_id) return true;
           if ((p.key === "shopify_aty" || p.key === "shopify_earth") && pd.product_id) return true;
+          if (p.key === "trade" && pd.linked_only) return false;   // someone else's product: never written to
           if ((p.key === "trade" || p.key === "store") && pd.product_id) return true;
           return false;
         }).map(p => p.key)
@@ -9068,7 +9121,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      edit in the store's own editor. */
   const linkedTo = (l, pkey) => {
     const pd = l.platforms?.[pkey];
-    if (!pd || pd.status === "deleted") return false;
+    if (!pd || pd.status === "deleted" || pd.linked_only) return false;
     if (pkey === "etsy") return !!pd.listing_id;
     if (pkey === "ebay") return !!pd.item_id;
     return !!pd.product_id;
@@ -9186,6 +9239,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
     let result;
 
+    if (pkey === "trade" && tradeRefOnly(listing)) throw new Error("This listing is connected to a separate trade product. Change it on the trade site, or unlink it first.");
     if (pkey === "trade") {
       // Straight into the trade site's table — no marketplace API in between.
       // Going onto the site for the first time: ask how it's sold and where it's from.
@@ -9372,6 +9426,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       return;
     }
     else if (pkey === "trade") {
+      if (tradeRefOnly(listing)) throw new Error("Connected for reference only. Hide it on the trade site, or unlink it here.");
       await hideTradeProduct(listing.platforms?.trade?.product_id);
       await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, trade: { ...current.platforms?.trade, status: "draft" } }, updated_at: now() }));
       return;
@@ -9434,7 +9489,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         if (p.key === "etsy") { action = "unpublish_etsy"; }
         else if (p.key === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
         else if (p.key === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
-        else if (p.key === "trade") { await hideTradeProduct(listing.platforms?.trade?.product_id).catch(e => console.warn("Trade hide failed:", e.message)); return; }
+        else if (p.key === "trade") { if (tradeRefOnly(listing)) return; await hideTradeProduct(listing.platforms?.trade?.product_id).catch(e => console.warn("Trade hide failed:", e.message)); return; }
         else if (p.key === "store") { await hideStoreProduct(listing.platforms?.store?.product_id).catch(e => console.warn("Store hide failed:", e.message)); return; }
         else if (p.key === "ebay") {
           const itemId = listing.platforms?.ebay?.item_id;
