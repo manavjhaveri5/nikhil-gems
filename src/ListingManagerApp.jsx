@@ -3041,8 +3041,12 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 
             {PLATFORMS.map(p => {
               const ps       = listing.platforms?.[p.key] || {};
-              const isLive   = ps.status === "active";
-              const isDraft  = ps.status === "draft";
+              // The store and trade site keep their own status; once loaded, it wins.
+              const own = p.key === "store" && storeFacts.map ? (storeRows[listing.id]?.status === "active" ? "active" : storeRows[listing.id] ? "draft" : "")
+                : p.key === "trade" && tradeFacts.map ? (trade ? (trade.live ? "active" : "draft") : "")
+                : ps.status;
+              const isLive   = own === "active";
+              const isDraft  = own === "draft";
               const busy     = publishing[p.key];
               const price    = listing[p.priceField];
               // The store needs no price of its own: it works one out from Etsy.
@@ -9597,7 +9601,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             </div>
 
             {view === "grid" && loaded && listings.length > 0 ? (
-              <ListingGrid listings={listings} orders={orders} stock={stock} loadStoreFacts={loadStoreFacts}
+              <ListingGrid listings={listings} orders={orders} stock={stock} loadStoreFacts={loadStoreFacts} loadTradeFacts={loadTradeFacts}
                 onLocation={setListingLocation}
                 onBulkMove={bulkMove}
                 onEdit={l => { setEditing(l); setShowForm(true); }}
