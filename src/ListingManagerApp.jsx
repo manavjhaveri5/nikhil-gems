@@ -2704,6 +2704,26 @@ function useTradeFacts() {
   }, []);
   return m || {};
 }
+/* The store's live $ and ₹ per listing, one shared copy like the trade facts:
+   with no store price typed, the site charges the Etsy price less its discount. */
+const storeFacts = { map: null, subs: new Set(), busy: null };
+function refreshStoreFacts() {
+  if (storeFacts.busy) return storeFacts.busy;
+  storeFacts.busy = loadStoreFacts()
+    .then(m => { storeFacts.map = m; storeFacts.subs.forEach(f => f(m)); return m; })
+    .catch(() => storeFacts.map || {})
+    .finally(() => { storeFacts.busy = null; });
+  return storeFacts.busy;
+}
+function useStoreFacts() {
+  const [m, setM] = useState(storeFacts.map);
+  useEffect(() => {
+    storeFacts.subs.add(setM);
+    if (!storeFacts.map) refreshStoreFacts();
+    return () => { storeFacts.subs.delete(setM); };
+  }, []);
+  return m || {};
+}
 const pcsRange = t => t?.pieces ? (t.pieces_max ? `${t.pieces}–${t.pieces_max}` : `${t.pieces}`) : "";
 const tradeFactsLine = t => !t ? "" : [
   t.unit === "piece" ? "sold per piece" : `per ${t.unit === "lot" ? "lot" : "kg"}${pcsRange(t) ? ` ≈ ${pcsRange(t)} pcs` : ""}`,
@@ -2820,6 +2840,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
   const salesCount      = (orders || []).filter(o => o.listing_id === listing.id).length;
   const trade           = useTradeFacts()[listing.id];
   const liveOn          = PLATFORMS.filter(p => listing.platforms?.[p.key]?.status === "active");
+  const storeRows = useStoreFacts();
   const shopifyVideoPlatformKey = ["shopify_aty", "shopify_earth"]
     .find(k => listing.platforms?.[k]?.product_id || listing.platforms?.[k]?.videoUrl || listing.platforms?.[k]?.videoStatus || listing.platforms?.[k]?.videoQueued);
   const shopifyVideoState = shopifyVideoPlatformKey ? listing.platforms?.[shopifyVideoPlatformKey] : null;
@@ -3024,7 +3045,14 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
               const isDraft  = ps.status === "draft";
               const busy     = publishing[p.key];
               const price    = listing[p.priceField];
-              const hasPrice = +price > 0;
+              // The store needs no price of its own: it works one out from Etsy.
+              const hasPrice = +price > 0 || (p.key === "store" && (+listing.price_store_inr > 0 || +listing.price_etsy > 0));
+              const sf = p.key === "store" ? storeRows[listing.id] : null;
+              const priceText = p.key === "store"
+                ? [+(sf?.price ?? listing.price_store) > 0 && `$${fmt(sf?.price ?? listing.price_store)}`,
+                   +(sf?.price_inr ?? listing.price_store_inr) > 0 && `₹${fmt(sf?.price_inr ?? listing.price_store_inr)}`].filter(Boolean).join(" · ")
+                  || (+listing.price_etsy > 0 ? `from the Etsy price, ₹${fmt(listing.price_etsy)}` : "")
+                : price ? (p.currency === "USD" ? `$${fmt(price)}` : `₹${fmt(price)}`) : "";
 
               return (
                 <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 12,
@@ -3037,7 +3065,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                       {p.label}{isDraft ? " — Draft" : ""}
                     </div>
                     <div style={{ fontSize: 11, color: C.inkFaint }}>
-                      {p.currency} {price ? (p.currency === "USD" ? `$${fmt(price)}` : `₹${fmt(price)}`) : "no price set"}
+                      {p.key === "store" ? "" : `${p.currency} `}{priceText || "no price set"}
                       {(isLive || isDraft) && (ps.listing_id || ps.product_id) && (() => {
                         const links = platformUrls(p.key, ps);
                         const linkS = { fontSize: 10.5, fontWeight: 800, color: p.color, textDecoration: "none", marginLeft: 7 };
@@ -9177,6 +9205,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       // A title or description set for Earth Editions here beats a hand edit in the store's editor.
       const own = [listing.store_title?.trim() && "title", listing.store_description?.trim() && "description"].filter(Boolean);
       result = await publishListingToStore(listing, { syncOnly, override: [...storeOverride, ...own] });
+      refreshStoreFacts();
     } else if (pkey === "ebay") {
       // eBay — call ebay.js directly
       const existingItemId = listing.platforms?.ebay?.item_id;
