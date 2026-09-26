@@ -5,7 +5,7 @@
    calls; this file is the view. */
 import { useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
-import { locationOf, needsLocation, knownLocations } from "./listingChannels.js";
+import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
 
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
@@ -37,7 +37,7 @@ const money = (v, cur) => v == null || v === "" ? "—" : `${cur}${Number(v).toL
    (f.store, f.trade), they decide; the listing's own note is the fallback. */
 const statusOf = (l, k, f = {}) => {
   if (k === "store" && f.store) { const r = f.store[l.id]; return !r ? "" : r.status === "active" ? "active" : r.status === "sold" ? "sold" : "draft"; }
-  if (k === "trade" && f.trade) { const r = f.trade[l.id]; return !r ? "" : r.live ? "active" : "draft"; }
+  if (k === "trade" && f.trade) { const r = tradeRowOf(f.trade, l); return !r ? "" : r.live ? "active" : "draft"; }
   const st = l.platforms?.[k]?.status || "";
   return st === "deleted" ? "" : st;
 };

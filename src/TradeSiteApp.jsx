@@ -806,13 +806,18 @@ const plain = html => String(html || "").replace(/<\s*br\s*\/?>/gi, "\n").replac
    live, so a change made on the trade site shows in the ERP too. Keyed by
    listing id. */
 export async function loadTradeFacts() {
-  const rows = await loadAll("trade_products", "id,source,unit,variants,origin,live,price", "created_at");
+  const rows = await loadAll("trade_products", "id,source,unit,variants,origin,live,price,title,images", "created_at");
+  /* Keyed by listing id when the product names its listing, and by "#<product
+     id>" for every product: a listing linked some other way (or connected by
+     hand) finds its product through platforms.trade.product_id. */
   const out = {};
   for (const r of rows) {
-    const lid = r.source?.listing_id || (String(r.id).startsWith("lm-") ? String(r.id).slice(3) : "");
-    if (!lid) continue;
     const v = (r.variants || []).find(x => x.pieces) || r.variants?.[0] || {};
-    out[lid] = { id: r.id, unit: r.unit || "kg", pieces: v.pieces || null, pieces_max: v.pieces_max || null, origin: r.origin || "", live: !!r.live, price: +r.price || 0 };
+    const fact = { id: r.id, unit: r.unit || "kg", pieces: v.pieces || null, pieces_max: v.pieces_max || null, origin: r.origin || "", live: !!r.live, price: +r.price || 0,
+      title: r.title || "", image: (r.images || []).find(u => typeof u === "string") || "" };
+    out[`#${r.id}`] = fact;
+    const lid = r.source?.listing_id || (String(r.id).startsWith("lm-") ? String(r.id).slice(3) : "");
+    if (lid) out[lid] = fact;
   }
   return out;
 }
