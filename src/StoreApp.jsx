@@ -6,13 +6,14 @@
    reads them through its own server; staff manage them here with their ERP
    session. A listing can also be published to the store from Listing Manager,
    which writes the same rows. */
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { ETSY_SHOP_SECTIONS } from "../lib/listingCategories.js";
 import { retailTitle } from "../lib/retailTitle.js";
+const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 const esc = s => s.replace(/[%_]/g, m => "\\" + m);
 
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
@@ -90,13 +91,23 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
     updated_at: new Date().toISOString(),
   };
 }
+/* What staff changed by hand in the store's product editor stays as they left
+   it when the listing syncs again; source.manual names those fields. */
+const MANUAL = ["title", "subtitle", "handle", "description", "images", "videos", "material", "shape", "product_type", "tags", "collections", "price", "compare_at", "price_inr", "qty", "is_unique", "sku", "weight_g"];
+function keepManual(row, existing) {
+  const manual = (existing?.source?.manual || []).filter(k => MANUAL.includes(k));
+  if (!manual.length) return row;
+  const out = { ...row, source: { ...row.source, manual } };
+  for (const k of manual) if (k in existing) out[k] = existing[k];
+  return out;
+}
 
 /* Listing Manager hooks — the store is a platform there, like Etsy. */
 export async function publishListingToStore(listing, { syncOnly = false } = {}) {
   const s = await storeSettings();
   const id = `lm-${listing.id}`;
-  const existing = await q(supabase.from("store_products").select("handle,status,collections,videos,title").eq("id", id).maybeSingle());
-  let row = rowFromListing(listing, { fx: +s.fx_inr_per_usd || 84, rounding: s.price_rounding, discount: s.etsy_discount_pct, existing, live: !syncOnly });
+  const existing = await q(supabase.from("store_products").select("*").eq("id", id).maybeSingle());
+  let row = keepManual(rowFromListing(listing, { fx: +s.fx_inr_per_usd || 84, rounding: s.price_rounding, discount: s.etsy_discount_pct, existing, live: !syncOnly }), existing);
   if (!existing) {
     // Another piece already has this name: this one takes the next number.
     if (!/ #\d+$/.test(row.title)) {
@@ -246,23 +257,37 @@ export function StoreProductsPanel({ showToast, settings: given, site: givenSite
   const [filter, setFilter] = useState("active");
   const [search, setSearch] = useState("");
   const [importing, setImporting] = useState(false);
+  const [edit, setEdit] = useState(null);
   const [shown, setShown] = useState(60);
+  /* Loads once. Listing Manager hands in a fresh showToast on every render, so
+     keying the load on it would re-download the store on each redraw. */
+  const toastRef = useRef(showToast);
+  toastRef.current = showToast;
+  const toast = m => toastRef.current?.(m);
   const load = useCallback(() => q(supabase.from("store_products").select("*").order("created_at", { ascending: false }).range(0, 4999))
-    .then(setRows).catch(e => { showToast?.("⚠ " + e.message); setRows([]); }), [showToast]);
+    .then(setRows).catch(e => { toastRef.current?.("⚠ " + e.message); setRows(r => r || []); }), []);
   useEffect(() => { load(); }, [load]);
-  const save = async (id, p) => {
-    try { const row = await q(supabase.from("store_products").update({ ...p, updated_at: new Date().toISOString() }).eq("id", id).select().single()); setRows(r => r.map(x => x.id === id ? row : x)); }
-    catch (e) { showToast?.("⚠ " + e.message); }
+  // `manual` = fields changed by hand; a later Listing Manager sync leaves them alone.
+  const save = async (id, p, manual = []) => {
+    try {
+      const cur = (rows || []).find(x => x.id === id);
+      const patch = { ...p, updated_at: new Date().toISOString() };
+      if (manual.length) patch.source = { ...(cur?.source || {}), manual: [...new Set([...(cur?.source?.manual || []), ...manual])] };
+      const row = await q(supabase.from("store_products").update(patch).eq("id", id).select().single());
+      setRows(r => r.map(x => x.id === id ? row : x));
+      return row;
+    } catch (e) { toast("⚠ " + (/store_products_handle_key|duplicate key/.test(e.message) ? "Another product already uses that web address" : e.message)); throw e; }
   };
   const del = async p => {
-    if (!window.confirm(`Take "${p.title}" off the store completely? (Hide keeps it for later.)`)) return;
-    try { await q(supabase.from("store_products").delete().eq("id", p.id)); setRows(r => r.filter(x => x.id !== p.id)); }
-    catch (e) { showToast?.("⚠ " + e.message); }
+    if (!window.confirm(`Delete "${p.title}" from the store completely? (Hide keeps it for later.)`)) return false;
+    try { await q(supabase.from("store_products").delete().eq("id", p.id)); setRows(r => r.filter(x => x.id !== p.id)); toast("Deleted from the store"); return true; }
+    catch (e) { toast("⚠ " + e.message); return false; }
   };
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const list = useMemo(() => (rows || []).filter(p => (filter === "all" || p.status === filter || (filter === "featured" && p.featured)) &&
     words.every(w => `${p.title} ${p.material} ${p.shape} ${p.sku} ${(p.collections || []).join(" ")}`.toLowerCase().includes(w))), [rows, filter, search]);
   const count = f => (rows || []).filter(p => f === "featured" ? p.featured : p.status === f).length;
+  const collections = useMemo(() => [...new Set([...Object.values(SECTION), ...(rows || []).flatMap(p => p.collections || [])])].sort(), [rows]);
 
   return (
     <div>
@@ -276,35 +301,211 @@ export function StoreProductsPanel({ showToast, settings: given, site: givenSite
       </div>
       {!rows && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
       {rows && !rows.length && <div style={{ ...card, padding: 28, textAlign: "center", fontSize: 13.5, color: C.inkMid }}>The store is empty. <b>＋ Add from listings</b> brings your Listing Manager pieces in — tick the ones to sell.</div>}
+      {rows?.length > 0 && <div style={{ fontSize: 11.5, color: C.inkFaint, marginBottom: 10 }}>Tap a piece to edit its photos, name, price and description, or to delete it.</div>}
       <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fill, minmax(${mob() ? 160 : 210}px, 1fr))`, gap: mob() ? 10 : 14 }}>
         {list.slice(0, shown).map(p => (
           <div key={p.id} style={{ ...card, overflow: "hidden", display: "flex", flexDirection: "column", opacity: p.status === "active" ? 1 : .6 }}>
-            <a href={`${site}/products/${p.handle}`} target="_blank" rel="noreferrer" style={{ position: "relative", aspectRatio: "4/5", background: C.card, display: "block" }}>
+            <div onClick={() => setEdit(p)} title="Edit" style={{ position: "relative", aspectRatio: "4/5", background: C.card, cursor: "pointer" }}>
               {p.images?.[0] && <img src={p.images[0]} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
               {p.status === "sold" && <span style={{ position: "absolute", top: 8, left: 8, background: C.ink, color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 4, padding: "2px 7px" }}>SOLD</span>}
               {p.featured && <span style={{ position: "absolute", top: 8, right: 8, background: C.gold, color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 4, padding: "2px 7px" }}>★</span>}
-            </a>
+            </div>
             <div style={{ padding: "10px 12px 6px", flex: 1 }}>
-              <div style={{ fontWeight: 600, fontSize: 13.5, lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.title}</div>
+              <div onClick={() => setEdit(p)} style={{ fontWeight: 600, fontSize: 13.5, lineHeight: 1.25, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", cursor: "pointer" }}>{p.title}</div>
               <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 3 }}>{[p.subtitle, (p.collections || [])[0]].filter(Boolean).join(" · ")}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
                 <span style={{ fontSize: 12, color: C.inkMid }}>$</span>
-                <input defaultValue={p.price} inputMode="decimal" onBlur={e => { const v = +e.target.value || 0; if (v !== +p.price) save(p.id, { price: v }); }}
+                <input key={p.price} defaultValue={p.price} inputMode="decimal" onBlur={e => { const v = +e.target.value || 0; if (v && v !== +p.price) save(p.id, { price: v }, ["price"]).catch(() => {}); }}
                   style={FI({ padding: "4px 8px", fontSize: 13, fontWeight: 700, width: 90 })} />
               </div>
             </div>
             <div style={{ display: "flex", gap: 5, padding: "4px 10px 10px" }}>
               {p.status !== "sold"
-                ? <button onClick={() => save(p.id, { status: p.status === "active" ? "hidden" : "active" })} style={{ ...btn(p.status === "active" ? C.ink : C.surface, p.status === "active" ? "#fff" : C.inkMid), flex: 1, padding: "5px 0", fontSize: 11 }}>{p.status === "active" ? "On sale" : "Hidden"}</button>
-                : <button onClick={() => save(p.id, { status: "active", sold_at: null })} style={{ ...btn(), flex: 1, padding: "5px 0", fontSize: 11 }}>Relist</button>}
-              <button onClick={() => save(p.id, { featured: !p.featured })} title="Feature on the home page" style={{ ...btn(p.featured ? C.gold : C.surface, p.featured ? "#fff" : C.inkMid), padding: "5px 9px", fontSize: 11 }}>★</button>
-              <button onClick={() => del(p)} title="Remove from the store" style={{ ...btn(), padding: "5px 9px", fontSize: 11, color: C.red }}>✕</button>
+                ? <button onClick={() => save(p.id, { status: p.status === "active" ? "hidden" : "active" }).catch(() => {})} style={{ ...btn(p.status === "active" ? C.ink : C.surface, p.status === "active" ? "#fff" : C.inkMid), flex: 1, padding: "5px 0", fontSize: 11 }}>{p.status === "active" ? "On sale" : "Hidden"}</button>
+                : <button onClick={() => save(p.id, { status: "active", sold_at: null }).catch(() => {})} style={{ ...btn(), flex: 1, padding: "5px 0", fontSize: 11 }}>Relist</button>}
+              <button onClick={() => save(p.id, { featured: !p.featured }).catch(() => {})} title="Feature on the home page" style={{ ...btn(p.featured ? C.gold : C.surface, p.featured ? "#fff" : C.inkMid), padding: "5px 9px", fontSize: 11 }}>★</button>
+              <button onClick={() => setEdit(p)} title="Edit" style={{ ...btn(), padding: "5px 9px", fontSize: 11 }}>✎</button>
+              <button onClick={() => del(p)} title="Delete from the store" style={{ ...btn(), padding: "5px 9px", fontSize: 11, color: C.red }}>✕</button>
             </div>
           </div>
         ))}
       </div>
       {list.length > shown && <div style={{ textAlign: "center", marginTop: 12 }}><button onClick={() => setShown(s => s + 100)} style={btn()}>Show more ({list.length - shown})</button></div>}
-      {importing && settings && <ImportFromListings settings={settings} existing={rows || []} onClose={() => setImporting(false)} onDone={n => { setImporting(false); load(); showToast?.(`✓ ${n} piece${n === 1 ? "" : "s"} added to the store`); }} />}
+      {edit && <StoreProductEditor p={edit} site={site} collections={collections} showToast={toast}
+        onClose={() => setEdit(null)}
+        onDelete={async () => { if (await del(edit)) setEdit(null); }}
+        onSave={async (patch, manual) => { await save(edit.id, patch, manual); setEdit(null); toast("Saved — live on the store within a minute"); }}
+        onUnlock={async () => { const row = await save(edit.id, { source: { ...(edit.source || {}), manual: [] } }); setEdit(row); toast("The next listing sync will update this piece again"); }} />}
+      {importing && settings && <ImportFromListings settings={settings} existing={rows || []} onClose={() => setImporting(false)} onDone={n => { setImporting(false); load(); toast(`✓ ${n} piece${n === 1 ? "" : "s"} added to the store`); }} />}
+    </div>
+  );
+}
+
+/* Everything the store shows about one piece. Fields changed here are marked
+   hand-edited so a Listing Manager sync doesn't put the listing's version back. */
+const FIELD_NAMES = { title: "name", subtitle: "size line", handle: "web address", description: "description", images: "photos", videos: "video", material: "material", shape: "shape", product_type: "type", tags: "tags", collections: "collections", price: "price", compare_at: "was-price", price_inr: "₹ price", qty: "quantity", is_unique: "one of a kind", sku: "SKU", weight_g: "weight" };
+function StoreProductEditor({ p, site, collections, showToast, onClose, onSave, onDelete, onUnlock }) {
+  const [f, setF] = useState(() => ({
+    title: p.title || "", subtitle: p.subtitle || "", handle: p.handle || "", description: p.description || "",
+    images: [...(p.images || [])], video: (p.videos || [])[0] || "",
+    material: p.material || "", shape: p.shape || "", product_type: p.product_type || "",
+    tags: (p.tags || []).join(", "), collections: [...(p.collections || [])],
+    price: p.price ?? "", compare_at: p.compare_at ?? "", price_inr: p.price_inr ?? "",
+    qty: p.qty ?? 1, is_unique: p.is_unique !== false, sku: p.sku || "", weight_g: p.weight_g ?? "",
+    status: p.status || "hidden", featured: !!p.featured,
+  }));
+  const [busy, setBusy] = useState("");
+  const [editIdx, setEditIdx] = useState(null);   // photo open in the photo editor
+  const set = k => e => setF(x => ({ ...x, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  const num = k => e => setF(x => ({ ...x, [k]: e.target.value.replace(/[^\d.]/g, "") }));
+  const setImages = fn => setF(x => ({ ...x, images: fn(x.images) }));
+  const toggleCol = c => setF(x => ({ ...x, collections: x.collections.includes(c) ? x.collections.filter(y => y !== c) : [...x.collections, c] }));
+  const [newCol, setNewCol] = useState("");
+  const addPhotos = async files => {
+    const list = [...(files || [])].filter(file => file.type.startsWith("image/"));
+    if (!list.length) return;
+    setBusy("photos");
+    try {
+      const urls = [];
+      for (const file of list) urls.push(await uploadToStorage(`store/products/${uid()}.${(file.name.split(".").pop() || "jpg").toLowerCase()}`, file));
+      setImages(a => [...a, ...urls]);
+    } catch (e) { showToast("⚠ " + e.message); }
+    setBusy("");
+  };
+  const addVideo = async file => {
+    if (!file) return;
+    setBusy("video");
+    try { const url = await uploadToStorage(`store/products/${uid()}.${(file.name.split(".").pop() || "mp4").toLowerCase()}`, file); setF(x => ({ ...x, video: url })); }
+    catch (e) { showToast("⚠ " + e.message); }
+    setBusy("");
+  };
+  const submit = async () => {
+    const price = +f.price || 0;
+    if (!f.title.trim()) return showToast("⚠ The piece needs a name");
+    if (!price) return showToast("⚠ Set a price in dollars");
+    const handle = slugify(f.handle) || p.handle;
+    const next = {
+      title: f.title.trim(), subtitle: f.subtitle.trim(), handle, description: f.description.trim(),
+      images: f.images, videos: f.video ? [f.video] : [],
+      material: f.material.trim(), shape: f.shape.trim(), product_type: f.product_type.trim(),
+      tags: f.tags.split(",").map(s => s.trim()).filter(Boolean), collections: f.collections,
+      price, compare_at: +f.compare_at > price ? +f.compare_at : null, price_inr: +f.price_inr || null,
+      qty: Math.max(0, parseInt(f.qty, 10) || 0), is_unique: f.is_unique, sku: f.sku.trim(), weight_g: parseInt(f.weight_g, 10) || null,
+    };
+    const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    const manual = Object.keys(next).filter(k => !same(next[k], k === "price" || k === "compare_at" || k === "price_inr" ? (p[k] == null ? null : +p[k]) : p[k]));
+    const patch = { ...next, featured: f.featured };
+    if (f.status !== p.status) { patch.status = f.status; patch.sold_at = f.status === "sold" ? (p.sold_at || new Date().toISOString()) : null; }
+    setBusy("save");
+    try { await onSave(patch, manual); } catch { /* toast already shown */ }
+    setBusy("");
+  };
+  const locked = (p.source?.manual || []).filter(k => FIELD_NAMES[k]);
+  const two = mob() ? "1fr" : "1fr 1fr";
+  const three = mob() ? "1fr 1fr" : "1fr 1fr 1fr";
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,15,5,.45)", display: "flex", alignItems: mob() ? "flex-end" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ ...card, width: "100%", maxWidth: 720, maxHeight: mob() ? "94vh" : "90vh", display: "flex", flexDirection: "column", borderRadius: mob() ? "14px 14px 0 0" : 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ fontFamily: SERIF, fontSize: 20, fontWeight: 700, flex: 1 }}>Edit store product</div>
+          <a href={`${site}/products/${p.handle}`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none", padding: "5px 10px" }}>↗ View</a>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: C.inkMid }}>×</button>
+        </div>
+        <div style={{ overflowY: "auto", padding: 18, flex: 1, display: "flex", flexDirection: "column", gap: 12 }}>
+          {locked.length > 0 && (
+            <div style={{ fontSize: 12, color: C.inkMid, background: C.card, borderRadius: 8, padding: "8px 12px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ flex: 1, minWidth: 200 }}>Edited here, so a Listing Manager sync leaves it alone: <b>{locked.map(k => FIELD_NAMES[k]).join(", ")}</b>.</span>
+              {p.listing_id && <button onClick={() => { if (window.confirm("Let the next Listing Manager sync overwrite these with the listing's details again?")) onUnlock().catch(() => {}); }} style={{ ...btn(), padding: "4px 10px", fontSize: 11.5 }}>Follow the listing again</button>}
+            </div>
+          )}
+          <div>
+            <span style={lab}>Photos · tap one to edit · first is the cover</span>
+            <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+              {f.images.map((src, i) => (
+                <div key={src} style={{ position: "relative", flexShrink: 0 }}>
+                  <img src={src} alt="" onClick={() => setEditIdx(i)} title="Edit this photo"
+                    style={{ width: 76, height: 76, objectFit: "cover", borderRadius: 7, cursor: "pointer", display: "block", border: `2px solid ${i === 0 ? C.gold : "transparent"}` }} />
+                  <div style={{ position: "absolute", top: 3, right: 3, display: "flex", gap: 3 }}>
+                    {i > 0 && <button type="button" title="Make cover" onClick={() => setImages(a => [a[i], ...a.filter((_, j) => j !== i)])}
+                      style={{ width: 22, height: 22, borderRadius: 11, border: "none", background: "rgba(20,15,8,.7)", color: "#fff", fontSize: 11, cursor: "pointer", padding: 0 }}>★</button>}
+                    <button type="button" title="Remove" onClick={() => setImages(a => a.filter((_, j) => j !== i))}
+                      style={{ width: 22, height: 22, borderRadius: 11, border: "none", background: "rgba(20,15,8,.7)", color: "#fff", fontSize: 13, cursor: "pointer", padding: 0 }}>×</button>
+                  </div>
+                </div>
+              ))}
+              <label style={{ width: 76, height: 76, flexShrink: 0, borderRadius: 7, border: `1.5px dashed ${C.border}`, display: "grid", placeItems: "center", fontSize: 11.5, color: C.inkMid, cursor: "pointer", textAlign: "center" }}>
+                {busy === "photos" ? "Uploading…" : "＋ Photos"}
+                <input type="file" accept="image/*" multiple hidden onChange={e => { addPhotos(e.target.files); e.target.value = ""; }} />
+              </label>
+            </div>
+          </div>
+          {editIdx != null && f.images[editIdx] && (
+            <Suspense fallback={null}>
+              <PhotoEditor url={f.images[editIdx]} photos={f.images} index={editIdx} showToast={showToast}
+                onSave={u => setImages(a => a.map((x, j) => (j === editIdx ? u : x)))}
+                onSaveAll={next => setImages(() => next)}
+                onClose={() => setEditIdx(null)} />
+            </Suspense>
+          )}
+          <div>
+            <span style={lab}>Video</span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {f.video ? <video src={f.video} muted playsInline style={{ width: 110, height: 76, objectFit: "cover", borderRadius: 7, background: C.card }} /> : <span style={{ fontSize: 12, color: C.inkFaint }}>none</span>}
+              <label style={{ ...btn(), cursor: "pointer" }}>{busy === "video" ? "Uploading…" : f.video ? "Replace" : "Upload video"}<input type="file" accept="video/*" hidden onChange={e => { addVideo(e.target.files?.[0]); e.target.value = ""; }} /></label>
+              {f.video && <button onClick={() => setF(x => ({ ...x, video: "" }))} style={btn()}>Remove</button>}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "2fr 1fr", gap: 10 }}>
+            <div><span style={lab}>Name</span><input value={f.title} onChange={set("title")} style={FI()} /></div>
+            <div><span style={lab}>Size line</span><input value={f.subtitle} onChange={set("subtitle")} placeholder="47mm · 690g" style={FI()} /></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: three, gap: 10 }}>
+            <div><span style={lab}>Price $</span><input value={f.price} onChange={num("price")} inputMode="decimal" style={FI({ fontWeight: 700 })} /></div>
+            <div><span style={lab}>Was $ (shows a sale)</span><input value={f.compare_at} onChange={num("compare_at")} inputMode="decimal" placeholder="—" style={FI()} /></div>
+            <div><span style={lab}>India price ₹</span><input value={f.price_inr} onChange={num("price_inr")} inputMode="decimal" placeholder="—" style={FI()} /></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: two, gap: 10 }}>
+            <div><span style={lab}>Status</span><select value={f.status} onChange={set("status")} style={FI()}><option value="active">On sale</option><option value="hidden">Hidden</option><option value="sold">Sold</option></select></div>
+            <div><span style={lab}>Quantity</span><input value={f.qty} onChange={e => setF(x => ({ ...x, qty: e.target.value.replace(/[^\d]/g, "") }))} inputMode="numeric" disabled={f.is_unique} style={FI({ opacity: f.is_unique ? .5 : 1 })} /></div>
+          </div>
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+            <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.is_unique} onChange={set("is_unique")} /> One of a kind (sells once)</label>
+            <label style={{ fontSize: 13, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.featured} onChange={set("featured")} /> ★ Featured on the home page</label>
+          </div>
+          <div>
+            <span style={lab}>Collections</span>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[...new Set([...collections, ...f.collections])].map(c => {
+                const on = f.collections.includes(c);
+                return <button key={c} type="button" onClick={() => toggleCol(c)} style={{ ...btn(on ? C.ink : C.surface, on ? "#fff" : C.inkMid), borderRadius: 999, padding: "4px 11px", fontSize: 11.5 }}>{c}</button>;
+              })}
+              <input value={newCol} onChange={e => setNewCol(e.target.value)} placeholder="＋ New collection" style={FI({ width: 150, padding: "4px 10px", fontSize: 12, borderRadius: 999 })}
+                onKeyDown={e => { if (e.key === "Enter" && newCol.trim()) { const c = newCol.trim(); setF(x => ({ ...x, collections: x.collections.includes(c) ? x.collections : [...x.collections, c] })); setNewCol(""); } }} />
+            </div>
+          </div>
+          <div><span style={lab}>Description</span><textarea value={f.description} onChange={set("description")} style={FI({ minHeight: 140, resize: "vertical" })} /></div>
+          <div style={{ display: "grid", gridTemplateColumns: three, gap: 10 }}>
+            <div><span style={lab}>Material</span><input value={f.material} onChange={set("material")} style={FI()} /></div>
+            <div><span style={lab}>Shape</span><input value={f.shape} onChange={set("shape")} style={FI()} /></div>
+            <div><span style={lab}>Type</span><input value={f.product_type} onChange={set("product_type")} style={FI()} /></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: three, gap: 10 }}>
+            <div><span style={lab}>SKU</span><input value={f.sku} onChange={set("sku")} style={FI()} /></div>
+            <div><span style={lab}>Weight (g, for shipping)</span><input value={f.weight_g} onChange={e => setF(x => ({ ...x, weight_g: e.target.value.replace(/[^\d]/g, "") }))} inputMode="numeric" style={FI()} /></div>
+            <div><span style={lab}>Tags (comma separated)</span><input value={f.tags} onChange={set("tags")} style={FI()} /></div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: two, gap: 10 }}>
+            <div><span style={lab}>Web address</span><div style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ fontSize: 11.5, color: C.inkFaint, whiteSpace: "nowrap" }}>/products/</span><input value={f.handle} onChange={set("handle")} onBlur={() => setF(x => ({ ...x, handle: slugify(x.handle) || p.handle }))} style={FI()} /></div></div>
+            <div style={{ fontSize: 11, color: C.inkFaint, alignSelf: "end", paddingBottom: 6 }}>Changing the address breaks old links to this piece.</div>
+          </div>
+        </div>
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={onDelete} style={{ ...btn(), color: C.red }}>🗑 Delete</button>
+          <div style={{ flex: 1 }} />
+          <button onClick={onClose} style={btn()}>Cancel</button>
+          <button onClick={submit} disabled={!!busy} style={btn(C.ink, "#FAF0DC")}>{busy === "save" ? "Saving…" : busy ? "Uploading…" : "Save"}</button>
+        </div>
+      </div>
     </div>
   );
 }
