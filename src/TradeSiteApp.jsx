@@ -538,12 +538,26 @@ function Modal({ title, onClose, children, footer }) {
   );
 }
 
+/* "5-7" → { pieces: 5, pieces_max: 7 }; "6" → { pieces: 6 }. How many pieces
+   a kilo (or lot) holds, so the trade site can show the price per piece. */
+const piecesFrom = t => {
+  const [a, b] = String(t || "").split(/[–-]/).map(x => parseInt(x, 10)).filter(x => x >= 1);
+  const lo = Math.min(a || b || 0, b || a || 0), hi = Math.max(a || 0, b || 0);
+  return hi > 1 ? { pieces: lo, pieces_max: hi !== lo ? hi : null } : { pieces: null, pieces_max: null };
+};
+const perPcText = (price, { pieces, pieces_max }) => {
+  if (!(+price > 0) || !pieces) return "";
+  const pc = n => money(n >= 10 ? Math.round(n) : Math.round(n * 100) / 100);
+  const lo = pc(price / (pieces_max || pieces)), hi = pc(price / pieces);
+  return `≈ ${lo === hi ? lo : `${lo}–${hi}`}/pc`;
+};
+
 function ProductEditor({ p, onClose, onSave }) {
   const [f, setF] = useState(() => ({
     title: p.title, description: p.description, shape: p.shape, product_type: p.product_type, unit: p.unit,
     images: [...(p.images || [])],
     collections: (p.collections || []).join(", "), live: p.live, is_new: p.is_new, is_deal: !!p.is_deal, deal_note: p.deal_note || "",
-    variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(v => ({ ...v, price: v.price || "" })),
+    variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(({ pcs, ...v }) => ({ ...v, price: v.price || "", pcs: v.pieces ? (v.pieces_max ? `${v.pieces}-${v.pieces_max}` : String(v.pieces)) : "" })),
   }));
   const [busy, setBusy] = useState(false);
   const [editIdx, setEditIdx] = useState(null);   // photo open in the editor
@@ -552,7 +566,7 @@ function ProductEditor({ p, onClose, onSave }) {
   const setV = (i, k, val) => setF(x => ({ ...x, variants: x.variants.map((v, j) => j === i ? { ...v, [k]: val } : v) }));
   const submit = async () => {
     setBusy(true);
-    const variants = f.variants.map(v => ({ ...v, price: +v.price || 0, stock: v.stock === "" || v.stock == null ? null : +v.stock }));
+    const variants = f.variants.map(({ pcs, ...v }) => ({ ...v, price: +v.price || 0, stock: v.stock === "" || v.stock == null ? null : +v.stock, ...piecesFrom(f.unit === "piece" ? "" : pcs) }));
     const prices = variants.map(v => v.price).filter(x => x > 0);
     const tracked = variants.filter(v => v.stock != null);
     try {
@@ -607,16 +621,18 @@ function ProductEditor({ p, onClose, onSave }) {
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr 110px", gap: 10 }}>
           <div><span style={lab}>Shape</span><input value={f.shape} onChange={set("shape")} style={FI()} /></div>
           <div><span style={lab}>Type</span><input value={f.product_type} onChange={set("product_type")} style={FI()} /></div>
-          <div><span style={lab}>Sold per</span><select value={f.unit} onChange={set("unit")} style={FI()}><option value="piece">piece</option><option value="kg">kg</option><option value="lot">lot</option></select></div>
+          <div><span style={lab}>Sold per</span><select value={f.unit} onChange={set("unit")} style={FI()}><option value="kg">kg</option><option value="piece">piece</option><option value="lot">lot</option></select></div>
         </div>
         <div><span style={lab}>Collections (comma separated)</span><input value={f.collections} onChange={set("collections")} style={FI()} /></div>
         <div>
-          <span style={lab}>Trade price{f.variants.length > 1 ? " per option" : ""} (USD · blank = on request)</span>
+          <span style={lab}>Trade price per {f.unit === "piece" ? "piece" : f.unit === "lot" ? "lot" : "kilo"}{f.variants.length > 1 ? ", each option" : ""} (USD · blank = on request) · stock · pieces per {f.unit === "lot" ? "lot" : "kilo"}</span>
           {f.variants.map((v, i) => (
-            <div key={v.id} style={{ display: "grid", gridTemplateColumns: f.variants.length > 1 ? "1fr 100px 80px" : "120px 80px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+            <div key={v.id} style={{ display: "grid", gridTemplateColumns: f.variants.length > 1 ? "1fr 100px 80px 80px auto" : "120px 80px 80px auto", gap: 8, marginBottom: 6, alignItems: "center" }}>
               {f.variants.length > 1 && <div style={{ fontSize: 12.5, color: C.inkMid }}>{optLabel(v.title)}</div>}
               <input value={v.price} onChange={e => setV(i, "price", e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="$" style={FI()} />
               <input value={v.stock ?? ""} onChange={e => setV(i, "stock", e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" placeholder="stock" title="Stock — blank = not tracked" style={FI()} />
+              <input value={v.pcs} onChange={e => setV(i, "pcs", e.target.value.replace(/[^\d–-]/g, ""))} disabled={f.unit === "piece"} placeholder="pcs e.g. 5-7" title="How many pieces one kilo / lot holds, e.g. 5-7 — buyers then see the price per piece" style={FI({ opacity: f.unit === "piece" ? .4 : 1 })} />
+              <span style={{ fontSize: 11.5, color: C.inkFaint, whiteSpace: "nowrap" }}>{f.unit !== "piece" && perPcText(v.price, piecesFrom(v.pcs))}</span>
             </div>
           ))}
         </div>
@@ -643,7 +659,7 @@ function StockPicker({ onClose, onAdd, existing }) {
 
   const add = s => {
     const photos = (s.photos?.length ? s.photos : [s.photo]).filter(Boolean);
-    const unit = /kg/i.test(s.unit) ? "kg" : "piece";
+    const unit = /^(pc|pcs|piece|pieces|nos?)$/i.test(String(s.unit || "").trim()) ? "piece" : "kg";
     onAdd({
       id: `stock-${s.id}-${uid()}`, title: [s.material, s.shape && !/mineral/i.test(s.shape) ? s.shape : ""].filter(Boolean).join(" "),
       description: s.notes || "", shape: s.shape || "", material: s.material || "", product_type: s.productType || "",
@@ -787,10 +803,11 @@ export async function publishListingToTrade(listing, { syncOnly = false } = {}) 
     images,
     // A listing carries one video; keep any others added on the site itself.
     videos: [...new Set([...(listing.video && /^https?:/.test(listing.video) ? [listing.video] : []), ...(existing?.videos || [])])],
-    variants: [{ id: v0.id || uid(), title: "Default Title", price, sku: listing.sku || "", stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null }],
+    // Keep what the site set on the option (e.g. pieces per lot).
+    variants: [{ ...v0, id: v0.id || uid(), title: "Default Title", price, sku: listing.sku || "", stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null }],
     price,
     stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null,
-    unit: existing?.unit || "piece",
+    unit: existing?.unit || "kg",   // trade prices are per kilo unless marked per piece
     live,
     is_new: existing ? existing.is_new : true,
     new_at: existing?.new_at || new Date().toISOString(),
