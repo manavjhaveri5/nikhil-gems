@@ -195,7 +195,7 @@ function BuyersTab({ showToast, siteUrl }) {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => loadAll("trade_buyers",
-    "id,email,name,company,phone,city,state,country,resale_no,resale_docs,status,created_at,approved_at,last_login,shopify_id,notes,invite_expires,has_password,sells_on,marketing_opt_in,prefs",
+    "id,email,name,company,phone,city,state,country,resale_no,resale_docs,status,created_at,approved_at,last_login,shopify_id,notes,invite_expires,has_password,sells_on,marketing_opt_in,prefs,is_editor",
     "created_at").then(setRows).catch(e => { showToast("⚠ " + e.message); setRows(r => r || []); }), [showToast]);
   useEffect(() => { load(); }, [load]);
 
@@ -353,13 +353,26 @@ function BuyersTab({ showToast, siteUrl }) {
                   </div>
                 )}
               </div>
-              <Pill k={b.status}>{b.status === "pending" ? "waiting" : b.status}</Pill>
+              <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                {b.is_editor && <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: .5, textTransform: "uppercase", color: C.gold, background: C.amberBg, border: `1px solid ${C.gold}40`, borderRadius: 20, padding: "2px 8px" }}>✎ Editor</span>}
+                <Pill k={b.status}>{b.status === "pending" ? "waiting" : b.status}</Pill>
+              </div>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
               {b.status !== "approved" && <button disabled={busy} onClick={() => approve(b)} style={btn(C.green, "#fff")}>{b.status === "paused" && b.has_password ? "▶ Reactivate" : "✓ Approve"}</button>}
               {b.status === "approved" && <button onClick={() => patch(b.id, { status: "paused" })} style={btn()}>Pause</button>}
               {b.status === "pending" && <button onClick={() => patch(b.id, { status: "declined" })} style={btn()}>Decline</button>}
               {b.status === "approved" && <button onClick={() => invite(b).catch(e => showToast("⚠ " + e.message))} style={btn()}>🔗 {b.has_password ? "Password reset link" : "Set-up link"}</button>}
+              {/* An editor can change products on the trade site itself (the ✎ Edit
+                  product button). Theirs is the same login as any buyer's. */}
+              {b.status === "approved" && (
+                <button onClick={() => {
+                  if (!b.is_editor && !window.confirm(`Let ${b.name || b.email} edit products on the trade site?`)) return;
+                  patch(b.id, { is_editor: !b.is_editor }).then(() => showToast(b.is_editor ? "Editing turned off" : "✓ Can now edit products on the trade site — reload the site"));
+                }} style={btn(b.is_editor ? C.amberBg : "transparent", b.is_editor ? C.gold : C.ink)}>
+                  ✎ {b.is_editor ? "Editor · on" : "Make editor"}
+                </button>
+              )}
               <div style={{ flex: 1 }} />
               <button onClick={() => remove(b)} style={{ ...btn(), color: C.red }} title="Delete this account">Delete</button>
             </div>
