@@ -75,6 +75,24 @@ export function tradeRowOf(map, l) {
    listing never writes to it: no sync, no hiding when the piece sells. */
 export const tradeRefOnly = l => !!l?.platforms?.trade?.linked_only;
 
+/* How many pieces a kilo of each shape usually holds: the starting count
+   when a piece goes onto the trade site per kilo. The trade site keeps the
+   same table (src/pieces.js) for products saved without a count. */
+const PER_KG = [
+  [/\bmini[\s-]*hearts?\b/i, 70, 100],
+  [/\bspheres?\b|\bballs?\b/i, 7, 13],
+  [/\bpalm[\s-]?stones?\b|\bworry stones?\b/i, 15, 25],
+  [/\bhearts?\b/i, 20, 30],
+  [/\bshiva|\blingams?\b/i, 20, 25],
+];
+export function defaultPieces(l) {
+  for (const text of [`${l?.shape || ""} ${l?.title || ""}`, l?.trade_title, l?.title]) {
+    const hit = PER_KG.find(([re]) => re.test(String(text || "")));
+    if (hit) return { pieces: hit[1], pieces_max: hit[2] };
+  }
+  return null;
+}
+
 /* A pasted link or number → the platform's id. Etsy and eBay only: the two
    sites of ours are linked by posting from here. */
 export function parseRef(key, text) {
