@@ -426,6 +426,19 @@ function ProductsTab({ showToast }) {
     } catch (e) { showToast("⚠ " + e.message); throw e; }
   };
 
+  const [away, setAway] = useState([]);   // deals whose stock is at a show
+  useEffect(() => {
+    if (!rows) return;
+    dealsAtShows(rows).then(setAway).catch(() => setAway([]));
+  }, [rows]);
+  const undealAway = async () => {
+    try {
+      await q(supabase.from("trade_products").update({ is_deal: false, updated_at: new Date().toISOString() }).in("id", away.map(a => a.product.id)));
+      setRows(r => r.map(p => away.some(a => a.product.id === p.id) ? { ...p, is_deal: false } : p));
+      toastRef.current?.(`✓ ${away.length} taken out of Deals`);
+    } catch (e) { toastRef.current?.("⚠ " + e.message); }
+  };
+
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const list = useMemo(() => (rows || []).filter(p =>
     (filter === "all" || (filter === "live" ? p.live : filter === "hidden" ? !p.live : filter === "new" ? p.is_new : filter === "deal" ? p.is_deal : !p.price)) &&
@@ -435,6 +448,17 @@ function ProductsTab({ showToast }) {
 
   return (
     <div>
+      {away.length > 0 && (
+        <div style={{ ...card, padding: 12, marginBottom: 12, borderColor: C.amber, background: C.amberBg }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 4 }}>
+            ⚠ {away.length} deal{away.length === 1 ? " is" : "s are"} at a show — not ready to ship
+          </div>
+          <div style={{ fontSize: 12, color: C.inkMid, lineHeight: 1.5, marginBottom: 8 }}>
+            {away.map(a => `${a.product.title} (${a.shows.join(", ")})`).join(" · ")}
+          </div>
+          <button onClick={undealAway} style={btn(C.ink, "#FAF0DC")}>Take {away.length === 1 ? "it" : "them"} out of Deals</button>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
         {[["all", "All"], ["live", "Live"], ["hidden", "Hidden"], ["new", "New"], ["deal", "Deals"], ["noprice", "No price"]].map(([k, l]) => (
           <button key={k} onClick={() => { setFilter(k); setShown(60); }} style={{ ...btn(filter === k ? C.ink : C.surface, filter === k ? "#fff" : C.ink), borderRadius: 999 }}>
@@ -856,6 +880,47 @@ export async function findTradeLinks(listings) {
     links[l.id] = { product_id: row.id, status: row.live ? "active" : "draft", url: `${base}/p/${row.id}` };
   }
   return links;
+}
+
+/* Deals are "Ready to ship · Free shipping". Stock that has gone to a show
+   isn't in the office to ship, so a deal on it is a promise we can't keep.
+   A trade product's stock is its own stock item (added from Stock) or the one
+   its listing is tied to. */
+const atShow = s => !!s?.showId && !s.soldDate;
+async function tradeStockMap() {
+  const [listings, stock] = await Promise.all([loadK("ng-listings-v1"), loadK("ng-stock-v5")]);
+  const byProduct = new Map();   // trade product id → Set(stock id)
+  const add = (pid, sid) => { if (!pid || !sid) return; if (!byProduct.has(pid)) byProduct.set(pid, new Set()); byProduct.get(pid).add(String(sid)); };
+  for (const l of Array.isArray(listings) ? listings : []) {
+    const pid = l.platforms?.trade?.product_id || `lm-${l.id}`;
+    add(pid, l.linked_stock_id); add(pid, l.stockId);
+  }
+  return { byProduct, stockById: new Map((Array.isArray(stock) ? stock : []).map(s => [String(s.id), s])) };
+}
+
+export async function dealsAtShows(products) {
+  const deals = (products || []).filter(p => p.is_deal);
+  if (!deals.length) return [];
+  const { byProduct, stockById } = await tradeStockMap();
+  return deals.map(p => {
+    const ids = new Set(byProduct.get(p.id) || []);
+    if (p.source?.stock_id) ids.add(String(p.source.stock_id));
+    const away = [...ids].map(id => stockById.get(id)).filter(atShow);
+    return away.length ? { product: p, shows: [...new Set(away.map(s => s.showTag || s.region || "a show"))] } : null;
+  }).filter(Boolean);
+}
+
+/* Stock → Send to show calls this: any deal on those items stops being one. */
+export async function undealForStock(stockIds) {
+  const ids = new Set([...(stockIds || [])].map(String));
+  if (!ids.size) return 0;
+  const { byProduct } = await tradeStockMap();
+  const pids = new Set([...byProduct].filter(([, set]) => [...set].some(id => ids.has(id))).map(([pid]) => pid));
+  const deals = await loadAll("trade_products", "id,is_deal,source", "created_at");
+  const hit = deals.filter(p => p.is_deal && (pids.has(p.id) || ids.has(String(p.source?.stock_id || ""))));
+  if (!hit.length) return 0;
+  await q(supabase.from("trade_products").update({ is_deal: false, updated_at: new Date().toISOString() }).in("id", hit.map(p => p.id)));
+  return hit.length;
 }
 
 export async function hideTradeProduct(productId) {
