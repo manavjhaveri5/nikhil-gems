@@ -4,7 +4,7 @@
    Everything lives in the trade_* tables. Staff reach them with their normal
    ERP session; buyers never do (they go through the trade site's own server
    function), so nothing here is visible to a buyer. */
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
@@ -194,9 +194,11 @@ function BuyersTab({ showToast, siteUrl }) {
   const [links, setLinks] = useState({}); // id → invite link, shown once
   const [busy, setBusy] = useState(false);
 
+  const toastRef = useRef(showToast);   // load once, whatever the parent re-renders
+  toastRef.current = showToast;
   const load = useCallback(() => loadAll("trade_buyers",
     "id,email,name,company,phone,city,state,country,resale_no,resale_docs,status,created_at,approved_at,last_login,shopify_id,notes,invite_expires,has_password,sells_on,marketing_opt_in,prefs,is_editor",
-    "created_at").then(setRows).catch(e => { showToast("⚠ " + e.message); setRows(r => r || []); }), [showToast]);
+    "created_at").then(setRows).catch(e => { toastRef.current?.("⚠ " + e.message); setRows(r => r || []); }), []);
   useEffect(() => { load(); }, [load]);
 
   const patch = async (id, p) => {
@@ -406,7 +408,13 @@ function ProductsTab({ showToast }) {
   const [picker, setPicker] = useState(false);
   const [shown, setShown] = useState(60);
 
-  const load = useCallback(() => loadAll("trade_products", "*", "created_at").then(setRows).catch(e => { showToast("⚠ " + e.message); setRows(r => r || []); }), [showToast]);
+  /* Loads once. Listing Manager hands in a fresh showToast on every render, so
+     keying the load on it re-downloaded the whole catalogue on each redraw and
+     the list never finished loading on a phone. */
+  const toastRef = useRef(showToast);
+  toastRef.current = showToast;
+  const load = useCallback(() => loadAll("trade_products", "*", "created_at").then(setRows)
+    .catch(e => { toastRef.current?.("⚠ " + e.message); setRows(r => r || []); }), []);
   useEffect(() => { load(); }, [load]);
 
   const save = async (id, p) => {
