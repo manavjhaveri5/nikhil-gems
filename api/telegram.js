@@ -63,6 +63,9 @@ function botCtx(isAT) {
     shows:    "ng-shows-v1",
     name:     isAT ? "Atyahara" : "Nikhil Gems",
     isAT,
+    // The Atyahara bot is the "Recv'd & Paid" bot: photos there are payment
+    // screenshots, never products. Listings are made in the Nikhil Gems bot.
+    listings_on: !isAT,
   };
 }
 
@@ -2373,6 +2376,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
 
 /* ── Tools: listings from plain text ─────────────────────────────────────── */
 async function execCreateListing(args = {}) {
+  if (!_ctx.listings_on) return { success: false, error: "Listings aren't made in the Atyahara bot. Use the Nikhil Gems bot." };
   const bits = [args.title, args.material, args.size, args.weight,
     args.origin && `from ${args.origin}`, args.box && `box ${args.box}`].filter(Boolean).join(" ");
   const parsed = parseListingCaption(bits);
@@ -2694,6 +2698,11 @@ export default async function handler(req, res) {
 
       // Listing mode — for a photo session where captioning every shot is a chore.
       const listMode = cmd.match(/^\/list\s*mode\s*(on|off|start|stop|yes|no)?\b/);
+      if ((listMode || (!hasPhoto && !doc && !hasVideo && isListingCaption(text))) && !_ctx.listings_on) {
+        await saveSession(chatId, { ...session, lastUpdateId: updateId, listingMode: false });
+        await send(chatId, "Listings aren't made in this bot — it's for payments. Post product photos in the Nikhil Gems bot.", _ctx.token);
+        return;
+      }
       if (listMode) {
         const arg = listMode[1] || "";
         const on = /^(on|start|yes)$/.test(arg) ? true : /^(off|stop|no)$/.test(arg) ? false : !session.listingMode;
@@ -2739,7 +2748,7 @@ export default async function handler(req, res) {
       // Explicit by design: a plain photo is still a payment screenshot or a stock
       // note, so it takes a /list caption — or listing mode — to become a product.
       const imageDoc = doc && /^image\//i.test(doc.mime_type || "") ? doc : null;
-      if (hasPhoto || imageDoc || hasVideo) {
+      if (_ctx.listings_on && (hasPhoto || imageDoc || hasVideo)) {
         const wantsListing = isListingCaption(caption) || session.listingMode === true || looksLikeListingCaption(caption);
         const ctx = _ctx;   // pinned: the listing flow outlives this tick
         const joinsAlbum = !wantsListing && !!message.media_group_id && await albumJoinedListing(message.media_group_id, ctx);
@@ -2761,7 +2770,7 @@ export default async function handler(req, res) {
       // video is a listing and was handled above — and a video posted inside an
       // album belongs to whatever the album is, so it never takes this path on
       // its own.
-      if (hasVideo && !message.media_group_id) {
+      if (_ctx.listings_on && hasVideo && !message.media_group_id) {
         const result = await createTelegramVideoListing(caption);
         await saveSession(chatId, { ...session, lastUpdateId: updateId });
         if (!result.success) {
