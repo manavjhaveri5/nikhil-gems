@@ -4,10 +4,11 @@
    Everything lives in the trade_* tables. Staff reach them with their normal
    ERP session; buyers never do (they go through the trade site's own server
    function), so nothing here is visible to a buyer. */
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
+const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
 const SERIF = "'Cormorant Garamond',Georgia,serif";
@@ -516,10 +517,13 @@ function Modal({ title, onClose, children, footer }) {
 function ProductEditor({ p, onClose, onSave }) {
   const [f, setF] = useState(() => ({
     title: p.title, description: p.description, shape: p.shape, product_type: p.product_type, unit: p.unit,
+    images: [...(p.images || [])],
     collections: (p.collections || []).join(", "), live: p.live, is_new: p.is_new, is_deal: !!p.is_deal, deal_note: p.deal_note || "",
     variants: (p.variants?.length ? p.variants : [{ id: uid(), title: "Default Title", price: p.price || 0, sku: "", stock: p.stock ?? null }]).map(v => ({ ...v, price: v.price || "" })),
   }));
   const [busy, setBusy] = useState(false);
+  const [editIdx, setEditIdx] = useState(null);   // photo open in the editor
+  const setImages = fn => setF(x => ({ ...x, images: fn(x.images) }));
   const set = k => e => setF(x => ({ ...x, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
   const setV = (i, k, val) => setF(x => ({ ...x, variants: x.variants.map((v, j) => j === i ? { ...v, [k]: val } : v) }));
   const submit = async () => {
@@ -529,7 +533,7 @@ function ProductEditor({ p, onClose, onSave }) {
     const tracked = variants.filter(v => v.stock != null);
     try {
       await onSave({
-        title: f.title.trim(), description: f.description, shape: f.shape.trim(), product_type: f.product_type.trim(), unit: f.unit,
+        title: f.title.trim(), description: f.description, images: f.images, shape: f.shape.trim(), product_type: f.product_type.trim(), unit: f.unit,
         collections: f.collections.split(",").map(s => s.trim()).filter(Boolean), live: f.live,
         is_new: f.is_new, new_at: f.is_new && !p.is_new ? new Date().toISOString() : p.new_at,
         is_deal: f.is_deal, deal_note: f.deal_note.trim(),
@@ -545,7 +549,36 @@ function ProductEditor({ p, onClose, onSave }) {
       <button onClick={submit} disabled={busy} style={btn(C.ink, "#FAF0DC")}>{busy ? "Saving…" : "Save"}</button>
     </>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {p.images?.length > 0 && <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>{p.images.map(src => <img key={src} src={src} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6 }} />)}</div>}
+        {/* Tap a photo to edit it; ★ makes it the cover, × takes it off. Nothing
+            changes on the site until Save. */}
+        {f.images.length > 0 && (
+          <div>
+            <span style={lab}>Photos · tap one to edit · first is the cover</span>
+            <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+              {f.images.map((src, i) => (
+                <div key={src} style={{ position: "relative", flexShrink: 0 }}>
+                  <img src={src} alt="" onClick={() => setEditIdx(i)} title="Edit this photo"
+                    style={{ width: 76, height: 76, objectFit: "cover", borderRadius: 7, cursor: "pointer", display: "block",
+                      border: `2px solid ${i === 0 ? C.gold : "transparent"}` }} />
+                  <div style={{ position: "absolute", top: 3, right: 3, display: "flex", gap: 3 }}>
+                    {i > 0 && <button type="button" title="Make cover" onClick={() => setImages(a => [a[i], ...a.filter((_, j) => j !== i)])}
+                      style={{ width: 22, height: 22, borderRadius: 11, border: "none", background: "rgba(20,15,8,.7)", color: "#fff", fontSize: 11, cursor: "pointer", padding: 0 }}>★</button>}
+                    <button type="button" title="Remove" onClick={() => setImages(a => a.filter((_, j) => j !== i))}
+                      style={{ width: 22, height: 22, borderRadius: 11, border: "none", background: "rgba(20,15,8,.7)", color: "#fff", fontSize: 13, cursor: "pointer", padding: 0 }}>×</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {editIdx != null && f.images[editIdx] && (
+          <Suspense fallback={null}>
+            <PhotoEditor url={f.images[editIdx]} photos={f.images} index={editIdx}
+              onSave={u => setImages(a => a.map((x, j) => (j === editIdx ? u : x)))}
+              onSaveAll={next => setImages(() => next)}
+              onClose={() => setEditIdx(null)} />
+          </Suspense>
+        )}
         <div><span style={lab}>Title</span><input value={f.title} onChange={set("title")} style={FI()} /></div>
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr 110px", gap: 10 }}>
           <div><span style={lab}>Shape</span><input value={f.shape} onChange={set("shape")} style={FI()} /></div>
