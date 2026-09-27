@@ -112,6 +112,10 @@ export async function publishListingToStore(listing, { syncOnly = false, overrid
   const s = await storeSettings();
   const id = `lm-${listing.id}`;
   let existing = await q(supabase.from("store_products").select("*").eq("id", id).maybeSingle());
+  // Bulk and wholesale lots are trade-site pieces; the retail store sells single pieces.
+  const title = `${listing.title || ""} ${listing.shopify_title || ""}`;
+  if (/\b(bulk|wholesale)\b|\b1\s*kg\b|\bper\s*kg\b/i.test(title) && (!existing || !syncOnly))
+    throw new Error("Bulk / wholesale lots don't go on eartheditions.co — post them to the trade site instead");
   if (existing && override.length) existing = { ...existing, source: { ...(existing.source || {}), manual: (existing.source?.manual || []).filter(k => !override.includes(k)) } };
   let row = keepManual(rowFromListing(listing, { fx: +s.fx_inr_per_usd || 84, rounding: s.price_rounding, discount: s.etsy_discount_pct, existing, live: !syncOnly }), existing);
   if (!existing) {
@@ -133,6 +137,13 @@ export async function publishListingToStore(listing, { syncOnly = false, overrid
 }
 /* What Listing Manager's grid shows for the store: the live $ and ₹ prices and
    status of each listing's store product, keyed by listing id. */
+/* The store's own copy of one listing: the short name and size line it shows,
+   and its live prices. */
+export async function loadStoreProduct(listingId) {
+  const rows = await q(supabase.from("store_products").select("id,title,subtitle,price,price_inr,status,handle").or(`id.eq.lm-${String(listingId).replace(/[,()]/g, "")},listing_id.eq.${String(listingId).replace(/[,()]/g, "")}`).limit(1));
+  return rows[0] || null;
+}
+
 export async function loadStoreFacts() {
   const out = {};
   for (let from = 0; ; from += 1000) {

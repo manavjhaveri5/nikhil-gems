@@ -162,3 +162,16 @@ export function withLocationLog(next, prevLoc, who) {
   return { ...next, officeLocation: to, location_at: new Date().toISOString(),
     location_log: [{ at: new Date().toISOString(), from, to, by: who || "" }, ...log].slice(0, 30) };
 }
+
+/* The trade site names things plainly, with what the price buys:
+   "38-42 MM Cobalto Calcite Sphere - Vivid Pink Matrix" → "Cobalto Calcite
+   Sphere (1 kg)", or "(1 pc)" for a piece sold on its own. */
+export const simpleName = t => String(t || "")
+  .replace(/^\s*[\d.,\s–-]+(?:x\s*[\d.]+\s*)?(?:mm|cm|inch(?:es)?|in|g|gm|gms|kg|ct|carats?)\b\.?\s*/i, "")
+  .split(/\s+[-–—|]\s+|\s*[|:]\s*|,\s/)[0]
+  .replace(/\s*#\d+$/, "").trim();
+export function tradeTitleFor(l, unit) {
+  const u = unit || (l?.type === "unique" ? "piece" : "kg");
+  const name = simpleName(l?.shopify_title || l?.title);
+  return name ? `${name} (1 ${u === "piece" ? "pc" : u === "lot" ? "lot" : "kg"})` : "";
+}

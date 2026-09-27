@@ -265,6 +265,19 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
   const [assignOpen,setAssignOpen]=useState(false);
   const [assignText,setAssignText]=useState("");
   const [assignDue,setAssignDue]=useState("");
+  // Photos to go with an assigned task: uploaded as they're picked or pasted.
+  const [assignPhotos,setAssignPhotos]=useState([]);   // [{id,url,busy,err}]
+  const addAssignPhotos=files=>{
+    [...(files||[])].filter(f=>/^image\//.test(f.type)).forEach(file=>{
+      const id=uid();
+      setAssignPhotos(p=>[...p,{id,url:URL.createObjectURL(file),busy:true}]);
+      const ext=(file.name||"").split(".").pop().toLowerCase().replace(/[^a-z0-9]/g,"")||"jpg";
+      supabaseUpload(`tasks/${id}.${ext}`,file)
+        .then(url=>setAssignPhotos(p=>p.map(x=>x.id===id?{...x,url,busy:false}:x)))
+        .catch(e=>setAssignPhotos(p=>p.map(x=>x.id===id?{...x,busy:false,err:e.message||"Upload failed"}:x)));
+    });
+  };
+  const assignUploading=assignPhotos.some(x=>x.busy);
   const [assignTargetId,setAssignTargetId]=useState("");
 
   useEffect(()=>{
@@ -336,9 +349,11 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
     if(!target)return;
     const existing=await loadK(target.key)||[];
     const arr=Array.isArray(existing)?existing:[];
-    const next=[{id:uid(),text,done:false,dueDate:assignDue||"",assignedBy:currentUser?.name||"Admin",createdAt:new Date().toISOString()},...arr];
+    if(assignUploading)return;
+    const photos=assignPhotos.filter(x=>!x.err&&/^https?:/.test(x.url)).map(x=>x.url);
+    const next=[{id:uid(),text,done:false,dueDate:assignDue||"",...(photos.length?{photos}:{}),assignedBy:currentUser?.name||"Admin",createdAt:new Date().toISOString()},...arr];
     await saveK(target.key,next);
-    setAssignText("");setAssignDue("");setAssignOpen(false);
+    setAssignText("");setAssignDue("");setAssignPhotos([]);setAssignOpen(false);
   };
 
   const pending=todos.filter(todo=>!todo.done).length;
@@ -419,6 +434,11 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
         </button>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:mob?15:13,color:t.done?C.inkFaint:C.ink,textDecoration:t.done?"line-through":"none",wordBreak:"break-word",lineHeight:1.4}}>{t.text}</div>
+          {Array.isArray(t.photos)&&t.photos.length>0&&(
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",margin:"5px 0 2px"}}>
+              {t.photos.map(u=><a key={u} href={u} target="_blank" rel="noreferrer" title="Open photo"><img src={u} alt="" style={{width:mob?64:52,height:mob?64:52,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,display:"block",opacity:t.done?.5:1}}/></a>)}
+            </div>
+          )}
           <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginTop:1}}>
             {due&&<span style={{fontSize:10,color:due.color,fontWeight:due.color===C.red?600:400}}>{due.label}</span>}
             {t.recurring&&<span style={{fontSize:9,background:C.blueBg,color:C.blue,borderRadius:3,padding:"1px 5px",fontWeight:600}}>↻ {RECUR_LABELS[t.recurring]||t.recurring}</span>}
@@ -454,7 +474,8 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
       {/* Assign modal */}
       {assignOpen&&(
         <div style={{position:"fixed",inset:0,background:"rgba(26,19,8,.45)",zIndex:900,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={e=>{if(e.target===e.currentTarget)setAssignOpen(false);}}>
-          <div style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:400,boxShadow:"var(--e-modal)",overflow:"hidden"}}>
+          <div onPaste={e=>{const f=[...(e.clipboardData?.files||[])];if(f.length){e.preventDefault();addAssignPhotos(f);}}}
+            style={{background:C.surface,borderRadius:12,width:"100%",maxWidth:400,boxShadow:"var(--e-modal)",overflow:"hidden"}}>
             <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:17,fontWeight:600}}>Assign a Task</div>
               <button onClick={()=>setAssignOpen(false)} style={{background:"none",border:"none",cursor:"pointer",fontSize:20,color:C.inkFaint}}>&times;</button>
@@ -479,11 +500,29 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
                 <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Due date (optional)</div>
                 <input type="date" value={assignDue} onChange={e=>setAssignDue(e.target.value)} style={{...FI,width:"100%",boxSizing:"border-box",colorScheme:"light"}}/>
               </div>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:5}}>Photos (optional)</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center"}}>
+                  {assignPhotos.map(x=>(
+                    <div key={x.id} style={{position:"relative",width:64,height:64,borderRadius:8,overflow:"hidden",border:`1.5px solid ${x.err?C.red:C.border}`,background:C.card}}>
+                      <img src={x.url} alt="" style={{width:"100%",height:"100%",objectFit:"cover",opacity:x.busy?.5:1}}/>
+                      {x.busy&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:C.ink,fontWeight:700}}>Uploading…</div>}
+                      {x.err&&<div title={x.err} style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:C.red,fontWeight:700,background:"rgba(255,255,255,.7)"}}>Failed</div>}
+                      <button onClick={()=>setAssignPhotos(p=>p.filter(y=>y.id!==x.id))} title="Remove" style={{position:"absolute",top:2,right:2,width:20,height:20,borderRadius:10,border:"none",background:"rgba(20,15,8,.7)",color:"#fff",fontSize:12,lineHeight:"20px",padding:0,cursor:"pointer"}}>&times;</button>
+                    </div>
+                  ))}
+                  <label style={{width:64,height:64,borderRadius:8,border:`1.5px dashed ${C.border}`,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",color:C.inkMid,fontSize:11,gap:2}}>
+                    <span style={{fontSize:20,lineHeight:1}}>📷</span>Add
+                    <input type="file" accept="image/*" multiple onChange={e=>{addAssignPhotos(e.target.files);e.target.value="";}} style={{display:"none"}}/>
+                  </label>
+                </div>
+                <div style={{fontSize:11,color:C.inkFaint,marginTop:5}}>Take or pick a photo, or paste a screenshot here.</div>
+              </div>
             </div>
             <div style={{padding:"12px 18px",borderTop:`1px solid ${C.border}`,display:"flex",gap:8}}>
               <button onClick={()=>setAssignOpen(false)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"9px",cursor:"pointer",fontSize:13,color:C.inkMid}}>Cancel</button>
-              <button onClick={doAssign} disabled={!assignText.trim()||!assignTargetId} style={{flex:2,background:assignText.trim()&&assignTargetId?C.ink:"#ccc",border:"none",borderRadius:6,padding:"9px",cursor:assignText.trim()&&assignTargetId?"pointer":"default",fontSize:13,fontWeight:600,color:"#FAF0DC"}}>
-                Assign{assignTargetId?` to ${assignees.find(a=>a.id===assignTargetId)?.name?.split(" ")[0]||""}` :""}
+              <button onClick={doAssign} disabled={!assignText.trim()||!assignTargetId||assignUploading} style={{flex:2,background:assignText.trim()&&assignTargetId&&!assignUploading?C.ink:"#ccc",border:"none",borderRadius:6,padding:"9px",cursor:assignText.trim()&&assignTargetId&&!assignUploading?"pointer":"default",fontSize:13,fontWeight:600,color:"#FAF0DC"}}>
+                {assignUploading?"Uploading photo…":<>Assign{assignTargetId?` to ${assignees.find(a=>a.id===assignTargetId)?.name?.split(" ")[0]||""}` :""}</>}
               </button>
             </div>
           </div>
@@ -493,7 +532,7 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:15,fontWeight:600,color:C.ink,lineHeight:1}}>To-Do</div>
         {pending>0&&<span style={{background:C.amber,color:"#fff",borderRadius:10,padding:"1px 8px",fontSize:9,fontWeight:700,lineHeight:1.6,flexShrink:0}}>{pending}</span>}
         <div style={{flex:1}}/>
-        {assignees.length>0&&<button onClick={()=>{setAssignOpen(true);setAssignTargetId("");setAssignText("");setAssignDue("");}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 9px",fontSize:11,cursor:"pointer",color:C.inkMid,lineHeight:1.4}}>Assign →</button>}
+        {assignees.length>0&&<button onClick={()=>{setAssignOpen(true);setAssignTargetId("");setAssignText("");setAssignDue("");setAssignPhotos([]);}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 9px",fontSize:11,cursor:"pointer",color:C.inkMid,lineHeight:1.4}}>Assign →</button>}
         {doneCount>0&&<button onClick={()=>setShowDone(v=>!v)} style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:C.inkFaint,padding:0}}>{showDone?`Hide completed`:`${doneCount} completed`}</button>}
       </div>
       <div style={{display:"flex",gap:6,marginBottom:activeTodos.length>0||showDone?10:0,flexWrap:"wrap"}}>

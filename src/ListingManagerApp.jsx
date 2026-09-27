@@ -20,10 +20,10 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import PriceStudio from "./PriceStudio.jsx";
-import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces } from "./listingChannels.js";
+import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -1869,6 +1869,27 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const [studio, setStudio] = useState(false);
   const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, [studio]);
   const stockCost = +(stock.find(s => s.id === form.linked_stock_id)?.costPrice) || 0;
+  const stockWeight = +(stock.find(s => s.id === form.linked_stock_id)?.weightGm) || 0;
+  // What eartheditions.co shows for this listing now: it keeps its own short name.
+  const [storeLive, setStoreLive] = useState(null);
+  // The store's rate and discount, to show what the USA $ and India ₹ come to.
+  const [storeCfg, setStoreCfg] = useState({});
+  useEffect(() => { storeSettings().then(s => setStoreCfg(s || {})).catch(() => {}); }, []);
+  const [focusPrice, setFocusPrice] = useState("");
+  const sFx = +storeCfg.fx_inr_per_usd || 84, sDisc = storeCfg.etsy_discount_pct ?? 25;
+  const autoUsd = +form.price_etsy > 0 ? storePriceFor({ price_etsy: form.price_etsy }, sFx, storeCfg.price_rounding || "whole", sDisc) : 0;
+  const autoInr = +form.price_etsy > 0 ? Math.round(+form.price_etsy * (1 - (+sDisc || 0) / 100) / 10) * 10 : 0;
+  useEffect(() => { if (initial?.id) loadStoreProduct(initial.id).then(setStoreLive).catch(() => {}); }, [initial?.id]);
+  // Finding the stock a piece came from, by stone, SKU, box or show.
+  const [stockQ, setStockQ] = useState("");
+  const stockHits = useMemo(() => {
+    const terms = stockQ.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) return [];
+    return stock.filter(x => {
+      const hay = [x.desc, x.material, x.shape, x.sku, x.location, x.showTag, x.grade, x.origin, x.notes].filter(Boolean).join(" ").toLowerCase();
+      return terms.every(t => hay.includes(t));
+    }).slice(0, 8);
+  }, [stock, stockQ]);
   const [liveUsdRate, setLiveUsdRate] = useState(USD_RATE);
 
   useEffect(() => {
@@ -1900,21 +1921,23 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkMid }}>{p.priceLabel || `${p.label} price`}</span>
           <div style={{ flex: 1 }} />
-          <button type="button" onClick={() => setStudio(true)} title="Work out this and every other price, step by step"
+          <button type="button" onClick={() => setStudio(true)} title="Work out this and every other price on one page"
             style={{ background: "none", border: `1px solid ${C.border}`, cursor: "pointer", fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: C.ink, padding: "5px 9px" }}>
             Price Studio
           </button>
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 6, borderBottom: `1px solid ${C.ink}` }}>
           <span style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 26, color: C.inkMid }}>{p.currency === "USD" ? "$" : "₹"}</span>
-          <input type="number" inputMode="decimal" value={form[p.priceField] || ""}
+          <input type="number" inputMode="decimal" value={form[p.priceField] || (focusPrice !== p.priceField && p.auto ? p.auto : "")}
+            onFocus={() => setFocusPrice(p.priceField)} onBlur={() => setFocusPrice("")}
             onChange={e => {
               set(p.priceField, e.target.value);
               // Auto-prefill eBay from Etsy
               if (p.key === "etsy" && e.target.value) set("price_ebay", (+e.target.value / liveUsdRate / 0.85).toFixed(2));
             }}
             placeholder={p.placeholder || "0"}
-            style={{ flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 32, fontWeight: 500, color: C.ink, padding: "2px 0" }} />
+            style={{ flex: 1, minWidth: 0, border: 0, outline: "none", background: "transparent", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 32, fontWeight: 500, color: !form[p.priceField] && p.auto ? C.inkMid : C.ink, padding: "2px 0" }} />
+          {!form[p.priceField] && p.auto > 0 && <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", color: C.inkFaint, textTransform: "uppercase" }}>auto</span>}
         </div>
         <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 6 }}>
           {p.currency !== "USD" && v > 0 && <>≈ ${(v / liveUsdRate).toFixed(0)} · </>}
@@ -1961,7 +1984,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     // A trade product connected for reference shows as itself, not as this listing.
     const tr = c.key === "trade" && pl.ref ? tradeRowOf(tradeFactsMap, form) : null;
     const cover = tr?.image || (form.images || []).find(u => typeof u === "string");
-    const shownTitle = tr?.title || titleFor({ ...form, tags }, c.key);
+    const liveStoreTitle = c.key === "store" && storeLive && !String(form.store_title || "").trim()
+      ? [storeLive.title, storeLive.subtitle].filter(Boolean).join(" · ") : "";
+    const shownTitle = tr?.title || liveStoreTitle || titleFor({ ...form, tags }, c.key);
     return (
       <div style={{ background: C.surface, border: `1.5px solid ${c.color}40`, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px", background: `${c.color}0F`, borderBottom: `1px solid ${c.color}25`, flexWrap: "wrap" }}>
@@ -1981,6 +2006,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             <div style={{ fontSize: 13.5, fontWeight: 650, color: shownTitle ? C.ink : C.inkFaint, lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{shownTitle || "No title yet"}</div>
             <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3 }}>
               {tr ? (tr.price ? `$${tr.price} / ${tr.unit === "piece" ? "piece" : tr.unit === "lot" ? "lot" : "kg"}` : "Price on request")
+                : c.key === "store" && storeLive && !(+form.price_store > 0) && !(+form.price_store_inr > 0)
+                ? [`$${storeLive.price}`, storeLive.price_inr && `₹${(+storeLive.price_inr).toLocaleString("en-IN")}`, "live on the site (from Etsy)"].filter(Boolean).join(" · ")
                 : c.key === "store"
                 ? [+form.price_store > 0 && `$${form.price_store}`, +form.price_store_inr > 0 && `₹${(+form.price_store_inr).toLocaleString("en-IN")}`].filter(Boolean).join(" · ") || (+form.price_etsy > 0 ? "Price from Etsy" : "No price")
                 : +form[c.priceField] > 0 ? `${c.cur}${(+form[c.priceField]).toLocaleString(c.cur === "₹" ? "en-IN" : "en-US")}` : "No price"}
@@ -2091,8 +2118,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   /* The title and description this platform gets, with its own limit. */
   const overrides = (c, { descPlaceholder, extra, rows = 4 } = {}) => {
     const own = String(form[c.titleField] || "");
-    const shown = titleFor(form, c.key);
-    const src = titleSource(form, c.key);
+    const tRow = c.key === "trade" ? tradeRowOf(tradeFactsMap, form) : null;
+    const live = !own.trim() ? (c.key === "store" ? storeLive?.title || "" : c.key === "trade" ? tRow?.title || "" : "") : "";
+    const suggest = c.key === "trade" && !own.trim() && !live ? tradeTitleFor(form, tRow?.unit) : "";
+    const shown = live || suggest || titleFor(form, c.key);
+    const src = live ? "live" : suggest ? "suggest" : titleSource(form, c.key);
+    const site = c.key === "trade" ? "the trade site" : "eartheditions.co";
+    const noDesc = c.key === "trade";   // the trade site shows name, photos and price only
     const over = c.titleMax && shown.length > c.titleMax;
     return (
       <Section title={`Title & description on ${c.label}`} action={extra}>
@@ -2100,14 +2132,15 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         <input value={own} onChange={e => set(c.titleField, e.target.value)}
           placeholder={shown || "Same as main title"} style={FI(over ? { borderColor: "#C0392B" } : {})} />
         <div style={{ display: "flex", gap: 8, fontSize: 11, marginTop: 4, color: C.inkFaint }}>
-          <span style={{ flex: 1 }}>{src === "own" ? `Own ${c.label} title.` : src === "shopify" ? "Using the old Shopify title. Type here to set one for this platform." : "Using the main title. Type here to change it only on this platform."}</span>
+          <span style={{ flex: 1 }}>{src === "live" ? `On ${site} now: “${live}”${c.key === "store" && storeLive?.subtitle ? `, size line “${storeLive.subtitle}”` : ""}. Type here to change it.` : src === "suggest" ? `Goes up as “${suggest}”: the plain name and what the price buys. Type here to change it.` : src === "own" ? `Own ${c.label} title.` : src === "shopify" ? "Using the old Shopify title. Type here to set one for this platform." : "Using the main title. Type here to change it only on this platform."}</span>
           {c.titleMax && <span style={{ fontWeight: 700, color: over ? C.red : shown.length > c.titleMax * .9 ? C.amber : C.inkFaint }}>{shown.length}/{c.titleMax}</span>}
         </div>
         {over && <div style={{ fontSize: 11.5, color: C.red, marginTop: 3 }}>{c.label} allows {c.titleMax} characters.{c.key === "ebay" ? " eBay cuts the rest off." : ""}</div>}
+        {noDesc ? <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 10 }}>No description: the trade site shows the name, photos, price and pieces per kilo.</div> : <>
         <Label style={{ marginTop: 12 }}>Description</Label>
         <textarea value={form[c.descField] || ""} onChange={e => set(c.descField, e.target.value)}
           rows={rows} placeholder={descPlaceholder || (descFor(form, c.key) ? `Same as ${c.legacy && form.shopify_description ? "the old Shopify description" : "main description"}:\n${String(descFor(form, c.key)).replace(/<[^>]+>/g, "").slice(0, 220)}` : "Same as main description")}
-          style={{ ...FI(), resize: "vertical" }} />
+          style={{ ...FI(), resize: "vertical" }} /></>}
       </Section>
     );
   };
@@ -2120,12 +2153,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   const TABS = [
     { key: "overview", label: "Overview" },
+    { key: "texts", label: "All descriptions" },
     ...CHANNELS.map(c => ({ key: c.key, label: c.label, color: c.color })),
     { key: "more", label: "More" },
   ];
   const tabBadge = key => {
     if (key === "overview") return locRequired && !loc ? { color: C.red, n: "!" } : null;
-    if (key === "more") return null;
+    if (key === "more" || key === "texts") return null;
     const pl = plan(key);
     if (!pl.linked && pl.action !== "add") return null;
     if (pl.ref) return { color: pl.status === "active" ? C.green : C.blue, n: "" };
@@ -2213,6 +2247,31 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   {linkedStockLoc && !loc && <button type="button" onClick={() => set("officeLocation", linkedStockLoc)} style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px dashed ${C.border}`, background: "none", color: C.inkMid }}>Use stock location: {linkedStockLoc}</button>}
                 </div>
               )}
+              <div style={{ marginTop: 10, position: "relative" }}>
+                <input value={stockQ} onChange={e => setStockQ(e.target.value)} placeholder="🔎 Search stock — stone, SKU, box, show…" style={FI({ fontSize: 13, borderRadius: 20, padding: "7px 12px" })} />
+                {stockHits.length > 0 && (
+                  <div style={{ marginTop: 6, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.surface }}>
+                    {stockHits.map(x => {
+                      const on = x.id === form.linked_stock_id;
+                      return (
+                        <button key={x.id} type="button" onClick={() => { set("linked_stock_id", x.id); if (x.location) { set("officeLocation", String(x.location)); setErrors(er => ({ ...er, location: "" })); } setStockQ(""); }}
+                          style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left", padding: "7px 10px", border: "none", borderBottom: `1px solid ${C.border}`, background: on ? C.amberBg : "transparent", cursor: "pointer" }}>
+                          <div style={{ width: 36, height: 36, borderRadius: 6, overflow: "hidden", background: C.card, flex: "none" }}>{(x.photo || x.photos?.[0]) && <img src={x.photo || x.photos[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 650, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.desc || [x.material, x.shape].filter(Boolean).join(" ") || "Stock item"}</div>
+                            <div style={{ fontSize: 11, color: C.inkFaint }}>{[x.sku, `${x.qty ?? "?"} ${x.unit || "pcs"}`, x.weightGm && `${x.weightGm}g`, x.showTag].filter(Boolean).join(" · ")}</div>
+                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: x.location ? C.ink : C.inkFaint, whiteSpace: "nowrap" }}>{x.location ? `📍 ${x.location}` : "no location"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {stockQ && !stockHits.length && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>No stock matches “{stockQ}”.</div>}
+                {form.linked_stock_id && !stockQ && (() => { const ls = stock.find(x => x.id === form.linked_stock_id); return ls ? (
+                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 6 }}>Linked to stock: <b>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ")}</b>{ls.sku ? ` (${ls.sku})` : ""} · {ls.qty} {ls.unit || "pcs"}{ls.location ? ` · 📍 ${ls.location}` : ""} <button type="button" onClick={() => set("linked_stock_id", "")} style={{ border: "none", background: "none", color: C.red, cursor: "pointer", fontSize: 11.5, textDecoration: "underline" }}>unlink</button></div>
+                ) : null; })()}
+              </div>
               {lastMove && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Last moved {new Date(lastMove.at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}{lastMove.from ? ` from ${lastMove.from}` : ""}{lastMove.by ? ` by ${lastMove.by}` : ""}.</div>}
             </div>
 
@@ -2240,7 +2299,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               <span style={{ flex: 1 }}>
                 <span style={{ display: "block", fontSize: 10.5, letterSpacing: ".22em", textTransform: "uppercase", opacity: .7 }}>Price Studio</span>
                 <span style={{ display: "block", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, lineHeight: 1.15, marginTop: 4 }}>
-                  {+form.price_etsy > 0 ? `Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")}${form.price_calc?.sale ? ` · ₹${Math.round(form.price_etsy * (1 - form.price_calc.sale / 100)).toLocaleString("en-IN")} in the sale` : ""}` : "Work out the prices, step by step"}
+                  {+form.price_etsy > 0 ? `Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")}${form.price_calc?.sale ? ` · ₹${Math.round(form.price_etsy * (1 - form.price_calc.sale / 100)).toLocaleString("en-IN")} in the sale` : ""}` : "Cost, weight, margin, fees and sale — every price on one page"}
                 </span>
               </span>
               <span style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{+form.price_etsy > 0 ? "Rework →" : "Start →"}</span>
@@ -2628,12 +2687,28 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </>; })()}
 
           {/* ── Earth Editions (eartheditions.co) ───────────────────────────── */}
+          {/* ── Every title and description side by side ───────────────────── */}
+          {tab === "texts" && <>
+            <div style={{ fontSize: 12.5, color: C.inkMid }}>The main title and description, and what each platform gets. A platform left blank uses the main one; type in its box to give it its own.</div>
+            <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12, alignItems: "start" }}>
+              <Section title="Main (used wherever a platform has none of its own)">
+                <Label>Title</Label>
+                <input value={form.title || ""} onChange={e => set("title", e.target.value)} style={FI()} />
+                <Label style={{ marginTop: 12 }}>Description</Label>
+                <textarea value={form.description || ""} onChange={e => set("description", e.target.value)} rows={9} style={{ ...FI(), resize: "vertical" }} />
+              </Section>
+              {CHANNELS.map(c => <div key={c.key}>{overrides(c, { rows: 9 })}</div>)}
+            </div>
+          </>}
+
           {tab === "store" && (() => { const c = channel("store"); return <>
             {channelHeader(c)}
             {checklist(c)}
             <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
-              {priceCard({ ...P("store"), priceLabel: "🇺🇸 USA price", placeholder: "From Etsy", hint: "Left blank: the Etsy price, converted" })}
-              {priceCard({ ...P("store"), key: "store_inr", priceField: "price_store_inr", currency: "INR", priceLabel: "🇮🇳 India price", placeholder: "From Etsy", hint: "Left blank: the Etsy ₹ price less the store discount" })}
+              {priceCard({ ...P("store"), priceLabel: "🇺🇸 USA price", placeholder: "Set an Etsy price first", auto: autoUsd,
+                hint: +form.price_store > 0 ? `Your own price. Clear it to follow Etsy ($${autoUsd}).` : autoUsd ? `What US buyers see: Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")} less ${sDisc}% ÷ ${sFx}. Type to set your own.${storeLive?.price && +storeLive.price !== autoUsd ? ` On the site now: $${storeLive.price}.` : ""}` : "Follows the Etsy price once it's set" })}
+              {priceCard({ ...P("store"), key: "store_inr", priceField: "price_store_inr", currency: "INR", priceLabel: "🇮🇳 India price", placeholder: "Set an Etsy price first", auto: autoInr,
+                hint: +form.price_store_inr > 0 ? `Your own price. Clear it to follow Etsy (₹${autoInr.toLocaleString("en-IN")}).` : autoInr ? `What buyers in India see: Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")} less ${sDisc}%. Type to set your own.${storeLive?.price_inr && +storeLive.price_inr !== autoInr ? ` On the site now: ₹${(+storeLive.price_inr).toLocaleString("en-IN")}.` : ""}` : "Follows the Etsy price once it's set" })}
             </div>
             {overrides(c, { rows: 5 })}
             <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: -6 }}>A title or description set here replaces one changed by hand in the store's own editor.</div>
@@ -2720,7 +2795,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {studio && (
-        <PriceStudio listing={{ ...form, tags }} stockCost={stockCost} liveRate={liveUsdRate} loadSettings={storeSettings}
+        <PriceStudio listing={{ ...form, tags }} stockCost={stockCost} stockWeight={stockWeight} liveRate={liveUsdRate} loadSettings={storeSettings}
+          shippingProfiles={etsyShippingProfiles}
           onClose={() => setStudio(false)}
           onApply={patch => { setForm(f => ({ ...f, ...patch })); setStudio(false); }} />
       )}
