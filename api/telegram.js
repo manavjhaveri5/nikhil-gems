@@ -2610,10 +2610,14 @@ export default async function handler(req, res) {
       _currentText = text;
       _currentHasVision = !!(wantsVision && imageUrl);
 
-      // Auth
+      // Auth: an allowed chat, or an allowed person writing in a group. A
+      // private chat's id is the person's own Telegram id, so the ids already
+      // on the list let those same people use the bot in a group they add it
+      // to; anyone else in that group still gets nothing.
       const allowed = _ctx.allowed.split(",").map(s => s.trim()).filter(Boolean);
-      if (allowed.length > 0 && !allowed.includes(String(chatId))) {
-        await send(chatId, "⛔ Not authorized.");
+      const fromId = message.from?.id;
+      if (allowed.length > 0 && !allowed.includes(String(chatId)) && !(fromId && allowed.includes(String(fromId)))) {
+        await send(chatId, `⛔ Not authorized.${fromId ? ` (your Telegram id: ${fromId})` : ""}`);
         return;
       }
 
