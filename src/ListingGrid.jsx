@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
 import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
-import { storyLists, useStoriesDone } from "./storyState.js";
+import { storyLists, useStoriesDone, listedAt } from "./storyState.js";
 
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 const StoryStudio = lazy(() => import("./StoryStudio.jsx"));
@@ -290,8 +290,9 @@ const round = { width: 26, height: 26, borderRadius: 13, border: "none", backgro
 
 /* ── the whole view ────────────────────────────────────────────────────── */
 const SORTS = {
-  new: ["Newest", (a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))],
-  old: ["Oldest", (a, b) => String(a.created_at || "").localeCompare(String(b.created_at || ""))],
+  // By when a piece was first listed: an Etsy renewal doesn't make it new.
+  new: ["Newest", (a, b) => listedAt(b) - listedAt(a)],
+  old: ["Oldest", (a, b) => (listedAt(a) || Infinity) - (listedAt(b) || Infinity)],
   etsyHigh: ["Etsy price ↓", (a, b) => (+b.price_etsy || 0) - (+a.price_etsy || 0)],
   etsyLow: ["Etsy price ↑", (a, b) => (+a.price_etsy || 1e12) - (+b.price_etsy || 1e12)],
   az: ["A–Z", (a, b) => String(a.title || "").localeCompare(String(b.title || ""))],

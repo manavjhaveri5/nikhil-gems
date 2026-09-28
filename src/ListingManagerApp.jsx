@@ -8935,7 +8935,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
 
   useEffect(() => { setTab(startTab); }, [startTab]);
 
-  const showToast = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
+  const showToast = (m, ms = 3500) => { setToast(m); setTimeout(() => setToast(""), ms); };
 
   // Reconcile local Etsy badges with Etsy's live state. The ERP only flips a
   // listing to "active" when published through its own button; if a draft is
@@ -8943,11 +8943,16 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   // Patches only platforms.etsy.status — never touches other ERP fields.
   // Throttled so navigating between tabs doesn't hammer the Etsy API.
   const ETSY_STATE_SYNC_TS = "ng-etsy-state-sync-ts";
+  const ETSY_REDATE_KEY = "ng-etsy-redated-v1";
   const reconcileEtsyStates = async (current) => {
     if (!current.some(l => l.platforms?.etsy?.listing_id)) return;
+    // The first run after the renewal-date fix goes straight away, whatever the
+    // throttle says, so renewed listings drop out of Newest on the next open.
+    let redate = false;
     try {
+      redate = !localStorage.getItem(ETSY_REDATE_KEY);
       const last = +localStorage.getItem(ETSY_STATE_SYNC_TS) || 0;
-      if (Date.now() - last < 10 * 60 * 1000) return; // at most once per 10 min
+      if (!redate && Date.now() - last < 10 * 60 * 1000) return; // at most once per 10 min
       localStorage.setItem(ETSY_STATE_SYNC_TS, String(Date.now()));
     } catch {}
     try {
@@ -8974,11 +8979,17 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         changedRows.push(updated);
         return updated;
       });
-      if (!changedRows.length) return;
-      setListings(next);
-      // One save for a big catch-up (the first run redates every renewed listing).
-      if (changedRows.length > 20) await saveK(LIST_KEY, next);
-      else for (const listing of changedRows) await upsertItemK(LIST_KEY, listing, { prepend: false });
+      const redated = changedRows.filter(l => l.platforms?.etsy?.first_listed_at && l.created_at === l.platforms.etsy.first_listed_at).length;
+      if (changedRows.length) {
+        setListings(next);
+        // One save for a big catch-up (the first run redates every renewed listing).
+        if (changedRows.length > 20) await saveK(LIST_KEY, next);
+        else for (const listing of changedRows) await upsertItemK(LIST_KEY, listing, { prepend: false });
+      }
+      if (redate) {
+        try { localStorage.setItem(ETSY_REDATE_KEY, new Date().toISOString()); } catch {}
+        showToast(redated ? `✓ Put ${redated} renewed Etsy listing${redated === 1 ? "" : "s"} back at their first-listed date` : `Etsy dates checked · ${d.renewed ?? 0} renewed on Etsy, none needed moving`, 6000);
+      }
     } catch {}
   };
 
