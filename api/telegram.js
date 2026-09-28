@@ -16,7 +16,7 @@ function sb() {
    instead of going quiet after "typing…". */
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`${what} took over ${ms / 1000}s`)), ms))]);
 async function loadK(key) {
-  const { data, error } = await withTimeout(sb().from("app_data").select("value").eq("key", key).single(), 10000, `Reading ${key}`);
+  const { data, error } = await withTimeout(sb().from("app_data").select("value").eq("key", key).single(), 25000, `Reading ${key}`);
   if (error || !data) return null;
   return data.value ?? null;
 }
@@ -38,7 +38,7 @@ async function broadcastInvalidate(key) {
   } catch {}
 }
 async function saveK(key, value, { quiet = false } = {}) {
-  const { error } = await withTimeout(sb().from("app_data").upsert({ key, value }), 10000, `Saving ${key}`);
+  const { error } = await withTimeout(sb().from("app_data").upsert({ key, value }), 25000, `Saving ${key}`);
   if (error) throw new Error(error.message);
   // Telling open ERP screens to refresh is a nicety; it never holds the reply.
   // (A chat's own bot session isn't on any screen, so it skips it.)
@@ -2638,6 +2638,12 @@ export default async function handler(req, res) {
       if (/^\/ping(@\w+)?\s*$/i.test(text)) {
         const r = await tg("sendMessage", { chat_id: chatId, text: `pong · chat ${chatId} · ${message.chat?.type || "?"}` }, _ctx.token);
         if (!r?.ok) console.error("ping reply failed:", r?.description);
+        // Then time one small database read, so a slow database shows as a number.
+        const t0 = Date.now();
+        let db;
+        try { await loadK(`${_ctx.sessions}:${chatId}`); db = `database read: ${((Date.now() - t0) / 1000).toFixed(1)}s`; }
+        catch (e) { db = `database: ${e.message}`; }
+        await tg("sendMessage", { chat_id: chatId, text: db }, _ctx.token);
         return;
       }
 
