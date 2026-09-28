@@ -11,8 +11,12 @@ function sb() {
     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
   );
 }
+/* The database never gets to hold a reply up for good: a read or write that
+   hangs gives up after a while and says so, and the chat hears the reason
+   instead of going quiet after "typing…". */
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`${what} took over ${ms / 1000}s`)), ms))]);
 async function loadK(key) {
-  const { data, error } = await sb().from("app_data").select("value").eq("key", key).single();
+  const { data, error } = await withTimeout(sb().from("app_data").select("value").eq("key", key).single(), 10000, `Reading ${key}`);
   if (error || !data) return null;
   return data.value ?? null;
 }
@@ -34,9 +38,10 @@ async function broadcastInvalidate(key) {
   } catch {}
 }
 async function saveK(key, value) {
-  const { error } = await sb().from("app_data").upsert({ key, value });
+  const { error } = await withTimeout(sb().from("app_data").upsert({ key, value }), 10000, `Saving ${key}`);
   if (error) throw new Error(error.message);
-  await broadcastInvalidate(key);
+  // Telling open ERP screens to refresh is a nicety; it never holds the reply.
+  await withTimeout(broadcastInvalidate(key), 4000, "Refresh signal").catch(() => {});
 }
 
 // ── Multi-bot context ─────────────────────────────────────────────────────────
@@ -2626,6 +2631,14 @@ export default async function handler(req, res) {
       const fromId = message.from?.id;
       if (allowed.length > 0 && !allowed.includes(String(chatId)) && !(fromId && allowed.includes(String(fromId)))) {
         await send(chatId, `⛔ Not authorized.${fromId ? ` (your Telegram id: ${fromId})` : ""}`);
+        return;
+      }
+
+      // /ping answers before anything else is read, so it shows whether the
+      // bot can reply here at all.
+      if (/^\/ping(@\w+)?\s*$/i.test(text)) {
+        const r = await tg("sendMessage", { chat_id: chatId, text: `pong · chat ${chatId} · ${message.chat?.type || "?"}` }, _ctx.token);
+        if (!r?.ok) console.error("ping reply failed:", r?.description);
         return;
       }
 
