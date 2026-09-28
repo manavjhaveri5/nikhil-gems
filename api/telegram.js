@@ -71,10 +71,18 @@ function botCtx(isAT) {
 
 // ── Telegram ──────────────────────────────────────────────────────────────────
 async function tg(method, body, token) {
-  const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  return r.json();
+  const call = async b => (await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b),
+  })).json();
+  let r = await call(body);
+  /* A group Telegram turned into a supergroup (it does when admins change)
+     has a new id; a reply sent to the old one fails with the new id attached.
+     Follow it rather than going quiet. */
+  const moved = r?.parameters?.migrate_to_chat_id;
+  if (!r?.ok && moved && body?.chat_id) r = await call({ ...body, chat_id: moved });
+  // Say so in the logs when Telegram refuses: a failed reply was silent before.
+  if (!r?.ok) console.error(`Telegram ${method} failed:`, r?.error_code, r?.description, body?.chat_id ?? "");
+  return r;
 }
 
 // Resolve a Telegram file_id to a temporary public URL (valid ~1h — long enough
