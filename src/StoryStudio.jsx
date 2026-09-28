@@ -137,9 +137,9 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
 const pill = on => ({ padding: "7px 14px", borderRadius: 20, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
   border: `1.5px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.surface, color: on ? "#FAF0DC" : C.ink });
 
-export default function StoryStudio({ listing: l, sold = false, onClose }) {
+export default function StoryStudio({ listing: l, sold = false, kind: startKind, onShared, onClose }) {
   const photos = useMemo(() => (l.images || []).filter(u => typeof u === "string"), [l.images]);
-  const [kind, setKind] = useState(sold ? "sold" : "listed");
+  const [kind, setKind] = useState(startKind || (sold ? "sold" : "listed"));
   const [photo, setPhoto] = useState(0);
   const [bmp, setBmp] = useState(null);
   const [err, setErr] = useState("");
@@ -212,15 +212,17 @@ export default function StoryStudio({ listing: l, sold = false, onClose }) {
       if (navigator.canShare?.({ files: [file] })) {
         if (kind === "listed" && link) navigator.clipboard?.writeText(link).catch(() => {});
         await navigator.share({ files: [file] });
+        onShared?.(kind);
         return;
       }
-      save(file);
+      await save(file);
     } catch (e) { if (e?.name !== "AbortError") flash("⚠ " + e.message); }
   };
   const save = async file => {
     file ||= await toFile();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(file); a.download = file.name; a.click();
+    onShared?.(kind);
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   };
   const copy = async () => { try { await navigator.clipboard.writeText(link); flash("Link copied"); } catch { flash("Couldn't copy — select the link and copy it"); } };

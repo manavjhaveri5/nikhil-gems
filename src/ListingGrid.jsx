@@ -3,12 +3,14 @@
    store, Etsy ₹) editable in place, and a drawer to manage photos, platforms
    and every other price. ListingManagerApp owns the data and the platform
    calls; this file is the view. */
-import { useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
 import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
+import { storyLists, useStoriesDone } from "./storyState.js";
 
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 const StoryStudio = lazy(() => import("./StoryStudio.jsx"));
+const StoryQueue = lazy(() => import("./StoryQueue.jsx"));
 
 const PLAT = [
   { key: "etsy",          label: "Etsy",       short: "Etsy",  color: "#F56400" },
@@ -193,7 +195,7 @@ const btn = (dark = false) => ({ flex: 1, padding: "7px 0", borderRadius: 7, fon
   border: `1px solid ${dark ? C.ink : C.border}`, background: dark ? C.ink : C.surface, color: dark ? "#FAF0DC" : C.ink });
 
 /* ── the drawer: photos, platforms, every price ────────────────────────── */
-function Drawer({ l, where, sold, tab, setTab, store, onClose, onPrice, onSavePhotos, onEdit, onMarkSold, onDelete, renderManage }) {
+function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice, onSavePhotos, onEdit, onMarkSold, onDelete, renderManage }) {
   const [imgs, setImgs] = useState(() => (l.images || []).filter(u => typeof u === "string"));
   const [editIdx, setEditIdx] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -280,7 +282,7 @@ function Drawer({ l, where, sold, tab, setTab, store, onClose, onPrice, onSavePh
           )}
         </div>
       </div>
-      {story && <Suspense fallback={null}><StoryStudio listing={l} sold={sold} onClose={() => setStory(false)} /></Suspense>}
+      {story && <Suspense fallback={null}><StoryStudio listing={l} sold={sold} onShared={k => onStory?.(k, l)} onClose={() => setStory(false)} /></Suspense>}
     </div>
   );
 }
@@ -417,6 +419,11 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
   const openL = open && listings.find(l => l.id === open.id);
   const toggleSel = id => setSel(s => toggle(s, id));
   const selected = list.filter(l => sel.has(l.id));
+  // Stories waiting to be posted: pieces that went live or sold this week.
+  const stories = useStoriesDone();
+  const [storyQ, setStoryQ] = useState(false);
+  const liveFn = useCallback(l => isLive(l, facts), [facts]);
+  const storyDue = useMemo(() => { const d = storyLists(listings, orders, liveFn, stories.done).due; return d.listed.length + d.sold.length; }, [listings, orders, liveFn, stories.done]);
   const nFilters = status.size + liveOn.size + notOn.size + types.size + stones.size + issues.size + locs.size + (erpOnly ? 1 : 0);
   const clearAll = () => { setStatus(new Set()); setLiveOn(new Set()); setNotOn(new Set()); setTypes(new Set()); setStones(new Set()); setIssues(new Set()); setLocs(new Set()); setErpOnly(false); setQ(""); };
   const placeList = places.filter(([k, e]) => !locQ || e.label.toLowerCase().includes(locQ.toLowerCase()));
@@ -434,6 +441,8 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
             style={{ ...FI(), flex: "1 1 260px", maxWidth: 460, borderRadius: 20, padding: "8px 14px" }} />
           <select value={sort} onChange={e => setSort(e.target.value)} style={{ ...FI(), width: "auto", padding: "7px 10px", fontSize: 12.5, borderRadius: 18 }}>{Object.entries(SORTS).map(([k, [t]]) => <option key={k} value={k}>Sort: {t}</option>)}</select>
           {nFilters > 0 && <button onClick={clearAll} style={{ ...chip(false), color: C.red }}>Clear filters</button>}
+          <button onClick={() => setStoryQ(true)} style={{ ...chip(false), color: C.ink, fontWeight: 700 }} title="Instagram stories for pieces that just went live or just sold">
+            📸 Stories{storyDue ? <span style={{ marginLeft: 6, background: C.gold, color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>{storyDue}</span> : null}</button>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 12, color: C.inkFaint }}>{list.length} of {listings.length}</span>
           <div style={{ display: "flex", border: `1px solid ${C.border}`, borderRadius: 18, overflow: "hidden" }} title="Cards per row">
@@ -504,8 +513,9 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
         </div>
       </div>
 
+      {storyQ && <Suspense fallback={null}><StoryQueue listings={listings} orders={orders} isLive={liveFn} stories={stories} onClose={() => setStoryQ(false)} /></Suspense>}
       {openL && (
-        <Drawer l={openL} where={whereOf.get(openL.id)} sold={soldOut(openL, orders, facts)} tab={open.tab} setTab={t => setOpen(o => ({ ...o, tab: t }))} store={store}
+        <Drawer l={openL} where={whereOf.get(openL.id)} sold={soldOut(openL, orders, facts)} onStory={(k, x) => stories.mark(k, x, "posted")} tab={open.tab} setTab={t => setOpen(o => ({ ...o, tab: t }))} store={store}
           onClose={() => setOpen(null)} onPrice={price} onEdit={x => { setOpen(null); onEdit(x); }}
           onSavePhotos={onSavePhotos} onMarkSold={onMarkSold} onDelete={onDelete} renderManage={renderManage} />
       )}

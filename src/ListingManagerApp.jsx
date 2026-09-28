@@ -9426,6 +9426,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         ...current.platforms?.[pkey],
         status: result.status || "active",
         ...result,
+        // When it went live here, for the Just listed stories.
+        ...((result.status || "active") === "active" && current.platforms?.[pkey]?.status !== "active" ? { live_at: now() } : {}),
         ...(result.videoStatus ? {
           videoStatusStartedAt: current.platforms?.[pkey]?.videoStatus === result.videoStatus
             ? (current.platforms?.[pkey]?.videoStatusStartedAt || now())
