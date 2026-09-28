@@ -1189,7 +1189,9 @@ export default async function handler(req, res) {
                   status: l.state === "active" ? "active" : "draft",
                 },
               },
-              created_at: new Date(l.creation_timestamp * 1000).toISOString(),
+              // Etsy moves creation_timestamp to the renewal date every time a
+              // listing renews; the original is when it was really first listed.
+              created_at: new Date((l.original_creation_timestamp || l.creation_timestamp) * 1000).toISOString(),
               updated_at: new Date(l.last_modified_timestamp * 1000).toISOString(),
             })));
             if (results.length < 100) break;
@@ -1202,12 +1204,14 @@ export default async function handler(req, res) {
       }
     }
 
-    /* Lightweight: map every live Etsy listing_id → its state (active|draft|...).
-       Used to reconcile local listing badges without re-importing full objects. */
+    /* Lightweight: map every live Etsy listing_id → its state (active|draft|...),
+       and when each was first listed (Etsy's original creation date, which a
+       renewal doesn't move). Used to reconcile local listing badges and dates
+       without re-importing full objects. */
     if (action === "sync_etsy_states") {
       try {
         const hdrs = await etsyHeaders(false);
-        const states = {};
+        const states = {}, firstListed = {};
         for (const state of ["active", "draft"]) {
           let offset = 0;
           while (true) {
@@ -1217,12 +1221,16 @@ export default async function handler(req, res) {
             );
             const d = await r.json();
             const results = d.results || [];
-            results.forEach(l => { states[l.listing_id] = l.state; });
+            results.forEach(l => {
+              states[l.listing_id] = l.state;
+              const first = l.original_creation_timestamp || l.creation_timestamp;
+              if (first) firstListed[l.listing_id] = new Date(first * 1000).toISOString();
+            });
             if (results.length < 100) break;
             offset += 100;
           }
         }
-        return res.json({ ok: true, states });
+        return res.json({ ok: true, states, firstListed });
       } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
       }

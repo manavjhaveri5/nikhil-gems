@@ -8,9 +8,16 @@ export const STORIES_KEY = "ng-stories-v1";
 export const WEEK = 7 * 86400000;
 
 const t = v => Date.parse(v || "") || 0;
-/* When a piece went live: the latest platform it went live on, or when the
-   listing was made (an Etsy import carries Etsy's own creation date). */
-export const listedAt = l => Math.max(0, ...Object.values(l.platforms || {}).map(p => t(p?.live_at))) || t(l.created_at);
+/* When a piece went live: the first time the ERP put it on a platform, or
+   else when it was first listed. Etsy moves a listing's creation date to the
+   day it renews, so its own first-listed date wins over a later created_at;
+   a renewal is never a new piece. */
+export const listedAt = l => {
+  const live = Math.max(0, ...Object.values(l.platforms || {}).map(p => t(p?.live_at)));
+  if (live) return live;
+  const dates = [t(l.created_at), t(l.platforms?.etsy?.first_listed_at)].filter(Boolean);
+  return dates.length ? Math.min(...dates) : 0;
+};
 const dead = o => /cancel|refund/i.test(o.status || "") || !!o.cancelled_at || !!o.refunded;
 const oneOff = l => l.type === "unique" || !(+l.qty > 1);
 export const ago = ms => {
