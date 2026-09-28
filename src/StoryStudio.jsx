@@ -1,24 +1,21 @@
 /* Instagram stories for a listing: "Just listed" and "Sold 🔥", drawn from the
-   piece's own photo at 1080×1920 in the store's type (Oswald and Inter from the
-   logo, an italic serif for "Sold"). No logo: Instagram already puts the
-   profile photo and @eartheditions_ on every story. The image goes to the
-   phone's share sheet, so it lands straight in Instagram; the link sticker is
-   added there, in the space left for it, with the link copied from here. */
+   piece's own photo at 1080×1920, set in one italic serif: "Sold 🔥" over the
+   name, or the name alone. No logo: Instagram already puts the profile photo
+   and @eartheditions_ on every story. The image goes to the phone's share
+   sheet, so it lands straight in Instagram; the link sticker is added there,
+   on the plainest patch of the photo, with the link copied from here. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, FI } from "./lmTheme.js";
 import { loadBitmap } from "./glPipeline.js";
 import { loadStoreProduct, storeSettings } from "./StoreApp.jsx";
 
 const W = 1080, H = 1920, LEFT = 72, TEXT_W = W - 2 * LEFT;
-const F = { serif: "EE Story Serif", head: "EE Story Head", body: "EE Story Body" };
+const F = { serif: "EE Story Serif" };
 const EMOJI = '"Apple Color Emoji","Noto Color Emoji","Segoe UI Emoji",sans-serif';
 
 let fontsReady = null;
 const loadFonts = () => fontsReady ||= Promise.all([
   [F.serif, "tinos-latin-400-italic", { style: "italic", weight: "400" }],
-  [F.head, "oswald-latin-700-normal", { weight: "700" }],
-  [F.body, "inter-latin-300-normal", { weight: "300" }],
-  [F.body, "inter-latin-500-normal", { weight: "500" }],
 ].map(async ([fam, file, desc]) => {
   const f = new FontFace(fam, `url(/fonts/story/${file}.woff2)`, desc);
   document.fonts.add(await f.load());
@@ -33,12 +30,6 @@ export const storyName = (l, storeTitle) => {
   return words.length > 9 ? words.slice(0, 9).join(" ") : cut;
 };
 
-/* Text drawn a letter at a time, so the wide tracking of the logo's EDITIONS
-   comes out the same in every browser. */
-const trackedWidth = (ctx, s, track) => [...s].reduce((w, ch) => w + ctx.measureText(ch).width + track, 0) - (s ? track : 0);
-function tracked(ctx, s, x, y, track) {
-  for (const ch of s) { ctx.fillText(ch, x, y); x += ctx.measureText(ch).width + track; }
-}
 const wrap = (ctx, s, max, width = t => ctx.measureText(t).width) => {
   const lines = [];
   let line = "";
@@ -78,12 +69,62 @@ function drawPhoto(ctx, bmp, { zoom = 1, ox = 0, oy = 0 }, k = 1) {
   ctx.drawImage(bmp, x * k, y * k, w * k, h * k);
 }
 
+/* How busy a patch of the photo is (spread of its brightness): the link
+   sticker goes on the plainest patch, so it never sits on the piece. */
+function busyness(ctx, { x, y, w, h }) {
+  const px = ctx.getImageData(x - 40, y - 40, w + 80, h + 80).data;
+  let n = 0, sum = 0, sq = 0;
+  for (let i = 0; i < px.length; i += 4 * 7) {
+    const v = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+    n++; sum += v; sq += v * v;
+  }
+  const mean = sum / n;
+  return Math.sqrt(Math.max(0, sq / n - mean * mean));
+}
+const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
 /* The story itself. Returns where the link sticker goes, for the preview. */
 function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
   ctx.clearRect(0, 0, W, H);
   drawPhoto(ctx, bmp, frame);
   const light = tone === "light", ink = light ? "#fff" : "#141210";
   const top = place === "top";
+
+  // Everything is set in the one italic: "Sold" large, the name under it.
+  const fit = (text, start, min, maxLines) => {
+    let size = start, lines;
+    for (;;) {
+      ctx.font = `italic 400 ${size}px "${F.serif}"`;
+      lines = wrap(ctx, text, TEXT_W);
+      if (lines.length <= maxLines || size <= min) return { size, lines, lineH: Math.round(size * 1.02) };
+      size -= 4;
+    }
+  };
+  const nm = kind === "sold" ? fit(name, 60, 44, 2) : fit(name, 112, 80, 2);
+  const soldH = kind === "sold" ? 125 + 18 : 0;
+  const hgt = soldH + nm.lines.length * nm.lineH;
+  const y0 = top ? 300 : H - 300 - hgt;
+  ctx.font = `italic 400 ${nm.size}px "${F.serif}"`;
+  const textW = Math.max(kind === "sold" ? 420 : 0, ...nm.lines.map(l => ctx.measureText(l).width));
+  const textBox = { x: LEFT - 20, y: y0 - 30, w: textW + 40, h: hgt + 60 };
+
+  // Where the link sticker would sit least in the way: under the name, or in
+  // a corner, whichever patch of the photo is plainest.
+  let sticker = null;
+  if (kind === "listed") {
+    const sw = 300, sh = 62, low = H - 250 - sh - 30, high = 270;
+    const lastW = ctx.measureText(nm.lines[nm.lines.length - 1]).width;
+    // Beside a short name, level with its last line.
+    const beside = LEFT + lastW + 40 + sw <= W - LEFT
+      ? { x: LEFT + lastW + 40, y: y0 + (nm.lines.length - 1) * nm.lineH + Math.round((nm.lineH - sh) / 2), w: sw, h: sh, near: true } : null;
+    // Under the name, then down both edges and along the foot of the story.
+    const tries = [{ x: LEFT, y: y0 + hgt + 30, near: true }, { x: (W - sw) / 2, y: low }];
+    for (let y = high; y <= low; y += 110) tries.push({ x: LEFT, y }, { x: W - LEFT - sw, y });
+    const spots = tries.map(p => ({ ...p, w: sw, h: sh })).filter(p => p.y + sh <= H - 240 && p.y >= high && !overlaps(p, textBox));
+    if (beside) spots.push(beside);
+    // A small nudge towards the spots by the name, where people look for it.
+    sticker = spots.map(p => ({ p, score: busyness(ctx, p) - (p.near ? .02 : 0) })).sort((a, b) => a.score - b.score)[0]?.p || null;
+  }
 
   // A light shade under white type only, towards the edge the type sits on.
   if (light) {
@@ -94,42 +135,19 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
     ctx.fillRect(0, 0, W, H);
   }
   ctx.textBaseline = "alphabetic";
-  const small = s => s.toUpperCase();
+  ctx.fillStyle = ink;
 
   if (kind === "sold") {
-    ctx.font = `300 21px "${F.body}"`;
-    const track = 21 * .42;
-    const lines = wrap(ctx, small(name), TEXT_W, t => trackedWidth(ctx, t, track));
-    const hgt = 125 + 22 + lines.length * 30;
-    const y0 = top ? 300 : H - 330 - hgt;
-    ctx.fillStyle = ink;
     ctx.font = `italic 400 132px "${F.serif}"`;
     ctx.fillText("Sold", LEFT, y0 + 106);
     const after = LEFT + ctx.measureText("Sold").width + 18;
     ctx.font = `78px ${EMOJI}`;
     ctx.fillText("🔥", after, y0 + 94);
-    ctx.font = `300 21px "${F.body}"`;
-    ctx.fillStyle = light ? "rgba(255,255,255,.88)" : "#3b3833";
-    lines.forEach((ln, i) => tracked(ctx, ln, LEFT, y0 + 125 + 22 + 16 + i * 30, track));
-    return null;
   }
-
-  // Just listed: the piece's name alone, in the italic of "Sold", then room
-  // for the link sticker. Long names step down a size rather than run to
-  // three lines.
-  let size = 112, lines;
-  for (;;) {
-    ctx.font = `italic 400 ${size}px "${F.serif}"`;
-    lines = wrap(ctx, name, TEXT_W);
-    if (lines.length <= 2 || size <= 80) break;
-    size -= 8;
-  }
-  const lineH = Math.round(size * .98), stickerGap = 34, stickerH = 62;
-  const hgt = lines.length * lineH + stickerGap + stickerH;
-  const y0 = top ? 300 : H - 250 - hgt;
-  ctx.fillStyle = ink;
-  lines.forEach((ln, i) => ctx.fillText(ln, LEFT, y0 + Math.round(size * .8) + i * lineH));
-  return { x: LEFT, y: y0 + lines.length * lineH + stickerGap, w: 300, h: stickerH };
+  ctx.font = `italic 400 ${nm.size}px "${F.serif}"`;
+  if (kind === "sold") ctx.fillStyle = light ? "rgba(255,255,255,.9)" : "#2b2824";
+  nm.lines.forEach((ln, i) => ctx.fillText(ln, LEFT, y0 + soldH + Math.round(nm.size * .8) + i * nm.lineH));
+  return sticker;
 }
 
 const pill = on => ({ padding: "7px 14px", borderRadius: 20, fontSize: 12.5, fontWeight: 700, cursor: "pointer",

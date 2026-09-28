@@ -1212,6 +1212,7 @@ export default async function handler(req, res) {
       try {
         const hdrs = await etsyHeaders(false);
         const states = {}, firstListed = {};
+        let renewed = 0;
         for (const state of ["active", "draft"]) {
           let offset = 0;
           while (true) {
@@ -1225,12 +1226,13 @@ export default async function handler(req, res) {
               states[l.listing_id] = l.state;
               const first = l.original_creation_timestamp || l.creation_timestamp;
               if (first) firstListed[l.listing_id] = new Date(first * 1000).toISOString();
+              if (l.original_creation_timestamp && l.creation_timestamp > l.original_creation_timestamp) renewed++;
             });
             if (results.length < 100) break;
             offset += 100;
           }
         }
-        return res.json({ ok: true, states, firstListed });
+        return res.json({ ok: true, states, firstListed, renewed });
       } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
       }
