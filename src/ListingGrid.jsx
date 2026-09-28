@@ -8,6 +8,7 @@ import { C, FI } from "./lmTheme.js";
 import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
 
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
+const StoryStudio = lazy(() => import("./StoryStudio.jsx"));
 
 const PLAT = [
   { key: "etsy",          label: "Etsy",       short: "Etsy",  color: "#F56400" },
@@ -192,16 +193,17 @@ const btn = (dark = false) => ({ flex: 1, padding: "7px 0", borderRadius: 7, fon
   border: `1px solid ${dark ? C.ink : C.border}`, background: dark ? C.ink : C.surface, color: dark ? "#FAF0DC" : C.ink });
 
 /* ── the drawer: photos, platforms, every price ────────────────────────── */
-function Drawer({ l, where, tab, setTab, store, onClose, onPrice, onSavePhotos, onEdit, onMarkSold, onDelete, renderManage }) {
+function Drawer({ l, where, sold, tab, setTab, store, onClose, onPrice, onSavePhotos, onEdit, onMarkSold, onDelete, renderManage }) {
   const [imgs, setImgs] = useState(() => (l.images || []).filter(u => typeof u === "string"));
   const [editIdx, setEditIdx] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [story, setStory] = useState(false);
   useEffect(() => { setImgs((l.images || []).filter(u => typeof u === "string")); }, [l.id, l.images]);
   const changed = JSON.stringify(imgs) !== JSON.stringify((l.images || []).filter(u => typeof u === "string"));
   const s = store?.[l.id];
   const val = f => f === "price_store" && s ? num(s.price) : f === "price_store_inr" && s ? num(s.price_inr) : num(l[f]);
   const move = (i, d) => setImgs(a => { const b = [...a]; const j = i + d; if (j < 0 || j >= b.length) return a; [b[i], b[j]] = [b[j], b[i]]; return b; });
-  useEffect(() => { const k = e => e.key === "Escape" && editIdx == null && onClose(); addEventListener("keydown", k); return () => removeEventListener("keydown", k); }, [onClose, editIdx]);
+  useEffect(() => { const k = e => e.key === "Escape" && editIdx == null && !story && onClose(); addEventListener("keydown", k); return () => removeEventListener("keydown", k); }, [onClose, editIdx, story]);
   return (
     <div onMouseDown={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(20,15,8,.35)", display: "flex", justifyContent: "flex-end" }}>
       <div style={{ width: "100%", maxWidth: 620, height: "100%", background: C.bg, display: "flex", flexDirection: "column", boxShadow: "-12px 0 40px rgba(0,0,0,.18)" }}>
@@ -268,6 +270,8 @@ function Drawer({ l, where, tab, setTab, store, onClose, onPrice, onSavePhotos, 
         </div>
         <div style={{ display: "flex", gap: 8, padding: "12px 16px", borderTop: `1px solid ${C.border}`, background: C.surface, alignItems: "center" }}>
           <button onClick={() => { onClose(); onMarkSold(l); }} style={{ ...btn(), flex: "none", padding: "8px 14px", background: C.greenBg, color: C.green, borderColor: C.green + "40" }}>Mark sold</button>
+          <button onClick={() => setStory(true)} disabled={!imgs.length} title={imgs.length ? "Just listed / Sold story for Instagram" : "Add a photo first"}
+            style={{ ...btn(), flex: "none", padding: "8px 14px", opacity: imgs.length ? 1 : .5 }}>Story</button>
           <button onClick={() => { if (confirm("Delete this listing from the ERP? It stays on the platforms.")) { onClose(); onDelete(l.id); } }} style={{ ...btn(), flex: "none", padding: "8px 14px", color: C.red }}>Delete</button>
           <div style={{ flex: 1 }} />
           {tab === "photos" && changed && (
@@ -276,6 +280,7 @@ function Drawer({ l, where, tab, setTab, store, onClose, onPrice, onSavePhotos, 
           )}
         </div>
       </div>
+      {story && <Suspense fallback={null}><StoryStudio listing={l} sold={sold} onClose={() => setStory(false)} /></Suspense>}
     </div>
   );
 }
@@ -500,7 +505,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
       </div>
 
       {openL && (
-        <Drawer l={openL} where={whereOf.get(openL.id)} tab={open.tab} setTab={t => setOpen(o => ({ ...o, tab: t }))} store={store}
+        <Drawer l={openL} where={whereOf.get(openL.id)} sold={soldOut(openL, orders, facts)} tab={open.tab} setTab={t => setOpen(o => ({ ...o, tab: t }))} store={store}
           onClose={() => setOpen(null)} onPrice={price} onEdit={x => { setOpen(null); onEdit(x); }}
           onSavePhotos={onSavePhotos} onMarkSold={onMarkSold} onDelete={onDelete} renderManage={renderManage} />
       )}
