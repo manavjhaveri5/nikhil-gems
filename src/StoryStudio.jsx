@@ -90,22 +90,24 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
   const light = tone === "light", ink = light ? "#fff" : "#141210";
   const top = place === "top";
 
-  // Everything is set in the one italic: "Sold" large, the name under it.
-  const fit = (text, start, min, maxLines) => {
-    let size = start, lines;
-    for (;;) {
-      ctx.font = `italic 400 ${size}px "${F.serif}"`;
-      lines = wrap(ctx, text, TEXT_W);
-      if (lines.length <= maxLines || size <= min) return { size, lines, lineH: Math.round(size * 1.02) };
-      size -= 4;
-    }
+  // Everything is set in the one italic. A name takes one line if a smaller
+  // size gets it there, and only then goes to two, smaller again if it must.
+  const fit = (text, start, oneLineMin, min) => {
+    const at = size => { ctx.font = `italic 400 ${size}px "${F.serif}"`; return wrap(ctx, text, TEXT_W); };
+    let size = start, lines = at(size);
+    while (lines.length > 1 && size > oneLineMin) lines = at(size -= 4);
+    if (lines.length > 1) { size = Math.max(min, Math.min(start, oneLineMin + 8)); lines = at(size); }
+    while (lines.length > 2 && size > min) lines = at(size -= 4);
+    return { size, lines, lineH: Math.round(size * 1.04) };
   };
-  const nm = kind === "sold" ? fit(name, 60, 44, 2) : fit(name, 112, 80, 2);
-  const soldH = kind === "sold" ? 125 + 18 : 0;
-  const hgt = soldH + nm.lines.length * nm.lineH;
+  const nm = kind === "sold" ? fit(name, 56, 42, 38) : fit(name, 92, 68, 56);
+  // Above the name: "Sold 🔥" large, or a small "Just listed" tag.
+  const TAG = "Just listed", tagSize = 32, tagH = 56;
+  const headH = kind === "sold" ? 125 + 18 : tagH + 24;
+  const hgt = headH + nm.lines.length * nm.lineH;
   const y0 = top ? 300 : H - 300 - hgt;
   ctx.font = `italic 400 ${nm.size}px "${F.serif}"`;
-  const textW = Math.max(kind === "sold" ? 420 : 0, ...nm.lines.map(l => ctx.measureText(l).width));
+  const textW = Math.max(420, ...nm.lines.map(l => ctx.measureText(l).width));
   const textBox = { x: LEFT - 20, y: y0 - 30, w: textW + 40, h: hgt + 60 };
 
   // Where the link sticker would sit least in the way: under the name, or in
@@ -116,7 +118,7 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
     const lastW = ctx.measureText(nm.lines[nm.lines.length - 1]).width;
     // Beside a short name, level with its last line.
     const beside = LEFT + lastW + 40 + sw <= W - LEFT
-      ? { x: LEFT + lastW + 40, y: y0 + (nm.lines.length - 1) * nm.lineH + Math.round((nm.lineH - sh) / 2), w: sw, h: sh, near: true } : null;
+      ? { x: LEFT + lastW + 40, y: y0 + headH + (nm.lines.length - 1) * nm.lineH + Math.round((nm.lineH - sh) / 2), w: sw, h: sh, near: true } : null;
     // Under the name, then down both edges and along the foot of the story.
     const tries = [{ x: LEFT, y: y0 + hgt + 30, near: true }, { x: (W - sw) / 2, y: low }];
     for (let y = high; y <= low; y += 110) tries.push({ x: LEFT, y }, { x: W - LEFT - sw, y });
@@ -144,9 +146,17 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
     ctx.font = `78px ${EMOJI}`;
     ctx.fillText("🔥", after, y0 + 94);
   }
+  if (kind === "listed") {
+    // A thin outlined tag in the same italic: minimal, never louder than the name.
+    ctx.font = `italic 400 ${tagSize}px "${F.serif}"`;
+    const tw = ctx.measureText(TAG).width + 44;
+    ctx.strokeStyle = ink; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(LEFT + 1, y0 + 1, tw, tagH - 2, (tagH - 2) / 2) : ctx.rect(LEFT + 1, y0 + 1, tw, tagH - 2); ctx.stroke();
+    ctx.fillText(TAG, LEFT + 22, y0 + tagH / 2 + tagSize * .32);
+  }
   ctx.font = `italic 400 ${nm.size}px "${F.serif}"`;
   if (kind === "sold") ctx.fillStyle = light ? "rgba(255,255,255,.9)" : "#2b2824";
-  nm.lines.forEach((ln, i) => ctx.fillText(ln, LEFT, y0 + soldH + Math.round(nm.size * .8) + i * nm.lineH));
+  nm.lines.forEach((ln, i) => ctx.fillText(ln, LEFT, y0 + headH + Math.round(nm.size * .8) + i * nm.lineH));
   return sticker;
 }
 
@@ -166,21 +176,31 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
   const [frame, setFrame] = useState({ zoom: 1, ox: 0, oy: 0 });
   const [sticker, setSticker] = useState(null);
   const [note, setNote] = useState("");
-  const cv = useRef(null), drag = useRef(null), named = useRef(false), fileRef = useRef(null);
+  const cv = useRef(null), drag = useRef(null), named = useRef(false), linkEdited = useRef(false), fileRef = useRef(null);
 
   // The store's short name and its public page, when the piece is on the store.
   useEffect(() => {
     let off = false;
     (async () => {
-      const etsy = l.platforms?.etsy;
-      const etsyUrl = etsy?.status === "active" && (etsy.url || (etsy.listing_id && `https://www.etsy.com/listing/${etsy.listing_id}`));
+      // The piece's public page, filled in by itself: eartheditions.co first,
+      // then the old Earth Editions Shopify store, then Etsy, then eBay —
+      // wherever it's live, so the link sticker opens the piece.
+      const P = l.platforms || {}, live = k => P[k]?.status === "active";
+      const others = [
+        live("store") && /^https?:\/\/(?!.*\/admin)/.test(P.store.url || "") && P.store.url,
+        live("shopify_earth") && P.shopify_earth.storefront_url,
+        live("etsy") && (P.etsy.url || (P.etsy.listing_id && `https://www.etsy.com/listing/${P.etsy.listing_id}`)),
+        live("ebay") && (P.ebay.url || (P.ebay.item_id && `https://www.ebay.com/itm/${P.ebay.item_id}`)),
+      ].filter(Boolean);
+      let store = "";
       try {
         const [row, s] = await Promise.all([loadStoreProduct(l.id), storeSettings().catch(() => ({}))]);
         if (off) return;
         if (row?.title && !named.current) setName(storyName(l, row.title));
         const base = String(s?.site_url || "https://eartheditions.co").replace(/\/+$/, "");
-        setLink(row?.handle && row.status === "active" ? `${base}/products/${row.handle}` : etsyUrl || (row?.handle ? `${base}/products/${row.handle}` : ""));
-      } catch { if (!off) setLink(etsyUrl || ""); }
+        if (row?.handle && row.status === "active") store = `${base}/products/${row.handle}`;
+      } catch {}
+      if (!off && !linkEdited.current) setLink(store || others[0] || "");
     })();
     return () => { off = true; };
   }, [l.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -325,7 +345,7 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
                 <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 8 }}>Link for Instagram's link sticker{link ? "" : " — this piece isn't live on the store or Etsy yet, so paste one in"}</div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <input value={link} onChange={e => setLink(e.target.value)} placeholder="https://eartheditions.co/products/…" style={FI({ fontSize: 13 })} />
+                  <input value={link} onChange={e => { linkEdited.current = true; setLink(e.target.value); }} placeholder="https://eartheditions.co/products/…" style={FI({ fontSize: 13 })} />
                   <button onClick={copy} disabled={!link} style={{ ...pill(false), flex: "none", opacity: link ? 1 : .5 }}>Copy</button>
                 </div>
               </div>
