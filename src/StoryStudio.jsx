@@ -30,7 +30,7 @@ export const storyName = (l, storeTitle) => {
   const t = String(storeTitle || l.title || "").trim();
   const cut = storeTitle ? t : t.split(/\s[|–—\-·]\s|\||,/)[0].trim();
   const words = cut.split(/\s+/);
-  return words.length > 6 ? words.slice(0, 6).join(" ") : cut;
+  return words.length > 9 ? words.slice(0, 9).join(" ") : cut;
 };
 
 /* Text drawn a letter at a time, so the wide tracking of the logo's EDITIONS
@@ -114,24 +114,22 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
     return null;
   }
 
-  // Just listed: the shop's tag, the name, then room for the link sticker.
-  ctx.font = `700 60px "${F.head}"`;
-  const lines = wrap(ctx, small(name), TEXT_W);
-  const tagH = 58, lineH = 62, stickerGap = 26, stickerH = 62;
-  const hgt = tagH + 20 + lines.length * lineH + stickerGap + stickerH;
+  // Just listed: the piece's name alone, in the italic of "Sold", then room
+  // for the link sticker. Long names step down a size rather than run to
+  // three lines.
+  let size = 112, lines;
+  for (;;) {
+    ctx.font = `italic 400 ${size}px "${F.serif}"`;
+    lines = wrap(ctx, name, TEXT_W);
+    if (lines.length <= 2 || size <= 80) break;
+    size -= 8;
+  }
+  const lineH = Math.round(size * .98), stickerGap = 34, stickerH = 62;
+  const hgt = lines.length * lineH + stickerGap + stickerH;
   const y0 = top ? 300 : H - 250 - hgt;
-
-  ctx.font = `500 24px "${F.body}"`;
-  const tTrack = 24 * .24, tW = trackedWidth(ctx, "JUST LISTED", tTrack) + 52;
-  ctx.fillStyle = light ? "#fff" : "#141210";
-  ctx.fillRect(LEFT, y0, tW, tagH);
-  ctx.fillStyle = light ? "#141210" : "#fff";
-  tracked(ctx, "JUST LISTED", LEFT + 26, y0 + 38, tTrack);
-
-  ctx.font = `700 60px "${F.head}"`;
   ctx.fillStyle = ink;
-  lines.forEach((ln, i) => ctx.fillText(ln, LEFT, y0 + tagH + 20 + 50 + i * lineH));
-  return { x: LEFT, y: y0 + tagH + 20 + lines.length * lineH + stickerGap, w: 300, h: stickerH };
+  lines.forEach((ln, i) => ctx.fillText(ln, LEFT, y0 + Math.round(size * .8) + i * lineH));
+  return { x: LEFT, y: y0 + lines.length * lineH + stickerGap, w: 300, h: stickerH };
 }
 
 const pill = on => ({ padding: "7px 14px", borderRadius: 20, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
