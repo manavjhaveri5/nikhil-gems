@@ -37,11 +37,12 @@ async function broadcastInvalidate(key) {
     await client.removeChannel(channel);
   } catch {}
 }
-async function saveK(key, value) {
+async function saveK(key, value, { quiet = false } = {}) {
   const { error } = await withTimeout(sb().from("app_data").upsert({ key, value }), 10000, `Saving ${key}`);
   if (error) throw new Error(error.message);
   // Telling open ERP screens to refresh is a nicety; it never holds the reply.
-  await withTimeout(broadcastInvalidate(key), 4000, "Refresh signal").catch(() => {});
+  // (A chat's own bot session isn't on any screen, so it skips it.)
+  if (!quiet) await withTimeout(broadcastInvalidate(key), 4000, "Refresh signal").catch(() => {});
 }
 
 // ── Multi-bot context ─────────────────────────────────────────────────────────
@@ -169,19 +170,17 @@ async function saveMemory(facts) {
 // ── Session ───────────────────────────────────────────────────────────────────
 const MAX_HISTORY = 40;
 
+/* Each chat keeps its own row. They used to share one, which grew with
+   every chat's history until reading it on each message took over 10s. */
+const sessionKey = chatId => `${_ctx.sessions}:${chatId}`;
 async function getSession(chatId) {
-  const sessions = (await loadK(_ctx.sessions)) || {};
-  return sessions[String(chatId)] || { history: [], lastUpdateId: null };
+  return (await loadK(sessionKey(chatId))) || { history: [], lastUpdateId: null };
 }
 async function saveSession(chatId, session) {
-  const sessions = (await loadK(_ctx.sessions)) || {};
-  sessions[String(chatId)] = { ...session, ts: Date.now() };
-  await saveK(_ctx.sessions, sessions);
+  await saveK(sessionKey(chatId), { ...session, ts: Date.now() }, { quiet: true });
 }
 async function clearSession(chatId) {
-  const sessions = (await loadK(_ctx.sessions)) || {};
-  delete sessions[String(chatId)];
-  await saveK(_ctx.sessions, sessions);
+  await saveK(sessionKey(chatId), { history: [], lastUpdateId: null, ts: Date.now() }, { quiet: true });
 }
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
@@ -2841,7 +2840,8 @@ export default async function handler(req, res) {
       // temporary and image content would bloat the stored session.
       const persistedTurn = { role: "user", content: (wantsVision && imageUrl) ? (caption || "[sent an image]") : text };
       const finalHistory = sanitizeHistory([...history, persistedTurn, ...newMessages]).slice(-MAX_HISTORY);
-      await saveSession(chatId, { lastUpdateId: updateId, history: finalHistory });
+      // Keep listing mode and anything else on the session across a chat turn.
+      await saveSession(chatId, { ...session, lastUpdateId: updateId, history: finalHistory });
 
       await send(chatId, reply);
 
