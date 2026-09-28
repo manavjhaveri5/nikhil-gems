@@ -198,17 +198,23 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
   const toFile = () => new Promise((ok, no) => cv.current.toBlob(b => b ? ok(new File([b], fileName, { type: "image/jpeg" })) : no(new Error("Couldn't make the image")), "image/jpeg", .93));
 
   /* The image is made as the preview settles, so tapping Share opens the share
-     sheet straight away: iPhone only allows it right off the tap. */
+     sheet straight away: iPhone only allows it right off the tap. Each image
+     carries the edit it was made from; one that finishes after a later edit
+     is thrown away, so Share never sends older text than the preview shows. */
+  const edit = useRef(0);
+  const [ready, setReady] = useState(false);
   useEffect(() => {
-    fileRef.current = null;
+    const n = ++edit.current;
+    fileRef.current = null; setReady(false);
     if (!bmp) return undefined;
-    const t = setTimeout(() => toFile().then(f => { fileRef.current = f; }).catch(() => {}), 300);
+    const t = setTimeout(() => toFile().then(f => { if (n === edit.current) { fileRef.current = f; setReady(true); } }).catch(() => {}), 250);
     return () => clearTimeout(t);
   }, [bmp, kind, name, place, tone, frame]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const share = async () => {
     try {
-      const file = fileRef.current || await toFile();
+      const file = fileRef.current;
+      if (!file) return;
       if (navigator.canShare?.({ files: [file] })) {
         if (kind === "listed" && link) navigator.clipboard?.writeText(link).catch(() => {});
         await navigator.share({ files: [file] });
@@ -310,7 +316,7 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
             )}
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button disabled={!bmp} onClick={share} style={{ ...pill(true), padding: "11px 22px", fontSize: 14, opacity: bmp ? 1 : .5 }}>Share to Instagram</button>
+              <button disabled={!ready} onClick={share} style={{ ...pill(true), padding: "11px 22px", fontSize: 14, opacity: ready ? 1 : .5 }}>{bmp && !ready ? "Updating…" : "Share to Instagram"}</button>
               <button disabled={!bmp} onClick={() => save().catch(e => flash("⚠ " + e.message))} style={{ ...pill(false), padding: "11px 18px", fontSize: 14, opacity: bmp ? 1 : .5 }}>Download</button>
               {note && <span style={{ fontSize: 12.5, color: C.inkMid }}>{note}</span>}
             </div>
