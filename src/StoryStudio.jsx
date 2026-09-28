@@ -60,24 +60,22 @@ function readPhoto(bmp, frame) {
   return { top: band(14, 32), bottom: band(64, 84) };
 }
 
-/* A photo's own background, from its outer edge: its average colour, and
-   whether it's plain (a studio shot on white or grey) or part of the scene. */
+/* A photo's own background colour, from its outer edge: what runs on
+   around the photo when it's zoomed out past the screen. */
 function edgeOf(bmp) {
   const n = 40, cv = document.createElement("canvas");
   cv.width = cv.height = n;
   const ctx = cv.getContext("2d", { willReadFrequently: true });
   ctx.drawImage(bmp, 0, 0, n, n);
-  const px = ctx.getImageData(0, 0, n, n).data, rgb = [0, 0, 0], lum = [];
+  const px = ctx.getImageData(0, 0, n, n).data, rgb = [0, 0, 0];
+  let count = 0;
   for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
     if (x > 1 && x < n - 2 && y > 1 && y < n - 2) continue;
     const i = (y * n + x) * 4;
-    rgb[0] += px[i]; rgb[1] += px[i + 1]; rgb[2] += px[i + 2];
-    lum.push((0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255);
+    rgb[0] += px[i]; rgb[1] += px[i + 1]; rgb[2] += px[i + 2]; count++;
   }
-  const mean = lum.reduce((a, b) => a + b, 0) / lum.length;
-  const spread = Math.sqrt(lum.reduce((a, b) => a + (b - mean) ** 2, 0) / lum.length);
-  const [r, g, b] = rgb.map(v => Math.round(v / lum.length));
-  return { bg: `rgb(${r},${g},${b})`, plain: spread < .045 };
+  const [r, g, b] = rgb.map(v => Math.round(v / count));
+  return { bg: `rgb(${r},${g},${b})` };
 }
 
 // Zoom 1 fills the screen; the smallest zoom shows the whole photo.
@@ -238,11 +236,9 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
     if (!photos[photo]) { setErr("This listing has no photos yet."); return; }
     Promise.all([loadBitmap(photos[photo]), loadFonts()]).then(([b]) => {
       if (off) return;
-      /* A studio shot on a plain background shows whole, fitted to the width,
-         with its background carried on above and below; anything else fills
-         the screen. Either way the zoom goes out to the whole photo. */
-      const edge = edgeOf(b);
-      const f = { zoom: edge.plain ? Math.max(minZoom(b), W / b.width / coverScale(b)) : 1, ox: 0, oy: 0, bg: edge.bg };
+      /* Every photo opens filling the screen. The zoom goes out to the whole
+         photo, with its own background colour carried on around it. */
+      const f = { zoom: 1, ox: 0, oy: 0, bg: edgeOf(b).bg };
       const r = readPhoto(b, f);
       // Sold reads best up top; a new listing wherever the photo is emptiest.
       const pick = r.top.spread <= r.bottom.spread * (kind === "sold" ? 1.4 : 1) ? "top" : "bottom";
