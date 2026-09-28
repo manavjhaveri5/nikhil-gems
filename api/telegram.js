@@ -1759,8 +1759,19 @@ function parseListingCaption(caption = "") {
   const qty    = take(/\b(?:qty\s*[:=]?\s*|x\s*)(\d{1,4})\b(?!\s*(?:mm|cm|g|kg|inch))/i)
               || take(/\b(\d{1,4})\s*(?:pcs?|pieces?|nos?\.?|units?)\b/i);
 
+  /* No currency marked: a bare "160,000" or "1,60,000" is how a price is
+     typed here, so the last standalone number that is written with commas or
+     runs to four figures is read as rupees. Sizes, weights and counts were
+     taken out above, so "165 mm" or "3.9 kgs" can't be mistaken for it. */
+  let bareInr = null;
+  if (!usd && !inr) {
+    const cands = [...text.matchAll(/(?<![\w.])(\d{1,3}(?:,\d{2,3})+|\d{4,})(?:\.\d+)?(?![\w.%])/g)];
+    const last = cands[cands.length - 1];
+    if (last) { bareInr = last; text = text.slice(0, last.index) + " " + text.slice(last.index + last[0].length); }
+  }
+
   const num = m => (m ? Number(String(m[1]).replace(/,/g, "")) : null);
-  const leftover = text.replace(/[,:|]+/g, " ").replace(/\s+/g, " ").trim();
+  const leftover = text.replace(/[,:;|]+/g, " ").replace(/\s+/g, " ").trim();
 
   return {
     raw,
@@ -1768,7 +1779,7 @@ function parseListingCaption(caption = "") {
     tags,
     ebay,
     priceUsd: num(usd),
-    priceInr: num(inr),
+    priceInr: num(inr) ?? num(bareInr),
     qty: num(qty),
     box: box ? box[1] : "",
     sku: sku ? sku[1] : "",
