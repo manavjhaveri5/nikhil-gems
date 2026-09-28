@@ -22,7 +22,7 @@ import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
-import PriceStudio from "./PriceStudio.jsx";
+import ListSteps from "./ListSteps.jsx";
 import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
@@ -1685,7 +1685,7 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING FORM
 ══════════════════════════════════════════════════════════════════════════ */
-function ListingForm({ initial, stock = [], listings = [], sold = false, onSave, onClose, who, startTab = "overview" }) {
+function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onClose, who, startTab = "overview" }) {
   const editing = !!initial?.id;
   const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
 
@@ -1811,11 +1811,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (cat) setForm(f => ({ ...f, shape: cat.shape, productType: cat.productType, etsy_taxonomy_id: cat.taxonomyId }));
   };
 
-  const validate = () => {
+  const validate = (f = form) => {
     const e = {};
-    if (!form.title.trim()) e.title = "Title required";
+    if (!String(f.title || "").trim()) e.title = "Title required";
     // Every one-of-a-kind piece that can still sell has to be findable on the shelf.
-    if (needsLocation(form, sold) && !locationOf(form, stock)) e.location = "Where is it? A one-of-a-kind piece needs a location before it's saved.";
+    if (needsLocation(f, sold) && !locationOf(f, stock)) e.location = "Where is it? A one-of-a-kind piece needs a location before it's saved.";
     setErrors(e);
     if (e.title || e.location) goTab("overview", e.location && !e.title ? locRef : null);
     return Object.keys(e).length === 0;
@@ -1866,10 +1866,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   });
 
   // Price calculator state
-  const [studio, setStudio] = useState(false);
-  const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, [studio]);
+  const [steps, setSteps] = useState(null);   // the listing steps: null | "where" | "price"
+  const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, []);
   const stockCost = +(stock.find(s => s.id === form.linked_stock_id)?.costPrice) || 0;
-  const stockWeight = +(stock.find(s => s.id === form.linked_stock_id)?.weightGm) || 0;
   // What eartheditions.co shows for this listing now: it keeps its own short name.
   const [storeLive, setStoreLive] = useState(null);
   // The store's rate and discount, to show what the USA $ and India ₹ come to.
@@ -1899,14 +1898,17 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       .catch(() => {});
   }, []);
 
-  const handleSave = () => {
-    if (!validate()) return;
-    onSave(ensureListingOrderId({ ...withLocationLog(form, initial?.officeLocation, who), tags, _ai: form._ai || null, _dealOnPublish: dealOpt.enabled ? { days: dealOpt.days, customDate: dealOpt.customDate } : null, updated_at: now() }), publishTo);
+  /* The listing steps save with their own prices and platforms, and can ask
+     for the piece to go live rather than stay a draft. */
+  const handleSave = (patch = null, to = null, opts = {}) => {
+    const f = patch && !patch.nativeEvent ? { ...form, ...patch } : form;
+    if (!validate(f)) return;
+    onSave(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, _dealOnPublish: dealOpt.enabled ? { days: dealOpt.days, customDate: dealOpt.customDate } : null, updated_at: now() }), to || publishTo, opts);
   };
 
 
-  /* One price box for a PLATFORMS entry. Working a price out happens in
-     Price Studio, which fills these in. */
+  /* One price box for a PLATFORMS entry. All of them at once, and what the
+     customer pays on each, are on the listing steps' price page. */
   const calc = form.price_calc || null;
   const priceCard = p => {
     const v = +form[p.priceField] || 0;
@@ -1921,9 +1923,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkMid }}>{p.priceLabel || `${p.label} price`}</span>
           <div style={{ flex: 1 }} />
-          <button type="button" onClick={() => setStudio(true)} title="Work out this and every other price on one page"
+          <button type="button" onClick={() => setSteps("price")} title="Every platform's price on one page"
             style={{ background: "none", border: `1px solid ${C.border}`, cursor: "pointer", fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: C.ink, padding: "5px 9px" }}>
-            Price Studio
+            All prices
           </button>
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 6, borderBottom: `1px solid ${C.ink}` }}>
@@ -2295,14 +2297,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               })}
             </div>
 
-            <button type="button" onClick={() => setStudio(true)} style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: "#141210", color: "#fff", border: "none", padding: "16px 18px", cursor: "pointer", flexShrink: 0 }}>
+            <button type="button" onClick={() => setSteps("where")} style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: "#141210", color: "#fff", border: "none", borderRadius: 12, padding: "16px 18px", cursor: "pointer", flexShrink: 0 }}>
               <span style={{ flex: 1 }}>
-                <span style={{ display: "block", fontSize: 10.5, letterSpacing: ".22em", textTransform: "uppercase", opacity: .7 }}>Price Studio</span>
+                <span style={{ display: "block", fontSize: 10.5, letterSpacing: ".22em", textTransform: "uppercase", opacity: .7 }}>List this piece</span>
                 <span style={{ display: "block", fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 22, lineHeight: 1.15, marginTop: 4 }}>
-                  {+form.price_etsy > 0 ? `Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")}${form.price_calc?.sale ? ` · ₹${Math.round(form.price_etsy * (1 - form.price_calc.sale / 100)).toLocaleString("en-IN")} in the sale` : ""}` : "Cost, weight, margin, fees and sale — every price on one page"}
+                  Where it goes → prices → list
                 </span>
               </span>
-              <span style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{+form.price_etsy > 0 ? "Rework →" : "Start →"}</span>
+              <span style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Start →</span>
             </button>
 
             {/* ── Title + Description ───────────────────────────────────────── */}
@@ -2794,11 +2796,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         </div>
 
       </div>
-      {studio && (
-        <PriceStudio listing={{ ...form, tags }} stockCost={stockCost} stockWeight={stockWeight} liveRate={liveUsdRate} loadSettings={storeSettings}
-          shippingProfiles={etsyShippingProfiles}
-          onClose={() => setStudio(false)}
-          onApply={patch => { setForm(f => ({ ...f, ...patch })); setStudio(false); }} />
+      {steps && (
+        <ListSteps form={{ ...form, tags }} orders={orders} start={steps}
+          onClose={() => setSteps(null)}
+          onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
     </div>
   );
@@ -9153,7 +9154,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* save */
-  const handleSave = async (listing, publishTo = {}) => {
+  const handleSave = async (listing, publishTo = {}, { live = false } = {}) => {
     let savedListing = ensureListingOrderId(listing);
     if ((listing.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(listing.video)) {
       showToast("Uploading listing media...");
@@ -9197,14 +9198,17 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         .catch(e => console.warn("trade photo refresh:", e));
     }
     if (targets.length === 0) return;
-    showToast(`Syncing to ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…`);
-    // Always sync-only on save — never activate. Only the explicit Publish button activates.
+    showToast(`${live ? "Listing on" : "Syncing to"} ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}…`);
+    // A save only syncs, never activates — except "List live" from the listing
+    // steps, which publishes on the platforms picked there.
     const results = await Promise.allSettled(targets.map(pkey =>
-      handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey) })
+      live && newTargets.includes(pkey)
+        ? handlePublish(savedListing, pkey, { syncOnly: false, allowCreate: true })
+        : handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey) })
     ));
     const failed = results.filter(r => r.status === "rejected");
     if (failed.length === 0) {
-      showToast(`✓ Synced to ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}`);
+      showToast(`✓ ${live ? "Live on" : "Synced to"} ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}`);
     } else {
       const errMsg = failed.map(r => r.reason?.message || "unknown error").join("; ");
       showToast(`⚠ ${errMsg}`, 8000);
@@ -9915,6 +9919,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           initial={editing}
           stock={stock}
           listings={listings}
+          orders={orders}
           sold={!!editing && editing.type !== "repeatable" && orders.some(o => o.listing_id === editing.id) && !PLATFORMS.some(p => editing.platforms?.[p.key]?.status === "active")}
           who={who}
           onSave={handleSave}
