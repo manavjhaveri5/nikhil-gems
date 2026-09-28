@@ -8954,7 +8954,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       const r = await fetch("/api/listing-manager?action=sync_etsy_states");
       const d = await r.json();
       if (!d.ok || !d.states) return;
-      const states = d.states;
+      const states = d.states, firstListed = d.firstListed || {};
       const fresh = await loadKFresh(LIST_KEY).catch(() => null);
       const base = Array.isArray(fresh) ? fresh : current;
       const changedRows = [];
@@ -8963,14 +8963,22 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         const live = lid && states[lid];
         if (!live) return l;
         const mapped = live === "active" ? "active" : "draft";
-        if (l.platforms.etsy.status === mapped) return l;
-        const updated = { ...l, platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped } } };
+        /* A renewal moves Etsy's creation date, and a listing imported after
+           one came in dated the day it renewed, so it sorted and counted as
+           new. Etsy's original date puts it back where it belongs. */
+        const first = firstListed[lid];
+        const early = first && Date.parse(first) < (Date.parse(l.created_at || "") || Infinity);
+        if (l.platforms.etsy.status === mapped && !early) return l;
+        const updated = { ...l, ...(early ? { created_at: first } : {}),
+          platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped, ...(early ? { first_listed_at: first } : {}) } } };
         changedRows.push(updated);
         return updated;
       });
       if (!changedRows.length) return;
       setListings(next);
-      for (const listing of changedRows) await upsertItemK(LIST_KEY, listing, { prepend: false });
+      // One save for a big catch-up (the first run redates every renewed listing).
+      if (changedRows.length > 20) await saveK(LIST_KEY, next);
+      else for (const listing of changedRows) await upsertItemK(LIST_KEY, listing, { prepend: false });
     } catch {}
   };
 
@@ -9427,7 +9435,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         status: result.status || "active",
         ...result,
         // When it went live here, for the Just listed stories.
-        ...((result.status || "active") === "active" && current.platforms?.[pkey]?.status !== "active" ? { live_at: now() } : {}),
+        // Only the first time: putting an existing listing back up (an Etsy
+        // renewal, a relist) isn't a new piece.
+        ...((result.status || "active") === "active" && !current.platforms?.[pkey]?.live_at
+          && !(current.platforms?.[pkey]?.listing_id || current.platforms?.[pkey]?.item_id || current.platforms?.[pkey]?.product_id) ? { live_at: now() } : {}),
         ...(result.videoStatus ? {
           videoStatusStartedAt: current.platforms?.[pkey]?.videoStatus === result.videoStatus
             ? (current.platforms?.[pkey]?.videoStatusStartedAt || now())
