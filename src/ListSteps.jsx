@@ -60,6 +60,11 @@ const laneBest = rec => !rec?.options?.length ? null
 
 export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose }) {
   const [step, setStep] = useState(start);
+  // An exception to the stock-card rule: a piece with no stock card (a sample,
+  // consignment, a one-off bought in), kept on the listing with its reason.
+  const [noStock, setNoStock] = useState(() => !!form.stock_exception);
+  const [noStockWhy, setNoStockWhy] = useState(() => form.stock_exception?.reason || "");
+  const stockException = () => (noStock && !form.linked_stock_id ? { reason: noStockWhy.trim(), at: new Date().toISOString() } : null);
   const [pick, setPick] = useState(() => Object.fromEntries(CHANNELS.map(c => [c.key, linkOf(form, c.key).linked])));
   const [p, setP] = useState(() => ({
     price_etsy: form.price_etsy || "", price_ebay: form.price_ebay || "",
@@ -123,7 +128,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   /* Etsy, eBay and Earth Editions sell the actual piece, so it has to be
      findable and tied to its stock card; wholesale alone doesn't. */
   const retail = chosen.some(c => c.key !== "trade");
-  const pieceMissing = retail ? [!form._loc && "where it's stored", !form.linked_stock_id && "its stock card"].filter(Boolean) : [];
+  const pieceMissing = retail ? [!form._loc && "where it's stored", !form.linked_stock_id && !noStock && "its stock card"].filter(Boolean) : [];
   const canNext = step === "where" ? chosen.length > 0 : step === "piece" ? !pieceMissing.length : true;
 
   // One platform at a time from the last step: publish it, then link to it live.
@@ -140,9 +145,11 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       price_ebay: p.price_ebay || (pick.ebay && ebayUsd ? String(ebayUsd) : form.price_ebay || ""),
       price_store: p.price_store, price_store_inr: p.price_store_inr,
       price_trade: p.price_trade,
+      stock_exception: stockException(),
   });
   const apply = live => {
     const patch = {
+      stock_exception: stockException(),
       price_etsy: p.price_etsy,
       price_ebay: p.price_ebay || (pick.ebay && ebayUsd ? String(ebayUsd) : form.price_ebay || ""),
       price_store: p.price_store, price_store_inr: p.price_store_inr,
@@ -213,6 +220,16 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>The piece</div>
             {renderWhere && renderWhere()}
             {pieceMissing.length > 0 && <div style={{ fontSize: 13, color: C.red }}>Etsy, eBay and Earth Editions need {pieceMissing.join(" and ")} before it can go on.</div>}
+            {retail && !form.linked_stock_id && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderRadius: 10, border: `1px solid ${noStock ? C.amber : C.border}`, background: noStock ? C.amberBg : "transparent" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
+                  <input type="checkbox" checked={noStock} onChange={e => setNoStock(e.target.checked)} style={{ width: 16, height: 16, margin: 0 }} />
+                  Exception: no stock card for this piece
+                </label>
+                {noStock && <input value={noStockWhy} onChange={e => setNoStockWhy(e.target.value)} placeholder="Why? e.g. sample, consignment, bought in (optional)"
+                  style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, background: C.surface, color: C.ink }} />}
+              </div>
+            )}
           </>}
 
           {renderPlatform && chosen.some(c => c.key === step) && <>
