@@ -1168,6 +1168,19 @@ export default async function handler(req, res) {
       }
     }
 
+    /* One listing's state on Etsy now (active, draft, sold_out…), for a piece
+       put live or taken down on Etsy itself since the ERP last looked. */
+    if (action === "etsy_listing_state") {
+      const id = String(url.searchParams.get("id") || "").replace(/\D/g, "");
+      if (!id) return res.status(400).json({ ok: false, error: "id required" });
+      try {
+        const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${id}`, { headers: await etsyHeaders(false) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) return res.status(r.status === 404 ? 404 : 502).json({ ok: false, error: d?.error || `Etsy ${r.status}` });
+        return res.json({ ok: true, state: d.state, url: d.url || `https://www.etsy.com/listing/${id}` });
+      } catch (e) { return res.status(500).json({ ok: false, error: e.message }); }
+    }
+
     /* Import all shop listings from Etsy → reconstruct listing objects */
     if (action === "import_etsy_listings") {
       try {
