@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { C } from "./lmTheme.js";
 import { CHANNELS, linkOf } from "./listingChannels.js";
 import { storeSettings, storePriceFor } from "./StoreApp.jsx";
+import { recommendCarriers, carrierLabel } from "./shipping.js";
 
 const serif = "'Cormorant Garamond',Georgia,serif";
 const DAY = 86400000;
@@ -50,7 +51,7 @@ const PLACE = {
 
 const Box = ({ children, style }) => <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", ...style }}>{children}</div>;
 
-export default function ListSteps({ form, orders, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onClose }) {
+export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onClose }) {
   const [step, setStep] = useState(start);
   const [pick, setPick] = useState(() => Object.fromEntries(CHANNELS.map(c => [c.key, linkOf(form, c.key).linked])));
   const [p, setP] = useState(() => ({
@@ -74,10 +75,24 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
 
   // What the piece cost us, from its stock card (an older listing may carry its own); 0 if unknown.
   const cost = +form._stockCost || +form.price_calc?.cost || 0;
-  const make = (pkey, paid, cur) => {
+  /* What shipping it to a US buyer should cost us, from what our past parcels
+     cost at this weight (the piece plus about 300 g of packing). Ours to pay:
+     Etsy ships free in the US over $35, and the sites and eBay price it in. */
+  const shipEst = useMemo(() => {
+    if (!weightKg) return null;
+    const rec = recommendCarriers(orders, stock, { id: "_price", ship_country: "US", parcel_weight_kg: weightKg + 0.3 });
+    const pick = rec?.best || rec?.options?.[0];
+    return pick ? { cost: pick.expected, carrier: pick.label || carrierLabel(pick.key), basis: pick.basis } : null;
+  }, [orders, stock, weightKg]);
+  const [shipTyped, setShipTyped] = useState("");
+  const ship = shipTyped !== "" ? +shipTyped || 0 : shipEst?.cost || 0;
+  // Customer pays → platform fees → shipping → cost → profit, all in rupees.
+  const money4 = (pkey, paid, cur) => {
     if (!paid) return null;
-    const got = paid * (1 - FEES[pkey]) * (cur === "$" ? rate : 1);
-    return Math.round(got - cost);
+    const gross = paid * (cur === "$" ? rate : 1);
+    const fees = gross * FEES[pkey];
+    const shipping = pkey === "trade" ? 0 : ship;
+    return { gross, fees, shipping, profit: gross - fees - shipping - cost };
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   // Where → the piece → prices → a page for each platform picked → publish.
@@ -108,16 +123,31 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
         style={{ flex: 1, minWidth: 0, width: "100%", border: 0, outline: "none", background: "transparent", fontFamily: serif, fontSize: 30, color: C.ink, padding: "2px 0" }} />
     </div>
   );
-  const pays = (big, sub, made, pkey) => (
+  const pays = (big, sub) => (
     <div style={{ textAlign: "right", flex: "none" }}>
       <div style={{ fontSize: 10.5, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint }}>Customer pays</div>
       <div style={{ fontFamily: serif, fontSize: 30, color: C.ink, lineHeight: 1.1 }}>{big}</div>
       {sub && <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>{sub}</div>}
-      {made != null && <>
-        <div style={{ fontSize: 10.5, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint, marginTop: 10 }}>{cost ? "We make" : "We get"}</div>
-        <div style={{ fontFamily: serif, fontSize: 24, color: made >= 0 ? C.green : C.red, lineHeight: 1.1 }}>{made < 0 ? "−" : ""}{inr(Math.abs(made))}</div>
-        <div style={{ fontSize: 11, color: C.inkFaint }}>after {Math.round(FEES[pkey] * 100)}% fees{cost ? ` and ${inr(cost)} cost` : ""}</div>
-      </>}
+    </div>
+  );
+  // The money under each platform: what's paid, what goes where, what's left.
+  const sheet = (pkey, m, label) => !m ? null : (
+    <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
+      {label && <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>{label}</div>}
+      {[
+        ["Customer pays", m.gross, C.ink],
+        [`${pkey === "etsy" ? "Etsy" : pkey === "ebay" ? "eBay" : "Card"} fees · ${Math.round(FEES[pkey] * 100)}%`, -m.fees, C.inkMid],
+        [pkey === "trade" ? "Shipping · buyer pays freight" : "Shipping", -m.shipping, C.inkMid],
+        ["Cost of the piece", -cost, C.inkMid],
+      ].map(([k, v, col]) => (
+        <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: col, padding: "2px 0" }}>
+          <span>{k}</span><span>{v < 0 ? "− " : ""}{v ? inr(Math.abs(v)) : "—"}</span>
+        </div>
+      ))}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: `1px solid ${C.border}`, marginTop: 4, paddingTop: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>Profit{!cost ? " · no cost on the stock card" : ""}</span>
+        <span style={{ fontFamily: serif, fontSize: 24, color: m.profit >= 0 ? C.green : C.red }}>{m.profit < 0 ? "− " : ""}{inr(Math.abs(m.profit))}</span>
+      </div>
     </div>
   );
 
@@ -181,14 +211,33 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
           {step === "price" && <>
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Prices</div>
             {!chosen.length && <div style={{ color: C.inkMid, fontSize: 14 }}>Pick where it goes first.</div>}
+            {chosen.some(c => c.key !== "trade") && <Box>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>Shipping — what we pay</div>
+                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>
+                    {shipEst ? <>≈ {inr(shipEst.cost)} to the US by {shipEst.carrier} · {weightKg + .3 < 1 ? `${Math.round((weightKg + .3) * 1000)} g` : `${(weightKg + .3).toFixed(1)} kg`} packed · {shipEst.basis}</>
+                      : weightKg ? "No past parcels to go on yet — type what it'll cost" : "Add the piece's weight (or its stock card's kilos) for an estimate, or type it"}
+                  </div>
+                </div>
+                <div style={{ width: 130 }}>{/* typed shipping replaces the estimate */}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 4, borderBottom: `1.5px solid ${C.ink}` }}>
+                    <span style={{ fontFamily: serif, fontSize: 20, color: C.inkMid }}>₹</span>
+                    <input type="number" inputMode="decimal" value={shipTyped} placeholder={shipEst ? String(shipEst.cost) : "0"} onChange={e => setShipTyped(e.target.value)}
+                      style={{ flex: 1, minWidth: 0, width: "100%", border: 0, outline: "none", background: "transparent", fontFamily: serif, fontSize: 24, color: C.ink }} />
+                  </div>
+                </div>
+              </div>
+            </Box>}
             {pick.etsy && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Etsy</div>
               <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_etsy", "₹")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>Listed price{sale ? ", shown crossed out" : ""}</div></div>
                 {pays(etsyPays ? inr(etsyPays) : "—",
                   etsyPays ? <><span>≈ {usd(Math.round(etsyPays / rate))}</span>{sale ? <> <s style={{ color: C.inkFaint }}>{usd(Math.round(etsyPrice / rate))}</s> · {sale}% sale</> : ""}</> : sale ? `in your ${sale}% sale` : "no sale running",
-                  make("etsy", etsyPays), "etsy")}
+                  )}
               </div>
+              {sheet("etsy", money4("etsy", etsyPays))}
               <div style={{ fontSize: 12, color: C.inkMid, marginTop: 12, lineHeight: 1.55, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
                 {now.orders ? <>Sale read from your last {now.orders} Etsy order{now.orders === 1 ? "" : "s"}.</> : <>No Etsy orders in the last 30 days — using your store's {sale}% setting.</>}
                 {now.tax > 0 && <> {now.taxWhere === "US" ? "US buyers" : "Some buyers"} also pay about {Math.round(now.tax * 100)}% sales tax on top — Etsy adds it at checkout and pays it over; it isn't yours.</>}
@@ -199,8 +248,9 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>eBay</div>
               <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_ebay", "$", ebayUsd ? String(ebayUsd) : "")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>{p.price_ebay ? "Your price" : "Same as an Etsy buyer pays, in dollars"}</div></div>
-                {pays(ebayUsd ? usd(ebayUsd) : "—", "+ shipping", make("ebay", ebayUsd, "$"), "ebay")}
+                {pays(ebayUsd ? usd(ebayUsd) : "—", ebayUsd ? `≈ ${inr(ebayUsd * rate)}` : "")}
               </div>
+              {sheet("ebay", money4("ebay", ebayUsd, "$"))}
             </Box>}
             {pick.store && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Earth Editions</div>
@@ -210,15 +260,18 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
               </div>
               <div style={{ fontSize: 12, color: C.inkMid, marginTop: 10 }}>
                 {p.price_store || p.price_store_inr ? "Customer pays these." : "Leave empty and it follows what an Etsy buyer pays in the sale."}
-                {storeUsd > 0 && <div style={{ marginTop: 6, color: C.ink }}>{cost ? "We make" : "We get"} <b style={{ color: make("store", storeUsd, "$") >= 0 ? C.green : C.red }}>{inr(make("store", storeUsd, "$"))}</b> on a US sale{storeInr ? <>, <b style={{ color: make("store", storeInr) >= 0 ? C.green : C.red }}>{inr(make("store", storeInr))}</b> in India</> : ""} · after 3% card fees{cost ? " and cost" : ""}</div>}
+              </div>
+              {sheet("store", money4("store", storeUsd, "$"), "A US sale")}
+              <div>
               </div>
             </Box>}
             {pick.trade && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Wholesale</div>
               <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_trade", "$")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>Per piece, lot or kilo — as set on the Wholesale tab</div></div>
-                {pays(+p.price_trade ? usd(+p.price_trade) : "—", "trade buyers", make("trade", +p.price_trade, "$"), "trade")}
+                {pays(+p.price_trade ? usd(+p.price_trade) : "—", +p.price_trade ? `≈ ${inr(+p.price_trade * rate)}` : "trade buyers")}
               </div>
+              {sheet("trade", money4("trade", +p.price_trade, "$"))}
             </Box>}
           </>}
 
