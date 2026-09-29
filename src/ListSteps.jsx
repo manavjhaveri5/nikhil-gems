@@ -111,7 +111,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
     const feeBase = pkey === "ebay" ? gross * (1 + (now.tax || 0)) : gross;
     const fees = feeBase * FEES[pkey];
     const shipping = pkey === "trade" ? 0 : pkey === "store_in" ? shipIn : ship;
-    return { gross, fees, shipping, profit: gross - fees - shipping - cost, onTax: pkey === "ebay" && now.tax > 0 };
+    // A sale within India owes 0.25% GST on stones (HSN 7103), inside the price; exports carry none.
+    const gst = pkey === "store_in" ? gross * .0025 / 1.0025 : 0;
+    return { gross, fees, shipping, gst, profit: gross - fees - shipping - gst - cost, onTax: pkey === "ebay" && now.tax > 0 };
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   // Where → the piece → prices → a page for each platform picked → publish.
@@ -157,6 +159,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
         ["Customer pays", m.gross, C.ink],
         [`${FEE_NAME[pkey]} · ${+(FEES[pkey] * 100).toFixed(2)}%${m.onTax ? " of price + tax" : ""}`, -m.fees, C.inkMid],
         [pkey === "trade" ? "Shipping · buyer pays freight" : pkey === "store_in" ? "Shipping in India" : "Shipping", -m.shipping, C.inkMid],
+        ...(m.gst ? [["GST · 0.25% (in the price)", -m.gst, C.inkMid]] : []),
         ["Cost of the piece", -cost, C.inkMid],
       ].map(([k, v, col]) => (
         <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: col, padding: "2px 0" }}>
