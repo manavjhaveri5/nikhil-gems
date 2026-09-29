@@ -114,6 +114,22 @@ function esc(s) {
 }
 
 // Send long messages in chunks; supports basic <b>, <i>, <code> from GPT
+/* A group counts as ours when one of the allowed people is a member of it,
+   by Telegram's own say (getChatMember). Remembered for ten minutes per
+   instance so an album doesn't ask once per photo. */
+const _trusted = new Map();
+async function trustedGroup(chatId, allowed) {
+  const hit = _trusted.get(chatId);
+  if (hit && Date.now() - hit.at < 600000) return hit.ok;
+  let ok = false;
+  for (const id of allowed.filter(a => /^\d+$/.test(a))) {
+    const r = await tg("getChatMember", { chat_id: chatId, user_id: Number(id) }, _ctx.token).catch(() => null);
+    if (["creator", "administrator", "member"].includes(r?.result?.status)) { ok = true; break; }
+  }
+  _trusted.set(chatId, { ok, at: Date.now() });
+  return ok;
+}
+
 async function send(chatId, text, token = null) {
   if (!text?.trim()) return;
   // Strip any raw <tag> that isn't an allowed HTML tag (prevent parse errors)
@@ -2543,9 +2559,18 @@ export default async function handler(req, res) {
       // to; anyone else in that group still gets nothing.
       const allowed = _ctx.allowed.split(",").map(s => s.trim()).filter(Boolean);
       const fromId = message.from?.id;
+      const isMedia = hasPhoto || hasVideo || (doc && /^image\//i.test(doc.mime_type || ""));
+      /* Someone else in a group one of us is in may post listings there, and
+         only listings: the assistant (money, stock, invoices) stays ours. */
+      let guest = false;
       if (allowed.length > 0 && !allowed.includes(String(chatId)) && !(fromId && allowed.includes(String(fromId)))) {
-        await send(chatId, `⛔ Not authorized.${fromId ? ` (your Telegram id: ${fromId})` : ""}`);
-        return;
+        guest = _ctx.listings_on && /group/.test(message.chat?.type || "") && await trustedGroup(chatId, allowed);
+        if (!guest) {
+          // Once per album, not once per photo in it.
+          if (!message.media_group_id || caption) await send(chatId, `⛔ Not authorized.${fromId ? ` (your Telegram id: ${fromId})` : ""}`);
+          return;
+        }
+        if (!isMedia) return;   // a guest's chat and commands aren't for the bot
       }
 
       // /ping answers before anything else is read, so it shows whether the
@@ -2706,6 +2731,12 @@ export default async function handler(req, res) {
           await handleMediaListing({ chatId, message, caption, file, ctx });
           return;
         }
+      }
+
+      // A guest's photo that isn't a listing goes no further (once per album).
+      if (guest) {
+        if (!message.media_group_id || caption) await send(chatId, "Post photos with one line — the piece's name and price — and it becomes a listing.");
+        return;
       }
 
       // Uncaptioned videos keep the old flat workflow: an Earth Editions Shopify
