@@ -2427,10 +2427,31 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       qty2: pieceKg ? String(pieceKg) : "", unit2: "kg",
       price: "", per: pieceKg ? "unit2" : "unit", sku: "" });
   };
+  // Open the linked stock card in the same form, to change it in place.
+  const startEditStock = card => {
+    loadK("ng-vendors-v5").then(v => setVendorNames((Array.isArray(v) ? v : []).filter(x => x?.name)
+      .map(x => ({ id: x.id, name: String(x.name).trim() })).sort((a, b) => a.name.localeCompare(b.name)))).catch(() => {});
+    setNewStock({ editId: card.id, material: card.material || "", shape: card.shape || "", vendor: card.vendor || "", vendorId: card.vendorId || "",
+      qty: String(card.qty ?? ""), unit: card.unit || "pcs", qty2: String(card.qty2 ?? ""), unit2: card.unit2 || "kg",
+      price: card.costPrice ? String(card.costPrice) : "", per: "unit", sku: card.sku || "", location: card.location || "" });
+  };
   const saveNewStock = async () => {
     const ns = newStock;
     if (!ns.material.trim()) return;
     setStockBusy(true);
+    if (ns.editId) {
+      try {
+        const card = stock.find(x => x.id === ns.editId);
+        if (!card) throw new Error("That stock card no longer exists");
+        const next = await upsertItemK(STK_KEY, { ...card, material: ns.material.trim(), shape: ns.shape, vendor: ns.vendor.trim(), vendorId: ns.vendorId || card.vendorId || "",
+          qty: ns.qty, unit: ns.unit, qty2: ns.qty2, unit2: ns.unit2, costPrice: nsCostPerUnit(ns) ? String(nsCostPerUnit(ns)) : "",
+          sku: ns.sku.trim() || card.sku || "", location: ns.location ?? card.location ?? "", updatedAt: new Date().toISOString() }, { prepend: false });
+        window.dispatchEvent(new CustomEvent("ng-stock-updated", { detail: next }));
+        setNewStock(null);
+      } catch (e) { alert(`Couldn't save the stock card: ${e.message}`); }
+      finally { setStockBusy(false); }
+      return;
+    }
     try {
       const now = new Date().toISOString();
       const item = {
@@ -2493,7 +2514,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const autoSku = skuFor(ns.material, ns.shape);
     return (
       <div style={{ marginTop: 10, border: `1.5px solid ${C.ink}`, borderRadius: 10, padding: 12, background: C.bg }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, marginBottom: 8 }}>New stock card</div>
+        <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, marginBottom: 8 }}>{ns.editId ? `Edit stock card ${ns.sku || ""}` : "New stock card"}</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div><Label>Stone</Label><input value={ns.material} onChange={e => upd({ material: e.target.value })} list="lm-mat-steps" placeholder="Ruby in Zoisite" style={FI()} /></div>
           <div><Label>Shape</Label><select value={ns.shape} onChange={e => upd({ shape: e.target.value })} style={FI()}><option value="">—</option>{SHAPES.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
@@ -2525,11 +2546,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           <div><Label>Per</Label><select value={ns.per} onChange={e => upd({ per: e.target.value })} style={FI()}>
             <option value="unit">{ns.unit}</option>{ns.qty2 && <option value="unit2">{ns.unit2}</option>}</select></div>
           {nsTotal(ns) > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 13, color: C.ink }}>Total cost <b>₹{Math.round(nsTotal(ns)).toLocaleString("en-IN")}</b>{+ns.qty > 1 ? ` · ₹${nsCostPerUnit(ns).toLocaleString("en-IN")} per ${ns.unit}` : ""}</div>}
+          {ns.editId && <div style={{ gridColumn: "1 / -1" }}><Label>Stored at</Label><input value={ns.location} onChange={e => upd({ location: e.target.value })} style={FI()} /></div>}
           <div><Label>SKU</Label><input value={ns.sku} onChange={e => upd({ sku: e.target.value.toUpperCase() })} placeholder={autoSku} style={FI({ fontFamily: "monospace" })} /></div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <button type="button" onClick={() => setNewStock(null)} style={{ padding: "9px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontWeight: 700 }}>Cancel</button>
-          <button type="button" disabled={!ns.material.trim() || stockBusy} onClick={saveNewStock} style={{ flex: 1, padding: "9px 14px", borderRadius: 8, border: "none", background: C.ink, color: "#FAF0DC", cursor: "pointer", fontWeight: 800, opacity: ns.material.trim() ? 1 : .5 }}>{stockBusy ? "Saving…" : `Create ${ns.sku.trim() || autoSku} and link it`}</button>
+          <button type="button" disabled={!ns.material.trim() || stockBusy} onClick={saveNewStock} style={{ flex: 1, padding: "9px 14px", borderRadius: 8, border: "none", background: C.ink, color: "#FAF0DC", cursor: "pointer", fontWeight: 800, opacity: ns.material.trim() ? 1 : .5 }}>{stockBusy ? "Saving…" : ns.editId ? "Save to stock card" : `Create ${ns.sku.trim() || autoSku} and link it`}</button>
         </div>
       </div>
     );
@@ -2582,9 +2604,26 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 {!form.linked_stock_id && !newStock && <button type="button" onClick={startNewStock}
                   style={{ marginTop: 8, fontSize: 12.5, fontWeight: 800, color: C.ink, background: "none", border: `1px dashed ${C.borderHi}`, borderRadius: 20, padding: "6px 12px", cursor: "pointer" }}>+ Create a stock card</button>}
                 {!form.linked_stock_id && newStock && newStockForm()}
-                {form.linked_stock_id && !stockQ && (() => { const ls = stock.find(x => x.id === form.linked_stock_id); return ls ? (
-                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 6 }}>Linked to stock: <b>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ")}</b>{ls.sku ? ` (${ls.sku})` : ""} · {ls.qty} {ls.unit || "pcs"}{ls.location ? ` · 📍 ${ls.location}` : ""} <button type="button" onClick={() => set("linked_stock_id", "")} style={{ border: "none", background: "none", color: C.red, cursor: "pointer", fontSize: 11.5, textDecoration: "underline" }}>unlink</button></div>
-                ) : null; })()}
+                {form.linked_stock_id && !stockQ && (() => { const ls = stock.find(x => x.id === form.linked_stock_id); if (!ls) return null;
+                  if (newStock?.editId === ls.id) return newStockForm();
+                  const q2 = String(ls.qty2 ?? "").trim();
+                  return (
+                    <div style={{ marginTop: 10, border: `1px solid ${C.border}`, borderRadius: 10, padding: 10, background: C.bg, display: "flex", gap: 10, alignItems: "flex-start" }}>
+                      {ls.photo ? <img src={ls.photo} alt="" style={{ width: 52, height: 52, borderRadius: 8, objectFit: "cover", flex: "none" }} /> : <div style={{ width: 52, height: 52, borderRadius: 8, background: C.card, display: "grid", placeItems: "center", flex: "none" }}>💎</div>}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>Linked stock card{ls.sku ? ` · ${ls.sku}` : ""}</div>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ") || "Stock item"}</div>
+                        <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.5 }}>
+                          {ls.qty} {ls.unit || "pcs"}{q2 ? ` · ${q2} ${ls.unit2 || ""}` : ""}{ls.location ? ` · 📍 ${ls.location}` : ""}<br />
+                          {ls.costPrice ? `Cost ₹${(+ls.costPrice).toLocaleString("en-IN")} per ${ls.unit || "pcs"}` : "No cost price"}{ls.vendor ? ` · ${ls.vendor}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "none" }}>
+                        <button type="button" onClick={() => startEditStock(ls)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: C.ink, color: "#FAF0DC", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Edit</button>
+                        <button type="button" onClick={() => set("linked_stock_id", "")} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Unlink</button>
+                      </div>
+                    </div>
+                  ); })()}
               </div>
               {costPrompt()}
             </div>
