@@ -123,6 +123,31 @@ const SITE_ID    = "0"; // eBay US
 const esc = s => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 // Convert plain text (with \n line breaks) to HTML for eBay description rendering
+/* Every error eBay returns, not just the first: its first is often the
+   summary ("cannot be listed or modified") and the one after names the cause. */
+function ebayErrors(xml) {
+  const out = [];
+  for (const m of String(xml || "").matchAll(/<Errors>([\s\S]*?)<\/Errors>/g)) {
+    const block = m[1];
+    if (/<SeverityCode>Warning<\/SeverityCode>/.test(block)) continue;
+    const msg = (block.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/) || block.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/) || [])[1] || "";
+    const code = (block.match(/<ErrorCode>(\d+)<\/ErrorCode>/) || [])[1] || "";
+    const params = [...block.matchAll(/<Value>([\s\S]*?)<\/Value>/g)].map(x => x[1]).filter(Boolean);
+    if (msg) out.push(`${msg.replace(/<[^>]+>/g, "").trim()}${params.length ? ` [${params.join(", ")}]` : ""}${code ? ` (eBay ${code})` : ""}`);
+  }
+  return [...new Set(out)].join(" · ");
+}
+
+/* eBay's filters refuse what Etsy lets through: links, email addresses, other
+   marketplaces by name, and claims that a stone heals or cures. Those come
+   out of the eBay copy; the rest of the text is left as written. */
+function ebaySafe(text) {
+  const banned = /https?:\/\/|www\.|[\w.+-]+@[\w-]+\.\w|\betsy\b|\b(heal(s|ing)?|cure[sd]?|treat(s|ment)?|remed(y|ies)|medicinal|diseases?|illness)\b/i;
+  return String(text || "")
+    .split(/(?<=[.!?])\s+|\n/).filter(sn => sn.trim() && !banned.test(sn)).join(" ")
+    .replace(/ {2,}/g, " ").trim();
+}
+
 function plainToHtml(text) {
   if (!text) return "";
   return text
@@ -341,7 +366,8 @@ export async function publishEbayListing(body = {}) {
 
   if (!title) return { ok: false, status: 400, error: "title required" };
   if (!price)  return { ok: false, status: 400, error: "price required" };
-  console.log("[ebay publish_listing] description preview:", JSON.stringify((description || "").slice(0, 200)));
+  const safeDesc = String(description || title).split(/\n\n+/).map(ebaySafe).filter(Boolean).join("\n\n") || ebaySafe(title);
+  console.log("[ebay publish_listing] description preview:", JSON.stringify(safeDesc.slice(0, 200)));
 
   const picXml = images.slice(0, 12).map(u => `<PictureURL>${esc(u)}</PictureURL>`).join("");
 
@@ -365,9 +391,9 @@ export async function publishEbayListing(body = {}) {
     // ReviseItem — update existing listing
     const fields = [
       `<ItemID>${esc(existingId)}</ItemID>`,
-      `<Title>${esc(title.slice(0, 80))}</Title>`,
+      `<Title>${esc((ebaySafe(title) || title).slice(0, 80))}</Title>`,
       ...(itemSku ? [`<SKU>${esc(itemSku.slice(0, 50))}</SKU>`] : []),
-      `<Description><![CDATA[${plainToHtml(description || title)}]]></Description>`,
+      `<Description><![CDATA[${plainToHtml(safeDesc)}]]></Description>`,
       `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
       `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
       ...(picXml ? [`<PictureDetails>${picXml}</PictureDetails>`] : []),
@@ -379,7 +405,7 @@ export async function publishEbayListing(body = {}) {
       // Item gone on eBay — fall through to create a fresh one below
       const errCode = xmlTag("ErrorCode", xml);
       if (errCode !== "17" && errCode !== "291") {
-        return { ok: false, status: 500, error: xmlTag("LongMessage", xml) || "ReviseItem failed" };
+        return { ok: false, status: 500, error: ebayErrors(xml) || "ReviseItem failed" };
       }
       if (syncOnly && !allowCreate) {
         return { ok: false, status: 409, error: xmlTag("LongMessage", xml) || "Skipped eBay sync: existing item could not be revised" };
@@ -395,9 +421,9 @@ export async function publishEbayListing(body = {}) {
 
   // AddItem — create new listing
   const itemXml = `
-    <Title>${esc(title.slice(0, 80))}</Title>
+    <Title>${esc((ebaySafe(title) || title).slice(0, 80))}</Title>
     ${itemSku ? `<SKU>${esc(itemSku.slice(0, 50))}</SKU>` : ""}
-    <Description><![CDATA[${plainToHtml(description || title)}]]></Description>
+    <Description><![CDATA[${plainToHtml(safeDesc)}]]></Description>
     <PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>
     <StartPrice>${Number(price).toFixed(2)}</StartPrice>
     <ConditionID>${esc(String(conditionId))}</ConditionID>
@@ -431,7 +457,7 @@ export async function publishEbayListing(body = {}) {
   `;
   const { ok, xml } = await trading("AddItem", `<Item>${itemXml}</Item>`);
   if (!ok) {
-    return { ok: false, status: 500, error: xmlTag("LongMessage", xml) || "AddItem failed" };
+    return { ok: false, status: 500, error: ebayErrors(xml) || "AddItem failed" };
   }
   const newItemId = xmlTag("ItemID", xml);
   return { ok: true, itemId: newItemId, isNew: true,
