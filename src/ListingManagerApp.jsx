@@ -1881,6 +1881,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   /* What this piece cost, from its stock card: the card's price per piece,
      or for a one-of-a-kind piece bought by weight, the price × its weight. */
   const linkedCard = stock.find(s => s.id === form.linked_stock_id) || null;
+  // The piece's weight in kilos: its own weight field, or its stock card's kilos.
+  const pieceKg = (() => {
+    const w = String(form.weight || "").match(/([\d.]+)\s*(kg|kgs|g|gm|gms|grams?)\b/i);
+    if (w) return /^k/i.test(w[2]) ? +w[1] : +w[1] / 1000;
+    if (linkedCard?.unit2 === "kg" && +linkedCard.qty2) return +linkedCard.qty2 / Math.max(1, +linkedCard.qty || 1);
+    if (linkedCard?.unit === "kg" && +linkedCard.qty) return +linkedCard.qty;
+    return 0;
+  })();
   const stockCost = !linkedCard || !(+linkedCard.costPrice) ? 0
     : linkedCard.unit && linkedCard.unit !== "pcs" && form.type !== "repeatable" ? Math.round(+linkedCard.costPrice * (+linkedCard.qty || 1)) : +linkedCard.costPrice;
   // What eartheditions.co shows for this listing now: it keeps its own short name.
@@ -2404,10 +2412,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     // The vendors we already buy from, by name, A–Z.
     loadK("ng-vendors-v5").then(v => setVendorNames((Array.isArray(v) ? v : []).filter(x => x?.name)
       .map(x => ({ id: x.id, name: String(x.name).trim() })).sort((a, b) => a.name.localeCompare(b.name)))).catch(() => {});
-    const kg = String(form.weight || "").match(/([\d.]+)\s*kg/i);
-    setNewStock({ material: form.material || "", shape: form.shape || "", vendor: "", vendorId: "", unit: "pcs",
-      qty: form.type === "repeatable" ? String(form.qty || 1) : "1", kgQty: kg ? kg[1] : "",
-      costPrice: form.price_calc?.cost ? String(form.price_calc.cost) : "", sku: "" });
+    setNewStock({ material: form.material || "", shape: form.shape || "", vendor: "", vendorId: "",
+      qty: form.type === "repeatable" ? String(form.qty || 1) : "1", unit: "pcs",
+      qty2: pieceKg ? String(pieceKg) : "", unit2: "kg",
+      price: "", per: pieceKg ? "unit2" : "unit", sku: "" });
   };
   const saveNewStock = async () => {
     const ns = newStock;
@@ -2417,10 +2425,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const now = new Date().toISOString();
       const item = {
         id: uid(), material: ns.material.trim(), shape: ns.shape, origin: form.origin || "", size: form.size || "", grade: "", hsn: "7103",
-        qty: ns.unit === "kg" && ns.kgQty ? ns.kgQty : ns.qty || "1", unit: ns.unit, weightGm: "", costPrice: ns.costPrice, listPrice: "",
+        qty: ns.qty || "1", unit: ns.unit, qty2: ns.qty2 || "", unit2: ns.unit2 || "kg", weightGm: "", costPrice: nsCostPerUnit(ns) ? String(nsCostPerUnit(ns)) : "", listPrice: "",
         location: loc || "", market: [], productType: "", photographed: !!(form.images || []).length, postedShopify: false, postedWix: false, postedEtsy: false,
         photo: typeof form.images?.[0] === "string" ? form.images[0] : "", photos: (form.images || []).filter(u => typeof u === "string"), video: "",
-        notes: `Made from listing ${form.listing_order_id || form.id || ""}`.trim(), addedDate: now.slice(0, 10), source: "listing",
+        notes: [`Made from listing ${form.listing_order_id || form.id || ""}`.trim(), +ns.price && ns.per === "unit2" && ns.qty2 ? `Bought at ₹${ns.price}/${ns.unit2}` : ""].filter(Boolean).join(" · "), addedDate: now.slice(0, 10), source: "listing",
         sku: ns.sku.trim() || skuFor(ns.material, ns.shape), vendor: ns.vendor.trim(), vendorId: ns.vendorId || "", region: "India", files: [], createdAt: now, updatedAt: now,
       };
       const next = await upsertItemK(STK_KEY, item, { prepend: true });
@@ -2458,6 +2466,18 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       </div>
     </div>
   );
+  /* Stock keeps its cost price per its first unit. Bought by the kilo, the
+     price per kilo × the kilos, shared over the pieces, is that price. */
+  const nsTotal = ns => !+ns.price ? 0 : ns.per === "unit2" ? +ns.price * (+ns.qty2 || 0) : +ns.price * (+ns.qty || 1);
+  const nsCostPerUnit = ns => { const t = nsTotal(ns); return t ? Math.round(t / Math.max(1, +ns.qty || 1) * 100) / 100 : 0; };
+  const [vendorOpen, setVendorOpen] = useState(false);
+  const addVendor = async name => {
+    const v = { id: uid(), name: name.trim(), companyName: "", gstin: "", pan: "", location: "", country: "India", contact: "", email: "", notes: "", files: [], addedFrom: "listing" };
+    await upsertItemK("ng-vendors-v5", v, { prepend: true });
+    setVendorNames(list => [...list, { id: v.id, name: v.name }].sort((a, b) => a.name.localeCompare(b.name)));
+    setNewStock(x => ({ ...x, vendor: v.name, vendorId: v.id }));
+    setVendorOpen(false);
+  };
   const newStockForm = () => {
     const ns = newStock, upd = patch => setNewStock(x => ({ ...x, ...patch }));
     const autoSku = skuFor(ns.material, ns.shape);
@@ -2467,15 +2487,34 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div><Label>Stone</Label><input value={ns.material} onChange={e => upd({ material: e.target.value })} list="lm-mat-steps" placeholder="Ruby in Zoisite" style={FI()} /></div>
           <div><Label>Shape</Label><select value={ns.shape} onChange={e => upd({ shape: e.target.value })} style={FI()}><option value="">—</option>{SHAPES.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-          <div style={{ gridColumn: "1 / -1" }}><Label>Vendor</Label>
-            <select value={ns.vendorId} onChange={e => { const v = vendorNames.find(x => x.id === e.target.value); upd({ vendorId: v?.id || "", vendor: v?.name || "" }); }} style={FI()}>
-              <option value="">{vendorNames.length ? "Who we bought it from…" : "Loading vendors…"}</option>
-              {vendorNames.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select></div>
-          <div><Label>Cost price</Label><input type="number" inputMode="decimal" value={ns.costPrice} onChange={e => upd({ costPrice: e.target.value })} placeholder="₹" style={FI()} /></div>
-          <div><Label>Per</Label><select value={ns.unit} onChange={e => upd({ unit: e.target.value })} style={FI()}>
-            <option value="pcs">Piece</option><option value="kg">Kilo</option><option value="gm">Gram</option><option value="ct">Carat</option><option value="lot">Lot</option></select></div>
-          <div><Label>{ns.unit === "kg" ? "Kilos" : ns.unit === "pcs" ? "Pieces" : "How many"}</Label><input type="number" inputMode="decimal" value={ns.unit === "kg" ? ns.kgQty : ns.qty} onChange={e => upd(ns.unit === "kg" ? { kgQty: e.target.value } : { qty: e.target.value })} style={FI()} /></div>
+          <div style={{ gridColumn: "1 / -1", position: "relative" }}><Label>Vendor</Label>
+            <input value={ns.vendor} onFocus={() => setVendorOpen(true)} onBlur={() => setTimeout(() => setVendorOpen(false), 150)}
+              onChange={e => { upd({ vendor: e.target.value, vendorId: "" }); setVendorOpen(true); }} placeholder="Type to search our vendors" style={FI()} />
+            {vendorOpen && (() => {
+              const q = ns.vendor.trim().toLowerCase();
+              const hits = vendorNames.filter(v => !q || v.name.toLowerCase().includes(q)).slice(0, 8);
+              const exact = vendorNames.some(v => v.name.toLowerCase() === q);
+              return (
+                <div style={{ position: "absolute", left: 0, right: 0, top: "100%", zIndex: 5, marginTop: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.12)", overflow: "hidden" }}>
+                  {hits.map(v => <button key={v.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { upd({ vendor: v.name, vendorId: v.id }); setVendorOpen(false); }}
+                    style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", border: "none", borderBottom: `1px solid ${C.border}`, background: v.id === ns.vendorId ? C.amberBg : "transparent", cursor: "pointer", fontSize: 14, color: C.ink }}>{v.name}</button>)}
+                  {q && !exact && <button type="button" onMouseDown={e => e.preventDefault()} onClick={() => addVendor(ns.vendor)}
+                    style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 12px", border: "none", background: "transparent", cursor: "pointer", fontSize: 14, fontWeight: 800, color: C.ink }}>+ Add “{ns.vendor.trim()}” as a new vendor</button>}
+                  {!hits.length && !q && <div style={{ padding: "9px 12px", fontSize: 13, color: C.inkFaint }}>No vendors yet — type a name to add one</div>}
+                </div>
+              );
+            })()}
+          </div>
+          <div><Label>Quantity</Label><div style={{ display: "flex", gap: 6 }}>
+            <input type="number" inputMode="decimal" value={ns.qty} onChange={e => upd({ qty: e.target.value })} style={FI({ flex: 1, minWidth: 0 })} />
+            <select value={ns.unit} onChange={e => upd({ unit: e.target.value })} style={FI({ width: 76 })}>{["pcs", "kg", "gm", "ct", "lot"].map(u => <option key={u} value={u}>{u}</option>)}</select></div></div>
+          <div><Label>Second unit</Label><div style={{ display: "flex", gap: 6 }}>
+            <input type="number" inputMode="decimal" value={ns.qty2} onChange={e => upd({ qty2: e.target.value })} placeholder="e.g. 3.9" style={FI({ flex: 1, minWidth: 0 })} />
+            <select value={ns.unit2} onChange={e => upd({ unit2: e.target.value })} style={FI({ width: 76 })}>{["kg", "gm", "ct", "pcs"].map(u => <option key={u} value={u}>{u}</option>)}</select></div></div>
+          <div><Label>Cost price</Label><input type="number" inputMode="decimal" value={ns.price} onChange={e => upd({ price: e.target.value })} placeholder="₹" style={FI()} /></div>
+          <div><Label>Per</Label><select value={ns.per} onChange={e => upd({ per: e.target.value })} style={FI()}>
+            <option value="unit">{ns.unit}</option>{ns.qty2 && <option value="unit2">{ns.unit2}</option>}</select></div>
+          {nsTotal(ns) > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 13, color: C.ink }}>Total cost <b>₹{Math.round(nsTotal(ns)).toLocaleString("en-IN")}</b>{+ns.qty > 1 ? ` · ₹${nsCostPerUnit(ns).toLocaleString("en-IN")} per ${ns.unit}` : ""}</div>}
           <div><Label>SKU</Label><input value={ns.sku} onChange={e => upd({ sku: e.target.value.toUpperCase() })} placeholder={autoSku} style={FI({ fontFamily: "monospace" })} /></div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -2960,7 +2999,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating}
+        <ListSteps form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating}
           onClose={() => setSteps(null)}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
