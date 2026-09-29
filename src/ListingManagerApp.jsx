@@ -904,7 +904,9 @@ function Toast({ msg }) {
   return (
     <div style={{ position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)",
       background: C.ink, color: "#fff", padding: "10px 22px", borderRadius: 10, fontSize: 12,
-      zIndex: 9999, boxShadow: "0 8px 28px rgba(0,0,0,.2)", whiteSpace: "nowrap", pointerEvents: "none" }}>
+      zIndex: 9999, boxShadow: "0 8px 28px rgba(0,0,0,.2)", pointerEvents: "none",
+      // Long messages (Etsy's reasons) wrap on a phone instead of running off both edges.
+      width: "max-content", maxWidth: "calc(100vw - 32px)", boxSizing: "border-box", lineHeight: 1.45, textAlign: "center" }}>
       {msg}
     </div>
   );
