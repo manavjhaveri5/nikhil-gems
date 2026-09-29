@@ -72,8 +72,8 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
   const storeInr = +p.price_store_inr || (etsyPrice ? Math.round(etsyPays / 10) * 10 : 0);
   const ebayUsd = +p.price_ebay || (etsyPays ? Math.round(etsyPays / fx) : 0);
 
-  // What the piece cost us, from step 1 (or its stock card); 0 if not given.
-  const cost = +form.price_calc?.cost || +form._stockCost || 0;
+  // What the piece cost us, from its stock card (an older listing may carry its own); 0 if unknown.
+  const cost = +form._stockCost || +form.price_calc?.cost || 0;
   const make = (pkey, paid, cur) => {
     if (!paid) return null;
     const got = paid * (1 - FEES[pkey]) * (cur === "$" ? rate : 1);

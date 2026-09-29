@@ -1878,7 +1878,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   // Price calculator state
   const [steps, setSteps] = useState(null);   // the listing steps: null | "where" | "price"
   const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, []);
-  const stockCost = +(stock.find(s => s.id === form.linked_stock_id)?.costPrice) || 0;
+  /* What this piece cost, from its stock card: the card's price per piece,
+     or for a one-of-a-kind piece bought by weight, the price × its weight. */
+  const linkedCard = stock.find(s => s.id === form.linked_stock_id) || null;
+  const stockCost = !linkedCard || !(+linkedCard.costPrice) ? 0
+    : linkedCard.unit && linkedCard.unit !== "pcs" && form.type !== "repeatable" ? Math.round(+linkedCard.costPrice * (+linkedCard.qty || 1)) : +linkedCard.costPrice;
   // What eartheditions.co shows for this listing now: it keeps its own short name.
   const [storeLive, setStoreLive] = useState(null);
   // The store's rate and discount, to show what the USA $ and India ₹ come to.
@@ -2161,7 +2165,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const loc = String(form.officeLocation || "").trim();
   const linkedStockLoc = form.linked_stock_id ? String(stock.find(s => s.id === form.linked_stock_id)?.location || "") : "";
   const locRequired = needsLocation(form, sold);
-  const lastMove = Array.isArray(form.location_log) ? form.location_log[0] : null;
 
   const TABS = [
     { key: "overview", label: "Overview" },
@@ -2423,12 +2426,36 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       set("linked_stock_id", item.id);
       if (!form.material) set("material", item.material);
       if (!form.shape && item.shape) set("shape", item.shape);
-      // The cost per piece is what the listing's "we make" works from.
-      if (ns.costPrice && ns.unit === "pcs") set("price_calc", { ...(form.price_calc || {}), cost: ns.costPrice });
       setNewStock(null);
     } catch (e) { alert(`Couldn't make the stock card: ${e.message}`); }
     finally { setStockBusy(false); }
   };
+  /* The cost lives on the stock card. A linked card with none asks for it
+     here, and the answer is saved onto the card itself. */
+  const [cardCost, setCardCost] = useState("");
+  const saveCardCost = async () => {
+    if (!linkedCard || !(+cardCost > 0)) return;
+    setStockBusy(true);
+    try {
+      const next = await upsertItemK(STK_KEY, { ...linkedCard, costPrice: String(+cardCost), updatedAt: new Date().toISOString() }, { prepend: false });
+      window.dispatchEvent(new CustomEvent("ng-stock-updated", { detail: next }));
+      setCardCost("");
+    } catch (e) { alert(`Couldn't save the cost: ${e.message}`); }
+    finally { setStockBusy(false); }
+  };
+  const costPrompt = () => !linkedCard || +linkedCard.costPrice > 0 ? null : (
+    <div style={{ marginTop: 10, border: `1.5px solid ${C.amber}`, background: C.amberBg, borderRadius: 10, padding: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>Its stock card has no cost price</div>
+      <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>Add it and it's saved to {linkedCard.sku || "the stock card"} — the price step then shows what we make.</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+        <span style={{ color: C.inkMid }}>₹</span>
+        <input type="number" inputMode="decimal" value={cardCost} onChange={e => setCardCost(e.target.value)} placeholder="Cost" style={FI({ flex: 1, fontSize: 15 })} />
+        <span style={{ fontSize: 12.5, color: C.inkMid, whiteSpace: "nowrap" }}>per {linkedCard.unit === "pcs" || !linkedCard.unit ? "piece" : linkedCard.unit === "gm" ? "gram" : linkedCard.unit === "ct" ? "carat" : linkedCard.unit === "kg" ? "kilo" : linkedCard.unit}</span>
+        <button type="button" disabled={!(+cardCost > 0) || stockBusy} onClick={saveCardCost}
+          style={{ padding: "9px 14px", borderRadius: 8, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, cursor: "pointer", opacity: +cardCost > 0 ? 1 : .5 }}>{stockBusy ? "Saving…" : "Save to card"}</button>
+      </div>
+    </div>
+  );
   const newStockForm = () => {
     const ns = newStock, upd = patch => setNewStock(x => ({ ...x, ...patch }));
     const autoSku = skuFor(ns.material, ns.shape);
@@ -2505,18 +2532,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 6 }}>Linked to stock: <b>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ")}</b>{ls.sku ? ` (${ls.sku})` : ""} · {ls.qty} {ls.unit || "pcs"}{ls.location ? ` · 📍 ${ls.location}` : ""} <button type="button" onClick={() => set("linked_stock_id", "")} style={{ border: "none", background: "none", color: C.red, cursor: "pointer", fontSize: 11.5, textDecoration: "underline" }}>unlink</button></div>
                 ) : null; })()}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>What did it cost us?</div>
-                  <div style={{ fontSize: 11, color: C.inkFaint }}>Optional · shows what we make on each price</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, width: 150 }}>
-                  <span style={{ color: C.inkMid }}>₹</span>
-                  <input type="number" inputMode="decimal" value={form.price_calc?.cost ?? ""} placeholder={stockCost ? String(stockCost) : "0"}
-                    onChange={e => set("price_calc", { ...(form.price_calc || {}), cost: e.target.value })} style={FI({ fontSize: 15 })} />
-                </div>
-              </div>
-              {lastMove && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Last moved {new Date(lastMove.at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}{lastMove.from ? ` from ${lastMove.from}` : ""}{lastMove.by ? ` by ${lastMove.by}` : ""}.</div>}
+              {costPrompt()}
             </div>
   );
 
