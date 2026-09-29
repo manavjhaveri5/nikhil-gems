@@ -1838,6 +1838,15 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         // characters, and it used to refuse the whole batch along with it.
         if (d.ai.etsy_tags?.length) setTags(cleanTags([...tags, ...d.ai.etsy_tags]));
         if (d.ai.etsy_description && !form.description) set("description", d.ai.etsy_description);
+        // Everything else it can read off the piece, only where nothing is set yet.
+        const blank = k => !String(form[k] ?? "").trim();
+        if (d.ai.etsy_title && blank("etsy_title")) set("etsy_title", d.ai.etsy_title);
+        if (d.ai.etsy_description && blank("etsy_description")) set("etsy_description", d.ai.etsy_description);
+        for (const k of ["material", "shape", "origin", "size"]) if (d.ai[k] && blank(k)) set(k, d.ai[k]);
+        if (d.ai.suggested_section && form.etsy_section_id == null) {
+          const sec = ETSY_SHOP_SECTIONS.find(x => x.id && x.label.toLowerCase() === String(d.ai.suggested_section).toLowerCase());
+          if (sec) set("etsy_section_id", sec.id);
+        }
         set("_ai", d.ai);
       }
     } catch (e) { console.error(e); }
@@ -2169,6 +2178,212 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const { bad } = readyScore(readiness({ ...form, tags }, key, tags));
     return bad ? { color: C.red, n: bad } : { color: pl.status === "active" || pl.action === "update" ? C.green : C.blue, n: "" };
   };
+
+  /* ── The listing steps reuse the platform tabs' own fields ─────────────
+     (without the tab's header, checklist and price boxes: the steps have a
+     page of their own for prices). */
+  const etsyBody = (steps = false) => { const c = channel("etsy"); return <>
+            {!steps && channelHeader(c)}
+            {!steps && checklist(c)}
+            {!steps && priceCard(P("etsy"))}
+            {steps && stoneFields()}
+            {overrides(c, { descPlaceholder: form.description ? "Same as main description" : "" })}
+            <Section title="Category & Section">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
+                <div>
+                  <Label>Etsy Category</Label>
+                  <select value={category} onChange={e => applyCategory(e.target.value)} style={FI()}>
+                    {ETSY_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label>Shop Section</Label>
+                  <select value={form.etsy_section_id ?? ""} onChange={e => set("etsy_section_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    {ETSY_SHOP_SECTIONS.map(s => <option key={s.id ?? ""} value={s.id ?? ""}>{s.label}</option>)}
+                  </select>
+                </div>
+              </div>
+            </Section>
+            <Section title="Tags"
+              action={
+                <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: tags.length === 13 ? C.green : C.inkFaint }}>{tags.length}/13{tags.length === 13 ? " ✓ full" : ""}</span>
+                  <button type="button" onClick={generateAI} disabled={generating || !form.title}
+                    style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.border}`,
+                      borderRadius: 5, padding: "2px 8px", cursor: form.title ? "pointer" : "not-allowed", opacity: form.title ? 1 : .5 }}>
+                    {generating ? "…" : "✨ Fill tags"}
+                  </button>
+                </span>
+              }>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {tags.map((t, i) => (
+                  <span key={t + i} style={{ display: "inline-flex", alignItems: "center", gap: 5,
+                    background: C.card, border: `1.5px solid ${C.border}`, borderRadius: 20,
+                    padding: "4px 10px", fontSize: 12, color: C.ink }}>
+                    {t}
+                    <button type="button" onClick={() => setTags(ts => ts.filter((_, j) => j !== i))}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint,
+                        fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
+                  </span>
+                ))}
+                {tags.length < 13 && (
+                  <input value={tagDraft} onChange={e => setTagDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagDraft); } }}
+                    onBlur={() => addTag(tagDraft)}
+                    placeholder={tags.length === 0 ? "Type a tag and press Enter…" : "+ tag"}
+                    style={{ ...FI(), width: tags.length === 0 ? "100%" : 120, fontSize: 12,
+                      border: `1.5px dashed ${C.border}`, borderRadius: 20, padding: "4px 12px" }} />
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: C.inkFaint }}>Up to 20 characters each. Long phrases buyers type work best.</div>
+            </Section>
+            <Section title="Shipping & Processing" accent="#F56400">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr 1fr", gap: 12 }}>
+                <div>
+                  <Label>Shipping Profile</Label>
+                  <select value={form.etsy_shipping_profile_id || ""}
+                    onChange={e => set("etsy_shipping_profile_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    <option value="">— Auto (by price)</option>
+                    {etsyShippingProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+                {/* Processing profile — Etsy calls it a readiness state. Left to
+                    the API this used to inherit whatever the last active listing
+                    carried, which is how ready stock published as made to order. */}
+                <div>
+                  <Label>Processing Profile</Label>
+                  <select value={form.etsy_readiness_state_id || ""}
+                    onChange={e => set("etsy_readiness_state_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    <option value="">{form.etsy_made_to_order ? "— Auto (fastest made-to-order)" : "— Auto (fastest ready to ship)"}</option>
+                    {etsyReadinessProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Label>Return Policy</Label>
+                  <select value={form.etsy_return_policy_id || ""}
+                    onChange={e => set("etsy_return_policy_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    <option value="">— Default (14-day returns)</option>
+                    {etsyReturnPolicies.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: phone ? "column" : "row", gap: phone ? 12 : 24, marginTop: 12 }}>
+                {[
+                  { field: "etsy_made_to_order", label: "Made to order",   sub: "Off = ready to ship from stock" },
+                  { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "₹0.20/renewal every 4 months" },
+                  { field: "etsy_ads",        label: "Run Etsy Ads",       sub: "Promotes listing in search" },
+                ].map(({ field, label, sub }) => (
+                  <label key={field} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", flex: 1 }}>
+                    <input type="checkbox" checked={!!form[field]} onChange={e => set(field, e.target.checked)}
+                      style={{ marginTop: 2, accentColor: "#F56400", width: 14, height: 14, flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{label}</div>
+                      <div style={{ fontSize: 10, color: C.inkFaint }}>{sub}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </Section>
+  </>; };
+  const ebayBody = (steps = false) => { const c = channel("ebay"); return <>
+            {!steps && channelHeader(c)}
+            {!steps && checklist(c)}
+            {!steps && priceCard({ ...P("ebay"), hint: "Filled from the Etsy price at today's rate ÷ 0.85; change it freely" })}
+            {overrides(c, { descPlaceholder: form._ai?.etsy_description ? "Same as the Etsy description" : "Same as main description" })}
+            <Section title="Condition & Shipping" accent="#0064D2">
+              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
+                <div>
+                  <Label>Condition</Label>
+                  <select value={form.conditionId || "3000"} onChange={e => set("conditionId", e.target.value)} style={FI()}>
+                    <option value="1000">New</option>
+                    <option value="3000">Used (default for natural stones)</option>
+                  </select>
+                </div>
+                <div>
+                  <Label>Shipping cost ($)</Label>
+                  <input type="number" inputMode="decimal" value={form.shippingCost ?? ""} onChange={e => set("shippingCost", e.target.value)} placeholder="0 = free shipping" style={FI()} />
+                </div>
+              </div>
+            </Section>
+  </>; };
+  const storeBody = (steps = false) => { const c = channel("store"); return <>
+            {!steps && channelHeader(c)}
+            {!steps && checklist(c)}
+            {!steps && <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
+              {priceCard({ ...P("store"), priceLabel: "🇺🇸 USA price", placeholder: "Set an Etsy price first", auto: autoUsd,
+                hint: +form.price_store > 0 ? `Your own price. Clear it to follow Etsy ($${autoUsd}).` : autoUsd ? `What US buyers see: Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")} less ${sDisc}% ÷ ${sFx}. Type to set your own.${storeLive?.price && +storeLive.price !== autoUsd ? ` On the site now: $${storeLive.price}.` : ""}` : "Follows the Etsy price once it's set" })}
+              {priceCard({ ...P("store"), key: "store_inr", priceField: "price_store_inr", currency: "INR", priceLabel: "🇮🇳 India price", placeholder: "Set an Etsy price first", auto: autoInr,
+                hint: +form.price_store_inr > 0 ? `Your own price. Clear it to follow Etsy (₹${autoInr.toLocaleString("en-IN")}).` : autoInr ? `What buyers in India see: Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")} less ${sDisc}%. Type to set your own.${storeLive?.price_inr && +storeLive.price_inr !== autoInr ? ` On the site now: ₹${(+storeLive.price_inr).toLocaleString("en-IN")}.` : ""}` : "Follows the Etsy price once it's set" })}
+            </div>}
+            {overrides(c, { rows: 5 })}
+            <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: -6 }}>A title or description set here replaces one changed by hand in the store's own editor.</div>
+  </>; };
+
+  // Stone and shape: what Etsy, the sites and the trade site all describe the piece by.
+  const stoneFields = () => (
+    <Section title="Stone & shape">
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div><Label>Stone</Label><input value={form.material || ""} onChange={e => set("material", e.target.value)} list="lm-mat-steps" placeholder="Ruby in Zoisite…" style={FI()} />
+          <datalist id="lm-mat-steps">{MATERIALS.map(m => <option key={m} value={m} />)}</datalist></div>
+        <div><Label>Shape</Label><select value={form.shape || ""} onChange={e => set("shape", e.target.value)} style={FI()}>
+          <option value="">—</option>{SHAPES.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+        <div><Label>Origin</Label><input value={form.origin || ""} onChange={e => set("origin", e.target.value)} placeholder="Tanzania" style={FI()} /></div>
+        <div><Label>Size</Label><input value={form.size || ""} onChange={e => set("size", e.target.value)} placeholder="165mm" style={FI()} /></div>
+      </div>
+    </Section>
+  );
+
+  /* Wholesale needs only four things: the stone, its shape, where it's from,
+     and how it's sold — per kilo with the pieces a kilo holds, per piece, or
+     per lot. Kept on the listing so going live doesn't stop to ask. */
+  const tradeStep = () => {
+    const d = defaultPieces(form);
+    const ta = form.trade_ask || {};
+    const unit = ta.unit || "kg";
+    const setTa = patch => set("trade_ask", { unit, pieces: ta.pieces ?? (d ? String(d.pieces) : ""), pieces_max: ta.pieces_max ?? (d ? String(d.pieces_max) : ""), ...ta, ...patch });
+    return (
+      <Section title="Wholesale" accent="#1F8F4E">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><Label>Stone</Label><input value={form.material || ""} onChange={e => set("material", e.target.value)} list="lm-mat-steps" style={FI()} /></div>
+          <div><Label>Shape</Label><select value={form.shape || ""} onChange={e => set("shape", e.target.value)} style={FI()}>
+            <option value="">—</option>{SHAPES.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+          <div><Label>Origin</Label><input value={form.origin || ""} onChange={e => set("origin", e.target.value)} placeholder="Country" style={FI()} /></div>
+          <div><Label>Sold per</Label><select value={unit} onChange={e => setTa({ unit: e.target.value })} style={FI()}>
+            <option value="kg">Kilo</option><option value="piece">Piece</option><option value="lot">Lot</option></select></div>
+        </div>
+        {unit !== "piece" && <div style={{ marginTop: 12 }}>
+          <Label>Pieces per {unit === "lot" ? "lot" : "kilo"}</Label>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="number" inputMode="numeric" value={ta.pieces ?? (d ? d.pieces : "")} onChange={e => setTa({ pieces: e.target.value })} placeholder="from" style={FI({ width: 110 })} />
+            <span style={{ color: C.inkFaint }}>to</span>
+            <input type="number" inputMode="numeric" value={ta.pieces_max ?? (d ? d.pieces_max : "")} onChange={e => setTa({ pieces_max: e.target.value })} placeholder="to" style={FI({ width: 110 })} />
+          </div>
+          {d && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 5 }}>Usual for a {String(form.shape || "").toLowerCase() || "piece"}: {d.pieces}–{d.pieces_max}</div>}
+        </div>}
+      </Section>
+    );
+  };
+
+  // One of a kind or repeatable, then where it's kept: the listing steps' second page.
+  const pieceCard = () => (
+    <>
+      <div style={{ display: "flex", gap: 10 }}>
+        {[{ v: "unique", label: "One of a kind", sub: "Comes off every platform when it sells" }, { v: "repeatable", label: "Repeatable", sub: "Several units, quantity tracked" }].map(o => (
+          <button key={o.v} type="button" onClick={() => set("type", o.v)} style={{ flex: 1, padding: "12px 14px", borderRadius: 12, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent",
+            border: `1.5px solid ${form.type === o.v ? C.ink : C.border}`, background: C.surface }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>{form.type === o.v ? "● " : "○ "}{o.label}</div>
+            <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 3 }}>{o.sub}</div>
+          </button>
+        ))}
+      </div>
+      {form.type === "repeatable" && <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>How many?</span>
+        <input type="number" min={1} value={form.qty} onChange={e => set("qty", e.target.value)} style={FI({ width: 100 })} />
+      </div>}
+      {whereCard()}
+    </>
+  );
+  const platformStep = key => key === "etsy" ? etsyBody(true) : key === "ebay" ? ebayBody(true) : key === "store" ? storeBody(true) : tradeStep();
 
   /* Where the piece is kept (or the stock card it comes from) and what it
      cost: the first thing the listing steps ask. */
@@ -2517,131 +2732,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </>}
 
           {/* ── Etsy ─────────────────────────────────────────────────────────── */}
-          {tab === "etsy" && (() => { const c = channel("etsy"); return <>
-            {channelHeader(c)}
-            {checklist(c)}
-            {priceCard(P("etsy"))}
-            {overrides(c, { descPlaceholder: form.description ? "Same as main description" : "" })}
-            <Section title="Category & Section">
-              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
-                <div>
-                  <Label>Etsy Category</Label>
-                  <select value={category} onChange={e => applyCategory(e.target.value)} style={FI()}>
-                    {ETSY_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <Label>Shop Section</Label>
-                  <select value={form.etsy_section_id ?? ""} onChange={e => set("etsy_section_id", e.target.value ? +e.target.value : null)} style={FI()}>
-                    {ETSY_SHOP_SECTIONS.map(s => <option key={s.id ?? ""} value={s.id ?? ""}>{s.label}</option>)}
-                  </select>
-                </div>
-              </div>
-            </Section>
-            <Section title="Tags"
-              action={
-                <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <span style={{ fontSize: 11, color: tags.length === 13 ? C.green : C.inkFaint }}>{tags.length}/13{tags.length === 13 ? " ✓ full" : ""}</span>
-                  <button type="button" onClick={generateAI} disabled={generating || !form.title}
-                    style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.border}`,
-                      borderRadius: 5, padding: "2px 8px", cursor: form.title ? "pointer" : "not-allowed", opacity: form.title ? 1 : .5 }}>
-                    {generating ? "…" : "✨ Fill tags"}
-                  </button>
-                </span>
-              }>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                {tags.map((t, i) => (
-                  <span key={t + i} style={{ display: "inline-flex", alignItems: "center", gap: 5,
-                    background: C.card, border: `1.5px solid ${C.border}`, borderRadius: 20,
-                    padding: "4px 10px", fontSize: 12, color: C.ink }}>
-                    {t}
-                    <button type="button" onClick={() => setTags(ts => ts.filter((_, j) => j !== i))}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint,
-                        fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
-                  </span>
-                ))}
-                {tags.length < 13 && (
-                  <input value={tagDraft} onChange={e => setTagDraft(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(tagDraft); } }}
-                    onBlur={() => addTag(tagDraft)}
-                    placeholder={tags.length === 0 ? "Type a tag and press Enter…" : "+ tag"}
-                    style={{ ...FI(), width: tags.length === 0 ? "100%" : 120, fontSize: 12,
-                      border: `1.5px dashed ${C.border}`, borderRadius: 20, padding: "4px 12px" }} />
-                )}
-              </div>
-              <div style={{ fontSize: 11, color: C.inkFaint }}>Up to 20 characters each. Long phrases buyers type work best.</div>
-            </Section>
-            <Section title="Shipping & Processing" accent="#F56400">
-              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr 1fr", gap: 12 }}>
-                <div>
-                  <Label>Shipping Profile</Label>
-                  <select value={form.etsy_shipping_profile_id || ""}
-                    onChange={e => set("etsy_shipping_profile_id", e.target.value ? +e.target.value : null)} style={FI()}>
-                    <option value="">— Auto (by price)</option>
-                    {etsyShippingProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-                  </select>
-                </div>
-                {/* Processing profile — Etsy calls it a readiness state. Left to
-                    the API this used to inherit whatever the last active listing
-                    carried, which is how ready stock published as made to order. */}
-                <div>
-                  <Label>Processing Profile</Label>
-                  <select value={form.etsy_readiness_state_id || ""}
-                    onChange={e => set("etsy_readiness_state_id", e.target.value ? +e.target.value : null)} style={FI()}>
-                    <option value="">{form.etsy_made_to_order ? "— Auto (fastest made-to-order)" : "— Auto (fastest ready to ship)"}</option>
-                    {etsyReadinessProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <Label>Return Policy</Label>
-                  <select value={form.etsy_return_policy_id || ""}
-                    onChange={e => set("etsy_return_policy_id", e.target.value ? +e.target.value : null)} style={FI()}>
-                    <option value="">— Default (14-day returns)</option>
-                    {etsyReturnPolicies.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div style={{ display: "flex", flexDirection: phone ? "column" : "row", gap: phone ? 12 : 24, marginTop: 12 }}>
-                {[
-                  { field: "etsy_made_to_order", label: "Made to order",   sub: "Off = ready to ship from stock" },
-                  { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "₹0.20/renewal every 4 months" },
-                  { field: "etsy_ads",        label: "Run Etsy Ads",       sub: "Promotes listing in search" },
-                ].map(({ field, label, sub }) => (
-                  <label key={field} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", flex: 1 }}>
-                    <input type="checkbox" checked={!!form[field]} onChange={e => set(field, e.target.checked)}
-                      style={{ marginTop: 2, accentColor: "#F56400", width: 14, height: 14, flexShrink: 0 }} />
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: C.ink }}>{label}</div>
-                      <div style={{ fontSize: 10, color: C.inkFaint }}>{sub}</div>
-                    </div>
-                  </label>
-                ))}
-              </div>
-            </Section>
-          </>; })()}
+          {tab === "etsy" && etsyBody()}
 
           {/* ── eBay ─────────────────────────────────────────────────────────── */}
-          {tab === "ebay" && (() => { const c = channel("ebay"); return <>
-            {channelHeader(c)}
-            {checklist(c)}
-            {priceCard({ ...P("ebay"), hint: "Filled from the Etsy price at today's rate ÷ 0.85; change it freely" })}
-            {overrides(c, { descPlaceholder: form._ai?.etsy_description ? "Same as the Etsy description" : "Same as main description" })}
-            <Section title="Condition & Shipping" accent="#0064D2">
-              <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
-                <div>
-                  <Label>Condition</Label>
-                  <select value={form.conditionId || "3000"} onChange={e => set("conditionId", e.target.value)} style={FI()}>
-                    <option value="1000">New</option>
-                    <option value="3000">Used (default for natural stones)</option>
-                  </select>
-                </div>
-                <div>
-                  <Label>Shipping cost ($)</Label>
-                  <input type="number" inputMode="decimal" value={form.shippingCost ?? ""} onChange={e => set("shippingCost", e.target.value)} placeholder="0 = free shipping" style={FI()} />
-                </div>
-              </div>
-            </Section>
-          </>; })()}
+          {tab === "ebay" && ebayBody()}
 
           {/* ── Wholesale (trade site) ───────────────────────────────────────── */}
           {tab === "trade" && (() => { const c = channel("trade"); const t = tradeRowOf(tradeFactsMap, form); const ref = tradeRefOnly(form); return ref ? <>
@@ -2690,18 +2784,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             </div>
           </>}
 
-          {tab === "store" && (() => { const c = channel("store"); return <>
-            {channelHeader(c)}
-            {checklist(c)}
-            <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
-              {priceCard({ ...P("store"), priceLabel: "🇺🇸 USA price", placeholder: "Set an Etsy price first", auto: autoUsd,
-                hint: +form.price_store > 0 ? `Your own price. Clear it to follow Etsy ($${autoUsd}).` : autoUsd ? `What US buyers see: Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")} less ${sDisc}% ÷ ${sFx}. Type to set your own.${storeLive?.price && +storeLive.price !== autoUsd ? ` On the site now: $${storeLive.price}.` : ""}` : "Follows the Etsy price once it's set" })}
-              {priceCard({ ...P("store"), key: "store_inr", priceField: "price_store_inr", currency: "INR", priceLabel: "🇮🇳 India price", placeholder: "Set an Etsy price first", auto: autoInr,
-                hint: +form.price_store_inr > 0 ? `Your own price. Clear it to follow Etsy (₹${autoInr.toLocaleString("en-IN")}).` : autoInr ? `What buyers in India see: Etsy ₹${(+form.price_etsy).toLocaleString("en-IN")} less ${sDisc}%. Type to set your own.${storeLive?.price_inr && +storeLive.price_inr !== autoInr ? ` On the site now: ₹${(+storeLive.price_inr).toLocaleString("en-IN")}.` : ""}` : "Follows the Etsy price once it's set" })}
-            </div>
-            {overrides(c, { rows: 5 })}
-            <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: -6 }}>A title or description set here replaces one changed by hand in the store's own editor.</div>
-          </>; })()}
+          {tab === "store" && storeBody()}
 
           {/* ── More: the Shopify stores and deals ──────────────────────────── */}
           {tab === "more" && <>
@@ -2784,7 +2867,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps form={{ ...form, tags, _stockCost: stockCost }} orders={orders} rate={liveUsdRate} start={steps} renderWhere={whereCard}
+        <ListSteps form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating}
           onClose={() => setSteps(null)}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
@@ -8908,6 +8991,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [view,       setView]       = useState(() => { try { return localStorage.getItem("lm-view") || "grid"; } catch { return "grid"; } });
   useEffect(() => { try { localStorage.setItem("lm-view", view); } catch {} }, [view]);
   const [tradeAsk,   setTradeAsk]   = useState(null);   // { listing, initial, res } while the trade form is open
+  const [liveSheet,  setLiveSheet]  = useState(null);   // after "Publish live": { title, rows: [{ key, ok, url, error }] }
   const askTrade = (listing, initial) => new Promise(res => setTradeAsk({ listing, initial, res }));
   // Trade details change on the site too: re-read them when coming back to the tab.
   useEffect(() => {
@@ -9194,6 +9278,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         : handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey) })
     ));
     const failed = results.filter(r => r.status === "rejected");
+    // Published from the listing steps: show where it went, with a link to each.
+    if (live) {
+      const fresh = (await loadKFresh(LIST_KEY).catch(() => null) || []).find(x => x.id === savedListing.id) || savedListing;
+      setLiveSheet({ title: savedListing.title, image: (savedListing.images || [])[0],
+        rows: targets.map((k, i) => ({ key: k, ok: results[i].status === "fulfilled", error: results[i].reason?.message || "", url: linkOf(fresh, k).live || "" })) });
+    }
     if (failed.length === 0) {
       showToast(`✓ ${live ? "Live on" : "Synced to"} ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}`);
     } else {
@@ -9332,7 +9422,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       let ask = null;
       if (!syncOnly) {
         const t = (await refreshTradeFacts())[listing.id];
-        if (!t?.live) {
+        // Answered already in the listing steps: no need to ask again.
+        const given = listing.trade_ask?.unit ? {
+          unit: listing.trade_ask.unit, origin: String(listing.origin || "").trim(),
+          pieces: listing.trade_ask.unit === "piece" ? null : (+listing.trade_ask.pieces || null),
+          pieces_max: listing.trade_ask.unit === "piece" ? null : (+listing.trade_ask.pieces_max && +listing.trade_ask.pieces_max !== +listing.trade_ask.pieces ? +listing.trade_ask.pieces_max : null),
+        } : null;
+        if (!t?.live && given) ask = given;
+        else if (!t?.live) {
           const g = tradeGuess(listing);
           // No count yet: start from the shape's usual pieces per kilo.
           const d = !t?.pieces && !g.pieces ? defaultPieces(listing) : null;
@@ -9912,6 +10009,35 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           onSave={handleSave}
           onClose={() => { setShowForm(false); setEditing(null); }}
         />
+      )}
+      {liveSheet && (
+        <div onMouseDown={e => e.target === e.currentTarget && setLiveSheet(null)} style={{ position: "fixed", inset: 0, zIndex: 450, background: "rgba(20,15,8,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: C.bg, borderRadius: 16, width: "100%", maxWidth: 440, padding: 20, boxShadow: "0 24px 80px rgba(0,0,0,.3)" }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14 }}>
+              {typeof liveSheet.image === "string" && <img src={liveSheet.image} alt="" style={{ width: 52, height: 52, borderRadius: 9, objectFit: "cover" }} />}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 26, color: C.ink, lineHeight: 1.1 }}>{liveSheet.rows.every(r => r.ok) ? "It's live" : "Published, with a problem"}</div>
+                <div style={{ fontSize: 12.5, color: C.inkMid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{liveSheet.title}</div>
+              </div>
+            </div>
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 }}>
+              {liveSheet.rows.map((r, i) => {
+                const pl = channel(r.key) || PLATFORMS.find(p => p.key === r.key);
+                return (
+                  <div key={r.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderTop: i ? `1px solid ${C.border}` : "none" }}>
+                    <span style={{ fontSize: 15 }}>{r.ok ? "✓" : "⚠"}</span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontSize: 14, fontWeight: 700, color: C.ink }}>{pl?.label || r.key}</span>
+                      {!r.ok && <span style={{ display: "block", fontSize: 11.5, color: C.red }}>{r.error}</span>}
+                    </span>
+                    {r.ok && r.url && <a href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>View live ↗</a>}
+                  </div>
+                );
+              })}
+            </div>
+            <button type="button" onClick={() => setLiveSheet(null)} style={{ marginTop: 14, width: "100%", padding: "12px 0", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 14, cursor: "pointer" }}>Done</button>
+          </div>
+        </div>
       )}
       {tradeAsk && (
         <TradeAskModal listing={tradeAsk.listing} initial={tradeAsk.initial}
