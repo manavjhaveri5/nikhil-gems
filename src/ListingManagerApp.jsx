@@ -5648,12 +5648,39 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                                   )}
                                   {!invoiceDone && editingAllocation && <button onClick={() => { linkOrderStock(order, ""); setStockSearch(s => ({ ...s, [order.id]: "" })); }} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Change item</button>}
                                 </div>
-                              ) : (
+                              ) : (<>
+                                {/* The listing's own stock card, offered first: picking it is
+                                    the whole of this step for a piece listed through the steps. */}
+                                {(() => {
+                                  const lst = listings.find(l => l.id === order.listing_id)
+                                    || (order.etsy_listing_id ? listings.find(l => String(l.platforms?.etsy?.listing_id || "") === String(order.etsy_listing_id)) : null);
+                                  const card = lst?.linked_stock_id ? stock.find(x => x.id === lst.linked_stock_id) : null;
+                                  if (!card) return null;
+                                  // One of a kind from a card that is just this piece: all of it.
+                                  // Otherwise the order's pieces, and the piece's own kilos if known.
+                                  const pcs = Math.max(1, +order.qty || 1);
+                                  const kgW = String(lst.weight || "").match(/([\d.]+)\s*(kg|kgs|g|gm|gms|grams?)\b/i);
+                                  const pieceKg = kgW ? (/^k/i.test(kgW[2]) ? +kgW[1] : +kgW[1] / 1000) : 0;
+                                  const wholeCard = (+card.qty || 0) <= pcs;
+                                  const q2 = String(card.qty2 || "").trim() === "" ? "" : wholeCard ? String(card.qty2) : card.unit2 === "kg" && pieceKg ? String(pieceKg * pcs) : "";
+                                  const use = () => { linkOrderStock(order, card.id); updNg(order, { qty: String(card.unit === "pcs" || !card.unit ? pcs : wholeCard ? card.qty : pcs), qty2: q2 }); };
+                                  return (
+                                    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: 10, background: C.amberBg, border: `1.5px solid ${C.gold}66`, borderRadius: 10, marginBottom: 10 }}>
+                                      {card.photo ? <img src={card.photo} alt="" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8, flexShrink: 0 }} /> : <div style={{ width: 48, height: 48, borderRadius: 8, background: C.card, display: "grid", placeItems: "center", flexShrink: 0 }}>💎</div>}
+                                      <div style={{ minWidth: 0, flex: 1 }}>
+                                        <div style={{ fontSize: 11, fontWeight: 800, color: C.gold, textTransform: "uppercase", letterSpacing: .5 }}>The listing's stock card</div>
+                                        <div style={{ fontSize: 13.5, fontWeight: 850, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{card.material || card.desc || "Item"}{card.shape ? ` · ${card.shape}` : ""}</div>
+                                        <div style={{ fontSize: 11, color: C.inkMid, marginTop: 2 }}>{[card.sku, `${card.qty} ${card.unit || "pcs"}${String(card.qty2 || "").trim() ? ` · ${card.qty2} ${card.unit2 || ""}` : ""}`, card.location && `🗄 ${card.location}`].filter(Boolean).join(" · ")}</div>
+                                      </div>
+                                      <button onClick={use} style={{ flexShrink: 0, background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 12, fontWeight: 850, cursor: "pointer" }}>Use this</button>
+                                    </div>
+                                  );
+                                })()}
                                 <button onClick={() => { setStockSearch(s => ({ ...s, [order.id]: "" })); setStockModalOrder(order); }} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: C.card, color: C.inkMid, border: `1.5px dashed ${C.border}`, borderRadius: 9, padding: "12px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", marginBottom: 10 }}>
                                   <span style={{ fontSize: 16 }}>🔍</span>
                                   <span>Search stock to allocate…</span>
                                 </button>
-                              )}
+                              </>)}
                               {linked && editingAllocation && (
                                 <>
                                   <div style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, textTransform: "uppercase", letterSpacing: .5, margin: "6px 0 8px" }}>How much did this order use?</div>
