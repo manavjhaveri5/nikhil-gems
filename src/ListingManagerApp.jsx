@@ -1685,7 +1685,7 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING FORM
 ══════════════════════════════════════════════════════════════════════════ */
-function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onClose, who, startTab = "overview" }) {
+function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onClose, who, startTab = "overview" }) {
   const editing = !!initial?.id;
   const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
 
@@ -1932,6 +1932,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   /* The listing steps save with their own prices and platforms, and can ask
      for the piece to go live rather than stay a draft. */
+  /* Publish one platform from the listing steps without leaving them: the
+     listing is saved, put up there, and the form takes back what the platform
+     returned (its ids) so the next save updates rather than duplicates. */
+  const publishOneFromSteps = async (patch, key) => {
+    const f = { ...form, ...patch };
+    if (!validate(f)) throw new Error("Fix the listing first");
+    const r = await onPublishOne(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, updated_at: now() }), key);
+    setForm(x => ({ ...x, ...patch, id: r.listing.id, listing_order_id: r.listing.listing_order_id, images: r.listing.images, video: r.listing.video, platforms: r.listing.platforms }));
+    return r.url;
+  };
   const handleSave = (patch = null, to = null, opts = {}) => {
     const f = patch && !patch.nativeEvent ? { ...form, ...patch } : form;
     if (!validate(f)) return;
@@ -3048,7 +3058,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating}
+        <ListSteps form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onClose={() => setSteps(null)}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
@@ -10215,6 +10225,15 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           sold={!!editing && editing.type !== "repeatable" && orders.some(o => o.listing_id === editing.id) && !PLATFORMS.some(p => editing.platforms?.[p.key]?.status === "active")}
           who={who}
           onSave={handleSave}
+          onPublishOne={async (listing, pkey) => {
+            let saved = ensureListingOrderId(listing);
+            if ((saved.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(saved.video)) saved = await persistListingMedia(saved);
+            await saveListingItem(saved, { prepend: !listings.some(l => l.id === saved.id) });
+            await handlePublish(saved, pkey, { syncOnly: false, allowCreate: true });
+            const fresh = ((await loadKFresh(LIST_KEY).catch(() => null)) || []).find(x => x.id === saved.id) || saved;
+            showToast(`✓ Live on ${channel(pkey)?.label || pkey}`);
+            return { listing: fresh, url: linkOf(fresh, pkey).live || "" };
+          }}
           onClose={() => { setShowForm(false); setEditing(null); }}
         />
       )}

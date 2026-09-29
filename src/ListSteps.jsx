@@ -58,7 +58,7 @@ const laneBest = rec => !rec?.options?.length ? null
   : rec.options.find(o => o.exact && o.key !== "other") || rec.options.find(o => o.exact)
   || rec.options.find(o => /^\d+ to /.test(o.basis || "")) || null;
 
-export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onClose }) {
+export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose }) {
   const [step, setStep] = useState(start);
   const [pick, setPick] = useState(() => Object.fromEntries(CHANNELS.map(c => [c.key, linkOf(form, c.key).linked])));
   const [p, setP] = useState(() => ({
@@ -126,6 +126,21 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   const pieceMissing = retail ? [!form._loc && "where it's stored", !form.linked_stock_id && "its stock card"].filter(Boolean) : [];
   const canNext = step === "where" ? chosen.length > 0 : step === "piece" ? !pieceMissing.length : true;
 
+  // One platform at a time from the last step: publish it, then link to it live.
+  const [one, setOne] = useState({});   // key → { busy, url, error }
+  const publishOne = async key => {
+    setOne(x => ({ ...x, [key]: { busy: true } }));
+    try {
+      const url = await onPublishOne(pricesPatch(), key);
+      setOne(x => ({ ...x, [key]: { url: url || "", done: true } }));
+    } catch (e) { setOne(x => ({ ...x, [key]: { error: e.message || "Didn't publish" } })); }
+  };
+  const pricesPatch = () => ({
+      price_etsy: p.price_etsy,
+      price_ebay: p.price_ebay || (pick.ebay && ebayUsd ? String(ebayUsd) : form.price_ebay || ""),
+      price_store: p.price_store, price_store_inr: p.price_store_inr,
+      price_trade: p.price_trade,
+  });
   const apply = live => {
     const patch = {
       price_etsy: p.price_etsy,
@@ -323,15 +338,34 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                   : c.key === "store" ? [storeUsd && usd(storeUsd), storeInr && inr(storeInr)].filter(Boolean).join(" · ") || "No price"
                   : +p.price_trade ? usd(+p.price_trade) : "No price";
                 return (
-                  <div key={c.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px", borderTop: i ? `1px solid ${C.border}` : "none" }}>
+                  <div key={c.key} style={{ borderTop: i ? `1px solid ${C.border}` : "none" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px" }}>
                     <span style={{ width: 8, height: 8, borderRadius: 4, background: c.color }} />
                     <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.ink }}>{c.label}</span>
                     <span style={{ fontSize: 14, color: /No price/.test(price) ? C.red : C.ink }}>{price}</span>
                   </div>
+                  {onPublishOne && (() => {
+                    const st = one[c.key] || {};
+                    const ln = linkOf(form, c.key);
+                    const url = st.url || (ln.linked && ln.status === "active" ? ln.live : "");
+                    const noPrice = /No price/.test(price);
+                    return (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 12px 34px", flexWrap: "wrap" }}>
+                        {st.error && <span style={{ flex: "1 1 100%", fontSize: 12, color: C.red }}>{st.error}</span>}
+                        {url && <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.green, border: `1.5px solid ${C.green}60`, borderRadius: 8, padding: "7px 12px", textDecoration: "none" }}>✓ View live ↗</a>}
+                        {st.done && !url && <span style={{ fontSize: 12.5, color: C.green, fontWeight: 700 }}>✓ Published — link appears once the platform confirms</span>}
+                        <button type="button" disabled={st.busy || noPrice || pieceMissing.length > 0} onClick={() => publishOne(c.key)}
+                          style={{ fontSize: 13, fontWeight: 800, borderRadius: 8, padding: "7px 14px", cursor: st.busy ? "wait" : "pointer", border: url ? `1px solid ${C.border}` : "none",
+                            background: url ? C.surface : C.ink, color: url ? C.ink : "#FAF0DC", opacity: noPrice || pieceMissing.length ? .4 : 1 }}>
+                          {st.busy ? "Publishing…" : url ? "Update" : `Publish on ${c.label}`}</button>
+                      </div>
+                    );
+                  })()}
+                  </div>
                 );
               }) : <div style={{ padding: 16, color: C.inkMid }}>Nowhere picked yet.</div>}
             </Box>
-            <div style={{ fontSize: 12, color: C.inkFaint }}>Publish live puts it up on each of these and then gives you a link to see it live. Save as drafts keeps it off sale.</div>
+            <div style={{ fontSize: 12, color: C.inkFaint }}>Publish each one on its own and check it live, or all at once with Publish all live. Save as drafts keeps it off sale.</div>
           </>}
         </div>
 
@@ -343,7 +377,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 style={{ padding: "13px 26px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: canNext ? "pointer" : "not-allowed", opacity: canNext ? 1 : .4 }}>Next</button>
             : <>
                 <button type="button" disabled={!chosen.length} onClick={() => apply(false)} style={{ padding: "13px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Save as drafts</button>
-                <button type="button" disabled={!chosen.length || pieceMissing.length > 0} onClick={() => apply(true)} style={{ padding: "13px 22px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length && !pieceMissing.length ? 1 : .4 }}>Publish live</button>
+                <button type="button" disabled={!chosen.length || pieceMissing.length > 0} onClick={() => apply(true)} style={{ padding: "13px 22px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length && !pieceMissing.length ? 1 : .4 }}>Publish all live</button>
               </>}
         </div>
       </div>
