@@ -1878,8 +1878,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   // Price calculator state
   const [steps, setSteps] = useState(null);   // the listing steps: null | "where" | "price"
   const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, []);
-  /* What this piece cost, from its stock card: the card's price per piece,
-     or for a one-of-a-kind piece bought by weight, the price × its weight. */
   const linkedCard = stock.find(s => s.id === form.linked_stock_id) || null;
   // The piece's weight in kilos: its own weight field, or its stock card's kilos.
   const pieceKg = (() => {
@@ -1889,8 +1887,20 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (linkedCard?.unit === "kg" && +linkedCard.qty) return +linkedCard.qty;
     return 0;
   })();
-  const stockCost = !linkedCard || !(+linkedCard.costPrice) ? 0
-    : linkedCard.unit && linkedCard.unit !== "pcs" && form.type !== "repeatable" ? Math.round(+linkedCard.costPrice * (+linkedCard.qty || 1)) : +linkedCard.costPrice;
+  /* What this piece cost, from its stock card. The card's cost price is per
+     its first unit (stock is valued qty × cost price), so: per piece, it's
+     that; by weight, it's that × this piece's own weight — not the card's
+     whole weight, which for a bulk card is every piece in it. */
+  const stockCost = (() => {
+    const cp = +linkedCard?.costPrice || 0;
+    if (!cp) return 0;
+    const u = String(linkedCard.unit || "pcs").toLowerCase();
+    if (u === "pcs" || u === "lot") return cp;
+    const kg = pieceKg || (u === "kg" ? +linkedCard.qty || 0 : u === "gm" ? (+linkedCard.qty || 0) / 1000 : 0);
+    if (u === "kg" && kg) return Math.round(cp * kg);
+    if (u === "gm" && kg) return Math.round(cp * kg * 1000);
+    return Math.round(cp * (+linkedCard.qty || 1));
+  })();
   // What eartheditions.co shows for this listing now: it keeps its own short name.
   const [storeLive, setStoreLive] = useState(null);
   // The store's rate and discount, to show what the USA $ and India ₹ come to.
