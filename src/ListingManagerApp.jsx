@@ -1046,6 +1046,8 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
      opens on — the listing's own clip first, then any extra takes the seller
      just picked. More than one and they arrive as a joined timeline to trim. */
   const [editVideo, setEditVideo] = useState(null);
+  const [vidStep, setVidStep] = useState("");
+  const [vidErr, setVidErr] = useState("");
   /* What the photos and the video were before the editor last wrote over them.
      Editing replaces the listing's picture with a new file, and the seller only
      finds out whether they liked it by looking at it afterwards — so the way
@@ -1159,14 +1161,20 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const handleVideoFiles = async files => {
     const [first, ...rest] = [...(files || [])];
     if (!first || !onVideoChange) return;
-    setVidUploading(true);
+    setVidUploading(true); setVidErr(""); setVidStep("");
     try {
-      const ext = (first.name.split(".").pop() || "mp4").toLowerCase();
-      const url = await uploadToStorage(`listing-videos/${uid()}.${ext}`, first);
+      // Over storage's 50 MB (4K off a DJI) → shrunk to 1080p here first.
+      const { fitVideoForStorage } = await import("./videoLab.js");
+      const big = first.size > 44 * 1024 * 1024;
+      if (big) setVidStep("Making a 1080p copy… 0%");
+      const file = await fitVideoForStorage(first, { onProgress: p => setVidStep(`Making a 1080p copy… ${Math.round(p * 100)}%`) });
+      setVidStep(big ? "Uploading the 1080p copy…" : "");
+      const ext = (file.name.split(".").pop() || "mp4").toLowerCase();
+      const url = await uploadToStorage(`listing-videos/${uid()}.${ext}`, file);
       onVideoChange(url);
       if (rest.length) setEditVideo({ urls: [url, ...rest] });
-    } catch (e) { /* surfaced by caller toast if needed */ }
-    setVidUploading(false);
+    } catch (e) { setVidErr(e.message || String(e)); }
+    setVidUploading(false); setVidStep("");
   };
 
   // Drag-to-reorder selected thumbnails
@@ -1472,11 +1480,12 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
               <input ref={videoRef} type="file" accept="video/*" multiple style={{ display: "none" }}
                 onChange={e => { const fs = [...(e.target.files || [])]; e.target.value = ""; handleVideoFiles(fs); }} />
               {vidUploading
-                ? <div style={{ fontSize: 12, color: C.inkMid, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Spinner /> Uploading video…</div>
+                ? <div style={{ fontSize: 12, color: C.inkMid, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}><Spinner /> {vidStep || "Uploading video…"}</div>
                 : <>
                     <div style={{ fontSize: 12, fontWeight: 600, color: C.inkMid }}>🎬 Add a video</div>
-                    <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 3 }}>Pick several takes and they open in the editor, joined, to trim into one.</div>
+                    <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 3 }}>Pick several takes and they open in the editor, joined, to trim into one. 4K clips over 50 MB are saved as a 1080p copy.</div>
                   </>}
+              {vidErr && !vidUploading && <div style={{ fontSize: 11.5, color: C.red, marginTop: 6, fontWeight: 600 }}>⚠️ {vidErr}</div>}
             </div>
           )}
         </div>
