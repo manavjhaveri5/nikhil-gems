@@ -50,7 +50,7 @@ const PLACE = {
 
 const Box = ({ children, style }) => <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", ...style }}>{children}</div>;
 
-export default function ListSteps({ form, orders, rate = 88, start = "where", renderWhere, onApply, onClose }) {
+export default function ListSteps({ form, orders, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onClose }) {
   const [step, setStep] = useState(start);
   const [pick, setPick] = useState(() => Object.fromEntries(CHANNELS.map(c => [c.key, linkOf(form, c.key).linked])));
   const [p, setP] = useState(() => ({
@@ -80,8 +80,15 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
     return Math.round(got - cost);
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
-  const STEPS = [["where", "Where"], ["price", "Price"], ["list", "List"]];
-  const at = STEPS.findIndex(x => x[0] === step);
+  // Where → the piece → prices → a page for each platform picked → publish.
+  const STEPS = [["where", "Where"], ["piece", "The piece"], ["price", "Price"],
+    ...(renderPlatform ? chosen.map(c => [c.key, c.key === "store" ? "Retail" : c.label]) : []), ["list", "Publish"]];
+  const at = Math.max(0, STEPS.findIndex(x => x[0] === step));
+  /* Etsy, eBay and Earth Editions sell the actual piece, so it has to be
+     findable and tied to its stock card; wholesale alone doesn't. */
+  const retail = chosen.some(c => c.key !== "trade");
+  const pieceMissing = retail ? [!form._loc && "where it's stored", !form.linked_stock_id && "its stock card"].filter(Boolean) : [];
+  const canNext = step === "where" ? chosen.length > 0 : step === "piece" ? !pieceMissing.length : true;
 
   const apply = live => {
     const patch = {
@@ -116,26 +123,44 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
 
   return (
     <div onMouseDown={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, zIndex: 400, background: "rgba(20,15,8,.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ background: C.bg, width: "100%", maxWidth: 560, maxHeight: "100%", height: innerWidth < 700 ? "100%" : "auto", overflowY: "auto", borderRadius: innerWidth < 700 ? 0 : 16, display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,.3)" }}>
+      <div id="ls-box" style={{ background: C.bg, width: "100%", maxWidth: 560, maxHeight: "100%", height: innerWidth < 700 ? "100%" : "auto", overflowY: "auto", borderRadius: innerWidth < 700 ? 0 : 16, display: "flex", flexDirection: "column", boxShadow: "0 24px 80px rgba(0,0,0,.3)" }}>
         {/* steps */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "calc(14px + env(safe-area-inset-top)) 18px 12px", background: C.surface, borderBottom: `1px solid ${C.border}`, position: "sticky", top: 0, zIndex: 2 }}>
           {form.images?.[0] && typeof form.images[0] === "string" && <img src={form.images[0]} alt="" style={{ width: 34, height: 34, borderRadius: 7, objectFit: "cover" }} />}
-          <div style={{ flex: 1, display: "flex", gap: 6 }}>
-            {STEPS.map(([k, label], i) => (
-              <button key={k} type="button" onClick={() => (i <= at || chosen.length) && setStep(k)}
-                style={{ flex: 1, border: "none", background: "none", padding: "4px 0", cursor: "pointer", textAlign: "left" }}>
-                <div style={{ height: 3, borderRadius: 2, background: i <= at ? C.ink : C.border }} />
-                <div style={{ fontSize: 11.5, fontWeight: i === at ? 800 : 500, color: i === at ? C.ink : C.inkMid, marginTop: 5 }}>{i + 1} · {label}</div>
-              </button>
-            ))}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", gap: 4 }}>
+              {STEPS.map(([k], i) => (
+                <button key={k} type="button" onClick={() => i < at && setStep(k)} aria-label={STEPS[i][1]}
+                  style={{ flex: 1, height: 14, border: "none", background: "none", padding: "5px 0", cursor: i < at ? "pointer" : "default" }}>
+                  <div style={{ height: 3, borderRadius: 2, background: i <= at ? C.ink : C.border }} />
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: C.inkMid, marginTop: 2 }}><b style={{ color: C.ink }}>{STEPS[at][1]}</b> · {at + 1} of {STEPS.length}</div>
           </div>
           <button type="button" onClick={onClose} style={{ border: "none", background: "none", fontSize: 24, color: C.inkMid, cursor: "pointer" }}>×</button>
         </div>
 
         <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12, flex: 1 }}>
-          {step === "where" && <>
+          {step === "piece" && <>
+            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>The piece</div>
             {renderWhere && renderWhere()}
-            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink, marginTop: renderWhere ? 10 : 0 }}>Where should it go?</div>
+            {pieceMissing.length > 0 && <div style={{ fontSize: 13, color: C.red }}>Etsy, eBay and Earth Editions need {pieceMissing.join(" and ")} before it can go on.</div>}
+          </>}
+
+          {renderPlatform && chosen.some(c => c.key === step) && <>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ fontFamily: serif, fontSize: 28, color: C.ink, flex: 1 }}>{STEPS[at][1]}</div>
+              {step !== "trade" && onAI && <button type="button" onClick={onAI} disabled={aiBusy || !form.title}
+                style={{ padding: "9px 14px", borderRadius: 10, border: "none", background: C.gold, color: "#fff", fontWeight: 800, fontSize: 13, cursor: aiBusy ? "wait" : "pointer", opacity: form.title ? 1 : .5 }}>
+                {aiBusy ? "Filling…" : "✨ Fill with AI"}</button>}
+            </div>
+            {step !== "trade" && <div style={{ fontSize: 12, color: C.inkMid, marginTop: -4 }}>AI fills the title, description, tags, stone, shape, origin and section from what's there — only the empty ones.</div>}
+            {renderPlatform(step)}
+          </>}
+
+          {step === "where" && <>
+            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Where should it go?</div>
             {CHANNELS.map(c => {
               const ln = linkOf(form, c.key);
               const on = !!pick[c.key];
@@ -198,7 +223,7 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
           </>}
 
           {step === "list" && <>
-            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Ready to list</div>
+            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Publish</div>
             <Box style={{ display: "flex", gap: 14, alignItems: "center" }}>
               {form.images?.[0] && typeof form.images[0] === "string" && <img src={form.images[0]} alt="" style={{ width: 64, height: 64, borderRadius: 9, objectFit: "cover", flex: "none" }} />}
               <div style={{ minWidth: 0 }}>
@@ -221,7 +246,7 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
                 );
               }) : <div style={{ padding: 16, color: C.inkMid }}>Nowhere picked yet.</div>}
             </Box>
-            <div style={{ fontSize: 12, color: C.inkFaint }}>Title, description, tags and photos are the ones on the listing — change them there before listing if they need it.</div>
+            <div style={{ fontSize: 12, color: C.inkFaint }}>Publish live puts it up on each of these and then gives you a link to see it live. Save as drafts keeps it off sale.</div>
           </>}
         </div>
 
@@ -229,11 +254,11 @@ export default function ListSteps({ form, orders, rate = 88, start = "where", re
           {at > 0 && <button type="button" onClick={() => setStep(STEPS[at - 1][0])} style={{ padding: "13px 18px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Back</button>}
           <div style={{ flex: 1 }} />
           {step !== "list"
-            ? <button type="button" disabled={!chosen.length} onClick={() => setStep(STEPS[at + 1][0])}
-                style={{ padding: "13px 26px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length ? 1 : .4 }}>Next</button>
+            ? <button type="button" disabled={!canNext} onClick={() => { setStep(STEPS[at + 1][0]); const box = document.getElementById("ls-box"); if (box) box.scrollTop = 0; }}
+                style={{ padding: "13px 26px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: canNext ? "pointer" : "not-allowed", opacity: canNext ? 1 : .4 }}>Next</button>
             : <>
                 <button type="button" disabled={!chosen.length} onClick={() => apply(false)} style={{ padding: "13px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Save as drafts</button>
-                <button type="button" disabled={!chosen.length} onClick={() => apply(true)} style={{ padding: "13px 22px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length ? 1 : .4 }}>List live</button>
+                <button type="button" disabled={!chosen.length || pieceMissing.length > 0} onClick={() => apply(true)} style={{ padding: "13px 22px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length && !pieceMissing.length ? 1 : .4 }}>Publish live</button>
               </>}
         </div>
       </div>
