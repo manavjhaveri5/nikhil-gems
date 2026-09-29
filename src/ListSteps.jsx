@@ -1,7 +1,7 @@
-/* Listing a piece, one step at a time: where it goes, what it costs on each
-   of those places (the price the customer pays, nothing else), then list it.
-   Etsy's sale, shipping and sales tax are read from the shop's own recent
-   orders, so there is nothing to set: the fees are Etsy's and don't change. */
+/* Listing a piece, one step at a time: where it's kept and where it goes,
+   what the customer pays on each of those places and what that leaves us,
+   then list it. Etsy's sale and sales tax are read from the shop's own recent
+   orders, and each platform's fees are fixed, so there is nothing to set. */
 import { useEffect, useMemo, useState } from "react";
 import { C } from "./lmTheme.js";
 import { CHANNELS, linkOf } from "./listingChannels.js";
@@ -15,8 +15,9 @@ const median = a => { const s = [...a].sort((x, y) => x - y); return s.length ? 
 const t = o => Date.parse(o.created_at || o.date || "") || 0;
 
 /* What Etsy buyers are paying right now, from the shop's recent orders: the
-   sale running (the discount on the latest orders), what shipping usually
-   adds, and the sales tax Etsy puts on top for buyers who owe it. */
+   sale running (the discount on the latest orders) and the sales tax Etsy
+   puts on top for buyers who owe it. Shipping isn't guessed: it follows the
+   listing's shipping profile, and Etsy ships free in the US over $35. */
 export function etsyNow(orders = []) {
   const etsy = orders.filter(o => (o.platform === "etsy" || o.source === "etsy-sync") && !o.cancelled && !/cancel/i.test(o.status || "") && +o.list_price > 0)
     .sort((a, b) => t(b) - t(a));
@@ -32,9 +33,13 @@ export function etsyNow(orders = []) {
   const byCountry = {};
   for (const o of taxed) { const c = o.buyer_country || o.ship_country || ""; if (c) byCountry[c] = (byCountry[c] || 0) + 1; }
   const taxWhere = Object.entries(byCountry).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
-  const shipping = median(etsy.slice(0, 50).map(o => +o.order_shipping || 0).filter(v => v > 0));
-  return { sale, orders: recent.length, tax, taxShare: last100.length ? taxed.length / last100.length : 0, taxWhere, shipping };
+  return { sale, orders: recent.length, tax, taxShare: last100.length ? taxed.length / last100.length : 0, taxWhere };
 }
+
+/* What each platform keeps of a sale — fixed, so never asked for. Etsy:
+   transaction, payment processing and listing fees together; eBay: final
+   value fee and payments; the two sites: card processing. */
+const FEES = { etsy: .11, ebay: .15, store: .03, trade: .03 };
 
 const PLACE = {
   etsy: "Retail, worldwide",
@@ -45,7 +50,7 @@ const PLACE = {
 
 const Box = ({ children, style }) => <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", ...style }}>{children}</div>;
 
-export default function ListSteps({ form, orders, start = "where", onApply, onClose }) {
+export default function ListSteps({ form, orders, rate = 88, start = "where", renderWhere, onApply, onClose }) {
   const [step, setStep] = useState(start);
   const [pick, setPick] = useState(() => Object.fromEntries(CHANNELS.map(c => [c.key, linkOf(form, c.key).linked])));
   const [p, setP] = useState(() => ({
@@ -67,6 +72,13 @@ export default function ListSteps({ form, orders, start = "where", onApply, onCl
   const storeInr = +p.price_store_inr || (etsyPrice ? Math.round(etsyPays / 10) * 10 : 0);
   const ebayUsd = +p.price_ebay || (etsyPays ? Math.round(etsyPays / fx) : 0);
 
+  // What the piece cost us, from step 1 (or its stock card); 0 if not given.
+  const cost = +form.price_calc?.cost || +form._stockCost || 0;
+  const make = (pkey, paid, cur) => {
+    if (!paid) return null;
+    const got = paid * (1 - FEES[pkey]) * (cur === "$" ? rate : 1);
+    return Math.round(got - cost);
+  };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   const STEPS = [["where", "Where"], ["price", "Price"], ["list", "List"]];
   const at = STEPS.findIndex(x => x[0] === step);
@@ -89,11 +101,16 @@ export default function ListSteps({ form, orders, start = "where", onApply, onCl
         style={{ flex: 1, minWidth: 0, width: "100%", border: 0, outline: "none", background: "transparent", fontFamily: serif, fontSize: 30, color: C.ink, padding: "2px 0" }} />
     </div>
   );
-  const pays = (big, sub) => (
+  const pays = (big, sub, made, pkey) => (
     <div style={{ textAlign: "right", flex: "none" }}>
       <div style={{ fontSize: 10.5, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint }}>Customer pays</div>
       <div style={{ fontFamily: serif, fontSize: 30, color: C.ink, lineHeight: 1.1 }}>{big}</div>
       {sub && <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>{sub}</div>}
+      {made != null && <>
+        <div style={{ fontSize: 10.5, letterSpacing: ".16em", textTransform: "uppercase", color: C.inkFaint, marginTop: 10 }}>{cost ? "We make" : "We get"}</div>
+        <div style={{ fontFamily: serif, fontSize: 24, color: made >= 0 ? C.green : C.red, lineHeight: 1.1 }}>{made < 0 ? "−" : ""}{inr(Math.abs(made))}</div>
+        <div style={{ fontSize: 11, color: C.inkFaint }}>after {Math.round(FEES[pkey] * 100)}% fees{cost ? ` and ${inr(cost)} cost` : ""}</div>
+      </>}
     </div>
   );
 
@@ -117,7 +134,8 @@ export default function ListSteps({ form, orders, start = "where", onApply, onCl
 
         <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12, flex: 1 }}>
           {step === "where" && <>
-            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Where should it go?</div>
+            {renderWhere && renderWhere()}
+            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink, marginTop: renderWhere ? 10 : 0 }}>Where should it go?</div>
             {CHANNELS.map(c => {
               const ln = linkOf(form, c.key);
               const on = !!pick[c.key];
@@ -142,20 +160,21 @@ export default function ListSteps({ form, orders, start = "where", onApply, onCl
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Etsy</div>
               <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_etsy", "₹")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>Listed price{sale ? ", shown crossed out" : ""}</div></div>
-                {pays(etsyPays ? inr(etsyPays) : "—", sale ? `in your ${sale}% sale` : "no sale running")}
+                {pays(etsyPays ? inr(etsyPays) : "—",
+                  etsyPays ? <><span>≈ {usd(Math.round(etsyPays / rate))}</span>{sale ? <> <s style={{ color: C.inkFaint }}>{usd(Math.round(etsyPrice / rate))}</s> · {sale}% sale</> : ""}</> : sale ? `in your ${sale}% sale` : "no sale running",
+                  make("etsy", etsyPays), "etsy")}
               </div>
               <div style={{ fontSize: 12, color: C.inkMid, marginTop: 12, lineHeight: 1.55, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
                 {now.orders ? <>Sale read from your last {now.orders} Etsy order{now.orders === 1 ? "" : "s"}.</> : <>No Etsy orders in the last 30 days — using your store's {sale}% setting.</>}
-                {now.shipping > 0 && <> Shipping usually adds {inr(now.shipping)}.</>}
                 {now.tax > 0 && <> {now.taxWhere === "US" ? "US buyers" : "Some buyers"} also pay about {Math.round(now.tax * 100)}% sales tax on top — Etsy adds it at checkout and pays it over; it isn't yours.</>}
-                {etsyPays > 0 && now.tax > 0 && <div style={{ marginTop: 6, color: C.ink }}>All in for {now.taxWhere === "US" ? "a US" : "a taxed"} buyer: about <b>{inr((etsyPays + (now.shipping || 0)) * (1 + now.tax))}</b></div>}
+                {etsyPays > 0 && now.tax > 0 && <div style={{ marginTop: 6, color: C.ink }}>All in for {now.taxWhere === "US" ? "a US" : "a taxed"} buyer: about <b>{inr(etsyPays * (1 + now.tax))}</b> ≈ {usd(Math.round(etsyPays * (1 + now.tax) / rate))}</div>}
               </div>
             </Box>}
             {pick.ebay && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>eBay</div>
               <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_ebay", "$", ebayUsd ? String(ebayUsd) : "")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>{p.price_ebay ? "Your price" : "Same as an Etsy buyer pays, in dollars"}</div></div>
-                {pays(ebayUsd ? usd(ebayUsd) : "—", "+ shipping")}
+                {pays(ebayUsd ? usd(ebayUsd) : "—", "+ shipping", make("ebay", ebayUsd, "$"), "ebay")}
               </div>
             </Box>}
             {pick.store && <Box>
@@ -166,13 +185,14 @@ export default function ListSteps({ form, orders, start = "where", onApply, onCl
               </div>
               <div style={{ fontSize: 12, color: C.inkMid, marginTop: 10 }}>
                 {p.price_store || p.price_store_inr ? "Customer pays these." : "Leave empty and it follows what an Etsy buyer pays in the sale."}
+                {storeUsd > 0 && <div style={{ marginTop: 6, color: C.ink }}>{cost ? "We make" : "We get"} <b style={{ color: make("store", storeUsd, "$") >= 0 ? C.green : C.red }}>{inr(make("store", storeUsd, "$"))}</b> on a US sale{storeInr ? <>, <b style={{ color: make("store", storeInr) >= 0 ? C.green : C.red }}>{inr(make("store", storeInr))}</b> in India</> : ""} · after 3% card fees{cost ? " and cost" : ""}</div>}
               </div>
             </Box>}
             {pick.trade && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Wholesale</div>
               <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_trade", "$")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>Per piece, lot or kilo — as set on the Wholesale tab</div></div>
-                {pays(+p.price_trade ? usd(+p.price_trade) : "—", "trade buyers")}
+                {pays(+p.price_trade ? usd(+p.price_trade) : "—", "trade buyers", make("trade", +p.price_trade, "$"), "trade")}
               </div>
             </Box>}
           </>}
