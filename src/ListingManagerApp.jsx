@@ -2401,9 +2401,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     return `${prefix}-${String(n).padStart(3, "0")}`;
   };
   const startNewStock = () => {
-    loadK("ng-vendors-v5").then(v => setVendorNames((Array.isArray(v) ? v : []).map(x => x?.name).filter(Boolean))).catch(() => {});
+    // The vendors we already buy from, by name, A–Z.
+    loadK("ng-vendors-v5").then(v => setVendorNames((Array.isArray(v) ? v : []).filter(x => x?.name)
+      .map(x => ({ id: x.id, name: String(x.name).trim() })).sort((a, b) => a.name.localeCompare(b.name)))).catch(() => {});
     const kg = String(form.weight || "").match(/([\d.]+)\s*kg/i);
-    setNewStock({ material: form.material || "", shape: form.shape || "", vendor: "", unit: "pcs",
+    setNewStock({ material: form.material || "", shape: form.shape || "", vendor: "", vendorId: "", unit: "pcs",
       qty: form.type === "repeatable" ? String(form.qty || 1) : "1", kgQty: kg ? kg[1] : "",
       costPrice: form.price_calc?.cost ? String(form.price_calc.cost) : "", sku: "" });
   };
@@ -2419,7 +2421,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         location: loc || "", market: [], productType: "", photographed: !!(form.images || []).length, postedShopify: false, postedWix: false, postedEtsy: false,
         photo: typeof form.images?.[0] === "string" ? form.images[0] : "", photos: (form.images || []).filter(u => typeof u === "string"), video: "",
         notes: `Made from listing ${form.listing_order_id || form.id || ""}`.trim(), addedDate: now.slice(0, 10), source: "listing",
-        sku: ns.sku.trim() || skuFor(ns.material, ns.shape), vendor: ns.vendor.trim(), region: "India", files: [], createdAt: now, updatedAt: now,
+        sku: ns.sku.trim() || skuFor(ns.material, ns.shape), vendor: ns.vendor.trim(), vendorId: ns.vendorId || "", region: "India", files: [], createdAt: now, updatedAt: now,
       };
       const next = await upsertItemK(STK_KEY, item, { prepend: true });
       window.dispatchEvent(new CustomEvent("ng-stock-updated", { detail: next }));
@@ -2465,8 +2467,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <div><Label>Stone</Label><input value={ns.material} onChange={e => upd({ material: e.target.value })} list="lm-mat-steps" placeholder="Ruby in Zoisite" style={FI()} /></div>
           <div><Label>Shape</Label><select value={ns.shape} onChange={e => upd({ shape: e.target.value })} style={FI()}><option value="">—</option>{SHAPES.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
-          <div style={{ gridColumn: "1 / -1" }}><Label>Vendor</Label><input value={ns.vendor} onChange={e => upd({ vendor: e.target.value })} list="lm-vendors" placeholder="Who we bought it from" style={FI()} />
-            <datalist id="lm-vendors">{vendorNames.map(v => <option key={v} value={v} />)}</datalist></div>
+          <div style={{ gridColumn: "1 / -1" }}><Label>Vendor</Label>
+            <select value={ns.vendorId} onChange={e => { const v = vendorNames.find(x => x.id === e.target.value); upd({ vendorId: v?.id || "", vendor: v?.name || "" }); }} style={FI()}>
+              <option value="">{vendorNames.length ? "Who we bought it from…" : "Loading vendors…"}</option>
+              {vendorNames.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select></div>
           <div><Label>Cost price</Label><input type="number" inputMode="decimal" value={ns.costPrice} onChange={e => upd({ costPrice: e.target.value })} placeholder="₹" style={FI()} /></div>
           <div><Label>Per</Label><select value={ns.unit} onChange={e => upd({ unit: e.target.value })} style={FI()}>
             <option value="pcs">Piece</option><option value="kg">Kilo</option><option value="gm">Gram</option><option value="ct">Carat</option><option value="lot">Lot</option></select></div>
