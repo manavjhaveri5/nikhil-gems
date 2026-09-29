@@ -1732,7 +1732,7 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
   const [etsyReadinessProfiles, setEtsyReadinessProfiles] = useState([]);
   const [tab, setTab] = useState(startTab);
   const [connectDraft, setConnectDraft] = useState({});
-  const sheetRef = useRef(null), bodyRef = useRef(null), locRef = useRef(null);
+  const sheetRef = useRef(null), bodyRef = useRef(null);
   const tradeFactsMap = useTradeFacts();
   // A new tab starts at its top, whichever element is doing the scrolling.
   const goTab = (key, focus) => {
@@ -1817,7 +1817,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     // Every one-of-a-kind piece that can still sell has to be findable on the shelf.
     if (needsLocation(f, sold) && !locationOf(f, stock)) e.location = "Where is it? A one-of-a-kind piece needs a location before it's saved.";
     setErrors(e);
-    if (e.title || e.location) goTab("overview", e.location && !e.title ? locRef : null);
+    if (e.title) goTab("overview");
+    else if (e.location) setSteps("where");
     return Object.keys(e).length === 0;
   };
 
@@ -2169,6 +2170,69 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     return bad ? { color: C.red, n: bad } : { color: pl.status === "active" || pl.action === "update" ? C.green : C.blue, n: "" };
   };
 
+  /* Where the piece is kept (or the stock card it comes from) and what it
+     cost: the first thing the listing steps ask. */
+  const whereCard = () => (
+            <div style={{ background: C.surface, border: `1.5px solid ${errors.location ? "#C0392B" : loc ? C.border : locRequired ? "#D4A017" : C.border}`, borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>📍 Where is it stored?</div>
+                <div style={{ fontSize: 11, color: C.inkFaint }}>{locRequired ? "Required for one-of-a-kind pieces" : "Internal only, never shown to buyers"}</div>
+              </div>
+              <input value={form.officeLocation || ""} onChange={e => { set("officeLocation", e.target.value); setErrors(er => ({ ...er, location: "" })); }}
+                placeholder={linkedStockLoc ? `From stock: ${linkedStockLoc}` : "e.g. Shelf B2 · Blue box 3 · Safe · Showroom cabinet"}
+                list="lm-loc-list" style={FI({ fontSize: 15, padding: "10px 12px", ...(errors.location ? { borderColor: "#C0392B" } : {}) })} />
+              <datalist id="lm-loc-list">{knownLocs.map(l => <option key={l.label} value={l.label} />)}</datalist>
+              {errors.location && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{errors.location}</div>}
+              {knownLocs.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                  {knownLocs.slice(0, 10).map(l => {
+                    const on = l.label.toLowerCase() === loc.toLowerCase();
+                    return <button key={l.label} type="button" onClick={() => { set("officeLocation", l.label); setErrors(er => ({ ...er, location: "" })); }}
+                      style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.card, color: on ? "#FAF0DC" : C.inkMid, fontWeight: on ? 700 : 500 }}>{l.label}</button>;
+                  })}
+                  {linkedStockLoc && !loc && <button type="button" onClick={() => set("officeLocation", linkedStockLoc)} style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px dashed ${C.border}`, background: "none", color: C.inkMid }}>Use stock location: {linkedStockLoc}</button>}
+                </div>
+              )}
+              <div style={{ marginTop: 10, position: "relative" }}>
+                <input value={stockQ} onChange={e => setStockQ(e.target.value)} placeholder="🔎 Search stock — stone, SKU, box, show…" style={FI({ fontSize: 13, borderRadius: 20, padding: "7px 12px" })} />
+                {stockHits.length > 0 && (
+                  <div style={{ marginTop: 6, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.surface }}>
+                    {stockHits.map(x => {
+                      const on = x.id === form.linked_stock_id;
+                      return (
+                        <button key={x.id} type="button" onClick={() => { set("linked_stock_id", x.id); if (x.location) { set("officeLocation", String(x.location)); setErrors(er => ({ ...er, location: "" })); } setStockQ(""); }}
+                          style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left", padding: "7px 10px", border: "none", borderBottom: `1px solid ${C.border}`, background: on ? C.amberBg : "transparent", cursor: "pointer" }}>
+                          <div style={{ width: 36, height: 36, borderRadius: 6, overflow: "hidden", background: C.card, flex: "none" }}>{(x.photo || x.photos?.[0]) && <img src={x.photo || x.photos[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 650, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.desc || [x.material, x.shape].filter(Boolean).join(" ") || "Stock item"}</div>
+                            <div style={{ fontSize: 11, color: C.inkFaint }}>{[x.sku, `${x.qty ?? "?"} ${x.unit || "pcs"}`, x.weightGm && `${x.weightGm}g`, x.showTag].filter(Boolean).join(" · ")}</div>
+                          </div>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: x.location ? C.ink : C.inkFaint, whiteSpace: "nowrap" }}>{x.location ? `📍 ${x.location}` : "no location"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {stockQ && !stockHits.length && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>No stock matches “{stockQ}”.</div>}
+                {form.linked_stock_id && !stockQ && (() => { const ls = stock.find(x => x.id === form.linked_stock_id); return ls ? (
+                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 6 }}>Linked to stock: <b>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ")}</b>{ls.sku ? ` (${ls.sku})` : ""} · {ls.qty} {ls.unit || "pcs"}{ls.location ? ` · 📍 ${ls.location}` : ""} <button type="button" onClick={() => set("linked_stock_id", "")} style={{ border: "none", background: "none", color: C.red, cursor: "pointer", fontSize: 11.5, textDecoration: "underline" }}>unlink</button></div>
+                ) : null; })()}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>What did it cost us?</div>
+                  <div style={{ fontSize: 11, color: C.inkFaint }}>Optional · shows what we make on each price</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, width: 150 }}>
+                  <span style={{ color: C.inkMid }}>₹</span>
+                  <input type="number" inputMode="decimal" value={form.price_calc?.cost ?? ""} placeholder={stockCost ? String(stockCost) : "0"}
+                    onChange={e => set("price_calc", { ...(form.price_calc || {}), cost: e.target.value })} style={FI({ fontSize: 15 })} />
+                </div>
+              </div>
+              {lastMove && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Last moved {new Date(lastMove.at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}{lastMove.from ? ` from ${lastMove.from}` : ""}{lastMove.by ? ` by ${lastMove.by}` : ""}.</div>}
+            </div>
+  );
+
   /* On a phone the form is a full-screen sheet that scrolls as one page: the
      sync-to row travels with the form and only Save / Cancel stay pinned, so
      the fields get the screen instead of a sliver between header and footer. */
@@ -2228,55 +2292,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           ...(phone ? { flexShrink: 0 } : { overflowY: "auto", flex: 1 }) }}>
 
           {tab === "overview" && <>
-            {/* ── Where it is ─────────────────────────────────────────────── */}
-            <div ref={locRef} style={{ background: C.surface, border: `1.5px solid ${errors.location ? "#C0392B" : loc ? C.border : locRequired ? "#D4A017" : C.border}`, borderRadius: 12, padding: "14px 16px" }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>📍 Where is this piece?</div>
-                <div style={{ fontSize: 11, color: C.inkFaint }}>{locRequired ? "Required for one-of-a-kind pieces" : "Internal only, never shown to buyers"}</div>
-              </div>
-              <input value={form.officeLocation || ""} onChange={e => { set("officeLocation", e.target.value); setErrors(er => ({ ...er, location: "" })); }}
-                placeholder={linkedStockLoc ? `From stock: ${linkedStockLoc}` : "e.g. Shelf B2 · Blue box 3 · Safe · Showroom cabinet"}
-                list="lm-loc-list" style={FI({ fontSize: 15, padding: "10px 12px", ...(errors.location ? { borderColor: "#C0392B" } : {}) })} />
-              <datalist id="lm-loc-list">{knownLocs.map(l => <option key={l.label} value={l.label} />)}</datalist>
-              {errors.location && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{errors.location}</div>}
-              {knownLocs.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                  {knownLocs.slice(0, 10).map(l => {
-                    const on = l.label.toLowerCase() === loc.toLowerCase();
-                    return <button key={l.label} type="button" onClick={() => { set("officeLocation", l.label); setErrors(er => ({ ...er, location: "" })); }}
-                      style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.card, color: on ? "#FAF0DC" : C.inkMid, fontWeight: on ? 700 : 500 }}>{l.label}</button>;
-                  })}
-                  {linkedStockLoc && !loc && <button type="button" onClick={() => set("officeLocation", linkedStockLoc)} style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px dashed ${C.border}`, background: "none", color: C.inkMid }}>Use stock location: {linkedStockLoc}</button>}
-                </div>
-              )}
-              <div style={{ marginTop: 10, position: "relative" }}>
-                <input value={stockQ} onChange={e => setStockQ(e.target.value)} placeholder="🔎 Search stock — stone, SKU, box, show…" style={FI({ fontSize: 13, borderRadius: 20, padding: "7px 12px" })} />
-                {stockHits.length > 0 && (
-                  <div style={{ marginTop: 6, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.surface }}>
-                    {stockHits.map(x => {
-                      const on = x.id === form.linked_stock_id;
-                      return (
-                        <button key={x.id} type="button" onClick={() => { set("linked_stock_id", x.id); if (x.location) { set("officeLocation", String(x.location)); setErrors(er => ({ ...er, location: "" })); } setStockQ(""); }}
-                          style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left", padding: "7px 10px", border: "none", borderBottom: `1px solid ${C.border}`, background: on ? C.amberBg : "transparent", cursor: "pointer" }}>
-                          <div style={{ width: 36, height: 36, borderRadius: 6, overflow: "hidden", background: C.card, flex: "none" }}>{(x.photo || x.photos?.[0]) && <img src={x.photo || x.photos[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</div>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 650, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.desc || [x.material, x.shape].filter(Boolean).join(" ") || "Stock item"}</div>
-                            <div style={{ fontSize: 11, color: C.inkFaint }}>{[x.sku, `${x.qty ?? "?"} ${x.unit || "pcs"}`, x.weightGm && `${x.weightGm}g`, x.showTag].filter(Boolean).join(" · ")}</div>
-                          </div>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: x.location ? C.ink : C.inkFaint, whiteSpace: "nowrap" }}>{x.location ? `📍 ${x.location}` : "no location"}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {stockQ && !stockHits.length && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>No stock matches “{stockQ}”.</div>}
-                {form.linked_stock_id && !stockQ && (() => { const ls = stock.find(x => x.id === form.linked_stock_id); return ls ? (
-                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 6 }}>Linked to stock: <b>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ")}</b>{ls.sku ? ` (${ls.sku})` : ""} · {ls.qty} {ls.unit || "pcs"}{ls.location ? ` · 📍 ${ls.location}` : ""} <button type="button" onClick={() => set("linked_stock_id", "")} style={{ border: "none", background: "none", color: C.red, cursor: "pointer", fontSize: 11.5, textDecoration: "underline" }}>unlink</button></div>
-                ) : null; })()}
-              </div>
-              {lastMove && <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Last moved {new Date(lastMove.at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}{lastMove.from ? ` from ${lastMove.from}` : ""}{lastMove.by ? ` by ${lastMove.by}` : ""}.</div>}
-            </div>
-
             {/* ── Where it's listed ─────────────────────────────────────── */}
             <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
               {CHANNELS.map(c => {
@@ -2389,34 +2404,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   <input type="number" min={1} value={form.qty} onChange={e => set("qty", e.target.value)} style={FI()} />
                 </div>
               )}
-              <div style={{ marginTop: 12 }}>
-                <Label>Linked stock item <span style={{ fontWeight: 400, color: C.inkFaint }}>(reads live quantity)</span></Label>
-                <select value={form.linked_stock_id} onChange={e => {
-                  const sid = e.target.value;
-                  set("linked_stock_id", sid);
-                  if (sid) {
-                    const s = stock.find(x => x.id === sid);
-                    if (s?.location && !form.officeLocation) set("officeLocation", s.location);
-                  }
-                }} style={FI()}>
-                  <option value="">— None (use manual quantity) —</option>
-                  {stock.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.desc || s.material} — {s.qty} {s.unit || "pcs"}{s.location ? ` · 📦 ${s.location}` : ""}{s.sku ? ` (${s.sku})` : ""}
-                    </option>
-                  ))}
-                </select>
-                {form.linked_stock_id && (() => {
-                  const ls = stock.find(s => s.id === form.linked_stock_id);
-                  return ls ? (
-                    <div style={{ marginTop: 6, background: C.card, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", fontSize: 12, color: C.inkMid, display: "flex", gap: 14, flexWrap: "wrap" }}>
-                      <span>📦 <b>{ls.qty} {ls.unit || "pcs"}</b> in stock</span>
-                      {ls.location && <span>📍 <b>{ls.location}</b></span>}
-                      {ls.material && <span>💎 {ls.material}{ls.shape ? ` · ${ls.shape}` : ""}</span>}
-                    </div>
-                  ) : null;
-                })()}
-              </div>
             </Section>
 
             {/* ── Physical details ─────────────────────────────────────────── */}
@@ -2779,7 +2766,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               {updates.length > 0 && <span>updates {updates.map(c => c.label).join(", ")}</span>}
               {updates.length > 0 && adds.length > 0 && <span>·</span>}
               {adds.length > 0 && <span style={{ color: C.blue }}>adds to {adds.map(c => c.label).join(", ")} as a draft</span>}
-            </> : <span>Saves in the ERP only. Open a platform tab to list it there.</span>}
+            </> : <span>Saves in the ERP only. To list it, use <b>List this piece</b>.</span>}
           </div>
           <div style={{ display: "flex", gap: 10 }}>
             <button type="button" onClick={handleSave}
@@ -2797,7 +2784,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps form={{ ...form, tags }} orders={orders} start={steps}
+        <ListSteps form={{ ...form, tags, _stockCost: stockCost }} orders={orders} rate={liveUsdRate} start={steps} renderWhere={whereCard}
           onClose={() => setSteps(null)}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
