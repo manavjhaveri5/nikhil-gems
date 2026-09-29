@@ -1903,6 +1903,24 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (u === "gm" && kg) return Math.round(cp * kg * 1000);
     return Math.round(cp * (+linkedCard.qty || 1));
   })();
+  /* Etsy's own word on this listing, fetched as it opens: a draft put live
+     (or a listing taken down) on Etsy itself shows as it is, not as the ERP
+     last left it, and is saved back onto the listing. */
+  useEffect(() => {
+    const id = initial?.platforms?.etsy?.listing_id;
+    if (!id) return;
+    let off = false;
+    fetch(`/api/listing-manager?action=etsy_listing_state&id=${id}`).then(r => r.json()).then(async d => {
+      if (off || !d?.ok || !d.state) return;
+      const st = d.state === "active" ? "active" : d.state === "sold_out" ? "sold" : d.state === "removed" || d.state === "expired" ? d.state : "draft";
+      if (st === initial.platforms.etsy.status) return;
+      setForm(f => ({ ...f, platforms: { ...f.platforms, etsy: { ...(f.platforms?.etsy || {}), status: st, url: d.url || f.platforms?.etsy?.url } } }));
+      const saved = (await loadKFresh(LIST_KEY).catch(() => null) || []).find(x => x.id === initial.id);
+      if (saved) await upsertItemK(LIST_KEY, { ...saved, platforms: { ...saved.platforms, etsy: { ...(saved.platforms?.etsy || {}), status: st } } }, { prepend: false }).catch(() => {});
+    }).catch(() => {});
+    return () => { off = true; };
+  }, [initial?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // What eartheditions.co shows for this listing now: it keeps its own short name.
   const [storeLive, setStoreLive] = useState(null);
   // The store's rate and discount, to show what the USA $ and India ₹ come to.
