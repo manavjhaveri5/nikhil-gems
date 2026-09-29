@@ -146,7 +146,7 @@ async function pumpAudio(clip, source, startTs, offset, endTs) {
 /* Storage takes files up to 50 MB, and a few seconds of 4K off a DJI is more
    than that. A clip that fits goes up untouched; one that doesn't is brought
    down to 1080 on the long edge (what every marketplace shows anyway) at a high
-   bitrate, sized so the result lands under the cap however long the clip is. */
+   bitrate and its own frame rate (up to 60), sized so the result lands under the cap however long the clip is. */
 export const STORAGE_MAX_BYTES = 50 * 1024 * 1024;
 const FIT_TARGET_BYTES = 44 * 1024 * 1024;
 export async function fitVideoForStorage(file, { onProgress } = {}) {
@@ -162,13 +162,17 @@ export async function fitVideoForStorage(file, { onProgress } = {}) {
     const scale = Math.min(1, MAX_RENDER_EDGE / Math.max(w, h));
     const even = v => Math.max(2, 2 * Math.round((v * scale) / 2));
     const audioBits = 192_000;
-    const bitrate = Math.max(2_000_000, Math.min(16_000_000, Math.floor((FIT_TARGET_BYTES * 8) / Math.max(1, duration)) - audioBits));
+    // Frame rate is kept (up to 60) so slow turns shot at 60 stay smooth; the
+    // extra frames get a little more bitrate.
+    const outFps = Math.min(60, Math.round(fps));
+    const ceiling = outFps > 30 ? 20_000_000 : 16_000_000;
+    const bitrate = Math.max(2_000_000, Math.min(ceiling, Math.floor((FIT_TARGET_BYTES * 8) / Math.max(1, duration)) - audioBits));
     const codec = await getFirstEncodableVideoCodec(["avc", "hevc", "vp9", "av1"], { width: even(w), height: even(h), bitrate });
     if (!codec) throw new Error("This browser can't encode video. Chrome, Edge or Safari 17+ can.");
     const output = newOutput();
     const conv = await Conversion.init({
       input, output,
-      video: { width: even(w), height: even(h), fit: "contain", codec, bitrate, frameRate: Math.min(30, Math.round(fps)), forceTranscode: true },
+      video: { width: even(w), height: even(h), fit: "contain", codec, bitrate, frameRate: outFps, forceTranscode: true },
       audio: { bitrate: audioBits },
     });
     if (!conv.isValid) throw new Error("This browser can't convert this video. Try Chrome or Safari, or export it at 1080p from the DJI app first.");
