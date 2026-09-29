@@ -2305,7 +2305,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
     const what = file.kind === "video" ? "video" : "photo";
     const rest = groupId ? " The rest of the album is still saved." : "";
     await send(chatId, tooBig
-      ? `⚠️ That ${what} is ${Math.round(mb)} MB — Telegram only lets bots download up to 20 MB.${rest} Add it to the listing in Listing Manager, or send a shorter / compressed version.`
+      ? `⚠️ That ${what} is ${Math.round(mb)} MB — Telegram only lets bots download up to 20 MB.${rest} Resend it at 1080p (tap the video before sending and set its quality to 1080p — Etsy shows 1080p at most, so nothing visible is lost), or add the original in Listing Manager.`
       : `⚠️ Could not pull that ${what} off Telegram.${rest} Send it again, or add it in Listing Manager.`, ctx.token);
     return;
   }
