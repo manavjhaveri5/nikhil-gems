@@ -126,16 +126,24 @@ const esc = s => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").repl
 /* Every error eBay returns, not just the first: its first is often the
    summary ("cannot be listed or modified") and the one after names the cause. */
 function ebayErrors(xml) {
+  // eBay escapes its messages twice and wraps them in HTML: decode, strip, tidy.
+  const clean = t => { let v = String(t || ""); for (let i = 0; i < 2; i++) v = v.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+    return v.replace(/<a [^>]*href="mailto:([^"]+)"[^>]*>[^<]*<\/a>/gi, "$1").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim(); };
   const out = [];
   for (const m of String(xml || "").matchAll(/<Errors>([\s\S]*?)<\/Errors>/g)) {
     const block = m[1];
     if (/<SeverityCode>Warning<\/SeverityCode>/.test(block)) continue;
-    const msg = (block.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/) || block.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/) || [])[1] || "";
     const code = (block.match(/<ErrorCode>(\d+)<\/ErrorCode>/) || [])[1] || "";
-    const params = [...block.matchAll(/<Value>([\s\S]*?)<\/Value>/g)].map(x => x[1]).filter(Boolean);
-    if (msg) out.push(`${msg.replace(/<[^>]+>/g, "").trim()}${params.length ? ` [${params.join(", ")}]` : ""}${code ? ` (eBay ${code})` : ""}`);
+    // The generic 240 summary adds nothing when a specific reason follows it.
+    const long = clean((block.match(/<LongMessage>([\s\S]*?)<\/LongMessage>/) || block.match(/<ShortMessage>([\s\S]*?)<\/ShortMessage>/) || [])[1]);
+    // Its parameters often carry the real reason as readable text.
+    const params = [...block.matchAll(/<Value>([\s\S]*?)<\/Value>/g)].map(x => clean(x[1]))
+      .filter(v => v.length > 40 && !/\{URL\d\}/.test(v));
+    const msg = params[0] || long;
+    if (msg) out.push(`${msg}${code && code !== "240" ? ` (eBay ${code})` : ""}`);
   }
-  return [...new Set(out)].join(" · ");
+  const uniq = [...new Set(out)];
+  return (uniq.length > 1 ? uniq.filter(x => !/cannot be listed or modified/i.test(x)) : uniq).join(" · ") || uniq.join(" · ");
 }
 
 /* eBay's filters refuse what Etsy lets through: links, email addresses, other
