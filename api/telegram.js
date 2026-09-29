@@ -1864,7 +1864,9 @@ async function aiListingDraft({ caption, imageUrls = [], hints = {} }) {
   if (!process.env.OPENAI_KEY) return null;
   const model = process.env.TELEGRAM_LISTING_MODEL || process.env.TELEGRAM_OPENAI_MODEL || "gpt-4.1-mini";
   const promptFor = photos => `You write Etsy listings for Nikhil Gems / Earth Editions, a crystal
-and mineral shop. Match the shop's own titles and tags — here are real ones:
+and mineral shop that also sells what goes with them — display stands and
+bases, cases, tools, labels, custom pieces. Match the shop's own titles and
+tags — here are real ones:
 
 ${HOUSE_STYLE_EXAMPLES}
 
@@ -1891,6 +1893,13 @@ angle. No hashtags, no duplicates of one another.
 ${photos.length ? `The ${photos.length} photo(s) below are the product.` : "There are no photos — work from the note alone."}
 Seller's note (facts, not the title): ${caption ? `"${caption}"` : "(none)"}
 Known already: ${JSON.stringify({ size: hints.size || "", weight: hints.weight || "", origin: hints.origin || "", qty: hints.qty || "" })}
+
+WHAT THE PRODUCT IS comes from the seller's note, never from the photos. If the
+note names a product that isn't a stone — "custom acrylic display stand",
+"specimen box", "label" — the listing is that product: title, body and tags are
+about it, "material" is what it's made of (e.g. Acrylic), and any stone in the
+photos is only there to show it in use. Never turn it into a listing for a stone
+the note doesn't name, and never name a mine or locality for it.
 
 The seller's note always wins on the facts — the stone, the locality, the size —
 over what you think you see. Never invent an origin, a size or a weight that is
@@ -2067,6 +2076,16 @@ async function aiHealthReport(ctx) {
 /* ── Draft assembly ──────────────────────────────────────────────────────── */
 function buildListingDraft({ parsed, ai, images = [], video = "", source = "telegram-photo" }) {
   const id = uid();
+  /* The AI's title has to be about what the seller named. One that shares no
+     real word with the note (a stand retitled "Ruby Fuchsite Heart") is the AI
+     describing a photo instead, so the note stands as the title. */
+  const words = t => new Set(String(t || "").toLowerCase().match(/[a-z]{3,}/g) || []);
+  const noteWords = [...words(parsed.text)].filter(w => !/^(the|and|for|with|from|this|that|piece|stone|crystal|mineral|natural)$/.test(w));
+  const aiTitle = (ai?.title || "").trim();
+  const offTopic = !!(aiTitle && noteWords.length >= 2 && !noteWords.some(w => words(aiTitle).has(w)));
+  // Everything it wrote is about the wrong thing then, not just the title.
+  if (offTopic) { for (const k of Object.keys(ai)) delete ai[k]; ai.notes_for_seller = `The AI took the photos for something else ("${aiTitle}"), so its copy was dropped — your line is the title; add the description and tags in Listing Manager.`; }
+
   const category = categoryByValue(ai?.category) || categoryByValue(inferCategoryValue(`${parsed.text} ${ai?.title || ""}`));
   /* The seller's line is shorthand for a mineral — "cavansite wagholi" — and a
      buyer searching Etsy is not typing that. The AI writes the title in the
