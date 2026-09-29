@@ -1696,19 +1696,19 @@ async function upsertItemK(key, item, { prepend = true } = {}) {
    _pendingFile slot the assistant path shares. */
 async function uploadTelegramMedia({ fileId, name, mime }, targetId, ctx) {
   const fileUrl = await tgFileUrl(fileId, ctx.token);
-  if (!fileUrl) return null;
+  if (!fileUrl) { console.error("Telegram getFile gave no path for", name); return null; }
   try {
     const resp = await fetch(fileUrl);
-    if (!resp.ok) return null;
+    if (!resp.ok) { console.error("Telegram file fetch failed:", resp.status, name); return null; }
     const buf = Buffer.from(await resp.arrayBuffer());
     const client = sb();
     await client.storage.createBucket("ng-media", { public: true }).catch(() => {});
     const ext = (String(name).split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
     const path = `telegram/${targetId}-${Date.now()}.${ext}`;
     const { error } = await client.storage.from("ng-media").upload(path, buf, { contentType: mime || "application/octet-stream", upsert: true });
-    if (error) return null;
+    if (error) { console.error("Media upload failed:", error.message, name, buf.length); return null; }
     return { id: uid(), url: client.storage.from("ng-media").getPublicUrl(path).data.publicUrl, name, type: mime, uploadedAt: new Date().toISOString() };
-  } catch { return null; }
+  } catch (e) { console.error("Media upload threw:", e.message, name); return null; }
 }
 
 /* ── Caption directives ──────────────────────────────────────────────────── */
@@ -2293,9 +2293,20 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
     }, { prepend: false });
   }
 
-  const uploaded = await uploadTelegramMedia(file, `listing-${file.uniqueId}`, ctx);
+  /* Telegram lets a bot download files up to 20 MB, so a longer or HD video
+     can't be pulled at all — say that plainly instead of asking for a resend
+     that would fail the same way. Anything else gets one quiet retry. */
+  const mb = (Number(file.size) || 0) / 1048576;
+  const tooBig = mb > 20;
+  const uploaded = tooBig ? null
+    : await uploadTelegramMedia(file, `listing-${file.uniqueId}`, ctx)
+      || await sleep(1500).then(() => uploadTelegramMedia(file, `listing-${file.uniqueId}`, ctx));
   if (!uploaded) {
-    await send(chatId, `⚠️ Could not pull that ${file.kind === "video" ? "video" : "photo"} off Telegram. Send it again?`, ctx.token);
+    const what = file.kind === "video" ? "video" : "photo";
+    const rest = groupId ? " The rest of the album is still saved." : "";
+    await send(chatId, tooBig
+      ? `⚠️ That ${what} is ${Math.round(mb)} MB — Telegram only lets bots download up to 20 MB.${rest} Add it to the listing in Listing Manager, or send a shorter / compressed version.`
+      : `⚠️ Could not pull that ${what} off Telegram.${rest} Send it again, or add it in Listing Manager.`, ctx.token);
     return;
   }
   const media = { ...uploaded, kind: file.kind };
@@ -2742,10 +2753,10 @@ export default async function handler(req, res) {
         if (wantsListing || joinsAlbum) {
           const photo = hasPhoto ? message.photo[message.photo.length - 1] : null;
           const file = photo
-            ? { fileId: photo.file_id, uniqueId: photo.file_unique_id, name: `listing-${photo.file_unique_id}.jpg`, mime: "image/jpeg", kind: "photo" }
+            ? { fileId: photo.file_id, uniqueId: photo.file_unique_id, name: `listing-${photo.file_unique_id}.jpg`, mime: "image/jpeg", kind: "photo", size: photo.file_size }
             : imageDoc
-              ? { fileId: imageDoc.file_id, uniqueId: imageDoc.file_unique_id, name: imageDoc.file_name || `listing-${imageDoc.file_unique_id}.jpg`, mime: imageDoc.mime_type || "image/jpeg", kind: "photo" }
-              : { fileId: video.file_id, uniqueId: video.file_unique_id || String(message.message_id), name: video.file_name || `listing-${message.message_id}.mp4`, mime: video.mime_type || "video/mp4", kind: "video" };
+              ? { fileId: imageDoc.file_id, uniqueId: imageDoc.file_unique_id, name: imageDoc.file_name || `listing-${imageDoc.file_unique_id}.jpg`, mime: imageDoc.mime_type || "image/jpeg", kind: "photo", size: imageDoc.file_size }
+              : { fileId: video.file_id, uniqueId: video.file_unique_id || String(message.message_id), name: video.file_name || `listing-${message.message_id}.mp4`, mime: video.mime_type || "video/mp4", kind: "video", size: video.file_size };
           await saveSession(chatId, { ...session, lastUpdateId: updateId });
           await handleMediaListing({ chatId, message, caption, file, ctx });
           return;
