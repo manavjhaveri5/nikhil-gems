@@ -40,7 +40,8 @@ export function etsyNow(orders = []) {
 /* What each platform keeps of a sale — fixed, so never asked for. Etsy:
    transaction, payment processing and listing fees together; eBay: final
    value fee and payments; the two sites: card processing. */
-const FEES = { etsy: .11, ebay: .15, store: .03, trade: .03 };
+const FEES = { etsy: .11, ebay: .15, store: .03, trade: .03, store_in: .0236 };
+const FEE_NAME = { etsy: "Etsy fees", ebay: "eBay fees", store: "Card fees", trade: "Card fees", store_in: "Razorpay 2% + GST" };
 
 const PLACE = {
   etsy: "Retail, worldwide",
@@ -50,6 +51,12 @@ const PLACE = {
 };
 
 const Box = ({ children, style }) => <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 18px", ...style }}>{children}</div>;
+
+/* The cheapest carrier that has actually gone to that country, then to its
+   region; null when there's only guesswork from other lanes. */
+const laneBest = rec => !rec?.options?.length ? null
+  : rec.options.find(o => o.exact && o.key !== "other") || rec.options.find(o => o.exact)
+  || rec.options.find(o => /^\d+ to /.test(o.basis || "")) || null;
 
 export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onClose }) {
   const [step, setStep] = useState(start);
@@ -81,18 +88,30 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   const shipEst = useMemo(() => {
     if (!weightKg) return null;
     const rec = recommendCarriers(orders, stock, { id: "_price", ship_country: "US", parcel_weight_kg: weightKg + 0.3 });
-    const pick = rec?.best || rec?.options?.[0];
+    const pick = laneBest(rec) || rec?.options?.[rec.options.length - 1];
     return pick ? { cost: pick.expected, carrier: pick.label || carrierLabel(pick.key), basis: pick.basis } : null;
   }, [orders, stock, weightKg]);
   const [shipTyped, setShipTyped] = useState("");
   const ship = shipTyped !== "" ? +shipTyped || 0 : shipEst?.cost || 0;
-  // Customer pays → platform fees → shipping → cost → profit, all in rupees.
+  // Within India a parcel costs far less: from our past domestic parcels, else a courier's usual rate.
+  const shipInEst = useMemo(() => {
+    const rec = recommendCarriers(orders, stock, { id: "_price_in", ship_country: "IN", parcel_weight_kg: (weightKg || .5) + 0.3 });
+    const pick = laneBest(rec);
+    if (pick) return { cost: pick.expected, carrier: pick.label || carrierLabel(pick.key), basis: pick.basis };
+    return { cost: Math.round(80 + 70 * Math.ceil((weightKg || .5) + .3)), carrier: "a domestic courier", basis: "usual rate" };
+  }, [orders, stock, weightKg]);
+  const [shipInTyped, setShipInTyped] = useState("");
+  const shipIn = shipInTyped !== "" ? +shipInTyped || 0 : shipInEst.cost;
+  /* Customer pays → platform fees → shipping → cost → profit, all in rupees.
+     eBay charges its fee on the whole order, US sales tax included; Etsy
+     only on the price. */
   const money4 = (pkey, paid, cur) => {
     if (!paid) return null;
     const gross = paid * (cur === "$" ? rate : 1);
-    const fees = gross * FEES[pkey];
-    const shipping = pkey === "trade" ? 0 : ship;
-    return { gross, fees, shipping, profit: gross - fees - shipping - cost };
+    const feeBase = pkey === "ebay" ? gross * (1 + (now.tax || 0)) : gross;
+    const fees = feeBase * FEES[pkey];
+    const shipping = pkey === "trade" ? 0 : pkey === "store_in" ? shipIn : ship;
+    return { gross, fees, shipping, profit: gross - fees - shipping - cost, onTax: pkey === "ebay" && now.tax > 0 };
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   // Where → the piece → prices → a page for each platform picked → publish.
@@ -136,8 +155,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       {label && <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>{label}</div>}
       {[
         ["Customer pays", m.gross, C.ink],
-        [`${pkey === "etsy" ? "Etsy" : pkey === "ebay" ? "eBay" : "Card"} fees · ${Math.round(FEES[pkey] * 100)}%`, -m.fees, C.inkMid],
-        [pkey === "trade" ? "Shipping · buyer pays freight" : "Shipping", -m.shipping, C.inkMid],
+        [`${FEE_NAME[pkey]} · ${+(FEES[pkey] * 100).toFixed(2)}%${m.onTax ? " of price + tax" : ""}`, -m.fees, C.inkMid],
+        [pkey === "trade" ? "Shipping · buyer pays freight" : pkey === "store_in" ? "Shipping in India" : "Shipping", -m.shipping, C.inkMid],
         ["Cost of the piece", -cost, C.inkMid],
       ].map(([k, v, col]) => (
         <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: col, padding: "2px 0" }}>
@@ -251,6 +270,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 {pays(ebayUsd ? usd(ebayUsd) : "—", ebayUsd ? `≈ ${inr(ebayUsd * rate)}` : "")}
               </div>
               {sheet("ebay", money4("ebay", ebayUsd, "$"))}
+              {now.tax > 0 && ebayUsd > 0 && <div style={{ fontSize: 12, color: C.inkMid, marginTop: 8, lineHeight: 1.55 }}>US buyers also pay about {Math.round(now.tax * 100)}% sales tax on top — eBay collects and pays it over. All in: about <b>{usd(Math.round(ebayUsd * (1 + now.tax)))}</b>. eBay's fee is charged on that total, tax included.</div>}
             </Box>}
             {pick.store && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Earth Editions</div>
@@ -262,8 +282,17 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 {p.price_store || p.price_store_inr ? "Customer pays these." : "Leave empty and it follows what an Etsy buyer pays in the sale."}
               </div>
               {sheet("store", money4("store", storeUsd, "$"), "A US sale")}
-              <div>
-              </div>
+              {storeInr > 0 && <>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, fontSize: 12, color: C.inkMid }}>
+                  <span style={{ flex: 1 }}>Shipping in India ≈ {inr(shipInEst.cost)} by {shipInEst.carrier} · {shipInEst.basis}</span>
+                  <span style={{ display: "flex", alignItems: "baseline", gap: 3, borderBottom: `1.5px solid ${C.ink}`, width: 90 }}>
+                    <span style={{ color: C.inkMid }}>₹</span>
+                    <input type="number" inputMode="decimal" value={shipInTyped} placeholder={String(shipInEst.cost)} onChange={e => setShipInTyped(e.target.value)}
+                      style={{ flex: 1, minWidth: 0, width: "100%", border: 0, outline: "none", background: "transparent", fontSize: 16, color: C.ink }} />
+                  </span>
+                </div>
+                {sheet("store_in", money4("store_in", storeInr), "An India sale · paid through Razorpay")}
+              </>}
             </Box>}
             {pick.trade && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Wholesale</div>
