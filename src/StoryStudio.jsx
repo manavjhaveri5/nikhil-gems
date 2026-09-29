@@ -1,5 +1,5 @@
 /* Instagram stories for a listing: "Just listed" and "Sold 🔥", drawn from the
-   piece's own photo at 1080×1920, set in one italic serif: "Sold 🔥" over the
+   piece's own photo at 1080×1920, set in Inter Tight: "Sold 🔥" over the
    name, or the name alone. No logo: Instagram already puts the profile photo
    and @eartheditions_ on every story. The image goes to the phone's share
    sheet, so it lands straight in Instagram; the link sticker is added there,
@@ -10,12 +10,14 @@ import { loadBitmap } from "./glPipeline.js";
 import { loadStoreProduct, storeSettings } from "./StoreApp.jsx";
 
 const W = 1080, H = 1920, LEFT = 72, TEXT_W = W - 2 * LEFT;
-const F = { serif: "EE Story Serif" };
+const F = { sans: "EE Story Sans" };
 const EMOJI = '"Apple Color Emoji","Noto Color Emoji","Segoe UI Emoji",sans-serif';
 
 let fontsReady = null;
 const loadFonts = () => fontsReady ||= Promise.all([
-  [F.serif, "tinos-latin-400-italic", { style: "italic", weight: "400" }],
+  [F.sans, "inter-tight-latin-500-normal", { weight: "500" }],
+  [F.sans, "inter-tight-latin-600-normal", { weight: "600" }],
+  [F.sans, "inter-tight-latin-700-normal", { weight: "700" }],
 ].map(async ([fam, file, desc]) => {
   const f = new FontFace(fam, `url(/fonts/story/${file}.woff2)`, desc);
   document.fonts.add(await f.load());
@@ -111,29 +113,35 @@ function busyness(ctx, { x, y, w, h }) {
 const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 
 /* The story itself. Returns where the link sticker goes, for the preview. */
+/* Inter Tight, set tight as a display face (the look of Helvetica Now
+   Display): weight and size, with tracking pulled in a touch. */
+const face = (ctx, weight, size) => {
+  ctx.font = `${weight} ${size}px "${F.sans}"`;
+  if ("letterSpacing" in ctx) ctx.letterSpacing = `${(-0.02 * size).toFixed(1)}px`;
+};
 function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
   ctx.clearRect(0, 0, W, H);
   drawPhoto(ctx, bmp, frame);
   const light = tone === "light", ink = light ? "#fff" : "#141210";
   const top = place === "top";
 
-  // Everything is set in the one italic. A name takes one line if a smaller
+  // Everything is set in the one face. A name takes one line if a smaller
   // size gets it there, and only then goes to two, smaller again if it must.
   const fit = (text, start, oneLineMin, min) => {
-    const at = size => { ctx.font = `italic 400 ${size}px "${F.serif}"`; return wrap(ctx, text, TEXT_W); };
+    const at = size => { face(ctx, 600, size); return wrap(ctx, text, TEXT_W); };
     let size = start, lines = at(size);
     while (lines.length > 1 && size > oneLineMin) lines = at(size -= 4);
     if (lines.length > 1) { size = Math.max(min, Math.min(start, oneLineMin + 8)); lines = at(size); }
     while (lines.length > 2 && size > min) lines = at(size -= 4);
     return { size, lines, lineH: Math.round(size * 1.04) };
   };
-  const nm = kind === "sold" ? fit(name, 56, 42, 38) : fit(name, 92, 68, 56);
+  const nm = kind === "sold" ? fit(name, 52, 40, 36) : fit(name, 84, 62, 52);
   // Above the name: "Sold 🔥" large, or a small "Just listed" tag.
-  const TAG = "Just listed", tagSize = 32, tagH = 56;
+  const TAG = "Just listed", tagSize = 28, tagH = 52;
   const headH = kind === "sold" ? 125 + 18 : tagH + 24;
   const hgt = headH + nm.lines.length * nm.lineH;
   const y0 = top ? 300 : H - 300 - hgt;
-  ctx.font = `italic 400 ${nm.size}px "${F.serif}"`;
+  face(ctx, 600, nm.size);
   const textW = Math.max(420, ...nm.lines.map(l => ctx.measureText(l).width));
   const textBox = { x: LEFT - 20, y: y0 - 30, w: textW + 40, h: hgt + 60 };
 
@@ -167,23 +175,25 @@ function drawStory(ctx, bmp, { kind, name, place, tone, frame }) {
   ctx.fillStyle = ink;
 
   if (kind === "sold") {
-    ctx.font = `italic 400 132px "${F.serif}"`;
-    ctx.fillText("Sold", LEFT, y0 + 106);
-    const after = LEFT + ctx.measureText("Sold").width + 18;
+    face(ctx, 700, 132);
+    ctx.fillText("Sold", LEFT - 4, y0 + 106);
+    const after = LEFT + ctx.measureText("Sold").width + 14;
+    if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
     ctx.font = `78px ${EMOJI}`;
     ctx.fillText("🔥", after, y0 + 94);
   }
   if (kind === "listed") {
-    // A thin outlined tag in the same italic: minimal, never louder than the name.
-    ctx.font = `italic 400 ${tagSize}px "${F.serif}"`;
+    // A thin outlined tag: minimal, never louder than the name.
+    face(ctx, 500, tagSize);
     const tw = ctx.measureText(TAG).width + 44;
     ctx.strokeStyle = ink; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.roundRect ? ctx.roundRect(LEFT + 1, y0 + 1, tw, tagH - 2, (tagH - 2) / 2) : ctx.rect(LEFT + 1, y0 + 1, tw, tagH - 2); ctx.stroke();
     ctx.fillText(TAG, LEFT + 22, y0 + tagH / 2 + tagSize * .32);
   }
-  ctx.font = `italic 400 ${nm.size}px "${F.serif}"`;
+  face(ctx, 600, nm.size);
   if (kind === "sold") ctx.fillStyle = light ? "rgba(255,255,255,.9)" : "#2b2824";
   nm.lines.forEach((ln, i) => ctx.fillText(ln, LEFT, y0 + headH + Math.round(nm.size * .8) + i * nm.lineH));
+  if ("letterSpacing" in ctx) ctx.letterSpacing = "0px";
   return sticker;
 }
 
