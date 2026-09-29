@@ -9234,6 +9234,27 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   // activated (or sold/expired) on Etsy directly, the badge would stay stale.
   // Patches only platforms.etsy.status — never touches other ERP fields.
   // Throttled so navigating between tabs doesn't hammer the Etsy API.
+  /* The Telegram bot used to write a USA warehouse note into every
+     description. It's no longer true: take it out of every listing once, and
+     the next save or re-sync takes it off the platform too. */
+  const dropWarehouseNote = async current => {
+    const re = /\n*\s*Please note: this piece is held in our USA warehouse[^\n]*\n?/gi;
+    const clean = t => String(t).replace(re, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    const has = t => typeof t === "string" && /held in our USA warehouse/i.test(t);
+    const hit = l => has(l.description) || has(l.etsy_description) || has(l.ebay_description) || has(l.store_description) || has(l._ai?.etsy_description);
+    if (!current.some(hit)) return;
+    try {
+      const fresh = await loadKFresh(LIST_KEY).catch(() => null);
+      const base = Array.isArray(fresh) ? fresh : current;
+      const next = base.map(l => !hit(l) ? l : {
+        ...l,
+        ...Object.fromEntries(["description", "etsy_description", "ebay_description", "store_description"].filter(k => has(l[k])).map(k => [k, clean(l[k])])),
+        ...(has(l._ai?.etsy_description) ? { _ai: { ...l._ai, etsy_description: clean(l._ai.etsy_description) } } : {}),
+      });
+      setListings(next);
+      await saveK(LIST_KEY, next);
+    } catch (e) { console.warn("warehouse note:", e); }
+  };
   const ETSY_STATE_SYNC_TS = "ng-etsy-state-sync-ts";
   const ETSY_REDATE_KEY = "ng-etsy-redated-v1";
   const reconcileEtsyStates = async (current) => {
@@ -9316,6 +9337,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       const normalized = await normalizeListingIds(l);
       setListings(normalized); setOrders(o || []); setStock(s || []); setLoaded(true);
       reconcileEtsyStates(normalized);
+      dropWarehouseNote(normalized);
       linkTradeProducts(normalized);
       // Pull eBay in the background. eBay strips buyer addresses ~14 days after the
       // sale, so this must not wait for someone to open the eBay tab.
