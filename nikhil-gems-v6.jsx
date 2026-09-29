@@ -5838,7 +5838,6 @@ ${vendorBlocks}
           ["customer","Customer Orders",openCustomerOrders],
           ["po","Purchase Orders",openPOs],
           ["packet","Monthly Packet",packetRows.filter(r=>r.included).length],
-          ["ledger","Finance Ledger",null],
         ].map(([id,label,count])=>(
           <button key={id} onClick={()=>setModuleTab(id)} style={{background:moduleTab===id?C.surface:"transparent",border:moduleTab===id?`1px solid ${C.border}`:"1px solid transparent",borderRadius:7,padding:"7px 13px",cursor:"pointer",fontSize:12,fontWeight:moduleTab===id?850:700,color:moduleTab===id?C.ink:C.inkMid,whiteSpace:"nowrap"}}>
             {label}{count!=null&&<span style={{marginLeft:5,color:moduleTab===id?C.green:C.inkFaint}}>{count}</span>}
@@ -5961,10 +5960,6 @@ ${vendorBlocks}
           onPersist={savePacket}
           showToast={showToast}
         />
-      )}
-
-      {moduleTab==="ledger"&&(
-        <AccountingFinanceLedger showToast={showToast} onViewBill={onViewBill} isAdmin={isAdmin}/>
       )}
 
       {/* Print Modal */}
