@@ -559,6 +559,10 @@ async function verifyEtsyTags(listingId, expected, hdrs) {
   } catch { return null; }
 }
 
+/* The USA warehouse note the Telegram bot used to add to every description:
+   no longer true, so it's taken out of anything sent to a platform. */
+export const stripWarehouseNote = t => String(t || "").replace(/\n*\s*Please note: this piece is held in our USA warehouse[^\n]*\n?/gi, "\n").replace(/\n{3,}/g, "\n\n").trim();
+
 /* ── Etsy: publish listing ─────────────────────────────────────────────────── */
 export async function publishEtsy(listing, ai, { activate = true } = {}) {
   const {
@@ -567,7 +571,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   } = listing;
 
   const etsyTitle = ai?.etsy_title || title;
-  const etsyDesc  = ai?.etsy_description || listing.description || title;
+  const etsyDesc  = stripWarehouseNote(ai?.etsy_description || listing.description || title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
 
   const sectionId      = listing.etsy_section_id   || ETSY_SECTIONS[shape] || ETSY_SECTIONS[productType] || null;
@@ -685,7 +689,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 /* ── Etsy: update listing ──────────────────────────────────────────────────── */
 async function updateEtsyListing(listingId, listing, ai) {
   const etsyTitle = ai?.etsy_title || listing.title;
-  const etsyDesc  = ai?.etsy_description || listing.description || listing.title;
+  const etsyDesc  = stripWarehouseNote(ai?.etsy_description || listing.description || listing.title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
   const quantity  = listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1);
   const dims      = listingDimensions(listing);

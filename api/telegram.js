@@ -1,8 +1,6 @@
 import { waitUntil } from "@vercel/functions";
 import { createClient } from "@supabase/supabase-js";
 import { ETSY_CATEGORIES, categoryByValue, sectionIdForCategory, inferCategoryValue } from "../lib/listingCategories.js";
-import { publishEtsy } from "./listing-manager.js";
-import { publishEbayListing } from "./ebay.js";
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
 function sb() {
@@ -1816,11 +1814,6 @@ const cleanListingTags = (list = []) => {
    own words out from under it. */
 const ATYAHARA_ABOUT = "Atyāhāra embodies a unique approach to luxury, rooted in mindful sourcing and a deep respect for Mother Earth. Our brand celebrates the beauty of nature’s treasures, not as a necessity, but as a cherished indulgence. Every piece is crafted with a commitment to sustainability, ensuring that the earth’s generosity is honored and preserved for future generations. By choosing Atyāhāra, you are embracing a journey where elegance meets responsibility, and together, we can make a difference.";
 const PHOTO_NOTE = "Photographs were taken in both studio and natural lighting to show the stone as accurately as possible. Please message us for any questions.";
-/* Everything posted from the phone is a piece that has already travelled: it
-   sits in the USA warehouse, which is only opened when the shop is in the
-   country for Denver and Tucson. A buyer needs to know that before they order,
-   not after, so it goes on every listing the bot writes. */
-const USA_WAREHOUSE_NOTE = "Please note: this piece is held in our USA warehouse, which we are only able to access in September, January and February, when we travel over for the Denver and Tucson gem shows. Orders are packed and dispatched during those visits, so kindly plan your purchase accordingly.";
 // One of a kind versus one of several — the shop says which, and says it first.
 const EXACT_LINE = "You will receive the EXACT piece shown in the photographs.";
 const SIMILAR_LINE = "You will receive a very SIMILAR piece. Please message us after purchasing to see available pieces.";
@@ -2093,7 +2086,6 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
     body || title,
     specs,
     images.length ? PHOTO_NOTE : "",
-    USA_WAREHOUSE_NOTE,
     `About Atyāhāra:\n${ATYAHARA_ABOUT}`,
   ].filter(Boolean).join("\n\n");
 
@@ -2127,15 +2119,8 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
     price_shopify_earth: money(priceUsd),
     price_shopify_aty: money(priceInr),
     price_ebay: money(priceUsd),
-    /* Posted from the phone means the piece is already in the USA warehouse, so
-       the Etsy draft is marked as slow to dispatch and takes the longest
-       processing window the shop has rather than promising tomorrow. Point
-       TELEGRAM_ETSY_SHIPPING_PROFILE_ID at a US warehouse profile once one
-       exists and every bot listing will use it. */
-    etsy_slow_dispatch: true,
-    // The shop keeps this stock in its own section, and asks for it by name so a
-    // renumbered section cannot quietly file a stone somewhere else.
-    etsy_section_name: process.env.TELEGRAM_ETSY_SECTION || "Local USA Warehouse",
+    // A section only when one is set for bot listings (TELEGRAM_ETSY_SECTION).
+    etsy_section_name: process.env.TELEGRAM_ETSY_SECTION || "",
     etsy_shipping_profile_id: process.env.TELEGRAM_ETSY_SHIPPING_PROFILE_ID
       ? Number(process.env.TELEGRAM_ETSY_SHIPPING_PROFILE_ID) : null,
     platforms: { etsy: {}, shopify_earth: {}, shopify_aty: {}, ebay: {} },
@@ -2186,72 +2171,6 @@ function listingReply({ listing, category, priceUsd, priceInr, converted, aiFail
     aiNote ? `Note: ${esc(aiNote)}` : "",
     tail,
   ].filter(Boolean).join("\n");
-}
-
-/* ── Publishing ──────────────────────────────────────────────────────────── */
-// Every post gets an Etsy draft (a draft is private — it is not on sale until
-// it is activated in Listing Manager or on Etsy). eBay is opt-in per post
-// because eBay has no draft: AddItem puts the item live at that price.
-const wantsEbay = caption => /\b(e-?bay)\b/i.test(String(caption || ""));
-
-async function publishDraftToPlatforms(listing, { ebay }) {
-  const out = {};
-
-  if (!Number(listing.price_etsy)) {
-    out.etsy = { skipped: "no price in the caption" };
-  } else {
-    try {
-      // activate:false — created on Etsy as a draft, never put on sale from here.
-      const r = await publishEtsy(listing, null, { activate: false });
-      out.etsy = { ok: true, listing_id: r.listing_id, url: r.url, status: r.status,
-        warning: r.fieldsWarning || r.tagsWarning || "" };
-    } catch (e) {
-      out.etsy = { error: e.message };
-    }
-  }
-
-  if (ebay) {
-    const price = Number(listing.price_ebay);
-    if (!price) {
-      out.ebay = { skipped: "no price in the caption" };
-    } else {
-      try {
-        const r = await publishEbayListing({
-          title: listing.title, description: listing.description, price,
-          quantity: listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1),
-          images: listing.images, video: listing.video || "", sku: listing.sku || listing.listing_order_id,
-        });
-        out.ebay = r.ok
-          ? { ok: true, listing_id: r.itemId, url: r.url || `https://www.ebay.com/itm/${r.itemId}`, warning: r.videoWarning || "" }
-          : { error: r.error };
-      } catch (e) {
-        out.ebay = { error: e.message };
-      }
-    }
-  }
-  return out;
-}
-
-// Stamp what came back onto the listing so Listing Manager shows it as published
-// there and re-syncs to the same item instead of creating a second one.
-function withPlatformResults(listing, results) {
-  const platforms = { ...listing.platforms };
-  const now = new Date().toISOString();
-  if (results.etsy?.ok) platforms.etsy = { ...platforms.etsy, listing_id: results.etsy.listing_id, url: results.etsy.url, status: results.etsy.status || "draft", published_at: now, source: "telegram" };
-  if (results.ebay?.ok) platforms.ebay = { ...platforms.ebay, listing_id: results.ebay.listing_id, url: results.ebay.url, status: "active", published_at: now, source: "telegram" };
-  return { ...listing, platforms, updated_at: now };
-}
-
-function platformLines(results) {
-  const line = (label, r) => {
-    if (!r) return "";
-    if (r.ok) return label === "Etsy"
-      ? `Etsy: <a href="${esc(r.url)}">draft created</a> — private until you activate it${r.warning ? ` · ${esc(r.warning)}` : ""}`
-      : `eBay: <a href="${esc(r.url)}">live now</a>${r.warning ? ` — ${esc(r.warning)}` : ""}`;
-    if (r.skipped) return `${label}: skipped — ${esc(r.skipped)}`;
-    return `⚠️ ${label} failed: ${esc(String(r.error).slice(0, 180))}`;
-  };
-  return [line("Etsy", results.etsy), line("eBay", results.ebay)].filter(Boolean);
 }
 
 /* ── Media posts ─────────────────────────────────────────────────────────── */
@@ -2313,28 +2232,13 @@ async function finishMediaListing({ chatId, caption, media, ctx }) {
   const draft = buildListingDraft({ parsed, ai, images, video: video?.url || "", source: video ? "telegram-media" : "telegram-photo" });
   await saveListingDraft(draft.listing, ctx);
 
-  // Acknowledge before publishing: uploading a dozen photos to Etsy takes long
-  // enough that a silent wait reads as a dropped post.
-  const ebay = parsed.ebay || wantsEbay(caption);
-  const priced = !!Number(draft.listing.price_etsy);
+  /* Into the ERP only. Nothing goes to Etsy or eBay from here: the listing
+     steps in Listing Manager (where it goes, prices, each platform) take it on. */
   await send(chatId, listingReply({
     ...draft, aiFailed, aiNote: ai?.notes_for_seller,
-    tail: priced
-      ? `⏳ Making the Etsy draft${ebay ? " — and putting it live on eBay" : ""}…`
-      : "No price in the line, so it stays an ERP draft. Add one in Listing Manager and publish from there.",
+    tail: "Saved in Listing Manager only — nothing is on Etsy or eBay yet. Open it there and tap <b>List this piece</b> to price it and publish.",
   }), ctx.token);
-
-  if (!priced && !ebay) return draft.listing;
-
-  const results = await publishDraftToPlatforms(draft.listing, { ebay });
-  const published = withPlatformResults(draft.listing, results);
-  if (results.etsy?.ok || results.ebay?.ok) await upsertItemK(ctx.listings, published);
-  const lines = platformLines(results);
-  if (results.etsy?.ok && !draft.listing.images.length) {
-    lines.push("Etsy needs at least one photo before that draft can go on sale — add one in Listing Manager.");
-  }
-  if (lines.length) await send(chatId, lines.join("\n"), ctx.token);
-  return published;
+  return draft.listing;
 }
 
 async function handleMediaListing({ chatId, message, caption, file, ctx }) {
@@ -2484,7 +2388,7 @@ You have full access to read AND write everything:
 - Finance accounts: get_finance_accounts (balances), get_finance_transactions (ledger), log_finance_transaction (one-sided income/expense), log_finance_transfer (internal transfer/conversion)
 - Documents: you CAN attach files to transactions. When a user sends a payment screenshot/receipt and you log that payment, the image is AUTOMATICALLY attached to that transaction — confirm it ("…and saved the screenshot to it"). To attach a file to an EXISTING/older transaction, call attach_document_to_transaction.
 - Vendors: search, create
-- Listings: get_listings (what is drafted / live on Etsy & Shopify), create_listing (a new ERP DRAFT only — it never publishes anywhere and cannot attach photos). Photos or a video sent with a one-line "name price" caption are handled before you see them: they become a listing plus an Etsy draft, and a live eBay item if the line says eBay. So for anything with pictures, tell him to just post the pictures with that one line.
+- Listings: get_listings (what is drafted / live on Etsy & Shopify), create_listing (a new ERP DRAFT only — it never publishes anywhere and cannot attach photos). Photos or a video sent with a one-line "name price" caption are handled before you see them: they become a Listing Manager listing only (nothing is sent to Etsy or eBay; he publishes from Listing Manager). So for anything with pictures, tell him to just post the pictures with that one line.
 - Memory: save/delete persistent facts
 
 IMPORTANT RULES:
@@ -2698,12 +2602,10 @@ export default async function handler(req, res) {
           ``,
           `<b>Listings</b> — send photos or a video with one line: the name and the price.`,
           `<code>Amethyst sphere 60mm $45</code>`,
-          `→ Listing Manager listing + an <b>Etsy draft</b>. Nothing is on sale.`,
-          `Say <b>ebay</b> in the line and it also goes <b>live on eBay</b> at that price.`,
+          `→ a Listing Manager listing only. Publish it from there with <b>List this piece</b>.`,
           `Several photos sent as one album all land on one listing.`,
           `Price as <code>$45</code> or <code>₹3800</code> — the other is converted.`,
           `Extras if you want them: <code>60mm 320g x3 box A12 from Brazil #tag</code>`,
-          `No price in the line → it stays an ERP draft, nothing is sent to Etsy.`,
           `A caption about money or stock is still a payment/stock note, not a listing.`,
           ``,
           `/listmode on — every photo becomes a listing (no caption needed)`,
@@ -2781,7 +2683,7 @@ export default async function handler(req, res) {
         const draft = buildListingDraft({ parsed, ai, images: [], source: "telegram-text" });
         await saveListingDraft(draft.listing, _ctx);
         await send(chatId, listingReply({ ...draft, aiFailed, aiNote: ai?.notes_for_seller,
-          tail: "ERP draft only — nothing was sent to Etsy without photos. Post the photos with the same line and it goes to Etsy as a draft." }));
+          tail: "Saved in Listing Manager only. Post the photos with the same line to add them, then publish from Listing Manager." }));
         return;
       }
 
