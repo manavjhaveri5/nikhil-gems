@@ -225,6 +225,8 @@ function listingDimensions(listing) {
     if (parts && parts[1]) {
       const scaled = [parts[1], parts[2], parts[3]].map(v => (v ? num(v) : null));
       [width, height, depth] = scaled;
+      // A sphere's one size is its diameter: the same every way.
+      if (width && !height && !depth && /sphere|ball|orb/i.test(`${listing.shape || ""} ${listing.title || ""}`)) height = depth = width;
       return { width, height, depth, unit: su };
     }
   }
@@ -280,7 +282,7 @@ async function applyEtsyDimensions(listingId, taxonomyId, dims, hdrs) {
     if (!r.ok) {
       // Same JSON-vs-form split the tag update already works around.
       const form = new URLSearchParams();
-      form.set("values", String(out));
+      form.append("values[]", String(out));
       form.set("scale_id", String(scale.scale_id));
       const { "Content-Type": _drop, ...bare } = hdrs;
       r = await fetch(
@@ -291,7 +293,9 @@ async function applyEtsyDimensions(listingId, taxonomyId, dims, hdrs) {
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
       console.error(`Etsy ${name} property failed:`, r.status, JSON.stringify(d));
-      warnings.push(name);
+      // Etsy's own reason, so the warning says what to change.
+      const why = String(d.error || d.error_description || d.message || `HTTP ${r.status}`).slice(0, 140);
+      warnings.push(`${name} (${out} ${scale.display_name}: ${why})`);
     }
   }
   return warnings;
@@ -669,7 +673,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   if (!payload.materials.length) gaps.push("no materials");
   if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
   if (!weight) gaps.push("no weight");
-  if (dimFailed.length) gaps.push(`Etsy rejected ${dimFailed.join("/")}`);
+  if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
 
   return {
     listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
@@ -775,7 +779,7 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (!listing.material) gaps.push("no materials");
   if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
   if (!weight) gaps.push("no weight");
-  if (dimFailed.length) gaps.push(`Etsy rejected ${dimFailed.join("/")}`);
+  if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
 
   return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc,
     ...(tagsWarning ? { tagsWarning } : {}),
