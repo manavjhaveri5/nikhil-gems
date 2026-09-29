@@ -12,7 +12,7 @@ import {
 import { lab, Slider } from "./EditorControls.jsx";
 import {
   ETSY_MAX_SECONDS, ETSY_MIN_SECONDS, openClip, closeClip, clipLength, totalLength,
-  frameSink, buildFilmstrip, canCopy, keyframeBefore, exportVideo,
+  frameSink, buildFilmstrip, canCopy, keyframeBefore, exportVideo, fitVideoForStorage,
 } from "./videoLab.js";
 
 /* The listing video, cut in the app rather than in another program.
@@ -415,8 +415,9 @@ export default function VideoEditor({ url, urls, recipe, onSave, onClose, showTo
       if (c.url) return Promise.resolve(c.url);
       const j = pending.indexOf(c);
       const sname = `take-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
-      return uploadToStorage(`listing-videos/${sname}`, new File([c.blob], sname, { type: c.blob.type || "video/mp4" }),
-        { onProgress: f => { done[j] = f; tick(); }, signal: abort.signal });
+      // A take over storage's 50 MB is kept as a 1080p copy instead.
+      return fitVideoForStorage(new File([c.blob], sname, { type: c.blob.type || "video/mp4" }))
+        .then(f => uploadToStorage(`listing-videos/${sname}`, f, { onProgress: p => { done[j] = p; tick(); }, signal: abort.signal }));
     });
     takeUploads.forEach(p => p.catch(() => {}));   // surfaced by the Promise.all below
     try {
