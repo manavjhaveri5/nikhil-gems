@@ -1,12 +1,14 @@
-/* Store → Social: words ready to post for every piece on eartheditions.co, and
-   reply drafts for comments and threads.
+/* Store → Social: an Instagram caption ready to post for every piece on
+   eartheditions.co, and reply drafts for comments and threads.
 
-   Each new piece gets a pack — Reel / TikTok caption, three story lines, three
-   Pinterest pins, a Reddit show-and-tell post, a Mindat photo caption and an
-   email blurb — with its own link tagged per channel (utm_source=…), so Store →
-   Visitors shows which posts bring people in. Packs are made by themselves for
-   the newest pieces when this tab opens, and kept on the product
-   (store_products.social).
+   Each caption is written the way Earth Editions posts: the piece and where
+   it's from, a couple of short paragraphs on what makes this one interesting,
+   then weight and size, and whether it's available. The locality, weight and
+   size come from the listing in Listing Manager and are never made up. The
+   piece's link is tagged (utm_source=instagram), so Store → Visitors shows
+   which posts bring people in. Captions are written by themselves for the
+   newest pieces when this tab opens, and kept on the product
+   (store_products.social.caption).
 
    Nothing is posted from here. Reddit and Mindat ban accounts (and whole
    websites) for automated posting and selling in threads, so replies are
@@ -16,11 +18,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { fetchWithRetry } from "./aiClient.js";
+import { loadK } from "./utils.js";
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 7, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
 const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
-const AUTO = 6;   // packs made by themselves for the newest pieces that have none
+const AUTO = 6;   // captions written by themselves for the newest pieces that have none
 
 export const tagged = (site, handle, source, medium = "social") => `${site}/products/${handle}?utm_source=${source}&utm_medium=${medium}&utm_campaign=${encodeURIComponent(handle)}`;
 const plain = html => String(html || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
@@ -41,19 +44,62 @@ async function ask(prompt, maxTokens = 1400) {
   return (d.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
 }
 
-const details = p => [
-  `Name: ${p.title}${p.subtitle ? ` (${p.subtitle})` : ""}`,
+// The piece as the caption writer sees it: the store product, plus the listing's own locality, weight and size.
+const details = (p, l = {}) => [
+  `Name: ${p.title}`,
   p.material && `Stone: ${p.material}`, p.shape && `Shape: ${p.shape}`,
-  `Price: $${p.price}`, p.is_unique ? "One of a kind" : `Several available`,
-  p.weight_g && `Weight: ${p.weight_g} g`,
-  `Description: ${plain(p.description).slice(0, 1500)}`,
-].filter(Boolean).join("\n");
+  `Locality: ${l.origin || "not given"}`,
+  `Weight: ${l.weight || (p.weight_g ? `${p.weight_g}g` : "not given")}`,
+  `Size: ${l.size || p.subtitle || "not given"}`,
+  `Description: ${plain(l.description || p.description).slice(0, 1500)}`,
+].join("\n");
 
-export async function makePack(p) {
-  const txt = await ask(`Write social posts for this piece.\n\n${details(p)}\n\nReply with JSON only:
-{"hook":"one line that makes someone stop scrolling","reel":"Instagram Reel caption, 2-4 short lines, ending with 'Link in bio'","tiktok":"TikTok caption, 1-2 lines","hashtags":"12-18 hashtags, mixing broad (#crystals) and specific (#rainbowmoonstone)","story":["frame 1: the reveal, max 8 words","frame 2: one detail about this piece or stone, max 14 words","frame 3: call to action for the link sticker, max 8 words"],"pins":[{"title":"Pinterest title with the stone and shape, max 90 characters","description":"2 sentences with search words people use"},{"title":"…","description":"…"},{"title":"…","description":"…"}],"reddit":{"title":"r/mineralcollecting or r/Crystals style title, no selling","body":"3-5 sentences about the piece and the stone, collector to collector"},"mindat":"Mindat photo caption: species, shape, size if given, locality only if given","email":"2-3 sentence blurb for the weekly new-pieces email"}`);
-  const j = JSON.parse(txt);
-  return { ...j, made_at: new Date().toISOString() };
+// Captions Earth Editions has posted — the model writes in this shape and voice.
+const EXAMPLES = `Collector's Ruby from South India 🇮🇳
+
+A beautiful pink ruby heart from the Madikeri region, with natural silk that gives the stone a soft pink asterism when the light catches it just right.
+
+One of those pieces where the inclusions are part of what makes it interesting.
+
+34g | 35 × 38 × 15mm
+Available — shop now at eartheditions.co
+
+---
+
+Citrine Ganesha from Madikeri 🇮🇳
+
+The clarity and beautiful honey-golden color of this Citrine made us want to do something special with it—so we decided on a Ganesha carving.
+
+A truly beautiful piece to hold and admire, especially in the light. Citrine is often associated with warmth, abundance and positivity, making it a fitting choice for Ganesha.
+
+886 carats | 60 × 50 × 20mm
+Available — shop now at eartheditions.co
+
+---
+
+Baryte on Rainbow Pyrite from Dahisar, Mumbai 🇮🇳
+
+A slender Baryte flower perched on a bed of iridescent "rainbow" Pyrite — from a new find in Dahisar, Mumbai.
+
+Pyrite is a relatively uncommon mineral from the Deccan Traps, making this association particularly interesting.
+
+Available with a custom lucite display base — shop now at eartheditions.co`;
+
+export async function makeCaption(p, l) {
+  const caption = await ask(`Write the Instagram caption for this piece, in exactly the shape and voice of these captions we've posted:
+
+${EXAMPLES}
+
+The piece:
+${details(p, l)}
+
+Rules for this caption:
+- First line: the piece's name, then "from <locality>" and that country's flag emoji — only if a locality is given above. No locality given: just the name, no "from", no flag.
+- Then 1–2 short paragraphs (1–3 sentences each): what is specific and interesting about THIS piece — colour, inclusions, clarity, form, why it was cut this way, the locality. Plain, warm, a collector talking. At most one gentle line on what the stone is traditionally associated with, and only if it fits.
+- Then a line with weight and size separated by " | " (leave out any that are "not given"; leave the line out if both are).
+- Last line: "Available — shop now at eartheditions.co".
+- No hashtags, no "link in bio", no exclamation marks, no invented facts. Reply with the caption text only.`, 600);
+  return { caption: caption.replace(/^["']|["']$/g, "").trim(), made_at: new Date().toISOString() };
 }
 
 function Copy({ text, label = "Copy" }) {
@@ -74,17 +120,9 @@ function Block({ title, text, link }) {
 }
 
 function Pack({ p, site }) {
-  const s = p.social;
-  const l = src => tagged(site, p.handle, src);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 10, marginTop: 12 }}>
-      <Block title="Instagram Reel" text={`${s.hook}\n\n${s.reel}\n\n${s.hashtags}`} link={l("instagram")} />
-      <Block title="TikTok" text={`${s.tiktok}\n\n${s.hashtags}`} link={l("tiktok")} />
-      <Block title="Story · 3 frames (link sticker on the last)" text={(s.story || []).map((t, i) => `${i + 1}. ${t}`).join("\n")} link={`${site}/products/${p.handle}?utm_source=instagram&utm_medium=story&utm_campaign=${encodeURIComponent(p.handle)}`} />
-      <Block title="Email · weekly new pieces" text={s.email} link={tagged(site, p.handle, "email", "email")} />
-      {(s.pins || []).map((pin, i) => <Block key={i} title={`Pinterest pin ${i + 1}`} text={`${pin.title}\n\n${pin.description}`} link={l("pinterest")} />)}
-      <Block title="Reddit · show-and-tell (post by hand; no link in the post)" text={`${s.reddit?.title}\n\n${s.reddit?.body}`} />
-      <Block title="Mindat · photo caption" text={s.mindat} />
+    <div style={{ marginTop: 12, maxWidth: 560 }}>
+      <Block title="Instagram caption" text={p.social.caption} link={`${site}/products/${p.handle}?utm_source=instagram&utm_medium=social&utm_campaign=${encodeURIComponent(p.handle)}`} />
     </div>
   );
 }
@@ -134,15 +172,20 @@ export default function SocialTab({ showToast, site }) {
   const [busy, setBusy] = useState({});
   const [missing, setMissing] = useState(false);
   const auto = useRef(false);
+  const listings = useRef(null);
+  const listingFor = async p => {
+    if (!listings.current) listings.current = await loadK("ng-listings-v1").then(ls => Array.isArray(ls) ? ls : []).catch(() => []);
+    return listings.current.find(l => String(l.id) === String(p.listing_id)) || {};
+  };
   const load = useCallback(async () => {
-    const { data, error } = await supabase.from("store_products").select("id,handle,title,subtitle,description,material,shape,price,is_unique,weight_g,images,created_at,social").eq("status", "active").order("created_at", { ascending: false }).limit(60);
+    const { data, error } = await supabase.from("store_products").select("id,listing_id,handle,title,subtitle,description,material,shape,price,is_unique,weight_g,images,created_at,social").eq("status", "active").order("created_at", { ascending: false }).limit(60);
     if (error) { if (/social/.test(error.message)) setMissing(true); else showToast("⚠ " + error.message); setRows([]); return []; }
     setRows(data); return data;
   }, [showToast]);
   const make = useCallback(async p => {
     setBusy(b => ({ ...b, [p.id]: true }));
     try {
-      const social = await makePack(p);
+      const social = await makeCaption(p, await listingFor(p));
       const { error } = await supabase.from("store_products").update({ social }).eq("id", p.id);
       if (error) throw new Error(error.message);
       setRows(rs => rs.map(r => r.id === p.id ? { ...r, social } : r));
@@ -155,7 +198,7 @@ export default function SocialTab({ showToast, site }) {
       if (auto.current) return;
       auto.current = true;
       // The newest pieces without a pack get one, one after another.
-      for (const p of (data || []).filter(r => !r.social).slice(0, AUTO)) if (!(await make(p))) break;
+      for (const p of (data || []).filter(r => !r.social?.caption).slice(0, AUTO)) if (!(await make(p))) break;
     });
   }, [load, make]);
 
@@ -165,23 +208,23 @@ export default function SocialTab({ showToast, site }) {
       <Replies site={site} showToast={showToast} />
       <div style={{ ...card, padding: "12px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <div style={{ flex: 1 }}><b style={{ fontSize: 15 }}>Posts for each piece</b><div style={{ fontSize: 12, color: C.inkFaint }}>Newest first. Packs are made by themselves for the {AUTO} newest pieces that don't have one; the links are tagged, so Visitors shows which posts bring people in.</div></div>
+          <div style={{ flex: 1 }}><b style={{ fontSize: 15 }}>Instagram captions</b><div style={{ fontSize: 12, color: C.inkFaint }}>Newest first, written the way you post. Captions are written by themselves for the {AUTO} newest pieces that don't have one. Locality, weight and size come from the listing; use Copy link for the story link sticker, so Visitors shows which posts bring people in.</div></div>
           <button onClick={load} style={btn()}>↻</button>
         </div>
         {!rows && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
         {(rows || []).map(p => (
           <div key={p.id} style={{ borderTop: `1px solid ${C.border}`, padding: "10px 0" }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", cursor: p.social ? "pointer" : "default" }} onClick={() => p.social && setOpen(open === p.id ? null : p.id)}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", cursor: p.social?.caption ? "pointer" : "default" }} onClick={() => p.social?.caption && setOpen(open === p.id ? null : p.id)}>
               {p.images?.[0] ? <img src={p.images[0]} alt="" loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6 }} /> : <div style={{ width: 44, height: 44, background: C.card, borderRadius: 6 }} />}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
-                <div style={{ fontSize: 11.5, color: C.inkFaint }}>on the store {new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{p.social ? " · posts ready" : ""}</div>
+                <div style={{ fontSize: 11.5, color: C.inkFaint }}>on the store {new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{p.social?.caption ? " · caption ready" : ""}</div>
               </div>
               {busy[p.id] ? <span style={{ fontSize: 12, color: C.inkFaint }}>Writing…</span>
-                : p.social ? <><button onClick={e => { e.stopPropagation(); make(p); }} style={btn()} title="Write them again">↻</button><button style={btn(open === p.id ? C.ink : C.surface, open === p.id ? "#fff" : C.ink)}>{open === p.id ? "Hide" : "Show posts"}</button></>
-                : <button onClick={() => make(p)} style={btn(C.ink, "#fff")}>Write posts</button>}
+                : p.social?.caption ? <><button onClick={e => { e.stopPropagation(); make(p); }} style={btn()} title="Write it again">↻</button><button style={btn(open === p.id ? C.ink : C.surface, open === p.id ? "#fff" : C.ink)}>{open === p.id ? "Hide" : "Show caption"}</button></>
+                : <button onClick={() => make(p)} style={btn(C.ink, "#fff")}>Write caption</button>}
             </div>
-            {open === p.id && p.social && <Pack p={p} site={site} />}
+            {open === p.id && p.social?.caption && <Pack p={p} site={site} />}
           </div>
         ))}
       </div>
