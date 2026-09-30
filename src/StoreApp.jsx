@@ -65,7 +65,31 @@ export async function storeSettings() {
   return Object.fromEntries(rows.map(r => [r.key, r.value]));
 }
 
+/* The listing's variations as the store's options: one per option of the
+   first axis, or per combination of two ("4 x 4 / Black"). An option priced
+   on its own keeps its $ price, else it's worked from its Etsy ₹ price like
+   the piece's own; rupees likewise from the Etsy sale price. */
+function storeVariants(l, fx, rounding, discount) {
+  const axes = (Array.isArray(l.variations) ? l.variations : [])
+    .map(v => ({ name: String(v.name || "").trim(), per: !!v.perVariantPricing, options: (v.options || []).filter(o => String(o.label || "").trim()) }))
+    .filter(v => v.name && v.options.length).slice(0, 2);
+  if (!axes.length) return [];
+  const combos = axes.length === 1 ? axes[0].options.map(o => [o]) : axes[0].options.flatMap(a => axes[1].options.map(b => [a, b]));
+  const baseQty = l.type === "unique" ? 1 : Math.max(1, parseInt(l.qty, 10) || 1);
+  const key = t => String(t).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+  return combos.map((opts, i) => {
+    const priced = opts.find((o, k) => axes[k].per && (+o.price_etsy > 0 || +o.price_shopify > 0));
+    const etsy = +(priced?.price_etsy || l.price_etsy) || 0;
+    const usd = +priced?.price_shopify || storePriceFor({ ...l, price_store: priced ? "" : l.price_store, price_etsy: etsy }, fx, rounding, discount);
+    const inr = !priced && +l.price_store_inr ? Math.round(+l.price_store_inr) : etsy ? Math.round(etsy * (1 - (+discount || 0) / 100) / 10) * 10 : null;
+    const label = opts.map(o => String(o.label).trim()).join(" / ");
+    const q = axes.length === 1 && String(opts[0].qty ?? "").trim() !== "" ? Math.max(0, parseInt(opts[0].qty, 10) || 0) : baseQty;
+    return { key: key(label) || `o${i + 1}`, name: axes.map(a => a.name).join(" / "), label, price: usd, price_inr: inr, qty: q, sku: l.sku ? `${l.sku}-${i + 1}` : "" };
+  }).filter(v => v.price > 0);
+}
+
 function rowFromListing(l, { fx, rounding, discount, existing, live }) {
+  const variants = storeVariants(l, fx, rounding, discount);
   const images = (l.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
   // The store's own short name: "Ruby in Matrix Specimen #3", size on its own line.
   const own = String(l.store_title || "").trim();
@@ -82,11 +106,13 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
     material: l.material || "", shape: l.shape || "", product_type: l.productType || "",
     tags: Array.isArray(l.tags) ? l.tags : [],
     collections: existing?.collections?.length ? existing.collections : [collectionFor(l)],
-    price: storePriceFor(l, fx, rounding, discount),
+    // With options, the piece shows its cheapest one ("From $55").
+    price: variants.length ? Math.min(...variants.map(v => v.price)) : storePriceFor(l, fx, rounding, discount),
+    variants,
     // Indian buyers pay in rupees: a store ₹ price set in Listing Manager, else
     // the Etsy sale price itself, no dollar round trip.
     price_inr: +l.price_store_inr ? Math.round(+l.price_store_inr) : +l.price_etsy ? Math.round(+l.price_etsy * (1 - (+discount || 0) / 100) / 10) * 10 : null,
-    qty: Math.max(1, parseInt(l.qty, 10) || 1),
+    qty: variants.length ? Math.max(1, variants.reduce((n, v) => n + v.qty, 0)) : Math.max(1, parseInt(l.qty, 10) || 1),
     is_unique: l.type !== "repeatable",
     status: existing?.status === "sold" ? "sold" : live ? "active" : (existing?.status || "hidden"),
     sku: l.sku || "",
@@ -131,9 +157,17 @@ export async function publishListingToStore(listing, { syncOnly = false, overrid
     if (clash) row = { ...row, handle: `${row.handle}-${String(listing.id).slice(-4)}` };
   }
   if (!row.price) throw new Error("No store price — set one, or an Etsy price to convert");
-  await q(supabase.from("store_products").upsert(row, { onConflict: "id" }));
+  try { await q(supabase.from("store_products").upsert(row, { onConflict: "id" })); }
+  catch (e) {
+    // Until the variants column is in the database, the piece still goes up — without its options.
+    if (!/variants/i.test(e.message || "")) throw e;
+    const { variants, ...plain } = row;
+    await q(supabase.from("store_products").upsert(plain, { onConflict: "id" }));
+    row = { ...row, _noVariants: true };
+  }
   const base = String(s.site_url || "https://eartheditions.co").replace(/\/+$/, "");
-  return { product_id: id, url: `${base}/products/${row.handle}`, status: row.status === "active" ? "active" : "draft" };
+  return { product_id: id, url: `${base}/products/${row.handle}`, status: row.status === "active" ? "active" : "draft",
+    ...(row._noVariants && row.variants?.length ? { warning: "Its sizes/options didn't go up yet — the store's database needs its update (supabase migration store_variants)." } : {}) };
 }
 /* What Listing Manager's grid shows for the store: the live $ and ₹ prices and
    status of each listing's store product, keyed by listing id. */
