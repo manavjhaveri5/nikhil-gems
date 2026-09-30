@@ -801,7 +801,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   return {
     listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
-    tags_applied: etsyTags.length, videoSrc, imagesSrc: imgUrls, ...(tagsWarning ? { tagsWarning } : {}),
+    tags_applied: etsyTags.length, videoSrc, imagesSrc: imgUrls, ...(varWarn ? { variationsWarning: varWarn } : {}), ...(tagsWarning ? { tagsWarning } : {}),
     ...(gaps.length ? { fieldsWarning: `Published with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}),
   };
 }
@@ -851,7 +851,7 @@ async function applyEtsyVariations(listingId, listing, hdrs, readinessId) {
     if (r.ok) return "";
     const d = await r.json().catch(() => ({}));
     console.error("Etsy inventory update failed:", JSON.stringify(d));
-    return `Etsy didn't take the variations: ${d.error || r.status}`;
+    return `Etsy didn't take the sizes/options: ${d.error_description || d.error || d.message || r.status}`;
   } catch (e) { return `Etsy didn't take the variations: ${e.message}`; }
 }
 
@@ -907,8 +907,10 @@ async function updateEtsyListing(listingId, listing, ai) {
       const errData = await fallback.json().catch(() => ({}));
       const msg = errData.error_description || errData.error || errData.message || `HTTP ${fallback.status}`;
       console.warn(`Etsy PATCH failed for listing ${listingId}: ${msg} — skipping sync, keeping existing listing_id`);
-      // Return existing data so the listing_id is preserved in the app
-      return { listing_id: listingId, status: existingStatus, sync_skipped: true };
+      // The options are their own call — still send them, and say what Etsy refused.
+      const varWarn = await applyEtsyVariations(listingId, listing, hdrs, readinessId);
+      return { listing_id: listingId, status: existingStatus, sync_skipped: true,
+        fieldsWarning: `Etsy refused the update: ${msg}${varWarn ? ` · ${varWarn}` : ""}`, ...(varWarn ? { variationsWarning: varWarn } : {}) };
     }
     r = fallback;
   }
@@ -917,7 +919,9 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (!r.ok) {
     const msg = data.error_description || data.error || data.message || JSON.stringify(data);
     console.warn(`Etsy update failed for ${listingId}: ${msg} — keeping existing listing_id`);
-    return { listing_id: listingId, status: existingStatus, sync_skipped: true };
+    const varWarn = await applyEtsyVariations(listingId, listing, hdrs, readinessId);
+    return { listing_id: listingId, status: existingStatus, sync_skipped: true,
+      fieldsWarning: `Etsy refused the update: ${msg}${varWarn ? ` · ${varWarn}` : ""}`, ...(varWarn ? { variationsWarning: varWarn } : {}) };
   }
 
   /* Photos, only when they've changed. Every sync used to upload all of them
@@ -964,7 +968,7 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
   if (varWarn) gaps.push(varWarn);
 
-  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc,
+  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc, ...(varWarn ? { variationsWarning: varWarn } : {}),
     ...(tagsWarning ? { tagsWarning } : {}),
     ...(gaps.length ? { fieldsWarning: `Synced with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}) };
 }

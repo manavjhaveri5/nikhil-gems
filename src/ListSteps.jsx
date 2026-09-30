@@ -205,8 +205,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
     if (key === "etsy" && !etsyFeeOk()) return;
     setOne(x => ({ ...x, [key]: { busy: true } }));
     try {
-      const url = await onPublishOne(pricesPatch(), key);
-      setOne(x => ({ ...x, [key]: { url: url || "", done: true } }));
+      const out = await onPublishOne(pricesPatch(), key);
+      const url = typeof out === "string" ? out : out?.url;
+      setOne(x => ({ ...x, [key]: { url: url || "", done: true, warning: out?.warning || "" } }));
     } catch (e) { setOne(x => ({ ...x, [key]: { error: e.message || "Didn't publish" } })); }
   };
   // Every platform picked is live (published here, or already live) → the step is
@@ -553,6 +554,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                     return (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 12px 34px", flexWrap: "wrap" }}>
                         {st.error && <span style={{ flex: "1 1 100%", fontSize: 12, color: C.red }}>{st.error}</span>}
+                        {st.warning && <span style={{ flex: "1 1 100%", fontSize: 12, color: C.amber, fontWeight: 600 }}>⚠ {st.warning}</span>}
                         {url && <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.green, border: `1.5px solid ${C.green}60`, borderRadius: 8, padding: "7px 12px", textDecoration: "none" }}>✓ View live ↗</a>}
                         {st.done && !url && <span style={{ fontSize: 12.5, color: C.green, fontWeight: 700 }}>✓ Published — link appears once the platform confirms</span>}
                         <button type="button" disabled={st.busy || noPrice || pieceMissing.length > 0} onClick={() => publishOne(c.key)}

@@ -1970,7 +1970,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (!validate(f)) throw new Error("Fix the listing first");
     const r = await onPublishOne(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, updated_at: now() }), key);
     setForm(x => ({ ...x, ...patch, id: r.listing.id, listing_order_id: r.listing.listing_order_id, images: r.listing.images, video: r.listing.video, platforms: r.listing.platforms }));
-    return r.url;
+    return { url: r.url, warning: r.warning || "" };
   };
   const handleSave = (patch = null, to = null, opts = {}) => {
     const f = patch && !patch.nativeEvent ? { ...form, ...patch } : form;
@@ -10322,10 +10322,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               let saved = ensureListingOrderId(listing);
               if ((saved.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(saved.video)) saved = await persistListingMedia(saved);
               await saveListingItem(saved, { prepend: !listings.some(l => l.id === saved.id) });
-              await handlePublish(saved, pkey, { syncOnly: false, allowCreate: true });
+              const res = await handlePublish(saved, pkey, { syncOnly: false, allowCreate: true });
               const fresh = ((await loadKFresh(LIST_KEY).catch(() => null)) || []).find(x => x.id === saved.id) || saved;
-              showToast(`✓ Live on ${label} — ${String(fresh.title || "").slice(0, 40)}`, 5000);
-              return { listing: fresh, url: linkOf(fresh, pkey).live || "" };
+              // A problem the platform reported stays on screen — not swapped out by the ✓.
+              const warning = res?.variationsWarning || res?.fieldsWarning || res?.warning || "";
+              showToast(warning ? `⚠ ${label}: ${warning}` : `✓ Live on ${label} — ${String(fresh.title || "").slice(0, 40)}`, warning ? 12000 : 5000);
+              return { listing: fresh, url: linkOf(fresh, pkey).live || "", warning };
             } catch (e) {
               showToast(`⚠ ${label} didn't publish: ${e.message}`, 8000);
               throw e;
