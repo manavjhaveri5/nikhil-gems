@@ -1336,7 +1336,7 @@ export default async function handler(req, res) {
     if (action === "sync_etsy_states") {
       try {
         const hdrs = await etsyHeaders(false);
-        const states = {}, firstListed = {};
+        const states = {}, firstListed = {}, info = {};
         let renewed = 0;
         for (const state of ["active", "draft"]) {
           let offset = 0;
@@ -1349,6 +1349,8 @@ export default async function handler(req, res) {
             const results = d.results || [];
             results.forEach(l => {
               states[l.listing_id] = l.state;
+              // What an ERP listing can be matched on when it was put on Etsy by hand.
+              info[l.listing_id] = { title: l.title || "", sku: (l.skus || [])[0] || "" };
               const first = l.original_creation_timestamp || l.creation_timestamp;
               if (first) firstListed[l.listing_id] = new Date(first * 1000).toISOString();
               if (l.original_creation_timestamp && l.creation_timestamp > l.original_creation_timestamp) renewed++;
@@ -1357,7 +1359,7 @@ export default async function handler(req, res) {
             offset += 100;
           }
         }
-        return res.json({ ok: true, states, firstListed, renewed });
+        return res.json({ ok: true, states, firstListed, renewed, info });
       } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
       }

@@ -9286,24 +9286,48 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const ETSY_STATE_SYNC_TS = "ng-etsy-state-sync-ts";
   const ETSY_REDATE_KEY = "ng-etsy-redated-v1";
   const reconcileEtsyStates = async (current) => {
-    if (!current.some(l => l.platforms?.etsy?.listing_id)) return;
+    // Runs when anything is on Etsy, or when something here isn't linked yet —
+    // it may have been put on Etsy by hand.
+    if (!current.some(l => l.platforms?.etsy?.listing_id || !l.platforms?.etsy?.listing_id)) return;
     // The first run after the renewal-date fix goes straight away, whatever the
     // throttle says, so renewed listings drop out of Newest on the next open.
     let redate = false;
     try {
       redate = !localStorage.getItem(ETSY_REDATE_KEY);
       const last = +localStorage.getItem(ETSY_STATE_SYNC_TS) || 0;
-      if (!redate && Date.now() - last < 10 * 60 * 1000) return; // at most once per 10 min
+      if (!redate && Date.now() - last < 2 * 60 * 1000) return; // at most once every 2 min
       localStorage.setItem(ETSY_STATE_SYNC_TS, String(Date.now()));
     } catch {}
     try {
       const r = await fetch("/api/listing-manager?action=sync_etsy_states");
       const d = await r.json();
       if (!d.ok || !d.states) return;
-      const states = d.states, firstListed = d.firstListed || {};
+      const states = d.states, firstListed = d.firstListed || {}, info = d.info || {};
       const fresh = await loadKFresh(LIST_KEY).catch(() => null);
-      const base = Array.isArray(fresh) ? fresh : current;
-      const changedRows = [];
+      const base0 = Array.isArray(fresh) ? fresh : current;
+      /* A piece put on Etsy by hand (a draft made there, or listed there first)
+         is linked here by its SKU, else by its title — only when exactly one
+         Etsy listing fits and no other listing here already holds it. */
+      const taken = new Set(base0.map(l => String(l.platforms?.etsy?.listing_id || "")).filter(Boolean));
+      const tkey = t => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const sameTitle = (a, b) => { const x = tkey(a), y = tkey(b); if (!x || !y) return false; if (x === y) return true; const [sh, lo] = x.length < y.length ? [x, y] : [y, x]; return sh.length >= 30 && lo.startsWith(sh); };
+      const free = Object.entries(info).filter(([id]) => !taken.has(String(id)));
+      const linkedNow = [];
+      const base = base0.map(l => {
+        // Only listings that were never on Etsy — one taken off Etsy stays off.
+        if (l.platforms?.etsy?.listing_id || l.platforms?.etsy?.status === "deleted") return l;
+        const skus = [l.sku, l.listing_order_id].map(v => String(v || "").trim().toLowerCase()).filter(Boolean);
+        let hits = free.filter(([, v]) => v.sku && skus.includes(v.sku.trim().toLowerCase()));
+        if (!hits.length) hits = free.filter(([, v]) => sameTitle(v.title, l.title) || sameTitle(v.title, l.etsy_title));
+        if (hits.length !== 1) return l;
+        const [id] = hits[0];
+        taken.add(String(id));
+        free.splice(free.indexOf(hits[0]), 1);
+        const updated = { ...l, platforms: { ...(l.platforms || {}), etsy: { ...(l.platforms?.etsy || {}), listing_id: Number(id) || id, url: `https://www.etsy.com/listing/${id}`, status: states[id] === "active" ? "active" : "draft", linked_at: new Date().toISOString() } } };
+        linkedNow.push(updated);
+        return updated;
+      });
+      const changedRows = [...linkedNow];
       const next = base.map(l => {
         const lid = l.platforms?.etsy?.listing_id;
         const live = lid && states[lid];
@@ -9315,11 +9339,13 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         const first = firstListed[lid];
         const early = first && Date.parse(first) < (Date.parse(l.created_at || "") || Infinity);
         if (l.platforms.etsy.status === mapped && !early) return l;
+        if (linkedNow.includes(l)) return l;
         const updated = { ...l, ...(early ? { created_at: first } : {}),
           platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped, ...(early ? { first_listed_at: first } : {}) } } };
         changedRows.push(updated);
         return updated;
       });
+      if (linkedNow.length) showToast(`✓ Linked ${linkedNow.length} listing${linkedNow.length === 1 ? "" : "s"} to ${linkedNow.length === 1 ? "its" : "their"} Etsy ${linkedNow.length === 1 ? "listing" : "listings"} — ${linkedNow.slice(0, 2).map(l => `“${String(l.title).slice(0, 40)}”`).join(", ")}`, 6000);
       const redated = changedRows.filter(l => l.platforms?.etsy?.first_listed_at && l.created_at === l.platforms.etsy.first_listed_at).length;
       if (changedRows.length) {
         setListings(next);
