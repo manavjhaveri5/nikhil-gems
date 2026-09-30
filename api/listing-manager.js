@@ -207,8 +207,16 @@ function parseWeight(raw) {
   const m = String(raw ?? "").match(/([\d.]+)\s*(kgs?|kilograms?|g|gm|grams?|oz|ounces?|lbs?|pounds?)?/i);
   if (!m || !m[1] || !isFinite(+m[1]) || +m[1] <= 0) return null;
   const u = String(m[2] || "g").toLowerCase();
-  const unit = /^k/.test(u) ? "kg" : /^o/.test(u) ? "oz" : /^(lb|pound)/.test(u) ? "lb" : "g";
-  return { value: +(+m[1]).toFixed(2), unit: WEIGHT_UNITS[unit] };
+  let unit = /^k/.test(u) ? "kg" : /^o/.test(u) ? "oz" : /^(lb|pound)/.test(u) ? "lb" : "g";
+  let v = +m[1];
+  /* Etsy's editor shows weight as two boxes — kg + g, or lb + oz — and refuses
+     to save a listing whose small box is 1000 g or 16 oz and over, or has
+     decimals ("Item weight" error). So 3406 g goes as 3.406 kg (3 kg 406 g),
+     grams are whole, and ounces past a pound become pounds. */
+  if (unit === "g" && v >= 1000) { unit = "kg"; v = v / 1000; }
+  if (unit === "oz" && v >= 16) { unit = "lb"; v = v / 16; }
+  v = unit === "g" ? Math.max(1, Math.round(v)) : unit === "kg" ? Math.round(v * 1000) / 1000 : unit === "lb" ? Math.round(v * 16) / 16 : Math.round(v * 10) / 10;
+  return { value: v, unit: WEIGHT_UNITS[unit] };
 }
 
 /* The form's own width/height/depth win; a plain "92 x 133 x 50 mm" or "45mm"
