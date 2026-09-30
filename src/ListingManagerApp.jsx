@@ -3090,6 +3090,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       {steps && (
         <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onClose={() => setSteps(null)}
+          onDone={() => { setSteps(null); onClose(); }}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
     </div>
