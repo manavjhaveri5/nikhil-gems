@@ -584,6 +584,24 @@ async function uploadEtsyVideo(listingId, videoUrl, authHdrs, name = "video") {
 /* ── Etsy: what video the listing is holding, and taking it off ───────────────
    Etsy allows one video per listing and does not swap it in place: an edited
    clip only arrives if the old one is deleted first. */
+async function etsyListingImages(listingId, authHdrs) {
+  try {
+    const { "Content-Type": _ct, ...bare } = authHdrs;
+    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: bare });
+    if (!r.ok) return [];
+    const d = await r.json().catch(() => ({}));
+    return Array.isArray(d?.results) ? d.results : [];
+  } catch { return []; }
+}
+
+async function deleteEtsyImage(listingId, imageId, authHdrs) {
+  if (!imageId) return;
+  try {
+    const { "Content-Type": _ct, ...bare } = authHdrs;
+    await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
+  } catch {}
+}
+
 async function etsyListingVideos(listingId, authHdrs) {
   try {
     const { "Content-Type": _ct, ...bare } = authHdrs;
@@ -779,7 +797,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   return {
     listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
-    tags_applied: etsyTags.length, videoSrc, ...(tagsWarning ? { tagsWarning } : {}),
+    tags_applied: etsyTags.length, videoSrc, imagesSrc: imgUrls, ...(tagsWarning ? { tagsWarning } : {}),
     ...(gaps.length ? { fieldsWarning: `Published with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}),
   };
 }
@@ -850,12 +868,21 @@ async function updateEtsyListing(listingId, listing, ai) {
     return { listing_id: listingId, status: existingStatus, sync_skipped: true };
   }
 
-  // Re-upload images
+  /* Photos, only when they've changed. Every sync used to upload all of them
+     again on top of what Etsy held — slow, and a listing filled up with
+     copies until Etsy's 10-photo cap turned the rest away. The listing
+     remembers what it last sent (imagesSrc): the same list is left alone, a
+     different one replaces Etsy's photos. With no record (put on Etsy by hand,
+     or synced before this) photos already on Etsy are kept. */
   const imgUrls = (listing.images || []).filter(u => typeof u === "string" && u.startsWith("http")).slice(0, 10);
-  for (let i = 0; i < imgUrls.length; i++) {
-    await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
-    if (i < imgUrls.length - 1) await new Promise(r => setTimeout(r, 400));
+  const sent = listing.platforms?.etsy?.imagesSrc;
+  const liveImgs = await etsyListingImages(listingId, hdrs);
+  const photosChanged = Array.isArray(sent) ? sent.join("|") !== imgUrls.join("|") : !liveImgs.length;
+  if (photosChanged && imgUrls.length) {
+    for (const im of liveImgs) await deleteEtsyImage(listingId, im.listing_image_id, hdrs);
+    for (let i = 0; i < imgUrls.length; i++) await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
   }
+  const imagesSrc = imgUrls;
 
   /* Optional listing video — best-effort. The listing remembers the file it
      last sent to Etsy; an unchanged one is left alone rather than re-uploaded
@@ -883,7 +910,7 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (!weight) gaps.push("no weight");
   if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
 
-  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc,
+  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc,
     ...(tagsWarning ? { tagsWarning } : {}),
     ...(gaps.length ? { fieldsWarning: `Synced with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}) };
 }
