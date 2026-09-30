@@ -337,24 +337,36 @@ Return JSON with these fields:
   "size": "e.g. 165mm or 3 inch — only if stated, else empty"
 }`;
 
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5",
-      max_tokens: 1200,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
-
-  const data = await r.json();
-  const text = data.content?.[0]?.text || "";
+  /* OpenAI first — it's the key the rest of the ERP runs on; Anthropic only
+     when that isn't set. The reply is long (two descriptions and 30-odd tags),
+     so the token cap has room for all of it: a cut-off reply is unparseable. */
+  let text = "";
+  if (process.env.OPENAI_KEY || process.env.OPENAI_API_KEY) {
+    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY || process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: process.env.LISTING_AI_MODEL || "gpt-4.1-mini",
+        max_tokens: 4000,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`AI error: ${data?.error?.message || r.status}`);
+    text = data.choices?.[0]?.message?.content || "";
+  } else if (process.env.ANTHROPIC_KEY) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(`AI error: ${data?.error?.message || r.status}`);
+    text = data.content?.[0]?.text || "";
+  } else throw new Error("No AI key is set in Vercel (OPENAI_KEY).");
   const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("AI returned invalid JSON");
+  if (!match) throw new Error("The AI's reply couldn't be read — try again.");
   return JSON.parse(match[0]);
 }
 

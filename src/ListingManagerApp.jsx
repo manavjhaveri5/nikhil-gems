@@ -1842,7 +1842,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "ai_generate", listing: { ...form, tags } }),
       });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
+      if (!d.ai) throw new Error(d.error || `AI failed (${r.status})`);
       if (d.ai) {
         // Merged through the same rules a typed tag goes through, so the chips
         // are exactly what gets published — Etsy refuses a tag over 20
@@ -1860,7 +1861,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         }
         set("_ai", d.ai);
       }
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); alert(`Couldn't fill with AI: ${e.message || e}`); }
     finally { setGenerating(false); }
   };
 
