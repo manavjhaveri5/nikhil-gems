@@ -370,6 +370,92 @@ Return JSON with these fields:
   return JSON.parse(match[0]);
 }
 
+/* ── Price research ─────────────────────────────────────────────────────────
+   The admin is whoever signs in without a staff profile (same rule as the
+   app shell: staff are the people listed in ng-users-v1). */
+async function isAdminUser(user) {
+  const email = String(user?.email || "").toLowerCase();
+  if (!email) return false;
+  const sb = createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  const { data } = await sb.from("app_data").select("value").eq("key", "ng-users-v1").maybeSingle();
+  const v = typeof data?.value === "string" ? JSON.parse(data.value) : data?.value;
+  return !(Array.isArray(v) ? v : []).some(u => String(u?.email || "").toLowerCase() === email);
+}
+
+const RESEARCH_STOP = new Set("the a an and or of for with from in on to by natural genuine real crystal crystals stone stones gemstone gem mineral minerals polished handmade raw piece large small big mini gift home decor rare quality high grade".split(" "));
+const researchWords = t => [...new Set(String(t || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2 && !RESEARCH_STOP.has(w)))];
+const sizeMm = t => { const m = String(t || "").match(/(\d+(?:\.\d+)?)\s*(mm|cm|inch|in|")\b/i); if (!m) return 0; const n = +m[1]; return /cm/i.test(m[2]) ? n * 10 : /mm/i.test(m[2]) ? n : n * 25.4; };
+
+/* Etsy's own search — no AI, so it costs nothing. Ranked by how many of the
+   piece's words each listing shares, with a plain note on why it's close. */
+async function researchEtsy(listing) {
+  const stone = String(listing.material || "").trim(), shape = String(listing.shape || "").trim();
+  const q = [stone, shape].filter(Boolean).join(" ") || String(listing.title || "").split(/[—|,-]/)[0];
+  const url = `https://openapi.etsy.com/v3/application/listings/active?keywords=${encodeURIComponent(q.trim())}&limit=50&sort_on=score`;
+  const r = await fetch(url, { headers: await etsyHeaders(false) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Etsy search: ${d.error || r.status}`);
+  const mine = researchWords(`${listing.title} ${stone} ${shape}`);
+  const ourMm = sizeMm(listing.size) || sizeMm(listing.title);
+  const scored = (d.results || []).filter(x => String(x.shop_id) !== String(ETSY_SHOP_ID)).map(x => {
+    const theirs = researchWords(x.title);
+    const shared = mine.filter(w => theirs.includes(w));
+    const mm = sizeMm(x.title);
+    let score = shared.length;
+    if (stone && x.title.toLowerCase().includes(stone.toLowerCase())) score += 3;
+    if (shape && x.title.toLowerCase().includes(shape.toLowerCase().replace(/s$/, ""))) score += 2;
+    if (ourMm && mm) score += Math.max(0, 2 - Math.abs(mm - ourMm) / ourMm * 4);
+    const note = [
+      stone && x.title.toLowerCase().includes(stone.toLowerCase()) ? `same stone` : "",
+      shape && x.title.toLowerCase().includes(shape.toLowerCase().replace(/s$/, "")) ? `same shape` : "",
+      ourMm && mm ? `${Math.round(mm)}mm vs ours ${Math.round(ourMm)}mm` : "",
+      shared.length ? `shares “${shared.slice(0, 4).join(", ")}”` : "",
+      x.num_favorers ? `${x.num_favorers} favourites` : "",
+      x.quantity > 1 ? `${x.quantity} in stock (repeatable)` : "one of a kind",
+    ].filter(Boolean).join(" · ");
+    return { id: String(x.listing_id), title: x.title, url: x.url, where: "Etsy",
+      price: x.price ? x.price.amount / x.price.divisor : 0, currency: x.price?.currency_code || "", note, score };
+  }).sort((a, b) => b.score - a.score).slice(0, 12);
+  // One batch call for their photos.
+  if (scored.length) {
+    try {
+      const b = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${scored.map(x => x.id).join(",")}&includes=Images`, { headers: await etsyHeaders(false) });
+      const bd = await b.json();
+      const img = Object.fromEntries((bd.results || []).map(x => [String(x.listing_id), x.images?.[0]?.url_170x135 || x.images?.[0]?.url_570xN || ""]));
+      scored.forEach(x => { x.image = img[x.id] || ""; });
+    } catch {}
+  }
+  return scored.map(({ score, ...x }) => x);
+}
+
+/* Anywhere online — one AI call with web search, only when asked for. */
+async function researchWeb(listing) {
+  const key = process.env.OPENAI_KEY || process.env.OPENAI_API_KEY;
+  if (!key) throw new Error("No OpenAI key is set in Vercel (OPENAI_KEY).");
+  const desc = [listing.title, listing.material && `stone: ${listing.material}`, listing.shape && `shape: ${listing.shape}`,
+    listing.size && `size: ${listing.size}`, listing.weight && `weight: ${listing.weight}`, listing.origin && `origin: ${listing.origin}`].filter(Boolean).join("; ");
+  const prompt = `Find up to 8 items for sale online that are most similar to this piece: ${desc}.
+Look across Etsy, eBay, crystal shops' own sites and marketplaces. Prefer the same stone, shape and a similar size. Skip anything sold by "Atyahara" or "Earth Editions" (that's us).
+Return ONLY JSON: {"items":[{"title":"","url":"the item's own page","where":"site or shop name","price":number,"currency":"USD|INR|GBP|EUR…","note":"one short line: how close it is to ours and why (stone, shape, size, quality)"}]}`;
+  const content = [{ type: "input_text", text: prompt }];
+  const img = (listing.images || [])[0];
+  if (img) content.push({ type: "input_image", image_url: img });
+  const r = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model: process.env.RESEARCH_AI_MODEL || "gpt-4.1-mini", tools: [{ type: "web_search_preview" }], input: [{ role: "user", content }], max_output_tokens: 2500 }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`AI error: ${d?.error?.message || r.status}`);
+  const text = d.output_text || (d.output || []).flatMap(o => o.content || []).map(c => c.text || "").join("");
+  const m = text.match(/\{[\s\S]*\}/);
+  let items = [];
+  try { items = JSON.parse(m?.[0] || "{}").items || []; } catch {}
+  return items.filter(x => /^https?:\/\//.test(x?.url || "")).slice(0, 8).map((x, i) => ({
+    id: `w${i}`, title: String(x.title || ""), url: x.url, where: String(x.where || ""), price: +x.price || 0, currency: String(x.currency || "").toUpperCase(), note: String(x.note || ""), image: "",
+  }));
+}
+
 /* ── Etsy: processing profile ("readiness state") ─────────────────────────────
    Publishing used to borrow whichever readiness_state_id the shop's most recent
    active listing happened to carry, so a ready-to-ship geode went out as "Made
@@ -1145,7 +1231,8 @@ export default async function handler(req, res) {
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
   const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids");
-  if (!storeAction && !(await requireUser(req, res))) return;
+  const user = storeAction ? null : await requireUser(req, res);
+  if (!storeAction && !user) return;
 
   /* ── GET: fetch Etsy shop settings OR import all Etsy listings ── */
   if (req.method === "GET") {
@@ -1427,6 +1514,14 @@ export default async function handler(req, res) {
   }
 
   try {
+
+    /* ── Price research: pieces like this one, for the admin only ────────── */
+    if (action === "price_research") {
+      if (!(await isAdminUser(user))) return res.status(403).json({ error: "Price research is for the admin only." });
+      if (!listing) return res.status(400).json({ error: "listing required" });
+      const items = body.mode === "web" ? await researchWeb(listing) : await researchEtsy(listing);
+      return res.json({ ok: true, mode: body.mode === "web" ? "web" : "etsy", items, at: new Date().toISOString() });
+    }
 
     /* ── AI: generate platform-specific content ──────────────────────────── */
     if (action === "ai_generate") {

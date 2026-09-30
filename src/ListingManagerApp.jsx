@@ -1696,7 +1696,7 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING FORM
 ══════════════════════════════════════════════════════════════════════════ */
-function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onClose, who, startTab = "overview" }) {
+function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onClose, who, admin = false, startTab = "overview" }) {
   const editing = !!initial?.id;
   const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
 
@@ -3088,7 +3088,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
+        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onClose={() => setSteps(null)}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
@@ -10276,6 +10276,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           orders={orders}
           sold={!!editing && editing.type !== "repeatable" && orders.some(o => o.listing_id === editing.id) && !PLATFORMS.some(p => editing.platforms?.[p.key]?.status === "active")}
           who={who}
+          admin={currentUser?.role === "admin"}
           onSave={handleSave}
           onPublishOne={async (listing, pkey) => {
             let saved = ensureListingOrderId(listing);

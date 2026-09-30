@@ -74,7 +74,7 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
   );
 }
 
-export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose }) {
+export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, research = false }) {
   const [step, setStep] = useState(start);
   // An exception to the stock-card rule: a piece with no stock card (a sample,
   // consignment, a one-off bought in), kept on the listing with its reason.
@@ -102,6 +102,23 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   };
   const costPatch = () => cardCost ? {} : {
     price_calc: { ...(form.price_calc || {}), cost: calcCost || "", cost_lines: costLines.filter(l => String(l.label).trim() || +l.amt) },
+  };
+  /* Price research (admin only): pieces like this one elsewhere. Nothing runs
+     until asked — Etsy's own search is free, the web search is one AI call —
+     and what came back is kept on the listing so it's never paid for twice. */
+  const [rs, setRs] = useState(() => form.price_research || null);   // { etsy?: {items, at}, web?: {items, at} }
+  const [rsBusy, setRsBusy] = useState("");
+  const [rsErr, setRsErr] = useState("");
+  const runResearch = async mode => {
+    setRsBusy(mode); setRsErr("");
+    try {
+      const r = await fetch("/api/listing-manager", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "price_research", mode, listing: { title: form.title, material: form.material, shape: form.shape, size: form.size, weight: form.weight, origin: form.origin, images: (form.images || []).slice(0, 1) } }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || `Research failed (${r.status})`);
+      setRs(x => ({ ...(x || {}), [mode]: { items: d.items || [], at: d.at } }));
+    } catch (e) { setRsErr(e.message || String(e)); }
+    setRsBusy("");
   };
   const [s, setS] = useState(null);
   useEffect(() => { storeSettings().then(setS).catch(() => setS({})); }, []);
@@ -167,7 +184,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   // Where → the piece → prices → a page for each platform picked → publish.
-  const STEPS = [["where", "Where"], ["piece", "The piece"], ["price", "Price"],
+  const STEPS = [["where", "Where"], ["piece", "The piece"], ...(research ? [["research", "Research"]] : []), ["price", "Price"],
     ...(renderPlatform ? chosen.map(c => [c.key, c.key === "store" ? "Retail" : c.label]) : []), ["list", "Publish"]];
   const at = Math.max(0, STEPS.findIndex(x => x[0] === step));
   /* Etsy, eBay and Earth Editions sell the actual piece, so it has to be
@@ -193,7 +210,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       price_store: p.price_store, price_store_inr: p.price_store_inr,
       price_trade: p.price_trade,
       stock_exception: stockException(),
-      ...variantsPatch(), ...costPatch(),
+      ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
   });
   const apply = live => {
     const patch = {
@@ -202,7 +219,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       price_ebay: p.price_ebay || (pick.ebay && ebayUsd ? String(ebayUsd) : form.price_ebay || ""),
       price_store: p.price_store, price_store_inr: p.price_store_inr,
       price_trade: p.price_trade,
-      ...variantsPatch(), ...costPatch(),
+      ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
     };
     onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live });
   };
@@ -311,6 +328,53 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
             })}
           </>}
 
+          {step === "research" && <>
+            <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Price research</div>
+            <div style={{ fontSize: 13.5, color: C.inkMid, lineHeight: 1.5 }}>What pieces like this sell for elsewhere — only when you ask. Tap <b>Next</b> to skip.</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button type="button" disabled={!!rsBusy} onClick={() => runResearch("etsy")} style={{ padding: "11px 16px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 14, cursor: "pointer", opacity: rsBusy ? .5 : 1 }}>
+                {rsBusy === "etsy" ? "Searching Etsy…" : rs?.etsy ? "↻ Search Etsy again" : "Search Etsy"} <span style={{ fontWeight: 500, opacity: .75 }}>· free</span></button>
+              <button type="button" disabled={!!rsBusy} onClick={() => runResearch("web")} style={{ padding: "11px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 800, fontSize: 14, cursor: "pointer", opacity: rsBusy ? .5 : 1 }}>
+                {rsBusy === "web" ? "Searching the web… (up to a minute)" : rs?.web ? "↻ Search the web again" : "Search the web"} <span style={{ fontWeight: 500, color: C.inkMid }}>· uses AI</span></button>
+            </div>
+            {rsErr && <div style={{ fontSize: 13, color: C.red }}>⚠️ {rsErr}</div>}
+            {["etsy", "web"].filter(k => rs?.[k]).map(k => {
+              const FX = { USD: rate, INR: 1, GBP: rate * 1.27, EUR: rate * 1.08, CAD: rate * .73, AUD: rate * .66 };
+              const items = rs[k].items || [];
+              const inInr = x => FX[x.currency] ? x.price * FX[x.currency] : 0;
+              const ps = items.map(inInr).filter(Boolean).sort((a, b) => a - b);
+              const mid = ps.length ? ps[Math.floor(ps.length / 2)] : 0;
+              return (
+                <Box key={k}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+                    <div style={{ flex: 1, fontSize: 12, fontWeight: 800, color: C.ink }}>{k === "etsy" ? "On Etsy" : "Around the web"} · {items.length}</div>
+                    {ps.length > 1 && <div style={{ fontSize: 12, color: C.inkMid }}>{inr(ps[0])} – {inr(ps[ps.length - 1])} · middle <b style={{ color: C.ink }}>{inr(mid)}</b> ≈ {usd(Math.round(mid / rate))}</div>}
+                  </div>
+                  {!items.length && <div style={{ fontSize: 13, color: C.inkMid }}>Nothing close turned up.</div>}
+                  {items.map(x => {
+                    const r = inInr(x);
+                    return (
+                      <div key={x.id || x.url} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: `1px solid ${C.border}` }}>
+                        {x.image ? <img src={x.image} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none", background: C.card }} />
+                          : <div style={{ width: 64, height: 64, borderRadius: 8, flex: "none", background: C.card, display: "grid", placeItems: "center", color: C.inkFaint, fontSize: 11 }}>{x.where?.slice(0, 10) || "web"}</div>}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <a href={x.url} target="_blank" rel="noreferrer" style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, textDecoration: "none", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{x.title} ↗</a>
+                          <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.45 }}>{x.where ? <b>{x.where}</b> : null}{x.where && x.note ? " · " : ""}{x.note}</div>
+                        </div>
+                        <div style={{ textAlign: "right", flex: "none" }}>
+                          <div style={{ fontFamily: serif, fontSize: 20, color: C.ink }}>{r ? inr(r) : x.price ? `${x.price} ${x.currency}` : "—"}</div>
+                          {r > 0 && x.currency !== "INR" && <div style={{ fontSize: 11, color: C.inkFaint }}>{x.price.toLocaleString()} {x.currency}</div>}
+                          {r > 0 && vi < 0 && pick.etsy && <button type="button" onClick={() => setP(v => ({ ...v, price_etsy: listedFor(Math.round(r)) }))}
+                            style={{ marginTop: 4, border: `1px solid ${C.border}`, background: "transparent", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, color: C.ink, cursor: "pointer" }}>Match on Etsy</button>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 6 }}>Found {new Date(rs[k].at).toLocaleString()} · kept on this listing{k === "etsy" ? " · listed prices, before any sale they're running" : ""}</div>
+                </Box>
+              );
+            })}
+          </>}
           {step === "price" && <>
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Prices</div>
             {!chosen.length && <div style={{ color: C.inkMid, fontSize: 14 }}>Pick where it goes first.</div>}
