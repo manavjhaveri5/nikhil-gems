@@ -128,7 +128,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   /* Etsy, eBay and Earth Editions sell the actual piece, so it has to be
      findable and tied to its stock card; wholesale alone doesn't. */
   const retail = chosen.some(c => c.key !== "trade");
-  const pieceMissing = retail ? [!form._loc && "where it's stored", !form.linked_stock_id && !noStock && "its stock card"].filter(Boolean) : [];
+  // The exception covers pieces that aren't on a shelf at all (custom, made to
+  // order, consignment) — so it waives the location along with the card.
+  const pieceMissing = retail && !noStock ? [!form._loc && "where it's stored", !form.linked_stock_id && "its stock card"].filter(Boolean) : [];
   const canNext = step === "where" ? chosen.length > 0 : step === "piece" ? !pieceMissing.length : true;
 
   // One platform at a time from the last step: publish it, then link to it live.
@@ -224,9 +226,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
               <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 12px", borderRadius: 10, border: `1px solid ${noStock ? C.amber : C.border}`, background: noStock ? C.amberBg : "transparent" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>
                   <input type="checkbox" checked={noStock} onChange={e => setNoStock(e.target.checked)} style={{ width: 16, height: 16, margin: 0 }} />
-                  Exception: no stock card for this piece
+                  Exception: no stock card or shelf for this piece
                 </label>
-                {noStock && <input value={noStockWhy} onChange={e => setNoStockWhy(e.target.value)} placeholder="Why? e.g. sample, consignment, bought in (optional)"
+                {noStock && <input value={noStockWhy} onChange={e => setNoStockWhy(e.target.value)} placeholder="Why? e.g. custom / made to order, sample, consignment (optional)"
                   style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 13, background: C.surface, color: C.ink }} />}
               </div>
             )}
