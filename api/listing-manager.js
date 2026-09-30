@@ -756,6 +756,9 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
     if (await uploadEtsyVideo(listingId, listing.video, hdrs, etsyTitle)) videoSrc = listing.video;
   }
 
+  // Variations before it goes live, so it never shows without them.
+  const varWarn = await applyEtsyVariations(listingId, listing, hdrs, payload.readiness_state_id);
+
   let finalStatus = "draft";
 
   if (activate) {
@@ -794,6 +797,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
   if (!weight) gaps.push("no weight");
   if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
+  if (varWarn) gaps.push(varWarn);
 
   return {
     listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
@@ -803,6 +807,54 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 }
 
 /* ── Etsy: update listing ──────────────────────────────────────────────────── */
+/* ── Etsy: variations ──────────────────────────────────────────────────────
+   The listing's variations (Size: 3×3 / 4×4 / 5×5 …) go on as Etsy's inventory:
+   one product per option (or per combination, for two axes), on Etsy's two
+   custom properties (513, 514). An axis priced per option carries its prices
+   (listing currency, the same as price_etsy); per-option stock carries through
+   too. Returns a warning string, or "" when it went through. */
+const ETSY_CUSTOM_PROPS = [513, 514];
+function etsyVariationAxes(listing) {
+  return (Array.isArray(listing.variations) ? listing.variations : [])
+    .map(v => ({ name: String(v.name || "").trim().slice(0, 45), per: !!v.perVariantPricing,
+      options: (v.options || []).filter(o => String(o.label || "").trim()) }))
+    .filter(v => v.name && v.options.length)
+    .slice(0, 2);
+}
+async function applyEtsyVariations(listingId, listing, hdrs, readinessId) {
+  const axes = etsyVariationAxes(listing);
+  if (!axes.length) return "";
+  const basePrice = +listing.price_etsy || 0;
+  const baseQty = listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1);
+  const sku = listingSku(listing);
+  const combos = axes.length === 1 ? axes[0].options.map(o => [o]) : axes[0].options.flatMap(a => axes[1].options.map(b => [a, b]));
+  const products = combos.map((opts, i) => {
+    const priced = opts.find((o, k) => axes[k].per && +o.price_etsy > 0);
+    const price = +(priced?.price_etsy || basePrice);
+    const q = axes.length === 1 && String(opts[0].qty ?? "").trim() !== "" ? Math.max(0, Math.floor(+opts[0].qty || 0)) : baseQty;
+    return {
+      ...(sku ? { sku: `${sku}-${i + 1}`.slice(0, 32) } : {}),
+      property_values: opts.map((o, k) => ({ property_id: ETSY_CUSTOM_PROPS[k], property_name: axes[k].name, value_ids: [], values: [String(o.label).trim().slice(0, 45)] })),
+      offerings: [{ price: parseFloat(price.toFixed(2)), quantity: q, is_enabled: q > 0 || combos.length === 1, ...(readinessId ? { readiness_state_id: readinessId } : {}) }],
+    };
+  });
+  const onProps = axes.map((a, k) => ETSY_CUSTOM_PROPS[k]);
+  const body = {
+    products,
+    price_on_property: axes.map((a, k) => a.per ? ETSY_CUSTOM_PROPS[k] : null).filter(Boolean),
+    quantity_on_property: axes.length === 1 ? onProps : [],
+    sku_on_property: sku ? onProps : [],
+    ...(readinessId ? { readiness_state_on_property: [] } : {}),
+  };
+  try {
+    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { method: "PUT", headers: hdrs, body: JSON.stringify(body) });
+    if (r.ok) return "";
+    const d = await r.json().catch(() => ({}));
+    console.error("Etsy inventory update failed:", JSON.stringify(d));
+    return `Etsy didn't take the variations: ${d.error || r.status}`;
+  } catch (e) { return `Etsy didn't take the variations: ${e.message}`; }
+}
+
 async function updateEtsyListing(listingId, listing, ai) {
   const etsyTitle = ai?.etsy_title || listing.title;
   const etsyDesc  = stripWarehouseNote(ai?.etsy_description || listing.description || listing.title);
@@ -822,8 +874,8 @@ async function updateEtsyListing(listingId, listing, ai) {
   const patchBody = {
     title:       etsyTitle.slice(0, 140),
     description: etsyDesc,
-    price:       parseFloat((+listing.price_etsy || 0).toFixed(2)),
-    quantity,
+    // With variations, price and stock live on each option (the inventory call below).
+    ...(etsyVariationAxes(listing).length ? {} : { price: parseFloat((+listing.price_etsy || 0).toFixed(2)), quantity }),
     tags:        etsyTags,
     taxonomy_id: taxonomyId,
     ...(readinessId ? { readiness_state_id: readinessId } : {}),
@@ -900,6 +952,7 @@ async function updateEtsyListing(listingId, listing, ai) {
     } else { videoSrc = listing.video; }
   }
 
+  const varWarn     = await applyEtsyVariations(listingId, listing, hdrs, readinessId);
   const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
   const dimFailed   = await applyEtsyDimensions(listingId, taxonomyId, dims, hdrs);
 
@@ -909,6 +962,7 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
   if (!weight) gaps.push("no weight");
   if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
+  if (varWarn) gaps.push(varWarn);
 
   return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc,
     ...(tagsWarning ? { tagsWarning } : {}),

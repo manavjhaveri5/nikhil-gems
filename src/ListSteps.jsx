@@ -74,7 +74,7 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
   );
 }
 
-export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, research = false }) {
+export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, onDone, research = false }) {
   const [step, setStep] = useState(start);
   // An exception to the stock-card rule: a piece with no stock card (a sample,
   // consignment, a one-off bought in), kept on the listing with its reason.
@@ -197,13 +197,21 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
 
   // One platform at a time from the last step: publish it, then link to it live.
   const [one, setOne] = useState({});   // key → { busy, url, error }
+  /* Putting a piece live on Etsy costs a $0.20 listing fee (an update to one
+     that's already live doesn't), so it asks first. */
+  const etsyFeeOk = () => linkOf(form, "etsy").status === "active"
+    || window.confirm("Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.");
   const publishOne = async key => {
+    if (key === "etsy" && !etsyFeeOk()) return;
     setOne(x => ({ ...x, [key]: { busy: true } }));
     try {
       const url = await onPublishOne(pricesPatch(), key);
       setOne(x => ({ ...x, [key]: { url: url || "", done: true } }));
     } catch (e) { setOne(x => ({ ...x, [key]: { error: e.message || "Didn't publish" } })); }
   };
+  // Every platform picked is live (published here, or already live) → the step is
+  // done. Each publish already saved the listing, so Done just closes — no re-sync.
+  const allLive = chosen.length > 0 && chosen.every(c => one[c.key]?.url || one[c.key]?.done || (linkOf(form, c.key).linked && linkOf(form, c.key).status === "active"));
   const pricesPatch = () => ({
       price_etsy: p.price_etsy,
       price_ebay: p.price_ebay || (pick.ebay && ebayUsd ? String(ebayUsd) : form.price_ebay || ""),
@@ -213,6 +221,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
   });
   const apply = live => {
+    if (live && pick.etsy && !etsyFeeOk()) return;
     const patch = {
       stock_exception: stockException(),
       price_etsy: p.price_etsy,
@@ -567,6 +576,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
           {step !== "list"
             ? <button type="button" disabled={!canNext} onClick={() => { setStep(STEPS[at + 1][0]); const box = document.getElementById("ls-box"); if (box) box.scrollTop = 0; }}
                 style={{ padding: "13px 26px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: canNext ? "pointer" : "not-allowed", opacity: canNext ? 1 : .4 }}>Next</button>
+            : allLive
+            ? <button type="button" onClick={() => (onDone || onClose)()}
+                style={{ padding: "13px 30px", borderRadius: 10, border: "none", background: C.green, color: "#fff", fontWeight: 800, fontSize: 15, cursor: "pointer" }}>✓ Done</button>
             : <>
                 <button type="button" disabled={!chosen.length} onClick={() => apply(false)} style={{ padding: "13px 16px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>Save as drafts</button>
                 <button type="button" disabled={!chosen.length || pieceMissing.length > 0} onClick={() => apply(true)} style={{ padding: "13px 22px", borderRadius: 10, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: chosen.length && !pieceMissing.length ? 1 : .4 }}>Publish all live</button>

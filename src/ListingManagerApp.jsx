@@ -3090,6 +3090,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       {steps && (
         <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onClose={() => setSteps(null)}
+          onDone={() => { setSteps(null); onClose(); }}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
       )}
     </div>
@@ -3268,6 +3269,9 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
   const storageLocation = listing.officeLocation || linkedStock?.location || "";
 
   const handlePublish = async pkey => {
+    // Going live on Etsy costs a $0.20 listing fee — ask first (not for one already live).
+    if (pkey === "etsy" && listing.platforms?.etsy?.status !== "active"
+      && !window.confirm("Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.")) return;
     setPublishing(p => ({ ...p, [pkey]: "publishing" }));
     try {
       await onPublish(listing, pkey);
