@@ -9231,6 +9231,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   // Whose name goes on an edit. Several people work the same catalogue, and a
   // clip that was recut yesterday is worth attributing.
   const who = currentUser?.name || currentUser?.email || "";
+  const publishingNow = useRef(new Set());   // "listingId:platform" publishes in flight
   const [listings,   setListings]   = useState([]);
   const [orders,     setOrders]     = useState([]);
   const [stock,      setStock]      = useState([]);
@@ -10309,13 +10310,26 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           admin={currentUser?.role === "admin"}
           onSave={handleSave}
           onPublishOne={async (listing, pkey) => {
-            let saved = ensureListingOrderId(listing);
-            if ((saved.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(saved.video)) saved = await persistListingMedia(saved);
-            await saveListingItem(saved, { prepend: !listings.some(l => l.id === saved.id) });
-            await handlePublish(saved, pkey, { syncOnly: false, allowCreate: true });
-            const fresh = ((await loadKFresh(LIST_KEY).catch(() => null)) || []).find(x => x.id === saved.id) || saved;
-            showToast(`✓ Live on ${channel(pkey)?.label || pkey}`);
-            return { listing: fresh, url: linkOf(fresh, pkey).live || "" };
+            /* Runs here, not in the steps box, so closing the box leaves it
+               going; the toast says how it ended either way. One publish per
+               listing and platform at a time — a second, started after
+               reopening the listing mid-publish, would make a duplicate. */
+            const flight = `${listing.id}:${pkey}`;
+            if (publishingNow.current.has(flight)) throw new Error("Already publishing — it's carrying on in the background");
+            publishingNow.current.add(flight);
+            const label = channel(pkey)?.label || pkey;
+            try {
+              let saved = ensureListingOrderId(listing);
+              if ((saved.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(saved.video)) saved = await persistListingMedia(saved);
+              await saveListingItem(saved, { prepend: !listings.some(l => l.id === saved.id) });
+              await handlePublish(saved, pkey, { syncOnly: false, allowCreate: true });
+              const fresh = ((await loadKFresh(LIST_KEY).catch(() => null)) || []).find(x => x.id === saved.id) || saved;
+              showToast(`✓ Live on ${label} — ${String(fresh.title || "").slice(0, 40)}`, 5000);
+              return { listing: fresh, url: linkOf(fresh, pkey).live || "" };
+            } catch (e) {
+              showToast(`⚠ ${label} didn't publish: ${e.message}`, 8000);
+              throw e;
+            } finally { publishingNow.current.delete(flight); }
           }}
           onClose={() => { setShowForm(false); setEditing(null); }}
         />

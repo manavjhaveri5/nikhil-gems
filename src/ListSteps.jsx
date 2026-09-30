@@ -559,6 +559,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                           style={{ fontSize: 13, fontWeight: 800, borderRadius: 8, padding: "7px 14px", cursor: st.busy ? "wait" : "pointer", border: url ? `1px solid ${C.border}` : "none",
                             background: url ? C.surface : C.ink, color: url ? C.ink : "#FAF0DC", opacity: noPrice || pieceMissing.length ? .4 : 1 }}>
                           {st.busy ? "Publishing…" : url ? "Update" : `Publish on ${c.label}`}</button>
+                        {st.busy && <span style={{ fontSize: 12, color: C.inkMid }}>You can close this — it carries on, and a message says when it's live.</span>}
                       </div>
                     );
                   })()}
