@@ -197,7 +197,12 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
 
   // One platform at a time from the last step: publish it, then link to it live.
   const [one, setOne] = useState({});   // key → { busy, url, error }
+  /* Putting a piece live on Etsy costs a $0.20 listing fee (an update to one
+     that's already live doesn't), so it asks first. */
+  const etsyFeeOk = () => linkOf(form, "etsy").status === "active"
+    || window.confirm("Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.");
   const publishOne = async key => {
+    if (key === "etsy" && !etsyFeeOk()) return;
     setOne(x => ({ ...x, [key]: { busy: true } }));
     try {
       const url = await onPublishOne(pricesPatch(), key);
@@ -213,6 +218,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
   });
   const apply = live => {
+    if (live && pick.etsy && !etsyFeeOk()) return;
     const patch = {
       stock_exception: stockException(),
       price_etsy: p.price_etsy,

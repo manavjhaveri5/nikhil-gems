@@ -3268,6 +3268,9 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
   const storageLocation = listing.officeLocation || linkedStock?.location || "";
 
   const handlePublish = async pkey => {
+    // Going live on Etsy costs a $0.20 listing fee — ask first (not for one already live).
+    if (pkey === "etsy" && listing.platforms?.etsy?.status !== "active"
+      && !window.confirm("Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.")) return;
     setPublishing(p => ({ ...p, [pkey]: "publishing" }));
     try {
       await onPublish(listing, pkey);
