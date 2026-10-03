@@ -3763,7 +3763,36 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
     return updated;
   };
   const setOrderShape = (order, shape) => patchOrder(order, { listing_shape: shape });
-  const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty || o._ngPlanQty || ""), qty2: String(o._ngAllocatedQty2 || o._ngDeductedQty2 || o._ngPlanQty2 || ""), shipCost: o.ship_cost != null && o.ship_cost !== "" ? String(o.ship_cost) : "", costMode: "earned", multiplier: "2", rate: "", loading: false, error: "", success: "" });
+  /* Who the parcel was booked and paid through — not the carrier that carries it
+   the last mile. Etsy's own carrier field already holds that (USPS, Royal Mail,
+   Intelcom), which is why the orders store has both "India Post" and "USPS" for
+   the same parcel. This is the one we pay, and the one a shipping price has to
+   be built from.
+
+   Service is a suggestion list rather than a fixed menu: each of these sells a
+   handful of products, they change them, and a menu missing the one actually
+   used would get "Other" forever — which records nothing. Anything typed once
+   is offered from then on, so the list grows into whatever is really used. */
+const SHIP_COURIERS = ["India Post", "ShipGlobal", "Shiprocket", "ShipUniversal", "Other"];
+const SHIP_SERVICE_HINTS = {
+  "India Post": ["Speed Post", "International Speed Post (EMS)", "Registered Post", "Air Parcel", "Tracked Packet Service"],
+  "ShipGlobal": ["ShipGlobal Direct", "DHL", "FedEx", "UPS"],
+  "Shiprocket": ["Shiprocket X", "Shiprocket Air", "Shiprocket Surface"],
+  "ShipUniversal": [],
+  "Other": [],
+};
+/* Services this shop has typed before, per courier, so the list learns. */
+const serviceOptions = (orders, courier) => {
+  const seen = new Set(SHIP_SERVICE_HINTS[courier] || []);
+  for (const o of orders || []) {
+    if (String(o?.ship_courier || "") !== courier) continue;
+    const v = String(o?.ship_service || "").trim();
+    if (v) seen.add(v);
+  }
+  return [...seen];
+};
+
+const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty || o._ngPlanQty || ""), qty2: String(o._ngAllocatedQty2 || o._ngDeductedQty2 || o._ngPlanQty2 || ""), shipWeight: o.ship_weight_kg == null ? "" : String(o.ship_weight_kg), shipCourier: o.ship_courier || "", shipService: o.ship_service || "", shipCost: o.ship_cost != null && o.ship_cost !== "" ? String(o.ship_cost) : "", costMode: "earned", multiplier: "2", rate: "", loading: false, error: "", success: "" });
   const ngDraft = o => ({ ...defaultNgDraft(o), ...(ngState[o.id] || {}) });
   // Merge from the latest updater state, not the render's older ngState closure.
   // This keeps number inputs stable while several keystrokes are being batched.
@@ -3775,8 +3804,32 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
      is always undefined — so `+undefined || 0` stamped every order shipped from
      step 1 at ₹0, overwriting the figure the blur had just saved. */
   const shipCostPatch = o => {
-    const entered = ngDraft(o).shipCost;
-    return { ship_cost: entered == null || entered === "" ? (o.ship_cost || "") : Math.max(0, +entered || 0) };
+    const d = ngDraft(o);
+    const entered = d.shipCost;
+    const w = d.shipWeight;
+    return {
+      ship_cost: entered == null || entered === "" ? (o.ship_cost || "") : Math.max(0, +entered || 0),
+      ship_weight_kg: w == null || w === "" ? (o.ship_weight_kg ?? "") : Math.max(0, +w || 0),
+      ship_courier: d.shipCourier || o.ship_courier || "",
+      ship_service: String(d.shipService || o.ship_service || "").trim(),
+    };
+  };
+  const saveOrderShipField = (order, key, value) => {
+    updNg(order, { [key]: value });
+    const col = key === "shipWeight" ? "ship_weight_kg" : key === "shipCourier" ? "ship_courier" : "ship_service";
+    const v = key === "shipWeight" ? (value === "" ? "" : Math.max(0, +value || 0)) : String(value || "").trim();
+    return patchOrder(order, { [col]: v });
+  };
+  /* The weight is the half of a shipping cost that makes it worth keeping: a
+     figure on its own says what one parcel cost, a figure with a weight beside
+     it says what the next one will. So a cost cannot be banked without it. */
+  const shipEntryMissing = o => {
+    const d = ngDraft(o);
+    const cost = d.shipCost === "" || d.shipCost == null ? +(o.ship_cost || 0) : +d.shipCost;
+    if (!(cost > 0)) return "";
+    const w = d.shipWeight === "" || d.shipWeight == null ? +(o.ship_weight_kg || 0) : +d.shipWeight;
+    if (!(w > 0)) return "Add the packed weight before marking it shipped — a cost without a weight can't price the next parcel.";
+    return "";
   };
   const saveOrderShipCost = (order, value) => {
     const shipCost = value === "" ? "" : Math.max(0, +value || 0);
@@ -5645,7 +5698,42 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                           <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>Receipt #{etsyReceiptId(order)}</div>
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-                          <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 170 }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 13, padding: "8px 36px 8px 10px", borderRadius: 8, marginTop: 4 }} /><span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
+                          <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 170 }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 13, padding: "8px 36px 8px 10px", borderRadius: 8, marginTop: 4 }} /><span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>{(() => {
+                            const d = ngDraft(order);
+                            const svcList = serviceOptions(orders, d.shipCourier);
+                            const lbl = { fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 120 };
+                            const inp = { ...FI(), width: "100%", fontSize: 13, padding: "8px 10px", marginTop: 4 };
+                            const need = !!shipEntryMissing(order);
+                            return (
+                              <>
+                                <label style={lbl}>Packed weight
+                                  <div style={{ position: "relative" }}>
+                                    <input type="number" min={0} step="any" value={d.shipWeight}
+                                      onChange={e => updNg(order, { shipWeight: e.target.value })}
+                                      onBlur={e => saveOrderShipField(order, "shipWeight", e.target.value)}
+                                      placeholder="0.00" aria-label="Packed parcel weight in kilos"
+                                      style={{ ...inp, padding: "8px 32px 8px 10px", borderColor: need ? C.red : undefined }} />
+                                    <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>kg</span>
+                                  </div>
+                                </label>
+                                <label style={lbl}>Courier
+                                  <select value={d.shipCourier} onChange={e => saveOrderShipField(order, "shipCourier", e.target.value)}
+                                    style={{ ...inp, cursor: "pointer" }}>
+                                    <option value="">—</option>
+                                    {SHIP_COURIERS.map(c => <option key={c} value={c}>{c}</option>)}
+                                  </select>
+                                </label>
+                                <label style={lbl}>Service
+                                  <input list={`svc-${order.id}`} value={d.shipService}
+                                    onChange={e => updNg(order, { shipService: e.target.value })}
+                                    onBlur={e => saveOrderShipField(order, "shipService", e.target.value)}
+                                    placeholder={d.shipCourier ? "Pick or type" : "Courier first"}
+                                    disabled={!d.shipCourier} style={{ ...inp, opacity: d.shipCourier ? 1 : .5 }} />
+                                  <datalist id={`svc-${order.id}`}>{svcList.map(v => <option key={v} value={v} />)}</datalist>
+                                </label>
+                              </>
+                            );
+                          })()}
                           {shipped
                             ? <>
                                 <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>✓ {order.tracking_code || order.tracking_number || "Tracking sent"}</span>
@@ -5653,7 +5741,7 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                                 <button onClick={() => setTrackingModalOrder(order)} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Update tracking</button>
                                 <button onClick={() => undoShipStep(order)} title="Undo step 1 locally; does not change Etsy" style={{ background: "transparent", color: C.inkFaint, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", fontSize: 11, fontWeight: 750, cursor: "pointer" }}>Undo</button>
                               </>
-                            : <button onClick={() => setTrackingModalOrder(order)} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking & ship</button>}
+                            : <button onClick={() => { const m = shipEntryMissing(order); if (m) { showToast(`⚠ ${m}`, 7000); return; } setTrackingModalOrder(order); }} style={{ background: "#F56400", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 850, cursor: "pointer" }}>Add tracking & ship</button>}
                           {trackingDraft(order).error && needsEtsyReconnect(trackingDraft(order).error) && <button onClick={reconnectEtsy} style={{ background: C.card, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Reconnect Etsy</button>}
                         </div>
                       </div>
@@ -5669,7 +5757,42 @@ function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoic
                           <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>{order.order_number}</div>
                         </div>
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 12 }}>
-                          <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 170 }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 13, padding: "8px 36px 8px 10px", borderRadius: 8, marginTop: 4 }} /><span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>
+                          <label style={{ fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 170 }}>Shipping you paid<div style={{ position: "relative" }}><input type="number" min={0} step="any" value={ngDraft(order).shipCost} onChange={e => updNg(order, { shipCost: e.target.value })} onBlur={e => saveOrderShipCost(order, e.target.value)} placeholder="0" style={{ ...FI(), width: "100%", fontSize: 13, padding: "8px 36px 8px 10px", borderRadius: 8, marginTop: 4 }} /><span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>₹</span></div></label>{(() => {
+                            const d = ngDraft(order);
+                            const svcList = serviceOptions(orders, d.shipCourier);
+                            const lbl = { fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 120 };
+                            const inp = { ...FI(), width: "100%", fontSize: 13, padding: "8px 10px", marginTop: 4 };
+                            const need = !!shipEntryMissing(order);
+                            return (
+                              <>
+                                <label style={lbl}>Packed weight
+                                  <div style={{ position: "relative" }}>
+                                    <input type="number" min={0} step="any" value={d.shipWeight}
+                                      onChange={e => updNg(order, { shipWeight: e.target.value })}
+                                      onBlur={e => saveOrderShipField(order, "shipWeight", e.target.value)}
+                                      placeholder="0.00" aria-label="Packed parcel weight in kilos"
+                                      style={{ ...inp, padding: "8px 32px 8px 10px", borderColor: need ? C.red : undefined }} />
+                                    <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-25%)", fontSize: 11, fontWeight: 800, color: C.inkFaint }}>kg</span>
+                                  </div>
+                                </label>
+                                <label style={lbl}>Courier
+                                  <select value={d.shipCourier} onChange={e => saveOrderShipField(order, "shipCourier", e.target.value)}
+                                    style={{ ...inp, cursor: "pointer" }}>
+                                    <option value="">—</option>
+                                    {SHIP_COURIERS.map(c => <option key={c} value={c}>{c}</option>)}
+                                  </select>
+                                </label>
+                                <label style={lbl}>Service
+                                  <input list={`svc-${order.id}`} value={d.shipService}
+                                    onChange={e => updNg(order, { shipService: e.target.value })}
+                                    onBlur={e => saveOrderShipField(order, "shipService", e.target.value)}
+                                    placeholder={d.shipCourier ? "Pick or type" : "Courier first"}
+                                    disabled={!d.shipCourier} style={{ ...inp, opacity: d.shipCourier ? 1 : .5 }} />
+                                  <datalist id={`svc-${order.id}`}>{svcList.map(v => <option key={v} value={v} />)}</datalist>
+                                </label>
+                              </>
+                            );
+                          })()}
                           {shipped
                             ? <>
                                 <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>✓ {order.tracking_code || order.tracking_number || "Fulfilled"}</span>
