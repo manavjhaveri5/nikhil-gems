@@ -942,11 +942,24 @@ async function updateEtsyListing(listingId, listing, ai) {
   const sent = listing.platforms?.etsy?.imagesSrc;
   const liveImgs = await etsyListingImages(listingId, hdrs);
   const photosChanged = Array.isArray(sent) ? sent.join("|") !== imgUrls.join("|") : !liveImgs.length;
+  /* Etsy won't let a live listing drop to no photos, so removing them all first
+     failed on the last one and the swap stopped there. Instead: clear all but
+     one old photo, put the new ones in front of it, then remove that last one.
+     The listing is never without a photo, and never over Etsy's 10. */
+  let photoWarning = "";
   if (photosChanged && imgUrls.length) {
-    for (const im of liveImgs) await deleteEtsyImage(listingId, im.listing_image_id, hdrs);
-    for (let i = 0; i < imgUrls.length; i++) await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
+    const [keep, ...rest] = [...liveImgs].sort((a, b) => (a.rank || 0) - (b.rank || 0));
+    for (const im of rest) await deleteEtsyImage(listingId, im.listing_image_id, hdrs);
+    // With one old photo still there, nine new fit under the 10; a tenth goes in after it's gone.
+    const first = keep ? Math.min(imgUrls.length, 9) : imgUrls.length;
+    for (let i = 0; i < first; i++) await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
+    if (keep) await deleteEtsyImage(listingId, keep.listing_image_id, hdrs);
+    for (let i = first; i < imgUrls.length; i++) await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
+    // Read back: what's on Etsy now should be exactly the new set.
+    const after = await etsyListingImages(listingId, hdrs);
+    if (after.length !== imgUrls.length) photoWarning = `Etsy has ${after.length} photo${after.length === 1 ? "" : "s"} on the listing, the ERP ${imgUrls.length} — check them on Etsy.`;
   }
-  const imagesSrc = imgUrls;
+  const imagesSrc = photoWarning ? sent : imgUrls;   // not recorded as sent, so the next sync tries again
 
   /* Optional listing video — best-effort. The listing remembers the file it
      last sent to Etsy; an unchanged one is left alone rather than re-uploaded
@@ -975,6 +988,7 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (!weight) gaps.push("no weight");
   if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
   if (varWarn) gaps.push(varWarn);
+  if (photoWarning) gaps.push(photoWarning);
 
   return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc, ...(varWarn ? { variationsWarning: varWarn } : {}),
     ...(tagsWarning ? { tagsWarning } : {}),
