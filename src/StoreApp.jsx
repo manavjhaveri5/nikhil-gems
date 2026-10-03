@@ -101,18 +101,15 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
   return {
     id: `lm-${l.id}`, listing_id: l.id,
     handle: existing?.handle || handleFrom(l),
-    /* A title set for Earth Editions in Listing Manager is meant as written, and
-       so is one typed on the store itself. Everything else is derived from the
-       Etsy title, and derived means re-derived: keeping `existing.title`
-       unconditionally meant a piece first published under its full Etsy name —
-       "50mm Hypersthene Sphere - Polished Black and Silver Crystal Orb" — kept
-       it for good, while the size line beside it updated on every sync.
-
-       So the last derived name is remembered. If the stored one still matches
-       it, nobody has touched it and it is derived again; if it differs, someone
-       typed that and it stays. */
-    title: own || (existing && existing.title !== existing.title_auto ? existing.title : derived),
-    title_auto: derived,
+    /* A title set for Earth Editions in Listing Manager is meant as written;
+       everything else is derived from the Etsy title, and derived means
+       re-derived. Carrying `existing.title` across unconditionally meant a
+       piece first published under its full Etsy name — "50mm Hypersthene
+       Sphere - Polished Black and Silver Crystal Orb" — wore it for good, while
+       the size line beside it was rebuilt on every sync. A name actually typed
+       in the store's editor is kept by keepManual below, which is what
+       source.manual is for. */
+    title: own || derived,
     subtitle: size,
     description: String(l.store_description || l.shopify_description || l.description || "").replace(/<[^>]+>/g, "").trim(),
     images, videos: l.video && /^https?:/.test(l.video) ? [l.video] : (existing?.videos || []),
