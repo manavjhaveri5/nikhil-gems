@@ -3310,6 +3310,39 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
     finally { setPublishing(p => ({ ...p, [pkey]: false })); }
   };
 
+  /* Push the photos out again, to everywhere the piece already is.
+
+     Every sync is careful NOT to re-upload photos it believes are unchanged —
+     without that a listing fills with copies and Etsy's 10-photo cap starts
+     refusing the rest. But "unchanged" is judged from the URLs, and a photo
+     edited in place keeps its URL, so a caption burnt into a cover shot is
+     invisible to that check. This is the manual override for exactly that: the
+     photos are known to differ, so send them.
+
+     Only platforms the piece is actually on, and never a publish — a resync
+     must not put a draft on sale or spend a listing fee. */
+  const photoTargets = shownPlatforms(listing).filter(p => {
+    const ps = listing.platforms?.[p.key] || {};
+    return ps.status && ps.status !== "deleted" && (ps.listing_id || ps.product_id || ps.item_id);
+  });
+
+  const handleResyncPhotos = async () => {
+    if (!photoTargets.length) return;
+    const names = photoTargets.map(p => p.label).join(", ");
+    if (!window.confirm(`Send these ${listing.images?.length || 0} photos again to ${names}?\n\nThe photos already there are replaced. Prices and text are left alone.`)) return;
+    setPublishing(p => ({ ...p, _photos: true }));
+    const failed = [];
+    for (const p of photoTargets) {
+      try {
+        await onPublish(listing, p.key, { syncOnly: true, allowCreate: false, forcePhotos: true });
+      } catch (e) { failed.push(`${p.label}: ${e.message}`); }
+    }
+    setPublishing(p => ({ ...p, _photos: false }));
+    showToast(failed.length
+      ? `⚠ Photos resent, except — ${failed.join(" · ")}`
+      : `✓ Photos resent to ${names}`);
+  };
+
   const refreshVideo = async (pkey, notify = true) => {
     setPublishing(p => ({ ...p, [`${pkey}_video`]: true }));
     try {
@@ -3620,11 +3653,22 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                 )}
               </div>
             ) : <div />}
-            <button onClick={() => onDelete(listing.id)}
-              style={{ padding: "6px 14px", background: "none", border: `1px solid ${C.red}40`,
-                borderRadius: 6, fontSize: 11, color: C.red, cursor: "pointer" }}>
-              Delete Listing
-            </button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {photoTargets.length > 0 && (
+                <button onClick={handleResyncPhotos} disabled={!!publishing._photos}
+                  title={`Send the photos again to ${photoTargets.map(p => p.label).join(", ")} — for a photo edited in place, which a normal save leaves alone`}
+                  style={{ padding: "6px 14px", background: "none", border: `1px solid ${C.border}`,
+                    borderRadius: 6, fontSize: 11, color: C.inkMid, fontWeight: 600,
+                    cursor: publishing._photos ? "wait" : "pointer", opacity: publishing._photos ? .7 : 1 }}>
+                  {publishing._photos ? <><Spinner /> Resending…</> : "⟳ Resync photos"}
+                </button>
+              )}
+              <button onClick={() => onDelete(listing.id)}
+                style={{ padding: "6px 14px", background: "none", border: `1px solid ${C.red}40`,
+                  borderRadius: 6, fontSize: 11, color: C.red, cursor: "pointer" }}>
+                Delete Listing
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -9821,7 +9865,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* publish — syncOnly=true means update fields only, never activate */
-  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [] } = {}) => {
+  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
     /* What says "this already exists over there" is the platform's own id, and
        it is written onto the stored listing at the END of this function. Anything
        holding an older copy of the listing — a form opened before the last
@@ -9943,7 +9987,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       const r = await fetch("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate }),
+        body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate, force_photos: forcePhotos }),
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "Publishing failed");

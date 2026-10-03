@@ -11,6 +11,10 @@ import {
   createPipeline, setPipelineSource, renderPipeline,
 } from "./glPipeline.js";
 import { lab, Slider } from "./EditorControls.jsx";
+import {
+  CAPTION_FONTS, CAPTION_PRESETS, NO_CAPTION, captionOn,
+  loadCaptionFont, drawCaption, compositeCaption,
+} from "./photoCaption.js";
 
 /* Native photo editor for listing shots.
 
@@ -63,6 +67,9 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
   const [prog, setProg] = useState("");
   const [err, setErr] = useState("");
   const [showOriginal, setShowOriginal] = useState(false);
+  const [cap, setCap] = useState(NO_CAPTION);
+  const [capFont, setCapFont] = useState("");    // the face actually loaded
+  const capCanvasRef = useRef(null);
   /* The editor fills the window, and a window gets resized while it is open —
      so the one-column break is watched rather than read once at mount. */
   const [narrow, setNarrow] = useState(mob);
@@ -150,6 +157,32 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
       : {});
   }, [ready, adjust, allBands, curves, sweep, mask, geo, showOriginal, draw]);
 
+  /* The face has to be in the document before anything is drawn with it:
+     canvas does not wait for a webfont, it silently writes in a fallback. */
+  const capWanted = captionOn(cap) ? cap.font : "";
+  useEffect(() => {
+    if (!capWanted) return undefined;
+    let dead = false;
+    loadCaptionFont(capWanted).then(
+      f => { if (!dead) setCapFont(f.key); },
+      () => { if (!dead) setErr("Couldn't load the caption typeface — check the connection, then reopen the editor."); });
+    return () => { dead = true; };
+  }, [capWanted]);
+
+  /* The caption rides on its own 2D canvas laid exactly over the WebGL one,
+     which cannot take a 2D context. It is sized in the GL canvas's own pixels
+     and positioned by CSS, so the preview is laid out the same way the save
+     composites it — and every caption measurement is a share of the frame, so
+     the 794px preview and the full-size save agree. */
+  useEffect(() => {
+    const gl = canvasRef.current, cv = capCanvasRef.current;
+    if (!ready || !gl || !cv) return;
+    if (cv.width !== gl.width || cv.height !== gl.height) { cv.width = gl.width; cv.height = gl.height; }
+    const ctx = cv.getContext("2d");
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!showOriginal && captionOn(cap) && capFont === cap.font) drawCaption(ctx, cap, cv.width, cv.height);
+  }, [ready, cap, capFont, showOriginal, adjust, allBands, curves, sweep, mask, geo]);
+
   /* Growing the mask is the only heavy thing here, so it runs when its own
      settings change and not on every render. */
   useEffect(() => {
@@ -191,8 +224,11 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
   const writeOne = async (bitmap, maskFor) => {
     setSource(bitmap);
     draw({ full: true, bitmap, mask: maskFor });
+    /* The caption goes on a copy of the rendered frame, and the blob is read
+       from that copy — the WebGL canvas itself holds only the graded pixels. */
+    const src = captionOn(cap) ? compositeCaption(canvasRef.current, cap) : canvasRef.current;
     const blob = await new Promise((resolve, reject) =>
-      canvasRef.current.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
+      src.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
     const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
     return uploadToStorage(`listing-photos/${name}`, new File([blob], name, { type: "image/jpeg" }));
   };
@@ -208,6 +244,8 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     const batch = applyAll && all;
     setBusy("save"); setErr(""); setProg("");
     try {
+      // Never bake a caption in whatever face the canvas falls back to.
+      if (captionOn(cap)) await loadCaptionFont(cap.font);
       /* Save from the original, not the lighter copy the preview runs on. */
       let full = bitmapRef.current;
       if (fullRef.current) {
@@ -313,6 +351,9 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                     maxHeight: narrow ? "min(320px, 45vh)" : "min(52vh, 460px)", borderRadius: 8,
                     display: "block", touchAction: geo.crop.on ? "none" : "auto",
                     cursor: geo.crop.on ? (dragging ? "grabbing" : "grab") : "default" }} />
+                <canvas ref={capCanvasRef} aria-hidden="true"
+                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%",
+                    pointerEvents: "none", borderRadius: 8 }} />
                 {dragging && (
                   <div style={{ position: "absolute", inset: 0, pointerEvents: "none", borderRadius: 8,
                     backgroundImage: `linear-gradient(to right, transparent calc(33.333% - 1px), rgba(255,255,255,.55) calc(33.333% - 1px), rgba(255,255,255,.55) 33.333%, transparent 33.333%, transparent calc(66.667% - 1px), rgba(255,255,255,.55) calc(66.667% - 1px), rgba(255,255,255,.55) 66.667%, transparent 66.667%), linear-gradient(to bottom, transparent calc(33.333% - 1px), rgba(255,255,255,.55) calc(33.333% - 1px), rgba(255,255,255,.55) 33.333%, transparent 33.333%, transparent calc(66.667% - 1px), rgba(255,255,255,.55) calc(66.667% - 1px), rgba(255,255,255,.55) 66.667%, transparent 66.667%)`,
@@ -477,6 +518,65 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                         : mask.coverage > 0.85
                           ? "That is claiming nearly the whole frame. Lower the tolerance before saving."
                           : `Backdrop covers ${Math.round(mask.coverage * 100)}% of the frame.`}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={lab}>Caption</span>
+                <span style={{ fontSize: 9.5, color: C.inkFaint }}>burnt into the photo</span>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {CAPTION_PRESETS.map(t => (
+                  <button key={t} type="button" onClick={() => setCap(c => ({ ...c, text: c.text === t ? "" : t }))}
+                    style={{ ...btn(cap.text === t ? C.teal : "transparent", cap.text === t ? "#fff" : C.ink),
+                      padding: "6px 10px", fontSize: 11 }}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <input value={cap.text} onChange={e => setCap(c => ({ ...c, text: e.target.value }))}
+                placeholder="or type your own" style={{ ...FI(), fontSize: 12 }} />
+              {!captionOn(cap) ? (
+                <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>
+                  Writes a line into the picture itself, so it travels with the photo — Etsy renders its own pages and would never show a caption of ours any other way.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {CAPTION_FONTS.map(f => (
+                      <button key={f.key} type="button" onClick={() => setCap(c => ({ ...c, font: f.key }))}
+                        style={{ ...btn(cap.font === f.key ? C.ink : "transparent", cap.font === f.key ? "#fff" : C.ink),
+                          padding: "6px 10px", fontSize: 11 }}>
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {[["top", "Top"], ["bottom", "Bottom"]].map(([k, l]) => (
+                      <button key={k} type="button" onClick={() => setCap(c => ({ ...c, pos: k }))}
+                        style={{ ...btn(cap.pos === k ? C.ink : "transparent", cap.pos === k ? "#fff" : C.ink),
+                          padding: "6px 10px", fontSize: 11 }}>{l}</button>
+                    ))}
+                    {[[true, "Dark type"], [false, "Light type"]].map(([k, l]) => (
+                      <button key={String(k)} type="button" onClick={() => setCap(c => ({ ...c, dark: k }))}
+                        style={{ ...btn(cap.dark === k ? C.ink : "transparent", cap.dark === k ? "#fff" : C.ink),
+                          padding: "6px 10px", fontSize: 11 }}>{l}</button>
+                    ))}
+                  </div>
+                  <Slider label="Size" hint="a share of the frame, so it looks the same on every photo" min={1.5} max={7} step={0.1} signed={false}
+                    value={cap.size} onChange={v => setCap(c => ({ ...c, size: v }))} onReset={() => setCap(c => ({ ...c, size: NO_CAPTION.size }))} />
+                  <Slider label="Letter spacing" min={0} max={60} signed={false}
+                    value={cap.track} onChange={v => setCap(c => ({ ...c, track: v }))} onReset={() => setCap(c => ({ ...c, track: NO_CAPTION.track }))} />
+                  {capFont !== cap.font && (
+                    <div style={{ fontSize: 11, color: C.inkFaint }}>Loading the typeface…</div>
+                  )}
+                  {applyAll && (
+                    <div style={{ fontSize: 11, color: C.amber, lineHeight: 1.5 }}>
+                      Apply to all is on, so this line goes on every photo of the listing — usually it belongs on the cover alone.
                     </div>
                   )}
                 </>

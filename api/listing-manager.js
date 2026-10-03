@@ -870,7 +870,7 @@ async function applyEtsyVariations(listingId, listing, hdrs, readinessId) {
   } catch (e) { return `Etsy didn't take the variations: ${e.message}`; }
 }
 
-async function updateEtsyListing(listingId, listing, ai) {
+async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false } = {}) {
   const etsyTitle = ai?.etsy_title || listing.title;
   const etsyDesc  = stripWarehouseNote(ai?.etsy_description || listing.description || listing.title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
@@ -961,7 +961,14 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (liveImgs == null) {
     photosWarning = "Couldn't read the photos already on Etsy, so they were left alone — re-sync to try again.";
   } else {
-    const photosChanged = Array.isArray(sent) ? sent.join("|") !== imgUrls.join("|") : !liveImgs.length;
+    /* Normally the listing's own record of what it last sent decides this, which
+       is what stops every save re-uploading the same photos. But a photo edited
+       in place keeps its URL, and a listing fixed by hand on Etsy has a record
+       that no longer describes what is there — in both cases the record says
+       "unchanged" and the new photos never go. Resync photos is the override:
+       the operator has looked at both and knows they differ. */
+    const photosChanged = forcePhotos
+      || (Array.isArray(sent) ? sent.join("|") !== imgUrls.join("|") : !liveImgs.length);
     if (photosChanged && imgUrls.length) {
       /* Every old photo has to go before a new one arrives. If even one refuses,
          uploading would leave the listing holding both — so the set is left as
@@ -1664,11 +1671,13 @@ export default async function handler(req, res) {
       // sync_only=false (default) → explicit publish, activate the listing
       const syncOnly = req.body?.sync_only === true;
       const allowCreate = req.body?.allow_create === true;
+      // Resync photos: re-send the set even when the listing thinks it already did.
+      const forcePhotos = req.body?.force_photos === true;
 
       let result;
       if (listing.platforms?.etsy?.listing_id) {
         const id = listing.platforms.etsy.listing_id;
-        result = await updateEtsyListing(id, listing, ai);
+        result = await updateEtsyListing(id, listing, ai, { forcePhotos });
         /* An explicit publish means "put it on sale", and that was only ever
            done on the way to creating a listing. An existing draft had its
            fields updated and stayed a draft, while the ERP reported success and
