@@ -844,6 +844,10 @@ function ShopifyVideoBadge({ platformState, compact = false, onRefresh, onRetry 
     return () => clearInterval(timer);
   }, [processing, since]);
   if (!st && !url && !hasLocalVideo) return null;
+  /* Nothing is on this platform yet, so there is nothing true to say about a
+     video there. "Video local only" only ever restated what the row already
+     says — no price set, nothing published — and read as a problem. */
+  if (!hasProduct && !st && !url) return null;
   const ready = st === "READY" && url;
   const failed = st === "FAILED";
   const none = st === "NONE" || (!st && hasLocalVideo && !hasProduct);
