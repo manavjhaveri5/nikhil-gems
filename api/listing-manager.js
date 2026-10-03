@@ -487,29 +487,59 @@ function etsyShippingProfile(priceUSD) {
 }
 
 /* ── Etsy: upload one image (download from URL → multipart to Etsy) ──────── */
+/* Says whether the photo went, and why not when it didn't.
+
+   This used to return nothing on every path: a refused upload logged a line to
+   a console nobody reads and the sync carried on as though the photo were
+   there, then recorded the whole set as sent — so the next sync saw "no change"
+   and never retried. A photo could go missing permanently and silently. */
 async function uploadEtsyImage(listingId, imgUrl, rank, altText, authHdrs) {
+  let imgResp;
   try {
-    const imgResp = await fetch(imgUrl);
-    if (!imgResp.ok) return;
-    const buf  = await imgResp.arrayBuffer();
-    const ext  = (imgUrl.split("?")[0].split(".").pop() || "jpg").toLowerCase().replace("jpeg", "jpg");
-    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-    const form = new FormData();
-    form.append("image", new Blob([buf], { type: mime }), `photo-${rank}.${ext}`);
-    form.append("rank", String(rank));
-    form.append("overwrite", "false");
-    form.append("alt_text", (altText || "").slice(0, 250));
-    // Don't pass Content-Type — let FormData set boundary automatically
-    const { "Content-Type": _ct, ...bare } = authHdrs;
-    const r = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`,
-      { method: "POST", headers: bare, body: form }
-    );
-    if (!r.ok) {
+    imgResp = await fetch(imgUrl);
+    if (!imgResp.ok) return { ok: false, error: `couldn't fetch the photo (${imgResp.status})` };
+  } catch (e) { return { ok: false, error: `couldn't fetch the photo: ${e.message}` }; }
+
+  let buf;
+  try { buf = await imgResp.arrayBuffer(); }
+  catch (e) { return { ok: false, error: `couldn't read the photo: ${e.message}` }; }
+
+  /* Etsy goes by the filename's extension, and a storage URL often carries none
+     — "…/listing-photos/edited-1738" would have been sent as "photo-1.edited-1738".
+     The response's own content-type is the reliable answer; the URL is the
+     fallback for a host that doesn't send one. */
+  const ctype = String(imgResp.headers.get("content-type") || "").toLowerCase();
+  const urlExt = (imgUrl.split("?")[0].split("/").pop() || "").includes(".")
+    ? imgUrl.split("?")[0].split(".").pop().toLowerCase().replace("jpeg", "jpg") : "";
+  const ext  = ctype.includes("png") ? "png" : ctype.includes("webp") ? "webp"
+    : ctype.includes("jpeg") || ctype.includes("jpg") ? "jpg"
+    : ["png", "webp", "jpg", "gif"].includes(urlExt) ? urlExt : "jpg";
+  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+
+  const { "Content-Type": _ct, ...bare } = authHdrs;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const form = new FormData();
+      form.append("image", new Blob([buf], { type: mime }), `photo-${rank}.${ext}`);
+      form.append("rank", String(rank));
+      form.append("overwrite", "false");
+      form.append("alt_text", (altText || "").slice(0, 250));
+      const r = await fetch(
+        `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`,
+        { method: "POST", headers: bare, body: form }
+      );
+      if (r.ok) return { ok: true };
       const d = await r.json().catch(() => ({}));
-      console.error("Etsy image upload error:", JSON.stringify(d));
-    }
-  } catch (e) { console.error("Etsy image upload failed:", e.message); }
+      const why = d.error || d.error_description || d.message || `HTTP ${r.status}`;
+      // A throttle clears in a moment; a refusal will not.
+      if (r.status !== 429 && r.status < 500) {
+        console.error("Etsy image upload error:", r.status, JSON.stringify(d));
+        return { ok: false, error: why };
+      }
+    } catch (e) { console.error("Etsy image upload threw:", e.message); }
+    await new Promise(r => setTimeout(r, 1100));
+  }
+  return { ok: false, error: "Etsy kept refusing the upload (rate limited)" };
 }
 
 /* ── Etsy: upload listing video (download from URL → multipart to Etsy) ────────
@@ -570,20 +600,22 @@ async function etsyListingImages(listingId, authHdrs) {
    as a deletion — and the upload that followed sat on top of a photo that was
    still there. */
 async function deleteEtsyImage(listingId, imageId, authHdrs) {
-  if (!imageId) return false;
+  if (!imageId) return { ok: false, error: "no image id" };
   const { "Content-Type": _ct, ...bare } = authHdrs;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
-      if (r.ok || r.status === 404) return true;   // gone is gone
+      if (r.ok || r.status === 404) return { ok: true };   // gone is gone
       if (r.status !== 429 && r.status < 500) {
-        console.error("Etsy image delete failed:", r.status, imageId);
-        return false;
+        const d = await r.json().catch(() => ({}));
+        const why = d.error || d.error_description || d.message || `HTTP ${r.status}`;
+        console.error("Etsy image delete failed:", r.status, imageId, why);
+        return { ok: false, error: why };
       }
     } catch (e) { console.error("Etsy image delete threw:", e.message); }
     await new Promise(r => setTimeout(r, 1100));
   }
-  return false;
+  return { ok: false, error: "Etsy kept refusing the delete (rate limited)" };
 }
 
 async function etsyListingVideos(listingId, authHdrs) {
@@ -757,7 +789,8 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   // Upload images FIRST — Etsy requires images before activation
   const imgUrls = images.filter(u => typeof u === "string" && u.startsWith("http")).slice(0, 10);
   for (let i = 0; i < imgUrls.length; i++) {
-    await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
+    const up = await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
+    if (!up.ok) console.error(`Etsy photo ${i + 1} didn't go up:`, up.error);
     if (i < imgUrls.length - 1) await new Promise(r => setTimeout(r, 400));
   }
 
@@ -970,16 +1003,59 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
     const photosChanged = forcePhotos
       || (Array.isArray(sent) ? sent.join("|") !== imgUrls.join("|") : !liveImgs.length);
     if (photosChanged && imgUrls.length) {
-      /* Every old photo has to go before a new one arrives. If even one refuses,
-         uploading would leave the listing holding both — so the set is left as
-         it is and the sync says so. */
-      const removed = [];
-      for (const im of liveImgs) removed.push(await deleteEtsyImage(listingId, im.listing_image_id, hdrs));
-      if (removed.every(Boolean)) {
-        for (let i = 0; i < imgUrls.length; i++) await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
-        imagesSrc = imgUrls;
+      /* Swapping the set without ever emptying the listing.
+
+         Deleting all the old photos first and then uploading is the obvious
+         order, and it is wrong: a live listing may not be left without a photo,
+         so Etsy refuses the delete that would empty it. The whole swap was then
+         abandoned and the new photos never went. It only ever worked while the
+         listing was still a draft.
+
+         So one old photo is held back to keep the listing legal, the new set
+         goes up beside it, and it leaves last. Etsy caps a listing at ten, and
+         that kept photo occupies one of them — hence the nine, with any tenth
+         sent once the old one is gone.
+
+         The order still matters: nothing is uploaded until every delete that
+         was attempted has succeeded, because a half-done swap is how a listing
+         ends up showing the same stone twice. */
+      const CAP = 10;
+      const keep  = liveImgs[liveImgs.length - 1];
+      const first = liveImgs.slice(0, -1);
+
+      const failed = [];
+      for (const im of first) {
+        const d = await deleteEtsyImage(listingId, im.listing_image_id, hdrs);
+        if (!d.ok) failed.push(d.error);
+      }
+
+      if (failed.length) {
+        photosWarning = `Etsy wouldn't remove the old photos (${failed[0]}), so the new ones were held back rather than added on top — try Resync photos again.`;
       } else {
-        photosWarning = "Etsy wouldn't remove the old photos, so the new ones were held back rather than added on top — re-sync to try again.";
+        const upload = async (urls, from) => {
+          const bad = [];
+          for (let i = 0; i < urls.length; i++) {
+            const up = await uploadEtsyImage(listingId, urls[i], from + i + 1, etsyTitle, hdrs);
+            if (!up.ok) bad.push(`photo ${from + i + 1}: ${up.error}`);
+            if (i < urls.length - 1) await new Promise(r => setTimeout(r, 400));
+          }
+          return bad;
+        };
+        const headroom = CAP - (keep ? 1 : 0);
+        const bad = await upload(imgUrls.slice(0, headroom), 0);
+
+        // The last of the old ones goes now that the listing has others to stand on.
+        if (keep) {
+          const d = await deleteEtsyImage(listingId, keep.listing_image_id, hdrs);
+          if (!d.ok) bad.push(`the old cover stayed (${d.error})`);
+          else bad.push(...await upload(imgUrls.slice(headroom), headroom));
+        }
+
+        /* Record what Etsy actually holds, not what was asked for. Writing the
+           full list after a partial upload is what would tell the next sync
+           "nothing changed" and strand the missing photos for good. */
+        imagesSrc = bad.length ? imgUrls.filter((_, i) => !bad.some(b => b.startsWith(`photo ${i + 1}:`))) : imgUrls;
+        if (bad.length) photosWarning = `Etsy took some but not all of the photos — ${bad.join("; ")}. Try Resync photos again.`;
       }
     } else {
       imagesSrc = imgUrls;
