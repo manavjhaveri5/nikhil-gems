@@ -196,6 +196,10 @@ function BuyersTab({ showToast, siteUrl }) {
   const [filter, setFilter] = useState("pending");
   const [search, setSearch] = useState("");
   const [links, setLinks] = useState({}); // id → invite link, shown once
+  const [justApproved, setJustApproved] = useState({}); // id → true when the link came from approving them
+  // A buyer who applied on the new site gets the welcome; one brought over from
+  // Shopify gets the "we've moved" note.
+  const welcome = b => justApproved[b.id] || !b.shopify_id;
   const [busy, setBusy] = useState(false);
 
   const toastRef = useRef(showToast);   // load once, whatever the parent re-renders
@@ -240,6 +244,7 @@ function BuyersTab({ showToast, siteUrl }) {
       }
       await patch(b.id, { status: "approved", approved_at: new Date().toISOString() });
       const link = await invite(b);
+      setJustApproved(x => ({ ...x, [b.id]: true }));
       const omni = async payload => {
         const r = await fetch("/api/omnisend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         const d = await r.json().catch(() => ({}));
@@ -387,8 +392,11 @@ function BuyersTab({ showToast, siteUrl }) {
                 <div style={{ wordBreak: "break-all", fontFamily: "ui-monospace,monospace", marginBottom: 8 }}>{links[b.id]}</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button onClick={() => navigator.clipboard.writeText(links[b.id]).then(() => showToast("Link copied"))} style={btn()}>Copy</button>
+                  {/* Just approved: a welcome. A set-up link for an existing buyer: the move to the new site. */}
                   {waNum(b.phone) && <a target="_blank" rel="noreferrer" style={{ ...btn("#1f8f4e", "#fff"), textDecoration: "none" }}
-                    href={`https://wa.me/${waNum(b.phone)}?text=${encodeURIComponent(`Hi ${b.name || ""}, Earth Editions' trade catalogue has moved to its own site. Set your password here to see trade prices and order: ${links[b.id]}`)}`}>Send on WhatsApp</a>}
+                    href={`https://wa.me/${waNum(b.phone)}?text=${encodeURIComponent(welcome(b)
+                      ? `Hi ${String(b.name || "").split(" ")[0] || "there"}, you've been approved for an Earth Editions trade account! 🎉\n\nSet your password here to see our wholesale prices and order: ${links[b.id]}\n\nAfter that, visit ${siteUrl} any time. If you have any questions, just message us here.\n\nThanks!\nEarth Editions`
+                      : `Hi ${b.name || ""}, Earth Editions' trade catalogue has moved to its own site. Set your password here to see trade prices and order: ${links[b.id]}`)}`}>{welcome(b) ? "💬 Send welcome on WhatsApp" : "Send on WhatsApp"}</a>}
                   <a style={{ ...btn(), textDecoration: "none" }}
                     href={`mailto:${b.email}?subject=${encodeURIComponent("Your Earth Editions trade account")}&body=${encodeURIComponent(`Hi ${b.name || ""},\n\nOur trade catalogue has moved to its own site. Set your password here to see trade prices and order:\n\n${links[b.id]}\n\nThe link works for 14 days.\n\nEarth Editions`)}`}>Email</a>
                 </div>
