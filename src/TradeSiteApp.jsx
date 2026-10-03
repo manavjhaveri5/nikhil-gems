@@ -395,7 +395,7 @@ function BuyersTab({ showToast, siteUrl }) {
                   {/* Just approved: a welcome. A set-up link for an existing buyer: the move to the new site. */}
                   {waNum(b.phone) && <a target="_blank" rel="noreferrer" style={{ ...btn("#1f8f4e", "#fff"), textDecoration: "none" }}
                     href={`https://wa.me/${waNum(b.phone)}?text=${encodeURIComponent(welcome(b)
-                      ? `Hi ${String(b.name || "").split(" ")[0] || "there"}, you've been approved for an Earth Editions trade account! 🎉\n\nSet your password here to see our wholesale prices and order: ${links[b.id]}\n\nAfter that, visit ${siteUrl} any time. If you have any questions, just message us here.\n\nThanks!\nEarth Editions`
+                      ? `Hi ${String(b.name || "").split(" ")[0] || "there"}, you've been approved for an Earth Editions trade account.\n\nSet your password here to see our wholesale prices and order: ${links[b.id]}\n\nAfter that, visit ${siteUrl} any time. If you have any questions, just message us here.\n\nThanks!\nEarth Editions`
                       : `Hi ${b.name || ""}, Earth Editions' trade catalogue has moved to its own site. Set your password here to see trade prices and order: ${links[b.id]}`)}`}>{welcome(b) ? "💬 Send welcome on WhatsApp" : "Send on WhatsApp"}</a>}
                   <a style={{ ...btn(), textDecoration: "none" }}
                     href={`mailto:${b.email}?subject=${encodeURIComponent("Your Earth Editions trade account")}&body=${encodeURIComponent(`Hi ${b.name || ""},\n\nOur trade catalogue has moved to its own site. Set your password here to see trade prices and order:\n\n${links[b.id]}\n\nThe link works for 14 days.\n\nEarth Editions`)}`}>Email</a>
