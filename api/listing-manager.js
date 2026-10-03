@@ -256,59 +256,6 @@ async function etsyTaxonomyProperties(taxonomyId, hdrs) {
   } catch { return []; }
 }
 
-async function applyEtsyDimensions(listingId, taxonomyId, dims, hdrs) {
-  if (!dims || (!dims.width && !dims.height && !dims.depth)) return [];
-  const props = await etsyTaxonomyProperties(taxonomyId, hdrs);
-  if (!props.length) return [];
-
-  const warnings = [];
-  const wanted = [["Width", dims.width], ["Height", dims.height], ["Depth", dims.depth]];
-
-  for (const [name, value] of wanted) {
-    if (!value) continue;
-    const prop = props.find(p => String(p.display_name).toLowerCase() === name.toLowerCase());
-    if (!prop) continue;
-
-    // Prefer the scale matching the seller's unit; otherwise convert into one
-    // the category does offer (cm for the metric-less "Inches/Centimeters" set).
-    const from = DIM_UNITS[dims.unit] || DIM_UNITS.mm;
-    let scale = (prop.scales || []).find(s => s.display_name === from.scale);
-    let out = value;
-    if (!scale) {
-      for (const key of ["cm", "in", "mm", "m"]) {
-        const cand = (prop.scales || []).find(s => s.display_name === DIM_UNITS[key].scale);
-        if (cand) { scale = cand; out = +(value * from.toMm / DIM_UNITS[key].toMm).toFixed(2); break; }
-      }
-    }
-    if (!scale) continue;
-
-    /* A measurement is a typed value, not one of Etsy's pre-set options, so it
-       goes in `values` and there are no `value_ids` to send. Etsy still counts
-       the parameter as required and reads an empty array as absent — which is
-       the "Missing input parameter: [value_ids]" this used to report. Both
-       shapes below name the parameter; neither can send "nothing" by leaving
-       it out, which is what the old form body did. */
-    const url = `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/properties/${prop.property_id}`;
-    const { "Content-Type": _drop, ...bare } = hdrs;
-    const form = new URLSearchParams();
-    form.append("values[]", String(out));
-    form.append("value_ids[]", "");
-    form.set("scale_id", String(scale.scale_id));
-    let r = await fetch(url, { method: "PUT", headers: { ...bare, "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() });
-    if (!r.ok) {
-      r = await fetch(url, { method: "PUT", headers: hdrs,
-        body: JSON.stringify({ values: [String(out)], value_ids: [], scale_id: scale.scale_id }) });
-    }
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      console.error(`Etsy ${name} property failed:`, r.status, JSON.stringify(d));
-      // Etsy's own reason, so the warning says what to change.
-      const why = String(d.error || d.error_description || d.message || `HTTP ${r.status}`).slice(0, 140);
-      warnings.push(`${name} (${out} ${scale.display_name}: ${why})`);
-    }
-  }
-  return warnings;
-}
 
 /* ── Claude AI helper ──────────────────────────────────────────────────────── */
 const SHAPE_WORDS = "Sphere, Heart, Palmstone, Tower, Tumbled, Bracelet, Pendant, Pendulum, Rough, Mineral, Egg, Skull, Pyramid, Chips, Freeform, Wand, Point, Slab, Other";
@@ -728,6 +675,11 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
     is_digital: false,
     // Shipping-side dimensions; the Width/Height/Depth boxes buyers see are
     // taxonomy attributes and are set separately once the listing exists.
+    /* The only place a size goes. Etsy's Width / Height / Depth attributes were
+       written to as well until they were deprecated — "Property id 512 is
+       deprecated and cannot be used in this request" — and the attempts spent
+       the per-second rate limit on requests that could never succeed. These
+       fields are the supported ones, and the ones the shipping calculator reads. */
     ...(dims.width  ? { item_width:  dims.width  } : {}),
     ...(dims.height ? { item_height: dims.height } : {}),
     ...(dims.depth  ? { item_length: dims.depth  } : {}),
@@ -798,7 +750,6 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   }
 
   const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
-  const dimFailed   = await applyEtsyDimensions(listingId, taxonomyId, dims, hdrs);
 
   const gaps = [];
   if (!etsyTags.length) gaps.push("no tags");
@@ -811,15 +762,11 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
      own item_width / item_height, so the size is on Etsy either way, and there
      is nothing on the form to correct. Telling someone to fill in a field that
      is already filled sends them looking for a fault that isn't there. */
-  const dimsNote = dimFailed.length
-    ? `The size is on the listing; Etsy's own ${dimFailed.join("; ")} box didn't take it, which changes nothing a buyer sees.`
-    : "";
   if (varWarn) gaps.push(varWarn);
 
   return {
     listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
     tags_applied: etsyTags.length, videoSrc, imagesSrc: imgUrls, ...(varWarn ? { variationsWarning: varWarn } : {}), ...(tagsWarning ? { tagsWarning } : {}),
-    ...(dimsNote ? { dimensionsNote: dimsNote } : {}),
     ...(gaps.length ? { fieldsWarning: `Published with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}),
   };
 }
@@ -899,6 +846,11 @@ async function updateEtsyListing(listingId, listing, ai) {
     ...(readinessId ? { readiness_state_id: readinessId } : {}),
     ...(listing.material ? { materials: [listing.material] } : {}),
     should_auto_renew: listing.etsy_auto_renew ?? false,
+    /* The only place a size goes. Etsy's Width / Height / Depth attributes were
+       written to as well until they were deprecated — "Property id 512 is
+       deprecated and cannot be used in this request" — and the attempts spent
+       the per-second rate limit on requests that could never succeed. These
+       fields are the supported ones, and the ones the shipping calculator reads. */
     ...(dims.width  ? { item_width:  dims.width  } : {}),
     ...(dims.height ? { item_height: dims.height } : {}),
     ...(dims.depth  ? { item_length: dims.depth  } : {}),
@@ -976,21 +928,16 @@ async function updateEtsyListing(listingId, listing, ai) {
 
   const varWarn     = await applyEtsyVariations(listingId, listing, hdrs, readinessId);
   const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
-  const dimFailed   = await applyEtsyDimensions(listingId, taxonomyId, dims, hdrs);
 
   const gaps = [];
   if (!etsyTags.length) gaps.push("no tags");
   if (!listing.material) gaps.push("no materials");
   if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
   if (!weight) gaps.push("no weight");
-  const dimsNote = dimFailed.length
-    ? `The size is on the listing; Etsy's own ${dimFailed.join("; ")} box didn't take it, which changes nothing a buyer sees.`
-    : "";
   if (varWarn) gaps.push(varWarn);
 
   return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc, ...(varWarn ? { variationsWarning: varWarn } : {}),
     ...(tagsWarning ? { tagsWarning } : {}),
-    ...(dimsNote ? { dimensionsNote: dimsNote } : {}),
     ...(gaps.length ? { fieldsWarning: `Synced with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}) };
 }
 
