@@ -1016,15 +1016,16 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
          that kept photo occupies one of them — hence the nine, with any tenth
          sent once the old one is gone.
 
-         The order still matters: nothing is uploaded until every delete that
-         was attempted has succeeded, because a half-done swap is how a listing
-         ends up showing the same stone twice. */
+         Which one stays is decided by rank rather than by the order the API
+         happened to answer in, so it is the cover that holds the listing up
+         while the rest are swapped underneath it. */
       const CAP = 10;
-      const keep  = liveImgs[liveImgs.length - 1];
-      const first = liveImgs.slice(0, -1);
+      const [keep, ...rest] = [...liveImgs].sort((a, b) => (a.rank || 0) - (b.rank || 0));
 
+      /* Nothing is uploaded until every delete attempted so far has succeeded:
+         a half-done swap is how a listing ends up showing the same stone twice. */
       const failed = [];
-      for (const im of first) {
+      for (const im of rest) {
         const d = await deleteEtsyImage(listingId, im.listing_image_id, hdrs);
         if (!d.ok) failed.push(d.error);
       }
@@ -1044,18 +1045,32 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
         const headroom = CAP - (keep ? 1 : 0);
         const bad = await upload(imgUrls.slice(0, headroom), 0);
 
-        // The last of the old ones goes now that the listing has others to stand on.
+        // The kept cover goes now that the listing has others to stand on.
         if (keep) {
           const d = await deleteEtsyImage(listingId, keep.listing_image_id, hdrs);
           if (!d.ok) bad.push(`the old cover stayed (${d.error})`);
           else bad.push(...await upload(imgUrls.slice(headroom), headroom));
         }
 
-        /* Record what Etsy actually holds, not what was asked for. Writing the
-           full list after a partial upload is what would tell the next sync
-           "nothing changed" and strand the missing photos for good. */
-        imagesSrc = bad.length ? imgUrls.filter((_, i) => !bad.some(b => b.startsWith(`photo ${i + 1}:`))) : imgUrls;
-        if (bad.length) photosWarning = `Etsy took some but not all of the photos — ${bad.join("; ")}. Try Resync photos again.`;
+        /* Then ask Etsy what it actually ended up holding. Every step above
+           reports its own success, but only the listing itself can say whether
+           the set as a whole came out right. */
+        const after = await etsyListingImages(listingId, hdrs);
+        const off = after == null ? "couldn't re-read the listing afterwards"
+          : after.length !== imgUrls.length
+            ? `Etsy has ${after.length} photo${after.length === 1 ? "" : "s"} on the listing, the ERP ${imgUrls.length}`
+            : "";
+
+        if (bad.length || off) {
+          photosWarning = `Etsy took some but not all of the photos — ${[...bad, off].filter(Boolean).join("; ")}. Try Resync photos again.`;
+          /* Not recorded as sent, so the next sync tries again rather than
+             reading "no change" and stranding the missing ones. An empty list
+             rather than nothing: with no record at all the next sync only acts
+             on a listing with no photos, which this one still has. */
+          imagesSrc = Array.isArray(sent) ? sent : [];
+        } else {
+          imagesSrc = imgUrls;
+        }
       }
     } else {
       imagesSrc = imgUrls;
