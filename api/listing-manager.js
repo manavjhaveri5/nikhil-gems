@@ -636,6 +636,28 @@ async function verifyEtsyTags(listingId, expected, hdrs) {
 export const stripWarehouseNote = t => String(t || "").replace(/\n*\s*Please note: this piece is held in our USA warehouse[^\n]*\n?/gi, "\n").replace(/\n{3,}/g, "\n\n").trim();
 
 /* ── Etsy: publish listing ─────────────────────────────────────────────────── */
+/* Taking a listing off draft and putting it on sale. Etsy wants this as its own
+   PATCH; the shop-scoped route is the more permissive one for drafts, and the
+   global one is the fallback. Kept apart from creating a listing because a
+   draft that already exists has to be able to go live on its own — which it
+   could not, and is why pressing Publish on a draft said it had worked while
+   Etsy went on showing a draft. */
+async function activateEtsyListing(listingId, readinessStateId = null) {
+  const hdrs = await etsyHeaders();
+  const body = { state: "active", ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}) };
+  let r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`,
+    { method: "PATCH", headers: hdrs, body: JSON.stringify(body) });
+  if (!r.ok) {
+    r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`,
+      { method: "PATCH", headers: hdrs, body: JSON.stringify(body) });
+  }
+  if (r.ok) return { ok: true };
+  const d = await r.json().catch(() => ({}));
+  const why = String(d.error || d.error_description || d.message || `HTTP ${r.status}`).slice(0, 180);
+  console.error("Etsy activate failed:", r.status, JSON.stringify(d));
+  return { ok: false, error: why };
+}
+
 export async function publishEtsy(listing, ai, { activate = true } = {}) {
   const {
     title, material, shape, productType, qty = 1, type = "repeatable",
@@ -1598,13 +1620,32 @@ export default async function handler(req, res) {
 
       let result;
       if (listing.platforms?.etsy?.listing_id) {
-        result = await updateEtsyListing(listing.platforms.etsy.listing_id, listing, ai);
+        const id = listing.platforms.etsy.listing_id;
+        result = await updateEtsyListing(id, listing, ai);
+        /* An explicit publish means "put it on sale", and that was only ever
+           done on the way to creating a listing. An existing draft had its
+           fields updated and stayed a draft, while the ERP reported success and
+           offered the button again. Activation is attempted even when the field
+           update failed: the draft is there, and going live is what was asked. */
+        if (!syncOnly) {
+          const act = await activateEtsyListing(id);
+          result = act.ok
+            ? { ...result, status: "active" }
+            : { ...result, status: result?.status || "draft", activateError: act.error };
+        }
       } else {
         if (syncOnly && !allowCreate) {
           return res.status(409).json({ ok: false, error: "Skipped Etsy sync: no existing Etsy listing_id" });
         }
         // New listing: create as draft always; only activate if user explicitly published
         result = await publishEtsy(listing, ai, { activate: !syncOnly });
+      }
+      /* Etsy refusing to put it on sale is not a successful publish. Saying so
+         is the difference between a button that can be pressed again and a
+         seller who believes the piece is live. */
+      if (result?.activateError) {
+        return res.status(502).json({ ok: false, platform: "etsy", result,
+          error: `Etsy kept it as a draft: ${result.activateError}` });
       }
       return res.json({ ok: true, platform: "etsy", result });
     }
