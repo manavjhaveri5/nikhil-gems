@@ -6,8 +6,8 @@
    then weight and size, and whether it's available. The locality, weight and
    size come from the listing in Listing Manager and are never made up. The
    piece's link is tagged (utm_source=instagram), so Store → Visitors shows
-   which posts bring people in. Captions are written by themselves for the
-   newest pieces when this tab opens, and kept on the product
+   which posts bring people in. A caption is written only when asked (Write
+   caption / ↻), never by itself, and kept on the product
    (store_products.social.caption).
 
    Nothing is posted from here. Reddit and Mindat ban accounts (and whole
@@ -23,7 +23,6 @@ import { loadK } from "./utils.js";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 7, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
 const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .6, marginBottom: 4, display: "block" };
-const AUTO = 6;   // captions written by themselves for the newest pieces that have none
 
 export const tagged = (site, handle, source, medium = "social") => `${site}/products/${handle}?utm_source=${source}&utm_medium=${medium}&utm_campaign=${encodeURIComponent(handle)}`;
 const plain = html => String(html || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
@@ -99,7 +98,10 @@ Rules for this caption:
 - Then a line with weight and size separated by " | " (leave out any that are "not given"; leave the line out if both are).
 - Last line: "Available — shop now at eartheditions.co".
 - No hashtags, no "link in bio", no exclamation marks, no invented facts. Reply with the caption text only.`, 600);
-  return { caption: caption.replace(/^["']|["']$/g, "").trim(), made_at: new Date().toISOString() };
+  let text = caption.replace(/^["']|["']$/g, "").trim();
+  // No locality on the listing: whatever the model wrote, the first line names none.
+  if (!String(l?.origin || "").trim()) text = text.replace(/^([^\n]*?)\s+from\s+[^\n]*/i, "$1").replace(/^([^\n]*?)\s*(?:[\u{1F1E6}-\u{1F1FF}]{2})+/u, "$1");
+  return { caption: text, made_at: new Date().toISOString() };
 }
 
 function Copy({ text, label = "Copy" }) {
@@ -171,7 +173,6 @@ export default function SocialTab({ showToast, site }) {
   const [open, setOpen] = useState(null);
   const [busy, setBusy] = useState({});
   const [missing, setMissing] = useState(false);
-  const auto = useRef(false);
   const listings = useRef(null);
   const listingFor = async p => {
     if (!listings.current) listings.current = await loadK("ng-listings-v1").then(ls => Array.isArray(ls) ? ls : []).catch(() => []);
@@ -193,14 +194,7 @@ export default function SocialTab({ showToast, site }) {
     } catch (e) { showToast(`⚠ ${p.title}: ${e.message}`); return false; }
     finally { setBusy(b => ({ ...b, [p.id]: false })); }
   }, [showToast]);
-  useEffect(() => {
-    load().then(async data => {
-      if (auto.current) return;
-      auto.current = true;
-      // The newest pieces without a pack get one, one after another.
-      for (const p of (data || []).filter(r => !r.social?.caption).slice(0, AUTO)) if (!(await make(p))) break;
-    });
-  }, [load, make]);
+  useEffect(() => { load(); }, [load]);
 
   if (missing) return <div style={{ ...card, padding: 24, fontSize: 13.5 }}><b>The Social tab needs a database update.</b> Run <code>supabase/migrations/20261001090000_site_visitors.sql</code> in Supabase → SQL Editor (project ERP).</div>;
   return (
@@ -208,7 +202,7 @@ export default function SocialTab({ showToast, site }) {
       <Replies site={site} showToast={showToast} />
       <div style={{ ...card, padding: "12px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <div style={{ flex: 1 }}><b style={{ fontSize: 15 }}>Instagram captions</b><div style={{ fontSize: 12, color: C.inkFaint }}>Newest first, written the way you post. Captions are written by themselves for the {AUTO} newest pieces that don't have one. Locality, weight and size come from the listing; use Copy link for the story link sticker, so Visitors shows which posts bring people in.</div></div>
+          <div style={{ flex: 1 }}><b style={{ fontSize: 15 }}>Instagram captions</b><div style={{ fontSize: 12, color: C.inkFaint }}>Newest first, written the way you post, only when you press Write caption. Locality, weight and size come from the listing; use Copy link for the story link sticker, so Visitors shows which posts bring people in.</div></div>
           <button onClick={load} style={btn()}>↻</button>
         </div>
         {!rows && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
