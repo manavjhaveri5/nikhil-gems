@@ -282,21 +282,22 @@ async function applyEtsyDimensions(listingId, taxonomyId, dims, hdrs) {
     }
     if (!scale) continue;
 
-    const body = { values: [String(out)], value_ids: [], scale_id: scale.scale_id };
-    let r = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/properties/${prop.property_id}`,
-      { method: "PUT", headers: hdrs, body: JSON.stringify(body) }
-    );
+    /* A measurement is a typed value, not one of Etsy's pre-set options, so it
+       goes in `values` and there are no `value_ids` to send. Etsy still counts
+       the parameter as required and reads an empty array as absent — which is
+       the "Missing input parameter: [value_ids]" this used to report. Both
+       shapes below name the parameter; neither can send "nothing" by leaving
+       it out, which is what the old form body did. */
+    const url = `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/properties/${prop.property_id}`;
+    const { "Content-Type": _drop, ...bare } = hdrs;
+    const form = new URLSearchParams();
+    form.append("values[]", String(out));
+    form.append("value_ids[]", "");
+    form.set("scale_id", String(scale.scale_id));
+    let r = await fetch(url, { method: "PUT", headers: { ...bare, "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() });
     if (!r.ok) {
-      // Same JSON-vs-form split the tag update already works around.
-      const form = new URLSearchParams();
-      form.append("values[]", String(out));
-      form.set("scale_id", String(scale.scale_id));
-      const { "Content-Type": _drop, ...bare } = hdrs;
-      r = await fetch(
-        `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/properties/${prop.property_id}`,
-        { method: "PUT", headers: { ...bare, "Content-Type": "application/x-www-form-urlencoded" }, body: form.toString() }
-      );
+      r = await fetch(url, { method: "PUT", headers: hdrs,
+        body: JSON.stringify({ values: [String(out)], value_ids: [], scale_id: scale.scale_id }) });
     }
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
@@ -804,12 +805,21 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   if (!payload.materials.length) gaps.push("no materials");
   if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
   if (!weight) gaps.push("no weight");
-  if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
+  /* Two different things used to be reported as one. A missing material or
+     weight is the seller's to fill in. A category's own Width/Height boxes
+     refusing a value is not: the measurement already went up in the listing's
+     own item_width / item_height, so the size is on Etsy either way, and there
+     is nothing on the form to correct. Telling someone to fill in a field that
+     is already filled sends them looking for a fault that isn't there. */
+  const dimsNote = dimFailed.length
+    ? `The size is on the listing; Etsy's own ${dimFailed.join("; ")} box didn't take it, which changes nothing a buyer sees.`
+    : "";
   if (varWarn) gaps.push(varWarn);
 
   return {
     listing_id: listingId, url: `https://www.etsy.com/listing/${listingId}`, status: finalStatus,
     tags_applied: etsyTags.length, videoSrc, imagesSrc: imgUrls, ...(varWarn ? { variationsWarning: varWarn } : {}), ...(tagsWarning ? { tagsWarning } : {}),
+    ...(dimsNote ? { dimensionsNote: dimsNote } : {}),
     ...(gaps.length ? { fieldsWarning: `Published with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}),
   };
 }
@@ -973,11 +983,14 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (!listing.material) gaps.push("no materials");
   if (!dims.width && !dims.height && !dims.depth) gaps.push("no dimensions");
   if (!weight) gaps.push("no weight");
-  if (dimFailed.length) gaps.push(`Etsy didn't take ${dimFailed.join("; ")}`);
+  const dimsNote = dimFailed.length
+    ? `The size is on the listing; Etsy's own ${dimFailed.join("; ")} box didn't take it, which changes nothing a buyer sees.`
+    : "";
   if (varWarn) gaps.push(varWarn);
 
   return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc, ...(varWarn ? { variationsWarning: varWarn } : {}),
     ...(tagsWarning ? { tagsWarning } : {}),
+    ...(dimsNote ? { dimensionsNote: dimsNote } : {}),
     ...(gaps.length ? { fieldsWarning: `Synced with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}) };
 }
 

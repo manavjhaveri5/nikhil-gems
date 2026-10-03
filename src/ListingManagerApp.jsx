@@ -9819,6 +9819,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       // reads them back, so say so rather than showing a plain ✓.
       if (result?.tagsWarning)   showToast(`⚠ ${result.tagsWarning}`);
       if (result?.fieldsWarning) showToast(`⚠ ${result.fieldsWarning}`, 9000);
+      // Not a warning: nothing is wrong and nothing is to be done about it.
+      if (result?.dimensionsNote) showToast(result.dimensionsNote, 6000);
       // ⭐ Deal-on-publish: drop the just-published product into the store's Deals
       // collection and start its remind-to-delete timer.
       if (listing._dealOnPublish && result?.product_id && (storeKey === "earth" || storeKey === "atyahara")) {
