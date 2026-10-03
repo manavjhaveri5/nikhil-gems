@@ -733,13 +733,20 @@ const needsEtsyReconnect = msg => /reconnect|permission|transactions_w|scope|for
 /* ─── platform config ────────────────────────────────────────────────────── */
 const PLATFORMS = [
   { key:"etsy",          label:"Etsy",         icon:"🏷️", color:"#F56400", priceField:"price_etsy",         currency:"INR" },
-  { key:"shopify_earth", label:"Earth Ed.",    icon:"🌍", color:"#2A6845", priceField:"price_shopify_earth", currency:"USD" },
+  { key:"shopify_earth", label:"Earth Ed.",    icon:"🌍", color:"#2A6845", priceField:"price_shopify_earth", currency:"USD", legacy:true },
   { key:"shopify_aty",   label:"Atyahara",     icon:"💫", color:"#6B3FA0", priceField:"price_shopify_aty",  currency:"INR" },
   { key:"ebay",          label:"eBay",         icon:"🔨", color:"#0064D2", priceField:"price_ebay",          currency:"USD" },
   { key:"trade",         label:"Trade site",   icon:"🤝", color:"#1F8F4E", priceField:"price_trade",         currency:"USD" },
   { key:"store",         label:"EE store",     icon:"🛒", color:"#141210", priceField:"price_store",         currency:"USD" },
 ];
 
+
+/* The old Shopify Earth Editions shop, replaced by the store and the trade
+   site. It stays out of the way rather than being torn out: a piece still
+   listed there keeps its row, because hiding it would leave no way to take the
+   piece down. Once nothing is on it, nobody sees it again. */
+const shownPlatforms = l => PLATFORMS.filter(p =>
+  !p.legacy || !!(l?.platforms?.[p.key]?.product_id || l?.platforms?.[p.key]?.listing_id));
 
 const MATERIALS = [
   "Clear Quartz","Amethyst","Rose Quartz","Citrine","Labradorite","Lapis Lazuli",
@@ -1620,7 +1627,7 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
                 const p = PLATFORMS.find(x => x.key === key);
                 if (p) set("sale_price", listing[p.priceField] || "");
               }} style={FI()}>
-                {PLATFORMS.filter(p => !p.coming).map(p => (
+                {shownPlatforms(listing).filter(p => !p.coming).map(p => (
                   <option key={p.key} value={p.key}>{p.icon} {p.label}</option>
                 ))}
                 <option value="manual">✏️ Manual / Other</option>
@@ -3394,14 +3401,14 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 
           {/* platform chips */}
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 6 }}>
-            {PLATFORMS.filter(p => !p.coming).map(p => (
+            {shownPlatforms(listing).filter(p => !p.coming).map(p => (
               <PlatformChip key={p.key} pkey={p.key} status={listing.platforms?.[p.key]?.status} />
             ))}
           </div>
 
           {/* prices */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            {PLATFORMS.filter(p => !p.coming && +listing[p.priceField] > 0).map(p => (
+            {shownPlatforms(listing).filter(p => !p.coming && +listing[p.priceField] > 0).map(p => (
               <span key={p.key} style={{ fontSize: 11, color: p.color, fontWeight: 700 }}>
                 {p.icon} {p.currency === "USD" ? "$" : "₹"}{fmt(listing[p.priceField])}
               </span>
@@ -3467,7 +3474,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
             <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase",
               letterSpacing: .7, color: C.inkFaint, marginBottom: 2 }}>Publish / Manage</div>
 
-            {PLATFORMS.map(p => {
+            {shownPlatforms(listing).map(p => {
               const ps       = listing.platforms?.[p.key] || {};
               // The store and trade site keep their own status; once loaded, it wins.
               const own = p.key === "store" && storeFacts.map ? (storeRows[listing.id]?.status === "active" ? "active" : storeRows[listing.id] ? "draft" : "")
