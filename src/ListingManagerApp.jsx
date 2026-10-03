@@ -9688,6 +9688,29 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   /* publish — syncOnly=true means update fields only, never activate */
   const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [] } = {}) => {
+    /* What says "this already exists over there" is the platform's own id, and
+       it is written onto the stored listing at the END of this function. Anything
+       holding an older copy of the listing — a form opened before the last
+       publish, or a run where something threw after the marketplace had already
+       made the thing — sends no id, and the platform is then correctly told to
+       create. That is how one piece ends up as three Etsy drafts.
+
+       So the ids are read back from the stored listing first, and they win over
+       whatever the caller is carrying: an id is a fact about the platform, not
+       an edit someone made in the form. */
+    try {
+      const stored = (await loadKFresh(LIST_KEY).catch(() => null) || []).find(x => x && x.id === listing.id);
+      if (stored?.platforms) {
+        const ID_KEYS = ["listing_id", "item_id", "product_id"];
+        const merged = { ...(listing.platforms || {}) };
+        for (const [k, sp] of Object.entries(stored.platforms)) {
+          if (!sp) continue;
+          const ids = Object.fromEntries(ID_KEYS.filter(f => sp[f]).map(f => [f, sp[f]]));
+          if (Object.keys(ids).length) merged[k] = { ...(merged[k] || {}), ...ids };
+        }
+        listing = { ...listing, platforms: merged };
+      }
+    } catch (e) { console.warn("publish: could not re-read platform ids", e); }
     // Only on the first trip to Etsy: once the listing exists, a re-sync
     // shouldn't stop to ask about fields the seller has already left blank.
     if (pkey === "etsy" && allowCreate && !listing.platforms?.etsy?.listing_id) {
