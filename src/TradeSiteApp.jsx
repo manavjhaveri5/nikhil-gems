@@ -52,7 +52,7 @@ async function loadAll(table, cols, order) {
   return out;
 }
 
-export default function TradeSiteApp({ onHome, onMakeInvoice }) {
+export default function TradeSiteApp({ onHome, onMakeInvoice, signOff = "" }) {
   const [tab, setTab] = useState("enquiries");
   const [settings, setSettings] = useState(null);
   const [toast, setToast] = useState("");
@@ -92,7 +92,7 @@ export default function TradeSiteApp({ onHome, onMakeInvoice }) {
       </div>
       <div style={{ padding: mob() ? 14 : "24px 28px", maxWidth: 1180, margin: "0 auto" }}>
         {tab === "enquiries" && <EnquiriesTab showToast={showToast} onMakeInvoice={onMakeInvoice} />}
-        {tab === "buyers" && <BuyersTab showToast={showToast} siteUrl={siteUrl} />}
+        {tab === "buyers" && <BuyersTab showToast={showToast} siteUrl={siteUrl} signOff={signOff} />}
         {tab === "products" && <ProductsTab showToast={showToast} />}
         {tab === "settings" && settings && <SettingsTab settings={settings} reload={loadSettings} showToast={showToast} />}
       </div>
@@ -191,7 +191,7 @@ function EnquiriesTab({ showToast, onMakeInvoice }) {
 }
 
 /* ── Buyers ────────────────────────────────────────────────────────────── */
-function BuyersTab({ showToast, siteUrl }) {
+function BuyersTab({ showToast, siteUrl, signOff }) {
   const [rows, setRows] = useState(null);
   const [filter, setFilter] = useState("pending");
   const [search, setSearch] = useState("");
@@ -395,7 +395,7 @@ function BuyersTab({ showToast, siteUrl }) {
                   {/* Just approved: a welcome. A set-up link for an existing buyer: the move to the new site. */}
                   {waNum(b.phone) && <a target="_blank" rel="noreferrer" style={{ ...btn("#1f8f4e", "#fff"), textDecoration: "none" }}
                     href={`https://wa.me/${waNum(b.phone)}?text=${encodeURIComponent(welcome(b)
-                      ? `Hi ${String(b.name || "").split(" ")[0] || "there"}, you've been approved for an Earth Editions trade account.\n\nSet your password here to see our wholesale prices and order: ${links[b.id]}\n\nAfter that, visit ${siteUrl} any time. If you have any questions, just message us here.\n\nThanks!\nEarth Editions`
+                      ? `Hi ${String(b.name || "").split(" ")[0] || "there"}, you've been approved for an Earth Editions trade account.\n\nSet your password here to see our wholesale prices and order: ${links[b.id]}\n\nAfter that, visit ${siteUrl} any time. If you have any questions, just message us here.\n\nThanks!\n${signOff ? `${signOff}, Earth Editions` : "Earth Editions"}`
                       : `Hi ${b.name || ""}, Earth Editions' trade catalogue has moved to its own site. Set your password here to see trade prices and order: ${links[b.id]}`)}`}>{welcome(b) ? "💬 Send welcome on WhatsApp" : "Send on WhatsApp"}</a>}
                   <a style={{ ...btn(), textDecoration: "none" }}
                     href={`mailto:${b.email}?subject=${encodeURIComponent("Your Earth Editions trade account")}&body=${encodeURIComponent(`Hi ${b.name || ""},\n\nOur trade catalogue has moved to its own site. Set your password here to see trade prices and order:\n\n${links[b.id]}\n\nThe link works for 14 days.\n\nEarth Editions`)}`}>Email</a>
