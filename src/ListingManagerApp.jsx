@@ -9941,6 +9941,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       // Etsy takes the listing and then keeps whichever tags it liked. The API
       // reads them back, so say so rather than showing a plain ✓.
       if (result?.tagsWarning)   showToast(`⚠ ${result.tagsWarning}`);
+      if (result?.photosWarning) showToast(`⚠ ${result.photosWarning}`, 9000);
       if (result?.fieldsWarning) showToast(`⚠ ${result.fieldsWarning}`, 9000);
       // ⭐ Deal-on-publish: drop the just-published product into the store's Deals
       // collection and start its remind-to-delete timer.

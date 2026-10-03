@@ -540,22 +540,50 @@ async function uploadEtsyVideo(listingId, videoUrl, authHdrs, name = "video") {
 /* ── Etsy: what video the listing is holding, and taking it off ───────────────
    Etsy allows one video per listing and does not swap it in place: an edited
    clip only arrives if the old one is deleted first. */
+/* null when Etsy could not be asked, which is not the same as a listing with no
+   photos — and telling the two apart is the whole point. Answering [] to a
+   throttled request made the sync believe the listing was empty, so it uploaded
+   a full set on top of the photos already there. That is where the doubles came
+   from. One retry, because the usual reason is the per-second limit and a
+   moment's wait clears it. */
 async function etsyListingImages(listingId, authHdrs) {
-  try {
-    const { "Content-Type": _ct, ...bare } = authHdrs;
-    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: bare });
-    if (!r.ok) return [];
-    const d = await r.json().catch(() => ({}));
-    return Array.isArray(d?.results) ? d.results : [];
-  } catch { return []; }
+  const { "Content-Type": _ct, ...bare } = authHdrs;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: bare });
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}));
+        return Array.isArray(d?.results) ? d.results : [];
+      }
+      if (r.status !== 429 && r.status < 500) {
+        console.error("Etsy images list failed:", r.status);
+        return null;
+      }
+    } catch (e) { console.error("Etsy images list threw:", e.message); }
+    await new Promise(r => setTimeout(r, 1100));
+  }
+  return null;
 }
 
+/* Says whether the photo actually went. A rejected DELETE answers with a
+   response rather than throwing, so awaiting it and moving on counted a refusal
+   as a deletion — and the upload that followed sat on top of a photo that was
+   still there. */
 async function deleteEtsyImage(listingId, imageId, authHdrs) {
-  if (!imageId) return;
-  try {
-    const { "Content-Type": _ct, ...bare } = authHdrs;
-    await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
-  } catch {}
+  if (!imageId) return false;
+  const { "Content-Type": _ct, ...bare } = authHdrs;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
+      if (r.ok || r.status === 404) return true;   // gone is gone
+      if (r.status !== 429 && r.status < 500) {
+        console.error("Etsy image delete failed:", r.status, imageId);
+        return false;
+      }
+    } catch (e) { console.error("Etsy image delete threw:", e.message); }
+    await new Promise(r => setTimeout(r, 1100));
+  }
+  return false;
 }
 
 async function etsyListingVideos(listingId, authHdrs) {
@@ -925,12 +953,31 @@ async function updateEtsyListing(listingId, listing, ai) {
   const imgUrls = (listing.images || []).filter(u => typeof u === "string" && u.startsWith("http")).slice(0, 10);
   const sent = listing.platforms?.etsy?.imagesSrc;
   const liveImgs = await etsyListingImages(listingId, hdrs);
-  const photosChanged = Array.isArray(sent) ? sent.join("|") !== imgUrls.join("|") : !liveImgs.length;
-  if (photosChanged && imgUrls.length) {
-    for (const im of liveImgs) await deleteEtsyImage(listingId, im.listing_image_id, hdrs);
-    for (let i = 0; i < imgUrls.length; i++) await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
+  /* Not knowing what Etsy holds is a reason to do nothing. Uploading anyway is
+     how a listing ends up showing the same stone twice, and a sync that skipped
+     the photos costs nothing but another sync. */
+  let photosWarning = "";
+  let imagesSrc = Array.isArray(sent) ? sent : undefined;
+  if (liveImgs == null) {
+    photosWarning = "Couldn't read the photos already on Etsy, so they were left alone — re-sync to try again.";
+  } else {
+    const photosChanged = Array.isArray(sent) ? sent.join("|") !== imgUrls.join("|") : !liveImgs.length;
+    if (photosChanged && imgUrls.length) {
+      /* Every old photo has to go before a new one arrives. If even one refuses,
+         uploading would leave the listing holding both — so the set is left as
+         it is and the sync says so. */
+      const removed = [];
+      for (const im of liveImgs) removed.push(await deleteEtsyImage(listingId, im.listing_image_id, hdrs));
+      if (removed.every(Boolean)) {
+        for (let i = 0; i < imgUrls.length; i++) await uploadEtsyImage(listingId, imgUrls[i], i + 1, etsyTitle, hdrs);
+        imagesSrc = imgUrls;
+      } else {
+        photosWarning = "Etsy wouldn't remove the old photos, so the new ones were held back rather than added on top — re-sync to try again.";
+      }
+    } else {
+      imagesSrc = imgUrls;
+    }
   }
-  const imagesSrc = imgUrls;
 
   /* Optional listing video — best-effort. The listing remembers the file it
      last sent to Etsy; an unchanged one is left alone rather than re-uploaded
@@ -958,7 +1005,7 @@ async function updateEtsyListing(listingId, listing, ai) {
   if (!weight) gaps.push("no weight");
   if (varWarn) gaps.push(varWarn);
 
-  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc, ...(varWarn ? { variationsWarning: varWarn } : {}),
+  return { listing_id: listingId, status: existingStatus, tags_applied: etsyTags.length, videoSrc, imagesSrc, ...(photosWarning ? { photosWarning } : {}), ...(varWarn ? { variationsWarning: varWarn } : {}),
     ...(tagsWarning ? { tagsWarning } : {}),
     ...(gaps.length ? { fieldsWarning: `Synced with ${gaps.join(", ")} — fill these in on the listing form and re-sync.` } : {}) };
 }
