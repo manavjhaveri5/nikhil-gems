@@ -183,6 +183,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
     return { gross, fees, shipping, gst, pieceCost, profit: gross - fees - shipping - gst - pieceCost, onTax: pkey === "ebay" && now.tax > 0 };
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
+  // Does any of them already hold this piece — live or as a draft?
+  const anyLinked = chosen.some(c => linkOf(form, c.key).linked);
   // Where → the piece → prices → a page for each platform picked → publish.
   const STEPS = [["where", "Where"], ["piece", "The piece"], ...(research ? [["research", "Research"]] : []), ["price", "Price"],
     ...(renderPlatform ? chosen.map(c => [c.key, c.key === "store" ? "Retail" : c.label]) : []), ["list", "Publish"]];
@@ -543,24 +545,40 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                   <div key={c.key} style={{ borderTop: i ? `1px solid ${C.border}` : "none" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "13px 16px" }}>
                     <span style={{ width: 8, height: 8, borderRadius: 4, background: c.color }} />
-                    <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.ink }}>{c.label}</span>
+                    <span style={{ flex: 1, fontSize: 14, fontWeight: 700, color: C.ink }}>
+                      {c.label}
+                      {(() => {
+                        const l = linkOf(form, c.key);
+                        if (!l.linked) return null;
+                        const isDraft = l.status !== "active";
+                        return <span style={{ marginLeft: 8, fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em",
+                          color: isDraft ? C.amber : C.green }}>{isDraft ? "— already a draft there" : "— already live"}</span>;
+                      })()}
+                    </span>
                     <span style={{ fontSize: 14, color: /No price/.test(price) ? C.red : C.ink }}>{price}</span>
                   </div>
                   {onPublishOne && (() => {
                     const st = one[c.key] || {};
                     const ln = linkOf(form, c.key);
                     const url = st.url || (ln.linked && ln.status === "active" ? ln.live : "");
+                    /* Already over there but not on sale. The old test asked only
+                       whether it was active, so a draft read as nothing at all —
+                       the step offered to publish a piece that Etsy was already
+                       holding, and said nothing about the draft sitting there. */
+                    const draft = !url && ln.linked && ln.status !== "deleted";
+                    const draftUrl = draft ? (ln.admin || ln.live || "") : "";
                     const noPrice = /No price/.test(price);
                     return (
                       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 12px 34px", flexWrap: "wrap" }}>
                         {st.error && <span style={{ flex: "1 1 100%", fontSize: 12, color: C.red }}>{st.error}</span>}
                         {st.warning && <span style={{ flex: "1 1 100%", fontSize: 12, color: C.amber, fontWeight: 600 }}>⚠ {st.warning}</span>}
                         {url && <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.green, border: `1.5px solid ${C.green}60`, borderRadius: 8, padding: "7px 12px", textDecoration: "none" }}>✓ View live ↗</a>}
+                        {draftUrl && <a href={draftUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.amber, border: `1.5px solid ${C.amber}60`, borderRadius: 8, padding: "7px 12px", textDecoration: "none" }}>View the draft ↗</a>}
                         {st.done && !url && <span style={{ fontSize: 12.5, color: C.green, fontWeight: 700 }}>✓ Published — link appears once the platform confirms</span>}
                         <button type="button" disabled={st.busy || noPrice || pieceMissing.length > 0} onClick={() => publishOne(c.key)}
                           style={{ fontSize: 13, fontWeight: 800, borderRadius: 8, padding: "7px 14px", cursor: st.busy ? "wait" : "pointer", border: url ? `1px solid ${C.border}` : "none",
                             background: url ? C.surface : C.ink, color: url ? C.ink : "#FAF0DC", opacity: noPrice || pieceMissing.length ? .4 : 1 }}>
-                          {st.busy ? "Publishing…" : url ? "Update" : `Publish on ${c.label}`}</button>
+                          {st.busy ? "Publishing…" : url ? "Update" : draft ? "Update the draft" : `Publish on ${c.label}`}</button>
                         {st.busy && <span style={{ fontSize: 12, color: C.inkMid }}>You can close this — it carries on, and a message says when it's live.</span>}
                       </div>
                     );
@@ -569,7 +587,14 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 );
               }) : <div style={{ padding: 16, color: C.inkMid }}>Nowhere picked yet.</div>}
             </Box>
-            <div style={{ fontSize: 12, color: C.inkFaint }}>Publish each one on its own and check it live, or all at once with Publish all live. Save as drafts keeps it off sale.</div>
+            {/* Anywhere it already exists is updated, never made again — saying so
+                here is the difference between trusting the button and checking
+                the shop afterwards to see what it did. */}
+            <div style={{ fontSize: 12, color: C.inkFaint }}>
+              Publish each one on its own and check it live, or all at once with Publish all live.
+              Save as drafts keeps it off sale.
+              {anyLinked ? " Anywhere it is already listed is updated in place, not listed again." : ""}
+            </div>
           </>}
         </div>
 
