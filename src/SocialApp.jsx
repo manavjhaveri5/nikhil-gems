@@ -22,6 +22,7 @@ import { fetchWithRetry } from "./aiClient.js";
 import { VOICE, Replies } from "./StoreSocial.jsx";
 const SocialStories = lazy(() => import("./SocialStories.jsx"));
 const Captions = lazy(() => import("./StoreSocial.jsx"));
+const SocialCalendar = lazy(() => import("./SocialCalendar.jsx"));
 
 const SITE = "https://eartheditions.co";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
@@ -503,8 +504,12 @@ function Accounts({ st, reload, showToast }) {
         <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 4 }}>github.com → Settings → Developer settings → Fine-grained tokens → only earth-store → Contents: read and write.</div>
       </div>
       <div style={card}>
-        <b style={{ fontSize: 15 }}>👽 Reddit</b> <span style={{ fontSize: 12.5, color: st?.reddit?.ready ? C.green : C.inkFaint }}>{st?.reddit?.ready ? "✓ ready" : "optional"}</span>
-        <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 4 }}>Only to search threads (never posts): reddit.com/prefs/apps → create app → "script" → REDDIT_CLIENT_ID (under the name) and REDDIT_CLIENT_SECRET.</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <b style={{ fontSize: 15, flex: 1 }}>👽 Reddit</b>
+          {st?.reddit?.connected ? <><span style={{ color: C.green, fontSize: 13, fontWeight: 650 }}>✓ {st.reddit.name || "connected"}</span><button onClick={() => disconnect("reddit")} style={btn()}>Disconnect</button></>
+            : st?.reddit?.ready ? <button onClick={() => connect("reddit")} style={btn(C.ink, "#FAF0DC")}>Connect</button> : <span style={{ fontSize: 12, color: C.inkFaint }}>needs setting up</span>}
+        </div>
+        <div style={{ fontSize: 12, color: C.inkMid, marginTop: 6, lineHeight: 1.6 }}>Posts only what you approve in Calendar, as your own account. Log in to Reddit as the account that should post, then: reddit.com/prefs/apps → "create another app" → type <b>web app</b> → redirect uri <code style={{ wordBreak: "break-all", userSelect: "all" }}>{st?.reddit?.redirect}</code> → add REDDIT_CLIENT_ID (the code under the app's name) and REDDIT_CLIENT_SECRET in Vercel → Redeploy → Connect.</div>
       </div>
     </div>
   );
@@ -534,14 +539,14 @@ function Log() {
 
 /* ── the module ────────────────────────────────────────────────────────── */
 export default function SocialApp({ onHome }) {
-  const [tab, setTab] = useState("compose");
+  const [tab, setTab] = useState("calendar");
   const [st, setSt] = useState(null);
   const [toast, setToast] = useState("");
   const showToast = useCallback(m => { setToast(m); setTimeout(() => setToast(""), 4500); }, []);
   const reload = useCallback(() => api("status").then(setSt).catch(e => showToast(`⚠ ${e.message}`)), [showToast]);
   useEffect(() => { reload(); }, [reload]);
   const connected = st ? PLATFORMS.filter(p => st[p.k]?.connected).length : 0;
-  const TABS = [["compose", "✍️", "Compose"], ["stories", "📸", "Stories"], ["captions", "💬", "Captions"], ["crosspost", "🔁", "Cross-post"], ["autopilot", "🤖", "Autopilot"], ["journal", "📝", "Journal"], ["community", "👥", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
+  const TABS = [["calendar", "📅", "Calendar"], ["compose", "✍️", "Compose"], ["stories", "📸", "Stories"], ["captions", "💬", "Captions"], ["crosspost", "🔁", "Cross-post"], ["autopilot", "🤖", "Autopilot"], ["journal", "📝", "Journal"], ["community", "👥", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: "Inter, system-ui, sans-serif" }}>
       {toast && <div style={{ position: "fixed", bottom: 22, left: 16, right: 16, margin: "0 auto", maxWidth: 520, zIndex: 1300, background: C.ink, color: "#fff", padding: "11px 16px", borderRadius: 10, fontSize: 13, textAlign: "center" }}>{toast}</div>}
@@ -563,6 +568,7 @@ export default function SocialApp({ onHome }) {
       <div style={{ padding: mob() ? 12 : "20px 28px", maxWidth: 980, margin: "0 auto" }}>
         {tab === "compose" && <Compose st={st} showToast={showToast} />}
         {tab === "crosspost" && <CrossPost st={st} showToast={showToast} />}
+        {tab === "calendar" && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}><SocialCalendar st={st} showToast={showToast} /></Suspense>}
         {(tab === "stories" || tab === "captions") && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}>
           {tab === "stories" ? <SocialStories /> : <Captions showToast={showToast} site={SITE} />}
         </Suspense>}
