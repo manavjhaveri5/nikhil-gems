@@ -40,7 +40,9 @@ export function etsyNow(orders = []) {
 /* What each platform keeps of a sale — fixed, so never asked for. Etsy:
    transaction, payment processing and listing fees together; eBay: final
    value fee and payments; the two sites: card processing. */
-const FEES = { etsy: .11, ebay: .15, store: .03, trade: .03, store_in: .0236 };
+/* Wholesale is paid by wire, not by card, so there is no percentage to take.
+   Charging 3% of a $600 kilo invented a Rs 1,734 cost that nobody pays. */
+const FEES = { etsy: .11, ebay: .15, store: .03, trade: 0, store_in: .0236 };
 const FEE_NAME = { etsy: "Etsy fees", ebay: "eBay fees", store: "Card fees", trade: "Card fees", store_in: "Razorpay 2% + GST" };
 
 const PLACE = {
@@ -149,6 +151,13 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   const calcCost = costLines.reduce((n, l) => n + (+l.amt || 0), 0);
   const cost = cardCost || calcCost;
   const optCost = o => +o.cost || cost;
+  /* Wholesale quotes a piece, a lot or a kilo — whichever the Wholesale tab is
+     set to — so the cost put against it has to be the same quantity. */
+  const tradeUnit = String(form._tradeUnit || "").toLowerCase();
+  const tradeCost = tradeUnit === "kg" ? (+form._costPerKg || 0)
+    : tradeUnit === "lot" ? (+form._lotCost || 0)
+    : cost;
+  const tradeBasis = tradeUnit === "kg" ? "a kilo" : tradeUnit === "lot" ? "the lot" : "a piece";
   /* What shipping it to a US buyer should cost us, from what our past parcels
      cost at this weight (the piece plus about 300 g of packing). Ours to pay:
      Etsy ships free in the US over $35, and the sites and eBay price it in. */
@@ -172,15 +181,61 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   /* Customer pays → platform fees → shipping → cost → profit, all in rupees.
      eBay charges its fee on the whole order, US sales tax included; Etsy
      only on the price. */
+  /* What the buyer puts toward the freight, per channel.
+
+     Every channel we sell on carries a shipping profile with a threshold: over
+     it the postage is free and ours to absorb, under it the buyer is charged a
+     flat rate we collect. Counting the postage as ours in both cases understated
+     every sale below the threshold — a Rs 3,000 Etsy order read as losing Rs 600
+     the buyer had in fact already paid.
+
+     The threshold is set in dollars and the money arrives in rupees, so the two
+     are put on the same footing before being compared rather than after.
+
+     Known limits: the threshold is a CART threshold and this screen can only see
+     one piece, so a buyer who adds a second item may cross it and pay nothing —
+     the figure here is the single-item case. eBay is left as ours to pay until
+     its profile is set. */
+  const ETSY_SHIP = { free_usd: 35, rate_inr: 800 };   // until Store → Settings says otherwise
+  const regions = s?.shipping?.regions || [];
+  const usRegion = regions.find(r => (r.countries || []).includes("US"))
+    || regions.find(r => (r.countries || []).includes("*"));
+
+  const shipRule = pkey => {
+    if (pkey === "etsy") return {
+      rateInr: +s?.etsy_shipping?.rate_inr || ETSY_SHIP.rate_inr,
+      freeUsd: s?.etsy_shipping?.free_over_usd ?? ETSY_SHIP.free_usd, set: true };
+    if (pkey === "store") return {
+      rateInr: (+usRegion?.rate || 0) * rate, freeUsd: +usRegion?.free_over || 0,
+      set: !!(+usRegion?.rate || +usRegion?.free_over) };
+    if (pkey === "store_in") return {
+      rateInr: +s?.india_shipping?.rate || 0, freeUsd: (+s?.india_shipping?.free_over || 0) / rate,
+      set: !!(+s?.india_shipping?.rate || +s?.india_shipping?.free_over) };
+    return null;   // trade bills freight separately; eBay has no profile here yet
+  };
+  const shipUnset = pkey => { const r = shipRule(pkey); return r ? !r.set : false; };
+
   const money4 = (pkey, paid, cur, pieceCost = cost) => {
     if (!paid) return null;
     const gross = paid * (cur === "$" ? rate : 1);
-    const feeBase = pkey === "ebay" ? gross * (1 + (now.tax || 0)) : gross;
-    const fees = feeBase * FEES[pkey];
     const shipping = pkey === "trade" ? 0 : pkey === "store_in" ? shipIn : ship;
+    const r = shipRule(pkey);
+    // Both sides into dollars, so a rupee price meets a dollar threshold squarely.
+    const paidUsd = cur === "$" ? paid : paid / (rate || 1);
+    const freeShip = !!(r && r.freeUsd > 0 && paidUsd >= r.freeUsd);
+    const shipPaid = !r || !r.set ? 0 : freeShip ? 0 : r.rateInr;
+    /* Etsy takes its cut of the postage as well as the price — the buyer paying
+       Rs 800 toward shipping is Rs 800 more that Etsy charges its fee on, so
+       crediting the postage without widening the fee base would overstate it. */
+    const feeBase = pkey === "ebay" ? gross * (1 + (now.tax || 0))
+      : pkey === "etsy" ? gross + shipPaid : gross;
+    const fees = feeBase * FEES[pkey];
     // A sale within India owes 0.25% GST on stones (HSN 7103), inside the price; exports carry none.
     const gst = pkey === "store_in" ? gross * .0025 / 1.0025 : 0;
-    return { gross, fees, shipping, gst, pieceCost, profit: gross - fees - shipping - gst - pieceCost, onTax: pkey === "ebay" && now.tax > 0 };
+    return { gross, fees, shipping, shipPaid, gst, pieceCost,
+      freeShip,
+      profit: gross + shipPaid - fees - shipping - gst - pieceCost,
+      onTax: pkey === "ebay" && now.tax > 0, onShip: pkey === "etsy" && shipPaid > 0 };
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   // Does any of them already hold this piece — live or as a draft?
@@ -257,10 +312,14 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       {label && <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>{label}</div>}
       {[
         ["Customer pays", m.gross, C.ink],
-        [`${FEE_NAME[pkey]} · ${+(FEES[pkey] * 100).toFixed(2)}%${m.onTax ? " of price + tax" : ""}`, -m.fees, C.inkMid],
-        [pkey === "trade" ? "Shipping · buyer pays freight" : pkey === "store_in" ? "Shipping in India" : "Shipping", -m.shipping, C.inkMid],
+        ...(FEES[pkey] ? [[`${FEE_NAME[pkey]} · ${+(FEES[pkey] * 100).toFixed(2)}%${m.onTax ? " of price + tax" : m.onShip ? " of price + shipping" : ""}`, -m.fees, C.inkMid]]
+          : [["Paid by wire · no card fee", 0, C.inkFaint]]),
+        ...(m.shipPaid ? [["Shipping the customer paid", m.shipPaid, C.inkMid]] : []),
+        [(pkey === "trade" ? "Shipping · buyer pays freight"
+          : pkey === "store_in" ? "Shipping in India" : "Shipping")
+          + (m.freeShip ? " · free at this price, ours to pay" : ""), -m.shipping, C.inkMid],
         ...(m.gst ? [["GST · 0.25% (in the price)", -m.gst, C.inkMid]] : []),
-        ["Cost of the piece", -m.pieceCost, C.inkMid],
+        [pkey === "trade" ? `Cost of ${tradeBasis}` : "Cost of the piece", -m.pieceCost, C.inkMid],
       ].map(([k, v, col]) => (
         <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: col, padding: "2px 0" }}>
           <span>{k}</span><span>{v < 0 ? "− " : ""}{v ? inr(Math.abs(v)) : "—"}</span>
@@ -504,6 +563,11 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 {p.price_store || p.price_store_inr ? "Customer pays these." : "Leave empty and it follows what an Etsy buyer pays in the sale."}
               </div>
               {sheet("store", money4("store", storeUsd, "$"), "A US sale")}
+              {storeUsd > 0 && shipUnset("store") && (
+                <div style={{ fontSize: 11.5, color: C.amber, marginTop: 6, lineHeight: 1.5 }}>
+                  No US shipping rate set, so this counts the postage as ours. Set the rate and the free-over figure on Store → Settings and a sale under the threshold will credit what the buyer pays.
+                </div>
+              )}
               {storeInr > 0 && <>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, fontSize: 12, color: C.inkMid }}>
                   <span style={{ flex: 1 }}>Shipping in India ≈ {inr(shipInEst.cost)} by {shipInEst.carrier} · {shipInEst.basis}</span>
@@ -514,6 +578,11 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                   </span>
                 </div>
                 {sheet("store_in", money4("store_in", storeInr), "An India sale · paid through Razorpay")}
+                {shipUnset("store_in") && (
+                  <div style={{ fontSize: 11.5, color: C.amber, marginTop: 6, lineHeight: 1.5 }}>
+                    No India shipping rate set, so this counts the postage as ours.
+                  </div>
+                )}
               </>}
             </Box>}
             {pick.trade && <Box>
@@ -522,7 +591,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_trade", "$")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>Per piece, lot or kilo — as set on the Wholesale tab</div></div>
                 {pays(+p.price_trade ? usd(+p.price_trade) : "—", +p.price_trade ? `≈ ${inr(+p.price_trade * rate)}` : "trade buyers")}
               </div>
-              {sheet("trade", money4("trade", +p.price_trade, "$"))}
+              {sheet("trade", money4("trade", +p.price_trade, "$", tradeCost))}
             </Box>}
           </>}
 

@@ -1943,6 +1943,28 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if ((u === "gm" || u === "g") && pieceKg) return Math.round(cp * pieceKg * 1000);
     return Math.round(cp * (+linkedCard.qty || 1));
   })();
+  /* Wholesale is not sold by the piece, so it cannot be costed by the piece.
+     A card bought at Rs 23,000 per kilo, cut into 82 hearts, costs Rs 322 a
+     heart and Rs 23,000 a kilo — and quoting a kilo at Rs 600 while charging
+     the cost of one heart against it reported a profit on nearly the whole
+     sale. The trade tab prices per piece, per lot or per kilo, so all three
+     bases travel with the listing and the sheet picks the matching one. */
+  const lotCost = (() => {
+    const cp = +linkedCard?.costPrice || 0;
+    if (!cp) return 0;
+    const u = String(linkedCard?.unit || "pcs").toLowerCase();
+    const kg = cardMeasure(linkedCard, "kg"), pcs = cardMeasure(linkedCard, "pcs");
+    if (u === "lot") return cp;
+    if (PCS_UNITS.includes(u)) return Math.round(cp * (pcs || 1));
+    if (u === "kg") return Math.round(cp * kg);
+    if (u === "gm" || u === "g") return Math.round(cp * kg * 1000);
+    return Math.round(cp * (+linkedCard?.qty || 1));
+  })();
+  const costPerKg = (() => {
+    const kg = cardMeasure(linkedCard, "kg");
+    return kg ? Math.round(lotCost / kg) : 0;
+  })();
+
   /* Etsy's own word on this listing, fetched as it opens: a draft put live
      (or a listing taken down) on Etsy itself shows as it is, not as the ERP
      last left it, and is saved back onto the listing. */
@@ -3118,7 +3140,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
+        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onClose={() => setSteps(null)}
           onDone={() => { setSteps(null); onClose(); }}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />
