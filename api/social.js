@@ -183,7 +183,30 @@ const P = {
       return { ...t, access_token: d.access_token, refresh_token: d.refresh_token || t.refresh_token, expires_at: Date.now() + (d.expires_in || 7200) * 1000 };
     },
   },
+  /* Reddit, logged in as the account that posts. Only ever posts what's been
+     approved in Social → Calendar (never on its own). A "web app" at
+     reddit.com/prefs/apps; the same keys also do the read-only search. */
+  reddit: {
+    keys: ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"],
+    login: (req, state) => `https://www.reddit.com/api/v1/authorize?client_id=${env("REDDIT_CLIENT_ID")}&response_type=code&state=${state}&redirect_uri=${encodeURIComponent(redirectUri(req, "reddit"))}&duration=permanent&scope=${encodeURIComponent("identity submit read flair")}`,
+    async token(req, code) {
+      const d = await json(await fetch("https://www.reddit.com/api/v1/access_token", { method: "POST", headers: { Authorization: basic(env("REDDIT_CLIENT_ID"), env("REDDIT_CLIENT_SECRET")), "Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA },
+        body: form({ grant_type: "authorization_code", code, redirect_uri: redirectUri(req, "reddit") }) }));
+      if (!d.access_token) fail(400, d.error || "no token");
+      let name = "";
+      try { name = "u/" + ((await json(await fetch("https://oauth.reddit.com/api/v1/me", { headers: { Authorization: `Bearer ${d.access_token}`, "User-Agent": UA } }))).name || ""); } catch { /* none */ }
+      return { access_token: d.access_token, refresh_token: d.refresh_token, expires_at: Date.now() + (d.expires_in || 3600) * 1000, name: name === "u/" ? "" : name };
+    },
+    async refresh(t) {
+      if (Date.now() < (t.expires_at || 0) - 120000) return t;
+      const d = await json(await fetch("https://www.reddit.com/api/v1/access_token", { method: "POST", headers: { Authorization: basic(env("REDDIT_CLIENT_ID"), env("REDDIT_CLIENT_SECRET")), "Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA },
+        body: form({ grant_type: "refresh_token", refresh_token: t.refresh_token }) }));
+      if (!d.access_token) fail(401, "Reddit's login has run out — connect it again");
+      return { ...t, access_token: d.access_token, expires_at: Date.now() + (d.expires_in || 3600) * 1000 };
+    },
+  },
 };
+const UA = "web:earth-editions-erp:1.0 (by the shop's own account)";
 const ready = p => P[p].keys.every(k => env(k));
 
 async function token(p) {
@@ -339,6 +362,49 @@ async function postX({ text, images = [] }) {
 
 const POST = { instagram: postInstagram, threads: postThreads, tiktok: postTikTok, youtube: postYouTube, pinterest: postPinterest, x: postX };
 
+/* ── Reddit: posting what was approved ─────────────────────────────────────
+   An image post (the photo goes to Reddit's own image host, so it shows in
+   the feed) with the story in a first comment, the way people post there;
+   or a text post (the Sunday sale list). */
+async function rd(path, t, params, method = "POST") {
+  const r = await fetch(`https://oauth.reddit.com${path}`, { method, headers: { Authorization: `Bearer ${t.access_token}`, "User-Agent": UA, ...(params ? { "Content-Type": "application/x-www-form-urlencoded" } : {}) }, body: params ? form(params) : undefined });
+  const d = await json(r);
+  if (!r.ok) fail(502, `Reddit: ${d.message || d.error || r.status}`);
+  const errs = d.json?.errors;
+  if (errs?.length) fail(400, `Reddit: ${errs.map(e => e.slice(1).join(" ")).join("; ")}`);
+  return d;
+}
+async function redditUpload(t, url) {
+  const { buf, type } = await download(url);
+  const mime = /png/.test(type) ? "image/png" : "image/jpeg";
+  const lease = await rd("/api/media/asset.json", t, { filepath: mime === "image/png" ? "photo.png" : "photo.jpg", mimetype: mime });
+  const action = lease.args.action.startsWith("//") ? `https:${lease.args.action}` : lease.args.action;
+  const fd = new FormData();
+  for (const f of lease.args.fields) fd.append(f.name, f.value);
+  fd.append("file", new Blob([buf], { type: mime }), mime === "image/png" ? "photo.png" : "photo.jpg");
+  const up = await fetch(action, { method: "POST", body: fd });
+  if (!up.ok && up.status !== 201) fail(502, `Reddit image upload failed (${up.status})`);
+  const key = lease.args.fields.find(f => f.name === "key")?.value;
+  return { url: `${action}/${key}`, asset_id: lease.asset.asset_id };
+}
+async function postReddit({ sub, title, kind = "image", body = "", images = [], comment = "", flair_id = "", flair_text = "" }) {
+  const t = await token("reddit");
+  if (!sub || !title) fail(400, "A subreddit and a title");
+  const base = { sr: sub.replace(/^r\//i, ""), title: title.slice(0, 300), api_type: "json", resubmit: "true", sendreplies: "true", ...(flair_id ? { flair_id, flair_text } : {}) };
+  let d;
+  if (kind === "image" && images[0]) {
+    const img = await redditUpload(t, images[0]);
+    d = await rd("/api/submit", t, { ...base, kind: "image", url: img.url });
+  } else d = await rd("/api/submit", t, { ...base, kind: "self", text: body });
+  const name = d.json?.data?.name || (d.json?.data?.id ? `t3_${d.json.data.id}` : "");
+  let url = d.json?.data?.url || "";
+  // An image post's link comes back as the image; the thread's address is what we want.
+  if (name) { try { const info = await rd(`/api/info?id=${name}`, t, null, "GET"); url = `https://www.reddit.com${info.data?.children?.[0]?.data?.permalink || ""}` || url; } catch { /* keep */ } }
+  if (comment && name) { try { await rd("/api/comment", t, { thing_id: name, text: comment, api_type: "json" }); } catch (e) { return { url, note: `posted, but the comment didn't go: ${e.message}` }; } }
+  return { url };
+}
+POST.reddit = postReddit;
+
 /* ── reading: Instagram posts, Reddit threads ────────────────────────────── */
 async function igMedia() {
   const t = await token("instagram");
@@ -450,6 +516,21 @@ async function runAutopilot() {
     done.push(`${q.platform}: ${q.status}`);
   }
   if (done.length) await saveData(QUEUE_KEY, queue);
+
+  // Calendar items approved for posting (Reddit and the rest), at their time.
+  const cal = (await appData("ng-social-calendar-v1")) || [];
+  let calChanged = false;
+  for (const it of cal.filter(x => x.status === "approved" && Date.parse(x.at) <= Date.now()).slice(0, 3)) {
+    if (!time()) break;
+    try {
+      // The photo chosen in the calendar, not just the first.
+      const out = await POST[it.platform](it.platform === "reddit" ? { ...it, images: it.kind === "image" ? [it.images?.[it.image || 0]].filter(Boolean) : [] } : { ...it, text: it.body });
+      Object.assign(it, { status: "posted", url: out.url || "", note: out.note || "", posted_at: new Date().toISOString() });
+      await addLog({ platform: it.platform, source: `calendar:${it.id}`, title: it.title, url: out.url || "", note: `calendar${it.sub ? ` · r/${it.sub}` : ""}${out.note ? ` · ${out.note}` : ""}` });
+    } catch (e) { Object.assign(it, { status: "failed", error: e.message }); }
+    calChanged = true; done.push(`calendar ${it.platform}: ${it.status}`);
+  }
+  if (calChanged) await saveData("ng-social-calendar-v1", cal);
 
   const auto = await autoSettings();
   const log = await readLog();
@@ -563,7 +644,7 @@ export default async function handler(req, res) {
         }
         out[k] = { ready: ready(k), connected: !!t?.access_token, name: t?.name || "", redirect: redirectUri(req, k), canPost: k !== "tiktok" || /video\.publish/.test(t?.scope || "") };
       }
-      out.reddit = { ready: !!env("REDDIT_CLIENT_ID") };
+
       out.journal = { ready: !!env("GITHUB_BLOG_TOKEN") };
       return res.json(out);
     }
@@ -609,6 +690,20 @@ export default async function handler(req, res) {
       const out = await POST[p]({ ...body, images, video });
       const entry = await addLog({ platform: p, source: body.source || "", title: body.title || "", url: out.url || "", note: out.note || "", mode: body.mode || "" });
       return res.json({ ok: true, ...out, entry });
+    }
+
+    if (action === "reddit_flairs") {
+      const t = await token("reddit");
+      const d = await json(await fetch(`https://oauth.reddit.com/r/${encodeURIComponent(String(u.searchParams.get("sub") || "").replace(/^r\//i, ""))}/api/link_flair_v2`, { headers: { Authorization: `Bearer ${t.access_token}`, "User-Agent": UA } }));
+      return res.json({ flairs: Array.isArray(d) ? d.map(f => ({ id: f.id, text: f.text })) : [] });
+    }
+    // A calendar item posted now, by hand.
+    if (action === "post_item") {
+      const it = body.item || {};
+      if (!POST[it.platform]) fail(400, "Which platform?");
+      const out = await POST[it.platform](it.platform === "reddit" ? it : { ...it, text: it.body });
+      await addLog({ platform: it.platform, source: `calendar:${it.id}`, title: it.title, url: out.url || "", note: `calendar${it.sub ? ` · r/${it.sub}` : ""}${out.note ? ` · ${out.note}` : ""}` });
+      return res.json({ ok: true, ...out });
     }
 
     if (action === "reddit_search") return res.json({ threads: await redditSearch(Array.isArray(body.terms) ? body.terms : []) });
