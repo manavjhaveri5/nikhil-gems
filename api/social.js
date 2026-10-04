@@ -21,7 +21,7 @@
    for a person to post. */
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { requireUser } from "../lib/auth.js";
+import { requireUser, hasStoreSecret } from "../lib/auth.js";
 
 export const config = { maxDuration: 300 };
 
@@ -397,6 +397,108 @@ async function publishJournal(post) {
   return { url: `https://eartheditions.co/blog/${slug}`, slug };
 }
 
+/* ── autopilot ───────────────────────────────────────────────────────────────
+   Run every 15 minutes by .github/workflows/social-autopost.yml (with the
+   shared store secret). Three jobs, each switched on in Social → Autopilot:
+   - posts scheduled from Compose go out when their time comes;
+   - a piece that went live in Listing Manager is posted, after a wait, to
+     the platforms picked, with captions written for each;
+   - a new Instagram post or Reel is sent on to the platforms picked.
+   A few at a time, so one run never outlasts the function. */
+const AUTO_KEY = "ng-social-auto-v1", QUEUE_KEY = "ng-social-queue-v1";
+const AUTO_DEFAULT = {
+  listings: { on: false, platforms: ["instagram", "pinterest", "threads"], afterHours: 1, since: null },
+  instagram: { on: false, platforms: ["tiktok", "youtube"], since: null },
+};
+async function autoSettings() { const a = await appData(AUTO_KEY); return { listings: { ...AUTO_DEFAULT.listings, ...(a?.listings || {}) }, instagram: { ...AUTO_DEFAULT.instagram, ...(a?.instagram || {}) } }; }
+const saveData = (key, value) => sb().from("app_data").upsert({ key, value });
+
+const VOICE = "You write for Earth Editions (eartheditions.co), a family business in India selling natural crystals, mineral specimens and gemstone carvings, bought as rough at the source and cut in house. Warm, knowledgeable, plain English, no hype. Metaphysical meaning only as tradition or belief, never a health claim. Never invent a locality, weight, size or treatment that isn't given.";
+async function captionsFor(l, link) {
+  const key = env("OPENAI_KEY") || env("OPENAI_API_KEY");
+  if (!key) fail(400, "No OpenAI key for writing captions");
+  const facts = [`Piece: ${l.title}`, l.material && `Stone: ${l.material}`, l.shape && `Shape: ${l.shape}`, l.origin && `Origin: ${l.origin}`, l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`,
+    l.description && `Listing description: ${String(l.description).slice(0, 1000)}`, link && `Link: ${link}`].filter(Boolean).join("\n");
+  const r = await fetch("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model: env("SOCIAL_AI_MODEL") || "gpt-4.1-mini", max_tokens: 2000, response_format: { type: "json_object" }, messages: [{ role: "system", content: VOICE }, { role: "user", content:
+      `Social posts for this piece, one per platform in its own style.\n\n${facts}\n\nReturn JSON: {"instagram":"3 short paragraphs then 8-15 hashtags, 'link in bio'","tiktok":"1-2 lines + 4-6 hashtags","youtube_title":"under 80 chars","youtube":"2-3 lines, the link, 3 hashtags","pinterest_title":"under 100 chars","pinterest":"under 450 chars, keyword-rich","threads":"under 450 chars, 1-2 hashtags","x":"under 250 chars incl. the link, 1-2 hashtags"}` }] }) });
+  const d = await json(r);
+  if (!r.ok) fail(502, `AI: ${d.error?.message || r.status}`);
+  return JSON.parse(d.choices?.[0]?.message?.content || "{}");
+}
+const storeLink = l => { const s = l.platforms?.store; const u = s?.storefront_url || s?.url || ""; return u ? `${u}${u.includes("?") ? "&" : "?"}utm_source=social&utm_medium=autopilot` : ""; };
+const wentLive = l => Math.min(...Object.values(l.platforms || {}).filter(x => x?.status === "active").map(x => Date.parse(x.live_at || x.first_listed_at || "") || Infinity));
+const payloadFor = (k, l, cap, link) => ({
+  text: cap[k] || "", title: k === "youtube" ? cap.youtube_title : k === "pinterest" ? cap.pinterest_title : l.title,
+  images: (l.images || []).filter(u => typeof u === "string" && /^https?:/.test(u)).slice(0, 10),
+  video: ["tiktok", "youtube", "instagram", "threads"].includes(k) && l.video && /^https?:/.test(l.video) ? l.video : "",
+  link, mode: k === "tiktok" ? "draft" : "", source: `listing:${l.id}`,
+});
+const canTake = (k, pl) => !((k === "tiktok" || k === "youtube") && !pl.video) && !(k === "pinterest" && (!pl.images.length || !pl.link)) && !(k !== "threads" && k !== "x" && !pl.images.length && !pl.video);
+
+async function runAutopilot() {
+  const done = [], started = Date.now(), budget = 200000;
+  const time = () => Date.now() - started < budget;
+  const connected = async k => !!(await getSecret(`tok_${k}`))?.access_token;
+
+  // 1. Scheduled posts that are due.
+  const queue = (await appData(QUEUE_KEY)) || [];
+  for (const q of queue.filter(x => x.status === "pending" && Date.parse(x.at) <= Date.now()).slice(0, 4)) {
+    if (!time()) break;
+    try { const out = await POST[q.platform](q.payload); Object.assign(q, { status: "done", url: out.url || "", note: out.note || "", done_at: new Date().toISOString() }); await addLog({ platform: q.platform, source: q.payload.source || "", title: q.payload.title || "", url: out.url || "", note: `scheduled${out.note ? ` · ${out.note}` : ""}` }); }
+    catch (e) { Object.assign(q, { status: "failed", error: e.message, done_at: new Date().toISOString() }); }
+    done.push(`${q.platform}: ${q.status}`);
+  }
+  if (done.length) await saveData(QUEUE_KEY, queue);
+
+  const auto = await autoSettings();
+  const log = await readLog();
+  const posted = new Set(log.map(e => `${e.source}|${e.platform}`));
+
+  // 2. Pieces that went live since autopilot was switched on, after the wait.
+  if (auto.listings.on && time()) {
+    const listings = (await appData("ng-listings-v1")) || [];
+    const since = Date.parse(auto.listings.since || "") || Date.now();
+    const ready = listings.filter(l => { const t = wentLive(l); return t > since && Date.now() - t >= (+auto.listings.afterHours || 0) * 36e5; })
+      .filter(l => auto.listings.platforms.some(k => !posted.has(`listing:${l.id}|${k}`)));
+    for (const l of ready.slice(0, 2)) {
+      if (!time()) break;
+      const link = storeLink(l);
+      let cap;
+      try { cap = await captionsFor(l, link); } catch (e) { done.push(`captions for ${l.title}: ${e.message}`); continue; }
+      for (const k of auto.listings.platforms) {
+        if (posted.has(`listing:${l.id}|${k}`) || !(await connected(k)) || !time()) continue;
+        const pl = payloadFor(k, l, cap, link);
+        if (!canTake(k, pl)) { await addLog({ platform: k, source: `listing:${l.id}`, title: l.title, note: "autopilot skipped — not the right media" }); continue; }
+        try { const out = await POST[k](pl); await addLog({ platform: k, source: pl.source, title: l.title, url: out.url || "", note: `autopilot${out.note ? ` · ${out.note}` : ""}` }); done.push(`${k}: ${l.title}`); }
+        catch (e) { await addLog({ platform: k, source: pl.source, title: l.title, note: `autopilot failed: ${e.message}` }); done.push(`${k} failed: ${e.message}`); }
+      }
+    }
+  }
+
+  // 3. New Instagram posts, sent on.
+  if (auto.instagram.on && time() && await connected("instagram")) {
+    const since = Date.parse(auto.instagram.since || "") || Date.now();
+    const media = (await igMedia()).filter(m => Date.parse(m.timestamp) > since);
+    for (const m of media.slice(0, 2)) {
+      for (const k of auto.instagram.platforms) {
+        const vid = m.media_type === "VIDEO";
+        if (posted.has(`ig:${m.id}|${k}`) || !time() || !(await connected(k))) continue;
+        if ((k === "tiktok" || k === "youtube") && !vid) continue;
+        if (k === "pinterest" && vid) continue;
+        const caption = m.caption || "";
+        const images = vid ? [] : m.media_type === "CAROUSEL_ALBUM" ? (m.children?.data || []).filter(c => c.media_type === "IMAGE").map(c => c.media_url) : [m.media_url];
+        try {
+          const out = await POST[k]({ text: k === "x" ? caption.slice(0, 270) : caption, title: caption.split("\n")[0].slice(0, 90), images, video: vid ? m.media_url : "", mode: k === "tiktok" ? "draft" : "", link: "https://eartheditions.co" });
+          await addLog({ platform: k, source: `ig:${m.id}`, title: caption.split("\n")[0].slice(0, 80), url: out.url || "", note: `autopilot${out.note ? ` · ${out.note}` : ""}` });
+          done.push(`${k}: Instagram ${m.id}`);
+        } catch (e) { await addLog({ platform: k, source: `ig:${m.id}`, title: caption.split("\n")[0].slice(0, 80), note: `autopilot failed: ${e.message}` }); }
+      }
+    }
+  }
+  return done;
+}
+
 /* ── handler ─────────────────────────────────────────────────────────────── */
 export default async function handler(req, res) {
   const u = new URL(req.url, "http://x");
@@ -418,7 +520,37 @@ export default async function handler(req, res) {
       } catch (e) { return back(`${p}: ${e.message}`); }
     }
 
+    // The scheduled run (GitHub Actions, every 15 minutes) comes with the store secret.
+    if (action === "cron") {
+      if (!hasStoreSecret(req) && !(await requireUser(req, res))) return;
+      return res.json({ ok: true, done: await runAutopilot() });
+    }
+
     if (!(await requireUser(req, res))) return;
+
+    if (action === "auto_get") return res.json({ auto: await autoSettings(), queue: (await appData(QUEUE_KEY)) || [] });
+    if (action === "auto_set") {
+      const cur = await autoSettings(), next = body.auto || {};
+      // Switching a job on starts it from now: nothing older is posted.
+      for (const k of ["listings", "instagram"]) if (next[k]?.on && !cur[k].on) next[k].since = new Date().toISOString();
+      const merged = { listings: { ...cur.listings, ...(next.listings || {}) }, instagram: { ...cur.instagram, ...(next.instagram || {}) } };
+      await saveData(AUTO_KEY, merged);
+      return res.json({ auto: merged });
+    }
+    // Scheduled posts from Compose: one row per platform.
+    if (action === "schedule") {
+      const queue = (await appData(QUEUE_KEY)) || [];
+      if (!Date.parse(body.at)) fail(400, "When?");
+      const rows = (body.items || []).filter(i => POST[i.platform]).map(i => ({ id: crypto.randomUUID(), at: new Date(body.at).toISOString(), platform: i.platform, payload: i.payload, status: "pending", created: new Date().toISOString() }));
+      const keep = queue.filter(q => q.status === "pending" || Date.now() - Date.parse(q.done_at || q.at) < 30 * 864e5);
+      await saveData(QUEUE_KEY, [...keep, ...rows]);
+      return res.json({ ok: true, added: rows.length });
+    }
+    if (action === "unschedule") {
+      const queue = (await appData(QUEUE_KEY)) || [];
+      await saveData(QUEUE_KEY, queue.filter(q => q.id !== body.id));
+      return res.json({ ok: true });
+    }
 
     if (action === "status") {
       const out = {};

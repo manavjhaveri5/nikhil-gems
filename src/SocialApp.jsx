@@ -15,11 +15,13 @@
    Log — what went where.
 
    The server side is api/social.js. */
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { C, FI, mob } from "./lmTheme.js";
 import { loadK } from "./utils.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { VOICE, Replies } from "./StoreSocial.jsx";
+const SocialStories = lazy(() => import("./SocialStories.jsx"));
+const Captions = lazy(() => import("./StoreSocial.jsx"));
 
 const SITE = "https://eartheditions.co";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
@@ -85,6 +87,7 @@ function Compose({ st, showToast }) {
   const [board, setBoard] = useState("");
   const [boards, setBoards] = useState([]);
   const [tiktokMode, setTiktokMode] = useState("draft");
+  const [when, setWhen] = useState("");   // a time to post later, from Autopilot's queue
   useEffect(() => { loadK("ng-listings-v1").then(ls => setListings((Array.isArray(ls) ? ls : []).filter(l => (l.images || []).some(u => typeof u === "string")))).catch(() => setListings([])); }, []);
   useEffect(() => { if (st?.pinterest?.connected) api("pinterest_boards").then(d => { setBoards(d.boards); setBoard(b => b || d.boards[0]?.id || ""); }).catch(() => {}); }, [st?.pinterest?.connected]);
 
@@ -124,6 +127,17 @@ function Compose({ st, showToast }) {
     images: imgs, video: ["tiktok", "youtube"].includes(k) || (["instagram", "threads"].includes(k) && video) ? video : "",
     link, board, mode: k === "tiktok" ? tiktokMode : "", source: `listing:${pick.id}`,
   });
+  const schedule = async () => {
+    const list = PLATFORMS.filter(p => on[p.k] && st?.[p.k]?.connected);
+    if (!list.length || !when) return;
+    setBusy("schedule");
+    try {
+      const d = await api("schedule", { body: { at: new Date(when).toISOString(), items: list.map(p => ({ platform: p.k, payload: payload(p.k) })) } });
+      showToast(`✓ ${d.added} post${d.added === 1 ? "" : "s"} scheduled for ${new Date(when).toLocaleString()} — see Autopilot`);
+      setWhen("");
+    } catch (e) { showToast(`⚠ ${e.message}`); }
+    setBusy("");
+  };
   const publish = async () => {
     const list = PLATFORMS.filter(p => on[p.k]);
     if (!list.length) return;
@@ -212,7 +226,12 @@ function Compose({ st, showToast }) {
         })}
         <button disabled={!!busy || !Object.keys(txt).length || !PLATFORMS.some(p => on[p.k])} onClick={publish}
           style={{ ...btn(C.ink, "#FAF0DC"), width: "100%", padding: "12px", fontSize: 15, marginTop: 8, opacity: busy || !Object.keys(txt).length ? .5 : 1 }}>
-          {busy === "publish" ? "Publishing…" : `Publish to ${PLATFORMS.filter(p => on[p.k] && st?.[p.k]?.connected).length || "…"} platform${PLATFORMS.filter(p => on[p.k]).length === 1 ? "" : "s"}`}</button>
+          {busy === "publish" ? "Publishing…" : `Publish now to ${PLATFORMS.filter(p => on[p.k] && st?.[p.k]?.connected).length || "…"} platform${PLATFORMS.filter(p => on[p.k]).length === 1 ? "" : "s"}`}</button>
+        <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+          <span style={{ fontSize: 12.5, color: C.inkMid }}>or later:</span>
+          <input type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} style={FI({ flex: 1, padding: "7px 10px" })} />
+          <button disabled={!!busy || !when || !Object.keys(txt).length} onClick={schedule} style={{ ...btn(), opacity: !when || !Object.keys(txt).length ? .5 : 1 }}>{busy === "schedule" ? "…" : "Schedule"}</button>
+        </div>
       </div>
     </div>
   );
@@ -390,6 +409,63 @@ function Community({ st, showToast }) {
   );
 }
 
+/* ── Autopilot ─────────────────────────────────────────────────────────── */
+function Autopilot({ st, showToast }) {
+  const [a, setA] = useState(null);
+  const [queue, setQueue] = useState([]);
+  const load = useCallback(() => api("auto_get").then(d => { setA(d.auto); setQueue(d.queue); }).catch(e => showToast(`⚠ ${e.message}`)), [showToast]);
+  useEffect(() => { load(); }, [load]);
+  const save = async next => { try { setA((await api("auto_set", { body: { auto: next } })).auto); showToast("✓ Saved"); } catch (e) { showToast(`⚠ ${e.message}`); } };
+  const toggle = (job, k) => { const cur = a[job].platforms; save({ [job]: { ...a[job], platforms: cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k] } }); };
+  const cancel = async id => { await api("unschedule", { body: { id } }); load(); };
+  if (!a) return <div style={card}>Loading…</div>;
+  const pending = queue.filter(q => q.status === "pending").sort((x, y) => x.at.localeCompare(y.at));
+  const past = queue.filter(q => q.status !== "pending").sort((x, y) => (y.done_at || "").localeCompare(x.done_at || "")).slice(0, 20);
+  const job = (key, title, sub, allowed, extra = null) => (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1 }}><b style={{ fontSize: 15 }}>{title}</b><div style={{ fontSize: 12.5, color: C.inkMid }}>{sub}</div></div>
+        <button onClick={() => save({ [key]: { ...a[key], on: !a[key].on } })} style={btn(a[key].on ? C.green : C.surface, a[key].on ? "#fff" : C.ink)}>{a[key].on ? "● On" : "Off"}</button>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+        {PLATFORMS.filter(p => allowed.includes(p.k)).map(p => {
+          const sel = a[key].platforms.includes(p.k), ok = st?.[p.k]?.connected;
+          return <button key={p.k} onClick={() => toggle(key, p.k)} style={{ ...btn(sel ? C.ink : C.surface, sel ? "#FAF0DC" : C.ink), padding: "5px 10px", fontSize: 12, opacity: ok ? 1 : .55 }} title={ok ? "" : "Not connected — skipped until it is"}>{p.icon} {p.label}</button>;
+        })}
+      </div>
+      {extra}
+      {a[key].on && a[key].since && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 8 }}>On since {new Date(a[key].since).toLocaleString()} — only things after that are posted.</div>}
+    </div>
+  );
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div style={{ fontSize: 12.5, color: C.inkMid }}>Runs every 15 minutes by itself (a free GitHub job), even with the ERP closed. Each job only posts to platforms that are connected; everything it does shows in Log.</div>
+      {job("listings", "🆕 New listings", "When a piece goes live in Listing Manager, captions are written for each platform and it's posted — Instagram as photos (or a Reel if it has a video), TikTok as a draft, Pinterest with its store link.",
+        ["instagram", "pinterest", "threads", "x", "tiktok", "youtube"],
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, marginTop: 10, flexWrap: "wrap" }}>Wait
+          <select value={a.listings.afterHours} onChange={e => save({ listings: { ...a.listings, afterHours: +e.target.value } })} style={{ ...FI(), width: "auto", padding: "4px 8px" }}>
+            {[0, 1, 3, 6, 24].map(h => <option key={h} value={h}>{h ? `${h} hour${h > 1 ? "s" : ""}` : "no time"}</option>)}
+          </select> after it goes live (time to fix anything first)</label>)}
+      {job("instagram", "🔁 New Instagram posts", "Whatever you post on Instagram goes on to these too — Reels to TikTok (as a draft) and YouTube Shorts, photos to Pinterest, everything to Threads and X.",
+        ["tiktok", "youtube", "threads", "x", "pinterest"])}
+      <div style={card}>
+        <b style={{ fontSize: 15 }}>🗓 Scheduled</b>
+        <div style={{ fontSize: 12.5, color: C.inkMid, marginBottom: 6 }}>Posts set for later from Compose.</div>
+        {!pending.length && <div style={{ fontSize: 13, color: C.inkFaint }}>Nothing scheduled.</div>}
+        {pending.map(q => {
+          const p = PLATFORMS.find(x => x.k === q.platform);
+          return <div key={q.id} style={{ display: "flex", gap: 10, alignItems: "center", borderTop: `1px solid ${C.border}`, padding: "7px 0", fontSize: 13 }}>
+            <span style={{ width: 150, flex: "none" }}>{new Date(q.at).toLocaleString()}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>{p?.icon} {p?.label} · {q.payload?.title}</span>
+            <button onClick={() => cancel(q.id)} style={{ ...btn(), padding: "3px 9px", fontSize: 12, color: C.red }}>Cancel</button></div>;
+        })}
+        {past.length > 0 && <div style={{ marginTop: 10 }}>{past.map(q => <div key={q.id} style={{ fontSize: 12, color: q.status === "failed" ? C.red : C.inkFaint, padding: "3px 0" }}>
+          {q.status === "failed" ? "⚠" : "✓"} {PLATFORMS.find(x => x.k === q.platform)?.label} · {q.payload?.title} · {q.error || q.note || "posted"} {q.url && <a href={q.url} target="_blank" rel="noreferrer">↗</a>}</div>)}</div>}
+      </div>
+    </div>
+  );
+}
+
 /* ── Accounts ──────────────────────────────────────────────────────────── */
 function Accounts({ st, reload, showToast }) {
   const [open, setOpen] = useState("");
@@ -465,7 +541,7 @@ export default function SocialApp({ onHome }) {
   const reload = useCallback(() => api("status").then(setSt).catch(e => showToast(`⚠ ${e.message}`)), [showToast]);
   useEffect(() => { reload(); }, [reload]);
   const connected = st ? PLATFORMS.filter(p => st[p.k]?.connected).length : 0;
-  const TABS = [["compose", "✍️", "Compose"], ["crosspost", "🔁", "Cross-post"], ["journal", "📝", "Journal"], ["community", "💬", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
+  const TABS = [["compose", "✍️", "Compose"], ["stories", "📸", "Stories"], ["captions", "💬", "Captions"], ["crosspost", "🔁", "Cross-post"], ["autopilot", "🤖", "Autopilot"], ["journal", "📝", "Journal"], ["community", "👥", "Community"], ["accounts", "🔗", `Accounts${st ? ` · ${connected}/${PLATFORMS.length}` : ""}`], ["log", "🗒", "Log"]];
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.ink, fontFamily: "Inter, system-ui, sans-serif" }}>
       {toast && <div style={{ position: "fixed", bottom: 22, left: 16, right: 16, margin: "0 auto", maxWidth: 520, zIndex: 1300, background: C.ink, color: "#fff", padding: "11px 16px", borderRadius: 10, fontSize: 13, textAlign: "center" }}>{toast}</div>}
@@ -487,6 +563,10 @@ export default function SocialApp({ onHome }) {
       <div style={{ padding: mob() ? 12 : "20px 28px", maxWidth: 980, margin: "0 auto" }}>
         {tab === "compose" && <Compose st={st} showToast={showToast} />}
         {tab === "crosspost" && <CrossPost st={st} showToast={showToast} />}
+        {(tab === "stories" || tab === "captions") && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}>
+          {tab === "stories" ? <SocialStories /> : <Captions showToast={showToast} site={SITE} />}
+        </Suspense>}
+        {tab === "autopilot" && <Autopilot st={st} showToast={showToast} />}
         {tab === "journal" && <Journal st={st} showToast={showToast} />}
         {tab === "community" && <Community st={st} showToast={showToast} />}
         {tab === "accounts" && <Accounts st={st} reload={reload} showToast={showToast} />}

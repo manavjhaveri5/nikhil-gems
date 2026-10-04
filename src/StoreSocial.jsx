@@ -205,7 +205,6 @@ export default function SocialTab({ showToast, site }) {
   if (missing) return <div style={{ ...card, padding: 24, fontSize: 13.5 }}><b>The Social tab needs a database update.</b> Run <code>supabase/migrations/20261001090000_site_visitors.sql</code> in Supabase → SQL Editor (project ERP).</div>;
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      <Replies site={site} showToast={showToast} />
       <div style={{ ...card, padding: "12px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <div style={{ flex: 1 }}><b style={{ fontSize: 15 }}>Instagram captions</b><div style={{ fontSize: 12, color: C.inkFaint }}>Newest first, written the way you post. Captions are written by themselves for the {AUTO} newest pieces that don't have one. Locality, weight and size come from the listing; use Copy link for the story link sticker, so Visitors shows which posts bring people in.</div></div>

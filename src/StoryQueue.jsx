@@ -33,7 +33,8 @@ function Tile({ r, kind, state, onOpen, onSkip }) {
   );
 }
 
-export default function StoryQueue({ listings, orders, isLive, stories, onClose }) {
+// inline: shown as a page (Social → Stories) rather than a panel over Listing Manager.
+export default function StoryQueue({ listings, orders, isLive, stories, onClose, inline = false }) {
   const { done, mark } = stories;
   const lists = useMemo(() => storyLists(listings, orders, isLive, done), [listings, orders, isLive, done]);
   const [kind, setKind] = useState(() => lists.due.listed.length || !lists.due.sold.length ? "listed" : "sold");
@@ -42,7 +43,7 @@ export default function StoryQueue({ listings, orders, isLive, stories, onClose 
   const [shown, setShown] = useState(PAGE);
   const [anyListing, setAnyListing] = useState(false);
   useEffect(() => { setShown(PAGE); }, [kind, q, anyListing]);
-  useEffect(() => { const k = e => e.key === "Escape" && !open && onClose(); addEventListener("keydown", k); return () => removeEventListener("keydown", k); }, [onClose, open]);
+  useEffect(() => { if (inline) return; const k = e => e.key === "Escape" && !open && onClose(); addEventListener("keydown", k); return () => removeEventListener("keydown", k); }, [onClose, open, inline]);
 
   const due = lists.due[kind];
   const recentDone = lists[kind].filter(r => Date.now() - r.at < WEEK && done[`${kind}:${r.l.id}`]);
@@ -59,14 +60,14 @@ export default function StoryQueue({ listings, orders, isLive, stories, onClose 
   const openIt = r => setOpen(r.l);
 
   return (
-    <div onMouseDown={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, zIndex: 1250, background: "rgba(20,15,8,.45)", display: "flex", justifyContent: "flex-end" }}>
-      <div style={{ width: "100%", maxWidth: 760, height: "100%", background: C.bg, display: "flex", flexDirection: "column", boxShadow: "-12px 0 40px rgba(0,0,0,.18)" }}>
+    <div onMouseDown={e => !inline && e.target === e.currentTarget && onClose()} style={inline ? {} : { position: "fixed", inset: 0, zIndex: 1250, background: "rgba(20,15,8,.45)", display: "flex", justifyContent: "flex-end" }}>
+      <div style={inline ? { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" } : { width: "100%", maxWidth: 760, height: "100%", background: C.bg, display: "flex", flexDirection: "column", boxShadow: "-12px 0 40px rgba(0,0,0,.18)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: C.ink }}>Instagram stories</div>
             <div style={{ fontSize: 12, color: C.inkFaint }}>New and sold pieces from the last 7 days, found automatically</div>
           </div>
-          <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 24, cursor: "pointer", color: C.inkMid }}>×</button>
+          {!inline && <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 24, cursor: "pointer", color: C.inkMid }}>×</button>}
         </div>
         <div style={{ display: "flex", gap: 4, padding: "4px 14px 0", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
           <button onClick={() => setKind("listed")} style={tab(kind === "listed")}>Just listed{lists.due.listed.length ? ` · ${lists.due.listed.length}` : ""}</button>
