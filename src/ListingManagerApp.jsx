@@ -1902,13 +1902,33 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const [steps, setSteps] = useState(null);   // the listing steps: null | "where" | "price"
   const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, []);
   const linkedCard = stock.find(s => s.id === form.linked_stock_id) || null;
-  // The piece's weight in kilos: its own weight field, or its stock card's kilos.
+  /* A card carries its two measures in either order — 82 pcs / 1.148 kg and
+     1.148 kg / 82 pcs are the same lot — so read each by its unit rather than
+     by which slot it landed in. Reading by slot is what charged a single heart
+     with the weight of all eighty-two of them. */
+  const PCS_UNITS = ["pcs", "pc", "piece", "pieces"];
+  const cardMeasure = (card, want) => {
+    const pairs = [[String(card?.unit || "").toLowerCase(), +card?.qty || 0],
+                   [String(card?.unit2 || "").toLowerCase(), +card?.qty2 || 0]];
+    for (const [u, q] of pairs) {
+      if (!q) continue;
+      if (want === "kg"  && u === "kg") return q;
+      if (want === "kg"  && (u === "gm" || u === "g")) return q / 1000;
+      if (want === "pcs" && PCS_UNITS.includes(u)) return q;
+    }
+    return 0;
+  };
+
+  // The piece's weight in kilos: its own weight field, or its share of the card's.
   const pieceKg = (() => {
     const w = String(form.weight || "").match(/([\d.]+)\s*(kg|kgs|g|gm|gms|grams?)\b/i);
     if (w) return /^k/i.test(w[2]) ? +w[1] : +w[1] / 1000;
-    if (linkedCard?.unit2 === "kg" && +linkedCard.qty2) return +linkedCard.qty2 / Math.max(1, +linkedCard.qty || 1);
-    if (linkedCard?.unit === "kg" && +linkedCard.qty) return +linkedCard.qty;
-    return 0;
+    const kg = cardMeasure(linkedCard, "kg");
+    if (!kg) return 0;
+    /* A card counted in pieces as well as weighed is a bulk card, and its
+       kilos are every piece in it. One piece is that weight over that count. */
+    const pcs = cardMeasure(linkedCard, "pcs");
+    return pcs > 0 ? kg / pcs : kg;
   })();
   /* What this piece cost, from its stock card. The card's cost price is per
      its first unit (stock is valued qty × cost price), so: per piece, it's
@@ -1918,10 +1938,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const cp = +linkedCard?.costPrice || 0;
     if (!cp) return 0;
     const u = String(linkedCard.unit || "pcs").toLowerCase();
-    if (u === "pcs" || u === "lot") return cp;
-    const kg = pieceKg || (u === "kg" ? +linkedCard.qty || 0 : u === "gm" ? (+linkedCard.qty || 0) / 1000 : 0);
-    if (u === "kg" && kg) return Math.round(cp * kg);
-    if (u === "gm" && kg) return Math.round(cp * kg * 1000);
+    if (PCS_UNITS.includes(u) || u === "lot") return cp;
+    if (u === "kg" && pieceKg) return Math.round(cp * pieceKg);
+    if ((u === "gm" || u === "g") && pieceKg) return Math.round(cp * pieceKg * 1000);
     return Math.round(cp * (+linkedCard.qty || 1));
   })();
   /* Etsy's own word on this listing, fetched as it opens: a draft put live
