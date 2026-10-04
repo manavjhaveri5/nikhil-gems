@@ -19,7 +19,6 @@ import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { loadK } from "./utils.js";
-import CrossPost from "./CrossPost.jsx";
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 7, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
@@ -29,7 +28,7 @@ const AUTO = 6;   // captions written by themselves for the newest pieces that h
 export const tagged = (site, handle, source, medium = "social") => `${site}/products/${handle}?utm_source=${source}&utm_medium=${medium}&utm_campaign=${encodeURIComponent(handle)}`;
 const plain = html => String(html || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
-const VOICE = `You write for Earth Editions (eartheditions.co), a family business in India selling natural crystals, mineral specimens and gemstone carvings, bought as rough at the source and cut in house. Voice: warm, knowledgeable, plain English, no hype, at most one emoji per paragraph. The piece in the photos is the one the buyer receives.
+export const VOICE = `You write for Earth Editions (eartheditions.co), a family business in India selling natural crystals, mineral specimens and gemstone carvings, bought as rough at the source and cut in house. Voice: warm, knowledgeable, plain English, no hype, at most one emoji per paragraph. The piece in the photos is the one the buyer receives.
 Rules:
 - Metaphysical meaning is phrased as tradition or belief ("traditionally associated with", "many people use it for"), never as a health claim — never "heals", "cures", "treats".
 - Never invent facts: no locality, weight, size or treatment that isn't in the details given. If a locality isn't given, don't name one.
@@ -128,7 +127,7 @@ function Pack({ p, site }) {
   );
 }
 
-function Replies({ site, showToast }) {
+export function Replies({ site, showToast }) {
   const [where, setWhere] = useState("Reddit");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -206,7 +205,6 @@ export default function SocialTab({ showToast, site }) {
   if (missing) return <div style={{ ...card, padding: 24, fontSize: 13.5 }}><b>The Social tab needs a database update.</b> Run <code>supabase/migrations/20261001090000_site_visitors.sql</code> in Supabase → SQL Editor (project ERP).</div>;
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      <CrossPost showToast={showToast} />
       <Replies site={site} showToast={showToast} />
       <div style={{ ...card, padding: "12px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
