@@ -117,6 +117,12 @@ function App() {
 
 watchModals();
 
+// Back from Instagram's or TikTok's login (api/social.js): say how it went, then tidy the address.
+try {
+  const msg = new URLSearchParams(location.search).get("social");
+  if (msg) { history.replaceState(null, "", location.pathname); setTimeout(() => alert(`${msg}\n\nSocial → Accounts`), 600); }
+} catch { /* no message */ }
+
 createRoot(document.getElementById("root")).render(
   <StrictMode>
     <App />

@@ -48,7 +48,7 @@ export default function VisitorsTab({ showToast, site }) {
   const [missing, setMissing] = useState(false);
 
   const loadLive = useCallback(async () => {
-    let qy = supabase.from("site_live").select("*").gt("last_seen", new Date(Date.now() - 75e3).toISOString()).order("started_at", { ascending: false }).limit(200);
+    let qy = supabase.from("site_live").select("*").gt("last_seen", new Date(Date.now() - 200e3).toISOString()).order("started_at", { ascending: false }).limit(200);
     if (!staff) qy = qy.eq("is_staff", false);
     const { data, error } = await qy;
     if (error) { if (/site_live|does not exist|schema cache/i.test(error.message)) setMissing(true); return; }

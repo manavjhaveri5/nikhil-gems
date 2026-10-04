@@ -28,7 +28,7 @@ const AUTO = 6;   // captions written by themselves for the newest pieces that h
 export const tagged = (site, handle, source, medium = "social") => `${site}/products/${handle}?utm_source=${source}&utm_medium=${medium}&utm_campaign=${encodeURIComponent(handle)}`;
 const plain = html => String(html || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 
-const VOICE = `You write for Earth Editions (eartheditions.co), a family business in India selling natural crystals, mineral specimens and gemstone carvings, bought as rough at the source and cut in house. Voice: warm, knowledgeable, plain English, no hype, at most one emoji per paragraph. The piece in the photos is the one the buyer receives.
+export const VOICE = `You write for Earth Editions (eartheditions.co), a family business in India selling natural crystals, mineral specimens and gemstone carvings, bought as rough at the source and cut in house. Voice: warm, knowledgeable, plain English, no hype, at most one emoji per paragraph. The piece in the photos is the one the buyer receives.
 Rules:
 - Metaphysical meaning is phrased as tradition or belief ("traditionally associated with", "many people use it for"), never as a health claim — never "heals", "cures", "treats".
 - Never invent facts: no locality, weight, size or treatment that isn't in the details given. If a locality isn't given, don't name one.
@@ -127,7 +127,7 @@ function Pack({ p, site }) {
   );
 }
 
-function Replies({ site, showToast }) {
+export function Replies({ site, showToast }) {
   const [where, setWhere] = useState("Reddit");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -205,7 +205,6 @@ export default function SocialTab({ showToast, site }) {
   if (missing) return <div style={{ ...card, padding: 24, fontSize: 13.5 }}><b>The Social tab needs a database update.</b> Run <code>supabase/migrations/20261001090000_site_visitors.sql</code> in Supabase → SQL Editor (project ERP).</div>;
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      <Replies site={site} showToast={showToast} />
       <div style={{ ...card, padding: "12px 14px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <div style={{ flex: 1 }}><b style={{ fontSize: 15 }}>Instagram captions</b><div style={{ fontSize: 12, color: C.inkFaint }}>Newest first, written the way you post. Captions are written by themselves for the {AUTO} newest pieces that don't have one. Locality, weight and size come from the listing; use Copy link for the story link sticker, so Visitors shows which posts bring people in.</div></div>

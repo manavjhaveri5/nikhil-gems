@@ -15,7 +15,6 @@ import { ETSY_SHOP_SECTIONS } from "../lib/listingCategories.js";
 import { retailTitle } from "../lib/retailTitle.js";
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 const VisitorsTab = lazy(() => import("./StoreVisitors.jsx"));
-const SocialTab = lazy(() => import("./StoreSocial.jsx"));
 const esc = s => s.replace(/[%_]/g, m => "\\" + m);
 
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
@@ -216,7 +215,7 @@ export default function StoreApp({ onHome }) {
   const reload = useCallback(() => storeSettings().then(setSettings).catch(e => showToast("⚠ " + e.message)), [showToast]);
   useEffect(() => { reload(); }, [reload]);
   const site = String(settings?.site_url || "https://eartheditions.co").replace(/\/+$/, "");
-  const TABS = [["orders", "🧾", "Orders"], ["products", "💎", "Products"], ["visitors", "📈", "Visitors"], ["social", "✍️", "Social"], ["settings", "⚙️", "Settings"]];
+  const TABS = [["orders", "🧾", "Orders"], ["products", "💎", "Products"], ["visitors", "📈", "Visitors"], ["settings", "⚙️", "Settings"]];   // Social is its own module now
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: FONT, color: C.ink }}>
       {toast && <div style={{ position: "fixed", bottom: 22, right: 22, left: mob() ? 22 : "auto", zIndex: 1200, background: C.ink, color: "#fff", padding: "10px 18px", borderRadius: 6, fontSize: 12.5 }}>{toast}</div>}
@@ -241,9 +240,7 @@ export default function StoreApp({ onHome }) {
       <div style={{ padding: mob() ? 14 : "24px 28px", maxWidth: 1180, margin: "0 auto" }}>
         {tab === "orders" && <OrdersTab showToast={showToast} />}
         {tab === "products" && settings && <StoreProductsPanel showToast={showToast} settings={settings} site={site} />}
-        {(tab === "visitors" || tab === "social") && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}>
-          {tab === "visitors" ? <VisitorsTab showToast={showToast} site={site} /> : <SocialTab showToast={showToast} site={site} />}
-        </Suspense>}
+        {tab === "visitors" && <Suspense fallback={<div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}><VisitorsTab showToast={showToast} site={site} /></Suspense>}
         {tab === "settings" && settings && <SettingsTab settings={settings} reload={reload} showToast={showToast} />}
       </div>
     </div>

@@ -17,6 +17,9 @@
     },
     "api/listing-manager.js": {
       "maxDuration": 300
+    },
+    "api/social.js": {
+      "maxDuration": 300
     }
   },
   "rewrites": [
