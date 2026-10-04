@@ -9870,35 +9870,75 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* delete */
-  /* Deleting several at once. Each one only leaves the ERP — whatever is live
-     on Etsy, eBay or the sites stays live — so the piece carries on selling
-     with nothing here tracking it, and no way back to it from the ERP. The
-     confirmation says how many of the chosen ones are in that state, because
-     that is the part worth hesitating over, and the count is worth seeing
-     before rather than after. */
-  const handleBulkDelete = async rows => {
-    const ids = rows.map(r => r.id).filter(Boolean);
-    if (!ids.length) return;
-    const liveOn = rows.filter(r => Object.values(r.platforms || {})
-      .some(p => p && p.status && p.status !== "deleted"));
-    const warn = liveOn.length
-      ? `\n\n${liveOn.length} of them ${liveOn.length === 1 ? "is" : "are"} still listed on a platform. Deleting here does not take anything down — those stay on sale, and the ERP will no longer know about them.`
-      : "";
-    if (!confirm(`Delete ${ids.length} listing${ids.length === 1 ? "" : "s"} from the ERP?${warn}\n\nThis cannot be undone.`)) return;
-    let gone = 0, failed = 0;
-    for (const id of ids) {
-      try { await removeListingItem(id); gone++; }
-      catch { failed++; }
+  /* Where a piece still stands on each platform, for anything that has to take
+     it down. A platform it was never on, or was already removed from, is not
+     something to go asking the platform about. */
+  const liveTargets = l => PLATFORMS.filter(p => {
+    const ps = l?.platforms?.[p.key];
+    return ps && ps.status && ps.status !== "deleted"
+      && (ps.listing_id || ps.product_id || ps.item_id);
+  });
+
+  /* Take a piece down everywhere, then forget it here.
+
+     The order is the whole point. Removing the ERP row first — or regardless —
+     leaves anything that refused to come down still on sale with nothing
+     tracking it and no route back to it: the listing is gone from the only
+     place that knew its platform ids. So the ERP row goes last, and only if
+     every platform has actually let go. A piece that half-deletes stays whole
+     here, and says what refused.
+
+     On Etsy, eBay and Shopify this really is a delete. On our own two sites it
+     takes the piece off sale rather than dropping the row, because a sold piece
+     keeps its row for the order that bought it — hideStoreProduct refuses a
+     sold product for exactly that reason. Off the shop either way. */
+  const removeEverywhere = async listing => {
+    const failed = [];
+    for (const p of liveTargets(listing)) {
+      try { await handleUnpublish(listing, p.key); }
+      catch (e) { failed.push(`${p.label}: ${e.message}`); }
     }
-    showToast(failed
-      ? `Deleted ${gone}, but ${failed} wouldn't go — try those again`
-      : `Deleted ${gone} listing${gone === 1 ? "" : "s"}`);
+    if (failed.length) return { ok: false, failed };
+    await removeListingItem(listing.id);
+    return { ok: true, failed: [] };
+  };
+
+  /* Deleting several at once, each one taken off every platform first. */
+  const handleBulkDelete = async rows => {
+    const picked = rows.filter(r => r?.id);
+    if (!picked.length) return;
+    const onSale = picked.filter(r => liveTargets(r).length);
+    const where = [...new Set(picked.flatMap(r => liveTargets(r).map(p => p.label)))];
+    const warn = onSale.length
+      ? `\n\n${onSale.length} of them ${onSale.length === 1 ? "is" : "are"} still listed on ${where.join(", ")}. Those will be taken down there as well — on Etsy and eBay that is a real delete, and relisting later costs the listing fee again and starts over with no views or favourites.`
+      : "";
+    if (!confirm(`Delete ${picked.length} listing${picked.length === 1 ? "" : "s"} everywhere?${warn}\n\nThis cannot be undone.`)) return;
+
+    let gone = 0;
+    const stuck = [];
+    for (const [i, l] of picked.entries()) {
+      if (picked.length > 3) showToast(`Deleting ${i + 1} of ${picked.length}…`, 60000);
+      try {
+        const r = await removeEverywhere(l);
+        if (r.ok) gone++;
+        else stuck.push(`${l.title || l.id} — ${r.failed.join("; ")}`);
+      } catch (e) { stuck.push(`${l.title || l.id} — ${e.message}`); }
+    }
+    showToast(stuck.length
+      ? `Deleted ${gone}. ${stuck.length} still ${stuck.length === 1 ? "stands" : "stand"}: ${stuck.slice(0, 2).join(" · ")}${stuck.length > 2 ? ` and ${stuck.length - 2} more` : ""}`
+      : `Deleted ${gone} listing${gone === 1 ? "" : "s"} everywhere`, stuck.length ? 12000 : 4000);
   };
 
   const handleDelete = async id => {
-    if (!confirm("Delete this listing from your catalog? Won't remove from platforms.")) return;
-    await removeListingItem(id);
-    showToast("Deleted");
+    const l = listings.find(x => x.id === id);
+    if (!l) return;
+    const where = liveTargets(l).map(p => p.label);
+    const warn = where.length
+      ? `\n\nIt will be taken down from ${where.join(", ")} too. On Etsy and eBay that is a real delete — relisting later costs the listing fee again.`
+      : "";
+    if (!confirm(`Delete this listing everywhere?${warn}\n\nThis cannot be undone.`)) return;
+    const r = await removeEverywhere(l);
+    showToast(r.ok ? "Deleted everywhere" : `⚠ Still listed — ${r.failed.join("; ")}`, r.ok ? 4000 : 12000);
   };
 
   // Earth Editions Shopify creds are stored in the shared app data (set up via
@@ -10423,12 +10463,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 onPrice={quickPrice}
                 onSavePhotos={(l, images) => handleSave({ ...l, images })}
                 onMarkSold={setSoldModal}
-                onDelete={async id => { await removeListingItem(id); showToast("Deleted"); }}
+                onDelete={handleDelete}
+                onBulkDelete={handleBulkDelete}
                 onBulkPrice={bulkPrice}
                 renderManage={l => (
                   <ListingCard listing={l} stock={stock} orders={orders} startExpanded
                     onEdit={x => { setEditing(x); setShowForm(true); }}
-                    onDelete={handleDelete} onBulkDelete={handleBulkDelete}
+                    onDelete={handleDelete}
                     onPublish={handlePublish}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
@@ -10512,7 +10553,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 {visibleListings.map(l => (
                   <ListingCard key={l.id} listing={l} stock={stock} orders={orders}
                     onEdit={l => { setEditing(l); setShowForm(true); }}
-                    onDelete={handleDelete} onBulkDelete={handleBulkDelete}
+                    onDelete={handleDelete}
                     onPublish={handlePublish}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}

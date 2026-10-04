@@ -273,7 +273,11 @@ function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice,
           <button onClick={() => { onClose(); onMarkSold(l); }} style={{ ...btn(), flex: "none", padding: "8px 14px", background: C.greenBg, color: C.green, borderColor: C.green + "40" }}>Mark sold</button>
           <button onClick={() => setStory(true)} disabled={!imgs.length} title={imgs.length ? "Just listed / Sold story for Instagram" : "Add a photo first"}
             style={{ ...btn(), flex: "none", padding: "8px 14px", opacity: imgs.length ? 1 : .5 }}>Story</button>
-          <button onClick={() => { if (confirm("Delete this listing from the ERP? It stays on the platforms.")) { onClose(); onDelete(l.id); } }} style={{ ...btn(), flex: "none", padding: "8px 14px", color: C.red }}>Delete</button>
+          {/* The asking belongs with the deleting: handleDelete knows which
+              platforms this piece is actually on and names them. A second
+              confirm here would ask twice and, worse, still promise that the
+              platforms are left alone — which is no longer true. */}
+          <button onClick={() => { onClose(); onDelete(l.id); }} style={{ ...btn(), flex: "none", padding: "8px 14px", color: C.red }}>Delete</button>
           <div style={{ flex: 1 }} />
           {tab === "photos" && changed && (
             <button disabled={busy} onClick={async () => { setBusy(true); try { await onSavePhotos(l, imgs); } finally { setBusy(false); } }}
