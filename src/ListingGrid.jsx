@@ -321,7 +321,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, loadTradeFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, renderManage, onBulkPrice }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, loadTradeFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -451,6 +451,15 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
             {onBulkMove && <button onClick={() => onBulkMove(selected)} style={chip(false)}>📍 Move to…</button>}
             <button onClick={() => setSel(new Set(list.map(l => l.id)))} style={chip(false)}>Select all {list.length}</button>
             <button onClick={() => setSel(new Set())} style={chip(false)}>Clear selection</button>
+            {onBulkDelete && (
+              /* Last, apart from the others, and in red: the one button here
+                 that cannot be undone should not sit under the thumb next to
+                 "Move to…". The selection clears only once they are gone. */
+              <button onClick={async () => { await onBulkDelete(selected); setSel(new Set()); }}
+                style={{ ...chip(false), marginLeft: "auto", color: C.red, border: `1px solid ${C.red}55` }}>
+                Delete {selected.length}…
+              </button>
+            )}
           </div>
         )}
       </div>

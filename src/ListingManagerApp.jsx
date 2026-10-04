@@ -9870,6 +9870,31 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* delete */
+  /* Deleting several at once. Each one only leaves the ERP — whatever is live
+     on Etsy, eBay or the sites stays live — so the piece carries on selling
+     with nothing here tracking it, and no way back to it from the ERP. The
+     confirmation says how many of the chosen ones are in that state, because
+     that is the part worth hesitating over, and the count is worth seeing
+     before rather than after. */
+  const handleBulkDelete = async rows => {
+    const ids = rows.map(r => r.id).filter(Boolean);
+    if (!ids.length) return;
+    const liveOn = rows.filter(r => Object.values(r.platforms || {})
+      .some(p => p && p.status && p.status !== "deleted"));
+    const warn = liveOn.length
+      ? `\n\n${liveOn.length} of them ${liveOn.length === 1 ? "is" : "are"} still listed on a platform. Deleting here does not take anything down — those stay on sale, and the ERP will no longer know about them.`
+      : "";
+    if (!confirm(`Delete ${ids.length} listing${ids.length === 1 ? "" : "s"} from the ERP?${warn}\n\nThis cannot be undone.`)) return;
+    let gone = 0, failed = 0;
+    for (const id of ids) {
+      try { await removeListingItem(id); gone++; }
+      catch { failed++; }
+    }
+    showToast(failed
+      ? `Deleted ${gone}, but ${failed} wouldn't go — try those again`
+      : `Deleted ${gone} listing${gone === 1 ? "" : "s"}`);
+  };
+
   const handleDelete = async id => {
     if (!confirm("Delete this listing from your catalog? Won't remove from platforms.")) return;
     await removeListingItem(id);
@@ -10403,7 +10428,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 renderManage={l => (
                   <ListingCard listing={l} stock={stock} orders={orders} startExpanded
                     onEdit={x => { setEditing(x); setShowForm(true); }}
-                    onDelete={handleDelete}
+                    onDelete={handleDelete} onBulkDelete={handleBulkDelete}
                     onPublish={handlePublish}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
@@ -10487,7 +10512,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 {visibleListings.map(l => (
                   <ListingCard key={l.id} listing={l} stock={stock} orders={orders}
                     onEdit={l => { setEditing(l); setShowForm(true); }}
-                    onDelete={handleDelete}
+                    onDelete={handleDelete} onBulkDelete={handleBulkDelete}
                     onPublish={handlePublish}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
