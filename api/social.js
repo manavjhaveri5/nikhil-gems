@@ -441,6 +441,54 @@ async function gh(path, opts = {}) {
   if (!r.ok) fail(502, `GitHub: ${d.message || r.status}`);
   return d;
 }
+/* Reading the journal: every post, and the topic queue the Tue/Fri writer
+   works through (content/blog/planned.json — [{ topic, notes }], first one
+   next). earth-store is a private repo, so this needs GITHUB_BLOG_TOKEN too. */
+const ghRead = async path => {
+  if (!env("GITHUB_BLOG_TOKEN")) fail(400, "Add GITHUB_BLOG_TOKEN in Vercel to see the journal here");
+  const r = await fetch(`${GH}/${path}?ref=main`, { headers: { Accept: "application/vnd.github+json", "User-Agent": "earth-editions-erp", Authorization: `Bearer ${env("GITHUB_BLOG_TOKEN")}` } });
+  if (r.status === 404) return null;
+  const d = await json(r);
+  if (!r.ok) fail(502, `GitHub: ${d.message || r.status}`);
+  return d;
+};
+const ghText = async path => { const f = await ghRead(path); return f?.content ? Buffer.from(f.content, "base64").toString("utf8") : null; };
+async function journalList() {
+  const index = (await ghText("content/blog/index.js")) || "";
+  const files = [...index.matchAll(/from "\.\/([^"]+\.js)"/g)].map(m => m[1]);
+  const posts = await Promise.all(files.map(async name => {
+    try {
+      const src = await ghText(`content/blog/${name}`);
+      // The posts are our own files: a plain object literal behind export default.
+      const p = new Function(src.replace(/^\s*export\s+default\s+/m, "return "))();
+      return { slug: p.slug, title: p.title, description: p.description, date: p.date, stones: p.stones || [], body: String(p.body || "").trim(), words: String(p.body || "").split(/\s+/).length };
+    } catch { return { slug: name.replace(/\.js$/, ""), title: name, broken: true }; }
+  }));
+  let planned = [];
+  try { planned = JSON.parse((await ghText("content/blog/planned.json")) || "[]"); } catch { /* none yet */ }
+  return { posts: posts.sort((a, b) => String(b.date).localeCompare(String(a.date))), planned: Array.isArray(planned) ? planned : [] };
+}
+async function setPlanned(list) {
+  if (!env("GITHUB_BLOG_TOKEN")) fail(400, "Add GITHUB_BLOG_TOKEN in Vercel to change the plan");
+  const clean = (Array.isArray(list) ? list : []).map(x => ({ topic: String(x.topic || "").trim(), notes: String(x.notes || "").trim() })).filter(x => x.topic).slice(0, 50);
+  const cur = await ghRead("content/blog/planned.json");
+  await gh("content/blog/planned.json", { method: "PUT", body: JSON.stringify({ message: "Journal: planned topics", content: Buffer.from(JSON.stringify(clean, null, 2) + "\n").toString("base64"), ...(cur?.sha ? { sha: cur.sha } : {}) }) });
+  return clean;
+}
+async function unpublishJournal(slug) {
+  if (!env("GITHUB_BLOG_TOKEN")) fail(400, "Add GITHUB_BLOG_TOKEN in Vercel first");
+  const f = await ghRead(`content/blog/${slug}.js`);
+  if (!f) fail(404, "No such post");
+  const idx = await gh("content/blog/index.js");
+  const src = Buffer.from(idx.content, "base64").toString("utf8");
+  const v = (src.match(new RegExp(`import (\\w+) from "\\./${slug}\\.js";`)) || [])[1];
+  if (v) {
+    const next = src.replace(new RegExp(`import ${v} from "\\./${slug}\\.js";\\n`), "").replace(new RegExp(`\\n\\s*${v},`), "");
+    await gh("content/blog/index.js", { method: "PUT", body: JSON.stringify({ message: `Journal: unpublish ${slug}`, content: Buffer.from(next).toString("base64"), sha: idx.sha }) });
+  }
+  await gh(`content/blog/${slug}.js`, { method: "DELETE", body: JSON.stringify({ message: `Journal: unpublish ${slug}`, sha: f.sha }) });
+}
+
 async function publishJournal(post) {
   if (!env("GITHUB_BLOG_TOKEN")) fail(400, "Add GITHUB_BLOG_TOKEN in Vercel (contents: write on earth-store)");
   const slug = String(post.slug || post.title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 70);
@@ -707,6 +755,10 @@ export default async function handler(req, res) {
     }
 
     if (action === "reddit_search") return res.json({ threads: await redditSearch(Array.isArray(body.terms) ? body.terms : []) });
+
+    if (action === "journal_list") return res.json(await journalList());
+    if (action === "journal_plan") return res.json({ planned: await setPlanned(body.planned) });
+    if (action === "journal_unpublish") { await unpublishJournal(String(body.slug || "")); await addLog({ platform: "journal", title: `Unpublished ${body.slug}` }); return res.json({ ok: true }); }
 
     if (action === "journal_publish") {
       const out = await publishJournal(body.post || {});

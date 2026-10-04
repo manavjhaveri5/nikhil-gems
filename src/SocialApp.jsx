@@ -291,59 +291,169 @@ function CrossPost({ st, showToast }) {
 }
 
 /* ── Journal ───────────────────────────────────────────────────────────── */
+/* The journal on eartheditions.co/blog. A scheduled writer (a Claude routine)
+   publishes a new article every Tuesday and Friday at 04:30 UTC, taking the
+   next topic from the queue here (content/blog/planned.json in the store's
+   repo) or choosing one itself when the queue is empty. Here: what's
+   published (edit or take down), what's coming and in what order, and a
+   post written and published by hand. */
+const nextRuns = n => {
+  const out = [], d = new Date();
+  for (let i = 0; out.length < n && i < 60; i++) {
+    const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + i, 4, 30));
+    if ((x.getUTCDay() === 2 || x.getUTCDay() === 5) && x > d) out.push(x);
+  }
+  return out;
+};
 function Journal({ st, showToast }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [plan, setPlan] = useState([]);
+  const [dirty, setDirty] = useState(false);
   const [topic, setTopic] = useState("");
-  const [post, setPost] = useState(null);
+  const [post, setPost] = useState(null);       // the editor: a new post, or a published one being changed
   const [busy, setBusy] = useState("");
   const [done, setDone] = useState(null);
+  const load = useCallback(() => { setErr(""); api("journal_list").then(d => { setData(d); setPlan(d.planned); setDirty(false); }).catch(e => setErr(e.message)); }, []);
+  useEffect(() => { load(); }, [load]);
+  const runs = nextRuns(Math.max(4, plan.length + 1));
+
   const write = async () => {
     setBusy("write"); setDone(null);
     try {
       const out = parseJson(await ask(`Write an article for the Earth Editions journal (eartheditions.co/blog) about: ${topic}.
-It's read by collectors and curious buyers: accurate geology, mineralogy and history, written plainly and warmly, 900-1300 words. No health claims. Link stones on the site the way the journal does: [amethyst](/stones/amethyst) (lower-case slug, hyphens).
-Body format: paragraphs separated by a blank line; "## " starts a heading; lines starting "- " make a list; **bold**, *italic*.
-Return ONLY JSON: {"title":"under 70 characters","description":"under 160 characters, for search results","slug":"short-hyphenated-slug","stones":["slugs of the stones it's about"],"body":"the article"}`, 4000));
+Read by collectors and curious buyers: accurate geology, mineralogy and history, plain and warm, British spelling, 800-1200 words. No health, healing or metaphysical claims; don't invent facts about the business. Link stones the way the journal does: [amethyst](/stones/amethyst) (lower-case slug, hyphens), and where it fits, an existing post: ${(data?.posts || []).slice(0, 12).map(p => `/blog/${p.slug}`).join(", ")}.
+Body format: paragraphs separated by a blank line; "## " starts a heading (3-6 of them); lines starting "- " make a list; **bold**, *italic*. No emojis, no exclamation marks, no "In conclusion".
+Return ONLY JSON: {"title":"under 70 characters","description":"90-170 characters","slug":"short-hyphenated-slug","stones":["slugs"],"body":"the article"}`, 4000));
       if (!out?.body) throw new Error("The AI's reply couldn't be read — try again");
-      setPost(out);
+      setPost({ ...out, isNew: true });
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
   const publish = async () => {
-    if (!confirm(`Publish "${post.title}" to the eartheditions.co journal?`)) return;
+    if (!confirm(post.isNew ? `Publish "${post.title}" to the journal now?` : `Save your changes to "${post.title}"? They go live after the store redeploys.`)) return;
     setBusy("pub");
-    try { const d = await api("journal_publish", { body: { post } }); setDone(d.url); showToast("✓ Published — live after the store's deploy (2–3 minutes)"); }
+    try { const d = await api("journal_publish", { body: { post } }); setDone(d.url); showToast("✓ Done — live after the store's deploy (2–3 minutes)"); load(); }
     catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
+  const unpublish = async p => {
+    if (!confirm(`Take "${p.title}" off the journal? Its page will stop working.`)) return;
+    setBusy(p.slug);
+    try { await api("journal_unpublish", { body: { slug: p.slug } }); showToast("✓ Taken down — gone after the store's deploy"); load(); }
+    catch (e) { showToast(`⚠ ${e.message}`); }
+    setBusy("");
+  };
+  const savePlan = async () => {
+    setBusy("plan");
+    try { const d = await api("journal_plan", { body: { planned: plan } }); setPlan(d.planned); setDirty(false); showToast("✓ Plan saved — the writer follows it from the next run"); }
+    catch (e) { showToast(`⚠ ${e.message}`); }
+    setBusy("");
+  };
+  const suggest = async () => {
+    setBusy("suggest");
+    try {
+      const have = [...(data?.posts || []).map(p => p.title), ...plan.map(p => p.topic)];
+      const out = parseJson(await ask(`Suggest 6 new journal topics for eartheditions.co (natural crystals, mineral specimens, carvings; a family business in India). Things people really search for: how a stone forms, where it's from and its history, telling it from fakes or look-alikes, what a trade name means, how a shape is made, care. Not these, already covered or planned: ${have.join("; ")}.
+Return ONLY JSON: {"topics":[{"topic":"the article's subject, as a working title","notes":"one line on the angle"}]}`, 900));
+      setPlan(p => [...p, ...(out?.topics || [])]); setDirty(true);
+    } catch (e) { showToast(`⚠ ${e.message}`); }
+    setBusy("");
+  };
+  const move = (i, d) => { setPlan(p => { const a = [...p], j = i + d; if (j < 0 || j >= a.length) return p; [a[i], a[j]] = [a[j], a[i]]; return a; }); setDirty(true); };
+  const setP = (i, k, v) => { setPlan(p => p.map((x, j) => j === i ? { ...x, [k]: v } : x)); setDirty(true); };
   const set = k => e => setPost(p => ({ ...p, [k]: k === "stones" ? e.target.value.split(/[,\s]+/).filter(Boolean) : e.target.value }));
+  const fmt = d => d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" }) + ", " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <div style={card}>
-        <span style={lab}>What should it be about?</span>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="e.g. Why labradorite flashes blue · How to clean and care for selenite" style={FI({ flex: 1 })} />
-          <button disabled={!topic.trim() || busy} onClick={write} style={btn(C.ink, "#FAF0DC")}>{busy === "write" ? "Writing…" : "✨ Write"}</button>
-        </div>
-        {!st?.journal?.ready && <div style={{ fontSize: 12, color: C.amber, marginTop: 8 }}>To publish from here, add GITHUB_BLOG_TOKEN in Vercel: github.com → Settings → Developer settings → Fine-grained tokens → repository earth-store, permission Contents: read and write. Until then, copy the article into content/blog.</div>}
+      <div style={{ ...card, fontSize: 12.5, color: C.inkMid, lineHeight: 1.6 }}>
+        <b style={{ color: C.ink, fontSize: 14 }}>How the journal runs</b><br />
+        A writer publishes a new article <b>every Tuesday and Friday at {nextRuns(1)[0].toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</b> (your time). It takes the <b>next topic in the queue below</b> — in that order, with your notes — or picks a topic people search for when the queue is empty. It writes 700–1,200 words in the journal's voice, checks it, and it's live on <a href={`${SITE}/blog`} target="_blank" rel="noreferrer">eartheditions.co/blog</a> a few minutes later. After 30 posts it goes weekly (Tuesdays).
       </div>
+      {err && <div style={{ ...card, color: C.red, fontSize: 13 }}>⚠ {err}{/GITHUB_BLOG_TOKEN/.test(err) && <div style={{ color: C.inkMid, marginTop: 6 }}>github.com → Settings → Developer settings → Fine-grained tokens → Generate → Repository access: only earth-store → Permissions: Contents: Read and write → add it in Vercel as GITHUB_BLOG_TOKEN → Redeploy.</div>}</div>}
+
+      <div style={card}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+          <b style={{ fontSize: 15, flex: 1 }}>Coming up</b>
+          <button disabled={!data || busy === "suggest"} onClick={suggest} style={btn()}>{busy === "suggest" ? "Thinking…" : "✨ Suggest topics"}</button>
+          <button disabled={!data} onClick={() => { setPlan(p => [...p, { topic: "", notes: "" }]); setDirty(true); }} style={btn()}>+ Add topic</button>
+          {dirty && <button disabled={busy === "plan"} onClick={savePlan} style={btn(C.ink, "#FAF0DC")}>{busy === "plan" ? "Saving…" : "Save plan"}</button>}
+        </div>
+        {runs.map((r, i) => {
+          const p = plan[i];
+          return (
+            <div key={r.toISOString()} style={{ display: "flex", gap: 10, borderTop: `1px solid ${C.border}`, padding: "8px 0", alignItems: "flex-start" }}>
+              <div style={{ width: 120, flex: "none", fontSize: 12.5, fontWeight: 650, paddingTop: 7 }}>{fmt(r)}</div>
+              {p ? (
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <input value={p.topic} onChange={e => setP(i, "topic", e.target.value)} placeholder="Topic" style={FI({ fontWeight: 650, marginBottom: 4 })} />
+                  <input value={p.notes || ""} onChange={e => setP(i, "notes", e.target.value)} placeholder="Notes for the writer (angle, stones to link, what to avoid) — optional" style={FI({ fontSize: 12.5 })} />
+                </div>
+              ) : <div style={{ flex: 1, fontSize: 13, color: C.inkFaint, paddingTop: 7 }}>Writer's choice — a topic not covered yet</div>}
+              {p && <div style={{ display: "flex", gap: 3, flex: "none" }}>
+                <button onClick={() => move(i, -1)} disabled={!i} style={{ ...btn(), padding: "4px 8px" }}>↑</button>
+                <button onClick={() => move(i, 1)} disabled={i === plan.length - 1} style={{ ...btn(), padding: "4px 8px" }}>↓</button>
+                <button onClick={() => { setPlan(x => x.filter((_, j) => j !== i)); setDirty(true); }} style={{ ...btn(), padding: "4px 8px", color: C.red }}>×</button>
+              </div>}
+            </div>
+          );
+        })}
+        {plan.length > runs.length && <div style={{ fontSize: 12, color: C.inkFaint }}>+ {plan.length - runs.length} more after these</div>}
+      </div>
+
+      <div style={card}>
+        <b style={{ fontSize: 15 }}>Write one now</b>
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="e.g. Why labradorite flashes blue" style={FI({ flex: 1 })} />
+          <button disabled={!topic.trim() || !!busy} onClick={write} style={btn(C.ink, "#FAF0DC")}>{busy === "write" ? "Writing…" : "✨ Write"}</button>
+        </div>
+        <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 6 }}>Published as soon as you approve it, outside the Tue/Fri schedule.</div>
+      </div>
+
       {post && (
         <div style={card}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+            <b style={{ fontSize: 15, flex: 1 }}>{post.isNew ? "New post" : `Editing: ${post.title}`}</b>
+            <button onClick={() => setPost(null)} style={btn()}>Close</button>
+          </div>
           <span style={lab}>Title</span><input value={post.title || ""} onChange={set("title")} style={FI({ marginBottom: 8, fontWeight: 700 })} />
           <span style={lab}>Search description</span><input value={post.description || ""} onChange={set("description")} style={FI({ marginBottom: 8 })} />
-          <div style={{ display: "flex", gap: 8 }}>
-            <div style={{ flex: 1 }}><span style={lab}>Address</span><input value={post.slug || ""} onChange={set("slug")} style={FI({ marginBottom: 8 })} /></div>
-            <div style={{ flex: 1 }}><span style={lab}>Stones (slugs)</span><input value={(post.stones || []).join(", ")} onChange={set("stones")} style={FI({ marginBottom: 8 })} /></div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 200px" }}><span style={lab}>Address</span><input value={post.slug || ""} disabled={!post.isNew} onChange={set("slug")} style={FI({ marginBottom: 8 })} /></div>
+            <div style={{ flex: "1 1 200px" }}><span style={lab}>Stones (slugs)</span><input value={(post.stones || []).join(", ")} onChange={set("stones")} style={FI({ marginBottom: 8 })} /></div>
+            <div style={{ flex: "0 1 150px" }}><span style={lab}>Date</span><input type="date" value={post.date || new Date().toISOString().slice(0, 10)} onChange={set("date")} style={FI({ marginBottom: 8 })} /></div>
           </div>
           <span style={lab}>Article</span>
-          <textarea value={post.body || ""} onChange={set("body")} rows={18} style={FI({ fontSize: 13.5, lineHeight: 1.6, resize: "vertical" })} />
+          <textarea value={post.body || ""} onChange={set("body")} rows={20} style={FI({ fontSize: 13.5, lineHeight: 1.6, resize: "vertical" })} />
           <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
             <span style={{ fontSize: 12, color: C.inkFaint, flex: 1 }}>{String(post.body || "").split(/\s+/).length} words</span>
             <button onClick={() => navigator.clipboard.writeText(post.body).then(() => showToast("Copied"))} style={btn()}>Copy</button>
-            <button disabled={!!busy || !st?.journal?.ready} onClick={publish} style={btn(C.ink, "#FAF0DC")}>{busy === "pub" ? "Publishing…" : "Publish to the journal"}</button>
+            <button disabled={!!busy || !st?.journal?.ready} onClick={publish} style={btn(C.ink, "#FAF0DC")}>{busy === "pub" ? "Saving…" : post.isNew ? "Publish" : "Save changes"}</button>
           </div>
           {done && <div style={{ fontSize: 13, color: C.green, marginTop: 8 }}>✓ <a href={done} target="_blank" rel="noreferrer">{done}</a> — live once the store redeploys.</div>}
         </div>
       )}
+
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 6 }}>
+          <b style={{ fontSize: 15, flex: 1 }}>Published · {data?.posts?.length ?? "…"}</b>
+          <button onClick={load} style={btn()}>↻</button>
+        </div>
+        {!data && !err && <div style={{ fontSize: 13, color: C.inkFaint }}>Loading…</div>}
+        {(data?.posts || []).map(p => (
+          <div key={p.slug} style={{ display: "flex", gap: 10, borderTop: `1px solid ${C.border}`, padding: "8px 0", alignItems: "center" }}>
+            <span style={{ width: 82, flex: "none", fontSize: 12, color: C.inkFaint }}>{p.date}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 650 }}>{p.title}</div>
+              <div style={{ fontSize: 11.5, color: C.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.words} words · {(p.stones || []).join(", ")}</div>
+            </div>
+            <a href={`${SITE}/blog/${p.slug}`} target="_blank" rel="noreferrer" style={{ fontSize: 12.5 }}>View ↗</a>
+            <button disabled={p.broken} onClick={() => { setPost({ ...p, isNew: false }); setDone(null); scrollTo({ top: 0, behavior: "smooth" }); }} style={{ ...btn(), padding: "4px 10px", fontSize: 12 }}>Edit</button>
+            <button disabled={busy === p.slug} onClick={() => unpublish(p)} style={{ ...btn(), padding: "4px 10px", fontSize: 12, color: C.red }}>{busy === p.slug ? "…" : "Take down"}</button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
