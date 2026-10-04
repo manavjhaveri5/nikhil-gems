@@ -550,7 +550,7 @@ function Autopilot({ st, showToast }) {
   );
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <div style={{ fontSize: 12.5, color: C.inkMid }}>Runs every 15 minutes by itself (a free GitHub job), even with the ERP closed. Each job only posts to platforms that are connected; everything it does shows in Log.</div>
+      <div style={{ fontSize: 12.5, color: C.inkMid }}>Runs every hour by itself (a free GitHub job), even with the ERP closed. Each job only posts to platforms that are connected; everything it does shows in Log.</div>
       {job("listings", "🆕 New listings", "When a piece goes live in Listing Manager, captions are written for each platform and it's posted — Instagram as photos (or a Reel if it has a video), TikTok as a draft, Pinterest with its store link.",
         ["instagram", "pinterest", "threads", "x", "tiktok", "youtube"],
         <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, marginTop: 10, flexWrap: "wrap" }}>Wait

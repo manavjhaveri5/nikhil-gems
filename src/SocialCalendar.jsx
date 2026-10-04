@@ -7,7 +7,7 @@
      Sun  r/Crystalsforsale   ten pieces from eartheditions.co, priced
 
    Nothing goes out unless it's been read and approved here: "Approve" lets
-   the autopilot post it at its time (api/social.js, every 15 minutes), "Post
+   the autopilot post it at its time (api/social.js, every hour), "Post
    now" sends it straight away. These are posts by a person who cuts and
    collects stone, in that person's words — so the drafts are written the way
    people actually write on Reddit, and every one is edited before it goes.
