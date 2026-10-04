@@ -1,0 +1,23 @@
+name: Social autopilot
+
+# Every 15 minutes: scheduled posts, new listings and new Instagram posts go
+# out as set in the ERP's Social → Autopilot (api/social.js?action=cron).
+# Nothing posts unless a job is switched on there.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Run the autopilot
+        env:
+          STORE_SYNC_SECRET: ${{ secrets.STORE_SYNC_SECRET }}
+        run: |
+          if [ -z "$STORE_SYNC_SECRET" ]; then echo "::warning::STORE_SYNC_SECRET not set"; exit 0; fi
+          curl -s --max-time 290 -X POST "https://project-nine-tan-22.vercel.app/api/social?action=cron" \
+            -H "x-store-secret: $STORE_SYNC_SECRET" -H 'Content-Type: application/json' -d '{}' | head -c 2000
