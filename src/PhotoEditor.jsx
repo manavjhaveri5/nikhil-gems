@@ -79,8 +79,12 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  /* Every kind of edit the Save button waits for. A caption is one of them: it
+     is the only change that alters no pixel the shader touches, so a photo whose
+     sole edit was a line of type read as untouched and Save stayed greyed out. */
   const touched = ADJUSTMENTS.some(a => adjust[a.key] !== 0) || bands.length > 0
-    || curvesTouched(curves) || mixerTouched(mixer) || (sweep.on && !!mask) || geoTouched(geo);
+    || curvesTouched(curves) || mixerTouched(mixer) || (sweep.on && !!mask) || geoTouched(geo)
+    || captionOn(cap);
   /* The mixer's ranges and the model's measured targets are the same mechanism,
      so they go to the shader as one list — mixer first, since those are the
      ranges the hand is on. */
@@ -383,7 +387,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 👁 Hold to compare
               </button>
-              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setGeo(NO_GEO); setSummary(""); }}
+              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setGeo(NO_GEO); setCap(NO_CAPTION); setSummary(""); }}
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 Reset
               </button>
