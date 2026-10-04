@@ -9478,7 +9478,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
     try {
       redate = !localStorage.getItem(ETSY_REDATE_KEY);
       const last = +localStorage.getItem(ETSY_STATE_SYNC_TS) || 0;
-      if (!redate && Date.now() - last < 2 * 60 * 1000) return; // at most once every 2 min
+      if (!redate && Date.now() - last < 10 * 60 * 1000) return; // at most once every 10 min (server CPU)
       localStorage.setItem(ETSY_STATE_SYNC_TS, String(Date.now()));
     } catch {}
     try {

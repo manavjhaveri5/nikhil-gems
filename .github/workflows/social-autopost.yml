@@ -1,12 +1,12 @@
 name: Social autopilot
 
-# Every 15 minutes: scheduled posts, new listings and new Instagram posts go
+# Every hour: scheduled posts, new listings and new Instagram posts go
 # out as set in the ERP's Social → Autopilot (api/social.js?action=cron).
 # Nothing posts unless a job is switched on there.
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '7 * * * *'   # hourly — each run is server time on Vercel's plan
   workflow_dispatch:
 
 jobs:

@@ -512,7 +512,7 @@ async function publishJournal(post) {
 }
 
 /* ── autopilot ───────────────────────────────────────────────────────────────
-   Run every 15 minutes by .github/workflows/social-autopost.yml (with the
+   Run every hour by .github/workflows/social-autopost.yml (with the
    shared store secret). Three jobs, each switched on in Social → Autopilot:
    - posts scheduled from Compose go out when their time comes;
    - a piece that went live in Listing Manager is posted, after a wait, to
