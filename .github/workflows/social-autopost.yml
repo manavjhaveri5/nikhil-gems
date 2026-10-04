@@ -18,6 +18,13 @@ jobs:
         env:
           STORE_SYNC_SECRET: ${{ secrets.STORE_SYNC_SECRET }}
         run: |
-          if [ -z "$STORE_SYNC_SECRET" ]; then echo "::warning::STORE_SYNC_SECRET not set"; exit 0; fi
+          # Fail loudly. Exiting 0 here made every hourly run report success
+          # while posting nothing, so the autopilot looked alive for as long as
+          # nobody opened a run and read it. A red run sends mail; a green one
+          # that did nothing teaches you to trust a tick that means nothing.
+          if [ -z "$STORE_SYNC_SECRET" ]; then
+            echo "::error::STORE_SYNC_SECRET is not set as a repository secret, so the autopilot cannot reach the ERP and nothing has been posted. Add it under Settings - Secrets and variables - Actions, using the same value the ERP project holds in Vercel."
+            exit 1
+          fi
           curl -s --max-time 290 -X POST "https://project-nine-tan-22.vercel.app/api/social?action=cron" \
             -H "x-store-secret: $STORE_SYNC_SECRET" -H 'Content-Type: application/json' -d '{}' | head -c 2000
