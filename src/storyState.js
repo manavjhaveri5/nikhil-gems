@@ -19,7 +19,6 @@ export const listedAt = l => {
   return dates.length ? Math.min(...dates) : 0;
 };
 const dead = o => /cancel|refund/i.test(o.status || "") || !!o.cancelled_at || !!o.refunded;
-const oneOff = l => l.type === "unique" || !(+l.qty > 1);
 export const ago = ms => {
   const s = (Date.now() - ms) / 1000;
   if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
@@ -35,15 +34,28 @@ export const small = u => /etsystatic\.com\/.*il_fullxfull\./.test(u || "") ? u.
 /* The two lists, shared with the toolbar badge so both count the same way. */
 export function storyLists(listings, orders, isLive, done = {}) {
   const now = Date.now();
-  const lastSale = new Map();
+  /* A sale finds its piece by the ERP listing it was matched to, else by its
+     Etsy listing or eBay item; a sale of something not in Listing Manager at
+     all still gets a story, from the order's own title and photo. Every
+     sale counts, one-offs and stock pieces alike. */
+  const byId = new Map(), byEtsy = new Map(), byEbay = new Map();
+  for (const l of listings || []) {
+    byId.set(l.id, l);
+    if (l.platforms?.etsy?.listing_id) byEtsy.set(String(l.platforms.etsy.listing_id), l);
+    if (l.platforms?.ebay?.item_id) byEbay.set(String(l.platforms.ebay.item_id), l);
+  }
+  const lastSale = new Map();   // listing id → { l, at }
   for (const o of orders || []) {
-    if (!o?.listing_id || dead(o)) continue;
+    if (!o || dead(o)) continue;
+    const l = byId.get(o.listing_id) || byEtsy.get(String(o.etsy_listing_id || "")) || byEbay.get(String(o.ebay_item_id || ""))
+      || (o.listing_image ? { id: `order:${o.platform_order_id || o.id}`, title: o.listing_title || "Sold piece", images: [o.listing_image], material: o.listing_material || "" } : null);
+    if (!l) continue;
     const at = t(o.created_at || o.date);
-    if (at > (lastSale.get(o.listing_id) || 0)) lastSale.set(o.listing_id, at);
+    if (at > (lastSale.get(l.id)?.at || 0)) lastSale.set(l.id, { l, at });
   }
   const withPhoto = (listings || []).filter(cover);
   const listed = withPhoto.filter(l => isLive(l)).map(l => ({ l, at: listedAt(l) })).sort((a, b) => b.at - a.at);
-  const sold = withPhoto.filter(l => lastSale.has(l.id) && oneOff(l)).map(l => ({ l, at: lastSale.get(l.id) })).sort((a, b) => b.at - a.at);
+  const sold = [...lastSale.values()].filter(r => cover(r.l)).sort((a, b) => b.at - a.at);
   const due = (rows, kind) => rows.filter(r => now - r.at < WEEK && !done[`${kind}:${r.l.id}`]);
   return { listed, sold, due: { listed: due(listed, "listed"), sold: due(sold, "sold") } };
 }
