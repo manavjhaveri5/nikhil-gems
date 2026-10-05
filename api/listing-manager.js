@@ -1450,7 +1450,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
-  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids");
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states");
   const user = storeAction ? null : await requireUser(req, res);
   if (!storeAction && !user) return;
 
@@ -1691,6 +1691,28 @@ export default async function handler(req, res) {
       if ((d.results || []).length < 100) break;
     }
     return res.json({ ok: true, ids });
+  }
+
+  /* The store's daily check asks what Etsy says about exactly the listings it
+     carries: active, sold_out, inactive, draft, expired — or "removed" when Etsy
+     no longer has it at all. Only a real sale should make a store piece Sold;
+     a listing missing from the active list (a draft mid-publish, one paused or
+     expired) is not one. */
+  if (action === "etsy_states") {
+    const secret = process.env.STORE_SYNC_SECRET;
+    if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });
+    const want = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String).filter(x => /^\d+$/.test(x)))].slice(0, 3000);
+    const hdrs = await etsyHeaders(false);
+    const states = {};
+    for (let i = 0; i < want.length; i += 100) {
+      const chunk = want.slice(i, i + 100);
+      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(502).json({ error: d?.error || `Etsy ${r.status}` });
+      for (const l of d.results || []) states[String(l.listing_id)] = l.state || "unknown";
+      for (const id of chunk) if (!states[id]) states[id] = "removed";
+    }
+    return res.json({ ok: true, states });
   }
 
   if (action === "store_sold") {
