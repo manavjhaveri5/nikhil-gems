@@ -3300,7 +3300,7 @@ function TradeAskModal({ listing, initial, onDone }) {
   );
 }
 
-function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo, onRelinkEtsy, startExpanded = false }) {
+function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo, startExpanded = false }) {
   const [expanded,   setExpanded]   = useState(startExpanded);
   const [dl,         setDl]         = useState("");   // media download progress, "3/11"
   const [publishing, setPublishing] = useState({});
@@ -3579,7 +3579,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                     </div>
                     <div style={{ fontSize: 11, color: C.inkFaint }}>
                       {p.key === "store" ? "" : `${p.currency} `}{priceText || "no price set"}
-                      {(isLive || isDraft || (p.key === "etsy" && ps.listing_id)) && (ps.listing_id || ps.product_id) && (() => {
+                      {(isLive || isDraft) && (ps.listing_id || ps.product_id) && (() => {
                         const links = platformUrls(p.key, ps);
                         const linkS = { fontSize: 10.5, fontWeight: 800, color: p.color, textDecoration: "none", marginLeft: 7 };
                         return (
@@ -3594,10 +3594,6 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                             {links.admin && (
                               <a href={links.admin} target="_blank" rel="noreferrer"
                                 onClick={e => e.stopPropagation()} style={{ ...linkS, color: C.inkFaint }}>Admin</a>
-                            )}
-                            {p.key === "etsy" && onRelinkEtsy && (
-                              <button onClick={e => { e.stopPropagation(); onRelinkEtsy(listing); }}
-                                style={{ ...linkS, color: C.inkFaint, background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>Wrong listing?</button>
                             )}
                           </>
                         );
@@ -9984,7 +9980,21 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* publish — syncOnly=true means update fields only, never activate */
-  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
+  /* One publish per listing and platform at a time, whichever button or save
+     started it. A second that starts while the first is still out — a save
+     right after a Publish in the listing steps, a tap on another device's
+     open copy here — waits for it, then reads the id it got and updates that
+     listing; before, both went out with no id and each made its own. */
+  const publishChain = useRef(new Map());
+  const handlePublish = (listing, pkey, opts = {}) => {
+    const k = `${listing.id}:${pkey}`;
+    const prev = publishChain.current.get(k) || Promise.resolve();
+    const run = prev.catch(() => {}).then(() => handlePublishNow(listing, pkey, opts));
+    publishChain.current.set(k, run);
+    run.finally(() => { if (publishChain.current.get(k) === run) publishChain.current.delete(k); }).catch(() => {});
+    return run;
+  };
+  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
     /* What says "this already exists over there" is the platform's own id, and
        it is written onto the stored listing at the END of this function. Anything
        holding an older copy of the listing — a form opened before the last
@@ -10109,7 +10119,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate, force_photos: forcePhotos }),
       });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error || "Publishing failed");
+      /* A failure can come after the listing was made (Etsy kept it a draft):
+         its id is kept even so, so pressing Publish again finishes that one
+         instead of making another. */
+      if (!d.ok) {
+        const made = d.result?.listing_id || d.result?.product_id;
+        if (made) await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], ...d.result, status: d.result.status || "draft" } }, updated_at: now() }));
+        throw new Error(d.error || "Publishing failed");
+      }
       result = d.result;
       if (listing.video && result?.videoErr) showToast(`⚠ ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} video: ${result.videoErr}`);
       // Etsy takes the listing and then keeps whichever tags it liked. The API
@@ -10225,29 +10242,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       return;
     }
     await handleUnpublish(listing, pkey);
-  };
-
-  /* Point a listing at the right Etsy listing — when it holds the id of one
-     that's gone (a duplicate made by a retry, a draft deleted on Etsy) while
-     the real one is live under another id. Paste its link or number. */
-  const relinkEtsy = async listing => {
-    const cur = listing.platforms?.etsy?.listing_id;
-    const raw = window.prompt(`Paste the Etsy listing link (or its number) for “${String(listing.title || "").slice(0, 60)}”${cur ? `\n\nNow linked to ${cur}.` : ""}`);
-    if (!raw) return;
-    const id = (String(raw).match(/listing\/(\d{6,})/) || String(raw).match(/^\s*(\d{6,})\s*$/) || [])[1];
-    if (!id) { showToast("⚠ That isn't an Etsy listing link or number"); return; }
-    if (String(id) === String(cur)) { showToast("It's already linked to that one"); return; }
-    const other = listings.find(l => l.id !== listing.id && String(l.platforms?.etsy?.listing_id || "") === id);
-    if (other && !window.confirm(`“${String(other.title || "").slice(0, 60)}” is linked to that Etsy listing too. Link this one to it as well?`)) return;
-    let state = "";
-    try {
-      const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${id}`).then(x => x.json());
-      state = c?.states?.[id] || "";
-    } catch {}
-    if (state === "removed") { showToast(`⚠ Etsy has no listing ${id}`); return; }
-    const status = !state || state === "active" ? "active" : state === "sold_out" ? "sold" : "draft";
-    await patchListingItem(listing, c => ({ ...c, platforms: { ...c.platforms, etsy: { ...(c.platforms?.etsy || {}), listing_id: Number(id), url: `https://www.etsy.com/listing/${id}`, status, linked_at: new Date().toISOString(), ...(cur ? { previous_listing_id: cur } : {}) } }, updated_at: new Date().toISOString() }));
-    showToast(`✓ Linked to Etsy listing ${id}${state && state !== "active" ? ` (${state.replace("_", " ")} on Etsy)` : ""}`);
   };
 
   /* An order for a one-off, from Etsy, eBay or anywhere, marks its piece Sold
@@ -10553,7 +10547,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
                     onMarkSold={setSoldModal}
-                    onRelinkEtsy={relinkEtsy}
                     onRefreshShopifyVideo={handleRefreshShopifyVideo} />
                 )} />
             ) : (<>
@@ -10638,7 +10631,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
                     onMarkSold={setSoldModal}
-                    onRelinkEtsy={relinkEtsy}
                     onRefreshShopifyVideo={handleRefreshShopifyVideo}
                   />
                 ))}

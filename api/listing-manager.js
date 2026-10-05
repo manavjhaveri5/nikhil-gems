@@ -1681,7 +1681,8 @@ export default async function handler(req, res) {
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); } }
 
-  const { action, listing, platform, store_key } = body;
+  const { action, platform, store_key } = body;
+  let { listing } = body;   // publish_etsy may fill in an Etsy id it finds by SKU
 
   /* ── STORE ORDER (called by eartheditions.co's Stripe webhook) ────────────
      Files the paid order under Orders — one row per piece, as Mark sold does.
@@ -1798,6 +1799,30 @@ export default async function handler(req, res) {
       const allowCreate = req.body?.allow_create === true;
       // Resync photos: re-send the set even when the listing thinks it already did.
       const forcePhotos = req.body?.force_photos === true;
+
+      /* Etsy is asked before anything is made: is there already a listing
+         carrying this piece's SKU? A create whose answer never got back to the
+         ERP (the function timed out mid-photos, the phone lost signal, Etsy
+         refused to activate and the reply was an error) left a listing on Etsy
+         the ERP knew nothing about — and the next Publish made a second one.
+         That is how one piece came to have two Etsy listings. Finding it by SKU
+         makes publishing the same piece twice land on the same listing. */
+      if (!listing.platforms?.etsy?.listing_id && listingSku(listing)) {
+        const sku = listingSku(listing).toLowerCase();
+        const hdrs = await etsyHeaders(false);
+        search: for (const state of ["active", "draft", "inactive"]) {
+          for (let offset = 0; offset < 300; offset += 100) {
+            const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}&sort_on=created&sort_order=desc`, { headers: hdrs });
+            if (!r.ok) break;
+            const d = await r.json().catch(() => ({}));
+            // Only one made in the last week: an older listing with the same SKU is another piece's.
+            const recent = (d.results || []).filter(l => (l.original_creation_timestamp || l.creation_timestamp || 0) * 1000 > Date.now() - 7 * 864e5);
+            const hit = recent.find(l => (l.skus || []).some(s => String(s).trim().toLowerCase() === sku));
+            if (hit) { listing = { ...listing, platforms: { ...(listing.platforms || {}), etsy: { ...(listing.platforms?.etsy || {}), listing_id: hit.listing_id } } }; break search; }
+            if (recent.length < (d.results || []).length || (d.results || []).length < 100) break;
+          }
+        }
+      }
 
       let result;
       if (listing.platforms?.etsy?.listing_id) {
