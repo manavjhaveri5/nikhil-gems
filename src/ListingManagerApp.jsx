@@ -10214,6 +10214,39 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     await handleUnpublish(listing, pkey);
   };
 
+  /* An order for a one-off, from Etsy, eBay or anywhere, marks its piece Sold
+     on eartheditions.co as soon as the order is here — no waiting, no nightly
+     guess. The store keeps it on show as Sold; the other platforms still come
+     down from the order's checklist. Only orders from the last two weeks, so an
+     old sale can't touch a piece that was put back up since. */
+  const storeSoldDone = useRef(new Set());
+  useEffect(() => {
+    if (!loaded || !orders?.length || !listings?.length) return;
+    const since = Date.now() - 14 * 864e5;
+    const byId = new Map(listings.map(l => [l.id, l]));
+    const byEtsy = new Map(listings.filter(l => l.platforms?.etsy?.listing_id).map(l => [String(l.platforms.etsy.listing_id), l]));
+    const byEbay = new Map(listings.filter(l => l.platforms?.ebay?.item_id).map(l => [String(l.platforms.ebay.item_id), l]));
+    const todo = new Map();
+    for (const o of orders) {
+      if (!o || o.platform === "store" || /cancel|refund/i.test(o.status || "") || o.cancelled_at || o.refunded) continue;
+      if (new Date(o.created_at || o.date || 0).getTime() < since) continue;
+      const l = byId.get(o.listing_id) || byEtsy.get(String(o.etsy_listing_id || "")) || byEbay.get(String(o.ebay_item_id || ""));
+      if (!l || l.type === "repeatable" || l.platforms?.store?.status !== "active" || !l.platforms?.store?.product_id) continue;
+      if (storeSoldDone.current.has(l.id)) continue;
+      todo.set(l.id, l);
+    }
+    if (!todo.size) return;
+    (async () => {
+      const done = [];
+      for (const l of todo.values()) {
+        storeSoldDone.current.add(l.id);
+        try { await delistFromPlatform(l, "store"); done.push(l.title); }
+        catch (e) { storeSoldDone.current.delete(l.id); console.warn("store sold", l.id, e); }
+      }
+      if (done.length) showToast?.(`✓ Marked sold on eartheditions.co: ${done.slice(0, 3).join(", ")}${done.length > 3 ? ` +${done.length - 3}` : ""}`);
+    })();
+  }, [loaded, orders, listings]);
+
   /* unpublish */
   const handleUnpublish = async (listing, pkey) => {
     let action, storeKey;
