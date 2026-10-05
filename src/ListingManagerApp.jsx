@@ -10224,26 +10224,36 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (!loaded || !orders?.length || !listings?.length) return;
     const since = Date.now() - 14 * 864e5;
     const byId = new Map(listings.map(l => [l.id, l]));
-    const byEtsy = new Map(listings.filter(l => l.platforms?.etsy?.listing_id).map(l => [String(l.platforms.etsy.listing_id), l]));
-    const byEbay = new Map(listings.filter(l => l.platforms?.ebay?.item_id).map(l => [String(l.platforms.ebay.item_id), l]));
+    /* An Etsy or eBay id shared by more than one ERP listing (a #2 made from
+       #1, a lot split up) can't say which piece sold — those are left for the
+       order's checklist rather than guessed at. */
+    const only = pairs => { const m = new Map(), n = new Map(); for (const [k, l] of pairs) { n.set(k, (n.get(k) || 0) + 1); m.set(k, l); } for (const [k, c] of n) if (c > 1) m.delete(k); return m; };
+    const byEtsy = only(listings.filter(l => l.platforms?.etsy?.listing_id).map(l => [String(l.platforms.etsy.listing_id), l]));
+    const byEbay = only(listings.filter(l => l.platforms?.ebay?.item_id).map(l => [String(l.platforms.ebay.item_id), l]));
     const todo = new Map();
     for (const o of orders) {
       if (!o || o.platform === "store" || /cancel|refund/i.test(o.status || "") || o.cancelled_at || o.refunded) continue;
       if (new Date(o.created_at || o.date || 0).getTime() < since) continue;
       const l = byId.get(o.listing_id) || byEtsy.get(String(o.etsy_listing_id || "")) || byEbay.get(String(o.ebay_item_id || ""));
-      if (!l || l.type === "repeatable" || l.platforms?.store?.status !== "active" || !l.platforms?.store?.product_id) continue;
+      // Strictly one-offs: marked unique and only one of it.
+      if (!l || l.type !== "unique" || +l.qty > 1 || l.platforms?.store?.status !== "active" || !l.platforms?.store?.product_id) continue;
       if (storeSoldDone.current.has(l.id)) continue;
-      todo.set(l.id, l);
+      todo.set(l.id, { l, o });
     }
     if (!todo.size) return;
     (async () => {
       const done = [];
-      for (const l of todo.values()) {
+      for (const { l, o } of todo.values()) {
         storeSoldDone.current.add(l.id);
-        try { await delistFromPlatform(l, "store"); done.push(l.title); }
+        const via = `${o.platform === "ebay" || String(o.order_number || "").startsWith("EBAY-") ? "eBay" : "Etsy"} order ${o.order_number || o.platform_order_id || ""}`.trim();
+        try {
+          await delistFromPlatform(l, "store");
+          await patchListingItem(l, cur => ({ ...cur, platforms: { ...cur.platforms, store: { ...cur.platforms?.store, sold_by: via, sold_by_at: new Date().toISOString() } } }));
+          done.push(`${String(l.title || "").split(/ [—–-] /)[0].slice(0, 50)} (${via})`);
+        }
         catch (e) { storeSoldDone.current.delete(l.id); console.warn("store sold", l.id, e); }
       }
-      if (done.length) showToast?.(`✓ Marked sold on eartheditions.co: ${done.slice(0, 3).join(", ")}${done.length > 3 ? ` +${done.length - 3}` : ""}`);
+      if (done.length) showToast?.(`✓ Marked sold on eartheditions.co: ${done.slice(0, 3).join(", ")}${done.length > 3 ? ` +${done.length - 3}` : ""}`, 9000);
     })();
   }, [loaded, orders, listings]);
 
