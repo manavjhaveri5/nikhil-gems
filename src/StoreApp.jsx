@@ -123,7 +123,11 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
     price_inr: +l.price_store_inr ? Math.round(+l.price_store_inr) : +l.price_etsy ? Math.round(+l.price_etsy * (1 - (+discount || 0) / 100) / 10) * 10 : null,
     qty: variants.length ? Math.max(1, variants.reduce((n, v) => n + v.qty, 0)) : Math.max(1, parseInt(l.qty, 10) || 1),
     is_unique: l.type !== "repeatable",
-    status: existing?.status === "sold" ? "sold" : live ? "active" : (existing?.status || "hidden"),
+    /* A sync never changes Sold. Publish is you saying it's for sale, so it
+       is — Sold included (a piece wrongly marked Sold used to stay a Draft
+       whatever you pressed). */
+    status: live ? "active" : existing?.status === "sold" ? "sold" : (existing?.status || "hidden"),
+    ...(live && existing?.status === "sold" ? { sold_at: null } : {}),
     sku: l.sku || "",
     source: { listing_id: l.id, etsy_id: l.platforms?.etsy?.listing_id || null },
     updated_at: new Date().toISOString(),
