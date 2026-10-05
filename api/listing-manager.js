@@ -786,6 +786,26 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   const listingId = data.listing_id;
 
+  /* The piece's SKU goes on straight away, before the slow photo and video
+     uploads. Etsy ignores the skus field on create: a SKU only lives in a
+     listing's inventory, and that was written only for listings with options.
+     Without it, a listing whose reply never reached the ERP couldn't be found
+     again, and the next Publish made another. (Listings with options get theirs
+     from applyEtsyVariations below.) */
+  if (listingSku(listing) && !etsyVariationAxes(listing).length) {
+    try {
+      const inv = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, {
+        method: "PUT", headers: hdrs, body: JSON.stringify({
+          products: [{ sku: listingSku(listing).slice(0, 32), property_values: [],
+            offerings: [{ price: payload.price, quantity, is_enabled: true, ...(readinessId ? { readiness_state_id: readinessId } : {}) }] }],
+          price_on_property: [], quantity_on_property: [], sku_on_property: [],
+          ...(readinessId ? { readiness_state_on_property: [] } : {}),
+        }),
+      });
+      if (!inv.ok) console.error("Etsy SKU didn't go on:", await inv.text().catch(() => inv.status));
+    } catch (e) { console.error("Etsy SKU didn't go on:", e.message); }
+  }
+
   // Upload images FIRST — Etsy requires images before activation
   const imgUrls = images.filter(u => typeof u === "string" && u.startsWith("http")).slice(0, 10);
   for (let i = 0; i < imgUrls.length; i++) {
@@ -1811,7 +1831,7 @@ export default async function handler(req, res) {
          That is how one piece came to have two Etsy listings. Finding it by SKU
          makes publishing the same piece twice land on the same listing. */
       if (!listing.platforms?.etsy?.listing_id && listingSku(listing)) {
-        const sku = listingSku(listing).toLowerCase();
+        const sku = listingSku(listing).slice(0, 32).toLowerCase();   // as written to Etsy
         const hdrs = await etsyHeaders(false);
         search: for (const state of ["active", "draft", "inactive"]) {
           for (let offset = 0; offset < 300; offset += 100) {
