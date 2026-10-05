@@ -1815,8 +1815,13 @@ export default async function handler(req, res) {
             const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}&sort_on=created&sort_order=desc`, { headers: hdrs });
             if (!r.ok) break;
             const d = await r.json().catch(() => ({}));
-            // Only one made in the last week: an older listing with the same SKU is another piece's.
-            const recent = (d.results || []).filter(l => (l.original_creation_timestamp || l.creation_timestamp || 0) * 1000 > Date.now() - 7 * 864e5);
+            /* A SKU the ERP made from this listing's own id belongs to this piece
+               alone, so a listing of any age carrying it is this one. A SKU typed
+               in by hand can be shared by pieces: then only one from the last
+               week counts. */
+            const ownSku = [listing.listing_order_id, listing.id].some(v => v && String(v).trim().toLowerCase() === sku);
+            const cutoff = ownSku ? 0 : Date.now() - 7 * 864e5;
+            const recent = (d.results || []).filter(l => (l.original_creation_timestamp || l.creation_timestamp || 0) * 1000 > cutoff);
             const hit = recent.find(l => (l.skus || []).some(s => String(s).trim().toLowerCase() === sku));
             if (hit) { listing = { ...listing, platforms: { ...(listing.platforms || {}), etsy: { ...(listing.platforms?.etsy || {}), listing_id: hit.listing_id } } }; break search; }
             if (recent.length < (d.results || []).length || (d.results || []).length < 100) break;
