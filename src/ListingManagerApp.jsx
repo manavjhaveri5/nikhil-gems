@@ -9980,7 +9980,21 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* publish — syncOnly=true means update fields only, never activate */
-  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
+  /* One publish per listing and platform at a time, whichever button or save
+     started it. A second that starts while the first is still out — a save
+     right after a Publish in the listing steps, a tap on another device's
+     open copy here — waits for it, then reads the id it got and updates that
+     listing; before, both went out with no id and each made its own. */
+  const publishChain = useRef(new Map());
+  const handlePublish = (listing, pkey, opts = {}) => {
+    const k = `${listing.id}:${pkey}`;
+    const prev = publishChain.current.get(k) || Promise.resolve();
+    const run = prev.catch(() => {}).then(() => handlePublishNow(listing, pkey, opts));
+    publishChain.current.set(k, run);
+    run.finally(() => { if (publishChain.current.get(k) === run) publishChain.current.delete(k); }).catch(() => {});
+    return run;
+  };
+  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
     /* What says "this already exists over there" is the platform's own id, and
        it is written onto the stored listing at the END of this function. Anything
        holding an older copy of the listing — a form opened before the last
@@ -10105,7 +10119,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate, force_photos: forcePhotos }),
       });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error || "Publishing failed");
+      /* A failure can come after the listing was made (Etsy kept it a draft):
+         its id is kept even so, so pressing Publish again finishes that one
+         instead of making another. */
+      if (!d.ok) {
+        const made = d.result?.listing_id || d.result?.product_id;
+        if (made) await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], ...d.result, status: d.result.status || "draft" } }, updated_at: now() }));
+        throw new Error(d.error || "Publishing failed");
+      }
       result = d.result;
       if (listing.video && result?.videoErr) showToast(`⚠ ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} video: ${result.videoErr}`);
       // Etsy takes the listing and then keeps whichever tags it liked. The API
