@@ -109,6 +109,8 @@ export default function VisitorsTab({ showToast, site }) {
       products: [...prod.values()].sort((a, b) => b.views - a.views).slice(0, 15),
       returning: all.filter(v => all.some(o => o.vid === v.vid && o.start < v.start)).length,
       blocked: blockedEv,
+      // One row per IP address: the same connection trying again shows as one, with its count.
+      blockedIps: [...blockedEv.filter(e => e.data?.ip).reduce((m, e) => { const r = m.get(e.data.ip) || { ip: e.data.ip, city: e.city || "Unknown", country: e.country, sites: new Set(), why: new Set(), n: 0, last: e.at }; r.n++; r.sites.add(e.data?.site === "trade" ? "Trade" : "Store"); r.why.add(e.data?.reason || ""); if (e.at > r.last) r.last = e.at; return m.set(e.data.ip, r); }, new Map()).values()].sort((a, b) => b.last.localeCompare(a.last)),
       blockedPlaces: [...blockedEv.reduce((m, e) => { const k = `${e.city || "?"}|${e.data?.site || ""}`; const r = m.get(k) || { city: e.city || "Unknown", country: e.country, site: e.data?.site || "", n: 0, last: e.at }; r.n++; if (e.at > r.last) r.last = e.at; return m.set(k, r); }, new Map()).values()].sort((a, b) => b.n - a.n),
     };
   }, [events, live]);
@@ -178,6 +180,12 @@ export default function VisitorsTab({ showToast, site }) {
         <Table title={`Turned away — ${s.blocked.length} blocked visit${s.blocked.length === 1 ? "" : "s"} (blocked cities and VPNs, both sites)`}
           rows={s.blockedPlaces.slice(0, 20)} empty="None in this period. (Counted from 5 October 2026.)"
           cols={[["Place", r => `${flag(r.country)} ${r.city}`], ["Site", r => r.site === "trade" ? "Trade" : "Store"], ["Tries", r => r.n, 1], ["Last", r => new Date(r.last).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), 1]]} />
+        {s.blockedIps.length > 0 && (
+          <Table title={`Turned away by IP address — ${s.blockedIps.length} different`} rows={s.blockedIps.slice(0, 50)}
+            cols={[["IP address", r => <span style={{ fontFamily: "monospace" }}>{r.ip}</span>], ["Place", r => `${flag(r.country)} ${r.city}`],
+              ["Why", r => [...r.why].map(w => ({ city: "City", vpn: "VPN", vpn_clock: "VPN (India clock)" }[w] || w)).join(", ")], ["Site", r => [...r.sites].join(", ")],
+              ["Tries", r => r.n, 1], ["Last", r => new Date(r.last).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }), 1]]} />
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "1fr 1fr", gap: 14 }}>
           <Table title="Where visits come from" rows={s.sources.slice(0, 12)} cols={[["Source", r => r.k], ["Visits", r => r.visits, 1], ["Carts", r => r.carts, 1], ["Bought", r => r.buys, 1], ["Cart rate", r => pct(r.carts, r.visits), 1]]} />
