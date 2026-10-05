@@ -1116,7 +1116,10 @@ async function unpublishEtsy(listingId) {
   });
   if (!r.ok && r.status !== 404) {
     const d = await r.json().catch(() => ({}));
-    throw new Error(`Etsy delete failed: ${d.error || r.status}`);
+    /* A listing Etsy has already removed can't be deleted again — it's gone,
+       which is what was asked. Only that answer counts as done; any other
+       refusal is a real failure. */
+    if (!/state:?\s*removed/i.test(String(d.error || ""))) throw new Error(`Etsy delete failed: ${d.error || r.status}`);
   }
   return { listing_id: listingId, status: "deleted" };
 }
