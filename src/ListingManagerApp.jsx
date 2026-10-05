@@ -9526,6 +9526,14 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       const r = await fetch("/api/listing-manager?action=sync_etsy_states");
       const d = await r.json();
       if (!d.ok || !d.states) return;
+      /* Shown live here but neither active nor a draft on Etsy: ask Etsy what
+         became of them (sold out, paused, expired, gone) — without this they
+         stayed "live" here for good, View link and all. */
+      const missing = current.filter(l => l.platforms?.etsy?.listing_id && l.platforms.etsy.status === "active" && !d.states[l.platforms.etsy.listing_id]).map(l => l.platforms.etsy.listing_id).slice(0, 300);
+      if (missing.length) {
+        const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${missing.join(",")}`).then(x => x.json()).catch(() => null);
+        if (c?.ok && c.states) Object.assign(d.states, c.states);
+      }
       const states = d.states, firstListed = d.firstListed || {}, info = d.info || {};
       const fresh = await loadKFresh(LIST_KEY).catch(() => null);
       const base0 = Array.isArray(fresh) ? fresh : current;
@@ -9556,7 +9564,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         const lid = l.platforms?.etsy?.listing_id;
         const live = lid && states[lid];
         if (!live) return l;
-        const mapped = live === "active" ? "active" : "draft";
+        // Sold out on Etsy is a sale; a listing Etsy no longer has is gone; paused, expired or a draft isn't live.
+        const mapped = live === "active" ? "active" : live === "sold_out" ? "sold" : live === "removed" ? "deleted" : "draft";
         /* A renewal moves Etsy's creation date, and a listing imported after
            one came in dated the day it renewed, so it sorted and counted as
            new. Etsy's original date puts it back where it belongs. */

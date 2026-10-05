@@ -1558,7 +1558,7 @@ export default async function handler(req, res) {
         const hdrs = await etsyHeaders(false);
         const states = {}, firstListed = {}, info = {};
         let renewed = 0;
-        for (const state of ["active", "draft"]) {
+        for (const state of url.searchParams.get("only_check") ? [] : ["active", "draft"]) {   // only_check: just the listings named in check
           let offset = 0;
           while (true) {
             const r = await fetch(
@@ -1578,6 +1578,18 @@ export default async function handler(req, res) {
             if (results.length < 100) break;
             offset += 100;
           }
+        }
+        /* Listings the ERP thinks are live but that are neither active nor a
+           draft on Etsy: sold out, paused, expired — or gone. Asked about one
+           by one (in batches), so the ERP stops showing them as live. */
+        const check = String(url.searchParams.get("check") || "").split(",").filter(x => /^\d+$/.test(x) && !states[x]).slice(0, 500);
+        for (let i = 0; i < check.length; i += 100) {
+          const chunk = check.slice(i, i + 100);
+          const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
+          if (!r.ok) break;
+          const d = await r.json().catch(() => ({}));
+          for (const l of d.results || []) states[l.listing_id] = l.state || "inactive";
+          for (const id of chunk) if (!states[id]) states[id] = "removed";
         }
         return res.json({ ok: true, states, firstListed, renewed, info });
       } catch (e) {
