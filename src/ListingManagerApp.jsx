@@ -3300,7 +3300,7 @@ function TradeAskModal({ listing, initial, onDone }) {
   );
 }
 
-function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo, startExpanded = false }) {
+function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSaveAsDraft, onUnpublish, onMarkSold, onRefreshShopifyVideo, onRelinkEtsy, startExpanded = false }) {
   const [expanded,   setExpanded]   = useState(startExpanded);
   const [dl,         setDl]         = useState("");   // media download progress, "3/11"
   const [publishing, setPublishing] = useState({});
@@ -3579,7 +3579,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                     </div>
                     <div style={{ fontSize: 11, color: C.inkFaint }}>
                       {p.key === "store" ? "" : `${p.currency} `}{priceText || "no price set"}
-                      {(isLive || isDraft) && (ps.listing_id || ps.product_id) && (() => {
+                      {(isLive || isDraft || (p.key === "etsy" && ps.listing_id)) && (ps.listing_id || ps.product_id) && (() => {
                         const links = platformUrls(p.key, ps);
                         const linkS = { fontSize: 10.5, fontWeight: 800, color: p.color, textDecoration: "none", marginLeft: 7 };
                         return (
@@ -3594,6 +3594,10 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
                             {links.admin && (
                               <a href={links.admin} target="_blank" rel="noreferrer"
                                 onClick={e => e.stopPropagation()} style={{ ...linkS, color: C.inkFaint }}>Admin</a>
+                            )}
+                            {p.key === "etsy" && onRelinkEtsy && (
+                              <button onClick={e => { e.stopPropagation(); onRelinkEtsy(listing); }}
+                                style={{ ...linkS, color: C.inkFaint, background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>Wrong listing?</button>
                             )}
                           </>
                         );
@@ -10223,6 +10227,29 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     await handleUnpublish(listing, pkey);
   };
 
+  /* Point a listing at the right Etsy listing — when it holds the id of one
+     that's gone (a duplicate made by a retry, a draft deleted on Etsy) while
+     the real one is live under another id. Paste its link or number. */
+  const relinkEtsy = async listing => {
+    const cur = listing.platforms?.etsy?.listing_id;
+    const raw = window.prompt(`Paste the Etsy listing link (or its number) for “${String(listing.title || "").slice(0, 60)}”${cur ? `\n\nNow linked to ${cur}.` : ""}`);
+    if (!raw) return;
+    const id = (String(raw).match(/listing\/(\d{6,})/) || String(raw).match(/^\s*(\d{6,})\s*$/) || [])[1];
+    if (!id) { showToast("⚠ That isn't an Etsy listing link or number"); return; }
+    if (String(id) === String(cur)) { showToast("It's already linked to that one"); return; }
+    const other = listings.find(l => l.id !== listing.id && String(l.platforms?.etsy?.listing_id || "") === id);
+    if (other && !window.confirm(`“${String(other.title || "").slice(0, 60)}” is linked to that Etsy listing too. Link this one to it as well?`)) return;
+    let state = "";
+    try {
+      const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${id}`).then(x => x.json());
+      state = c?.states?.[id] || "";
+    } catch {}
+    if (state === "removed") { showToast(`⚠ Etsy has no listing ${id}`); return; }
+    const status = !state || state === "active" ? "active" : state === "sold_out" ? "sold" : "draft";
+    await patchListingItem(listing, c => ({ ...c, platforms: { ...c.platforms, etsy: { ...(c.platforms?.etsy || {}), listing_id: Number(id), url: `https://www.etsy.com/listing/${id}`, status, linked_at: new Date().toISOString(), ...(cur ? { previous_listing_id: cur } : {}) } }, updated_at: new Date().toISOString() }));
+    showToast(`✓ Linked to Etsy listing ${id}${state && state !== "active" ? ` (${state.replace("_", " ")} on Etsy)` : ""}`);
+  };
+
   /* An order for a one-off, from Etsy, eBay or anywhere, marks its piece Sold
      on eartheditions.co as soon as the order is here — no waiting, no nightly
      guess. The store keeps it on show as Sold; the other platforms still come
@@ -10526,6 +10553,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
                     onMarkSold={setSoldModal}
+                    onRelinkEtsy={relinkEtsy}
                     onRefreshShopifyVideo={handleRefreshShopifyVideo} />
                 )} />
             ) : (<>
@@ -10610,6 +10638,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     onSaveAsDraft={(listing, pkey) => handlePublish(listing, pkey, { syncOnly: true, allowCreate: true })}
                     onUnpublish={handleUnpublish}
                     onMarkSold={setSoldModal}
+                    onRelinkEtsy={relinkEtsy}
                     onRefreshShopifyVideo={handleRefreshShopifyVideo}
                   />
                 ))}
