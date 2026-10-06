@@ -629,29 +629,57 @@ function TodoWidget({todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=
 // ══════════════════════════════════════════════════════════════════
 // WELCOME
 // ══════════════════════════════════════════════════════════════════
+/* The modules, in six groups.
+
+   Twenty-four of them in one flat column meant nine sat permanently above the
+   fold of a scrolling sidebar with nothing to say they were there — which is
+   how Finance came to look missing when it was simply the eighth item.
+
+   The grouping is presentation and nothing else. `mod` is still a leaf id, so
+   the routing chain and every permission check go on working untouched; a
+   module cannot break by being put in a group. Ask AI belongs to no group
+   because it answers questions about all of them. */
+const GROUPS=[
+  {id:"accounting",icon:"📒",title:"Accounting",desc:"The books, and everything the accountant sees"},
+  {id:"inventory", icon:"💎",title:"Inventory", desc:"What we hold, where it is, and where it goes"},
+  {id:"selling",   icon:"🏷️",title:"Selling",   desc:"The marketplaces and our own two shops"},
+  {id:"marketing", icon:"📣",title:"Marketing", desc:"Posts, mail and print"},
+  {id:"studio",    icon:"📸",title:"Studio",    desc:"Photographs, and getting them ready"},
+  {id:"admin",     icon:"⚙️",title:"Admin",     desc:"Papers, people and the lists behind the forms"},
+];
+
+/* The groups this person can see, each with the modules they are allowed.
+   A group nobody has a module in is not shown at all, rather than opening onto
+   an empty page. */
+const groupsOf=mods=>GROUPS
+  .map(g=>({...g,mods:(mods||[]).filter(m=>m.group===g.id)}))
+  .filter(g=>g.mods.length);
+const ungrouped=mods=>(mods||[]).filter(m=>!m.group);
+
 const MODS=[
-  {id:"purchases",icon:"📦",title:"Purchases",desc:"Orders, bills, expand to stock",ready:true},
-  {id:"vendors",icon:"🏢",title:"Vendors",desc:"Suppliers, GST, history",ready:true},
-  {id:"stock",icon:"💎",title:"Stock",desc:"Physical inventory & insights",ready:true},
-  {id:"expenses",icon:"🧾",title:"Expenses",desc:"Freight, rent, show costs, utilities",ready:true},
-  {id:"invoices",icon:"📋",title:"Invoicing",desc:"Export invoices, proforma",ready:true},
-  {id:"shows",icon:"🌐",title:"Shows",desc:"Gem shows, checklist, shipments",ready:true},
-  {id:"recon",icon:"🏦",title:"Export Recon",desc:"FIRC · Shipping Bills · Bank packets",ready:true},
-  {id:"finance",icon:"💰",title:"Finance",desc:"Ledger, balances, reconcile, P&L",ready:true},
-  {id:"jobwork",icon:"🔧",title:"Job Work",desc:"Track goods sent for polishing, resetting, cutting",ready:true},
-  {id:"etsy",icon:"🏷️",title:"Listing Manager",desc:"Etsy, eBay, Atyahara, Earth Editions listings & orders",ready:true},
-  {id:"orders",icon:"🛍️",title:"Orders",desc:"Customer orders, shipping and fulfilment",ready:true},
+  {id:"ledger",icon:"📒",title:"Ledger",desc:"Classify bank and cash, attach bills, settle inter-company",group:"accounting",ready:true},
+  {id:"purchases",icon:"📦",title:"Purchases",desc:"Orders, bills, expand to stock",group:"accounting",ready:true},
+  {id:"vendors",icon:"🏢",title:"Vendors",desc:"Suppliers, GST, history",group:"accounting",ready:true},
+  {id:"stock",icon:"💎",title:"Stock",desc:"Physical inventory & insights",group:"inventory",ready:true},
+  {id:"expenses",icon:"🧾",title:"Expenses",desc:"Freight, rent, show costs, utilities",group:"accounting",ready:true},
+  {id:"invoices",icon:"📋",title:"Invoicing",desc:"Export invoices, proforma",group:"accounting",ready:true},
+  {id:"shows",icon:"🌐",title:"Shows",desc:"Gem shows, checklist, shipments",group:"inventory",ready:true},
+  {id:"recon",icon:"🏦",title:"Export Recon",desc:"FIRC · Shipping Bills · Bank packets",group:"accounting",ready:true},
+  {id:"finance",icon:"💰",title:"Finance",desc:"Ledger, balances, reconcile, P&L",group:"accounting",ready:true},
+  {id:"jobwork",icon:"🔧",title:"Job Work",desc:"Track goods sent for polishing, resetting, cutting",group:"inventory",ready:true},
+  {id:"etsy",icon:"🏷️",title:"Listing Manager",desc:"Etsy, eBay, Atyahara, Earth Editions listings & orders",group:"selling",ready:true},
+  {id:"orders",icon:"🛍️",title:"Orders",desc:"Customer orders, shipping and fulfilment",group:"selling",ready:true},
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
-  {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",ready:true},
-  {id:"bgremove",icon:"✂️",title:"Background Remover",desc:"Phone photo → clean white background (sandbox)",ready:true},
-  {id:"misc",icon:"🗂️",title:"Miscellaneous",desc:"Purchase bill maker, utilities",ready:true},
-  {id:"omnisend",icon:"📣",title:"Omnisend",desc:"Email campaigns, subscribers and mailing lists",ready:true},
-  {id:"trade",icon:"🤝",title:"Trade Site",desc:"Wholesale buyers, WhatsApp carts, trade.eartheditions.co",ready:true},
-  {id:"store",icon:"🛒",title:"Store",desc:"eartheditions.co — orders, products, shipping",ready:true},
-  {id:"social",icon:"📱",title:"Social",desc:"Instagram, TikTok, YouTube, Pinterest, Threads, X, journal, Reddit",ready:true},
-  {id:"labels",icon:"🏷",title:"Make Labels",desc:"Name cards for shows and shelves — edit, print, PDF",ready:true},
-  {id:"journal",icon:"🧾",title:"Accounting Journal",desc:"Stock movements, customer orders, purchase orders",ready:true},
-  {id:"documents",icon:"📁",title:"Documents",desc:"Passports, ITRs, bills, licences — searchable with expiry alerts",ready:true},
+  {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",group:"studio",ready:true},
+  {id:"bgremove",icon:"✂️",title:"Background Remover",desc:"Phone photo → clean white background (sandbox)",group:"studio",ready:true},
+  {id:"misc",icon:"🗂️",title:"Miscellaneous",desc:"Purchase bill maker, utilities",group:"admin",ready:true},
+  {id:"omnisend",icon:"📣",title:"Omnisend",desc:"Email campaigns, subscribers and mailing lists",group:"marketing",ready:true},
+  {id:"trade",icon:"🤝",title:"Trade Site",desc:"Wholesale buyers, WhatsApp carts, trade.eartheditions.co",group:"selling",ready:true},
+  {id:"store",icon:"🛒",title:"Store",desc:"eartheditions.co — orders, products, shipping",group:"selling",ready:true},
+  {id:"social",icon:"📱",title:"Social",desc:"Instagram, TikTok, YouTube, Pinterest, Threads, X, journal, Reddit",group:"marketing",ready:true},
+  {id:"labels",icon:"🏷",title:"Make Labels",desc:"Name cards for shows and shelves — edit, print, PDF",group:"marketing",ready:true},
+  {id:"journal",icon:"🧾",title:"Accounting Journal",desc:"Stock movements, customer orders, purchase orders",group:"inventory",ready:true},
+  {id:"documents",icon:"📁",title:"Documents",desc:"Passports, ITRs, bills, licences — searchable with expiry alerts",group:"admin",ready:true},
 ];
 // ── FINANCIAL CHART (standalone — Y-axis + hover tooltips) ────────
 function FinancialChart({chartData,months6,nextM,openPOtotal,pendingReceivables,todayStr}){
@@ -801,7 +829,46 @@ function MorningStandup({todoKey="ng-todos-v1",onClose}){
   );
 }
 
+/* One module in the sidebar. The same row whether it sits on its own or inside
+   a group — indented ones are a shade smaller so the nesting reads at a glance
+   without a second set of styles to keep in step. */
+/* Each module's tile colour. Module scope, not inside Welcome: the sidebar
+   rows and the group pages draw the same tiles, and it is a constant. */
+const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",trade:"#1F8F4E",store:"#141210",social:"#E1306C",users:"#007AFF",datasets:"#5AC8FA",ledger:"#0A84FF",labels:"#AF52DE",bgremove:"#5AC8FA",omnisend:"#FF2D55"};
+
+function SideModule({m,hov,setHov,onEnter,t,small=false}){
+  const mc=MOD_COLORS[m.id]||"#8E8E93";
+  const d=small?26:30;
+  return(
+    <button onClick={()=>m.ready&&onEnter(m.id)}
+      style={{display:"flex",alignItems:"center",gap:small?8:10,width:"100%",padding:small?"5px 7px":"7px 8px",marginBottom:1,border:"none",borderRadius:9,cursor:m.ready?"pointer":"default",background:hov===m.id?"rgba(0,0,0,0.04)":"transparent",opacity:m.ready?1:.4,transition:"background .12s",textAlign:"left",color:C.ink,fontFamily:"inherit"}}
+      onMouseEnter={()=>m.ready&&setHov(m.id)} onMouseLeave={()=>setHov(null)}>
+      <div style={{width:d,height:d,borderRadius:small?7:8,background:mc,boxShadow:`0 1px 4px ${mc}55`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:small?13:15,flexShrink:0,lineHeight:1}}>
+        {m.icon}
+      </div>
+      <div style={{flex:1,minWidth:0}}>
+        {/* t() returns the key itself when there is no translation, which shows
+            a module's id in lower case. Its own title is the better fallback. */}
+        <div style={{fontSize:small?11.5:12,fontWeight:500,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t(m.id)===m.id?m.title:t(m.id)}</div>
+        {!m.ready&&<div style={{fontSize:8,color:C.inkFaint,letterSpacing:.6,fontWeight:600}}>SOON</div>}
+      </div>
+    </button>
+  );
+}
+
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
+  /* Which groups are open. Remembered, because a sidebar that folds itself shut
+     on every visit is a sidebar you stop trusting; Accounting is open the first
+     time so the list does not look empty. */
+  const [openGroups,setOpenGroups]=useState(()=>{
+    try{const v=JSON.parse(localStorage.getItem("ng-nav-groups-v1")||"null");if(Array.isArray(v))return v;}catch{}
+    return ["accounting"];
+  });
+  const toggleGroup=id=>setOpenGroups(prev=>{
+    const next=prev.includes(id)?prev.filter(x=>x!==id):[...prev,id];
+    try{localStorage.setItem("ng-nav-groups-v1",JSON.stringify(next));}catch{}
+    return next;
+  });
   const t=useT();
   const visibleMods=allowedMods||MODS;
   // Quick Sell is hidden for specific staff who don't sell directly (e.g. Madiha).
@@ -1015,7 +1082,6 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   };
 
   // Apple-style icon colors per module (iOS Settings palette)
-  const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",trade:"#1F8F4E",store:"#141210",social:"#E1306C",users:"#007AFF",datasets:"#5AC8FA"};
 
   return(
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"-apple-system,'SF Pro Display',Figtree,system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
@@ -1047,20 +1113,32 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           <div style={{width:200,borderRight:"0.5px solid rgba(0,0,0,0.07)",background:C.surface,position:"sticky",top:56,height:"calc(100vh - 56px)",overflowY:"auto",flexShrink:0,display:"flex",flexDirection:"column"}}>
             <div style={{padding:"14px 10px",flex:1}}>
               <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:8,paddingLeft:8}}>Modules</div>
-              {visibleMods.map(m=>{
-                const mc=MOD_COLORS[m.id]||"#8E8E93";
+              {/* A module on its own — Ask AI — sits above the groups, because it
+                  answers questions about all of them and belongs under none. */}
+              {ungrouped(visibleMods).map(m=>(
+                <SideModule key={m.id} m={m} hov={hov} setHov={setHov} onEnter={onEnter} t={t}/>
+              ))}
+              {groupsOf(visibleMods).map(g=>{
+                const open=openGroups.includes(g.id);
                 return(
-                  <button key={m.id} onClick={()=>m.ready&&onEnter(m.id)}
-                    style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"7px 8px",marginBottom:1,border:"none",borderRadius:9,cursor:m.ready?"pointer":"default",background:hov===m.id?"rgba(0,0,0,0.04)":"transparent",opacity:m.ready?1:.4,transition:"background .12s",textAlign:"left",color:C.ink,fontFamily:"inherit"}}
-                    onMouseEnter={()=>m.ready&&setHov(m.id)} onMouseLeave={()=>setHov(null)}>
-                    <div style={{width:30,height:30,borderRadius:8,background:mc,boxShadow:`0 1px 4px ${mc}55`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0,lineHeight:1}}>
-                      {m.icon}
-                    </div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:12,fontWeight:500,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t(m.id)}</div>
-                      {!m.ready&&<div style={{fontSize:8,color:C.inkFaint,letterSpacing:.6,fontWeight:600}}>SOON</div>}
-                    </div>
-                  </button>
+                  <div key={g.id} style={{marginTop:6}}>
+                    <button onClick={()=>{toggleGroup(g.id);onEnter(`group:${g.id}`);}}
+                      title={g.desc}
+                      style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"6px 8px",border:"none",borderRadius:9,cursor:"pointer",background:hov===g.id?"rgba(0,0,0,0.04)":"transparent",textAlign:"left",color:C.ink,fontFamily:"inherit"}}
+                      onMouseEnter={()=>setHov(g.id)} onMouseLeave={()=>setHov(null)}>
+                      <span style={{fontSize:9,color:C.inkFaint,width:9,flexShrink:0,transform:open?"rotate(90deg)":"none",transition:"transform .14s"}}>▶</span>
+                      <span style={{fontSize:14,lineHeight:1}}>{g.icon}</span>
+                      <span style={{flex:1,minWidth:0,fontSize:11.5,fontWeight:800,letterSpacing:.2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.title}</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{g.mods.length}</span>
+                    </button>
+                    {open&&(
+                      <div style={{marginLeft:9,paddingLeft:7,borderLeft:`1px solid ${C.border}`}}>
+                        {g.mods.map(m=>(
+                          <SideModule key={m.id} m={m} hov={hov} setHov={setHov} onEnter={onEnter} t={t} small/>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -1586,6 +1664,37 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 // ══════════════════════════════════════════════════════════════════
 // SHELL
 // ══════════════════════════════════════════════════════════════════
+/* A group's own page: its modules as tiles, with their descriptions.
+
+   The sidebar can only ever show a name. This is where the one-line answer to
+   "what is in here, and which one do I want" lives — and it is the same tile
+   the phone has always used, so there is one set of tiles to maintain, not two. */
+function GroupHome({group,mods,onEnter,onHome}){
+  return(
+    <Shell title={group.title} crumb={group.desc} onHome={onHome}>
+      <div style={{padding:mob?"14px 12px":"22px 28px",maxWidth:1100,margin:"0 auto"}}>
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(250px,1fr))",gap:12}}>
+          {mods.map(m=>{
+            const mc=MOD_COLORS[m.id]||"#8E8E93";
+            return(
+              <button key={m.id} onClick={()=>onEnter(m.id)}
+                style={{display:"flex",alignItems:"flex-start",gap:12,padding:"15px 16px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,cursor:"pointer",textAlign:"left",fontFamily:"inherit",boxShadow:"var(--e-1)",transition:"transform .1s"}}
+                onMouseEnter={e=>e.currentTarget.style.transform="translateY(-1px)"}
+                onMouseLeave={e=>e.currentTarget.style.transform="none"}>
+                <div style={{width:38,height:38,borderRadius:10,background:mc,boxShadow:`0 1px 5px ${mc}55`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:19,flexShrink:0,lineHeight:1}}>{m.icon}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:700,color:C.ink,marginBottom:3}}>{m.title}</div>
+                  <div style={{fontSize:11.5,color:C.inkFaint,lineHeight:1.45}}>{m.desc}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
 function Shell({title,crumb,onHome,onBack,actions,children}){
   const [dark,toggleDark]=useDark();
   const [lang,setLang,canSwitchLang]=useLang();
@@ -4068,6 +4177,24 @@ async function extractPdfText(url){
     return out.trim();
   }catch{return"";}
 }
+/* The accountant's ledger, as a module of its own.
+
+   It was built as a tab inside Stock Journal, so it brings no Shell and no
+   toast — its host supplied both. 26b8ffe removed the tab on the grounds that
+   "Finance has its own module", but Finance's ledger is a bank and cash list,
+   not this one, so the component has sat in the bundle rendered by nothing ever
+   since. This gives it the host it lost. */
+function LedgerApp({onHome,isAdmin=false,onViewBill}){
+  const [toast,setToast]=useState("");
+  const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
+  return(
+    <Shell title="Ledger" crumb="Accounting" onHome={onHome}>
+      <AccountingFinanceLedger showToast={showToast} isAdmin={isAdmin} onViewBill={onViewBill}/>
+      <Toast msg={toast}/>
+    </Shell>
+  );
+}
+
 function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-accounting-ledger-company")||"ng");
   const [accounts,setAccounts]=useState([]);
@@ -22800,6 +22927,7 @@ const ALL_STAFF_MODS=[
   {id:"store",label:"Store"},
   {id:"labels",label:"Make Labels"},
   // Books and personal papers: assignable, but never ticked by default.
+  {id:"ledger",label:"Ledger",sensitive:true},
   {id:"finance",label:"Finance",sensitive:true},
   {id:"documents",label:"Documents",sensitive:true},
 ];
@@ -23238,7 +23366,7 @@ export default function Root({onSignOut}){
   const isAdmin=userProfile===false||userProfile===undefined;
   const todoKey=isAdmin?"ng-todos-v1":TODO_KEY_FOR(currentEmail);
   const currentUser=isAdmin?{name:"Admin",email:currentEmail,role:"admin"}:userProfile||null;
-  const allowedMods=isAdmin?[...MODS,{id:"users",icon:"👥",title:"Users",desc:"Manage staff and permissions",ready:true},{id:"datasets",icon:"🗂️",title:"Datasets",desc:"Manage shapes, categories, markets and more",ready:true}]:MODS.filter(m=>(userProfile?.allowedModules||[]).includes(m.id)||(m.id==="orders"&&(userProfile?.allowedModules||[]).includes("etsy")));
+  const allowedMods=isAdmin?[...MODS,{id:"users",icon:"👥",title:"Users",desc:"Manage staff and permissions",group:"admin",ready:true},{id:"datasets",icon:"🗂️",title:"Datasets",desc:"Manage shapes, categories, markets and more",group:"admin",ready:true}]:MODS.filter(m=>(userProfile?.allowedModules||[]).includes(m.id)||(m.id==="orders"&&(userProfile?.allowedModules||[]).includes("etsy")));
 
   // Handle Shopify OAuth redirect — token arrives in URL hash
   useEffect(()=>{
@@ -23272,6 +23400,13 @@ export default function Root({onSignOut}){
   const _locationParam=new URLSearchParams(window.location.search).get("location");
   const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startInvoiceId,setStartInvoiceId]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);
   const go=(id,sv=null)=>{
+    /* A group's landing page is not a module and is not in allowedMods, so it
+       is let through here and gated where it is rendered — on the modules the
+       person actually has, which is the only gate that means anything. */
+    if(String(id).startsWith("group:")){
+      setMod(id);setStartView(null);setScreen("app");
+      return;
+    }
     // Block access to modules not in allowedMods
     if(userProfile&&userProfile!==false&&!allowedMods.find(m=>m.id===id))return;
     setMod(id);setStartView(sv);setScreen("app");localStorage.setItem("ng-last-mod",id);
@@ -23335,7 +23470,14 @@ export default function Root({onSignOut}){
     }
   };
   if(screen==="app"){
-    if(mod==="purchases")content=<PurchasesApp onHome={()=>{goHome();setStartView(null);setStartBillId(null);}} startView={startView} startBillId={startBillId} onBillIdConsumed={()=>setStartBillId(null)} onGoToVendor={name=>{setStartVendor(name);setMod("vendors");setScreen("app");}}/>;
+    if(String(mod).startsWith("group:")){
+      const g=GROUPS.find(x=>x.id===String(mod).slice(6));
+      const mine=allowedMods.filter(m=>m.group===g?.id&&m.ready);
+      content=g&&mine.length
+        ? <GroupHome group={g} mods={mine} onEnter={go} onHome={goHome}/>
+        : null;   // no group, or none of it allowed: fall through to Home
+    }
+    else if(mod==="purchases")content=<PurchasesApp onHome={()=>{goHome();setStartView(null);setStartBillId(null);}} startView={startView} startBillId={startBillId} onBillIdConsumed={()=>setStartBillId(null)} onGoToVendor={name=>{setStartVendor(name);setMod("vendors");setScreen("app");}}/>;
     else if(mod==="vendors")content=<VendorsApp onHome={()=>{goHome();setStartVendor(null);}} startVendor={startVendor}/>;
     else if(mod==="stock")content=<StockApp onHome={goHome} startStockId={startStockId} onStockIdConsumed={()=>{setStartStockId(null);window.history.replaceState(null,"",window.location.pathname);}} startLocationFilter={startLocationFilter} onLocationConsumed={()=>{setStartLocationFilter(null);window.history.replaceState(null,"",window.location.pathname);}} onCreateInvoiceFromStock={draft=>{setStartInvoiceDraft(draft);setMod("invoices");setScreen("app");}} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
     else if(mod==="expenses")content=<ExpensesApp onHome={goHome}/>;
@@ -23369,6 +23511,12 @@ export default function Root({onSignOut}){
     else if(mod==="bgremove")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><BgRemoveSandbox onHome={goHome}/></React.Suspense>;
     else if(mod==="misc")content=<MiscApp onHome={goHome}/>;
     else if(mod==="documents"&&(isAdmin||allowedMods.some(m=>m.id==="documents")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DocumentsApp onHome={goHome} currentUser={currentUser}/></React.Suspense>;
+    /* The accountant's ledger. It was dropped from Stock Journal in 26b8ffe on the
+       grounds that "Finance has its own module" — but Finance's ledger is a
+       bank and cash list, not this, so the component has sat in the bundle
+       rendered by nothing ever since. Here it has its own module, gated like
+       the other books. */
+    else if(mod==="ledger"&&(isAdmin||allowedMods.some(m=>m.id==="ledger")))content=<LedgerApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
     else if(mod==="journal")content=<StockJournalApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
   }
   const handleGoToActivity=act=>{
