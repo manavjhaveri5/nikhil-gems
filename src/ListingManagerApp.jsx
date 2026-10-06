@@ -9526,6 +9526,14 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       const r = await fetch("/api/listing-manager?action=sync_etsy_states");
       const d = await r.json();
       if (!d.ok || !d.states) return;
+      /* Shown live here but neither active nor a draft on Etsy: ask Etsy what
+         became of them (sold out, paused, expired, gone) — without this they
+         stayed "live" here for good, View link and all. */
+      const missing = current.filter(l => l.platforms?.etsy?.listing_id && l.platforms.etsy.status === "active" && !d.states[l.platforms.etsy.listing_id]).map(l => l.platforms.etsy.listing_id).slice(0, 300);
+      if (missing.length) {
+        const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${missing.join(",")}`).then(x => x.json()).catch(() => null);
+        if (c?.ok && c.states) Object.assign(d.states, c.states);
+      }
       const states = d.states, firstListed = d.firstListed || {}, info = d.info || {};
       const fresh = await loadKFresh(LIST_KEY).catch(() => null);
       const base0 = Array.isArray(fresh) ? fresh : current;
@@ -9556,7 +9564,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         const lid = l.platforms?.etsy?.listing_id;
         const live = lid && states[lid];
         if (!live) return l;
-        const mapped = live === "active" ? "active" : "draft";
+        // Sold out on Etsy is a sale; a listing Etsy no longer has is gone; paused, expired or a draft isn't live.
+        const mapped = live === "active" ? "active" : live === "sold_out" ? "sold" : live === "removed" ? "deleted" : "draft";
         /* A renewal moves Etsy's creation date, and a listing imported after
            one came in dated the day it renewed, so it sorted and counted as
            new. Etsy's original date puts it back where it belongs. */
@@ -9971,7 +9980,21 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* publish — syncOnly=true means update fields only, never activate */
-  const handlePublish = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
+  /* One publish per listing and platform at a time, whichever button or save
+     started it. A second that starts while the first is still out — a save
+     right after a Publish in the listing steps, a tap on another device's
+     open copy here — waits for it, then reads the id it got and updates that
+     listing; before, both went out with no id and each made its own. */
+  const publishChain = useRef(new Map());
+  const handlePublish = (listing, pkey, opts = {}) => {
+    const k = `${listing.id}:${pkey}`;
+    const prev = publishChain.current.get(k) || Promise.resolve();
+    const run = prev.catch(() => {}).then(() => handlePublishNow(listing, pkey, opts));
+    publishChain.current.set(k, run);
+    run.finally(() => { if (publishChain.current.get(k) === run) publishChain.current.delete(k); }).catch(() => {});
+    return run;
+  };
+  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
     /* What says "this already exists over there" is the platform's own id, and
        it is written onto the stored listing at the END of this function. Anything
        holding an older copy of the listing — a form opened before the last
@@ -10096,7 +10119,14 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate, force_photos: forcePhotos }),
       });
       const d = await r.json();
-      if (!d.ok) throw new Error(d.error || "Publishing failed");
+      /* A failure can come after the listing was made (Etsy kept it a draft):
+         its id is kept even so, so pressing Publish again finishes that one
+         instead of making another. */
+      if (!d.ok) {
+        const made = d.result?.listing_id || d.result?.product_id;
+        if (made) await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], ...d.result, status: d.result.status || "draft" } }, updated_at: now() }));
+        throw new Error(d.error || "Publishing failed");
+      }
       result = d.result;
       if (listing.video && result?.videoErr) showToast(`⚠ ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} video: ${result.videoErr}`);
       // Etsy takes the listing and then keeps whichever tags it liked. The API
@@ -10213,6 +10243,49 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     }
     await handleUnpublish(listing, pkey);
   };
+
+  /* An order for a one-off, from Etsy, eBay or anywhere, marks its piece Sold
+     on eartheditions.co as soon as the order is here — no waiting, no nightly
+     guess. The store keeps it on show as Sold; the other platforms still come
+     down from the order's checklist. Only orders from the last two weeks, so an
+     old sale can't touch a piece that was put back up since. */
+  const storeSoldDone = useRef(new Set());
+  useEffect(() => {
+    if (!loaded || !orders?.length || !listings?.length) return;
+    const since = Date.now() - 14 * 864e5;
+    const byId = new Map(listings.map(l => [l.id, l]));
+    /* An Etsy or eBay id shared by more than one ERP listing (a #2 made from
+       #1, a lot split up) can't say which piece sold — those are left for the
+       order's checklist rather than guessed at. */
+    const only = pairs => { const m = new Map(), n = new Map(); for (const [k, l] of pairs) { n.set(k, (n.get(k) || 0) + 1); m.set(k, l); } for (const [k, c] of n) if (c > 1) m.delete(k); return m; };
+    const byEtsy = only(listings.filter(l => l.platforms?.etsy?.listing_id).map(l => [String(l.platforms.etsy.listing_id), l]));
+    const byEbay = only(listings.filter(l => l.platforms?.ebay?.item_id).map(l => [String(l.platforms.ebay.item_id), l]));
+    const todo = new Map();
+    for (const o of orders) {
+      if (!o || o.platform === "store" || /cancel|refund/i.test(o.status || "") || o.cancelled_at || o.refunded) continue;
+      if (new Date(o.created_at || o.date || 0).getTime() < since) continue;
+      const l = byId.get(o.listing_id) || byEtsy.get(String(o.etsy_listing_id || "")) || byEbay.get(String(o.ebay_item_id || ""));
+      // Strictly one-offs: marked unique and only one of it.
+      if (!l || l.type !== "unique" || +l.qty > 1 || l.platforms?.store?.status !== "active" || !l.platforms?.store?.product_id) continue;
+      if (storeSoldDone.current.has(l.id)) continue;
+      todo.set(l.id, { l, o });
+    }
+    if (!todo.size) return;
+    (async () => {
+      const done = [];
+      for (const { l, o } of todo.values()) {
+        storeSoldDone.current.add(l.id);
+        const via = `${o.platform === "ebay" || String(o.order_number || "").startsWith("EBAY-") ? "eBay" : "Etsy"} order ${o.order_number || o.platform_order_id || ""}`.trim();
+        try {
+          await delistFromPlatform(l, "store");
+          await patchListingItem(l, cur => ({ ...cur, platforms: { ...cur.platforms, store: { ...cur.platforms?.store, sold_by: via, sold_by_at: new Date().toISOString() } } }));
+          done.push(`${String(l.title || "").split(/ [—–-] /)[0].slice(0, 50)} (${via})`);
+        }
+        catch (e) { storeSoldDone.current.delete(l.id); console.warn("store sold", l.id, e); }
+      }
+      if (done.length) showToast?.(`✓ Marked sold on eartheditions.co: ${done.slice(0, 3).join(", ")}${done.length > 3 ? ` +${done.length - 3}` : ""}`, 9000);
+    })();
+  }, [loaded, orders, listings]);
 
   /* unpublish */
   const handleUnpublish = async (listing, pkey) => {

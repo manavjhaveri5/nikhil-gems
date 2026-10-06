@@ -786,6 +786,26 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   const listingId = data.listing_id;
 
+  /* The piece's SKU goes on straight away, before the slow photo and video
+     uploads. Etsy ignores the skus field on create: a SKU only lives in a
+     listing's inventory, and that was written only for listings with options.
+     Without it, a listing whose reply never reached the ERP couldn't be found
+     again, and the next Publish made another. (Listings with options get theirs
+     from applyEtsyVariations below.) */
+  if (listingSku(listing) && !etsyVariationAxes(listing).length) {
+    try {
+      const inv = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, {
+        method: "PUT", headers: hdrs, body: JSON.stringify({
+          products: [{ sku: listingSku(listing).slice(0, 32), property_values: [],
+            offerings: [{ price: payload.price, quantity, is_enabled: true, ...(readinessId ? { readiness_state_id: readinessId } : {}) }] }],
+          price_on_property: [], quantity_on_property: [], sku_on_property: [],
+          ...(readinessId ? { readiness_state_on_property: [] } : {}),
+        }),
+      });
+      if (!inv.ok) console.error("Etsy SKU didn't go on:", await inv.text().catch(() => inv.status));
+    } catch (e) { console.error("Etsy SKU didn't go on:", e.message); }
+  }
+
   // Upload images FIRST — Etsy requires images before activation
   const imgUrls = images.filter(u => typeof u === "string" && u.startsWith("http")).slice(0, 10);
   for (let i = 0; i < imgUrls.length; i++) {
@@ -1116,7 +1136,10 @@ async function unpublishEtsy(listingId) {
   });
   if (!r.ok && r.status !== 404) {
     const d = await r.json().catch(() => ({}));
-    throw new Error(`Etsy delete failed: ${d.error || r.status}`);
+    /* A listing Etsy has already removed can't be deleted again — it's gone,
+       which is what was asked. Only that answer counts as done; any other
+       refusal is a real failure. */
+    if (!/state:?\s*removed/i.test(String(d.error || ""))) throw new Error(`Etsy delete failed: ${d.error || r.status}`);
   }
   return { listing_id: listingId, status: "deleted" };
 }
@@ -1450,7 +1473,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
-  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids");
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states");
   const user = storeAction ? null : await requireUser(req, res);
   if (!storeAction && !user) return;
 
@@ -1558,7 +1581,7 @@ export default async function handler(req, res) {
         const hdrs = await etsyHeaders(false);
         const states = {}, firstListed = {}, info = {};
         let renewed = 0;
-        for (const state of ["active", "draft"]) {
+        for (const state of url.searchParams.get("only_check") ? [] : ["active", "draft"]) {   // only_check: just the listings named in check
           let offset = 0;
           while (true) {
             const r = await fetch(
@@ -1578,6 +1601,18 @@ export default async function handler(req, res) {
             if (results.length < 100) break;
             offset += 100;
           }
+        }
+        /* Listings the ERP thinks are live but that are neither active nor a
+           draft on Etsy: sold out, paused, expired — or gone. Asked about one
+           by one (in batches), so the ERP stops showing them as live. */
+        const check = String(url.searchParams.get("check") || "").split(",").filter(x => /^\d+$/.test(x) && !states[x]).slice(0, 500);
+        for (let i = 0; i < check.length; i += 100) {
+          const chunk = check.slice(i, i + 100);
+          const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
+          if (!r.ok) break;
+          const d = await r.json().catch(() => ({}));
+          for (const l of d.results || []) states[l.listing_id] = l.state || "inactive";
+          for (const id of chunk) if (!states[id]) states[id] = "removed";
         }
         return res.json({ ok: true, states, firstListed, renewed, info });
       } catch (e) {
@@ -1669,7 +1704,8 @@ export default async function handler(req, res) {
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch { return res.status(400).json({ error: "Invalid JSON" }); } }
 
-  const { action, listing, platform, store_key } = body;
+  const { action, platform, store_key } = body;
+  let { listing } = body;   // publish_etsy may fill in an Etsy id it finds by SKU
 
   /* ── STORE ORDER (called by eartheditions.co's Stripe webhook) ────────────
      Files the paid order under Orders — one row per piece, as Mark sold does.
@@ -1691,6 +1727,28 @@ export default async function handler(req, res) {
       if ((d.results || []).length < 100) break;
     }
     return res.json({ ok: true, ids });
+  }
+
+  /* The store's daily check asks what Etsy says about exactly the listings it
+     carries: active, sold_out, inactive, draft, expired — or "removed" when Etsy
+     no longer has it at all. Only a real sale should make a store piece Sold;
+     a listing missing from the active list (a draft mid-publish, one paused or
+     expired) is not one. */
+  if (action === "etsy_states") {
+    const secret = process.env.STORE_SYNC_SECRET;
+    if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });
+    const want = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : []).map(String).filter(x => /^\d+$/.test(x)))].slice(0, 3000);
+    const hdrs = await etsyHeaders(false);
+    const states = {};
+    for (let i = 0; i < want.length; i += 100) {
+      const chunk = want.slice(i, i + 100);
+      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(502).json({ error: d?.error || `Etsy ${r.status}` });
+      for (const l of d.results || []) states[String(l.listing_id)] = l.state || "unknown";
+      for (const id of chunk) if (!states[id]) states[id] = "removed";
+    }
+    return res.json({ ok: true, states });
   }
 
   if (action === "store_sold") {
@@ -1764,6 +1822,35 @@ export default async function handler(req, res) {
       const allowCreate = req.body?.allow_create === true;
       // Resync photos: re-send the set even when the listing thinks it already did.
       const forcePhotos = req.body?.force_photos === true;
+
+      /* Etsy is asked before anything is made: is there already a listing
+         carrying this piece's SKU? A create whose answer never got back to the
+         ERP (the function timed out mid-photos, the phone lost signal, Etsy
+         refused to activate and the reply was an error) left a listing on Etsy
+         the ERP knew nothing about — and the next Publish made a second one.
+         That is how one piece came to have two Etsy listings. Finding it by SKU
+         makes publishing the same piece twice land on the same listing. */
+      if (!listing.platforms?.etsy?.listing_id && listingSku(listing)) {
+        const sku = listingSku(listing).slice(0, 32).toLowerCase();   // as written to Etsy
+        const hdrs = await etsyHeaders(false);
+        search: for (const state of ["active", "draft", "inactive"]) {
+          for (let offset = 0; offset < 300; offset += 100) {
+            const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}&sort_on=created&sort_order=desc`, { headers: hdrs });
+            if (!r.ok) break;
+            const d = await r.json().catch(() => ({}));
+            /* A SKU the ERP made from this listing's own id belongs to this piece
+               alone, so a listing of any age carrying it is this one. A SKU typed
+               in by hand can be shared by pieces: then only one from the last
+               week counts. */
+            const ownSku = [listing.listing_order_id, listing.id].some(v => v && String(v).trim().toLowerCase() === sku);
+            const cutoff = ownSku ? 0 : Date.now() - 7 * 864e5;
+            const recent = (d.results || []).filter(l => (l.original_creation_timestamp || l.creation_timestamp || 0) * 1000 > cutoff);
+            const hit = recent.find(l => (l.skus || []).some(s => String(s).trim().toLowerCase() === sku));
+            if (hit) { listing = { ...listing, platforms: { ...(listing.platforms || {}), etsy: { ...(listing.platforms?.etsy || {}), listing_id: hit.listing_id } } }; break search; }
+            if (recent.length < (d.results || []).length || (d.results || []).length < 100) break;
+          }
+        }
+      }
 
       let result;
       if (listing.platforms?.etsy?.listing_id) {
