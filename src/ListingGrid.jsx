@@ -162,9 +162,11 @@ function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocat
           {PLAT.map(p => {
             const st = statusOf(l, p.key, facts);
             const on = st === "active", draft = st && st !== "active" && st !== "deleted";
-            return <span key={p.key} style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 10, letterSpacing: .2,
+            // Filled = live and on sale; dashed = there but not on sale (a draft, or sold out); faint = not on it.
+            return <span key={p.key} title={`${p.label}: ${on ? "live" : st === "sold" ? "sold" : draft ? "draft — there, not on sale" : "not listed"}`}
+              style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 10, letterSpacing: .2,
               background: on ? p.color : "transparent", color: on ? "#fff" : draft ? p.color : C.inkFaint,
-              border: `1px solid ${on ? p.color : draft ? p.color + "80" : C.border}`, opacity: on || draft ? 1 : .7 }}>{p.short}</span>;
+              border: `1px ${draft ? "dashed" : "solid"} ${on ? p.color : draft ? p.color : C.border}`, opacity: on || draft ? 1 : .7 }}>{p.short}{draft ? (st === "sold" ? " · sold" : " · draft") : ""}</span>;
           })}
         </div>
         <div onClick={() => onOpen(l, "platforms")} style={{ cursor: "pointer" }}>

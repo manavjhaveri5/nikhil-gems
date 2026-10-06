@@ -1902,6 +1902,17 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const [steps, setSteps] = useState(null);   // the listing steps: null | "where" | "price"
   const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, []);
   const linkedCard = stock.find(s => s.id === form.linked_stock_id) || null;
+  /* The stock card is where the piece's place and count live. Linked, the
+     listing follows the card: nothing to type twice, nothing to drift. */
+  const cardLoc = String(linkedCard?.location || "").trim();
+  // Linking a card, or changing the card's place, moves the piece with it. A piece
+  // moved on its own since (the grid's Move to) keeps its own place on opening.
+  const seenCard = useRef({ id: linkedCard?.id, loc: cardLoc });
+  useEffect(() => {
+    const was = seenCard.current, changed = was.id !== linkedCard?.id || was.loc !== cardLoc;
+    seenCard.current = { id: linkedCard?.id, loc: cardLoc };
+    if (cardLoc && (changed || !String(form.officeLocation || "").trim()) && cardLoc !== String(form.officeLocation || "").trim()) set("officeLocation", cardLoc);
+  }, [linkedCard?.id, cardLoc]); // eslint-disable-line react-hooks/exhaustive-deps
   /* A card carries its two measures in either order — 82 pcs / 1.148 kg and
      1.148 kg / 82 pcs are the same lot — so read each by its unit rather than
      by which slot it landed in. Reading by slot is what charged a single heart
@@ -1918,6 +1929,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     }
     return 0;
   };
+
+  const cardPcs = linkedCard ? cardMeasure(linkedCard, "pcs") : 0;
+  useEffect(() => {
+    if (form.type === "repeatable" && cardPcs > 0 && String(form.qty) !== String(cardPcs)) set("qty", cardPcs);
+  }, [linkedCard?.id, cardPcs, form.type]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The piece's weight in kilos: its own weight field, or its share of the card's.
   const pieceKg = (() => {
@@ -1994,14 +2010,17 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const autoInr = +form.price_etsy > 0 ? Math.round(+form.price_etsy * (1 - (+sDisc || 0) / 100) / 10) * 10 : 0;
   useEffect(() => { if (initial?.id) loadStoreProduct(initial.id).then(setStoreLive).catch(() => {}); }, [initial?.id]);
   // Finding the stock a piece came from, by stone, SKU, box or show.
+  // Stock sent to a show isn't on the shelf its card still names.
+  const stockAway = x => (x.showId || x.showTag) ? 1 : 0;
   const [stockQ, setStockQ] = useState("");
   const stockHits = useMemo(() => {
     const terms = stockQ.toLowerCase().split(/\s+/).filter(Boolean);
     if (!terms.length) return [];
     return stock.filter(x => {
+      if (x.soldDate && !(+x.qty > 0)) return false;   // sold through: nothing left to list
       const hay = [x.desc, x.material, x.shape, x.sku, x.location, x.showTag, x.grade, x.origin, x.notes].filter(Boolean).join(" ").toLowerCase();
       return terms.every(t => hay.includes(t));
-    }).slice(0, 8);
+    }).sort((a, b) => stockAway(a) - stockAway(b)).slice(0, 8);
   }, [stock, stockQ]);
   const [liveUsdRate, setLiveUsdRate] = useState(USD_RATE);
 
@@ -2273,7 +2292,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   const knownLocs = useMemo(() => knownLocations(listings || [], stock || []), [listings, stock]);
   const loc = String(form.officeLocation || "").trim();
-  const linkedStockLoc = form.linked_stock_id ? String(stock.find(s => s.id === form.linked_stock_id)?.location || "") : "";
   const locRequired = needsLocation(form, sold);
 
   const TABS = [
@@ -2480,6 +2498,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   // One of a kind or repeatable, then where it's kept: the listing steps' second page.
   const pieceCard = () => (
     <>
+      {whereCard()}
       <div style={{ display: "flex", gap: 10 }}>
         {[{ v: "unique", label: "One of a kind", sub: "Comes off every platform when it sells" }, { v: "repeatable", label: "Repeatable", sub: "Several units, quantity tracked" }].map(o => (
           <button key={o.v} type="button" onClick={() => set("type", o.v)} style={{ flex: 1, padding: "12px 14px", borderRadius: 12, textAlign: "left", cursor: "pointer", WebkitTapHighlightColor: "transparent",
@@ -2489,11 +2508,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </button>
         ))}
       </div>
-      {form.type === "repeatable" && <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>How many?</span>
-        <input type="number" min={1} value={form.qty} onChange={e => set("qty", e.target.value)} style={FI({ width: 100 })} />
-      </div>}
-      {whereCard()}
+      {form.type === "repeatable" && (cardPcs > 0
+        ? <div style={{ fontSize: 13, color: C.inkMid }}><b style={{ color: C.ink }}>{cardPcs} for sale</b> — the count on {linkedCard.sku || "its stock card"}. Change it on the card.</div>
+        : <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>How many?</span>
+          <input type="number" min={1} value={form.qty} onChange={e => set("qty", e.target.value)} style={FI({ width: 100 })} />
+          {linkedCard && <span style={{ fontSize: 11.5, color: C.inkFaint }}>Its stock card counts {linkedCard.unit || "weight"}, not pieces</span>}
+        </div>)}
     </>
   );
   const platformStep = key => key === "etsy" ? etsyBody(true) : key === "ebay" ? ebayBody(true) : key === "store" ? storeBody(true) : tradeStep();
@@ -2517,7 +2538,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     setNewStock({ material: form.material || "", shape: form.shape || "", vendor: "", vendorId: "",
       qty: form.type === "repeatable" ? String(form.qty || 1) : "1", unit: "pcs",
       qty2: pieceKg ? String(pieceKg) : "", unit2: "kg",
-      price: "", per: pieceKg ? "unit2" : "unit", sku: "" });
+      price: "", per: pieceKg ? "unit2" : "unit", sku: "", location: loc });
   };
   // Open the linked stock card in the same form, to change it in place.
   const startEditStock = card => {
@@ -2549,7 +2570,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const item = {
         id: uid(), material: ns.material.trim(), shape: ns.shape, origin: form.origin || "", size: form.size || "", grade: "", hsn: "7103",
         qty: ns.qty || "1", unit: ns.unit, qty2: ns.qty2 || "", unit2: ns.unit2 || "kg", weightGm: "", costPrice: nsCostPerUnit(ns) ? String(nsCostPerUnit(ns)) : "", listPrice: "",
-        location: loc || "", market: [], productType: "", photographed: !!(form.images || []).length, postedShopify: false, postedWix: false, postedEtsy: false,
+        location: String(ns.location ?? loc ?? "").trim(), market: [], productType: "", photographed: !!(form.images || []).length, postedShopify: false, postedWix: false, postedEtsy: false,
         photo: typeof form.images?.[0] === "string" ? form.images[0] : "", photos: (form.images || []).filter(u => typeof u === "string"), video: "",
         notes: [`Made from listing ${form.listing_order_id || form.id || ""}`.trim(), +ns.price && ns.per === "unit2" && ns.qty2 ? `Bought at ₹${ns.price}/${ns.unit2}` : ""].filter(Boolean).join(" · "), addedDate: now.slice(0, 10), source: "listing",
         sku: ns.sku.trim() || skuFor(ns.material, ns.shape), vendor: ns.vendor.trim(), vendorId: ns.vendorId || "", region: "India", files: [], createdAt: now, updatedAt: now,
@@ -2638,7 +2659,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           <div><Label>Per</Label><select value={ns.per} onChange={e => upd({ per: e.target.value })} style={FI()}>
             <option value="unit">{ns.unit}</option>{ns.qty2 && <option value="unit2">{ns.unit2}</option>}</select></div>
           {nsTotal(ns) > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 13, color: C.ink }}>Total cost <b>₹{Math.round(nsTotal(ns)).toLocaleString("en-IN")}</b>{+ns.qty > 1 ? ` · ₹${nsCostPerUnit(ns).toLocaleString("en-IN")} per ${ns.unit}` : ""}</div>}
-          {ns.editId && <div style={{ gridColumn: "1 / -1" }}><Label>Stored at</Label><input value={ns.location} onChange={e => upd({ location: e.target.value })} style={FI()} /></div>}
+          <div style={{ gridColumn: "1 / -1" }}><Label>Stored at</Label><input value={ns.location || ""} onChange={e => upd({ location: e.target.value })} list="lm-loc-list" placeholder="Shelf, box, drawer…" style={FI()} /></div>
           <div><Label>SKU</Label><input value={ns.sku} onChange={e => upd({ sku: e.target.value.toUpperCase() })} placeholder={autoSku} style={FI({ fontFamily: "monospace" })} /></div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -2649,77 +2670,123 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     );
   };
 
-  /* Where the piece is kept (or the stock card it comes from) and what it
-     cost: the first thing the listing steps ask. */
-  const whereCard = () => (
-            <div style={{ background: C.surface, border: `1.5px solid ${errors.location ? "#C0392B" : loc ? C.border : locRequired ? "#D4A017" : C.border}`, borderRadius: 12, padding: "14px 16px" }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>📍 Where is it stored?</div>
-                <div style={{ fontSize: 11, color: C.inkFaint }}>{locRequired ? "Required for one-of-a-kind pieces" : "Internal only, never shown to buyers"}</div>
-              </div>
-              <input value={form.officeLocation || ""} onChange={e => { set("officeLocation", e.target.value); setErrors(er => ({ ...er, location: "" })); }}
-                placeholder={linkedStockLoc ? `From stock: ${linkedStockLoc}` : "e.g. Shelf B2 · Blue box 3 · Safe · Showroom cabinet"}
-                list="lm-loc-list" style={FI({ fontSize: 15, padding: "10px 12px", ...(errors.location ? { borderColor: "#C0392B" } : {}) })} />
+  /* The stock card first: it says where the piece is kept and how many
+     there are, so linking one answers both. Typing a place by hand is only
+     for a piece with no card. */
+  const [typeLoc, setTypeLoc] = useState(false);
+  const saveCardLoc = async v => {
+    const place = String(v || "").trim();
+    if (!linkedCard || !place) return;
+    setStockBusy(true);
+    try {
+      const next = await upsertItemK(STK_KEY, { ...linkedCard, location: place, updatedAt: new Date().toISOString() }, { prepend: false });
+      window.dispatchEvent(new CustomEvent("ng-stock-updated", { detail: next }));
+      set("officeLocation", place); setErrors(er => ({ ...er, location: "" }));
+    } catch (e) { alert(`Couldn't save the location: ${e.message}`); }
+    finally { setStockBusy(false); }
+  };
+  const locChips = (current, pick) => knownLocs.length > 0 && (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+      {knownLocs.slice(0, 10).map(l => {
+        const on = l.label.toLowerCase() === String(current || "").toLowerCase();
+        return <button key={l.label} type="button" onClick={() => pick(l.label)}
+          style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.card, color: on ? "#FAF0DC" : C.inkMid, fontWeight: on ? 700 : 500 }}>{l.label}</button>;
+      })}
+    </div>
+  );
+  const [cardLocDraft, setCardLocDraft] = useState("");
+  const whereCard = () => {
+    const ls = linkedCard;
+    const showTyped = !ls && (typeLoc || !!loc || !!errors.location);
+    return (
+            <div style={{ background: C.surface, border: `1.5px solid ${errors.location ? "#C0392B" : (ls ? cardLoc : loc) || !locRequired ? C.border : "#D4A017"}`, borderRadius: 12, padding: "14px 16px" }}>
               <datalist id="lm-loc-list">{knownLocs.map(l => <option key={l.label} value={l.label} />)}</datalist>
-              {errors.location && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>{errors.location}</div>}
-              {knownLocs.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                  {knownLocs.slice(0, 10).map(l => {
-                    const on = l.label.toLowerCase() === loc.toLowerCase();
-                    return <button key={l.label} type="button" onClick={() => { set("officeLocation", l.label); setErrors(er => ({ ...er, location: "" })); }}
-                      style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.card, color: on ? "#FAF0DC" : C.inkMid, fontWeight: on ? 700 : 500 }}>{l.label}</button>;
-                  })}
-                  {linkedStockLoc && !loc && <button type="button" onClick={() => set("officeLocation", linkedStockLoc)} style={{ fontSize: 12, borderRadius: 16, padding: "4px 11px", cursor: "pointer", border: `1px dashed ${C.border}`, background: "none", color: C.inkMid }}>Use stock location: {linkedStockLoc}</button>}
-                </div>
-              )}
-              <div style={{ marginTop: 10, position: "relative" }}>
-                <input value={stockQ} onChange={e => setStockQ(e.target.value)} placeholder="🔎 Search stock — stone, SKU, box, show…" style={FI({ fontSize: 13, borderRadius: 20, padding: "7px 12px" })} />
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>📦 Its stock card</div>
+                <div style={{ fontSize: 11, color: C.inkFaint }}>{ls ? "Where it's kept and how many come from the card" : "Link one and its location and count come with it"}</div>
+              </div>
+              {errors.location && <div style={{ fontSize: 12, color: C.red, marginBottom: 6 }}>{errors.location}</div>}
+
+              {ls && !stockQ && (newStock?.editId === ls.id ? newStockForm() : (() => {
+                const q2 = String(ls.qty2 ?? "").trim();
+                const away = stockAway(ls);
+                return (<>
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: 10, background: C.bg, display: "flex", gap: 10, alignItems: "flex-start" }}>
+                    {ls.photo ? <img src={ls.photo} alt="" style={{ width: 52, height: 52, borderRadius: 8, objectFit: "cover", flex: "none" }} /> : <div style={{ width: 52, height: 52, borderRadius: 8, background: C.card, display: "grid", placeItems: "center", flex: "none" }}>💎</div>}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>Linked stock card{ls.sku ? ` · ${ls.sku}` : ""}</div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ") || "Stock item"}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: cardLoc ? C.ink : C.red, marginTop: 4 }}>{cardLoc ? `📍 ${cardLoc}` : "📍 No location on this card"}</div>
+                      {loc && cardLoc && loc.toLowerCase() !== cardLoc.toLowerCase() && <div style={{ fontSize: 12, color: C.inkMid }}>This piece was moved to <b>📍 {loc}</b> <button type="button" onClick={() => set("officeLocation", cardLoc)} style={{ fontSize: 11.5, background: "none", border: "none", color: C.inkMid, textDecoration: "underline", cursor: "pointer", padding: 0 }}>back with the card</button></div>}
+                      <div style={{ fontSize: 12, color: C.inkMid, marginTop: 2, lineHeight: 1.5 }}>
+                        {ls.qty} {ls.unit || "pcs"}{q2 ? ` · ${q2} ${ls.unit2 || ""}` : ""}
+                        {" · "}{ls.costPrice ? `Cost ₹${(+ls.costPrice).toLocaleString("en-IN")} per ${ls.unit || "pcs"}` : "No cost price"}{ls.vendor ? ` · ${ls.vendor}` : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "none" }}>
+                      <button type="button" onClick={() => startEditStock(ls)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: C.ink, color: "#FAF0DC", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Edit</button>
+                      <button type="button" onClick={() => set("linked_stock_id", "")} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Unlink</button>
+                    </div>
+                  </div>
+                  {away > 0 && <div style={{ marginTop: 8, border: `1.5px solid ${C.amber}`, background: C.amberBg, borderRadius: 10, padding: "9px 12px", fontSize: 12.5, color: C.ink }}>
+                    <b>🎪 This stock is at {ls.showTag || "a show"}</b>{ls.sentAt ? `, sent ${ls.sentAt}` : ""} — it isn't on the shelf. List it only once it's back.</div>}
+                  {!cardLoc && <div style={{ marginTop: 8 }}>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input value={cardLocDraft} onChange={e => setCardLocDraft(e.target.value)} list="lm-loc-list" placeholder="Where is it? Saved on the card" style={FI({ flex: 1, fontSize: 15 })} />
+                      <button type="button" disabled={!cardLocDraft.trim() || stockBusy} onClick={() => saveCardLoc(cardLocDraft).then(() => setCardLocDraft(""))}
+                        style={{ padding: "9px 14px", borderRadius: 8, border: "none", background: C.ink, color: "#FAF0DC", fontWeight: 800, cursor: "pointer", opacity: cardLocDraft.trim() ? 1 : .5 }}>{stockBusy ? "Saving…" : "Save to card"}</button>
+                    </div>
+                    {locChips(cardLocDraft, saveCardLoc)}
+                  </div>}
+                </>);
+              })())}
+
+              {(!ls || stockQ) && <>
+                <input value={stockQ} onChange={e => setStockQ(e.target.value)} placeholder="🔎 Find its stock card — stone, SKU, box…" style={FI({ fontSize: 14, borderRadius: 20, padding: "8px 12px" })} />
                 {stockHits.length > 0 && (
                   <div style={{ marginTop: 6, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", background: C.surface }}>
                     {stockHits.map(x => {
-                      const on = x.id === form.linked_stock_id;
+                      const on = x.id === form.linked_stock_id, away = stockAway(x);
                       return (
-                        <button key={x.id} type="button" onClick={() => { set("linked_stock_id", x.id); if (x.location) { set("officeLocation", String(x.location)); setErrors(er => ({ ...er, location: "" })); } setStockQ(""); }}
-                          style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left", padding: "7px 10px", border: "none", borderBottom: `1px solid ${C.border}`, background: on ? C.amberBg : "transparent", cursor: "pointer" }}>
-                          <div style={{ width: 36, height: 36, borderRadius: 6, overflow: "hidden", background: C.card, flex: "none" }}>{(x.photo || x.photos?.[0]) && <img src={x.photo || x.photos[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</div>
+                        <button key={x.id} type="button" onClick={() => {
+                            if (away && !window.confirm(`${x.sku || "This stock"} is at ${x.showTag || "a show"}, not on the shelf. Link it anyway?`)) return;
+                            set("linked_stock_id", x.id); if (x.location) { set("officeLocation", String(x.location)); setErrors(er => ({ ...er, location: "" })); } setStockQ(""); setTypeLoc(false); }}
+                          style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left", padding: "7px 10px", border: "none", borderBottom: `1px solid ${C.border}`, background: on ? C.amberBg : away ? C.bg : "transparent", cursor: "pointer", opacity: away ? .75 : 1 }}>
+                          <div style={{ width: 36, height: 36, borderRadius: 6, overflow: "hidden", background: C.card, flex: "none" }}>{(x.photo || x.photos?.[0]) && <img src={x.photo || x.photos[0]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", filter: away ? "grayscale(.6)" : "none" }} />}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: 13, fontWeight: 650, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.desc || [x.material, x.shape].filter(Boolean).join(" ") || "Stock item"}</div>
-                            <div style={{ fontSize: 11, color: C.inkFaint }}>{[x.sku, `${x.qty ?? "?"} ${x.unit || "pcs"}`, x.weightGm && `${x.weightGm}g`, x.showTag].filter(Boolean).join(" · ")}</div>
+                            <div style={{ fontSize: 11, color: C.inkFaint }}>{[x.sku, `${x.qty ?? "?"} ${x.unit || "pcs"}`, x.weightGm && `${x.weightGm}g`].filter(Boolean).join(" · ")}</div>
                           </div>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: x.location ? C.ink : C.inkFaint, whiteSpace: "nowrap" }}>{x.location ? `📍 ${x.location}` : "no location"}</span>
+                          {away
+                            ? <span style={{ fontSize: 11.5, fontWeight: 800, color: C.amber, background: C.amberBg, border: `1px solid ${C.amber}60`, borderRadius: 8, padding: "3px 8px", whiteSpace: "nowrap", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }} title={x.showTag || ""}>🎪 At {x.showTag || "a show"}</span>
+                            : <span style={{ fontSize: 12, fontWeight: 700, color: x.location ? C.ink : C.inkFaint, whiteSpace: "nowrap" }}>{x.location ? `📍 ${x.location}` : "no location"}</span>}
                         </button>
                       );
                     })}
                   </div>
                 )}
                 {stockQ && !stockHits.length && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>No stock matches “{stockQ}”.</div>}
-                {!form.linked_stock_id && !newStock && <button type="button" onClick={startNewStock}
-                  style={{ marginTop: 8, fontSize: 12.5, fontWeight: 800, color: C.ink, background: "none", border: `1px dashed ${C.borderHi}`, borderRadius: 20, padding: "6px 12px", cursor: "pointer" }}>+ Create a stock card</button>}
-                {!form.linked_stock_id && newStock && newStockForm()}
-                {form.linked_stock_id && !stockQ && (() => { const ls = stock.find(x => x.id === form.linked_stock_id); if (!ls) return null;
-                  if (newStock?.editId === ls.id) return newStockForm();
-                  const q2 = String(ls.qty2 ?? "").trim();
-                  return (
-                    <div style={{ marginTop: 10, border: `1px solid ${C.border}`, borderRadius: 10, padding: 10, background: C.bg, display: "flex", gap: 10, alignItems: "flex-start" }}>
-                      {ls.photo ? <img src={ls.photo} alt="" style={{ width: 52, height: 52, borderRadius: 8, objectFit: "cover", flex: "none" }} /> : <div style={{ width: 52, height: 52, borderRadius: 8, background: C.card, display: "grid", placeItems: "center", flex: "none" }}>💎</div>}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>Linked stock card{ls.sku ? ` · ${ls.sku}` : ""}</div>
-                        <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{ls.desc || [ls.material, ls.shape].filter(Boolean).join(" ") || "Stock item"}</div>
-                        <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.5 }}>
-                          {ls.qty} {ls.unit || "pcs"}{q2 ? ` · ${q2} ${ls.unit2 || ""}` : ""}{ls.location ? ` · 📍 ${ls.location}` : ""}<br />
-                          {ls.costPrice ? `Cost ₹${(+ls.costPrice).toLocaleString("en-IN")} per ${ls.unit || "pcs"}` : "No cost price"}{ls.vendor ? ` · ${ls.vendor}` : ""}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "none" }}>
-                        <button type="button" onClick={() => startEditStock(ls)} style={{ padding: "7px 12px", borderRadius: 8, border: "none", background: C.ink, color: "#FAF0DC", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Edit</button>
-                        <button type="button" onClick={() => set("linked_stock_id", "")} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.red, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Unlink</button>
-                      </div>
-                    </div>
-                  ); })()}
-              </div>
+                {ls && stockQ && <button type="button" onClick={() => setStockQ("")} style={{ marginTop: 6, fontSize: 12, background: "none", border: "none", color: C.inkMid, cursor: "pointer", padding: 0 }}>Keep {ls.sku || "the linked card"}</button>}
+              </>}
+
+              {!ls && !newStock && <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+                <button type="button" onClick={startNewStock}
+                  style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, background: "none", border: `1px dashed ${C.borderHi}`, borderRadius: 20, padding: "6px 12px", cursor: "pointer" }}>+ Create a stock card</button>
+                {!showTyped && <button type="button" onClick={() => setTypeLoc(true)} style={{ fontSize: 12, background: "none", border: "none", color: C.inkMid, cursor: "pointer", padding: 0, textDecoration: "underline" }}>No card — just say where it is</button>}
+              </div>}
+              {!ls && newStock && newStockForm()}
+
+              {showTyped && !newStock && <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, marginBottom: 6 }}>📍 Where is it? <span style={{ fontWeight: 500, color: C.inkFaint }}>{locRequired ? "Needed for a one-of-a-kind piece" : "Internal only"}</span></div>
+                <input value={form.officeLocation || ""} onChange={e => { set("officeLocation", e.target.value); setErrors(er => ({ ...er, location: "" })); }}
+                  placeholder="e.g. Shelf B2 · Blue box 3 · Safe" list="lm-loc-list"
+                  style={FI({ fontSize: 15, padding: "10px 12px", ...(errors.location ? { borderColor: "#C0392B" } : {}) })} />
+                {locChips(loc, v => { set("officeLocation", v); setErrors(er => ({ ...er, location: "" })); })}
+              </div>}
               {costPrompt()}
             </div>
-  );
+    );
+  };
 
   /* On a phone the form is a full-screen sheet that scrolls as one page: the
      sync-to row travels with the form and only Save / Cancel stay pinned, so

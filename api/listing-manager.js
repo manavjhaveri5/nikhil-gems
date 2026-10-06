@@ -923,6 +923,37 @@ async function applyEtsyVariations(listingId, listing, hdrs, readinessId) {
   } catch (e) { return `Etsy didn't take the variations: ${e.message}`; }
 }
 
+/* A listing without options keeps its price and stock in a one-product
+   inventory, and once that inventory exists the listing PATCH's price and
+   quantity are ignored — Etsy answers 200 and the old price stays. Every
+   listing made here has one (the SKU goes on through it), so an update has to
+   write the price there. A listing whose Etsy inventory has options this one
+   doesn't know about is left alone rather than flattened. */
+async function applyEtsyPlainInventory(listingId, listing, hdrs, readinessId, quantity) {
+  if (etsyVariationAxes(listing).length) return "";
+  const price = parseFloat((+listing.price_etsy || 0).toFixed(2));
+  if (!(price > 0)) return "";
+  try {
+    const cur = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { headers: hdrs });
+    const inv = cur.ok ? await cur.json() : null;
+    const products = inv?.products || [];
+    if (products.length > 1) return "Etsy has options on this listing that the ERP doesn't — price left as it is there";
+    const sku = (listingSku(listing) || products[0]?.sku || "").slice(0, 32);
+    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, {
+      method: "PUT", headers: hdrs, body: JSON.stringify({
+        products: [{ ...(sku ? { sku } : {}), property_values: [],
+          offerings: [{ price, quantity, is_enabled: true, ...(readinessId ? { readiness_state_id: readinessId } : {}) }] }],
+        price_on_property: [], quantity_on_property: [], sku_on_property: [],
+        ...(readinessId ? { readiness_state_on_property: [] } : {}),
+      }),
+    });
+    if (r.ok) return "";
+    const d = await r.json().catch(() => ({}));
+    console.error("Etsy price/stock update failed:", JSON.stringify(d));
+    return `Etsy didn't take the new price: ${d.error_description || d.error || d.message || r.status}`;
+  } catch (e) { return `Etsy didn't take the new price: ${e.message}`; }
+}
+
 async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false } = {}) {
   const etsyTitle = ai?.etsy_title || listing.title;
   const etsyDesc  = stripWarehouseNote(ai?.etsy_description || listing.description || listing.title);
@@ -1113,7 +1144,8 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
     } else { videoSrc = listing.video; }
   }
 
-  const varWarn     = await applyEtsyVariations(listingId, listing, hdrs, readinessId);
+  const varWarn     = await applyEtsyVariations(listingId, listing, hdrs, readinessId)
+    || await applyEtsyPlainInventory(listingId, listing, hdrs, readinessId, quantity);
   const tagsWarning = await verifyEtsyTags(listingId, etsyTags, hdrs);
 
   const gaps = [];

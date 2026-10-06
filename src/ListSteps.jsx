@@ -541,7 +541,12 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
               <div style={{ fontSize: 12, color: C.inkMid, marginTop: 12, lineHeight: 1.55, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
                 {now.orders ? <>Sale read from your last {now.orders} Etsy order{now.orders === 1 ? "" : "s"}.</> : <>No Etsy orders in the last 30 days — using your store's {sale}% setting.</>}
                 {now.tax > 0 && <> {now.taxWhere === "US" ? "US buyers" : "Some buyers"} also pay about {Math.round(now.tax * 100)}% sales tax on top — Etsy adds it at checkout and pays it over; it isn't yours.</>}
-                {etsyPays > 0 && now.tax > 0 && <div style={{ marginTop: 6, color: C.ink }}>All in for {now.taxWhere === "US" ? "a US" : "a taxed"} buyer: about <b>{inr(etsyPays * (1 + now.tax))}</b> ≈ {usd(Math.round(etsyPays * (1 + now.tax) / rate))}</div>}
+                {etsyPays > 0 && (() => {
+                  // What lands on the buyer's card: the price, the postage they pay, and sales tax on both.
+                  const shipB = money4("etsy", etsyPays)?.shipPaid || 0, all = (etsyPays + shipB) * (1 + (now.tax || 0));
+                  return <div style={{ marginTop: 6, color: C.ink }}>All in for {now.tax > 0 ? (now.taxWhere === "US" ? "a US" : "a taxed") : "a"} buyer: about <b>{inr(all)}</b> ≈ {usd(Math.round(all / rate))}
+                    <span style={{ color: C.inkMid }}> — {[inr(etsyPays) + " piece", shipB ? inr(shipB) + " shipping" : "free shipping", now.tax > 0 && `${Math.round(now.tax * 100)}% tax`].filter(Boolean).join(" + ")}</span></div>;
+                })()}
               </div>
             </Box>}
             {pick.ebay && <Box>
@@ -551,7 +556,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 {pays(ebayUsd ? usd(ebayUsd) : "—", ebayUsd ? `≈ ${inr(ebayUsd * rate)}` : "")}
               </div>
               {sheet("ebay", money4("ebay", ebayUsd, "$"))}
-              {now.tax > 0 && ebayUsd > 0 && <div style={{ fontSize: 12, color: C.inkMid, marginTop: 8, lineHeight: 1.55 }}>US buyers also pay about {Math.round(now.tax * 100)}% sales tax on top — eBay collects and pays it over. All in: about <b>{usd(Math.round(ebayUsd * (1 + now.tax)))}</b>. eBay's fee is charged on that total, tax included.</div>}
+              {now.tax > 0 && ebayUsd > 0 && <div style={{ fontSize: 12, color: C.inkMid, marginTop: 8, lineHeight: 1.55 }}>US buyers also pay about {Math.round(now.tax * 100)}% sales tax on top — eBay collects and pays it over. All in, with the shipping they pay: about <b>{usd(Math.round((ebayUsd + (money4("ebay", ebayUsd, "$")?.shipPaid || 0) / rate) * (1 + now.tax)))}</b>. eBay's fee is charged on that total, tax included.</div>}
             </Box>}
             {pick.store && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Earth Editions</div>
@@ -563,6 +568,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 {p.price_store || p.price_store_inr ? "Customer pays these." : "Leave empty and it follows what an Etsy buyer pays in the sale."}
               </div>
               {sheet("store", money4("store", storeUsd, "$"), "A US sale")}
+              {storeUsd > 0 && (() => { const shipB = money4("store", storeUsd, "$")?.shipPaid || 0;
+                return <div style={{ fontSize: 12, color: C.ink, marginTop: 8 }}>All in for a US buyer: about <b>{usd(Math.round(storeUsd + shipB / rate))}</b>
+                  <span style={{ color: C.inkMid }}> — {usd(storeUsd)} piece + {shipB ? `${usd(Math.round(shipB / rate))} shipping` : "free shipping"}</span></div>; })()}
               {storeUsd > 0 && shipUnset("store") && (
                 <div style={{ fontSize: 11.5, color: C.amber, marginTop: 6, lineHeight: 1.5 }}>
                   No US shipping rate set, so this counts the postage as ours. Set the rate and the free-over figure on Store → Settings and a sale under the threshold will credit what the buyer pays.
