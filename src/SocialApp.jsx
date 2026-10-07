@@ -20,6 +20,7 @@ import { C, FI, mob } from "./lmTheme.js";
 import { loadK } from "./utils.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { VOICE, Replies } from "./StoreSocial.jsx";
+import { INSTAGRAM_VOICE, instagramShape, HASHTAG_ENDING } from "../lib/instagramVoice.js";
 const SocialStories = lazy(() => import("./SocialStories.jsx"));
 const Captions = lazy(() => import("./StoreSocial.jsx"));
 const SocialCalendar = lazy(() => import("./SocialCalendar.jsx"));
@@ -60,9 +61,9 @@ const api = async (action, { p, body } = {}) => {
   if (!r.ok) throw new Error(d.error || `Failed (${r.status})`);
   return d;
 };
-async function ask(prompt, maxTokens = 1800) {
+async function ask(prompt, maxTokens = 1800, system = VOICE, writer) {
   const res = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ max_tokens: maxTokens, temperature: 0.7, messages: [{ role: "system", content: VOICE }, { role: "user", content: prompt }] }) }, { tries: 2, timeoutMs: 90000 });
+    body: JSON.stringify({ writer, max_tokens: maxTokens, temperature: 0.7, messages: [{ role: "system", content: system }, { role: "user", content: prompt }] }) }, { tries: 2, timeoutMs: 90000 });
   const d = await res.json();
   if (d.error) throw new Error(d.error?.message || d.error);
   return (d.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
@@ -111,12 +112,15 @@ function Compose({ st, showToast }) {
         pick.size && `Size: ${pick.size}`, pick.weight && `Weight: ${pick.weight}`, pick.description && `Listing description: ${String(pick.description).slice(0, 1200)}`,
         link && `Link: ${link}`].filter(Boolean).join("\n");
       const out = parseJson(await ask(`Write social posts for this piece, one per platform, each in that platform's own style. Never invent facts beyond these.\n\n${facts}\n\nReturn ONLY JSON:
-{"instagram":"caption, 3 short paragraphs then 8-15 hashtags, 'link in bio' rather than a URL",
+{"instagram":"the Instagram caption (shape below)",
  "tiktok":"1-2 punchy lines + 4-6 hashtags",
  "youtube_title":"under 80 characters","youtube":"description, 2-3 lines, the link, 3 hashtags",
  "pinterest_title":"under 100 characters, searchable","pinterest":"under 450 characters, keyword-rich, no hashtags",
  "threads":"under 450 characters, conversational, 1-2 hashtags",
- "x":"under 250 characters including the link if given, 1-2 hashtags"}`));
+ "x":"under 250 characters including the link if given, 1-2 hashtags"}
+
+The Instagram caption:
+${instagramShape(HASHTAG_ENDING)}`, 1800, INSTAGRAM_VOICE, "journal"));
       if (!out) throw new Error("The AI's reply couldn't be read — try again");
       setTxt(out);
     } catch (e) { showToast(`⚠ ${e.message}`); }

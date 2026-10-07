@@ -1,4 +1,5 @@
 import { requireUser } from "../lib/auth.js";
+import { JOURNAL_WRITER_MODEL } from "../lib/instagramVoice.js";
 export const config = {
   api: {
     bodyParser: {
@@ -131,12 +132,40 @@ async function handleEmbed(req, res, key) {
   }
 }
 
+// The model behind the eartheditions.co journal, called on Anthropic directly. Text only.
+// Returns false when Anthropic refuses (e.g. no credit), so the request falls through to OpenAI.
+async function handleJournalWriter(req, res) {
+  try {
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    const msgs = body.messages || [];
+    const system = msgs.filter(m => m?.role === "system").map(m => asText(m.content)).join("\n\n");
+    const messages = msgs.filter(m => m && m.role !== "system").map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: asText(m.content) }));
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: JOURNAL_WRITER_MODEL, max_tokens: body.max_tokens || 1000, ...(system ? { system } : {}), messages }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { console.warn(`journal writer unavailable, using OpenAI: ${data.error?.message || r.status}`); return false; }
+    res.status(200).json({ id: data.id, model: data.model, content: (data.content || []).filter(b => b.type === "text"), usage: data.usage, provider: "anthropic" });
+    return true;
+  } catch (err) {
+    console.warn(`journal writer unavailable, using OpenAI: ${err.message}`);
+    return false;
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
   // The daily ops-check workflow (no user session) presents the store secret.
   if (!(await requireUser(req, res, { allowStoreSecret: true }))) return;
+
+  // Social captions ask for the journal's writer by name; everything else stays on OpenAI.
+  let writer;
+  try { writer = (typeof req.body === "string" ? JSON.parse(req.body) : req.body || {}).writer; } catch { /* handled below */ }
+  if (writer === "journal" && process.env.ANTHROPIC_KEY && (await handleJournalWriter(req, res))) return;
 
   const key = process.env.OPENAI_KEY || process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: { message: "OPENAI_KEY not set" } });

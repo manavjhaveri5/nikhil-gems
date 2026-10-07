@@ -22,6 +22,7 @@
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { requireUser, hasStoreSecret } from "../lib/auth.js";
+import { INSTAGRAM_VOICE, JOURNAL_WRITER_MODEL, instagramShape, HASHTAG_ENDING } from "../lib/instagramVoice.js";
 
 export const config = { maxDuration: 300 };
 
@@ -527,18 +528,31 @@ const AUTO_DEFAULT = {
 async function autoSettings() { const a = await appData(AUTO_KEY); return { listings: { ...AUTO_DEFAULT.listings, ...(a?.listings || {}) }, instagram: { ...AUTO_DEFAULT.instagram, ...(a?.instagram || {}) } }; }
 const saveData = (key, value) => sb().from("app_data").upsert({ key, value });
 
-const VOICE = "You write for Earth Editions (eartheditions.co), a family business in India selling natural crystals, mineral specimens and gemstone carvings, bought as rough at the source and cut in house. Warm, knowledgeable, plain English, no hype. Metaphysical meaning only as tradition or belief, never a health claim. Never invent a locality, weight, size or treatment that isn't given.";
+// Written by the journal's writer (Claude) when ANTHROPIC_KEY is set, otherwise OpenAI.
 async function captionsFor(l, link) {
-  const key = env("OPENAI_KEY") || env("OPENAI_API_KEY");
-  if (!key) fail(400, "No OpenAI key for writing captions");
-  const facts = [`Piece: ${l.title}`, l.material && `Stone: ${l.material}`, l.shape && `Shape: ${l.shape}`, l.origin && `Origin: ${l.origin}`, l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`,
+  const facts = [`Piece: ${l.title}`, l.material && `Stone: ${l.material}`, l.shape && `Shape: ${l.shape}`, l.origin && `Locality: ${l.origin}`, l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`,
     l.description && `Listing description: ${String(l.description).slice(0, 1000)}`, link && `Link: ${link}`].filter(Boolean).join("\n");
-  const r = await fetch("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: env("SOCIAL_AI_MODEL") || "gpt-4.1-mini", max_tokens: 2000, response_format: { type: "json_object" }, messages: [{ role: "system", content: VOICE }, { role: "user", content:
-      `Social posts for this piece, one per platform in its own style.\n\n${facts}\n\nReturn JSON: {"instagram":"3 short paragraphs then 8-15 hashtags, 'link in bio'","tiktok":"1-2 lines + 4-6 hashtags","youtube_title":"under 80 chars","youtube":"2-3 lines, the link, 3 hashtags","pinterest_title":"under 100 chars","pinterest":"under 450 chars, keyword-rich","threads":"under 450 chars, 1-2 hashtags","x":"under 250 chars incl. the link, 1-2 hashtags"}` }] }) });
-  const d = await json(r);
-  if (!r.ok) fail(502, `AI: ${d.error?.message || r.status}`);
-  return JSON.parse(d.choices?.[0]?.message?.content || "{}");
+  const prompt = `Social posts for this piece, one per platform in its own style. Never invent facts beyond these.\n\n${facts}\n\nReturn ONLY JSON: {"instagram":"the Instagram caption (shape below)","tiktok":"1-2 lines + 4-6 hashtags","youtube_title":"under 80 chars","youtube":"2-3 lines, the link, 3 hashtags","pinterest_title":"under 100 chars","pinterest":"under 450 chars, keyword-rich","threads":"under 450 chars, 1-2 hashtags","x":"under 250 chars incl. the link, 1-2 hashtags"}\n\nThe Instagram caption:\n${instagramShape(HASHTAG_ENDING)}`;
+  let text = "";
+  if (env("ANTHROPIC_KEY")) {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": env("ANTHROPIC_KEY"), "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: JOURNAL_WRITER_MODEL, max_tokens: 2000, system: INSTAGRAM_VOICE, messages: [{ role: "user", content: prompt }] }) }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : {};
+    if (r?.ok) text = (d.content || []).map(b => b.text || "").join("");
+    else console.warn(`journal writer unavailable, using OpenAI: ${d.error?.message || r?.status}`);
+  }
+  if (!text) {
+    const key = env("OPENAI_KEY") || env("OPENAI_API_KEY");
+    if (!key) fail(400, "No AI key for writing captions");
+    const r = await fetch("https://api.openai.com/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: env("SOCIAL_AI_MODEL") || "gpt-4.1-mini", max_tokens: 2000, response_format: { type: "json_object" }, messages: [{ role: "system", content: INSTAGRAM_VOICE }, { role: "user", content: prompt }] }) });
+    const d = await json(r);
+    if (!r.ok) fail(502, `AI: ${d.error?.message || r.status}`);
+    text = d.choices?.[0]?.message?.content || "";
+  }
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) fail(502, "The AI's reply couldn't be read");
+  return JSON.parse(m[0]);
 }
 const storeLink = l => { const s = l.platforms?.store; const u = s?.storefront_url || s?.url || ""; return u ? `${u}${u.includes("?") ? "&" : "?"}utm_source=social&utm_medium=autopilot` : ""; };
 const wentLive = l => Math.min(...Object.values(l.platforms || {}).filter(x => x?.status === "active").map(x => Date.parse(x.live_at || x.first_listed_at || "") || Infinity));

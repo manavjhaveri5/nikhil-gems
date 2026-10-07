@@ -1,7 +1,8 @@
 /* Store → Social: an Instagram caption ready to post for every piece on
    eartheditions.co, and reply drafts for comments and threads.
 
-   Each caption is written the way Earth Editions posts: the piece and where
+   Each caption is written by the journal's writer (lib/instagramVoice.js),
+   in the shape Earth Editions posts: the piece and where
    it's from, a couple of short paragraphs on what makes this one interesting,
    then weight and size, and whether it's available. The locality, weight and
    size come from the listing in Listing Manager and are never made up. The
@@ -19,6 +20,7 @@ import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { loadK } from "./utils.js";
+import { INSTAGRAM_VOICE, instagramShape, SHOP_ENDING } from "../lib/instagramVoice.js";
 
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
 const btn = (bg = C.surface, fg = C.ink) => ({ background: bg, color: fg, border: bg === C.surface ? `1px solid ${C.border}` : "none", borderRadius: 7, padding: "6px 12px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" });
@@ -34,10 +36,10 @@ Rules:
 - Never invent facts: no locality, weight, size or treatment that isn't in the details given. If a locality isn't given, don't name one.
 - Reddit and Mindat texts are for collectors: no prices, no "buy now", no links in the body, no sales language — show the piece and share what's interesting about the stone.`;
 
-async function ask(prompt, maxTokens = 1400) {
+async function ask(prompt, maxTokens = 1400, system = VOICE, writer) {
   const res = await fetchWithRetry("/api/claude", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, temperature: 0.7, messages: [{ role: "system", content: VOICE }, { role: "user", content: prompt }] }),
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", writer, max_tokens: maxTokens, temperature: 0.7, messages: [{ role: "system", content: system }, { role: "user", content: prompt }] }),
   }, { tries: 2, timeoutMs: 60000 });
   const d = await res.json();
   if (d.error) throw new Error(d.error?.message || d.error);
@@ -66,17 +68,6 @@ Available — shop now at eartheditions.co
 
 ---
 
-Citrine Ganesha from Madikeri 🇮🇳
-
-The clarity and beautiful honey-golden color of this Citrine made us want to do something special with it—so we decided on a Ganesha carving.
-
-A truly beautiful piece to hold and admire, especially in the light. Citrine is often associated with warmth, abundance and positivity, making it a fitting choice for Ganesha.
-
-886 carats | 60 × 50 × 20mm
-Available — shop now at eartheditions.co
-
----
-
 Baryte on Rainbow Pyrite from Dahisar, Mumbai 🇮🇳
 
 A slender Baryte flower perched on a bed of iridescent "rainbow" Pyrite — from a new find in Dahisar, Mumbai.
@@ -86,19 +77,16 @@ Pyrite is a relatively uncommon mineral from the Deccan Traps, making this assoc
 Available with a custom lucite display base — shop now at eartheditions.co`;
 
 export async function makeCaption(p, l) {
-  const caption = await ask(`Write the Instagram caption for this piece, in exactly the shape and voice of these captions we've posted:
+  const caption = await ask(`Write the Instagram caption for this piece. Keep the shape of these captions we've posted, in the journal's voice:
 
 ${EXAMPLES}
 
 The piece:
 ${details(p, l)}
 
-Rules for this caption:
-- First line: the piece's name, then "from <locality>" and that country's flag emoji — only if a locality is given above. No locality given: just the name, no "from", no flag.
-- Then 1–2 short paragraphs (1–3 sentences each): what is specific and interesting about THIS piece — colour, inclusions, clarity, form, why it was cut this way, the locality. Plain, warm, a collector talking. At most one gentle line on what the stone is traditionally associated with, and only if it fits.
-- Then a line with weight and size separated by " | " (leave out any that are "not given"; leave the line out if both are).
-- Last line: "Available — shop now at eartheditions.co".
-- No hashtags, no "link in bio", no exclamation marks, no invented facts. Reply with the caption text only.`, 600);
+${instagramShape(SHOP_ENDING)}
+
+Reply with the caption text only.`, 600, INSTAGRAM_VOICE, "journal");
   return { caption: caption.replace(/^["']|["']$/g, "").trim(), made_at: new Date().toISOString() };
 }
 
