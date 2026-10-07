@@ -13475,6 +13475,16 @@ function BuyerManager({buyers,setBuyers,invoices=[],onNewInvoice,onOpenInvoice,b
   );
 }
 
+/* An invoice line's amount, typed straight in: the rate is worked back from it
+   (amount ÷ qty), so a total agreed with the buyer goes on the invoice exactly.
+   Holds its own text while typing so "16449." isn't snapped to "16449". */
+function InvAmtInput({amt,onAmt,style}){
+  const shown=amt?String(Math.round(+amt*100)/100):"";
+  const [text,setText]=useState(null);
+  return <input type="number" inputMode="decimal" value={text??shown} onFocus={()=>setText(shown)} onBlur={()=>setText(null)}
+    onChange={e=>{setText(e.target.value);onAmt(e.target.value);}} style={style}/>;
+}
+
 function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],isSaved=false,onCancelInvoice,onReinstate,onSave,onDelete,onPreview,onPackingList,showToast,onRefreshStock,onCancelPaymentSource}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
   // Cancelled invoices are read-only: printed and issued, so nothing about them may change.
@@ -13582,8 +13592,15 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
       if(defaultGst)items[idx].igst=defaultGst;
     }
     const qty=parseFloat(k==="qty"?v:items[idx].qty)||0;
-    const rate=parseFloat(k==="rate"?v:items[idx].rate)||0;
-    items[idx].amt=qty*rate;
+    if(k==="amt"){
+      // Amount typed in: it stands as typed, and the rate follows from it.
+      const amt=parseFloat(v)||0;
+      items[idx].amt=amt;
+      if(qty>0)items[idx].rate=String(Math.round(amt/qty*10000)/10000);
+    } else {
+      const rate=parseFloat(k==="rate"?v:items[idx].rate)||0;
+      items[idx].amt=qty*rate;
+    }
     return{...d,items,totalAmt:calcTotalAmt(items,d.shippingCost,d.discountAmt)};
   });
   const addItem=()=>setDraft(d=>{const items=[...d.items,newInvItem({buyer:gstBuyer})];return{...d,items};});
@@ -14039,7 +14056,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
                          <td style={{padding:"5px 7px",fontSize:11,color:C.inkMid,textAlign:"center",whiteSpace:"nowrap"}}>{(item.igst||0)/2}%</td></>
                       :<td style={{padding:"5px 7px"}}><select value={item.igst??0} onChange={e=>si(idx,"igst",+e.target.value)} style={{...CI,cursor:"pointer",width:52}}><option value={0}>0%</option>{[0.25,3,5,12,18].map(r=><option key={r} value={r}>{r}%</option>)}</select></td>
                     }
-                    <td style={{padding:"5px 7px",textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:13,fontWeight:500,whiteSpace:"nowrap",width:88}}>{item.amt?`${draft.currency} ${(+item.amt).toFixed(2)}`:""}</td>
+                    <td style={{padding:"5px 7px",textAlign:"right",fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:13,fontWeight:500,whiteSpace:"nowrap",width:88}}><div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end"}}><span style={{fontSize:11,color:C.inkFaint}}>{draft.currency}</span><InvAmtInput amt={item.amt} onAmt={v=>si(idx,"amt",v)} style={{...CI,textAlign:"right",width:92}}/></div></td>
                     <td style={{padding:"5px 7px",textAlign:"center"}}>
                       <input type="date" value={item.readyDate||""} onChange={e=>si(idx,"readyDate",e.target.value)} style={{...CI,fontSize:10,padding:"3px 4px",width:52}} title="Ready by date"/>
                     </td>
