@@ -14245,6 +14245,11 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           </button>
           <span style={{fontSize:11,color:C.inkFaint}}>Downloads the invoice PDF and the valuation sheet, and opens a Gmail draft to {VALUER_EMAIL} — attach both there</span>
         </div>
+        {/* Ticked by hand once the email has actually gone: the button only opens a draft. */}
+        <label style={{display:"flex",alignItems:"center",gap:6,cursor:shipLock?"default":"pointer",fontSize:12,color:draft.valuationSentAt?C.green:C.inkMid,marginBottom:10}}>
+          <input type="checkbox" disabled={shipLock} checked={!!draft.valuationSentAt} onChange={e=>set("valuationSentAt",e.target.checked?new Date().toISOString().slice(0,10):"")}/>
+          {draft.valuationSentAt?`✓ Valuation email sent · ${valDate(draft.valuationSentAt)}`:"Valuation email sent"}
+        </label>
 
         {/* Shipped toggle */}
         {draft.goodsShipped
@@ -14578,6 +14583,75 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         );
       })()}
       </fieldset>
+      <InvoiceLegalCheck draft={draft} buyers={buyers} company={company}/>
+    </div>
+  );
+}
+
+/* AI legal check: reads the invoice as written (seller IDs, buyer and
+   consignee, lines, HSN, tax, endorsements, totals) against Indian export
+   invoice rules and lists what to fix. Advisory only — it changes nothing,
+   so it works on printed and cancelled invoices too. */
+const LEGAL_RULES=`Check this Indian export invoice (goods, natural stones/minerals/gems) for legal and customs problems. Rules to check, where they apply:
+- CGST Rule 46 tax invoice contents: supplier name, address and GSTIN; invoice number (max 16 characters, unique, consecutive series) and date; recipient name and address; consignee name and delivery address with country; HSN; description; quantity and unit (UQC); taxable value; tax rate and amount; place of supply; signature.
+- Export without payment of IGST under LUT: IGST must be 0%, and the invoice must carry an endorsement like "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)" together with the LUT ARN. Check the endorsement wording and spelling.
+- Foreign Trade Policy / customs: exporter IEC; ITC-HS codes on export documents are 8 digits; the HSN must fit the description (e.g. unworked natural quartz/mineral specimens vs worked precious or semi-precious stones of 7103 vs articles of 7116); units consistent with the HSN's UQC; currency stated; ports of loading and discharge; country of origin; Incoterms if freight is charged.
+- Arithmetic: each line qty × rate = amount; subtotal + freight − discount = grand total.
+- Anything else a customs officer, CHA or GST auditor would query.
+Only report real problems found in the data given. Do not invent facts. If a field is missing from the data, say it is missing rather than guessing.
+Reply with JSON only: {"issues":[{"severity":"must fix"|"check"|"tip","where":"short field or line name","problem":"what is wrong, one sentence","fix":"what to change, one sentence"}]}. An empty list means nothing found.`;
+function InvoiceLegalCheck({draft,buyers,company}){
+  const [busy,setBusy]=useState(false);
+  const [res,setRes]=useState(null); // {issues, at} | {error}
+  const run=async()=>{
+    setBusy(true);setRes(null);
+    try{
+      const co=companyProfileFromKey(company);
+      const b=(buyers||[]).find(x=>x.id===draft.buyerId)||{};
+      const items=(draft.items||[]).map((it,i)=>({line:i+1,customs_description:it.desc,detail:it.customDesc||it.acctDesc,hsn:it.hsn,qty:it.qty,unit:it.unit,rate:it.rate,amount:it.amt,igst_percent:it.igst}));
+      const sub=items.reduce((s,it)=>s+(+it.amount||0),0);
+      const facts={
+        seller:{name:co.name,address:co.address,gstin:co.gstin,iec:co.iec,state_code:co.stateCode,lut_arn:draft.lutArn||co.lutArn},
+        invoice:{number:draft.invNo,date:draft.date,due_date:draft.dueDate,currency:draft.currency||"USD",payment_terms:draft.terms,port_of_loading:draft.portLading||"Mumbai, India",port_of_discharge:draft.portDischarge},
+        buyer:{name:b.name||draft.buyerName||draft.customerName,contact:b.contact,address:b.address,country:b.country},
+        consignee:draft.consigneeSameAsBuyer!==false?"same as buyer":{name:draft.consigneeName,address:draft.consigneeAddress,country:draft.consigneeCountry},
+        items,items_subtotal:sub,freight:+draft.shippingCost||0,discount:+draft.discountAmt||0,grand_total:draft.totalAmt,
+        notes_printed:draft.notes||"",terms_printed:draft.termsText||"",
+      };
+      // The full model, not the default mini one: this is a compliance read.
+      const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-4.1",max_tokens:1800,messages:[{role:"system",content:"You are an Indian export compliance checker (GST, customs, Foreign Trade Policy). Precise, brief, no padding."},{role:"user",content:`${LEGAL_RULES}\n\nInvoice data:\n${JSON.stringify(facts,null,1)}`}]})});
+      const d=await r.json();
+      if(!r.ok||d.error)throw new Error(d.error?.message||`HTTP ${r.status}`);
+      const text=d.content?.find(x=>x.type==="text")?.text||"";
+      const m=String(text).match(/\{[\s\S]*\}/);
+      const out=m?JSON.parse(m[0]):null;
+      if(!out||!Array.isArray(out.issues))throw new Error("The check's reply couldn't be read — run it again");
+      setRes({issues:out.issues,at:new Date()});
+    }catch(e){setRes({error:e.message||String(e)});}
+    setBusy(false);
+  };
+  const tone={"must fix":C.red,"check":C.gold,"tip":C.inkMid};
+  const order={"must fix":0,"check":1,"tip":2};
+  return(
+    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 17px",marginTop:13}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Legal check</div>
+        <button type="button" onClick={run} disabled={busy} style={{cursor:busy?"default":"pointer",opacity:busy?.6:1,fontSize:12,padding:"6px 14px",border:`1px solid ${C.gold}`,borderRadius:5,background:C.goldBg,color:C.ink,fontFamily:"inherit"}}>
+          ⚖ {busy?"Checking…":res?"Check again":"AI legal check"}
+        </button>
+        <span style={{fontSize:11,color:C.inkFaint}}>GST (LUT), customs and IEC rules for export invoices. A second pair of eyes, not legal advice — confirm anything serious with your CHA.</span>
+      </div>
+      {res?.error&&<div style={{fontSize:12,color:C.red,marginTop:10}}>⚠ {res.error}</div>}
+      {res?.issues&&(res.issues.length===0
+        ?<div style={{fontSize:12,color:C.green,marginTop:10}}>✓ Nothing found to fix.</div>
+        :<div style={{marginTop:10,display:"grid",gap:8}}>
+          {[...res.issues].sort((a,b)=>(order[a.severity]??3)-(order[b.severity]??3)).map((x,i)=>(
+            <div key={i} style={{display:"grid",gridTemplateColumns:"84px 1fr",gap:10,fontSize:12,paddingTop:8,borderTop:i?`1px solid ${C.border}`:"none"}}>
+              <span style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.4,color:tone[x.severity]||C.inkMid}}>{x.severity}</span>
+              <div><b style={{color:C.ink}}>{x.where}</b> — {x.problem}{x.fix&&<div style={{color:C.inkMid,marginTop:2}}>→ {x.fix}</div>}</div>
+            </div>
+          ))}
+        </div>)}
     </div>
   );
 }
