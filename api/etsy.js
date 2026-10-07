@@ -785,7 +785,7 @@ async function publicReviews(res) {
     const get = async path => { const r = await fetch(`https://openapi.etsy.com/v3/application/${path}`, { headers: { "x-api-key": key } }); if (!r.ok) throw new Error(`Etsy ${r.status}`); return r.json(); };
     const [shop, page] = await Promise.all([get(`shops/${sid}`), get(`shops/${sid}/reviews?limit=100`)]);
     const reviews = (page.results || [])
-      .filter(r => r.rating >= 4 && String(r.review || "").trim().length >= 20)
+      .filter(r => r.rating >= 4 && String(r.review || "").trim().length >= 40 && (!r.language || /^en/i.test(r.language)))
       .map(r => ({ rating: r.rating, text: String(r.review).trim().slice(0, 600), date: new Date((r.created_timestamp || r.create_timestamp) * 1000).toISOString().slice(0, 10) }))
       .slice(0, 24);
     res.setHeader("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=86400");
