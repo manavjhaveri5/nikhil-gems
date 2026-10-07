@@ -775,19 +775,38 @@ export default async function handler(req, res) {
 }
 
 /* Rating, count and the latest written reviews (4 and 5 stars, English,
-   at least a sentence). Etsy's API gives no buyer names. */
+   at least a sentence). Etsy's API gives no reviewer names, so each is
+   credited from its order: first name and last initial ("Paula M."), as
+   Etsy itself shows reviewers. A review whose order can't be read is
+   credited "Customer". */
+const shortName = full => {
+  const w = String(full || "").trim().split(/\s+/).filter(x => /^[\p{L}'-]+$/u.test(x));
+  if (!w.length) return "";
+  const cap = x => x.charAt(0).toUpperCase() + x.slice(1).toLowerCase();
+  return w.length > 1 ? `${cap(w[0])} ${w[w.length - 1].charAt(0).toUpperCase()}.` : cap(w[0]);
+};
 async function storeReviews(res) {
   const key = process.env.ETSY_API_KEY ||
     (process.env.ETSY_KEYSTRING && process.env.ETSY_SHARED_SECRET ? `${process.env.ETSY_KEYSTRING}:${process.env.ETSY_SHARED_SECRET}` : process.env.ETSY_KEYSTRING);
   const sid = process.env.ETSY_SHOP_ID;
   if (!key || !sid) return res.status(503).json({ error: "Etsy not set up" });
   try {
-    const get = async path => { const r = await fetch(`https://openapi.etsy.com/v3/application/${path}`, { headers: { "x-api-key": key } }); if (!r.ok) throw new Error(`Etsy ${r.status}`); return r.json(); };
+    const token = await getEtsyAccessToken().catch(() => null);
+    const get = async (path, auth) => { const r = await fetch(`https://openapi.etsy.com/v3/application/${path}`, { headers: { "x-api-key": key, ...(auth && token ? { Authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(8000) }); if (!r.ok) throw new Error(`Etsy ${r.status}`); return r.json(); };
     const [shop, page] = await Promise.all([get(`shops/${sid}`), get(`shops/${sid}/reviews?limit=100`)]);
-    const reviews = (page.results || [])
+    const kept = (page.results || [])
       .filter(r => r.rating >= 4 && String(r.review || "").trim().length >= 40 && (!r.language || /^en/i.test(r.language)))
-      .map(r => ({ rating: r.rating, text: String(r.review).trim().slice(0, 600), date: new Date((r.created_timestamp || r.create_timestamp) * 1000).toISOString().slice(0, 10) }))
       .slice(0, 24);
+    // review → transaction → receipt name; six at a time.
+    const names = new Map();
+    if (token) for (let i = 0; i < kept.length; i += 6) await Promise.all(kept.slice(i, i + 6).map(async r => {
+      try {
+        const t = await get(`shops/${sid}/transactions/${r.transaction_id}`, true);
+        const rc = await get(`shops/${sid}/receipts/${t.receipt_id}`, true);
+        names.set(r.transaction_id, shortName(rc.name));
+      } catch { /* credited "Customer" */ }
+    }));
+    const reviews = kept.map(r => ({ rating: r.rating, text: String(r.review).trim().slice(0, 600), date: new Date((r.created_timestamp || r.create_timestamp) * 1000).toISOString().slice(0, 10), name: names.get(r.transaction_id) || "" }));
     return res.status(200).json({ average: +shop.review_average || 0, count: +shop.review_count || 0, reviews });
   } catch (e) {
     return res.status(502).json({ error: e.message });
