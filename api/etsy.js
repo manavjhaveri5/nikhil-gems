@@ -796,16 +796,20 @@ async function storeReviews(res) {
     const [shop, page] = await Promise.all([get(`shops/${sid}`), get(`shops/${sid}/reviews?limit=100`)]);
     const kept = (page.results || [])
       .filter(r => r.rating >= 4 && String(r.review || "").trim().length >= 40 && (!r.language || /^en/i.test(r.language)))
-      .slice(0, 24);
-    // review → transaction → receipt name; six at a time.
+      .slice(0, 12);
+    // review → transaction → receipt name, one at a time: in parallel, Etsy
+    // answers 429 (too many requests) and the reviews go unnamed.
     const names = new Map();
-    if (token) for (let i = 0; i < kept.length; i += 6) await Promise.all(kept.slice(i, i + 6).map(async r => {
+    const pause = () => new Promise(r => setTimeout(r, 150));
+    if (token) for (const r of kept) {
       try {
         const t = await get(`shops/${sid}/transactions/${r.transaction_id}`, true);
+        await pause();
         const rc = await get(`shops/${sid}/receipts/${t.receipt_id}`, true);
         names.set(r.transaction_id, shortName(rc.name));
       } catch (e) { names.err = e.message; /* credited "Customer" */ }
-    }));
+      await pause();
+    }
     console.log(`store_reviews: token ${!!token}, named ${names.size}/${kept.length}${names.err ? `, last error ${names.err}` : ""}`);
     const reviews = kept.map(r => ({ rating: r.rating, text: String(r.review).trim().slice(0, 600), date: new Date((r.created_timestamp || r.create_timestamp) * 1000).toISOString().slice(0, 10), name: names.get(r.transaction_id) || "" }));
     return res.status(200).json({ average: +shop.review_average || 0, count: +shop.review_count || 0, reviews });
