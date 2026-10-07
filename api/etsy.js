@@ -804,8 +804,9 @@ async function storeReviews(res) {
         const t = await get(`shops/${sid}/transactions/${r.transaction_id}`, true);
         const rc = await get(`shops/${sid}/receipts/${t.receipt_id}`, true);
         names.set(r.transaction_id, shortName(rc.name));
-      } catch { /* credited "Customer" */ }
+      } catch (e) { names.err = e.message; /* credited "Customer" */ }
     }));
+    console.log(`store_reviews: token ${!!token}, named ${names.size}/${kept.length}${names.err ? `, last error ${names.err}` : ""}`);
     const reviews = kept.map(r => ({ rating: r.rating, text: String(r.review).trim().slice(0, 600), date: new Date((r.created_timestamp || r.create_timestamp) * 1000).toISOString().slice(0, 10), name: names.get(r.transaction_id) || "" }));
     return res.status(200).json({ average: +shop.review_average || 0, count: +shop.review_count || 0, reviews });
   } catch (e) {
