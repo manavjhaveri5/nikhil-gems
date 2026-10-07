@@ -656,11 +656,33 @@ async function mediaUrlToFile(url, fallbackName) {
   return new File([blob], `${fallbackName}.${ext}`, { type: mime });
 }
 
+/* A cut-out photo (PNG/WebP with a see-through background) is laid on plain
+   white before upload. Left transparent it shows whatever sits behind it —
+   the store's beige cards, black on Etsy and Instagram. Photos with no
+   transparent pixels go up untouched. */
+async function whiteBackground(file) {
+  if (!/^image\/(png|webp|gif)$/i.test(file.type || "")) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const c = document.createElement("canvas"); c.width = bmp.width; c.height = bmp.height;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    const px = ctx.getImageData(0, 0, c.width, c.height).data;
+    let clear = false;
+    for (let i = 3; i < px.length; i += 4) if (px[i] < 250) { clear = true; break; }
+    if (!clear) return file;
+    ctx.globalCompositeOperation = "destination-over";
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, "image/jpeg", 0.92));
+    return blob ? new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
+  } catch { return file; }
+}
+
 async function persistListingMedia(listing) {
   const images = Array.isArray(listing.images) ? listing.images : [];
   const nextImages = await Promise.all(images.map(async (url, i) => {
     if (!isLocalMediaUrl(url)) return url;
-    const file = await mediaUrlToFile(url, `listing-${listing.id || uid()}-${i}`);
+    const file = await whiteBackground(await mediaUrlToFile(url, `listing-${listing.id || uid()}-${i}`));
     const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
     return uploadToStorage(`listing-photos/${listing.id || uid()}-${i}-${Date.now()}.${ext}`, file);
   }));
@@ -1113,8 +1135,8 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const bgUse = async () => {
     setBgBusy("save"); setBgErr("");
     try {
-      const file = new File([dataURLToBlob(bgResult)], `cutout-${Date.now()}.png`, { type: "image/png" });
-      const newUrl = await uploadToStorage(`bg-canva/${uid()}.png`, file);
+      const file = await whiteBackground(new File([dataURLToBlob(bgResult)], `cutout-${Date.now()}.png`, { type: "image/png" }));
+      const newUrl = await uploadToStorage(`bg-canva/${uid()}.${file.name.split(".").pop()}`, file);
       onChange(selectedUrls.map((u, j) => j === viewIdx ? newUrl : u));
       setViewIdx(null);
     } catch (e) { setBgErr(e.message); } finally { setBgBusy(""); }
@@ -1153,7 +1175,8 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
     if (!files?.length) return;
     setUploading(true);
     const results = await Promise.allSettled(
-      Array.from(files).map(file => {
+      Array.from(files).map(async picked => {
+        const file = await whiteBackground(picked);
         const ext = file.name.split(".").pop().toLowerCase() || "jpg";
         return uploadToStorage(`listing-photos/${uid()}.${ext}`, file);
       })
@@ -6897,9 +6920,10 @@ function EtsyLiveView({ onCrossPost }) {
     setImgUploading(false);
   };
 
-  const uploadFileToListing = async (file) => {
+  const uploadFileToListing = async (picked) => {
     setImgUploading(true);
     try {
+      const file = await whiteBackground(picked);
       const ext = file.name.split(".").pop() || "jpg";
       const url = await uploadToStorage(`etsy-uploads/${uid()}.${ext}`, file);
       await uploadListingImg(url);
@@ -8169,10 +8193,11 @@ function EbayLiveView() {
     setLoadingItem(false);
   };
 
-  const addPhoto = async file => {
-    if (!file || !editItem) return;
+  const addPhoto = async picked => {
+    if (!picked || !editItem) return;
     setUploadingPhoto(true);
     try {
+      const file = await whiteBackground(picked);
       const ext = file.name.split(".").pop().toLowerCase();
       const path = `ng-stock/ebay/${editItem.itemId}-${Date.now()}.${ext}`;
       const url = await uploadToStorage(path, file);
