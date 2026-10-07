@@ -14588,121 +14588,132 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
   );
 }
 
-/* AI legal check: reads the invoice as written (seller IDs, buyer and
-   consignee, lines, HSN, tax, endorsements, totals) against Indian export
-   invoice rules and lists what to fix. Advisory only — it changes nothing,
-   so it works on printed and cancelled invoices too. */
-const LEGAL_RULES=`Check this Indian export invoice (goods, natural stones/minerals/gems) for legal and customs problems. Rules to check, where they apply:
-- CGST Rule 46 tax invoice contents: supplier name, address and GSTIN; invoice number (max 16 characters, unique, consecutive series) and date; recipient name and address; consignee name and delivery address with country; HSN; description; quantity and unit (UQC); taxable value; tax rate and amount; place of supply; signature.
-- Export without payment of IGST under LUT: IGST must be 0%, and the invoice must carry an endorsement like "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)" together with the LUT ARN. Check the endorsement wording and spelling.
-- Foreign Trade Policy / customs: exporter IEC; ITC-HS codes on export documents are 8 digits; the HSN must fit the description (e.g. unworked natural quartz/mineral specimens vs worked precious or semi-precious stones of 7103 vs articles of 7116); units consistent with the HSN's UQC; currency stated; ports of loading and discharge; country of origin; Incoterms if freight is charged.
-- Arithmetic: each line qty × rate = amount; subtotal + freight − discount = grand total.
-- Beach sand minerals: garnet, ilmenite, rutile, zircon, monazite, sillimanite and leucoxene are also "beach sand minerals". Indian customs can classify them under Chapter 25/26 (garnet: CTH 25132030), and those headings can only be exported through Indian Rare Earths Limited (IREL). This happened to us: a garnet shipment under 71031039 was questioned at JNCH, Nhava Sheva, and the examiner proposed 25132030. When one of these is exported as a semi-precious stone (7103/7116), the invoice must make that case on its face: a description naming the stone and the form ("Natural garnet, semi-precious stone, rough/sawn", not sand, grit or abrasive), lapidary grade, and the correct 7103 10 line for it. Flag any of these lines that don't.
-- Every description field on a line must name the same stone: "agate stone, sawn – Garnet" is a contradiction customs will query. Wording that concedes the goods are industrial, abrasive or sand-like is a problem.
-- Anything else a customs officer, CHA or GST auditor would query.
-Only report real problems found in the data given. Do not invent facts. If a field is missing from the data, say it is missing rather than guessing.
-Reply with JSON only: {"issues":[{"severity":"must fix"|"check"|"tip","where":"short field or line name","problem":"what is wrong, one sentence","fix":"what to change, one sentence"}]}. An empty list means nothing found.`;
-/* Checks that need no AI and always run: the mistakes that have actually cost
-   us. Garnet (Shipping Bill 6841733, JNCH, Sept 2026) went out under 71031039
-   described as "agate stone, sawn – Garnet"; the examiner proposed 25132030, a
-   beach-sand-mineral heading only IREL may export. */
+/* Legal check, on a button: the invoice is read for legal risk by fixed
+   rules (no AI) and by the AI against Indian export law. The answer is flat:
+   the risks, each with its fix, or "All clear". It changes nothing on the
+   invoice itself. */
+const LEGAL_RULES=`You are checking an Indian export invoice (natural stones, minerals, gems, carvings) for LEGAL RISK before it goes to customs: anything that could get the shipment questioned, held, reclassified, refused, or the exporter penalised. Think like the customs examiner at the port, the CHA and a GST auditor.
+
+Check, where they apply:
+- Classification: is the HSN the heading customs would choose for these goods as described? Consider every heading an examiner could propose instead (e.g. Chapter 25/26 minerals and ores, 7103 vs 7104 vs 7116 vs 7117, 6802 worked stone, 9705 collections/specimens). If an alternative heading is Prohibited, Restricted or canalised (STE) under ITC-HS Schedule 2 export policy — e.g. beach sand minerals (garnet, ilmenite, rutile, zircon, monazite, sillimanite, leucoxene) only through IREL — say so, and say what wording keeps the goods clearly in the right heading. Past failure, as an example of the kind of thing to catch: garnet under 71031039 described "agate stone, sawn – Garnet"; the examiner proposed 25132030 (IREL only).
+- Description: names what the goods actually are (stone, natural/synthetic, form: rough/sawn/tumbled/polished/carved), the same in every field, and concedes nothing that points to a riskier heading (sand, grit, abrasive, powder, industrial, ore).
+- Controlled goods: CITES or wildlife materials (coral, shell, ivory, bone, amber with inclusions), fossils, meteorites, antiquities, radioactive or rare-earth minerals, anything needing a licence or certificate.
+- ITC-HS codes are 8 digits; unit fits the heading's UQC; quantity × rate = amount; subtotal + freight − discount = grand total.
+- CGST Rule 46 contents: supplier name, address, GSTIN; invoice number (≤16 characters) and date; recipient and consignee with address and country; HSN; description; quantity and unit; value; tax rate; place of supply.
+- Export under LUT: IGST 0% on every line, the endorsement "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)" spelt correctly, and the LUT ARN.
+- Exporter IEC, currency, ports of loading and discharge, country of origin.
+
+Report only real risks found in the data. No style tips, no generic advice, no invented facts. A missing required field is a risk; say it is missing.
+Reply with JSON only: {"risks":[{"where":"short field or line name","risk":"what is wrong and why it is a legal risk, one sentence","fix":"exactly what to change, one sentence"}]}. An empty list means all clear.`;
+
 const BEACH_SAND=["garnet","ilmenite","rutile","zircon","monazite","sillimanite","leucoxene"];
+const CONTROLLED=["coral","ivory","shell","bone","fossil","meteorite","amber","antique","radioactive","uranium","thorium"];
 const STONE_WORDS=["agate","amethyst","apophyllite","aquamarine","aventurine","calcite","carnelian","chalcedony","citrine","fluorite","garnet","hematite","jasper","kyanite","labradorite","lapis","malachite","moonstone","obsidian","onyx","pyrite","quartz","rhodochrosite","rose quartz","ruby","sapphire","selenite","sodalite","stilbite","sunstone","tiger","tourmaline","zircon"];
 const stonesIn=t=>{const s=String(t||"").toLowerCase();return STONE_WORDS.filter(w=>new RegExp(`\\b${w}`).test(s)).filter((w,_,a)=>!(w==="quartz"&&a.includes("rose quartz")));};
-function invoiceRuleChecks(draft,invoices=[]){
-  const out=[];
-  (draft.items||[]).forEach((it,i)=>{
+const cap1=w=>w[0].toUpperCase()+w.slice(1);
+// The fixed rules, no AI. Each is { where, risk, fix }.
+function invoiceRuleChecks(draft,invoices=[],company){
+  const out=[],add=(where,risk,fix)=>out.push({where,risk,fix});
+  const items=draft.items||[];
+  items.forEach((it,i)=>{
     const where=`Line ${i+1}`;
     const descs=[it.desc,it.customDesc,it.acctDesc].filter(Boolean);
     const all=descs.join(" · ").toLowerCase();
     const hsn=String(it.hsn||"").replace(/\D/g,"");
-    if(!hsn)out.push({severity:"must fix",where,problem:"No HSN code.",fix:"Add the 8-digit ITC-HS code."});
-    else if(hsn.length!==8)out.push({severity:"must fix",where,problem:`HSN ${it.hsn} is ${hsn.length} digits; export documents need the 8-digit ITC-HS code.`,fix:"Use the full 8-digit tariff line."});
-    // Each description field naming a different stone (the "agate … Garnet" mistake).
+    if(!hsn)add(where,"No HSN code.","Add the 8-digit ITC-HS code.");
+    else if(hsn.length!==8)add(where,`HSN ${it.hsn} is ${hsn.length} digits; export documents need the 8-digit ITC-HS code.`,"Use the full 8-digit tariff line.");
+    if(!descs.length)add(where,"No description.","Describe the goods: stone, natural, and form (rough/sawn/polished/carved).");
     const named=descs.map(stonesIn).filter(x=>x.length);
     const distinct=[...new Set(named.flat())];
     if(named.length>1&&!named.every(x=>x.some(w=>named[0].includes(w))))
-      out.push({severity:"must fix",where,problem:`The description fields name different stones (${distinct.join(", ")}).`,fix:"Every description on the line should name the same stone."});
-    const sand=BEACH_SAND.find(w=>all.includes(w));
+      add(where,`The description fields name different stones (${distinct.join(", ")}); customs reads that as a misdeclaration.`,"Name the same stone in every description field.");
+    const sand=BEACH_SAND.find(w=>new RegExp(`\\b${w}`).test(all));
     if(sand){
-      if(/^(25|26)/.test(hsn))out.push({severity:"must fix",where,problem:`${sand[0].toUpperCase()+sand.slice(1)} under Chapter ${hsn.slice(0,2)} is a beach sand mineral heading; export is canalised through IREL.`,fix:"If this is lapidary stone, classify under 7103 (or 7116 for articles) and describe it that way."});
-      else out.push({severity:"check",where,problem:`${sand[0].toUpperCase()+sand.slice(1)} is also a beach sand mineral: customs may move it to Chapter 25/26, which only IREL can export (as with Shipping Bill 6841733).`,fix:`Describe it as "Natural ${sand}, semi-precious stone, rough/sawn" (the actual form), lapidary grade, never sand/grit/abrasive, under the correct 7103 10 line confirmed with the CHA.`});
-      if(/\b(sand|grit|abrasive|powder|industrial)\b/.test(all))out.push({severity:"must fix",where,problem:`The description says "${all.match(/\b(sand|grit|abrasive|powder|industrial)\b/)[0]}", which concedes the beach-sand-mineral reading.`,fix:"Describe the actual lapidary form: rough, sawn, tumbled, carved."});
+      if(/^(25|26)/.test(hsn))add(where,`${cap1(sand)} under Chapter ${hsn.slice(0,2)} is a beach sand mineral heading, exportable only through IREL.`,"If this is lapidary stone, classify it under 7103 (7116 for articles) and describe it that way.");
+      else add(where,`${cap1(sand)} is also a beach sand mineral: an examiner can move it to Chapter 25/26, which only IREL may export.`,`Describe it as "Natural ${sand}, semi-precious stone, <actual form>", lapidary grade, under the 7103 line your CHA confirms.`);
     }
-    // The code used before for this stone, so shipments stay consistent.
+    const weak=all.match(/\b(sand|grit|abrasive|powder|industrial|ore)\b/);
+    if(weak&&(sand||/^71/.test(hsn)))add(where,`"${weak[1]}" in the description points customs to a mineral/industrial heading instead of ${hsn.slice(0,4)||"the one used"}.`,"Describe the actual lapidary form: rough, sawn, tumbled, polished, carved.");
+    const ctl=CONTROLLED.find(w=>new RegExp(`\\b${w}`).test(all));
+    if(ctl)add(where,`${cap1(ctl)} can be a controlled export (CITES, wildlife, antiquities or atomic minerals rules).`,"Confirm with the CHA whether a permit or certificate is needed before shipping.");
+    if(+it.igst>0&&draft.type!=="domestic")add(where,`IGST is ${it.igst}% on an export invoice under LUT.`,"Set IGST to 0% for export under LUT.");
+    const q=+it.qty,r=+it.rate,amt=+it.amt;
+    if(q&&r&&amt&&Math.abs(q*r-amt)>0.01*Math.max(1,amt))add(where,`Quantity × rate (${(q*r).toFixed(2)}) doesn't match the amount (${amt.toFixed(2)}).`,"Correct the rate or the amount so they agree.");
     const stone=distinct[0];
-    if(stone&&hsn){
+    if(stone&&hsn.length===8){
       const before=new Set();
-      for(const inv of invoices){if(inv.id===draft.id||inv.cancelledAt)continue;for(const x of inv.items||[]){const h=String(x.hsn||"").replace(/\D/g,"");if(h&&stonesIn([x.desc,x.customDesc,x.acctDesc].join(" ")).includes(stone))before.add(h);}}
-      const others=[...before].filter(h=>h!==hsn);
-      if(before.size&&others.length&&!before.has(hsn))out.push({severity:"check",where,problem:`Past ${stone} invoices used HSN ${others.slice(0,3).join(", ")}, not ${it.hsn}.`,fix:"Keep the code consistent across shipments unless the CHA has confirmed the change."});
+      for(const inv of invoices){if(inv.id===draft.id||inv.cancelledAt)continue;for(const x of inv.items||[]){const h=String(x.hsn||"").replace(/\D/g,"");if(h.length===8&&stonesIn([x.desc,x.customDesc,x.acctDesc].join(" ")).includes(stone))before.add(h);}}
+      if(before.size&&!before.has(hsn))add(where,`Past ${stone} invoices used HSN ${[...before].slice(0,3).join(", ")}, not ${it.hsn}; an inconsistent code invites a classification query.`,"Use the same code as before unless your CHA has confirmed the change.");
     }
   });
+  const terms=`${draft.termsText||""} ${draft.notes||""}`;
+  if(items.length&&items.every(it=>!(+it.igst))){
+    if(!/letter of undertaking|\bLUT\b/i.test(terms))add("Terms","No LUT endorsement on a 0% IGST export invoice.",`Add "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)".`);
+    if(!(draft.lutArn||companyProfileFromKey(company).lutArn))add("LUT ARN","No LUT ARN for an export under LUT.","Add the LUT ARN in Show advanced.");
+  }
+  const typo=terms.match(/intergated|integarted|undertakng|payement/i);
+  if(typo)add("Terms",`The endorsement is misspelt ("${typo[0]}").`,"Correct the spelling; a wrong endorsement weakens the LUT claim.");
   return out;
+}
+
+// The AI half of the check. Returns [{ where, risk, fix }]; throws if it can't run.
+async function invoiceAiRisks(draft,buyers,company){
+  const co=companyProfileFromKey(company);
+  const b=(buyers||[]).find(x=>x.id===draft.buyerId)||{};
+  const items=(draft.items||[]).map((it,i)=>({line:i+1,customs_description:it.desc,detail:it.customDesc||it.acctDesc,hsn:it.hsn,qty:it.qty,unit:it.unit,rate:it.rate,amount:it.amt,igst_percent:it.igst}));
+  const facts={
+    seller:{name:co.name,address:co.address,gstin:co.gstin,iec:co.iec,state_code:co.stateCode,lut_arn:draft.lutArn||co.lutArn},
+    invoice:{number:draft.invNo,date:draft.date,currency:draft.currency||"USD",payment_terms:draft.terms,port_of_loading:draft.portLading||"Mumbai, India",port_of_discharge:draft.portDischarge},
+    buyer:{name:b.name||draft.buyerName||draft.customerName,contact:b.contact,address:b.address,country:b.country},
+    consignee:draft.consigneeSameAsBuyer!==false?"same as buyer":{name:draft.consigneeName,address:draft.consigneeAddress,country:draft.consigneeCountry},
+    items,items_subtotal:items.reduce((s,it)=>s+(+it.amount||0),0),freight:+draft.shippingCost||0,discount:+draft.discountAmt||0,grand_total:draft.totalAmt,
+    notes_printed:draft.notes||"",terms_printed:draft.termsText||"",
+  };
+  // The full model, not the default mini one: this is a compliance read.
+  const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-4.1",max_tokens:1800,messages:[{role:"system",content:"You are an Indian export compliance checker (customs classification, ITC-HS export policy, GST, Foreign Trade Policy). Precise, brief, no padding."},{role:"user",content:`${LEGAL_RULES}\n\nInvoice data:\n${JSON.stringify(facts,null,1)}`}]})});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error?.message||`HTTP ${r.status}`);
+  const m=String(d.content?.find(x=>x.type==="text")?.text||"").match(/\{[\s\S]*\}/);
+  const out=m?JSON.parse(m[0]):null;
+  if(!out||!Array.isArray(out.risks))throw new Error("The check's reply couldn't be read — run it again");
+  return out.risks.filter(x=>x&&x.risk);
 }
 
 function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
   const [busy,setBusy]=useState(false);
-  const [res,setRes]=useState(null); // {issues, at} | {error}
-  const rules=useMemo(()=>invoiceRuleChecks(draft,invoices),[draft,invoices]);
+  const [res,setRes]=useState(null); // { rules, risks } | { rules, error }
+  // An edit after a check makes its answer stale.
+  const sig=JSON.stringify([draft.items,draft.termsText,draft.notes,draft.lutArn,draft.buyerId,draft.consigneeName,draft.consigneeAddress]);
+  const [checkedSig,setCheckedSig]=useState("");
+  const fresh=res&&checkedSig===sig;
   const run=async()=>{
     setBusy(true);setRes(null);
-    try{
-      const co=companyProfileFromKey(company);
-      const b=(buyers||[]).find(x=>x.id===draft.buyerId)||{};
-      const items=(draft.items||[]).map((it,i)=>({line:i+1,customs_description:it.desc,detail:it.customDesc||it.acctDesc,hsn:it.hsn,qty:it.qty,unit:it.unit,rate:it.rate,amount:it.amt,igst_percent:it.igst}));
-      const sub=items.reduce((s,it)=>s+(+it.amount||0),0);
-      const facts={
-        seller:{name:co.name,address:co.address,gstin:co.gstin,iec:co.iec,state_code:co.stateCode,lut_arn:draft.lutArn||co.lutArn},
-        invoice:{number:draft.invNo,date:draft.date,due_date:draft.dueDate,currency:draft.currency||"USD",payment_terms:draft.terms,port_of_loading:draft.portLading||"Mumbai, India",port_of_discharge:draft.portDischarge},
-        buyer:{name:b.name||draft.buyerName||draft.customerName,contact:b.contact,address:b.address,country:b.country},
-        consignee:draft.consigneeSameAsBuyer!==false?"same as buyer":{name:draft.consigneeName,address:draft.consigneeAddress,country:draft.consigneeCountry},
-        items,items_subtotal:sub,freight:+draft.shippingCost||0,discount:+draft.discountAmt||0,grand_total:draft.totalAmt,
-        notes_printed:draft.notes||"",terms_printed:draft.termsText||"",
-      };
-      // The full model, not the default mini one: this is a compliance read.
-      const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-4.1",max_tokens:1800,messages:[{role:"system",content:"You are an Indian export compliance checker (GST, customs, Foreign Trade Policy). Precise, brief, no padding."},{role:"user",content:`${LEGAL_RULES}\n\nInvoice data:\n${JSON.stringify(facts,null,1)}`}]})});
-      const d=await r.json();
-      if(!r.ok||d.error)throw new Error(d.error?.message||`HTTP ${r.status}`);
-      const text=d.content?.find(x=>x.type==="text")?.text||"";
-      const m=String(text).match(/\{[\s\S]*\}/);
-      const out=m?JSON.parse(m[0]):null;
-      if(!out||!Array.isArray(out.issues))throw new Error("The check's reply couldn't be read — run it again");
-      setRes({issues:out.issues,at:new Date()});
-    }catch(e){setRes({error:e.message||String(e)});}
-    setBusy(false);
+    const rules=invoiceRuleChecks(draft,invoices,company);
+    try{setRes({rules,risks:await invoiceAiRisks(draft,buyers,company)});}
+    catch(e){setRes({rules,error:e.message||String(e)});}
+    setCheckedSig(sig);setBusy(false);
   };
-  const tone={"must fix":C.red,"check":C.gold,"tip":C.inkMid};
-  const order={"must fix":0,"check":1,"tip":2};
+  const risks=fresh?[...res.rules,...(res.risks||[])]:[];
+  const allClear=fresh&&res.risks&&risks.length===0;
   return(
-    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"14px 17px",marginTop:13}}>
+    <div style={{background:C.surface,border:`1px solid ${allClear?C.green:risks.length?C.red:C.border}`,borderRadius:8,padding:"14px 17px",marginTop:13}}>
       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Legal check</div>
         <button type="button" onClick={run} disabled={busy} style={{cursor:busy?"default":"pointer",opacity:busy?.6:1,fontSize:12,padding:"6px 14px",border:`1px solid ${C.gold}`,borderRadius:5,background:C.goldBg,color:C.ink,fontFamily:"inherit"}}>
-          ⚖ {busy?"Checking…":res?"Check again":"AI legal check"}
+          ⚖ {busy?"Checking…":fresh?"Check again":"Run legal check"}
         </button>
-        <span style={{fontSize:11,color:C.inkFaint}}>GST (LUT), customs and IEC rules for export invoices. A second pair of eyes, not legal advice — confirm anything serious with your CHA.</span>
+        {allClear?<b style={{fontSize:13,color:C.green}}>✓ All clear</b>
+          :risks.length?<b style={{fontSize:13,color:C.red}}>{risks.length} legal risk{risks.length>1?"s":""}</b>
+          :<span style={{fontSize:11,color:C.inkFaint}}>{res&&!fresh?"Changed since the last check — run it again.":"Customs classification, export policy, GST/LUT."}</span>}
       </div>
-      {rules.length>0&&<div style={{marginTop:10,display:"grid",gap:8}}>
-        {[...rules].sort((a,b)=>(order[a.severity]??3)-(order[b.severity]??3)).map((x,i)=>(
-          <div key={"r"+i} style={{display:"grid",gridTemplateColumns:"84px 1fr",gap:10,fontSize:12,paddingTop:8,borderTop:i?`1px solid ${C.border}`:"none"}}>
-            <span style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.4,color:tone[x.severity]||C.inkMid}}>{x.severity}</span>
-            <div><b style={{color:C.ink}}>{x.where}</b> — {x.problem}{x.fix&&<div style={{color:C.inkMid,marginTop:2}}>→ {x.fix}</div>}</div>
+      {res?.error&&fresh&&<div style={{fontSize:12,color:C.red,marginTop:10}}>⚠ The AI part couldn't run: {res.error}. Only the fixed rules were checked.</div>}
+      {risks.length>0&&<div style={{marginTop:10,display:"grid",gap:8}}>
+        {risks.map((x,i)=>(
+          <div key={i} style={{fontSize:12,paddingTop:8,borderTop:i?`1px solid ${C.border}`:"none"}}>
+            <b style={{color:C.ink}}>{x.where}</b> — {x.risk}{x.fix&&<div style={{color:C.inkMid,marginTop:2}}>→ {x.fix}</div>}
           </div>
         ))}
-        {res?.issues&&<div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginTop:6}}>AI check</div>}
       </div>}
-      {res?.error&&<div style={{fontSize:12,color:C.red,marginTop:10}}>⚠ {res.error}</div>}
-      {res?.issues&&(res.issues.length===0
-        ?<div style={{fontSize:12,color:C.green,marginTop:10}}>✓ {rules.length?"The AI found nothing more.":"Nothing found to fix."}</div>
-        :<div style={{marginTop:10,display:"grid",gap:8}}>
-          {[...res.issues].sort((a,b)=>(order[a.severity]??3)-(order[b.severity]??3)).map((x,i)=>(
-            <div key={i} style={{display:"grid",gridTemplateColumns:"84px 1fr",gap:10,fontSize:12,paddingTop:8,borderTop:i?`1px solid ${C.border}`:"none"}}>
-              <span style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.4,color:tone[x.severity]||C.inkMid}}>{x.severity}</span>
-              <div><b style={{color:C.ink}}>{x.where}</b> — {x.problem}{x.fix&&<div style={{color:C.inkMid,marginTop:2}}>→ {x.fix}</div>}</div>
-            </div>
-          ))}
-        </div>)}
     </div>
   );
 }
