@@ -13258,7 +13258,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
           {tab==="buyers"&&<BuyerManager buyers={buyers} setBuyers={setBuyers} buyersKey={INV_KEYS.buyers} invoices={invoices} onToast={showToast} onNewInvoice={buyerId=>{const d={...newDraft("commercial"),buyerId:buyerId||""};setDraft(d);setView("form");}} onOpenInvoice={inv=>{setDraft({...inv});setView("form");}}/>}
         </div>
       )}
-	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} isSaved={invoices.some(i=>i.id===draft.id)} onCancelInvoice={cancelInvoice} onReinstate={reinstateInvoice} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} onPackingList={()=>setView("packing")} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
+	      {loaded&&view==="form"&&draft&&<InvoiceForm draft={draft} setDraft={setDraft} buyers={buyers} company={company} accStock={accStock} stock={stock} purchases={purchases} finTxns={finTxns} customsDescs={customsDescs} invoices={invoices} isSaved={invoices.some(i=>i.id===draft.id)} onCancelInvoice={cancelInvoice} onReinstate={reinstateInvoice} onSave={saveInvoice} onDelete={delInvoice} onPreview={()=>setView("preview")} onPackingList={()=>setView("packing")} showToast={showToast} onRefreshStock={refreshStock} onCancelPaymentSource={cancelInvoicePaymentSource}/>}
 	      {loaded&&view==="preview"&&draft&&<InvoicePreview inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={saveInvoice} onEdit={()=>setView("form")}/>}
 	      {loaded&&view==="packing"&&draft&&<PackingListBuilder inv={draft} buyers={buyers} company={company} onBack={()=>setView("form")} onSave={async(next,opts)=>{setDraft(next);return saveInvoice(next,opts);}} showToast={showToast}/>}
 	      {loaded&&view==="bulk-inv"&&<InvBulkView queue={bulkQueue} idx={bulkIdx} setIdx={setBulkIdx} buyers={buyers} company={company} extractInvoice={extractInvoice} onSave={async inv=>{await saveInvoice(inv,{navigateAway:false});if(bulkIdx<bulkQueue.length-1){setBulkIdx(i=>i+1);}else{showToast(`${bulkQueue.length} invoice${bulkQueue.length>1?"s":""} processed`);setView("list");setDraft(null);}}} onBack={()=>{setView("list");setBulkQueue([]);}}/>}
@@ -13485,7 +13485,7 @@ function InvAmtInput({amt,onAmt,style}){
     onChange={e=>{setText(e.target.value);onAmt(e.target.value);}} style={style}/>;
 }
 
-function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],isSaved=false,onCancelInvoice,onReinstate,onSave,onDelete,onPreview,onPackingList,showToast,onRefreshStock,onCancelPaymentSource}) {
+function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purchases=[],finTxns=[],customsDescs=[],invoices=[],isSaved=false,onCancelInvoice,onReinstate,onSave,onDelete,onPreview,onPackingList,showToast,onRefreshStock,onCancelPaymentSource}) {
 	  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
   // Cancelled invoices are read-only: printed and issued, so nothing about them may change.
   // A printed invoice is locked the same way, but an admin can unlock it for this sitting.
@@ -14583,7 +14583,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
         );
       })()}
       </fieldset>
-      <InvoiceLegalCheck draft={draft} buyers={buyers} company={company}/>
+      <InvoiceLegalCheck draft={draft} buyers={buyers} company={company} invoices={invoices}/>
     </div>
   );
 }
@@ -14597,12 +14597,54 @@ const LEGAL_RULES=`Check this Indian export invoice (goods, natural stones/miner
 - Export without payment of IGST under LUT: IGST must be 0%, and the invoice must carry an endorsement like "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)" together with the LUT ARN. Check the endorsement wording and spelling.
 - Foreign Trade Policy / customs: exporter IEC; ITC-HS codes on export documents are 8 digits; the HSN must fit the description (e.g. unworked natural quartz/mineral specimens vs worked precious or semi-precious stones of 7103 vs articles of 7116); units consistent with the HSN's UQC; currency stated; ports of loading and discharge; country of origin; Incoterms if freight is charged.
 - Arithmetic: each line qty × rate = amount; subtotal + freight − discount = grand total.
+- Beach sand minerals: garnet, ilmenite, rutile, zircon, monazite, sillimanite and leucoxene are also "beach sand minerals". Indian customs can classify them under Chapter 25/26 (garnet: CTH 25132030), and those headings can only be exported through Indian Rare Earths Limited (IREL). This happened to us: a garnet shipment under 71031039 was questioned at JNCH, Nhava Sheva, and the examiner proposed 25132030. When one of these is exported as a semi-precious stone (7103/7116), the invoice must make that case on its face: a description naming the stone and the form ("Natural garnet, semi-precious stone, rough/sawn", not sand, grit or abrasive), lapidary grade, and the correct 7103 10 line for it. Flag any of these lines that don't.
+- Every description field on a line must name the same stone: "agate stone, sawn – Garnet" is a contradiction customs will query. Wording that concedes the goods are industrial, abrasive or sand-like is a problem.
 - Anything else a customs officer, CHA or GST auditor would query.
 Only report real problems found in the data given. Do not invent facts. If a field is missing from the data, say it is missing rather than guessing.
 Reply with JSON only: {"issues":[{"severity":"must fix"|"check"|"tip","where":"short field or line name","problem":"what is wrong, one sentence","fix":"what to change, one sentence"}]}. An empty list means nothing found.`;
-function InvoiceLegalCheck({draft,buyers,company}){
+/* Checks that need no AI and always run: the mistakes that have actually cost
+   us. Garnet (Shipping Bill 6841733, JNCH, Sept 2026) went out under 71031039
+   described as "agate stone, sawn – Garnet"; the examiner proposed 25132030, a
+   beach-sand-mineral heading only IREL may export. */
+const BEACH_SAND=["garnet","ilmenite","rutile","zircon","monazite","sillimanite","leucoxene"];
+const STONE_WORDS=["agate","amethyst","apophyllite","aquamarine","aventurine","calcite","carnelian","chalcedony","citrine","fluorite","garnet","hematite","jasper","kyanite","labradorite","lapis","malachite","moonstone","obsidian","onyx","pyrite","quartz","rhodochrosite","rose quartz","ruby","sapphire","selenite","sodalite","stilbite","sunstone","tiger","tourmaline","zircon"];
+const stonesIn=t=>{const s=String(t||"").toLowerCase();return STONE_WORDS.filter(w=>new RegExp(`\\b${w}`).test(s)).filter((w,_,a)=>!(w==="quartz"&&a.includes("rose quartz")));};
+function invoiceRuleChecks(draft,invoices=[]){
+  const out=[];
+  (draft.items||[]).forEach((it,i)=>{
+    const where=`Line ${i+1}`;
+    const descs=[it.desc,it.customDesc,it.acctDesc].filter(Boolean);
+    const all=descs.join(" · ").toLowerCase();
+    const hsn=String(it.hsn||"").replace(/\D/g,"");
+    if(!hsn)out.push({severity:"must fix",where,problem:"No HSN code.",fix:"Add the 8-digit ITC-HS code."});
+    else if(hsn.length!==8)out.push({severity:"must fix",where,problem:`HSN ${it.hsn} is ${hsn.length} digits; export documents need the 8-digit ITC-HS code.`,fix:"Use the full 8-digit tariff line."});
+    // Each description field naming a different stone (the "agate … Garnet" mistake).
+    const named=descs.map(stonesIn).filter(x=>x.length);
+    const distinct=[...new Set(named.flat())];
+    if(named.length>1&&!named.every(x=>x.some(w=>named[0].includes(w))))
+      out.push({severity:"must fix",where,problem:`The description fields name different stones (${distinct.join(", ")}).`,fix:"Every description on the line should name the same stone."});
+    const sand=BEACH_SAND.find(w=>all.includes(w));
+    if(sand){
+      if(/^(25|26)/.test(hsn))out.push({severity:"must fix",where,problem:`${sand[0].toUpperCase()+sand.slice(1)} under Chapter ${hsn.slice(0,2)} is a beach sand mineral heading; export is canalised through IREL.`,fix:"If this is lapidary stone, classify under 7103 (or 7116 for articles) and describe it that way."});
+      else out.push({severity:"check",where,problem:`${sand[0].toUpperCase()+sand.slice(1)} is also a beach sand mineral: customs may move it to Chapter 25/26, which only IREL can export (as with Shipping Bill 6841733).`,fix:`Describe it as "Natural ${sand}, semi-precious stone, rough/sawn" (the actual form), lapidary grade, never sand/grit/abrasive, under the correct 7103 10 line confirmed with the CHA.`});
+      if(/\b(sand|grit|abrasive|powder|industrial)\b/.test(all))out.push({severity:"must fix",where,problem:`The description says "${all.match(/\b(sand|grit|abrasive|powder|industrial)\b/)[0]}", which concedes the beach-sand-mineral reading.`,fix:"Describe the actual lapidary form: rough, sawn, tumbled, carved."});
+    }
+    // The code used before for this stone, so shipments stay consistent.
+    const stone=distinct[0];
+    if(stone&&hsn){
+      const before=new Set();
+      for(const inv of invoices){if(inv.id===draft.id||inv.cancelledAt)continue;for(const x of inv.items||[]){const h=String(x.hsn||"").replace(/\D/g,"");if(h&&stonesIn([x.desc,x.customDesc,x.acctDesc].join(" ")).includes(stone))before.add(h);}}
+      const others=[...before].filter(h=>h!==hsn);
+      if(before.size&&others.length&&!before.has(hsn))out.push({severity:"check",where,problem:`Past ${stone} invoices used HSN ${others.slice(0,3).join(", ")}, not ${it.hsn}.`,fix:"Keep the code consistent across shipments unless the CHA has confirmed the change."});
+    }
+  });
+  return out;
+}
+
+function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
   const [busy,setBusy]=useState(false);
   const [res,setRes]=useState(null); // {issues, at} | {error}
+  const rules=useMemo(()=>invoiceRuleChecks(draft,invoices),[draft,invoices]);
   const run=async()=>{
     setBusy(true);setRes(null);
     try{
@@ -14641,9 +14683,18 @@ function InvoiceLegalCheck({draft,buyers,company}){
         </button>
         <span style={{fontSize:11,color:C.inkFaint}}>GST (LUT), customs and IEC rules for export invoices. A second pair of eyes, not legal advice — confirm anything serious with your CHA.</span>
       </div>
+      {rules.length>0&&<div style={{marginTop:10,display:"grid",gap:8}}>
+        {[...rules].sort((a,b)=>(order[a.severity]??3)-(order[b.severity]??3)).map((x,i)=>(
+          <div key={"r"+i} style={{display:"grid",gridTemplateColumns:"84px 1fr",gap:10,fontSize:12,paddingTop:8,borderTop:i?`1px solid ${C.border}`:"none"}}>
+            <span style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.4,color:tone[x.severity]||C.inkMid}}>{x.severity}</span>
+            <div><b style={{color:C.ink}}>{x.where}</b> — {x.problem}{x.fix&&<div style={{color:C.inkMid,marginTop:2}}>→ {x.fix}</div>}</div>
+          </div>
+        ))}
+        {res?.issues&&<div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginTop:6}}>AI check</div>}
+      </div>}
       {res?.error&&<div style={{fontSize:12,color:C.red,marginTop:10}}>⚠ {res.error}</div>}
       {res?.issues&&(res.issues.length===0
-        ?<div style={{fontSize:12,color:C.green,marginTop:10}}>✓ Nothing found to fix.</div>
+        ?<div style={{fontSize:12,color:C.green,marginTop:10}}>✓ {rules.length?"The AI found nothing more.":"Nothing found to fix."}</div>
         :<div style={{marginTop:10,display:"grid",gap:8}}>
           {[...res.issues].sort((a,b)=>(order[a.severity]??3)-(order[b.severity]??3)).map((x,i)=>(
             <div key={i} style={{display:"grid",gridTemplateColumns:"84px 1fr",gap:10,fontSize:12,paddingTop:8,borderTop:i?`1px solid ${C.border}`:"none"}}>
