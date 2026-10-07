@@ -1,4 +1,4 @@
-import { requireUser } from "../lib/auth.js";
+import { requireUser, hasStoreSecret } from "../lib/auth.js";
 import { getEtsyAccessToken, etsyAuthHandler } from "../lib/etsy-auth.js";
 
 export const maxDuration = 45; // Vercel Pro: allow up to 45s for multi-page listing fetches
@@ -19,6 +19,9 @@ export default async function handler(req, res) {
     return etsyAuthHandler(req, res);
   }
   if (req.method !== "GET" && req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  // Reviews for eartheditions.co, for the store's server only (store secret).
+  // Text, stars and dates; nothing that names or links the Etsy shop.
+  if (req.query?.action === "store_reviews") return hasStoreSecret(req) ? storeReviews(res) : res.status(401).json({ error: "Unauthorized" });
   if (!(await requireUser(req, res))) return;
 
   // x-api-key must be keystring:sharedsecret for Etsy API v3
@@ -771,3 +774,22 @@ export default async function handler(req, res) {
   }
 }
 
+/* Rating, count and the latest written reviews (4 and 5 stars, English,
+   at least a sentence). Etsy's API gives no buyer names. */
+async function storeReviews(res) {
+  const key = process.env.ETSY_API_KEY ||
+    (process.env.ETSY_KEYSTRING && process.env.ETSY_SHARED_SECRET ? `${process.env.ETSY_KEYSTRING}:${process.env.ETSY_SHARED_SECRET}` : process.env.ETSY_KEYSTRING);
+  const sid = process.env.ETSY_SHOP_ID;
+  if (!key || !sid) return res.status(503).json({ error: "Etsy not set up" });
+  try {
+    const get = async path => { const r = await fetch(`https://openapi.etsy.com/v3/application/${path}`, { headers: { "x-api-key": key } }); if (!r.ok) throw new Error(`Etsy ${r.status}`); return r.json(); };
+    const [shop, page] = await Promise.all([get(`shops/${sid}`), get(`shops/${sid}/reviews?limit=100`)]);
+    const reviews = (page.results || [])
+      .filter(r => r.rating >= 4 && String(r.review || "").trim().length >= 40 && (!r.language || /^en/i.test(r.language)))
+      .map(r => ({ rating: r.rating, text: String(r.review).trim().slice(0, 600), date: new Date((r.created_timestamp || r.create_timestamp) * 1000).toISOString().slice(0, 10) }))
+      .slice(0, 24);
+    return res.status(200).json({ average: +shop.review_average || 0, count: +shop.review_count || 0, reviews });
+  } catch (e) {
+    return res.status(502).json({ error: e.message });
+  }
+}
