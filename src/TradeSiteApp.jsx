@@ -298,6 +298,28 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
     setBusy(false);
   };
 
+  /* Email a set-up link from the business, as Approve does: the ERP's own mail
+     (Resend, from eartheditions.co) when it's set up, else the Omnisend
+     "wholesale_approved" automation, which sends from the shop's address. */
+  const emailSetupLink = async (b, link) => {
+    setBusy(true);
+    try {
+      const mailed = await fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template: "trade_approved", to: b.email, name: b.name, setup_url: link, site_url: siteUrl }) })
+        .then(async r => ({ ok: r.ok, status: r.status, d: await r.json().catch(() => ({})) })).catch(e => ({ ok: false, d: { error: e.message } }));
+      if (mailed.ok) showToast(`✓ Set-up link emailed to ${b.email} from Earth Editions`);
+      else if (mailed.status === 503) {
+        const r = await fetch("/api/omnisend", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "trigger_event", eventName: "wholesale_approved", email: b.email,
+            properties: { setup_url: link, first_name: String(b.name || "").split(" ")[0], company: b.company || "", site_url: siteUrl } }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.error) throw new Error(d.error || `Omnisend ${r.status}`);
+        showToast(`✓ Sent to Omnisend — its approval email goes to ${b.email} from Earth Editions`);
+      } else throw new Error(mailed.d?.error || `Mail ${mailed.status}`);
+    } catch (e) { showToast(`⚠ Couldn't email it: ${e.message} — copy the link instead`); }
+    setBusy(false);
+  };
+
   const bulkInvites = async () => {
     const list = (rows || []).filter(b => b.status === "approved" && !b.has_password);
     if (!list.length) { showToast("Every approved buyer already has a password"); return; }
@@ -441,8 +463,9 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
                     href={`https://wa.me/${waNum(b.phone)}?text=${encodeURIComponent(welcome(b)
                       ? `Hi ${String(b.name || "").split(" ")[0] || "there"}, you've been approved for an Earth Editions trade account.\n\nSet your password here to see our wholesale prices and order: ${links[b.id]}\n\nAfter that, visit ${siteUrl} any time. If you have any questions, just message us here.\n\nThanks!\n${signOff ? `${signOff}, Earth Editions` : "Earth Editions"}`
                       : `Hi ${b.name || ""}, Earth Editions' trade catalogue has moved to its own site. Set your password here to see trade prices and order: ${links[b.id]}`)}`}>{welcome(b) ? "💬 Send welcome on WhatsApp" : "Send on WhatsApp"}</a>}
-                  <a style={{ ...btn(), textDecoration: "none" }}
-                    href={`mailto:${b.email}?subject=${encodeURIComponent("Your Earth Editions trade account")}&body=${encodeURIComponent(`Hi ${b.name || ""},\n\nOur trade catalogue has moved to its own site. Set your password here to see trade prices and order:\n\n${links[b.id]}\n\nThe link works for 14 days.\n\nEarth Editions`)}`}>Email</a>
+                  {/* Sent by the business (Resend, else the Omnisend automation), never
+                      from whoever is signed in — a mailto: link went out from their own inbox. */}
+                  <button disabled={busy} onClick={() => emailSetupLink(b, links[b.id])} style={btn()}>✉ Email from Earth Editions</button>
                 </div>
                 <div style={{ color: C.inkFaint, marginTop: 6 }}>Works once, for 14 days. Only shown now — make a new one if it's lost.</div>
               </div>
