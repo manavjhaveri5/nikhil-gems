@@ -3810,6 +3810,23 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 /* ══════════════════════════════════════════════════════════════════════════
    ORDERS VIEW
 ══════════════════════════════════════════════════════════════════════════ */
+// Etsy's ship-by date for an order line (the date the buyer was promised dispatch by).
+const etsyShipBy = txn => txn?.expected_ship_date ? new Date(txn.expected_ship_date * 1000).toISOString().slice(0, 10) : "";
+/* Days to an unshipped order's ship-by date: negative = overdue. null when
+   there's no date, or the order has shipped or been cancelled. */
+const shipByDays = o => {
+  if (!o?.ship_by || o.cancelled || ["shipped", "completed", "fulfilled", "canceled"].includes(o.status) || o.shipped_at || o.etsy_live_is_shipped) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((new Date(o.ship_by + "T00:00:00") - today) / 86400000);
+};
+function ShipByBadge({ o }) {
+  const d = shipByDays(o);
+  if (d == null) return null;
+  const [bg, fg, text] = d < 0 ? ["#fde8e6", "#b42318", `${-d}d overdue`] : d === 0 ? ["#fff3dc", "#9a5b00", "Ship today"] : d === 1 ? ["#fff3dc", "#9a5b00", "Ship tomorrow"]
+    : ["transparent", "#6b6358", `Ship by ${new Date(o.ship_by + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`];
+  return <span title={`Etsy ship-by date: ${o.ship_by}`} style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: bg, color: fg, border: bg === "transparent" ? "1px solid #e4ddd2" : "none", whiteSpace: "nowrap" }}>{text}</span>;
+}
+
 function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoice, onViewInvoicePdf, onDelist }) {
   const [pFilter,  setPFilter]  = useState("all");
   const [shipFilter, setShipFilter] = useState("all");
@@ -4868,6 +4885,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
           etsy_listing_id:   etsyListingId,
           etsy_receipt_id:   receipt.receipt_id,
           etsy_transaction_id: txn?.transaction_id || "",
+          ship_by:           etsyShipBy(txn),
           ...lineMoney,
           currency,
           buyer_name:        receipt.name || etsyEmailFromReceipt(receipt) || "",
@@ -4935,6 +4953,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
           listing_image: etsyImageFromTxn(txn),
           variations: etsyVariations(txn),
           etsy_listing_id: listingId,
+          ship_by: etsyShipBy(txn),
         };
       });
     });
@@ -5565,6 +5584,23 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
         </div>
       )}
 
+      {/* Etsy ship-by deadlines, counted per order (receipt), not per item. */}
+      {(() => {
+        const due = new Map();
+        for (const o of orders || []) { const d = shipByDays(o); if (d == null) continue; const k = etsyReceiptId(o) || o.id; if (!due.has(k) || d < due.get(k).d) due.set(k, { d, o }); }
+        const list = [...due.values()];
+        const overdue = list.filter(x => x.d < 0), today = list.filter(x => x.d === 0), tomorrow = list.filter(x => x.d === 1);
+        if (!overdue.length && !today.length && !tomorrow.length) return null;
+        const names = xs => xs.sort((a, b) => a.d - b.d).slice(0, 4).map(x => x.o.buyer_name || `#${etsyReceiptId(x.o)}`).join(", ") + (xs.length > 4 ? ` +${xs.length - 4}` : "");
+        return (
+          <div style={{ marginBottom: 10, background: overdue.length ? "#fde8e6" : "#fff3dc", border: `1px solid ${overdue.length ? "#b4231840" : "#9a5b0040"}`, borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: C.ink, display: "grid", gap: 3 }}>
+            {overdue.length > 0 && <div><b style={{ color: "#b42318" }}>{overdue.length} overdue</b> — past Etsy's ship-by date: {names(overdue)}</div>}
+            {today.length > 0 && <div><b style={{ color: "#9a5b00" }}>{today.length} to ship today</b> — {names(today)}</div>}
+            {tomorrow.length > 0 && <div><b style={{ color: "#9a5b00" }}>{tomorrow.length} to ship tomorrow</b> — {names(tomorrow)}</div>}
+          </div>
+        );
+      })()}
+
       {/* order list */}
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 0", color: C.inkFaint }}>
@@ -5609,6 +5645,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <ShipByBadge o={[...members].filter(m => shipByDays(m) != null).sort((a, b) => shipByDays(a) - shipByDays(b))[0]} />
                     <span style={{ fontSize: 10.5, fontWeight: 800, borderRadius: 20, padding: "3px 9px", background: s.complete === s.count ? C.greenBg : C.card, color: s.complete === s.count ? C.green : C.inkMid, border: `1px solid ${s.complete === s.count ? C.green + "55" : C.border}` }}>
                       {s.complete}/{s.count} complete
                     </span>
@@ -5780,7 +5817,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                   </div>
                   <div style={{ textAlign: mob() ? "left" : "right", gridColumn: mob() ? "2 / 3" : "auto" }}>
                     <div style={{ fontSize: 16, fontWeight: 850, color: cancelled ? C.inkFaint : C.green, textDecoration: cancelled ? "line-through" : "none" }}>{money(order.sale_price, order.currency)}</div>
-                    <div style={{ marginTop: 3 }}><StatusPill status={status} /></div>
+                    <div style={{ marginTop: 3, display: "flex", gap: 6, justifyContent: mob() ? "flex-start" : "flex-end", alignItems: "center", flexWrap: "wrap" }}><ShipByBadge o={order} /><StatusPill status={status} /></div>
                   </div>
                 </div>
 
@@ -6556,6 +6593,7 @@ function EtsyLiveView({ onCrossPost }) {
           etsy_listing_id:   etsyListingId || "",
           etsy_receipt_id:   o.receipt_id,
           etsy_transaction_id: txn?.transaction_id || "",
+          ship_by:           etsyShipBy(txn),
           ...lineMoney,
           currency,
           buyer_name:        o.name || etsyBuyerEmail(o) || "",
