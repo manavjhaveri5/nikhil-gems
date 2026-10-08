@@ -231,10 +231,19 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     /* The caption goes on a copy of the rendered frame, and the blob is read
        from that copy — the WebGL canvas itself holds only the graded pixels. */
     const src = captionOn(cap) ? compositeCaption(canvasRef.current, cap) : canvasRef.current;
-    const blob = await new Promise((resolve, reject) =>
-      src.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
-    const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
-    return uploadToStorage(`listing-photos/${name}`, new File([blob], name, { type: "image/jpeg" }));
+    const read = c => new Promise((resolve, reject) =>
+      c.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
+    const stem = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    /* A captioned photo also keeps a twin without the caption, beside it as
+       <name>-plain.jpg. The trade site sells by the kilo, where "Exact piece
+       shown" isn't true, and shows the twin instead. Uploaded first, so the
+       twin exists by the time the photo is anywhere. */
+    if (captionOn(cap)) {
+      const plain = `${stem}-plain.jpg`;
+      await uploadToStorage(`listing-photos/${plain}`, new File([await read(canvasRef.current)], plain, { type: "image/jpeg" }));
+    }
+    const name = `${stem}.jpg`;
+    return uploadToStorage(`listing-photos/${name}`, new File([await read(src)], name, { type: "image/jpeg" }));
   };
 
   const maskFrom = bitmap => {

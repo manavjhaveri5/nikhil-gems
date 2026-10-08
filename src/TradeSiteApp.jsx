@@ -209,6 +209,30 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
     "created_at").then(setRows).catch(e => { toastRef.current?.("⚠ " + e.message); setRows(r => r || []); }), []);
   useEffect(() => { load(); }, [load]);
 
+  /* Each buyer's own discount, in percent: { buyerId: 20 }. Kept in
+     trade_settings.buyer_discounts; the trade site's server applies it to
+     every price that buyer sees and to their cart total, showing the old price
+     struck through. Editors never get it (they edit the real prices). */
+  const [discounts, setDiscounts] = useState({});
+  const [discDraft, setDiscDraft] = useState({});
+  useEffect(() => {
+    q(supabase.from("trade_settings").select("value").eq("key", "buyer_discounts").maybeSingle())
+      .then(r => setDiscounts(r?.value && typeof r.value === "object" ? r.value : {})).catch(() => {});
+  }, []);
+  const saveDiscount = async (b, raw) => {
+    const pct = Math.round(Math.max(0, Math.min(90, parseFloat(String(raw).replace(",", ".")) || 0)) * 10) / 10;
+    if ((+discounts[b.id] || 0) === pct) return;
+    try {
+      // Re-read first, so two people setting discounts don't undo each other.
+      const cur = await q(supabase.from("trade_settings").select("value").eq("key", "buyer_discounts").maybeSingle());
+      const next = { ...(cur?.value && typeof cur.value === "object" ? cur.value : {}) };
+      if (pct) next[b.id] = pct; else delete next[b.id];
+      await q(supabase.from("trade_settings").upsert({ key: "buyer_discounts", value: next }));
+      setDiscounts(next);
+      showToast(pct ? `✓ ${b.company || b.name} now sees ${pct}% off every price` : `${b.company || b.name}: discount removed`);
+    } catch (e) { showToast("⚠ " + e.message); }
+  };
+
   const patch = async (id, p) => {
     try {
       await q(supabase.from("trade_buyers").update(p).eq("id", id));
@@ -366,6 +390,7 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
               </div>
               <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                 {b.is_editor && <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: .5, textTransform: "uppercase", color: C.gold, background: C.amberBg, border: `1px solid ${C.gold}40`, borderRadius: 20, padding: "2px 8px" }}>✎ Editor</span>}
+                {+discounts[b.id] > 0 && <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: .5, color: C.green, background: C.greenBg, border: `1px solid ${C.green}40`, borderRadius: 20, padding: "2px 8px" }}>−{discounts[b.id]}%</span>}
                 <Pill k={b.status}>{b.status === "pending" ? "waiting" : b.status}</Pill>
               </div>
             </div>
@@ -383,6 +408,16 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
                 }} style={btn(b.is_editor ? C.amberBg : "transparent", b.is_editor ? C.gold : C.ink)}>
                   ✎ {b.is_editor ? "Editor · on" : "Make editor"}
                 </button>
+              )}
+              {b.status === "approved" && !b.is_editor && (
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: C.inkMid }} title="This buyer sees every price with this much off, the old price struck through">
+                  Discount
+                  <input inputMode="decimal" value={discDraft[b.id] ?? (discounts[b.id] || "")} placeholder="0"
+                    onChange={e => setDiscDraft(d => ({ ...d, [b.id]: e.target.value.replace(/[^\d.,]/g, "") }))}
+                    onBlur={e => { saveDiscount(b, e.target.value); setDiscDraft(d => { const n = { ...d }; delete n[b.id]; return n; }); }}
+                    onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                    style={{ width: 52, padding: "5px 7px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, fontFamily: "inherit", textAlign: "right" }} />%
+                </label>
               )}
               <div style={{ flex: 1 }} />
               <button onClick={() => remove(b)} style={{ ...btn(), color: C.red }} title="Delete this account">Delete</button>
