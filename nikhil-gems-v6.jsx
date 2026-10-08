@@ -15305,7 +15305,7 @@ function packingMarks(blocks,mode,startAt=1){
 /* Packages are counted, not read off the last mark — a consignment carrying on
    from the previous one starts at N.G.-296 without holding 296 bags. */
 const packCount=marks=>(marks||[]).reduce((n,m)=>n+m.span,0);
-const packMarkLabel=(prefix,m)=>m.from===m.to?`${prefix}-${m.from}`:`${prefix}-${m.from} to ${prefix}-${m.to}`;
+const packMarkLabel=(prefix,m)=>{const p=String(prefix||"").replace(/-+$/,"");return m.from===m.to?`${p}-${m.from}`:`${p}-${m.from} to ${p}-${m.to}`;};
 
 const packNum=v=>{const n=parseFloat(String(v).replace(/,/g,""));return isFinite(n)?n:0;};
 /* Weights print as typed — "5.400" and "0.791" are how the shipper writes them,
@@ -15544,7 +15544,8 @@ Two layouts:
 - "bulk": one block per run of identical bags/packages of one stone: lines:[{desc}], bags (how many packages in the run), packing (e.g. GUNNY BAGS, CARTON BOX), dest (destination port/city if written), net and gross = TOTAL kg for the whole run.
 Pick the layout the sheet uses. Keep package order. If the sheet shows mark numbers (e.g. N.G.-296), set prefix ("N.G.") and start_at (the first number).
 
-Descriptions: when a line is the same goods as one of these invoice descriptions, use the invoice wording exactly: ${JSON.stringify(descs)}. Otherwise keep the sheet's wording.
+Descriptions: when a line is the same goods as one of these invoice descriptions, use that wording: ${JSON.stringify(descs)}. Otherwise keep the sheet's wording. Either way, write every description in sentence case (first letter capital, the rest lower case except proper names such as Tiffany) and correct spelling mistakes in stone and shape names (e.g. MALACITE → Malachite, CHYSOPHRASE → chrysoprase, HYPERSTIAN → hypersthene, TIFANY → Tiffany, FLOURITE → fluorite). Don't add or drop words.
+Weights: "kgs", "net" and "gross" are in KILOGRAMS. Sheets often mix grams and kilograms in one column (820 meaning 820 g next to 1.5 meaning 1.5 kg); a carton's line weights should add up to its net weight, so use that to tell them apart and convert grams to kg (820 → 0.82).
 Numbers as plain numbers (no units). Leave a field "" if the sheet doesn't give it; never invent weights or counts. Skip total/summary rows.
 
 Reply with JSON only: {"mode":"detailed"|"bulk","prefix":"","start_at":"","blocks":[{"lines":[{"desc":"","pcs":"","kgs":""}],"net":"","gross":"","packing":"","bags":"","dest":""}]}`;
@@ -15555,11 +15556,27 @@ Reply with JSON only: {"mode":"detailed"|"bulk","prefix":"","start_at":"","block
   const out=m?JSON.parse(m[0]):null;
   if(!out?.blocks?.length)throw new Error("No packages found in that file");
   const str=v=>v==null?"":String(v).trim();
+  // Still all capitals: sentence case at least (spelling is the AI's job above).
+  const sentence=t=>/[A-Z]/.test(t)&&t===t.toUpperCase()?t.charAt(0)+t.slice(1).toLowerCase():t;
+  /* Grams left in the kg column: if the lines only add up to the carton's net
+     weight with the big figures read as grams, read them that way. */
+  const kgFix=(lines,net)=>{
+    const n=packNum(net),w=lines.map(l=>packNum(l.kgs));
+    if(!n||!w.some(Boolean))return lines;
+    const sum=a=>a.reduce((x,y)=>x+y,0),near=v=>Math.abs(v-n)<=Math.max(0.02*n,0.005);
+    if(near(sum(w)))return lines;
+    for(const cut of [50,20,10,5]){
+      const g=w.map(v=>v>=cut?v/1000:v);
+      if(near(sum(g)))return lines.map((l,i)=>w[i]>=cut?{...l,kgs:String(+(w[i]/1000).toFixed(3))}:l);
+    }
+    if(near(sum(w)/1000))return lines.map((l,i)=>w[i]?{...l,kgs:String(+(w[i]/1000).toFixed(3))}:l);
+    return lines;
+  };
   const mode=out.mode==="bulk"?"bulk":"detailed";
   return{
-    mode,prefix:str(out.prefix),startAt:parseInt(out.start_at,10)||0,
+    mode,prefix:str(out.prefix).replace(/[-\s]+$/,""),startAt:parseInt(out.start_at,10)||0,
     blocks:out.blocks.map(b=>packingBlock({
-      lines:(b.lines?.length?b.lines:[{}]).map(l=>packingLine({desc:str(l.desc),pcs:str(l.pcs),kgs:str(l.kgs)})),
+      lines:kgFix((b.lines?.length?b.lines:[{}]).map(l=>({desc:sentence(str(l.desc)),pcs:str(l.pcs),kgs:str(l.kgs)})),b.net).map(l=>packingLine(l)),
       net:str(b.net),gross:str(b.gross),packing:str(b.packing)||"GUNNY BAGS",bags:mode==="bulk"?str(b.bags)||"1":"1",dest:str(b.dest),
     })),
   };
@@ -15740,6 +15757,9 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
             </div>
           ):(
             <div style={{marginBottom:8}}>
+              <div style={{display:"grid",gridTemplateColumns:mob?"1fr 60px 60px 26px":"1fr 110px 110px 30px",gap:8,marginBottom:3}}>
+                <div style={lbl}>Description</div><div style={lbl}>Pcs</div><div style={lbl}>Kgs</div><div/>
+              </div>
               {(b.lines||[]).map((l,li)=>(
                 <div key={l.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 60px 60px 26px":"1fr 110px 110px 30px",gap:8,marginBottom:6}}>
                   <input list="pl-desc-list" value={l.desc} placeholder="RHODONITE BOWL 2”" onChange={e=>setLine(i,li,{desc:e.target.value})} style={inp}/>
