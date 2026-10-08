@@ -357,7 +357,16 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
           <div key={b.id} style={{ ...card, padding: mob() ? 12 : "12px 16px" }}>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
               <div style={{ flex: 1, minWidth: 200 }}>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{b.company || b.name || b.email} {b.company && b.name && <span style={{ color: C.inkFaint, fontWeight: 400 }}>· {b.name}</span>}</div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{b.company || b.name || b.email} {b.company && b.name && <span style={{ color: C.inkFaint, fontWeight: 400 }}>· {b.name}</span>}
+                  {/* The name their set-up page and emails greet them by ("Welcome, Mountain"). */}
+                  <button title="Change the buyer's name and company" onClick={() => {
+                    const name = window.prompt("Buyer's name (their set-up page and emails greet them by it)", b.name || "");
+                    if (name === null) return;
+                    const company = window.prompt("Company (optional)", b.company || "");
+                    if (company === null) return;
+                    patch(b.id, { name: name.trim(), company: company.trim() }).then(() => showToast("✓ Saved"));
+                  }} style={{ marginLeft: 6, background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12, color: C.inkFaint, fontWeight: 500 }}>✎ name</button>
+                </div>
                 <div style={{ fontSize: 12, color: C.inkMid }}>{[b.email, b.phone, [b.city, b.state, b.country].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</div>
                 <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>
                   {b.shopify_id ? "From Shopify" : `Applied ${fmtDate(b.created_at)}`}
