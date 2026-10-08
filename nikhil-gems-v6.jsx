@@ -15474,7 +15474,20 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
   const head=packHeaderMode(pl,company);
   const art=letterheadForCompany(company), mark=letterheadMarkForCompany(company);
 
+  /* Signed and stamped on every page: the stamp sits in a table footer, which
+     the browser repeats at the foot of each printed page (and puts once under
+     the list on the last). A loose sheet of a multi-page list still carries
+     the signature. */
+  const sign=sigSrc
+    // The stamp is a scan that already reads "For <company> / Authorized
+    // Signatory", so setting the same words around it prints them twice.
+    ?`<img src="${sigSrc}" style="height:80px;max-width:220px;object-fit:contain"/>`
+    :`<div style="font-size:9px;letter-spacing:1px;font-weight:700;margin-bottom:2px">FOR ${esc(co.name).toUpperCase()}</div>
+      <div style="font-size:10px;margin-top:26px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>`;
   return `
+  <table class="page-table" style="font-family:Arial,Helvetica,sans-serif"><tfoot style="display:table-footer-group"><tr><td>
+    <div class="sig-block" style="padding:${PL_PT(10)}px ${PL.margin}px 0">${sign}</div>
+  </td></tr></tfoot><tbody><tr><td>
   <div style="font-family:Arial,Helvetica,sans-serif;position:relative">
   ${head==="paper"&&mark
     // Fixed from the top of the sheet rather than a share of the content, so a
@@ -15503,17 +15516,10 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
         <div>Total Gross Weight: ${packWeight(tot.gross)} KGS</div>
       </div>
     </div>
-    <div class="sig-block" style="margin-top:${PL_PT(26)}px">
-      ${sigSrc
-        // The stamp is a scan that already reads "For <company> / Authorized
-        // Signatory", so setting the same words around it prints them twice.
-        ?`<img src="${sigSrc}" style="height:80px;max-width:220px;object-fit:contain"/>`
-        :`<div style="font-size:9px;letter-spacing:1px;font-weight:700;margin-bottom:2px">FOR ${esc(co.name).toUpperCase()}</div>
-          <div style="font-size:10px;margin-top:26px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>`}
-    </div>
   </div>
   </div>
-  </div>`;
+  </div>
+  </td></tr></tbody></table>`;
 }
 
 /* Fill a packing list from the sheet it was written in. Lists are usually
