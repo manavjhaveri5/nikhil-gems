@@ -15516,6 +15516,55 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
   </div>`;
 }
 
+/* Fill a packing list from the sheet it was written in. Lists are usually
+   kept in Google Sheets (downloaded as .xlsx/.csv) or arrive as a PDF or a
+   photo, each laid out its own way, so the AI reads the file and maps it onto
+   cartons; the reconciliation against the invoice then shows anything that
+   didn't come across. Descriptions are matched to the invoice's own wording
+   so the two line up. */
+async function importPackingFile(file,inv){
+  const name=file.name||"file",low=name.toLowerCase();
+  const b64=async f=>{const buf=new Uint8Array(await f.arrayBuffer());let s="";for(let i=0;i<buf.length;i+=0x8000)s+=String.fromCharCode(...buf.subarray(i,i+0x8000));return btoa(s);};
+  let part;
+  if(/\.(xlsx|xls|csv|tsv|ods)$/.test(low)){
+    const XLSX=await import("xlsx");
+    const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});
+    const text=wb.SheetNames.map(n=>`### Sheet: ${n}\n${XLSX.utils.sheet_to_csv(wb.Sheets[n],{blankrows:false})}`).join("\n\n").slice(0,60000);
+    part={type:"text",text:`The packing list, from the spreadsheet "${name}":\n${text}`};
+  }else if(/\.pdf$/.test(low)||file.type==="application/pdf"){
+    part={type:"document",source:{media_type:"application/pdf",data:await b64(file),filename:name}};
+  }else if(/^image\//.test(file.type)){
+    part={type:"image",source:{media_type:file.type,data:await b64(file)}};
+  }else throw new Error("Use a spreadsheet (.xlsx, .csv), a PDF or a photo");
+  const descs=[...new Set((inv.items||[]).map(packItemDesc).filter(Boolean))];
+  const prompt=`Turn this packing list into JSON for our packing list builder.
+
+Two layouts:
+- "detailed": one block per carton/box/package, each with its stones: [{desc, pcs, kgs}], plus that carton's net and gross weight in kg.
+- "bulk": one block per run of identical bags/packages of one stone: lines:[{desc}], bags (how many packages in the run), packing (e.g. GUNNY BAGS, CARTON BOX), dest (destination port/city if written), net and gross = TOTAL kg for the whole run.
+Pick the layout the sheet uses. Keep package order. If the sheet shows mark numbers (e.g. N.G.-296), set prefix ("N.G.") and start_at (the first number).
+
+Descriptions: when a line is the same goods as one of these invoice descriptions, use the invoice wording exactly: ${JSON.stringify(descs)}. Otherwise keep the sheet's wording.
+Numbers as plain numbers (no units). Leave a field "" if the sheet doesn't give it; never invent weights or counts. Skip total/summary rows.
+
+Reply with JSON only: {"mode":"detailed"|"bulk","prefix":"","start_at":"","blocks":[{"lines":[{"desc":"","pcs":"","kgs":""}],"net":"","gross":"","packing":"","bags":"","dest":""}]}`;
+  const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-4.1",max_tokens:8000,messages:[{role:"user",content:[part,{type:"text",text:prompt}]}]})});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error?.message||`HTTP ${r.status}`);
+  const m=String(d.content?.find(x=>x.type==="text")?.text||"").match(/\{[\s\S]*\}/);
+  const out=m?JSON.parse(m[0]):null;
+  if(!out?.blocks?.length)throw new Error("No packages found in that file");
+  const str=v=>v==null?"":String(v).trim();
+  const mode=out.mode==="bulk"?"bulk":"detailed";
+  return{
+    mode,prefix:str(out.prefix),startAt:parseInt(out.start_at,10)||0,
+    blocks:out.blocks.map(b=>packingBlock({
+      lines:(b.lines?.length?b.lines:[{}]).map(l=>packingLine({desc:str(l.desc),pcs:str(l.pcs),kgs:str(l.kgs)})),
+      net:str(b.net),gross:str(b.gross),packing:str(b.packing)||"GUNNY BAGS",bags:mode==="bulk"?str(b.bags)||"1":"1",dest:str(b.dest),
+    })),
+  };
+}
+
 function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
   const saved=inv.packingList;
   const [pl,setPl]=useState(()=>({
@@ -15527,6 +15576,20 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
     blocks:(saved?.blocks?.length?saved.blocks:seedPackingBlocks(inv,saved?.mode||"detailed")),
   }));
   const [saving,setSaving]=useState(false);
+  const [importing,setImporting]=useState("");
+  const importRef=useRef(null);
+  const importFile=async file=>{
+    if(!file)return;
+    const has=pl.blocks.some(b=>packNum(b.net)||packNum(b.gross)||(b.lines||[]).some(l=>packNum(l.pcs)||packNum(l.kgs)));
+    if(has&&!confirm(`Replace the cartons here with the ones in "${file.name}"?`))return;
+    setImporting(file.name);
+    try{
+      const got=await importPackingFile(file,inv);
+      setPl(p=>({...p,mode:got.mode,blocks:got.blocks,...(got.prefix?{prefix:got.prefix}:{}),...(got.startAt?{startAt:got.startAt}:{})}));
+      showToast?.(`Filled ${got.blocks.length} ${got.mode==="bulk"?"bag run":"carton"}${got.blocks.length>1?"s":""} from ${file.name} — check them against the sheet, then save`);
+    }catch(e){showToast?.("Couldn't read that file: "+(e?.message||e));}
+    setImporting("");
+  };
   const set=(k,v)=>setPl(p=>({...p,[k]:v}));
   const setBlock=(i,patch)=>setPl(p=>{const blocks=[...p.blocks];blocks[i]={...blocks[i],...patch};return{...p,blocks};});
   const setLine=(bi,li,patch)=>setPl(p=>{
@@ -15574,6 +15637,14 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
           <button className="bs" onClick={doPrint}>👁 Print preview</button>
           <button className="bp" disabled={saving} onClick={()=>doSave(true)}>🖨 Save & Print</button>
         </div>
+      </div>
+
+      {/* Fill from the sheet the list was written in */}
+      <div style={{...box,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",borderStyle:"dashed"}}
+        onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();importFile(e.dataTransfer.files?.[0]);}}>
+        <input ref={importRef} type="file" accept=".xlsx,.xls,.csv,.tsv,.ods,.pdf,image/*" style={{display:"none"}} onChange={e=>{importFile(e.target.files?.[0]);e.target.value="";}}/>
+        <button className="bp" disabled={!!importing} onClick={()=>importRef.current?.click()}>{importing?`Reading ${importing}…`:"📄 Fill from sheet / PDF"}</button>
+        <span style={{fontSize:11,color:C.inkFaint}}>Upload or drop the packing list — Google Sheet downloaded as .xlsx or .csv, a PDF, or a photo. Cartons, stones, pieces and weights are filled in; the check below shows anything that doesn't match the invoice.</span>
       </div>
 
       {/* Settings */}
