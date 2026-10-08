@@ -5238,10 +5238,14 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     return true;
   };
   const dateFilteredOrders = (orders || []).filter(dateMatches);
-  const filtered = dateFilteredOrders
+  // "Due soon": overdue or due within 3 days, whatever month the order came in.
+  const DUE_SOON_DAYS = 3;
+  const dueSoon = o => !isCancelled(o) && !isShipped(o) && shipByDays(o) != null && shipByDays(o) <= DUE_SOON_DAYS;
+  const filtered = (shipFilter === "due" ? (orders || []) : dateFilteredOrders)
     .filter(o => pFilter === "all" || o.platform === pFilter)
     .filter(o => {
       if (shipFilter === "all") return true;
+      if (shipFilter === "due") return dueSoon(o);
       if (shipFilter === "cancelled") return isCancelled(o);
       if (isCancelled(o)) return false; // cancelled orders only show under All / Cancelled
       return shipFilter === "shipped" ? isShipped(o) : !isShipped(o);
@@ -5251,7 +5255,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
       o.listing_sku, o.buyer_country, o.ship_address1, o.ship_city, o.ship_postcode,
     ]
       .join(" ").toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => new Date(b.created_at || b.date) - new Date(a.created_at || a.date));
+    .sort((a, b) => shipFilter === "due" ? shipByDays(a) - shipByDays(b) : new Date(b.created_at || b.date) - new Date(a.created_at || a.date));
 
   /* One Etsy receipt = one parcel to one buyer, but it arrives as a row per line
      item. Group those under a single header (combined value, overall progress) so
@@ -5315,6 +5319,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const SHIP_OPTS = [
     { key:"all", label:"All", n:dateFilteredOrders.length, color:C.ink, bg:C.card },
     { key:"unshipped", label:"Unshipped", n:unshippedCount, color:C.amber, bg:C.amberBg },
+    { key:"due", label:"Due soon", n:new Set((orders || []).filter(dueSoon).map(o => etsyReceiptId(o) || o.id)).size, color:C.red, bg:C.redBg },
     { key:"shipped", label:"Shipped", n:shippedCount, color:C.green, bg:C.greenBg },
     ...(cancelledCount ? [{ key:"cancelled", label:"Cancelled", n:cancelledCount, color:C.red, bg:C.redBg }] : []),
   ];
@@ -5589,14 +5594,16 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
         const due = new Map();
         for (const o of orders || []) { const d = shipByDays(o); if (d == null) continue; const k = etsyReceiptId(o) || o.id; if (!due.has(k) || d < due.get(k).d) due.set(k, { d, o }); }
         const list = [...due.values()];
-        const overdue = list.filter(x => x.d < 0), today = list.filter(x => x.d === 0), tomorrow = list.filter(x => x.d === 1);
-        if (!overdue.length && !today.length && !tomorrow.length) return null;
+        const overdue = list.filter(x => x.d < 0), today = list.filter(x => x.d === 0), tomorrow = list.filter(x => x.d === 1), soon = list.filter(x => x.d > 1 && x.d <= 3);
+        if (!overdue.length && !today.length && !tomorrow.length && !soon.length) return null;
         const names = xs => xs.sort((a, b) => a.d - b.d).slice(0, 4).map(x => x.o.buyer_name || `#${etsyReceiptId(x.o)}`).join(", ") + (xs.length > 4 ? ` +${xs.length - 4}` : "");
         return (
           <div style={{ marginBottom: 10, background: overdue.length ? "#fde8e6" : "#fff3dc", border: `1px solid ${overdue.length ? "#b4231840" : "#9a5b0040"}`, borderRadius: 9, padding: "9px 12px", fontSize: 12.5, color: C.ink, display: "grid", gap: 3 }}>
             {overdue.length > 0 && <div><b style={{ color: "#b42318" }}>{overdue.length} overdue</b> — past Etsy's ship-by date: {names(overdue)}</div>}
             {today.length > 0 && <div><b style={{ color: "#9a5b00" }}>{today.length} to ship today</b> — {names(today)}</div>}
             {tomorrow.length > 0 && <div><b style={{ color: "#9a5b00" }}>{tomorrow.length} to ship tomorrow</b> — {names(tomorrow)}</div>}
+            {soon.length > 0 && <div><b style={{ color: "#9a5b00" }}>{soon.length} become overdue in 2–3 days</b> — {names(soon)}</div>}
+            {shipFilter !== "due" && <button onClick={() => setShipFilter("due")} style={{ justifySelf: "start", marginTop: 3, background: "none", border: "none", padding: 0, color: C.ink, fontSize: 12, fontWeight: 800, textDecoration: "underline", cursor: "pointer" }}>Show these orders, earliest deadline first</button>}
           </div>
         );
       })()}
@@ -5605,8 +5612,8 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
       {filtered.length === 0 ? (
         <div style={{ textAlign: "center", padding: "60px 0", color: C.inkFaint }}>
           <div style={{ fontSize: 36, marginBottom: 10 }}>📦</div>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>No orders yet</div>
-          <div style={{ fontSize: 12 }}>Use "Mark Sold" on any live listing to record a sale here.</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{shipFilter === "due" ? "Nothing due in the next 3 days" : "No orders yet"}</div>
+          <div style={{ fontSize: 12 }}>{shipFilter === "due" ? "Unshipped Etsy orders show here before their ship-by date passes." : 'Use "Mark Sold" on any live listing to record a sale here.'}</div>
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

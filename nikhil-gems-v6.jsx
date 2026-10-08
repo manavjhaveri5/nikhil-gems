@@ -14605,7 +14605,7 @@ Reply with JSON only: {"risks":[{"category":"Restricted export"|"HSN"|"GST"|"Spe
 
 const BEACH_SAND=["garnet","ilmenite","rutile","zircon","monazite","sillimanite","leucoxene"];
 const CONTROLLED=["coral","ivory","shell","bone","fossil","meteorite","amber","antique","radioactive","uranium","thorium"];
-const STONE_WORDS=["agate","amethyst","apophyllite","aquamarine","aventurine","calcite","carnelian","chalcedony","chrysocolla","citrine","fluorite","garnet","hematite","jasper","kyanite","labradorite","lapis","malachite","moonstone","obsidian","onyx","pyrite","quartz","rhodochrosite","rose quartz","ruby","sapphire","selenite","sodalite","stilbite","sunstone","tiger","tourmaline","zircon"];
+const STONE_WORDS=["alexandrite","beryl","chrysoberyl","prehnite","tanzanite","agate","amethyst","apophyllite","aquamarine","aventurine","calcite","carnelian","chalcedony","chrysocolla","citrine","fluorite","garnet","hematite","jasper","kyanite","labradorite","lapis","malachite","moonstone","obsidian","onyx","pyrite","quartz","rhodochrosite","rose quartz","ruby","sapphire","selenite","sodalite","stilbite","sunstone","tiger","tourmaline","zircon"];
 // Misspellings seen on, or likely on, our invoices: wrong → right.
 const MISSPELT={flourite:"fluorite",flurite:"fluorite",amethist:"amethyst",amythest:"amethyst",amethest:"amethyst",rhodocrosite:"rhodochrosite",rhodochrosit:"rhodochrosite",calcide:"calcite",carnelion:"carnelian",chrysocola:"chrysocolla",malacite:"malachite",sodalight:"sodalite",apophylite:"apophyllite",appophyllite:"apophyllite",selinite:"selenite",pyrete:"pyrite",garnate:"garnet",quarts:"quartz",quatrz:"quartz",labradorit:"labradorite",chalcedoney:"chalcedony",aquamarin:"aquamarine",tourmalin:"tourmaline",specimin:"specimen",speciman:"specimen",specimans:"specimens",intergated:"integrated",integarted:"integrated",intergrated:"integrated",undertakng:"undertaking",undertacking:"undertaking",payement:"payment",recieved:"received",seperate:"separate",consignement:"consignment",shippment:"shipment",semi_precious:"semi-precious"};
 const stonesIn=t=>{const s=String(t||"").toLowerCase();return STONE_WORDS.filter(w=>new RegExp(`\\b${w}`).test(s)).filter((w,_,a)=>!(w==="quartz"&&a.includes("rose quartz")));};
@@ -14620,6 +14620,33 @@ const gstinValid=g=>{
 };
 const ARTICLE=/\b(carving|carved|sphere|ball|bowl|figurine|statue|idol|skull|tower|point|pendant|palm ?stone|worry stone|heart|egg|pyramid|bracelet|necklace|jewell?ery)s?\b/;
 const LOOSE=/\b(rough|raw|sawn|specimen|cluster|geode|unworked|tumble[ds]?)\b/;
+/* Exact Indian tariff lines (ITC-HS 8-digit), from GJEPC's Chapter 71 list.
+   [unworked, worked] per stone that has a line of its own; stones without
+   one fall under the group's "others" line and are left to the AI and CHA. */
+const HSN_EXACT={
+  "garnet":["71031051","71039931"],"lapis":["71031052","71039932"],
+  "ruby":["71031041","71039110"],"sapphire":["71031042","71039120"],"moonstone":["71031043","71039921"],
+  "prehnite":["71031061","71039941"],"agate":["71031062","71039942"],"aventurine":["71031063","71039943"],"chalcedony":["71031064","71039944"],
+  "tourmaline":["71031071","71039951"],"tanzanite":["71031072","71039952"],
+  "beryl":["71031032","71039911"],"chrysoberyl":["71031033","71039912"],"alexandrite":["71031034","71039913"],
+};
+const HSN_ARTICLE="71162000"; // articles of precious or semi-precious stones
+// What a 7103/7116 line covers, to say what a wrong code actually means.
+const HSN_NAME={"71031032":"unworked yellow/golden/pink/red/green beryl","71031033":"unworked chrysoberyl","71031034":"unworked alexandrite","71031039":"other unworked beryl/chrysoberyl","71031041":"unworked ruby","71031042":"unworked sapphire","71031043":"unworked moonstone","71031049":"other unworked ruby/sapphire/moonstone group","71031051":"unworked garnet","71031052":"unworked lapis lazuli","71031059":"other unworked garnet/lapis group","71031061":"unworked prehnite","71031062":"unworked agate","71031063":"unworked aventurine","71031064":"unworked chalcedony","71031069":"other unworked agate/chalcedony group","71031071":"unworked tourmaline","71031072":"unworked tanzanite","71031079":"other unworked tourmaline/tanzanite group","71031090":"other unworked semi-precious stones","71039110":"worked ruby","71039120":"worked sapphire","71039130":"worked emerald","71039911":"worked beryl","71039912":"worked chrysoberyl","71039913":"worked alexandrite","71039919":"other worked beryl group","71039921":"worked moonstone","71039929":"other worked moonstone group","71039931":"worked garnet","71039932":"worked lapis lazuli","71039939":"other worked garnet/lapis group","71039941":"worked prehnite","71039942":"worked agate","71039943":"worked aventurine","71039944":"worked chalcedony","71039949":"other worked agate/chalcedony group","71039951":"worked tourmaline","71039952":"worked tanzanite","71039959":"other worked tourmaline group","71039990":"other worked semi-precious stones","71162000":"articles of precious or semi-precious stones","25061010":"quartz in lumps","25061020":"quartz in powder","25132030":"natural garnet (beach sand mineral heading)"};
+const WORKED=/\b(polished|cut|faceted|cabochons?|beads?|tumbled|tumble|shaped|carved)\b/;
+// The exact line(s) a stone line should carry, or null when there's no single answer.
+const expectedHsn=(stone,text)=>{
+  const t=String(text).toLowerCase();
+  const article=ARTICLE.test(t);
+  if(stone==="quartz"&&!article)return{codes:["25061010","25061020"],prefixes:["7103"],why:"quartz is 2506 10 as a mineral (25061010 lumps, 25061020 powder), or 7103 as gem material"};
+  if(stone==="kyanite"&&!article)return{codes:[],prefixes:["250850","7103"],why:"kyanite is 2508 50 as a mineral, or 7103 as gem material"};
+  const row=HSN_EXACT[stone==="lapis"?"lapis":stone];
+  if(!row)return null;
+  if(article)return{codes:[HSN_ARTICLE],prefixes:[],why:`${/^[aeiou]/.test(stone)?"an":"a"} ${stone} ${t.match(ARTICLE)[0]} is an article: ${HSN_ARTICLE}`};
+  if(WORKED.test(t))return{codes:[row[1]],prefixes:[],why:`worked ${stone} is ${row[1]}`};
+  if(LOOSE.test(t))return{codes:[row[0]],prefixes:[],why:`unworked ${stone} is ${row[0]}`};
+  return{codes:row,prefixes:[],why:`${stone} is ${row[0]} unworked or ${row[1]} worked`};
+};
 // The fixed rules, no AI. Each is { category, where, risk, fix }.
 function invoiceRuleChecks(draft,invoices=[],company){
   const out=[],add=(category,where,risk,fix)=>out.push({category,where,risk,fix});
@@ -14636,8 +14663,12 @@ function invoiceRuleChecks(draft,invoices=[],company){
     else if(hsn.length!==8)add("HSN",where,`HSN ${it.hsn} is ${hsn.length} digits; export documents need the 8-digit ITC-HS code.`,"Use the full 8-digit tariff line.");
     if(hsn.length>=2&&(stonesIn(all).length||/\b(stone|mineral|crystal|gem|specimen)/.test(all))&&!["25","26","68","71","96","97"].includes(hsn.slice(0,2)))
       add("HSN",where,`Chapter ${hsn.slice(0,2)} doesn't cover natural stones or minerals.`,"Use the stone's heading (usually 7103, 7116 for articles, 9705 for specimens/collections).");
-    if(/^7103/.test(hsn)&&ARTICLE.test(all))add("HSN",where,`"${all.match(ARTICLE)[0]}" is a finished article; 7103 is for the stones themselves.`,"Check with the CHA whether 7116 (articles of precious/semi-precious stones) applies.");
-    if(/^7116/.test(hsn)&&LOOSE.test(all)&&!ARTICLE.test(all))add("HSN",where,`"${all.match(LOOSE)[0]}" describes loose stone, but 7116 is for articles.`,"Check whether 7103 is the right heading.");
+    // The exact tariff line for the stone named.
+    const main=stonesIn(all)[0];
+    const exp=main&&hsn.length===8?expectedHsn(main,all):null;
+    if(exp&&!exp.codes.includes(hsn)&&!exp.prefixes.some(p=>hsn.startsWith(p)))
+      add("HSN",where,`${it.hsn}${HSN_NAME[hsn]?` is "${HSN_NAME[hsn]}"`:""} — ${exp.why}.`,exp.codes.length===1?`Use ${exp.codes[0]}.`:`Use ${[...exp.codes,...exp.prefixes.map(p=>p+"…")].join(" or ")}, as your CHA confirms.`);
+    else if(!main&&/^7103/.test(hsn)&&ARTICLE.test(all))add("HSN",where,`"${all.match(ARTICLE)[0]}" is a finished article; 7103 is for the stones themselves.`,`Use ${HSN_ARTICLE} (articles of precious/semi-precious stones).`);
     if(!descs.length)add("Other legal",where,"No description.","Describe the goods: stone, natural, and form (rough/sawn/polished/carved).");
     const named=descs.map(stonesIn).filter(x=>x.length);
     const distinct=[...new Set(named.flat())];
@@ -14647,7 +14678,7 @@ function invoiceRuleChecks(draft,invoices=[],company){
     const sand=BEACH_SAND.find(w=>new RegExp(`\\b${w}`).test(all));
     if(sand){
       if(/^(25|26)/.test(hsn))add("Restricted export",where,`${cap1(sand)} under Chapter ${hsn.slice(0,2)} is a beach sand mineral heading, exportable only through IREL.`,"If this is lapidary stone, classify it under 7103 (7116 for articles) and describe it that way.");
-      else add("Restricted export",where,`${cap1(sand)} is also a beach sand mineral: an examiner can move it to Chapter 25/26, which only IREL may export.`,`Describe it as "Natural ${sand}, semi-precious stone, <actual form>", lapidary grade, under the 7103 line your CHA confirms.`);
+      else add("Restricted export",where,`${cap1(sand)} is also a beach sand mineral: an examiner can move it to Chapter 25/26, which only IREL may export.`,`Describe it as "Natural ${sand}, semi-precious stone, <actual form>", lapidary grade${HSN_EXACT[sand]?`, under ${HSN_EXACT[sand][0]} (unworked) or ${HSN_EXACT[sand][1]} (worked)`:", under the 7103 line your CHA confirms"}.`);
     }
     const ctl=CONTROLLED.find(w=>new RegExp(`\\b${w}`).test(all));
     if(ctl)add("Restricted export",where,`${cap1(ctl)} can be a controlled export (CITES, wildlife, antiquities or atomic minerals rules).`,"Confirm with the CHA whether a permit or certificate is needed before shipping.");
