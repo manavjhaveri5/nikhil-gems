@@ -14592,67 +14592,94 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
    rules (no AI) and by the AI against Indian export law. The answer is flat:
    the risks, each with its fix, or "All clear". It changes nothing on the
    invoice itself. */
-const LEGAL_RULES=`You are checking an Indian export invoice (natural stones, minerals, gems, carvings) for LEGAL RISK before it goes to customs: anything that could get the shipment questioned, held, reclassified, refused, or the exporter penalised. Think like the customs examiner at the port, the CHA and a GST auditor.
+const LEGAL_RULES=`You are checking an Indian export invoice (natural stones, minerals, gems, carvings) for LEGAL RISK before it goes to customs: anything that could get the shipment questioned, held, reclassified or refused, or the exporter penalised. Think like the customs examiner at the port, the CHA and a GST auditor. Check every category below and report every risk you find:
 
-Check, where they apply:
-- Classification: is the HSN the heading customs would choose for these goods as described? Consider every heading an examiner could propose instead (e.g. Chapter 25/26 minerals and ores, 7103 vs 7104 vs 7116 vs 7117, 6802 worked stone, 9705 collections/specimens). If an alternative heading is Prohibited, Restricted or canalised (STE) under ITC-HS Schedule 2 export policy — e.g. beach sand minerals (garnet, ilmenite, rutile, zircon, monazite, sillimanite, leucoxene) only through IREL — say so, and say what wording keeps the goods clearly in the right heading. Past failure, as an example of the kind of thing to catch: garnet under 71031039 described "agate stone, sawn – Garnet"; the examiner proposed 25132030 (IREL only).
-- Description: names what the goods actually are (stone, natural/synthetic, form: rough/sawn/tumbled/polished/carved), the same in every field, and concedes nothing that points to a riskier heading (sand, grit, abrasive, powder, industrial, ore).
-- Controlled goods: CITES or wildlife materials (coral, shell, ivory, bone, amber with inclusions), fossils, meteorites, antiquities, radioactive or rare-earth minerals, anything needing a licence or certificate.
-- ITC-HS codes are 8 digits; unit fits the heading's UQC; quantity × rate = amount; subtotal + freight − discount = grand total.
-- CGST Rule 46 contents: supplier name, address, GSTIN; invoice number (≤16 characters) and date; recipient and consignee with address and country; HSN; description; quantity and unit; value; tax rate; place of supply.
-- Export under LUT: IGST 0% on every line, the endorsement "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)" spelt correctly, and the LUT ARN.
-- Exporter IEC, currency, ports of loading and discharge, country of origin.
+1. "Restricted export": is the export of these goods Prohibited, Restricted or canalised (STE) under ITC-HS Schedule 2 export policy, or does it need a licence, permit or certificate? Consider the heading actually used AND every heading an examiner could propose instead. E.g. beach sand minerals (garnet, ilmenite, rutile, zircon, monazite, sillimanite, leucoxene) only through IREL; CITES and wildlife material (coral, shell, ivory, bone); fossils, meteorites, antiquities; atomic or rare-earth minerals. Past failure, as one example of what to catch: garnet under 71031039 described "agate stone, sawn – Garnet"; the examiner proposed 25132030 (IREL only).
+2. "HSN": is each 8-digit ITC-HS code the correct one for the goods as described? Unworked/rough/sawn stones vs worked stones (7103 subheadings), articles such as carvings, spheres, bowls, figurines (7116), specimens and collections (9705), worked building/monumental stone (6802), minerals (Chapter 25/26). Code and description must agree; the unit must fit the heading's UQC.
+3. "GST": export under LUT needs IGST 0% on every line, the endorsement "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)" and the LUT ARN; export with payment of IGST needs the correct IGST rate for the HSN. Supplier GSTIN and state code, place of supply (outside India), and every CGST Rule 46 field: invoice number (≤16 characters) and date, recipient and consignee with address and country, HSN, description, quantity, unit, value, tax rate.
+4. "Spelling": every spelling mistake in any text on the invoice — descriptions, stone names, notes, terms, endorsement, ports, buyer and consignee details (do not flag correct foreign names). Quote the wrong word and give the correction.
+5. "Other legal": anything else that is a legal risk — descriptions that contradict each other or concede a riskier heading (sand, grit, abrasive, industrial, ore), maths that doesn't add up (qty × rate = amount; subtotal + freight − discount = grand total), missing IEC, currency, ports or country of origin, mismatched buyer/consignee details.
 
 Report only real risks found in the data. No style tips, no generic advice, no invented facts. A missing required field is a risk; say it is missing.
-Reply with JSON only: {"risks":[{"where":"short field or line name","risk":"what is wrong and why it is a legal risk, one sentence","fix":"exactly what to change, one sentence"}]}. An empty list means all clear.`;
+Reply with JSON only: {"risks":[{"category":"Restricted export"|"HSN"|"GST"|"Spelling"|"Other legal","where":"short field or line name","risk":"what is wrong and why it is a risk, one sentence","fix":"exactly what to change, one sentence"}]}. An empty list means all clear.`;
 
 const BEACH_SAND=["garnet","ilmenite","rutile","zircon","monazite","sillimanite","leucoxene"];
 const CONTROLLED=["coral","ivory","shell","bone","fossil","meteorite","amber","antique","radioactive","uranium","thorium"];
-const STONE_WORDS=["agate","amethyst","apophyllite","aquamarine","aventurine","calcite","carnelian","chalcedony","citrine","fluorite","garnet","hematite","jasper","kyanite","labradorite","lapis","malachite","moonstone","obsidian","onyx","pyrite","quartz","rhodochrosite","rose quartz","ruby","sapphire","selenite","sodalite","stilbite","sunstone","tiger","tourmaline","zircon"];
+const STONE_WORDS=["agate","amethyst","apophyllite","aquamarine","aventurine","calcite","carnelian","chalcedony","chrysocolla","citrine","fluorite","garnet","hematite","jasper","kyanite","labradorite","lapis","malachite","moonstone","obsidian","onyx","pyrite","quartz","rhodochrosite","rose quartz","ruby","sapphire","selenite","sodalite","stilbite","sunstone","tiger","tourmaline","zircon"];
+// Misspellings seen on, or likely on, our invoices: wrong → right.
+const MISSPELT={flourite:"fluorite",flurite:"fluorite",amethist:"amethyst",amythest:"amethyst",amethest:"amethyst",rhodocrosite:"rhodochrosite",rhodochrosit:"rhodochrosite",calcide:"calcite",carnelion:"carnelian",chrysocola:"chrysocolla",malacite:"malachite",sodalight:"sodalite",apophylite:"apophyllite",appophyllite:"apophyllite",selinite:"selenite",pyrete:"pyrite",garnate:"garnet",quarts:"quartz",quatrz:"quartz",labradorit:"labradorite",chalcedoney:"chalcedony",aquamarin:"aquamarine",tourmalin:"tourmaline",specimin:"specimen",speciman:"specimen",specimans:"specimens",intergated:"integrated",integarted:"integrated",intergrated:"integrated",undertakng:"undertaking",undertacking:"undertaking",payement:"payment",recieved:"received",seperate:"separate",consignement:"consignment",shippment:"shipment",semi_precious:"semi-precious"};
 const stonesIn=t=>{const s=String(t||"").toLowerCase();return STONE_WORDS.filter(w=>new RegExp(`\\b${w}`).test(s)).filter((w,_,a)=>!(w==="quartz"&&a.includes("rose quartz")));};
 const cap1=w=>w[0].toUpperCase()+w.slice(1);
-// The fixed rules, no AI. Each is { where, risk, fix }.
+// GSTIN: 15 characters, state code, PAN, entity, Z, and a mod-36 check character.
+const gstinValid=g=>{
+  const v=String(g||"").toUpperCase();
+  if(!/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(v))return false;
+  const cs="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";let sum=0;
+  for(let i=0;i<14;i++){const p=cs.indexOf(v[i])*(i%2?2:1);sum+=Math.floor(p/36)+p%36;}
+  return cs[(36-sum%36)%36]===v[14];
+};
+const ARTICLE=/\b(carving|carved|sphere|ball|bowl|figurine|statue|idol|skull|tower|point|pendant|palm ?stone|worry stone|heart|egg|pyramid|bracelet|necklace|jewell?ery)s?\b/;
+const LOOSE=/\b(rough|raw|sawn|specimen|cluster|geode|unworked|tumble[ds]?)\b/;
+// The fixed rules, no AI. Each is { category, where, risk, fix }.
 function invoiceRuleChecks(draft,invoices=[],company){
-  const out=[],add=(where,risk,fix)=>out.push({where,risk,fix});
+  const out=[],add=(category,where,risk,fix)=>out.push({category,where,risk,fix});
+  const co=companyProfileFromKey(company);
   const items=draft.items||[];
   items.forEach((it,i)=>{
     const where=`Line ${i+1}`;
-    const descs=[it.desc,it.customDesc,it.acctDesc].filter(Boolean);
+    // Read with known misspellings corrected, so "amethist" still counts as amethyst.
+    const descs=[it.desc,it.customDesc,it.acctDesc].filter(Boolean).map(t=>String(t).replace(/[a-z_]+/gi,w=>MISSPELT[w.toLowerCase()]||w));
     const all=descs.join(" · ").toLowerCase();
     const hsn=String(it.hsn||"").replace(/\D/g,"");
-    if(!hsn)add(where,"No HSN code.","Add the 8-digit ITC-HS code.");
-    else if(hsn.length!==8)add(where,`HSN ${it.hsn} is ${hsn.length} digits; export documents need the 8-digit ITC-HS code.`,"Use the full 8-digit tariff line.");
-    if(!descs.length)add(where,"No description.","Describe the goods: stone, natural, and form (rough/sawn/polished/carved).");
+    // HSN
+    if(!hsn)add("HSN",where,"No HSN code.","Add the 8-digit ITC-HS code.");
+    else if(hsn.length!==8)add("HSN",where,`HSN ${it.hsn} is ${hsn.length} digits; export documents need the 8-digit ITC-HS code.`,"Use the full 8-digit tariff line.");
+    if(hsn.length>=2&&(stonesIn(all).length||/\b(stone|mineral|crystal|gem|specimen)/.test(all))&&!["25","26","68","71","96","97"].includes(hsn.slice(0,2)))
+      add("HSN",where,`Chapter ${hsn.slice(0,2)} doesn't cover natural stones or minerals.`,"Use the stone's heading (usually 7103, 7116 for articles, 9705 for specimens/collections).");
+    if(/^7103/.test(hsn)&&ARTICLE.test(all))add("HSN",where,`"${all.match(ARTICLE)[0]}" is a finished article; 7103 is for the stones themselves.`,"Check with the CHA whether 7116 (articles of precious/semi-precious stones) applies.");
+    if(/^7116/.test(hsn)&&LOOSE.test(all)&&!ARTICLE.test(all))add("HSN",where,`"${all.match(LOOSE)[0]}" describes loose stone, but 7116 is for articles.`,"Check whether 7103 is the right heading.");
+    if(!descs.length)add("Other legal",where,"No description.","Describe the goods: stone, natural, and form (rough/sawn/polished/carved).");
     const named=descs.map(stonesIn).filter(x=>x.length);
     const distinct=[...new Set(named.flat())];
     if(named.length>1&&!named.every(x=>x.some(w=>named[0].includes(w))))
-      add(where,`The description fields name different stones (${distinct.join(", ")}); customs reads that as a misdeclaration.`,"Name the same stone in every description field.");
+      add("Other legal",where,`The description fields name different stones (${distinct.join(", ")}); customs reads that as a misdeclaration.`,"Name the same stone in every description field.");
+    // Restricted export
     const sand=BEACH_SAND.find(w=>new RegExp(`\\b${w}`).test(all));
     if(sand){
-      if(/^(25|26)/.test(hsn))add(where,`${cap1(sand)} under Chapter ${hsn.slice(0,2)} is a beach sand mineral heading, exportable only through IREL.`,"If this is lapidary stone, classify it under 7103 (7116 for articles) and describe it that way.");
-      else add(where,`${cap1(sand)} is also a beach sand mineral: an examiner can move it to Chapter 25/26, which only IREL may export.`,`Describe it as "Natural ${sand}, semi-precious stone, <actual form>", lapidary grade, under the 7103 line your CHA confirms.`);
+      if(/^(25|26)/.test(hsn))add("Restricted export",where,`${cap1(sand)} under Chapter ${hsn.slice(0,2)} is a beach sand mineral heading, exportable only through IREL.`,"If this is lapidary stone, classify it under 7103 (7116 for articles) and describe it that way.");
+      else add("Restricted export",where,`${cap1(sand)} is also a beach sand mineral: an examiner can move it to Chapter 25/26, which only IREL may export.`,`Describe it as "Natural ${sand}, semi-precious stone, <actual form>", lapidary grade, under the 7103 line your CHA confirms.`);
     }
-    const weak=all.match(/\b(sand|grit|abrasive|powder|industrial|ore)\b/);
-    if(weak&&(sand||/^71/.test(hsn)))add(where,`"${weak[1]}" in the description points customs to a mineral/industrial heading instead of ${hsn.slice(0,4)||"the one used"}.`,"Describe the actual lapidary form: rough, sawn, tumbled, polished, carved.");
     const ctl=CONTROLLED.find(w=>new RegExp(`\\b${w}`).test(all));
-    if(ctl)add(where,`${cap1(ctl)} can be a controlled export (CITES, wildlife, antiquities or atomic minerals rules).`,"Confirm with the CHA whether a permit or certificate is needed before shipping.");
-    if(+it.igst>0&&draft.type!=="domestic")add(where,`IGST is ${it.igst}% on an export invoice under LUT.`,"Set IGST to 0% for export under LUT.");
+    if(ctl)add("Restricted export",where,`${cap1(ctl)} can be a controlled export (CITES, wildlife, antiquities or atomic minerals rules).`,"Confirm with the CHA whether a permit or certificate is needed before shipping.");
+    const weak=all.match(/\b(sand|grit|abrasive|powder|industrial|ore)\b/);
+    if(weak&&(sand||/^71/.test(hsn)))add("Restricted export",where,`"${weak[1]}" in the description points customs to a mineral/industrial heading instead of ${hsn.slice(0,4)||"the one used"}.`,"Describe the actual lapidary form: rough, sawn, tumbled, polished, carved.");
+    // GST
+    if(+it.igst>0&&draft.type!=="domestic")add("GST",where,`IGST is ${it.igst}% on an export invoice under LUT.`,"Set IGST to 0% for export under LUT.");
+    // Other legal: maths
     const q=+it.qty,r=+it.rate,amt=+it.amt;
-    if(q&&r&&amt&&Math.abs(q*r-amt)>0.01*Math.max(1,amt))add(where,`Quantity × rate (${(q*r).toFixed(2)}) doesn't match the amount (${amt.toFixed(2)}).`,"Correct the rate or the amount so they agree.");
+    if(q&&r&&amt&&Math.abs(q*r-amt)>0.01*Math.max(1,amt))add("Other legal",where,`Quantity × rate (${(q*r).toFixed(2)}) doesn't match the amount (${amt.toFixed(2)}).`,"Correct the rate or the amount so they agree.");
+    // HSN consistency with past invoices
     const stone=distinct[0];
     if(stone&&hsn.length===8){
       const before=new Set();
       for(const inv of invoices){if(inv.id===draft.id||inv.cancelledAt)continue;for(const x of inv.items||[]){const h=String(x.hsn||"").replace(/\D/g,"");if(h.length===8&&stonesIn([x.desc,x.customDesc,x.acctDesc].join(" ")).includes(stone))before.add(h);}}
-      if(before.size&&!before.has(hsn))add(where,`Past ${stone} invoices used HSN ${[...before].slice(0,3).join(", ")}, not ${it.hsn}; an inconsistent code invites a classification query.`,"Use the same code as before unless your CHA has confirmed the change.");
+      if(before.size&&!before.has(hsn))add("HSN",where,`Past ${stone} invoices used HSN ${[...before].slice(0,3).join(", ")}, not ${it.hsn}; an inconsistent code invites a classification query.`,"Use the same code as before unless your CHA has confirmed the change.");
     }
   });
+  // GST: LUT, GSTIN
   const terms=`${draft.termsText||""} ${draft.notes||""}`;
   if(items.length&&items.every(it=>!(+it.igst))){
-    if(!/letter of undertaking|\bLUT\b/i.test(terms))add("Terms","No LUT endorsement on a 0% IGST export invoice.",`Add "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)".`);
-    if(!(draft.lutArn||companyProfileFromKey(company).lutArn))add("LUT ARN","No LUT ARN for an export under LUT.","Add the LUT ARN in Show advanced.");
+    if(!/letter of undertaking|\bLUT\b/i.test(terms))add("GST","Terms","No LUT endorsement on a 0% IGST export invoice.",`Add "Supply meant for export under Letter of Undertaking without payment of Integrated Tax (IGST)".`);
+    if(!(draft.lutArn||co.lutArn))add("GST","LUT ARN","No LUT ARN for an export under LUT.","Add the LUT ARN in Show advanced.");
   }
-  const typo=terms.match(/intergated|integarted|undertakng|payement/i);
-  if(typo)add("Terms",`The endorsement is misspelt ("${typo[0]}").`,"Correct the spelling; a wrong endorsement weakens the LUT claim.");
+  if(!gstinValid(co.gstin))add("GST","Seller GSTIN",`GSTIN ${co.gstin||"(missing)"} isn't a valid GSTIN.`,"Correct the GSTIN on the company profile.");
+  else if(co.stateCode&&co.gstin.slice(0,2)!==String(co.stateCode).padStart(2,"0"))add("GST","Seller GSTIN",`GSTIN state ${co.gstin.slice(0,2)} doesn't match state code ${co.stateCode}.`,"Correct the state code or the GSTIN.");
+  if(!/^[0-9A-Z]{10}$/i.test(String(co.iec||"")))add("Other legal","Seller IEC",`IEC ${co.iec||"(missing)"} isn't a 10-character IEC.`,"Correct the IEC on the company profile.");
+  if(String(draft.invNo||"").length>16)add("GST","Invoice No.",`"${draft.invNo}" is over 16 characters (CGST Rule 46).`,"Shorten the invoice number.");
+  // Spelling: words we know get misspelt, anywhere on the invoice.
+  const texts=[...items.flatMap((it,i)=>[[`Line ${i+1}`,it.desc],[`Line ${i+1}`,it.customDesc],[`Line ${i+1}`,it.acctDesc]]),["Terms",draft.termsText],["Notes",draft.notes],["Port of Discharge",draft.portDischarge],["Port of Lading",draft.portLading]];
+  const seen=new Set();
+  for(const [where,t] of texts){if(!t)continue;for(const w of String(t).toLowerCase().match(/[a-z_]+/g)||[]){const right=MISSPELT[w];if(right&&!seen.has(where+w)){seen.add(where+w);add("Spelling",where,`"${w}" is misspelt.`,`Write "${right}".`);}}}
   return out;
 }
 
@@ -14676,7 +14703,8 @@ async function invoiceAiRisks(draft,buyers,company){
   const m=String(d.content?.find(x=>x.type==="text")?.text||"").match(/\{[\s\S]*\}/);
   const out=m?JSON.parse(m[0]):null;
   if(!out||!Array.isArray(out.risks))throw new Error("The check's reply couldn't be read — run it again");
-  return out.risks.filter(x=>x&&x.risk);
+  const CATS=["Restricted export","HSN","GST","Spelling","Other legal"];
+  return out.risks.filter(x=>x&&x.risk).map(x=>({...x,category:CATS.includes(x.category)?x.category:"Other legal"}));
 }
 
 function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
@@ -14693,7 +14721,8 @@ function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
     catch(e){setRes({rules,error:e.message||String(e)});}
     setCheckedSig(sig);setBusy(false);
   };
-  const risks=fresh?[...res.rules,...(res.risks||[])]:[];
+  const CAT_ORDER=["Restricted export","HSN","GST","Spelling","Other legal"];
+  const risks=(fresh?[...res.rules,...(res.risks||[])]:[]).map((x,i)=>({...x,i})).sort((a,b)=>CAT_ORDER.indexOf(a.category)-CAT_ORDER.indexOf(b.category)||a.i-b.i);
   const allClear=fresh&&res.risks&&risks.length===0;
   return(
     <div style={{background:C.surface,border:`1px solid ${allClear?C.green:risks.length?C.red:C.border}`,borderRadius:8,padding:"14px 17px",marginTop:13}}>
@@ -14704,13 +14733,13 @@ function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
         </button>
         {allClear?<b style={{fontSize:13,color:C.green}}>✓ All clear</b>
           :risks.length?<b style={{fontSize:13,color:C.red}}>{risks.length} legal risk{risks.length>1?"s":""}</b>
-          :<span style={{fontSize:11,color:C.inkFaint}}>{res&&!fresh?"Changed since the last check — run it again.":"Customs classification, export policy, GST/LUT."}</span>}
+          :<span style={{fontSize:11,color:C.inkFaint}}>{res&&!fresh?"Changed since the last check — run it again.":"Restricted export, HSN, GST, spelling and other legal risks."}</span>}
       </div>
       {res?.error&&fresh&&<div style={{fontSize:12,color:C.red,marginTop:10}}>⚠ The AI part couldn't run: {res.error}. Only the fixed rules were checked.</div>}
       {risks.length>0&&<div style={{marginTop:10,display:"grid",gap:8}}>
         {risks.map((x,i)=>(
           <div key={i} style={{fontSize:12,paddingTop:8,borderTop:i?`1px solid ${C.border}`:"none"}}>
-            <b style={{color:C.ink}}>{x.where}</b> — {x.risk}{x.fix&&<div style={{color:C.inkMid,marginTop:2}}>→ {x.fix}</div>}
+            <span style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.4,color:C.red,marginRight:8}}>{x.category}</span><b style={{color:C.ink}}>{x.where}</b> — {x.risk}{x.fix&&<div style={{color:C.inkMid,marginTop:2}}>→ {x.fix}</div>}
           </div>
         ))}
       </div>}
