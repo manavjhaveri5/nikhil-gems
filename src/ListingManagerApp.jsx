@@ -1051,7 +1051,7 @@ function listingMedia(listing) {
   return items;
 }
 
-function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoChange, videoEdit, onVideoEditChange, who }) {
+function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoChange, videoEdit, onVideoEditChange, originals = {}, onOriginalsChange, who }) {
   const [allLibImages, setAllLibImages] = useState([]);
   const [uploading,    setUploading]    = useState(false);
   const [vidUploading, setVidUploading] = useState(false);
@@ -1090,6 +1090,14 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
   const [editedUrls, setEditedUrls] = useState(() => new Set());
   const [undoVideo, setUndoVideo] = useState(null);   // the clip as it was before the last edit
   const [seeOriginal, setSeeOriginal] = useState(""); // the untouched take, played beside the cut
+  /* Every edited photo remembers the photo it was made from, as shot — an
+     edit of an edit still points at the first one. The trade site sells by
+     the kilo, so it takes these originals: no "Exact piece shown", no grade. */
+  const noteOriginals = (urls, next) => {
+    const map = { ...originals };
+    next.forEach((u, i) => { if (u !== urls[i] && urls[i]) map[u] = originals[urls[i]] || urls[i]; });
+    onOriginalsChange?.(map);
+  };
   const noteEdit = (urls, next) => {
     const changed = next.filter((u, i) => u !== urls[i]);
     setUndoEdit({ urls, next, count: changed.length || next.length });
@@ -1407,8 +1415,8 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
           url={selectedUrls[editIdx]}
           photos={selectedUrls}
           index={editIdx}
-          onSave={newUrl => { const next = selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)); noteEdit(selectedUrls, next); onChange(next); }}
-          onSaveAll={next => { noteEdit(selectedUrls, next); onChange(next); }}
+          onSave={newUrl => { const next = selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)); noteOriginals(selectedUrls, next); noteEdit(selectedUrls, next); onChange(next); }}
+          onSaveAll={next => { noteOriginals(selectedUrls, next); noteEdit(selectedUrls, next); onChange(next); }}
           onClose={() => setEditIdx(null)}
         />
       )}
@@ -2943,6 +2951,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 selectedUrls={form.images || []} onChange={urls => set("images", urls)}
                 video={form.video || ""} onVideoChange={url => set("video", url)}
                 videoEdit={form.videoEdit || null} onVideoEditChange={r => set("videoEdit", r)}
+                originals={form.original_images || {}} onOriginalsChange={m => set("original_images", m)}
                 who={who}
               />
             </Section>

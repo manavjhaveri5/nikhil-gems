@@ -871,6 +871,12 @@ export async function loadTradeFacts() {
   return out;
 }
 
+/* The trade site gets every photo as shot: an edited photo (graded, with
+   "EXACT PIECE SHOWN" written in) is swapped for the original it was made
+   from, which the listing remembers in original_images. */
+const tradePhotos = listing => (listing.images || []).filter(u => typeof u === "string" && /^https?:/.test(u))
+  .map(u => listing.original_images?.[u] || u);
+
 /* ask: answers from Listing Manager's "Post to the trade site" form —
    { unit, pieces, pieces_max, origin }. Without it (background syncs) the
    site's own values are kept. */
@@ -889,7 +895,7 @@ export async function publishListingToTrade(listing, { syncOnly = false, ask = n
   /* A piece that came onto the trade site from Shopify has its trade price set
      there; a listing without one mustn't sync it back to "on request". */
   const price = +listing.price_trade || (existing ? +existing.price || +v0.price || 0 : 0);
-  const images = (listing.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
+  const images = tradePhotos(listing);
   const live = syncOnly ? (existing ? existing.live : false) : true;
   const row = {
     id,
@@ -927,7 +933,7 @@ export async function publishListingToTrade(listing, { syncOnly = false, ask = n
    piece (by listing, Shopify product or stock item) takes its photos. Only
    the photos: titles and prices on the trade site are set for trade. */
 export async function refreshTradePhotos(listing) {
-  const images = (listing.images || []).filter(u => typeof u === "string" && /^https?:/.test(u));
+  const images = tradePhotos(listing);
   if (!images.length) return 0;
   const quote = v => `"${String(v).replace(/"/g, '\\"')}"`;
   const match = [`source->>listing_id.eq.${quote(listing.id)}`];
