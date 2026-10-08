@@ -12089,6 +12089,10 @@ const signatureForCompany=company=>companySlugFromKey(company)==="atyahara"?"/at
    gem mark that sits behind the text. Documents mailed as PDFs go out on this
    rather than on a typed-out approximation of it. */
 const letterheadForCompany=company=>companySlugFromKey(company)==="atyahara"?null:"/ng-letterhead.jpg";
+// The whole sheet of stationery as scanned (header, NG mark, edges) and the
+// signature/stamp with a clear background, for documents printed page by page.
+const stationeryForCompany=company=>companySlugFromKey(company)==="atyahara"?null:"/ng-stationery.jpg";
+const stampForCompany=company=>companySlugFromKey(company)==="atyahara"?"/atyahara-sign-stamp.jpg":"/ng-sign-stamp.png";
 const letterheadMarkForCompany=company=>companySlugFromKey(company)==="atyahara"?null:"/ng-letterhead-mark.jpg";
 // Resolve buyer details for display/printing: prefer the linked buyer record, but
 // fall back to the buyer/consignee fields stored on the invoice itself so a buyers
@@ -15484,18 +15488,12 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
     ?`<img src="${sigSrc}" style="height:80px;max-width:220px;object-fit:contain"/>`
     :`<div style="font-size:9px;letter-spacing:1px;font-weight:700;margin-bottom:2px">FOR ${esc(co.name).toUpperCase()}</div>
       <div style="font-size:10px;margin-top:26px;font-weight:700;letter-spacing:.5px">AUTHORIZED SIGNATORY</div>`;
-  return `
-  <table class="page-table" style="font-family:Arial,Helvetica,sans-serif"><tfoot style="display:table-footer-group"><tr><td>
-    <div class="sig-block" style="padding:${PL_PT(10)}px ${PL.margin}px 0">${sign}</div>
-  </td></tr></tfoot><tbody><tr><td>
-  <div style="font-family:Arial,Helvetica,sans-serif;position:relative">
-  ${head==="paper"&&mark
-    // Fixed from the top of the sheet rather than a share of the content, so a
-    // short list and a long one both carry the mark where the paper has it.
-    ?`<img src="${mark}" style="position:absolute;left:50%;top:400px;width:300px;transform:translateX(-50%);opacity:.35;z-index:0"/>`:""}
-  <div style="position:relative;z-index:1">
-  ${head==="paper"&&art?`<img src="${art}" style="width:100%;display:block"/>`:""}
-  <div style="padding:0 ${PL.margin}px">
+  /* On the letterhead, every sheet is the stationery itself — the scanned page
+     (header, NG mark, edges) behind it and the stamp in its corner, as the
+     lists typed in Docs come out. Both are fixed, which the browser prints on
+     every page; blank header/footer rows that repeat on each page keep the
+     text clear of the letterhead and the stamp. */
+  const packingContentHTML=()=>`
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-top:${PL_PT(12)}px">
       <div>${head==="typed"?`<div class="co-name">${esc(co.name)}</div>
         <div style="font-size:10px;color:#444;white-space:pre-line;line-height:1.5">${esc(co.address)}\nTEL: ${esc(co.tel)}\nE.Mail: ${esc(co.email)}</div>`:""}</div>
@@ -15516,6 +15514,25 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
         <div>Total Gross Weight: ${packWeight(tot.gross)} KGS</div>
       </div>
     </div>
+`;
+  const paper=head==="paper"&&stationeryForCompany(company);
+  if(paper)return `
+  <style>@page{margin:0;size:A4}body{margin:0!important;padding:0!important}.inv-page{page-break-after:auto}</style>
+  <img src="${stationeryForCompany(company)}" alt="" style="position:fixed;left:0;top:0;width:210mm;height:297mm;z-index:0"/>
+  <img src="${stampForCompany(company)}" alt="" style="position:fixed;left:157mm;top:251mm;width:44mm;z-index:2"/>
+  <table class="page-table" style="position:relative;z-index:1;font-family:Arial,Helvetica,sans-serif">
+  <thead style="display:table-header-group"><tr><td><div style="height:50mm"></div></td></tr></thead>
+  <tfoot style="display:table-footer-group"><tr><td><div style="height:50mm"></div></td></tr></tfoot>
+  <tbody><tr><td><div style="padding:0 22mm 0 20mm">${packingContentHTML()}</div></td></tr></tbody></table>`;
+  return `
+  <table class="page-table" style="font-family:Arial,Helvetica,sans-serif"><tfoot style="display:table-footer-group"><tr><td>
+    <div class="sig-block" style="padding:${PL_PT(10)}px ${PL.margin}px 0">${sign}</div>
+  </td></tr></tfoot><tbody><tr><td>
+  <div style="font-family:Arial,Helvetica,sans-serif;position:relative">
+  <div style="position:relative;z-index:1">
+  ${head==="paper"&&art?`<img src="${art}" style="width:100%;display:block"/>`:""}
+  <div style="padding:0 ${PL.margin}px">
+    ${packingContentHTML()}
   </div>
   </div>
   </div>
