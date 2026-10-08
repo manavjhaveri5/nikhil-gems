@@ -15334,9 +15334,9 @@ const packDateLong=v=>{const p=packDateParts(v);return p?`${String(p.d).padStart
 const packDescKey=d=>String(d||"").trim().toUpperCase().replace(/\s+/g," ");
 const packItemDesc=it=>String(it?.acctDesc||it?.desc||"").trim();
 /* Our names for shapes, not the workshop's: a sabu is a palmstone and a
-   lingam is a Shiva. Applied on import and again on print, so lists saved
+   lingam is a Shivalingam. Applied on import and again on print, so lists saved
    before this still print right. Case follows the word it replaces. */
-const PACK_TERMS=[[/\bsabus?\b/gi,"Palmstone"],[/\bshiva\s+lingams?\b/gi,"Shiva"],[/\blingams?\b/gi,"Shiva"]];
+const PACK_TERMS=[[/\bsabus?\b/gi,"Palmstone"],[/\bshiva\s*lingams?\b/gi,"Shivalingam"],[/\blingams?\b/gi,"Shivalingam"]];
 const packTerms=t=>PACK_TERMS.reduce((s,[re,to])=>s.replace(re,w=>w===w.toUpperCase()?to.toUpperCase():w===w.toLowerCase()?to.toLowerCase():to),String(t||""));
 
 /* What the invoice sold, per description, split by unit — pieces and kilos
@@ -15572,7 +15572,7 @@ Two layouts:
 - "bulk": one block per run of identical bags/packages of one stone: lines:[{desc}], bags (how many packages in the run), packing (e.g. GUNNY BAGS, CARTON BOX), dest (destination port/city if written), net and gross = TOTAL kg for the whole run.
 Pick the layout the sheet uses. Keep package order. If the sheet shows mark numbers (e.g. N.G.-296), set prefix ("N.G.") and start_at (the first number).
 
-Descriptions: when a line is the same goods as one of these invoice descriptions, use that wording: ${JSON.stringify(descs)}. Otherwise keep the sheet's wording. Either way, write every description in Title Case (Hypersthene Palmstone, Ruby in Fuchsite Heart) and correct spelling mistakes in stone and shape names (e.g. MALACITE → Malachite, CHYSOPHRASE → chrysoprase, HYPERSTIAN → hypersthene, TIFANY → Tiffany, FLOURITE → fluorite). Our shape names: "sabu" is Palmstone, "lingam" is Shiva. Don't add or drop words otherwise.
+Descriptions: when a line is the same goods as one of these invoice descriptions, use that wording: ${JSON.stringify(descs)}. Otherwise keep the sheet's wording. Either way, write every description in Title Case (Hypersthene Palmstone, Ruby in Fuchsite Heart) and correct spelling mistakes in stone and shape names (e.g. MALACITE → Malachite, CHYSOPHRASE → chrysoprase, HYPERSTIAN → hypersthene, TIFANY → Tiffany, FLOURITE → fluorite). Our shape names: "sabu" is Palmstone, "lingam" is Shivalingam. Don't add or drop words otherwise.
 Weights: copy every weight figure ("kgs", "net", "gross") EXACTLY as written on the sheet. Do not convert units or divide or multiply anything — the figures are checked and converted afterwards.
 Numbers as plain numbers (no units). Leave a field "" if the sheet doesn't give it; never invent weights or counts. Skip total/summary rows.
 
