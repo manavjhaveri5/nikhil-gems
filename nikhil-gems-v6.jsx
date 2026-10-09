@@ -15731,16 +15731,32 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
   const offBy=recon.filter(r=>!r.ok);
   const descList=[...new Set((inv.items||[]).map(packItemDesc).filter(Boolean))];
 
+  /* On the letterhead it goes out as an A4 PDF, the same on every printer and
+     phone. The PDF is made ahead, as the list changes, so the tap on Print can
+     open it straight away: a phone only lets a tap open a new tab, and won't
+     load a PDF into a tab that was opened before it was ready (it sat on
+     "Preparing…"). */
+  const asPdf=packHeaderMode(pl,company)==="paper"&&!!stationeryForCompany(company);
+  const pdfRef=useRef({key:"",blob:null,error:""});
+  const pdfKey=JSON.stringify([pl,inv.invNo,inv.date,inv.buyerId,company]);
+  useEffect(()=>{
+    if(!asPdf)return;
+    const key=pdfKey;
+    const t=setTimeout(()=>{buildPackingPDF(inv,buyers,company,pl)
+      .then(blob=>{pdfRef.current={key,blob,error:""};})
+      .catch(e=>{pdfRef.current={key,blob:null,error:e?.message||String(e)};});},400);
+    return()=>clearTimeout(t);
+  },[asPdf,pdfKey]);
   const doPrint=()=>{
-    const w=window.open("","_blank");
-    if(!w)return showToast?.("Allow pop-ups to print the packing list");
-    // On the letterhead it goes out as an A4 PDF, the same on every printer and phone.
-    if(packHeaderMode(pl,company)==="paper"&&stationeryForCompany(company)){
-      w.document.write("<p style='font:15px system-ui;padding:20px'>Preparing the packing list…</p>");
-      buildPackingPDF(inv,buyers,company,pl).then(blob=>{w.location.href=URL.createObjectURL(blob);})
-        .catch(e=>{w.close();showToast?.("Couldn't make the PDF: "+(e?.message||e));});
+    if(asPdf){
+      const r=pdfRef.current;
+      if(r.key!==pdfKey||!r.blob)return showToast?.(r.key===pdfKey&&r.error?"Couldn't make the PDF: "+r.error:"Getting the PDF ready — tap Print again in a moment");
+      const url=URL.createObjectURL(r.blob);
+      if(!window.open(url,"_blank"))location.href=url;
       return;
     }
+    const w=window.open("","_blank");
+    if(!w)return showToast?.("Allow pop-ups to print the packing list");
     w.document.write(wrapInvDoc(`Packing List ${inv.invNo}`,[buildPackingBodyHTML(inv,buyers,company,pl)]));
     w.document.close();w.focus();setTimeout(()=>w.print(),600);
   };
