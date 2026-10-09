@@ -355,6 +355,37 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
     window.open(data.signedUrl, "_blank");
   };
 
+  /* A buyer you already know, invited straight in: created approved (no
+     application to fill), with their own one-time set-up link to send by
+     WhatsApp or email. An email that already has an account gets a fresh link
+     on that account instead of a second one. */
+  const [adding, setAdding] = useState(null);   // the form, while open
+  const addBuyer = async () => {
+    const f = adding, email = String(f.email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { showToast("⚠ Add their email"); return; }
+    setBusy(true);
+    try {
+      const existing = await q(supabase.from("trade_buyers").select("*").ilike("email", email).maybeSingle());
+      let b = existing;
+      if (!b) {
+        b = await q(supabase.from("trade_buyers").insert({
+          email, name: String(f.name || "").trim(), company: String(f.company || "").trim(), phone: String(f.phone || "").trim(),
+          country: String(f.country || "").trim(), status: "approved", approved_at: new Date().toISOString(), notes: "Invited from the ERP",
+        }).select().single());
+        setRows(r => [b, ...(r || [])]);
+      } else {
+        if (b.status !== "approved") await patch(b.id, { status: "approved", approved_at: b.approved_at || new Date().toISOString() });
+        if (!(rows || []).some(x => x.id === b.id)) setRows(r => [b, ...(r || [])]);
+      }
+      if (+f.discount > 0) await saveDiscount(b, f.discount);
+      await invite(b);
+      setJustApproved(x => ({ ...x, [b.id]: !existing }));
+      setFilter("approved"); setSearch(email); setAdding(null);
+      showToast(existing ? `${email} already had an account — here's a fresh set-up link` : `✓ ${f.name || email} is in — send them the link below`);
+    } catch (e) { showToast("⚠ " + e.message); }
+    setBusy(false);
+  };
+
   const count = s => (rows || []).filter(b => b.status === s).length;
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = (rows || []).filter(b => (filter === "all" || b.status === filter) &&
@@ -370,8 +401,24 @@ function BuyersTab({ showToast, siteUrl, signOff }) {
         ))}
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, shop, email…" style={{ ...FI({ width: mob() ? "100%" : 220, borderRadius: 999 }) }} />
         <div style={{ flex: 1 }} />
+        <button onClick={() => setAdding(a => a ? null : { name: "", company: "", email: "", phone: "", country: "", discount: "" })} style={btn(C.ink, "#fff")}>＋ Invite a buyer</button>
         <button onClick={bulkInvites} disabled={busy} style={btn()}>{busy ? "Making links…" : "✉ Set-up links for all (CSV)"}</button>
       </div>
+      {adding && (
+        <div style={{ ...card, padding: 14, marginBottom: 12, display: "grid", gap: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Invite a buyer you know <span style={{ fontWeight: 400, color: C.inkFaint }}>— approved straight away, with their own set-up link</span></div>
+          <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "repeat(3, 1fr)", gap: 8 }}>
+            {[["name", "Name (they're greeted by it)"], ["company", "Shop / company"], ["email", "Email *"], ["phone", "WhatsApp / phone, with country code"], ["country", "Country"], ["discount", "Discount % (optional)"]].map(([k, ph]) => (
+              <input key={k} value={adding[k]} placeholder={ph} inputMode={k === "discount" ? "decimal" : k === "email" ? "email" : undefined}
+                onChange={e => setAdding(a => ({ ...a, [k]: e.target.value }))} onKeyDown={e => { if (e.key === "Enter") addBuyer(); }} style={FI({})} />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button disabled={busy} onClick={addBuyer} style={btn(C.green, "#fff")}>{busy ? "Making the link…" : "Create & make set-up link"}</button>
+            <button onClick={() => setAdding(null)} style={btn()}>Cancel</button>
+          </div>
+        </div>
+      )}
       {!rows && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
       {rows && !shown.length && <div style={{ ...card, padding: 24, color: C.inkFaint, fontSize: 13, textAlign: "center" }}>{filter === "pending" ? "No applications waiting." : "Nobody here."}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
