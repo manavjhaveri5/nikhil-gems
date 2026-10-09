@@ -15447,6 +15447,87 @@ const PL={
   totalGap:PL_PT(21),
 };
 
+/* The packing list on the letterhead, as an A4 PDF with the stationery and the
+   stamp drawn on every page. Printed as a web page it depended on the browser
+   repeating fixed-position images on each sheet and honouring "A4": iPhones do
+   neither, so on US Letter the bottom of page 1's letterhead and its stamp
+   slid onto the top of page 2 as a brown band, and later pages had none. A PDF
+   keeps its own page size, and a phone scales it to whatever paper it prints
+   on. Same measurements as the printed page (Arial ≈ Helvetica). */
+async function buildPackingPDF(inv,buyers,company,pl){
+  const {PDFDocument,StandardFonts,rgb}=await import("pdf-lib");
+  const MM=72/25.4, W=210*MM, H=297*MM;
+  const doc=await PDFDocument.create();
+  const bold=await doc.embedFont(StandardFonts.HelveticaBold), reg=await doc.embedFont(StandardFonts.Helvetica);
+  const bytes=async u=>new Uint8Array(await (await fetch(u)).arrayBuffer());
+  const paperSrc=stationeryForCompany(company), stampSrc=stampForCompany(company);
+  const paper=paperSrc?await (/\.png$/i.test(paperSrc)?doc.embedPng(await bytes(paperSrc)):doc.embedJpg(await bytes(paperSrc))):null;
+  const stamp=stampSrc?await (/\.png$/i.test(stampSrc)?doc.embedPng(await bytes(stampSrc)):doc.embedJpg(await bytes(stampSrc))).catch(()=>null):null;
+  // Characters outside the PDF's standard font come out as their nearest plain form.
+  const ok=(f,ch)=>{try{f.encodeText(ch);return true;}catch{return false;}};
+  const clean=(f,t)=>[...String(t||"")].map(ch=>ok(f,ch)?ch:[...ch.normalize("NFKD").replace(/[\u0300-\u036f]/g,"")].map(c=>ok(f,c)?c:"?").join("")).join("");
+  const wrap=(f,size,t,max)=>{
+    const out=[];let line="";
+    for(const w of clean(f,t).split(/\s+/)){const next=line?`${line} ${w}`:w;if(line&&f.widthOfTextAtSize(next,size)>max){out.push(line);line=w;}else line=next;}
+    if(line)out.push(line);return out.length?out:[""];
+  };
+  const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv);
+  const consignee=inv.consigneeSameAsBuyer
+    ?{name:buyer?.name,address:buyer?.shippingSameAsBilling!==false?(buyer?.billingAddress||buyer?.address||""):(buyer?.shippingAddress||buyer?.billingAddress||buyer?.address||""),country:buyer?.country}
+    :{name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
+  const marks=packingMarks(pl.blocks,pl.mode,pl.startAt), tot=packingTotals(pl.blocks), prefix=pl.prefix||"N.G.";
+  const X=20*MM, R=W-22*MM, TOP=H-50*MM, BOTTOM=50*MM, BODY=12, LEAD=16.6;
+  let page,y;
+  const newPage=()=>{
+    page=doc.addPage([W,H]);
+    if(paper)page.drawImage(paper,{x:0,y:0,width:W,height:H});
+    if(stamp){const sw=44*MM,sh=sw*stamp.height/stamp.width;page.drawImage(stamp,{x:157*MM,y:H-251*MM-sh,width:sw,height:sh});}
+    y=TOP;
+  };
+  const text=(t,{f=bold,size=BODY,x=X,lead=LEAD}={})=>{for(const l of wrap(f,size,t,R-x)){page.drawText(l,{x,y:y-size,size,font:f,color:rgb(0,0,0)});y-=lead;}};
+  newPage();
+  // Date in the corner, then who it goes to.
+  y-=12;
+  const date=clean(reg,`Date: ${packDateShort(pl.date||inv.date)}`);
+  page.drawText(date,{x:R-reg.widthOfTextAtSize(date,11),y:y-11,size:11,font:reg});
+  y-=11*1.4+4;
+  text("To",{f:reg,size:11,lead:11*1.3});
+  text(consignee?.name||buyer?.name||"-",{size:9,lead:9*1.15});
+  for(const l of `${consignee?.address||""}${consignee?.country?`\n${consignee.country}`:""}`.split("\n"))text(l,{f:reg,size:9,lead:9*1.15});
+  // The heading, underlined and set in a little.
+  y-=43.8;
+  const title=`DETAILED PACKING LIST FOR INV ${inv.invNo||""} DTD ${packDateLong(inv.date)}`;
+  const tx=X+23.8, tl=wrap(bold,BODY,title,R-tx);
+  for(const l of tl){page.drawText(l,{x:tx,y:y-BODY,size:BODY,font:bold});page.drawLine({start:{x:tx,y:y-BODY-1.5},end:{x:tx+bold.widthOfTextAtSize(l,BODY),y:y-BODY-1.5},thickness:.8});y-=LEAD;}
+  y-=25.9-(LEAD-BODY);
+  // The boxes: a box never splits across pages; one that won't fit starts the next.
+  const blocks=(pl.blocks||[]).map((b,i)=>{
+    const lines=[`${packMarkLabel(prefix,marks[i])}${b.dest?` / ${b.dest}`:""}`];
+    if(pl.mode==="bulk"){
+      const n=Math.max(1,parseInt(b.bags,10)||1), noun=String(b.packing||"").toUpperCase().includes("BAG")?"BAG":"PKG";
+      lines.push(`Description: ${packTerms(b.lines?.[0]?.desc).toUpperCase()}`,`Packing: ${String(b.packing||"").toUpperCase()}`,`Quantity: ${n} ${noun}${n===1?"":"S"}`);
+    } else for(const l of (b.lines||[]).filter(l=>String(l.desc||"").trim())){
+      const bits=[l.pcs?`${l.pcs} PCS`:"",l.kgs?`${l.kgs} KGS`:""].filter(Boolean).join(" - ");
+      lines.push(`${packTerms(l.desc).toUpperCase()}${bits?` - ${bits}`:""}`);
+    }
+    lines.push(`Net Weight: ${b.net||"-"} KGS`,`Gross Weight: ${b.gross||"-"} KGS`);
+    return lines;
+  });
+  const height=lines=>lines.reduce((h,l)=>h+wrap(bold,BODY,l,R-X).length*LEAD,0);
+  let onPage=0;
+  for(const lines of blocks){
+    if(onPage&&y-height(lines)<BOTTOM){newPage();onPage=0;}
+    for(const l of lines)text(l);
+    y-=12;onPage++;
+  }
+  const totals=[`Total Net Weight: ${packWeight(tot.net)} KGS`,`Total Gross Weight: ${packWeight(tot.gross)} KGS`];
+  y-=21-12;
+  if(y-height(totals)<BOTTOM){newPage();}
+  for(const l of totals)text(l);
+  doc.setTitle(`Packing List ${inv.invNo||""}`);
+  return new Blob([await doc.save()],{type:"application/pdf"});
+}
+
 function buildPackingBodyHTML(inv,buyers,company,pl){
   const co=companyProfileFromKey(company);
   const sigSrc=signatureForCompany(company);
@@ -15653,6 +15734,13 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
   const doPrint=()=>{
     const w=window.open("","_blank");
     if(!w)return showToast?.("Allow pop-ups to print the packing list");
+    // On the letterhead it goes out as an A4 PDF, the same on every printer and phone.
+    if(packHeaderMode(pl,company)==="paper"&&stationeryForCompany(company)){
+      w.document.write("<p style='font:15px system-ui;padding:20px'>Preparing the packing list…</p>");
+      buildPackingPDF(inv,buyers,company,pl).then(blob=>{w.location.href=URL.createObjectURL(blob);})
+        .catch(e=>{w.close();showToast?.("Couldn't make the PDF: "+(e?.message||e));});
+      return;
+    }
     w.document.write(wrapInvDoc(`Packing List ${inv.invNo}`,[buildPackingBodyHTML(inv,buyers,company,pl)]));
     w.document.close();w.focus();setTimeout(()=>w.print(),600);
   };
