@@ -9935,7 +9935,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           return false;
         }).map(p => p.key)
       : [];
-    const newTargets  = Object.entries(publishTo).filter(([, v]) => v).map(([k]) => k);
+    // A trade product connected for reference is never written to, so it isn't a target.
+    const newTargets  = Object.entries(publishTo).filter(([k, v]) => v && !(k === "trade" && tradeRefOnly(listing))).map(([k]) => k);
     const targets = [...new Set([...liveTargets, ...newTargets])];
     // Trade products that are this piece but weren't published from here.
     if (exists && !targets.includes("trade")) {

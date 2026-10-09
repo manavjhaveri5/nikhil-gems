@@ -4,7 +4,7 @@
    orders, and each platform's fees are fixed, so there is nothing to set. */
 import { useEffect, useMemo, useState } from "react";
 import { C } from "./lmTheme.js";
-import { CHANNELS, linkOf } from "./listingChannels.js";
+import { CHANNELS, linkOf, tradeRefOnly } from "./listingChannels.js";
 import { storeSettings, storePriceFor } from "./StoreApp.jsx";
 import { recommendCarriers, carrierLabel } from "./shipping.js";
 
@@ -617,6 +617,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 const price = c.key === "etsy" ? (etsyPays ? `${inr(etsyPays)}${sale ? ` (${inr(etsyPrice)} − ${sale}%)` : ""}` : "No price")
                   : c.key === "ebay" ? (ebayUsd ? usd(ebayUsd) : "No price")
                   : c.key === "store" ? [storeUsd && usd(storeUsd), storeInr && inr(storeInr)].filter(Boolean).join(" · ") || "No price"
+                  : tradeRefOnly(form) ? "Priced on the trade site"
                   : +p.price_trade ? usd(+p.price_trade) : "No price";
                 return (
                   <div key={c.key} style={{ borderTop: i ? `1px solid ${C.border}` : "none" }}>
@@ -634,7 +635,15 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                     </span>
                     <span style={{ fontSize: 14, color: /No price/.test(price) ? C.red : C.ink }}>{price}</span>
                   </div>
-                  {onPublishOne && (() => {
+                  {/* Connected to a trade product of its own (a per-kilo lot, say):
+                      this listing never writes to it, so there is nothing to
+                      publish — only where to change it. */}
+                  {c.key === "trade" && tradeRefOnly(form) ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 16px 12px 34px", flexWrap: "wrap" }}>
+                      {linkOf(form, "trade").live && <a href={linkOf(form, "trade").live} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.green, border: `1.5px solid ${C.green}60`, borderRadius: 8, padding: "7px 12px", textDecoration: "none" }}>✓ View live ↗</a>}
+                      <span style={{ fontSize: 12, color: C.inkMid }}>Connected for reference — its price, title and photos are changed on the trade site (✎ Edit product), not from here.</span>
+                    </div>
+                  ) : onPublishOne && (() => {
                     const st = one[c.key] || {};
                     const ln = linkOf(form, c.key);
                     const url = st.url || (ln.linked && ln.status === "active" ? ln.live : "");
