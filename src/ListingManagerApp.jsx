@@ -4,6 +4,7 @@ import { uploadToStorage } from "./storageUtils.js";
 import { classify } from "./aiClient.js";
 import { CUSTOMS_DESCS_KEY, DEFAULT_CUSTOMS_DESCS } from "./DatasetsApp.jsx";
 import CampaignComposer from "./CampaignComposer.jsx";
+import StoreDescWriter from "./StoreDescWriter.jsx";
 import PhotoEditor from "./PhotoEditor.jsx";
 /* Split out: the video editor carries a whole media toolkit with it, and most
    visits to the listing manager never open one. It arrives when it is asked
@@ -9618,6 +9619,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
     return () => document.removeEventListener("visibilitychange", on);
   }, []);
   const [campaignOpen, setCampaignOpen] = useState(false);
+  const [descWriterOpen, setDescWriterOpen] = useState(false);
   const [toast,      setToast]      = useState("");
 
   const [search,     setSearch]     = useState("");
@@ -10583,6 +10585,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       <Toast msg={toast} />
       <DealsDuePopup />
       {campaignOpen && <CampaignComposer listings={listings} showToast={showToast} onClose={() => setCampaignOpen(false)} />}
+      {descWriterOpen && <StoreDescWriter listings={listings} saveListingItem={saveListingItem} showToast={showToast} onClose={() => setDescWriterOpen(false)} />}
 
       {/* ── sticky header ── */}
       <div style={{ position: "sticky", top: 0, zIndex: 100, background: C.surface, borderBottom: `1px solid ${C.border}` }}>
@@ -10600,6 +10603,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             </div>
           </div>
           <div style={{ flex: 1 }} />
+          <button onClick={() => setDescWriterOpen(true)}
+            title="Give every piece on eartheditions.co its own description (not the Etsy copy)"
+            style={{ background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7,
+              padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: "pointer", marginRight: 8 }}>
+            ✍ {mob() ? "" : "Store descriptions"}
+          </button>
           <button onClick={() => setCampaignOpen(true)}
             title="Email a new-products campaign via Omnisend"
             style={{ background: C.tealBg, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 7,
