@@ -327,7 +327,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, loadTradeFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, loadTradeFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice, onBulkPricePost }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -347,6 +347,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
   const [open, setOpen] = useState(null);           // { id, tab }
   const [store, setStore] = useState(null);
   const [sel, setSel] = useState(new Set());
+  const [pricePost, setPricePost] = useState(false);
   const more = useRef(null);
 
   const [trade, setTrade] = useState(null);
@@ -436,6 +437,8 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
 
   return (
     <div>
+      {pricePost && <PricePost rows={selected} facts={facts} onClose={() => setPricePost(false)}
+        onRun={async (rows, post, step) => { const r = await onBulkPricePost(rows, post, step); refreshStore(); return r; }} />}
       {/* search, sort, layout */}
       <div style={{ position: "sticky", top: 0, zIndex: 20, background: C.bg, padding: "10px 0 12px", marginBottom: 8, borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -453,6 +456,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
         {selected.length > 0 && (
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, padding: "8px 12px", background: C.amberBg, borderRadius: 10, fontSize: 12.5, flexWrap: "wrap" }}>
             <b>{selected.length} selected</b>
+            {onBulkPricePost && <button onClick={() => setPricePost(true)} style={{ ...chip(true) }}>💲 Price &amp; post…</button>}
             <button onClick={() => onBulkPrice(selected).then(refreshStore)} style={chip(false)}>Change prices by %…</button>
             {onBulkMove && <button onClick={() => onBulkMove(selected)} style={chip(false)}>📍 Move to…</button>}
             <button onClick={() => setSel(new Set(list.map(l => l.id)))} style={chip(false)}>Select all {list.length}</button>
@@ -528,6 +532,97 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
           onClose={() => setOpen(null)} onPrice={price} onEdit={x => { setOpen(null); onEdit(x); }}
           onSavePhotos={onSavePhotos} onMarkSold={onMarkSold} onDelete={onDelete} renderManage={renderManage} />
       )}
+    </div>
+  );
+}
+
+/* Price & post: the selected pieces in one table — a price per column for
+   each, filled by hand, all at once, or by weight — then live on the
+   platforms ticked. */
+const gramsOf = l => {
+  for (const t of [l.weight, l.title]) {
+    const m = String(t || "").replace(/,/g, "").match(/(\d+(?:\.\d+)?)\s*(kg|kgs|g|gm|gms|grams?)\b/i);
+    if (m) return +m[1] * (/^kg/i.test(m[2]) ? 1000 : 1);
+  }
+  return null;
+};
+const PP_COLS = [
+  { field: "price_store", label: "USA $", cur: "$" },
+  { field: "price_store_inr", label: "India ₹", cur: "₹" },
+  { field: "price_etsy", label: "Etsy ₹", cur: "₹" },
+  { field: "price_trade", label: "Trade $", cur: "$" },
+];
+const PP_POST = [["store", "Earth Editions"], ["etsy", "Etsy"], ["trade", "Trade site"]];
+function PricePost({ rows, facts, onClose, onRun }) {
+  const cur = (l, f) => { const s = facts.store?.[l.id]; return f === "price_store" && s ? num(s.price) : f === "price_store_inr" && s ? num(s.price_inr) : num(l[f]); };
+  const [vals, setVals] = useState(() => Object.fromEntries(rows.map(l => [l.id, Object.fromEntries(PP_COLS.map(c => [c.field, cur(l, c.field) ?? ""]))])));
+  const [rate, setRate] = useState({});
+  const [all, setAll] = useState({});
+  const [post, setPost] = useState(() => new Set(["store"]));
+  const [busy, setBusy] = useState(0);
+  const [failed, setFailed] = useState(null);
+  const set = (id, f, v) => setVals(x => ({ ...x, [id]: { ...x[id], [f]: v } }));
+  const fillAll = f => { const v = all[f]; if (v === "" || v == null) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, r]) => [id, { ...r, [f]: v }]))); };
+  const byWeight = f => { const r = +rate[f]; if (!(r > 0)) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, row]) => { const g = gramsOf(rows.find(l => l.id === id)); return [id, g ? { ...row, [f]: Math.round(g * r) } : row]; }))); };
+  const noWeight = rows.filter(l => !gramsOf(l)).length;
+  const run = async () => {
+    const list = rows.map(l => ({ l, prices: Object.fromEntries(PP_COLS.filter(c => vals[l.id][c.field] !== "" && +vals[l.id][c.field] !== cur(l, c.field)).map(c => [c.field, +vals[l.id][c.field]])) }));
+    const missing = post.has("store") ? rows.filter(l => !(+vals[l.id].price_store > 0)).length : 0;
+    if (missing && !confirm(`${missing} piece${missing === 1 ? " has" : "s have"} no USA price — post anyway?`)) return;
+    setBusy(0.001);
+    const r = await onRun(list, [...post], n => setBusy(n));
+    setBusy(0);
+    if (r?.failed?.length) setFailed(r.failed); else if (r) onClose();
+  };
+  const box = { ...FI(), padding: "5px 7px", fontSize: 12.5, width: 84 };
+  return (
+    <div onClick={() => !busy && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 80, display: "grid", placeItems: "center", padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 14, width: "min(980px, 100%)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+          <b style={{ fontSize: 16, flex: 1 }}>Price &amp; post · {rows.length} piece{rows.length === 1 ? "" : "s"}</b>
+          <button disabled={!!busy} onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 18, cursor: "pointer", color: C.inkMid }}>×</button>
+        </div>
+        <div style={{ overflow: "auto", padding: "8px 18px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ color: C.inkFaint, fontSize: 11, textAlign: "left" }}>
+                <th style={{ padding: "6px 4px" }}>Piece</th><th>Weight</th>
+                {PP_COLS.map(c => <th key={c.field} style={{ padding: "6px 4px" }}>{c.label}</th>)}
+              </tr>
+              <tr style={{ background: C.bg }}>
+                <td style={{ padding: "6px 4px", fontSize: 11.5, color: C.inkMid }} colSpan={2}>Same for all →<br />Per gram →{noWeight ? <span style={{ color: C.amber }}> ({noWeight} without a weight stay as they are)</span> : null}</td>
+                {PP_COLS.map(c => (
+                  <td key={c.field} style={{ padding: "6px 4px" }}>
+                    <div style={{ display: "flex", gap: 3 }}><input value={all[c.field] ?? ""} onChange={e => setAll(a => ({ ...a, [c.field]: e.target.value }))} onKeyDown={e => e.key === "Enter" && fillAll(c.field)} placeholder={c.cur} style={{ ...box, width: 60 }} /><button onClick={() => fillAll(c.field)} style={{ ...box, width: "auto", cursor: "pointer" }}>↓</button></div>
+                    <div style={{ display: "flex", gap: 3, marginTop: 3 }}><input value={rate[c.field] ?? ""} onChange={e => setRate(a => ({ ...a, [c.field]: e.target.value }))} onKeyDown={e => e.key === "Enter" && byWeight(c.field)} placeholder={`${c.cur}/g`} style={{ ...box, width: 60 }} /><button onClick={() => byWeight(c.field)} style={{ ...box, width: "auto", cursor: "pointer" }}>↓</button></div>
+                  </td>))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(l => (
+                <tr key={l.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "6px 4px", display: "flex", gap: 8, alignItems: "center", minWidth: 220 }}>
+                    {(l.images || []).find(u => typeof u === "string") && <img src={(l.images || []).find(u => typeof u === "string")} alt="" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 6 }} />}
+                    <span style={{ lineHeight: 1.3 }}>{l.title}</span>
+                  </td>
+                  <td style={{ color: C.inkMid, whiteSpace: "nowrap" }}>{gramsOf(l) ? `${gramsOf(l)} g` : "—"}</td>
+                  {PP_COLS.map(c => <td key={c.field} style={{ padding: "6px 4px" }}><input inputMode="decimal" value={vals[l.id][c.field]} onChange={e => set(l.id, c.field, e.target.value.replace(/[^\d.]/g, ""))} style={box} /></td>)}
+                </tr>))}
+            </tbody>
+          </table>
+          {failed && <div style={{ marginTop: 10, padding: 10, background: C.redBg, color: C.red, borderRadius: 8, fontSize: 12.5 }}>{failed.map(f => <div key={f}>⚠ {f}</div>)}</div>}
+        </div>
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700 }}>Post live on:</span>
+          {PP_POST.map(([k, label]) => (
+            <label key={k} style={{ fontSize: 12.5, display: "flex", gap: 5, alignItems: "center", cursor: "pointer" }}>
+              <input type="checkbox" checked={post.has(k)} onChange={() => setPost(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; })} /> {label}</label>))}
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 11.5, color: C.inkFaint }}>Already live elsewhere? Those just get the new prices.</span>
+          <button disabled={!!busy} onClick={run} style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 750, cursor: busy ? "wait" : "pointer" }}>
+            {busy ? `Working… ${Math.floor(busy)}/${rows.length}` : post.size ? `Save prices & post ${rows.length}` : `Save prices`}</button>
+        </div>
+      </div>
     </div>
   );
 }

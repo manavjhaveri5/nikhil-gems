@@ -10011,6 +10011,30 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     showToast(`✓ ${sel.length} listings repriced`);
   };
 
+  /* Price & post (the grid's bulk window): each selected piece gets the prices
+     typed for it, then goes live on the platforms ticked. Platforms it's already
+     on but not ticked just take the new prices. One at a time, so a failure on
+     one piece says which and the rest carry on. */
+  const bulkPricePost = async (rows, post, onStep) => {
+    const newOnEtsy = post.includes("etsy") ? rows.filter(r => r.l.platforms?.etsy?.status !== "active").length : 0;
+    if (newOnEtsy && !confirm(`Put ${newOnEtsy} listing${newOnEtsy === 1 ? "" : "s"} live on Etsy?\n\nEtsy charges $0.20 each.`)) return null;
+    const failed = [];
+    for (const [i, { l, prices }] of rows.entries()) {
+      const current = listings.find(x => x.id === l.id) || l;
+      const next = { ...current, ...prices, updated_at: new Date().toISOString() };
+      try { await saveListingItem(next); } catch (e) { failed.push(`${l.title}: ${e.message}`); continue; }
+      for (const k of post) {
+        try { await handlePublish(next, k); } catch (e) { failed.push(`${l.title} — ${PLATFORMS.find(p => p.key === k)?.label || k}: ${e.message}`); }
+      }
+      for (const k of ["etsy", "store", "trade"].filter(k => !post.includes(k) && linkedTo(next, k))) {
+        try { await handlePublish(next, k, { syncOnly: true, allowCreate: false, storeOverride: ["price", "price_inr"] }); } catch (e) { console.warn(k, e); }
+      }
+      onStep?.(i + 1);
+    }
+    showToast(failed.length ? `⚠ ${rows.length - failed.length} done — ${failed.length} problem${failed.length === 1 ? "" : "s"}` : `✓ ${rows.length} priced${post.length ? " and posted" : ""}`);
+    return { failed };
+  };
+
   /* Where a piece sits. Each move is logged on the listing. */
   const setListingLocation = async (listing, place) => {
     const current = listings.find(x => x.id === listing.id) || listing;
@@ -10695,6 +10719,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 onDelete={handleDelete}
                 onBulkDelete={handleBulkDelete}
                 onBulkPrice={bulkPrice}
+                onBulkPricePost={bulkPricePost}
                 renderManage={l => (
                   <ListingCard listing={l} stock={stock} orders={orders} startExpanded
                     onEdit={x => { setEditing(x); setShowForm(true); }}
