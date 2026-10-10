@@ -450,7 +450,7 @@ async function redditQuestions() {
     // One sub at a time, a beat apart, kept 5 minutes: Reddit rate-limits feeds fetched back to back.
     if (rssMemo && Date.now() - rssMemo.at < 5 * 60e3) return rssMemo.list;
     const got = [];
-    for (const sub of ["whatsthisrock", "crystals"]) {
+    for (const sub of ["whatsthisrock", "crystals", "minerals"]) {
       try { got.push(...await redditRss(sub)); } catch (e) { if (!got.length && sub === "crystals") throw e; }
       await new Promise(r => setTimeout(r, 1200));
     }
@@ -470,7 +470,7 @@ async function redditQuestions() {
   const host = auth.Authorization ? "https://oauth.reddit.com" : "https://www.reddit.com";
   const ASKS = /\?|\b(what|which|is (this|it)|real|fake|dyed|identif\w*|id\b|help|anyone know|any idea|found)\b/i;
   const out = [];
-  for (const sub of ["whatsthisrock", "crystals"]) {
+  for (const sub of ["whatsthisrock", "crystals", "minerals"]) {
     const r = await fetch(`${host}/r/${sub}/new${auth.Authorization ? "" : ".json"}?limit=60`, { headers: { ...auth, "User-Agent": "web:earth-editions-erp:1.0" } });
     if (!r.ok) fail(502, r.status === 403 || r.status === 429 ? "Reddit blocked the search — add REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET in Vercel" : `Reddit: ${r.status}`);
     const d = await json(r);

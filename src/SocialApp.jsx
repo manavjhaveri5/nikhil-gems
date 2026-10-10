@@ -521,7 +521,7 @@ function Community({ st, showToast }) {
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ ...card, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 200 }}>
-          <b style={{ fontSize: 15 }}>Reddit questions — r/whatsthisrock, r/crystals</b>
+          <b style={{ fontSize: 15 }}>Reddit questions — r/whatsthisrock, r/crystals, r/minerals</b>
           <div style={{ fontSize: 12, color: C.inkMid }}>Newest first, last 2 days. Draft a reply from the photos, make it yours, post. No shop, no links — this builds the name.{feedAt ? ` · Updated ${ago(feedAt)} from the Mac — double-click Refresh Reddit on the Desktop for newer.` : ""}</div>
         </div>
         {answered > 0 && <label style={{ fontSize: 12, color: C.inkMid, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)} /> show {answered} answered</label>}

@@ -41,13 +41,13 @@ const prev = await fetch(`${URL_}/rest/v1/app_data?key=eq.ng-reddit-feed-v1&sele
 const errors = [];
 let got = null;
 for (let tryN = 0; tryN < 3 && !got; tryN++) {
-  try { got = await rss("whatsthisrock+crystals"); } catch (e) { if (tryN === 2) errors.push(e.message); else { console.log(`Reddit busy (${e.message}), trying again in 45s…`); await sleep(45000); } }
+  try { got = await rss("whatsthisrock+crystals+minerals"); } catch (e) { if (tryN === 2) errors.push(e.message); else { console.log(`Reddit busy (${e.message}), trying again in 45s…`); await sleep(45000); } }
 }
 const threads = got || prev;
 const keep = threads
   .filter(p => Date.now() - Date.parse(p.at) < 48 * 3600e3)
   .filter(p => p.sub === "whatsthisrock" || ASKS.test(`${p.title} ${p.text.slice(0, 300)}`))
-  .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 60);
+  .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 90);
 
 if (!keep.length) { console.error(`reddit-relay: nothing read (${errors.join("; ") || "empty"}) — keeping the last feed`); process.exit(errors.length ? 1 : 0); }
 const r = await fetch(`${URL_}/rest/v1/app_data?on_conflict=key`, {
