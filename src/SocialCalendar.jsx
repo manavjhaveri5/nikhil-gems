@@ -1,10 +1,14 @@
 /* Social → Calendar: the week's posts, planned, drafted, approved, posted.
 
-   The standing plan (a week at a time, "Plan this week"):
-     Mon  r/crystals          a piece worth talking about
-     Thu  r/Minerals          a specimen — locality, habit, association
-     Sun  r/crystals          the sale post (Sundays allow selling there): this
-                              week's newest pieces from eartheditions.co, priced
+   The standing plan (a week at a time, "Plan this week") — each kind of
+   piece goes where the people who care about it are:
+     Mon  r/crystals    a polished piece / carving (crystal)
+     Tue  r/Lapidary    rough — what's inside, how it'll cut
+     Thu  r/Minerals    a mineral specimen — habit, association, locality
+     Fri  r/Gemstones   a cabochon or cut stone
+     Sat  r/rockhounds  another mineral specimen
+     Sun  r/crystals    the sale post (Sundays allow selling there): this
+                        week's newest pieces from eartheditions.co, priced
 
    Nothing goes out unless it's been read and approved here: "Approve" lets
    the autopilot post it at its time (api/social.js, every hour), "Post
@@ -30,10 +34,15 @@ const DAY = 864e5;
 
 // The weekly plan. dow: 0 Sunday … 6 Saturday. Posting at 14:00 UTC — mid-morning in the US, where most of these readers are.
 export const PLAN = [
-  { dow: 1, sub: "crystals", type: "show", what: "a piece worth talking about" },
-  { dow: 4, sub: "Minerals", type: "show", what: "a mineral specimen", specimen: true },
-  { dow: 0, sub: "crystals", type: "sale", what: "this week's newest pieces from the store" },
+  { dow: 1, sub: "crystals", type: "show", kind: "crystal" },
+  { dow: 2, sub: "Lapidary", type: "show", kind: "rough" },
+  { dow: 4, sub: "Minerals", type: "show", kind: "mineral" },
+  { dow: 5, sub: "Gemstones", type: "show", kind: "gem" },
+  { dow: 6, sub: "rockhounds", type: "show", kind: "mineral" },
+  { dow: 0, sub: "crystals", type: "sale" },
 ];
+// Which sub a piece belongs in, by what it is.
+export const SUB_FOR = { crystal: "crystals", rough: "Lapidary", mineral: "Minerals", gem: "Gemstones" };
 const HOUR_UTC = 14;
 
 const weekStart = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };   // Monday
@@ -66,7 +75,13 @@ const factsOf = l => [`Piece: ${l.title}`, l.material && `Stone: ${l.material}`,
   l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`, l.description && `Notes: ${String(l.description).replace(/\s+/g, " ").slice(0, 900)}`].filter(Boolean).join("\n");
 
 async function draftShow(l, sub) {
-  const out = await ask(`Draft an image post for r/${sub}. The photo shows this piece:\n${factsOf(l)}\n\nReturn ONLY JSON: {"title":"plain and specific, under 110 characters, no clickbait","comment":"the first comment under the photo: 2-4 short paragraphs of real detail, ending with one genuine question"}`);
+  const angle = {
+    lapidary: "r/Lapidary is cutters: talk about the rough as material — what's likely inside, how it'll saw and polish, hardness, which way you'd orient it, what you'd cut it into. Ask what they'd cut from it.",
+    gemstones: "r/Gemstones is gem people: colour, clarity, inclusions, cut, size in mm/ct if given, natural vs treated (say plainly if you don't know). Not for sale, so it's fine to add NFS in the title.",
+    minerals: "r/Minerals is collectors: habit, luster, associated minerals, locality only if given, how it was cleaned or prepped.",
+    rockhounds: "r/rockhounds is rock people: how it came out of the ground, what it was found with (only if given), what makes it a good piece. Don't claim you dug it yourself.",
+  }[String(sub).toLowerCase()] || "";
+  const out = await ask(`Draft an image post for r/${sub}. ${angle} The photo shows this piece:\n${factsOf(l)}\n\nReturn ONLY JSON: {"title":"plain and specific, under 110 characters, no clickbait","comment":"the first comment under the photo: 2-4 short paragraphs of real detail, ending with one genuine question"}`);
   return { title: out.title || l.title, comment: out.comment || "" };
 }
 async function draftSale(rows, sub = "crystals") {
@@ -78,9 +93,20 @@ Return ONLY JSON: {"title":"${wts ? "starts with [WTS], " : ""}casual, names 2-3
   return out;
 }
 
-const specimenRe = /specimen|cluster|mineral|rough|matrix|geode|point|crystal|druz|raw/i;
-const polishedRe = /sphere|heart|palm|tower|bracelet|pendant|carving|egg|skull|pyramid|wand|bowl|tumble|cabochon|lingam/i;
-const isSpecimen = l => specimenRe.test(`${l.shape} ${l.title}`) && !polishedRe.test(`${l.shape} ${l.title}`);
+/* What a piece is, for where it's posted: polished pieces and carvings are
+   "crystal", cabochons and cut stones "gem", rough and slabs "rough", the rest
+   (clusters, specimens on matrix, points) "mineral". Titles carry shop words
+   ("Crystal", "Gemstone"), so it reads the shape and the title's first phrase. */
+export const kindOf = l => {
+  const shape = String(l?.shape || "").toLowerCase();
+  const head = String(l?.title || "").split(/[:|–—•(]/)[0].toLowerCase();
+  if (/sphere|palm|heart|tower|egg|tumble|bowl|skull|lingam|flatstone|pendant|bracelet|wand|pyramid/.test(shape)) return "crystal";
+  if (/carv|statue|figur|ganesh|buddha|skull|lingam|bottle|bowl|sphere|heart|tower|egg|palm|flatstone|pendant|pendulum|bracelet|beads?|wand|pyramid|obelisk|angel|chess|mix\b|bulk|chips/.test(head)) return "crystal";
+  if (/cabochons?|\bcabs?\b|faceted|loose (gem|stone)/.test(head)) return "gem";
+  const specimen = /cluster|geode|matrix|specimen|\bon\b|druz|points?\b|stalact/.test(head);
+  if (!specimen && (/\b(rough|raw|slabs?|sticks?|chunks?|nuggets?)\b/.test(head) || shape === "rough")) return "rough";
+  return "mineral";
+};
 const live = l => Object.values(l.platforms || {}).some(p => p?.status === "active");
 
 /* Plain text: Reddit's post box shows markdown as typed, so no ** or [](). */
@@ -138,8 +164,8 @@ export default function SocialCalendar({ st, showToast }) {
       const recent = new Set((items || []).filter(x => Date.now() - Date.parse(x.at) < 60 * DAY).flatMap(x => x.listing_ids || []));
       const pool = listings.filter(l => (l.images || []).some(u => typeof u === "string") && (live(l) || store[l.id]?.status === "active") && !recent.has(l.id));
       const used = new Set(), stones = new Set();
-      const pickOne = specimen => {
-        const c = pool.filter(l => !used.has(l.id) && !stones.has(String(l.material || "").toLowerCase()) && (specimen ? isSpecimen(l) : true));
+      const pickOne = kind => {
+        const c = pool.filter(l => !used.has(l.id) && !stones.has(String(l.material || "").toLowerCase()) && kindOf(l) === kind);
         const l = (c.length ? c : pool.filter(x => !used.has(x.id)))[Math.floor(Math.random() * Math.min(12, c.length || 1))];
         if (l) { used.add(l.id); stones.add(String(l.material || "").toLowerCase()); }
         return l;
@@ -149,7 +175,7 @@ export default function SocialCalendar({ st, showToast }) {
         const at = slot(ws, s.dow);
         if ((items || []).some(x => x.plan === `${s.sub}:${at.slice(0, 10)}`)) continue;
         if (s.type === "show") {
-          const l = pickOne(s.specimen);
+          const l = pickOne(s.kind);
           if (!l) continue;
           const d = await draftShow(l, s.sub);
           made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "show", kind: "image", title: d.title, comment: d.comment, body: "",
@@ -265,7 +291,7 @@ export default function SocialCalendar({ st, showToast }) {
         <button disabled={busy === "plan" || !items} onClick={plan} style={btn(C.ink, "#FAF0DC")}>{busy === "plan" ? "Drafting the week…" : "✨ Plan this week"}</button>
       </div>
       <div style={{ fontSize: 12.5, color: C.inkMid }}>
-        Mon r/crystals · Thu r/Minerals — a piece worth talking about, posted as a photo with the story in the first comment. Sun r/crystals — the Sunday sale post: this week's newest pieces from the store, with prices. Every post waits for you: <b>Approve</b> and it goes out at its time, or <b>Post now</b>.
+        Each piece goes where its people are: Mon r/crystals (polished, carvings) · Tue r/Lapidary (rough) · Thu r/Minerals (specimens) · Fri r/Gemstones (cabochons, cut stones) · Sat r/rockhounds (specimens) — a photo with the story in the first comment. Picking a different piece moves the post to that piece's sub. Sun r/crystals — the Sunday sale post: this week's newest pieces from the store, with prices. Every post waits for you: <b>Approve</b> and it goes out at its time, or <b>Post now</b>.
         {!connected && <span style={{ color: C.amber }}> Until Reddit approves API access you post by hand: open a post, <b>Open on Reddit to post</b> (title filled in, photo saved to Downloads, text copied), then <b>✓ I posted it</b>.</span>}
       </div>
 
@@ -367,7 +393,7 @@ function PiecePicker({ it, lib, update }) {
     const first = imgsOf(l, store[l.id])[0];
     update(it.id, sale
       ? { listing_ids: [...ids, l.id], images: first ? [...chosen, first] : chosen }
-      : { listing_ids: [l.id], images: imgsOf(l, store[l.id]).slice(0, 3), piece: l.title });
+      : { listing_ids: [l.id], images: imgsOf(l, store[l.id]).slice(0, 3), piece: l.title, sub: SUB_FOR[kindOf(l)] });
     setAdding(false); setQ("");
   };
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
