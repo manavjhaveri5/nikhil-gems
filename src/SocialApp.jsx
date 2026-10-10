@@ -476,7 +476,9 @@ How he answers:
 - Never: the name Earth Editions, a shop, a link, prices, "DM me", offers to sell, emojis, exclamation marks, hashtags, health or metaphysical claims.`;
 async function draftAnswer(t) {
   const content = [{ type: "text", text: `r/${t.sub} post${t.flair ? ` [${t.flair}]` : ""}\nTitle: ${t.title}\n${t.text || "(photo only)"}\n\nWrite his reply. Return only the reply.` },
-    ...(t.images || (t.image ? [t.image] : [])).map(url => ({ type: "image", source: { type: "url", url } }))];
+    ...(t.images || (t.image ? [t.image] : [])).map(url => url.startsWith("data:")
+      ? { type: "image", source: { media_type: url.slice(5, url.indexOf(";")), data: url.split(",")[1] } }
+      : { type: "image", source: { type: "url", url } })];
   const res = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "gpt-4.1", max_tokens: 400, temperature: 0.6, messages: [{ role: "system", content: ANSWER }, { role: "user", content }] }) }, { tries: 2, timeoutMs: 90000 });
   const d = await res.json();
@@ -512,8 +514,44 @@ function Community({ st, showToast }) {
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
+  /* Draft from a post you're looking at: paste its title/text, paste or drop
+     its photo. Works without any Reddit API access. */
+  const [pasted, setPasted] = useState({ text: "", sub: "whatsthisrock", images: [], reply: "" });
+  const addPhotos = files => Promise.all([...files].filter(f => f.type.startsWith("image/")).slice(0, 3).map(f => new Promise(res => {
+    const img = new Image(); img.onload = () => { const k = Math.min(1, 1400 / Math.max(img.width, img.height)); const c = document.createElement("canvas"); c.width = img.width * k; c.height = img.height * k; c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); res(c.toDataURL("image/jpeg", .85)); URL.revokeObjectURL(img.src); };
+    img.src = URL.createObjectURL(f);
+  }))).then(urls => setPasted(p => ({ ...p, images: [...p.images, ...urls].slice(0, 3) })));
+  const draftPasted = async () => {
+    setBusy("paste");
+    try { const lines = pasted.text.trim().split("\n"); setPasted(p => ({ ...p, reply: "" })); const reply = await draftAnswer({ sub: pasted.sub, title: lines[0] || "", text: lines.slice(1).join("\n"), images: pasted.images }); setPasted(p => ({ ...p, reply })); }
+    catch (e) { showToast(`⚠ ${e.message}`); }
+    setBusy("");
+  };
   return (
     <div style={{ display: "grid", gap: 12 }}>
+      <div style={card} onPaste={e => { if (e.clipboardData?.files?.length) { e.preventDefault(); addPhotos(e.clipboardData.files); } }}
+        onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); addPhotos(e.dataTransfer.files); }}>
+        <b style={{ fontSize: 15 }}>Answer a post you're looking at</b>
+        <div style={{ fontSize: 12, color: C.inkMid, margin: "2px 0 8px" }}>Paste the post's title (first line) and text, and paste or drop its photo (a screenshot is fine). You get a reply in the voice of someone who's handled a lot of rough — no shop, no links. Make it yours, then post it on Reddit yourself.</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+          {["whatsthisrock", "crystals", "Minerals", "geology"].map(x => <button key={x} onClick={() => setPasted(p => ({ ...p, sub: x }))} style={btn(pasted.sub === x ? C.ink : undefined, pasted.sub === x ? "#FAF0DC" : undefined)}>r/{x}</button>)}
+        </div>
+        <textarea value={pasted.text} onChange={e => setPasted(p => ({ ...p, text: e.target.value }))} rows={3} placeholder={"Found this on a beach in Oregon, what is it?\nHeavy for its size, scratches glass…"} style={FI({ fontSize: 13 })} />
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+          {pasted.images.map((u, i) => <img key={i} src={u} alt="" onClick={() => setPasted(p => ({ ...p, images: p.images.filter((_, j) => j !== i) }))} title="Click to remove" style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 7, cursor: "pointer" }} />)}
+          <label style={{ ...btn(), display: "inline-block" }}>＋ Photo<input type="file" accept="image/*" multiple hidden onChange={e => { addPhotos(e.target.files); e.target.value = ""; }} /></label>
+          <span style={{ fontSize: 11.5, color: C.inkFaint }}>or paste / drop it here</span>
+          <div style={{ flex: 1 }} />
+          <button disabled={busy === "paste" || (!pasted.text.trim() && !pasted.images.length)} onClick={draftPasted} style={btn(C.ink, "#FAF0DC")}>{busy === "paste" ? "Drafting…" : pasted.reply ? "↻ Draft again" : "Draft a reply"}</button>
+        </div>
+        {pasted.reply && <>
+          <textarea value={pasted.reply} onChange={e => setPasted(p => ({ ...p, reply: e.target.value }))} rows={5} style={FI({ fontSize: 13, marginTop: 8 })} />
+          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <button onClick={() => navigator.clipboard.writeText(pasted.reply).then(() => showToast("Copied — paste it on Reddit"))} style={btn(C.ink, "#FAF0DC")}>Copy reply</button>
+            <button onClick={() => setPasted({ text: "", sub: pasted.sub, images: [], reply: "" })} style={btn()}>Next post</button>
+          </div>
+        </>}
+      </div>
       <div style={card}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <div style={{ flex: 1 }}>
