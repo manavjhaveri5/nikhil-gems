@@ -61,9 +61,11 @@ How people actually write on r/crystals and r/Minerals (read hundreds of posts �
 - Never invent a fact. Use only the size, weight, origin and details given; if origin isn't given, don't name one.
 - No health or metaphysical claims.`;
 
-async function ask(prompt, max = 900) {
+// The full model, and it sees the photos: it writes about what's actually there.
+async function ask(prompt, max = 900, images = []) {
+  const content = images.length ? [{ type: "text", text: prompt }, ...images.map(url => ({ type: "image", source: { type: "url", url } }))] : prompt;
   const r = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ max_tokens: max, temperature: 0.85, messages: [{ role: "system", content: REDDIT }, { role: "user", content: prompt }] }) }, { tries: 2, timeoutMs: 90000 });
+    body: JSON.stringify({ model: "gpt-4.1", max_tokens: max, temperature: 0.85, messages: [{ role: "system", content: REDDIT }, { role: "user", content }] }) }, { tries: 2, timeoutMs: 120000 });
   const d = await r.json();
   if (d.error) throw new Error(d.error?.message || d.error);
   const t = (d.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
@@ -74,14 +76,21 @@ async function ask(prompt, max = 900) {
 const factsOf = l => [`Piece: ${l.title}`, l.material && `Stone: ${l.material}`, l.shape && `Form: ${l.shape}`, l.origin && `Origin: ${l.origin}`,
   l.size && `Size: ${l.size}`, l.weight && `Weight: ${l.weight}`, l.description && `Notes: ${String(l.description).replace(/\s+/g, " ").slice(0, 900)}`].filter(Boolean).join("\n");
 
-async function draftShow(l, sub) {
+async function draftShow(l, sub, images = []) {
   const angle = {
     lapidary: "r/Lapidary is cutters: talk about the rough as material — what's likely inside, how it'll saw and polish, hardness, which way you'd orient it, what you'd cut it into. Ask what they'd cut from it.",
     gemstones: "r/Gemstones is gem people: colour, clarity, inclusions, cut, size in mm/ct if given, natural vs treated (say plainly if you don't know). Not for sale, so it's fine to add NFS in the title.",
     minerals: "r/Minerals is collectors: habit, luster, associated minerals, locality only if given, how it was cleaned or prepped.",
     rockhounds: "r/rockhounds is rock people: how it came out of the ground, what it was found with (only if given), what makes it a good piece. Don't claim you dug it yourself.",
   }[String(sub).toLowerCase()] || "";
-  const out = await ask(`Draft an image post for r/${sub}. ${angle} The photo shows this piece:\n${factsOf(l)}\n\nReturn ONLY JSON: {"title":"plain and specific, under 110 characters, no clickbait","comment":"the first comment under the photo: 2-4 short paragraphs of real detail, ending with one genuine question"}`);
+  const out = await ask(`Draft a photo post for r/${sub}, as a regular there sharing a piece he likes — not a listing. ${angle}
+The piece (shop facts — use only what's true, never copy their wording):\n${factsOf(l)}
+The attached photos are what's posted. Look at them and write about what's actually visible and worth noticing.
+
+Title — how regulars title these: short, lowercase-ish, a person talking. Like "alien amethyst from telangana, the red is hematite", "this fluorite on quartz has a purple phantom you can only see backlit", "ruby in kyanite, the blue is way more electric in person", or on r/Minerals just "Fluorite on Quartz — Kishangarh, India". Never the shop title, never a list of adjectives, never "Polished X with Y and Z from A/B".
+Comment — 2-4 sentences, maybe a short second paragraph. One or two things you'd point out to a friend holding it (a phantom, the way the bands catch light, a contact point, how heavy it feels, what it looks like under a torch). Then one real question for the sub.
+Never: "This is a…", describing the shape ("smooth oval shape", "fits nicely in the hand"), "adds character", "suitable for", "enhances", "I appreciate", "display and tactile use", "known sources", hedged origins ("either X or Y" — if the origin isn't one clear place, leave it out), sizes and grams in the first line.
+Return ONLY JSON: {"title":"...","comment":"..."}`, 900, images.slice(0, 4));
   return { title: out.title || l.title, comment: out.comment || "" };
 }
 async function draftSale(rows, sub = "crystals") {
@@ -91,6 +100,28 @@ The pieces:\n${rows.map(r => `- ${r.name}${r.size ? ` (${r.size})` : ""}${r.note
 How real Sunday sale posts there read: titles like "Sunday sale — couple of atlantisite skulls and some ruby fuchsite, ships from India" or "few new carvings up for grabs this week"; the text is short and practical, a line or two about the pieces in his own words, then how to buy.
 Return ONLY JSON: {"title":"${wts ? "starts with [WTS], " : ""}casual, names 2-3 of the actual stones, mentions shipping from India, under 120 characters","intro":"1-2 short casual sentences about these particular pieces, something real about them (from the details given), not about 'the collection'","outro":"one short line: comment or DM with questions, happy to send more pics or a video"}`, 500);
   return out;
+}
+
+/* Pieces worth a show-and-tell: one of a kind, not stock sold by the dozen
+   (palmstones, tumbles, hearts, beads), and the dearer ones first. */
+const STOCKY = /palm|tumble|heart|egg|bracelet|pendant|beads?|chips|mix\b|bulk|\blots?\b|mini|pendulum|wand|angel|set\b|pair|keychain|ring\b/i;
+const worthShowing = (l, sp) => (+l.qty || 1) <= 1 && !(l.variations || []).length && !STOCKY.test(`${l.shape} ${String(l.title || "").split(/[:|–—•(]/)[0]}`) && imgsOf(l, sp).length >= 2;
+/* Let the model look: of a handful of candidates, the piece a collector would
+   stop scrolling for, and its photos that look like someone took them on a
+   table or in hand — not the white-background shop shots, collages or ones
+   with text on them. */
+async function choosePiece(cands, sub, store) {
+  const shown = cands.slice(0, 8).map(l => ({ l, photos: imgsOf(l, store[l.id]).filter(u => !/etsystatic/.test(u)).slice(0, 3) })).filter(c => c.photos.length);
+  if (shown.length < 2) return shown[0] ? { l: shown[0].l, photos: shown[0].photos } : null;
+  const refs = shown.flatMap((c, i) => c.photos.map((u, k) => ({ i, k, u })));
+  const out = await ask(`Pick the best piece to show on r/${sub} — the one regulars there would stop for and talk about: an interesting specimen, unusual material, a great inclusion or colour — not a generic shop item. Then pick its photos that look natural (in hand, on a table, real light, close-ups of detail). Skip photos with text, logos, collages, size charts, or plain white studio backgrounds.
+The candidates, in order, with the photos attached in the same order:
+${shown.map((c, i) => `${i + 1}. ${c.l.title} — photos ${c.photos.map((_, k) => `${i + 1}.${k + 1}`).join(", ")}`).join("\n")}
+Return ONLY JSON: {"piece": number, "photos": ["n.k", ...] (1-4 of that piece's, best first)}`, 300, refs.map(r => r.u));
+  const c = shown[(+out.piece || 1) - 1] || shown[0];
+  const ci = shown.indexOf(c);
+  const photos = (out.photos || []).map(x => String(x).split(".").map(Number)).filter(([n]) => n - 1 === ci).map(([, k]) => c.photos[k - 1]).filter(Boolean);
+  return { l: c.l, photos: photos.length ? photos : c.photos.slice(0, 2) };
 }
 
 /* What a piece is, for where it's posted: polished pieces and carvings are
@@ -157,29 +188,40 @@ export default function SocialCalendar({ st, showToast }) {
 
   /* Plan the week: a draft for each slot that doesn't have one yet, each with
      its own piece — one not posted about in the last two months. */
-  const plan = async () => {
+  const plan = async (redo = false) => {
+    // Redo: this week's untouched drafts go, and are planned afresh.
+    let items_ = items || [];
+    if (redo) {
+      if (!confirm("Replace this week's drafts (not approved or posted ones) with new picks?")) return;
+      items_ = items_.filter(x => !(inWeek(x.at) && x.plan && x.status === "draft"));
+    }
     setBusy("plan");
     try {
       const [listings, store] = await Promise.all([loadK("ng-listings-v1").then(l => Array.isArray(l) ? l : []), loadStoreFacts().catch(() => ({}))]);
-      const recent = new Set((items || []).filter(x => Date.now() - Date.parse(x.at) < 60 * DAY).flatMap(x => x.listing_ids || []));
+      const recent = new Set(items_.filter(x => Date.now() - Date.parse(x.at) < 60 * DAY).flatMap(x => x.listing_ids || []));
       const pool = listings.filter(l => (l.images || []).some(u => typeof u === "string") && (live(l) || store[l.id]?.status === "active") && !recent.has(l.id));
       const used = new Set(), stones = new Set();
-      const pickOne = kind => {
-        const c = pool.filter(l => !used.has(l.id) && !stones.has(String(l.material || "").toLowerCase()) && kindOf(l) === kind);
-        const l = (c.length ? c : pool.filter(x => !used.has(x.id)))[Math.floor(Math.random() * Math.min(12, c.length || 1))];
-        if (l) { used.add(l.id); stones.add(String(l.material || "").toLowerCase()); }
-        return l;
+      // A shortlist of one-of-a-kind pieces of the right kind (the dearer half,
+      // shuffled), and the model picks the one to show and its photos.
+      const pickOne = async (kind, sub) => {
+        const c = pool.filter(l => !used.has(l.id) && !stones.has(String(l.material || "").toLowerCase()) && kindOf(l) === kind && worthShowing(l, store[l.id]))
+          .sort((a, b) => (+store[b.id]?.price || +b.price_etsy || 0) - (+store[a.id]?.price || +a.price_etsy || 0));
+        const top = c.slice(0, Math.max(8, Math.ceil(c.length / 2))).sort(() => Math.random() - .5);
+        const got = top.length ? await choosePiece(top, sub, store) : null;
+        if (got) { used.add(got.l.id); stones.add(String(got.l.material || "").toLowerCase()); }
+        return got;
       };
       const made = [];
       for (const s of PLAN) {
         const at = slot(ws, s.dow);
-        if ((items || []).some(x => x.plan === `${s.sub}:${at.slice(0, 10)}`)) continue;
+        if (items_.some(x => x.plan === `${s.sub}:${at.slice(0, 10)}`)) continue;
         if (s.type === "show") {
-          const l = pickOne(s.kind);
-          if (!l) continue;
-          const d = await draftShow(l, s.sub);
+          const got = await pickOne(s.kind, s.sub);
+          if (!got) continue;
+          const { l, photos } = got;
+          const d = await draftShow(l, s.sub, photos);
           made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "show", kind: "image", title: d.title, comment: d.comment, body: "",
-            images: imgsOf(l, store[l.id]).slice(0, 3), listing_ids: [l.id], piece: l.title, status: "draft" });
+            images: photos, listing_ids: [l.id], piece: l.title, status: "draft" });
         } else {
           // The newest pieces on the store: the sale post is "new in this week".
           const ids = pool.filter(l => store[l.id]?.status === "active" && +store[l.id]?.price > 0 && !used.has(l.id))
@@ -191,7 +233,7 @@ export default function SocialCalendar({ st, showToast }) {
             body: saleBody(rows, d), comment: "", images: rows.map(r => imgsOf(listings.find(l => l.id === r.id), store[r.id])[0]).filter(Boolean), listing_ids: rows.map(r => r.id), piece: `${rows.length} pieces`, status: "draft" });
         }
       }
-      await persist([...(items || []), ...made]);
+      await persist([...items_, ...made]);
       showToast(made.length ? `✓ ${made.length} draft${made.length === 1 ? "" : "s"} for the week — read, edit, approve` : "This week is already planned");
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
@@ -218,7 +260,7 @@ export default function SocialCalendar({ st, showToast }) {
       } else {
         const l = listings.find(x => x.id === it.listing_ids?.[0]);
         if (!l) throw new Error("Pick the piece first");
-        const d = await draftShow(l, it.sub); await update(it.id, { title: d.title, comment: d.comment, piece: l.title });
+        const d = await draftShow(l, it.sub, it.images || []); await update(it.id, { title: d.title, comment: d.comment, piece: l.title });
       }
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
@@ -288,7 +330,8 @@ export default function SocialCalendar({ st, showToast }) {
         <button onClick={() => setWs(w => new Date(w.getTime() + 7 * DAY))} style={btn()}>›</button>
         <button onClick={() => setWs(weekStart(new Date()))} style={btn()}>This week</button>
         <div style={{ flex: 1 }} />
-        <button disabled={busy === "plan" || !items} onClick={plan} style={btn(C.ink, "#FAF0DC")}>{busy === "plan" ? "Drafting the week…" : "✨ Plan this week"}</button>
+        {week.some(x => x.plan && x.status === "draft") && <button disabled={busy === "plan"} onClick={() => plan(true)} style={btn()}>↻ Redo drafts</button>}
+        <button disabled={busy === "plan" || !items} onClick={() => plan(false)} style={btn(C.ink, "#FAF0DC")}>{busy === "plan" ? "Picking pieces & drafting…" : "✨ Plan this week"}</button>
       </div>
       <div style={{ fontSize: 12.5, color: C.inkMid }}>
         Each piece goes where its people are: Mon r/crystals (polished, carvings) · Tue r/Lapidary (rough) · Thu r/Minerals (specimens) · Fri r/Gemstones (cabochons, cut stones) · Sat r/rockhounds (specimens) — a photo with the story in the first comment. Picking a different piece moves the post to that piece's sub. Sun r/crystals — the Sunday sale post: this week's newest pieces from the store, with prices. Every post waits for you: <b>Approve</b> and it goes out at its time, or <b>Post now</b>.
