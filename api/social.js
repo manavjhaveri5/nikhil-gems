@@ -445,7 +445,7 @@ async function redditQuestions() {
   // (scripts/reddit-relay.mjs → app_data ng-reddit-feed-v1), else the RSS.
   if (!env("REDDIT_CLIENT_ID")) {
     const relay = await appData("ng-reddit-feed-v1").catch(() => null);
-    if (relay?.threads?.length) return Object.assign(relay.threads.filter(p => Date.now() - Date.parse(p.at) < 48 * 3600e3), { feedAt: relay.at });
+    if (relay?.threads?.length) return Object.assign(relay.threads.filter(p => Date.now() - Date.parse(p.at) < 72 * 3600e3), { feedAt: relay.at });
     const ASKS = /\?|\b(what|which|is (this|it)|real|fake|dyed|identif\w*|id\b|help|anyone know|any idea|found)\b/i;
     // One sub at a time, a beat apart, kept 5 minutes: Reddit rate-limits feeds fetched back to back.
     if (rssMemo && Date.now() - rssMemo.at < 5 * 60e3) return rssMemo.list;

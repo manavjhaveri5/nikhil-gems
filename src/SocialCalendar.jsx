@@ -43,13 +43,14 @@ const localInput = iso => { const d = new Date(iso); const p = n => String(n).pa
 
 /* How a person writes on Reddit. The drafts are a starting point, read and
    edited every time — but they should already sound like someone, not a shop. */
-const REDDIT = `You're helping a man in India who has bought, sorted and wholesaled rough stone for years, and cuts and collects it (family business, buys rough at the source), write his own Reddit posts. Write exactly the way a knowledgeable, slightly understated hobbyist writes on Reddit — not a brand, not a marketer.
-- First person, plain, specific. Mix short and long sentences. Contractions. It's fine to be a little dry.
-- No hashtags, no emojis, no exclamation marks, no "check out", "stunning", "mesmerizing", "gorgeous", "beautiful energy", "I'm excited to share", "Hey everyone", "Hope you enjoy".
-- No links, no shop name, nothing for sale in show-and-tell posts — subs remove self-promotion.
-- Never invent a fact. Only the size, weight, origin and details given; if origin isn't given, don't name one.
-- No health or metaphysical claims. In r/Minerals and r/mineralcollectors talk like a collector: locality, habit, associated minerals, luster, how it was found, prepped or cut; in r/crystals a bit warmer, still grounded.
-- End the comment with one real question the sub would enjoy answering (an ID detail, a comparison, a cutting choice) — not "what do you think?".`;
+const REDDIT = `You're writing Reddit posts for a guy in India whose family has bought, sorted and wholesaled rough stone for years; he cuts and collects too. He posts as himself, like any regular in the sub.
+How people actually write on r/crystals and r/Minerals (read hundreds of posts — sound like them):
+- Short and casual. Lowercase-ish energy, contractions, plain words. Real people say "got a few new ones in", "these came out really nice", "the flash on this one is hard to catch on camera", "lmk if you want more pics", "happy sunday all". It's fine to be a bit dry or self-deprecating.
+- Talk about the actual stones: what's odd or good about this piece, how it looks in hand vs photo, a detail only someone who handled it would notice. One concrete detail beats three adjectives.
+- Never write like a shop or a press release: no "added some new stones to the collection", "a mix of tumbled and carved pieces", "our usual sources", "curated", "high quality", "stunning", "mesmerizing", "beautiful energy", "I'm excited to share", "Hey everyone", "Hope you enjoy", "elevate", "unique piece". No hashtags, no emoji, no exclamation marks.
+- Show-and-tell posts: no links, no shop, nothing for sale. r/Minerals: collector talk — locality only if given, habit, luster, associations, how it was cut or prepped. r/crystals: warmer, still grounded.
+- Never invent a fact. Use only the size, weight, origin and details given; if origin isn't given, don't name one.
+- No health or metaphysical claims.`;
 
 async function ask(prompt, max = 900) {
   const r = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -70,8 +71,10 @@ async function draftShow(l, sub) {
 }
 async function draftSale(rows, sub = "crystals") {
   const wts = /forsale/i.test(sub);
-  const out = await ask(`Draft the opening and closing lines for this week's ${wts ? "sale post on r/" + sub : "Sunday sale post on r/crystals (selling is allowed there on Sundays only)"}. They are new pieces just added to our shop. The list of pieces is added separately — don't repeat it. Pieces: ${rows.map(r => r.name).join("; ")}.
-Return ONLY JSON: {"title":"${wts ? "starts with [WTS], " : "plain, e.g. 'Sunday sale: new in this week — ' then 2-3 of the stones, "}under 160 characters, says ships worldwide from India","intro":"1-2 plain sentences: what came in this week, no hype","outro":"1-2 lines: comment or DM to claim, happy to send more photos or video"}`, 500);
+  const out = await ask(`Write the title and the few lines around the list for this week's ${wts ? "sale post on r/" + sub : "Sunday sale post on r/crystals (selling is allowed there on Sundays)"}. It's a photo post: the photos are the actual pieces. The list of pieces with prices goes in between — don't repeat it.
+The pieces:\n${rows.map(r => `- ${r.name}${r.size ? ` (${r.size})` : ""}${r.notes ? ` — ${r.notes}` : ""}`).join("\n")}
+How real Sunday sale posts there read: titles like "Sunday sale — couple of atlantisite skulls and some ruby fuchsite, ships from India" or "few new carvings up for grabs this week"; the text is short and practical, a line or two about the pieces in his own words, then how to buy.
+Return ONLY JSON: {"title":"${wts ? "starts with [WTS], " : ""}casual, names 2-3 of the actual stones, mentions shipping from India, under 120 characters","intro":"1-2 short casual sentences about these particular pieces, something real about them (from the details given), not about 'the collection'","outro":"one short line: comment or DM with questions, happy to send more pics or a video"}`, 500);
   return out;
 }
 
@@ -80,9 +83,22 @@ const polishedRe = /sphere|heart|palm|tower|bracelet|pendant|carving|egg|skull|p
 const isSpecimen = l => specimenRe.test(`${l.shape} ${l.title}`) && !polishedRe.test(`${l.shape} ${l.title}`);
 const live = l => Object.values(l.platforms || {}).some(p => p?.status === "active");
 
+/* Plain text: Reddit's post box shows markdown as typed, so no ** or [](). */
 function saleBody(rows, d) {
-  const lines = rows.map((r, i) => `${i + 1}. **${r.name}**${r.size ? ` — ${r.size}` : ""} — **$${Math.round(r.price)}** — [photos](${r.url})`);
-  return [d.intro || "", "", ...lines, "", "Prices in USD. Free tracked shipping to the US over $35, duties paid; worldwide shipping from India.", "", d.outro || ""].join("\n").trim();
+  const lines = rows.map((r, i) => `${i + 1}. ${r.name}${r.size ? `, ${r.size}` : ""} — $${Math.round(r.price)}\n${r.url}`);
+  return [d.intro || "", "", ...lines.flatMap(l => [l, ""]), "Prices in USD, photos are the actual pieces. Free tracked shipping to the US over $35, duties paid; ships worldwide from India.", "", d.outro || ""].join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+// A piece's photos: our own copies first (they download straight into a post),
+// then any the store has that we don't.
+const imgsOf = (l, sp) => { const all = [...new Set([...(l?.images || []), ...(sp?.images || [])].filter(u => typeof u === "string" && /^https:/.test(u)))]; return [...all.filter(u => !/etsystatic/.test(u)), ...all.filter(u => /etsystatic/.test(u))]; };
+const grams = t => String(t || "").replace(/(\d)\s*(g|kg|mm|cm)\b/gi, "$1 $2");
+// One line per piece for the sale post: name, size (weight once, not twice), store price and link.
+function saleRows(ids, listings, store) {
+  return ids.map(id => listings.find(l => l.id === id)).filter(l => l && store[l.id]?.handle && +store[l.id]?.price > 0).map(l => {
+    const size = [...new Set([l.size, l.weight].map(grams).map(x => x.trim()).filter(Boolean))].join(", ");
+    return { id: l.id, name: (store[l.id].title || [l.material, l.shape].filter(Boolean).join(" ") || l.title).replace(/^\d+\s*g\s+/i, ""), size, price: +store[l.id].price,
+      notes: String(l.description || "").replace(/\s+/g, " ").slice(0, 160), url: `${SITE.replace("https://", "")}/products/${store[l.id].handle}?utm_source=reddit` };
+  });
 }
 
 export default function SocialCalendar({ st, showToast }) {
@@ -137,16 +153,16 @@ export default function SocialCalendar({ st, showToast }) {
           if (!l) continue;
           const d = await draftShow(l, s.sub);
           made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "show", kind: "image", title: d.title, comment: d.comment, body: "",
-            images: (l.images || []).filter(u => typeof u === "string").slice(0, 6), image: 0, listing_ids: [l.id], piece: l.title, status: "draft" });
+            images: imgsOf(l, store[l.id]).slice(0, 3), listing_ids: [l.id], piece: l.title, status: "draft" });
         } else {
           // The newest pieces on the store: the sale post is "new in this week".
-          const rows = pool.filter(l => store[l.id]?.status === "active" && +store[l.id]?.price > 0 && !used.has(l.id))
-            .sort((a, b) => String(store[b.id]?.created_at || b.created_at || "").localeCompare(String(store[a.id]?.created_at || a.created_at || ""))).slice(0, 10)
-            .map(l => ({ id: l.id, name: [l.material, l.shape].filter(Boolean).join(" ") || l.title, size: [l.size, l.weight].filter(Boolean).join(", "), price: +store[l.id].price, url: `${SITE}/products/${store[l.id].handle}?utm_source=reddit&utm_medium=social` }));
+          const ids = pool.filter(l => store[l.id]?.status === "active" && +store[l.id]?.price > 0 && !used.has(l.id))
+            .sort((a, b) => String(store[b.id]?.created_at || b.created_at || "").localeCompare(String(store[a.id]?.created_at || a.created_at || ""))).slice(0, 6).map(l => l.id);
+          const rows = saleRows(ids, listings, store);
           if (!rows.length) continue;
           const d = await draftSale(rows, s.sub);
-          made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "sale", kind: "self", title: d.title || (/forsale/i.test(s.sub) ? "[WTS] This week's pieces — ships worldwide from India" : "Sunday sale: new in this week — ships worldwide from India"),
-            body: saleBody(rows, d), comment: "", images: [], listing_ids: rows.map(r => r.id), piece: `${rows.length} pieces`, status: "draft" });
+          made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "sale", kind: "image", title: d.title || "Sunday sale — a few new pieces, ships from India",
+            body: saleBody(rows, d), comment: "", images: rows.map(r => imgsOf(listings.find(l => l.id === r.id), store[r.id])[0]).filter(Boolean), listing_ids: rows.map(r => r.id), piece: `${rows.length} pieces`, status: "draft" });
         }
       }
       await persist([...(items || []), ...made]);
@@ -155,13 +171,29 @@ export default function SocialCalendar({ st, showToast }) {
     setBusy("");
   };
 
+  // The pieces and photos to pick from, loaded when a post is opened.
+  const [lib, setLib] = useState(null);
+  const loadLib = async () => {
+    if (lib) return lib;
+    const [listings, store] = await Promise.all([loadK("ng-listings-v1").then(l => Array.isArray(l) ? l : []), loadStoreFacts().catch(() => ({}))]);
+    const v = { listings, store }; setLib(v); return v;
+  };
+  useEffect(() => { if (open) loadLib().catch(() => {}); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   const redraft = async it => {
     setBusy(it.id);
     try {
-      const listings = await loadK("ng-listings-v1");
-      const l = (listings || []).find(x => x.id === it.listing_ids?.[0]);
-      if (it.type === "show" && l) { const d = await draftShow(l, it.sub); await update(it.id, { title: d.title, comment: d.comment }); }
-      else showToast("Edit the sale post by hand — the list is the pieces and prices");
+      const { listings, store } = await loadLib();
+      if (it.type === "sale") {
+        const rows = saleRows(it.listing_ids || [], listings, store);
+        if (!rows.length) throw new Error("Pick at least one piece that's on the store");
+        const d = await draftSale(rows, it.sub);
+        const images = it.images?.length ? it.images : rows.map(r => imgsOf(listings.find(l => l.id === r.id), store[r.id])[0]).filter(Boolean);
+        await update(it.id, { title: d.title || it.title, body: saleBody(rows, d), piece: `${rows.length} pieces`, kind: "image", images });
+      } else {
+        const l = listings.find(x => x.id === it.listing_ids?.[0]);
+        if (!l) throw new Error("Pick the piece first");
+        const d = await draftShow(l, it.sub); await update(it.id, { title: d.title, comment: d.comment, piece: l.title });
+      }
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
@@ -173,7 +205,7 @@ export default function SocialCalendar({ st, showToast }) {
     if (!confirm(`Post this to r/${it.sub} now?`)) return;
     setBusy(it.id);
     try {
-      const payload = { ...it, images: it.kind === "image" ? [it.images[it.image || 0]].filter(Boolean) : [] };
+      const payload = { ...it, images: it.kind === "image" ? [it.images?.[0]].filter(Boolean) : [] };
       const r = await fetch("/api/social?action=post_item", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ item: payload }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.status);
@@ -186,22 +218,27 @@ export default function SocialCalendar({ st, showToast }) {
      title filled in, the photo is saved to Downloads to drop into the post, and
      the text (or first comment) is on the clipboard. */
   const byHand = async it => {
-    const photo = it.kind === "image" ? it.images?.[it.image || 0] : "";
-    const text = it.kind === "image" ? it.comment : it.body;
-    if (photo) {
+    const photos = it.kind === "image" ? it.images || [] : [];
+    // A sale post's text goes in the photo post's body; a show post's story is the first comment.
+    const text = it.type === "sale" || it.kind === "self" ? it.body : it.comment;
+    const stem = (it.piece || it.title || "photo").replace(/[^\w -]+/g, "").slice(0, 40).trim() || "photo";
+    for (const [i, photo] of photos.entries()) {
       try {
         const b = await (await fetch(photo)).blob();
         const a = document.createElement("a");
-        a.href = URL.createObjectURL(b); a.download = `${(it.piece || it.title || "photo").replace(/[^\w -]+/g, "").slice(0, 50).trim() || "photo"}.${(b.type.split("/")[1] || "jpg").replace("jpeg", "jpg")}`;
+        a.href = URL.createObjectURL(b); a.download = `${stem} ${String(i + 1).padStart(2, "0")}.${(b.type.split("/")[1] || "jpg").replace("jpeg", "jpg")}`;
         document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        await new Promise(r => setTimeout(r, 350));
       } catch { window.open(photo, "_blank"); }
     }
     const q = new URLSearchParams({ title: it.title || "" });
-    if (it.kind === "image") q.set("type", "IMAGE"); else { q.set("type", "TEXT"); q.set("text", text || ""); }
+    if (it.kind === "image") q.set("type", "IMAGE"); else q.set("type", "TEXT");
     window.open(`https://www.reddit.com/r/${it.sub}/submit?${q}`, "_blank");
     try { await navigator.clipboard.writeText(text || ""); } catch { /* not allowed */ }
     await update(it.id, { hand: true });
-    showToast(it.kind === "image" ? "Reddit opened with the title — drop in the photo from Downloads, post, then paste the first comment (it's copied)" : "Reddit opened with the title — the post text is copied, paste it if the box is empty");
+    showToast(it.kind !== "image" ? "Reddit opened with the title — paste the post text (it's copied)"
+      : it.type === "sale" ? `Reddit opened with the title — drop in the ${photos.length} photo${photos.length === 1 ? "" : "s"} from Downloads, then paste the text into the body (it's copied)`
+      : `Reddit opened with the title — drop in the photo${photos.length === 1 ? "" : "s"} from Downloads, post, then paste the first comment (it's copied)`);
   };
   const markPosted = async it => {
     const url = prompt("Paste the link to your Reddit post (optional):", "") ?? null;
@@ -250,7 +287,7 @@ export default function SocialCalendar({ st, showToast }) {
               return (
                 <div key={it.id} style={{ borderTop: `1px solid ${C.border}`, padding: "8px 0" }}>
                   <div onClick={() => setOpen(isOpen ? null : it.id)} style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-                    {it.images?.[it.image || 0] && <img src={it.images[it.image || 0]} alt="" style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 6 }} />}
+                    {it.images?.[0] && <img src={it.images[0]} alt="" style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 6 }} />}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 650, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title || <i style={{ color: C.inkFaint }}>Untitled</i>}</div>
                       <div style={{ fontSize: 11.5, color: C.inkFaint }}>r/{it.sub} · {new Date(it.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}{it.piece ? ` · ${it.piece}` : ""}</div>
@@ -265,19 +302,22 @@ export default function SocialCalendar({ st, showToast }) {
                         <div style={{ flex: "1 1 160px" }}><span style={lab}>Subreddit</span><input value={it.sub} onChange={e => edit(it.id, { sub: e.target.value.replace(/^r\//i, "") })} style={FI()} /></div>
                         <div style={{ flex: "1 1 180px" }}><span style={lab}>When</span><input type="datetime-local" value={localInput(it.at)} onChange={e => e.target.value && update(it.id, { at: new Date(e.target.value).toISOString() })} style={FI()} /></div>
                         <div style={{ flex: "1 1 140px" }}><span style={lab}>Post as</span>
-                          <select value={it.kind} onChange={e => update(it.id, { kind: e.target.value })} style={FI()}><option value="image">Photo + first comment</option><option value="self">Text post</option></select></div>
+                          <select value={it.kind} onChange={e => update(it.id, { kind: e.target.value })} style={FI()}><option value="image">{it.type === "sale" ? "Photos + text" : "Photos + first comment"}</option><option value="self">Text only</option></select></div>
                       </div>
                       <span style={lab}>Title</span>
                       <input value={it.title} onChange={e => edit(it.id, { title: e.target.value })} style={FI({ fontWeight: 650 })} />
-                      {it.kind === "image" && <>
-                        <span style={lab}>Photo</span>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{(it.images || []).map((u, i) => <img key={u} src={u} alt="" onClick={() => update(it.id, { image: i })} style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 6, cursor: "pointer", outline: (it.image || 0) === i ? `2.5px solid ${C.gold}` : "none", opacity: (it.image || 0) === i ? 1 : .6 }} />)}</div>
+                      <PiecePicker it={it} lib={lib} update={update} />
+                      {it.kind === "image" && it.type === "sale" && <>
+                        <span style={lab}>Post text (goes under the photos)</span>
+                        <textarea value={it.body} onChange={e => edit(it.id, { body: e.target.value })} rows={14} style={FI({ fontSize: 13, lineHeight: 1.55 })} />
+                      </>}
+                      {it.kind === "image" && it.type !== "sale" && <>
                         <span style={lab}>First comment</span>
                         <textarea value={it.comment} onChange={e => edit(it.id, { comment: e.target.value })} rows={7} style={FI({ fontSize: 13.5, lineHeight: 1.55 })} />
                       </>}
                       {it.kind === "self" && <>
                         <span style={lab}>Post</span>
-                        <textarea value={it.body} onChange={e => edit(it.id, { body: e.target.value })} rows={it.type === "sale" ? 16 : 8} style={FI({ fontSize: 13, lineHeight: 1.55, fontFamily: it.type === "sale" ? "ui-monospace,monospace" : "inherit" })} />
+                        <textarea value={it.body} onChange={e => edit(it.id, { body: e.target.value })} rows={it.type === "sale" ? 16 : 8} style={FI({ fontSize: 13, lineHeight: 1.55 })} />
                       </>}
                       {it.type === "sale" && <div style={{ fontSize: 12, color: C.amber, marginTop: 4 }}>Sale subs want a timestamp photo (paper with your username and the date next to the pieces) — add that link in the post before approving. Check the sub's rules for format.</div>}
                       <span style={lab}>Flair</span>
@@ -294,7 +334,7 @@ export default function SocialCalendar({ st, showToast }) {
                           : <button disabled={!it.title} onClick={() => byHand(it)} style={btn(C.ink, "#FAF0DC")}>Open on Reddit to post</button>)}
                         {it.status !== "posted" && !connected && it.hand && it.kind === "image" && <button onClick={() => navigator.clipboard.writeText(it.comment || "").then(() => showToast("First comment copied"))} style={btn()}>Copy first comment</button>}
                         {it.status !== "posted" && !connected && it.hand && <button onClick={() => markPosted(it)} style={btn(C.green, "#fff")}>✓ I posted it</button>}
-                        {it.type === "show" && it.status !== "posted" && <button disabled={busy === it.id} onClick={() => redraft(it)} style={btn()}>↻ Draft again</button>}
+                        {it.status !== "posted" && <button disabled={busy === it.id} onClick={() => redraft(it)} style={btn()}>{busy === it.id ? "Writing…" : it.type === "sale" ? "↻ Rewrite for these pieces" : "↻ Draft again"}</button>}
                         <button onClick={() => navigator.clipboard.writeText([it.title, it.kind === "image" ? it.comment : it.body].join("\n\n")).then(() => showToast("Copied"))} style={btn()}>Copy</button>
                         {it.status !== "posted" && <button onClick={() => update(it.id, { status: "skipped" })} style={btn()}>Skip</button>}
                         <button onClick={() => { if (confirm("Delete this post from the calendar?")) persist(items.filter(x => x.id !== it.id)); }} style={{ ...btn(), color: C.red }}>Delete</button>
@@ -307,6 +347,69 @@ export default function SocialCalendar({ st, showToast }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/* Which pieces go in the post, and which of their photos. Click a photo to put
+   it in or take it out; the order you pick is the order on Reddit. */
+function PiecePicker({ it, lib, update }) {
+  const [q, setQ] = useState("");
+  const [adding, setAdding] = useState(false);
+  if (!lib) return <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 8 }}>Loading pieces…</div>;
+  const { listings, store } = lib;
+  const ids = it.listing_ids || [];
+  const chosen = it.images || [];
+  const sale = it.type === "sale";
+  const toggleImg = u => update(it.id, { images: chosen.includes(u) ? chosen.filter(x => x !== u) : [...chosen, u] });
+  const removePiece = id => { const l = listings.find(x => x.id === id); const mine = imgsOf(l, store[id]); update(it.id, { listing_ids: ids.filter(x => x !== id), images: chosen.filter(u => !mine.includes(u)) }); };
+  const addPiece = l => {
+    const first = imgsOf(l, store[l.id])[0];
+    update(it.id, sale
+      ? { listing_ids: [...ids, l.id], images: first ? [...chosen, first] : chosen }
+      : { listing_ids: [l.id], images: imgsOf(l, store[l.id]).slice(0, 3), piece: l.title });
+    setAdding(false); setQ("");
+  };
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const pool = listings.filter(l => !ids.includes(l.id) && imgsOf(l, store[l.id]).length && (sale ? store[l.id]?.status === "active" && +store[l.id]?.price > 0 : true))
+    .filter(l => words.every(w => `${store[l.id]?.title || ""} ${l.title} ${l.material} ${l.shape}`.toLowerCase().includes(w)))
+    .sort((a, b) => String(store[b.id]?.created_at || "").localeCompare(String(store[a.id]?.created_at || ""))).slice(0, 40);
+  return (
+    <div>
+      <span style={lab}>{sale ? `Pieces (${ids.length}) & photos — ${chosen.length} picked` : `Piece & photos — ${chosen.length} picked`}</span>
+      {ids.map(id => {
+        const l = listings.find(x => x.id === id); const sp = store[id];
+        return (
+          <div key={id} style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: 8, marginBottom: 6 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+              <b style={{ fontSize: 12.5, flex: 1 }}>{sp?.title || l?.title || id}{sp?.price ? ` · $${Math.round(sp.price)}` : ""}{sale && sp?.status !== "active" ? " · not on the store" : ""}</b>
+              <button onClick={() => removePiece(id)} style={{ ...btn(), padding: "2px 8px", fontSize: 11.5 }}>{sale ? "Remove" : "Change"}</button>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {imgsOf(l, sp).map(u => { const n = chosen.indexOf(u); return (
+                <div key={u} onClick={() => toggleImg(u)} style={{ position: "relative", cursor: "pointer" }}>
+                  <img src={u} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, outline: n >= 0 ? `2.5px solid ${C.gold}` : "none", opacity: n >= 0 ? 1 : .45 }} />
+                  {n >= 0 && <span style={{ position: "absolute", top: 3, left: 3, background: C.ink, color: "#FAF0DC", fontSize: 10, fontWeight: 800, borderRadius: 8, padding: "0 5px" }}>{n + 1}</span>}
+                </div>); })}
+            </div>
+          </div>);
+      })}
+      {(sale || !ids.length) && (adding
+        ? <div style={{ border: `1px solid ${C.border}`, borderRadius: 9, padding: 8 }}>
+            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder={sale ? "Search pieces on the store…" : "Search pieces…"} style={FI({ marginBottom: 6 })} />
+            <div style={{ display: "grid", gap: 4, maxHeight: 280, overflowY: "auto" }}>
+              {pool.map(l => (
+                <div key={l.id} onClick={() => addPiece(l)} style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer", padding: 3, borderRadius: 6 }}>
+                  <img src={imgsOf(l, store[l.id])[0]} alt="" style={{ width: 36, height: 36, objectFit: "cover", borderRadius: 5 }} />
+                  <span style={{ fontSize: 12.5, flex: 1 }}>{store[l.id]?.title || l.title}</span>
+                  {store[l.id]?.price && <span style={{ fontSize: 12, color: C.inkMid }}>${Math.round(store[l.id].price)}</span>}
+                </div>))}
+              {!pool.length && <div style={{ fontSize: 12, color: C.inkFaint }}>Nothing matches.</div>}
+            </div>
+            <button onClick={() => setAdding(false)} style={{ ...btn(), marginTop: 6 }}>Done</button>
+          </div>
+        : <button onClick={() => setAdding(true)} style={btn()}>+ {sale ? "Add a piece" : "Pick the piece"}</button>)}
+      {sale && <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>After changing pieces, press ↻ Rewrite for these pieces so the list and prices match.</div>}
     </div>
   );
 }

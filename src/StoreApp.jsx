@@ -194,7 +194,7 @@ export async function loadStoreProduct(listingId) {
 export async function loadStoreFacts() {
   const out = {};
   for (let from = 0; ; from += 1000) {
-    const rows = await q(supabase.from("store_products").select("id,listing_id,price,price_inr,status,handle,created_at").range(from, from + 999));
+    const rows = await q(supabase.from("store_products").select("id,listing_id,title,images,price,price_inr,status,handle,created_at").range(from, from + 999));
     for (const r of rows) { const lid = r.listing_id || (String(r.id).startsWith("lm-") ? String(r.id).slice(3) : ""); if (lid) out[lid] = r; }
     if (rows.length < 1000) break;
   }
