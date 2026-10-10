@@ -15,8 +15,9 @@ const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 const unxml = t => String(t || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
 const ASKS = /\?|\b(what|which|is (this|it)|real|fake|dyed|identif\w*|id\b|help|anyone know|any idea|found)\b/i;
 
+// One request for both subs: Reddit refuses a second request seconds after the first.
 async function rss(sub) {
-  const r = await fetch(`https://www.reddit.com/r/${sub}/new/.rss?limit=50`, { headers: { "User-Agent": UA, Accept: "application/atom+xml,application/xml" } });
+  const r = await fetch(`https://www.reddit.com/r/${sub}/new/.rss?limit=100`, { headers: { "User-Agent": UA, Accept: "application/atom+xml,application/xml" } });
   if (!r.ok) throw new Error(`r/${sub}: ${r.status}`);
   const xml = await r.text();
   return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(([, e]) => {
@@ -27,7 +28,7 @@ async function rss(sub) {
     const imgs = [...html.matchAll(/(?:src|href)="(https:\/\/(?:i|preview)\.redd\.it\/[^"]+)"/g)].map(m => unxml(m[1]));
     const thumb = unxml((html.match(/<img src="([^"]+)"/) || [])[1] || "");
     const text = unxml((html.match(/<div class="md">([\s\S]*?)<\/div>/) || [])[1] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    return { id, sub, title: unxml(tag("title")), text: text.slice(0, 800), url: link, image: imgs[0] || thumb,
+    return { id, sub: (e.match(/<category term="([^"]+)"/) || [])[1]?.toLowerCase() || sub, title: unxml(tag("title")), text: text.slice(0, 800), url: link, image: imgs[0] || thumb,
       images: [...new Set([...imgs, thumb].filter(Boolean))].slice(0, 3), flair: "", comments: null,
       at: new Date(tag("updated") || tag("published") || Date.now()).toISOString() };
   }).filter(p => p.id);
@@ -37,15 +38,12 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}` };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // The last good feed: a sub Reddit refuses this time keeps its posts from then.
 const prev = await fetch(`${URL_}/rest/v1/app_data?key=eq.ng-reddit-feed-v1&select=value`, { headers: H }).then(r => r.json()).then(d => d?.[0]?.value?.threads || []).catch(() => []);
-const threads = [], errors = [];
-for (const sub of ["whatsthisrock", "crystals"]) {
-  let got = null;
-  for (let tryN = 0; tryN < 2 && !got; tryN++) {
-    try { got = await rss(sub); } catch (e) { if (tryN) errors.push(e.message); else await sleep(15000); }
-  }
-  threads.push(...(got || prev.filter(p => p.sub.toLowerCase() === sub)));
-  await sleep(6000);
+const errors = [];
+let got = null;
+for (let tryN = 0; tryN < 3 && !got; tryN++) {
+  try { got = await rss("whatsthisrock+crystals"); } catch (e) { if (tryN === 2) errors.push(e.message); else { console.log(`Reddit busy (${e.message}), trying again in 45s…`); await sleep(45000); } }
 }
+const threads = got || prev;
 const keep = threads
   .filter(p => Date.now() - Date.parse(p.at) < 48 * 3600e3)
   .filter(p => p.sub === "whatsthisrock" || ASKS.test(`${p.title} ${p.text.slice(0, 300)}`))
