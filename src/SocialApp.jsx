@@ -480,6 +480,8 @@ function Community({ st, showToast }) {
   const [drafts, setDrafts] = useState({});
   const [done, setDone] = useState(answeredIds);
   const [showDone, setShowDone] = useState(false);
+  const [sub, setSub] = useState(() => { try { return localStorage.getItem("ee-reddit-sub") || ""; } catch { return ""; } });
+  const pickSub = k => { setSub(k); try { localStorage.setItem("ee-reddit-sub", k); } catch { /* private */ } };
   const load = useCallback(async () => {
     setBusy("load"); setErr("");
     try { const d = await api("reddit_questions"); setThreads(d.threads || []); setCanPost(!!d.canPost); setFeedAt(d.feedAt || ""); } catch (e) { setErr(e.message); }
@@ -511,7 +513,9 @@ function Community({ st, showToast }) {
     catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
-  const list = (threads || []).filter(t => showDone || !done[t.id]);
+  const open_ = (threads || []).filter(t => showDone || !done[t.id]);
+  const subs = [...new Set((threads || []).map(t => t.sub))].sort();
+  const list = open_.filter(t => !sub || t.sub === sub);
   const answered = (threads || []).filter(t => done[t.id]).length;
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -523,6 +527,11 @@ function Community({ st, showToast }) {
         {answered > 0 && <label style={{ fontSize: 12, color: C.inkMid, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)} /> show {answered} answered</label>}
         <button disabled={busy === "load"} onClick={load} style={btn()}>{busy === "load" ? "Loading…" : "↻ Refresh"}</button>
       </div>
+      {subs.length > 1 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {[["", "All"], ...subs.map(k => [k, `r/${k}`])].map(([k, label]) => (
+          <button key={k} onClick={() => pickSub(k)} style={{ ...btn(sub === k ? C.ink : C.surface, sub === k ? "#FAF0DC" : C.ink), borderRadius: 20 }}>
+            {label} <span style={{ opacity: .6 }}>{open_.filter(t => !k || t.sub === k).length}</span></button>))}
+      </div>}
       {!canPost && threads && <div style={{ fontSize: 12, color: C.inkMid, padding: "0 4px" }}>Posting straight from here starts once Reddit approves the API access and Reddit is connected in Accounts. Until then, Post copies the reply and opens the post — paste it as a comment.</div>}
       {err && <div style={{ ...card, color: C.red, fontSize: 13 }}>⚠ {err}</div>}
       {threads && !list.length && <div style={{ ...card, color: C.inkFaint, fontSize: 13 }}>{threads.length ? "All answered — refresh later for new ones." : "No new questions right now."}</div>}

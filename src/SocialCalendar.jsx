@@ -182,6 +182,33 @@ export default function SocialCalendar({ st, showToast }) {
     } catch (e) { showToast(`⚠ ${e.message}`); await update(it.id, { status: "failed", error: e.message }); }
     setBusy("");
   };
+  /* Posting by hand, until Reddit approves API access: Reddit opens with the
+     title filled in, the photo is saved to Downloads to drop into the post, and
+     the text (or first comment) is on the clipboard. */
+  const byHand = async it => {
+    const photo = it.kind === "image" ? it.images?.[it.image || 0] : "";
+    const text = it.kind === "image" ? it.comment : it.body;
+    if (photo) {
+      try {
+        const b = await (await fetch(photo)).blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(b); a.download = `${(it.piece || it.title || "photo").replace(/[^\w -]+/g, "").slice(0, 50).trim() || "photo"}.${(b.type.split("/")[1] || "jpg").replace("jpeg", "jpg")}`;
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      } catch { window.open(photo, "_blank"); }
+    }
+    const q = new URLSearchParams({ title: it.title || "" });
+    if (it.kind === "image") q.set("type", "IMAGE"); else { q.set("type", "TEXT"); q.set("text", text || ""); }
+    window.open(`https://www.reddit.com/r/${it.sub}/submit?${q}`, "_blank");
+    try { await navigator.clipboard.writeText(text || ""); } catch { /* not allowed */ }
+    await update(it.id, { hand: true });
+    showToast(it.kind === "image" ? "Reddit opened with the title — drop in the photo from Downloads, post, then paste the first comment (it's copied)" : "Reddit opened with the title — the post text is copied, paste it if the box is empty");
+  };
+  const markPosted = async it => {
+    const url = prompt("Paste the link to your Reddit post (optional):", "") ?? null;
+    if (url === null) return;
+    await update(it.id, { status: "posted", url: url.trim(), posted_at: new Date().toISOString(), error: "" });
+    showToast("✓ Marked posted");
+  };
   const add = async date => {
     const it = { id: uid(), at: new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), HOUR_UTC)).toISOString(), platform: "reddit", sub: "crystals", type: "show", kind: "self", title: "", body: "", comment: "", images: [], listing_ids: [], status: "draft" };
     await persist([...(items || []), it]); setOpen(it.id);
@@ -202,7 +229,7 @@ export default function SocialCalendar({ st, showToast }) {
       </div>
       <div style={{ fontSize: 12.5, color: C.inkMid }}>
         Mon r/crystals · Thu r/Minerals — a piece worth talking about, posted as a photo with the story in the first comment. Sun r/crystals — the Sunday sale post: this week's newest pieces from the store, with prices. Every post waits for you: <b>Approve</b> and it goes out at its time, or <b>Post now</b>.
-        {!connected && <span style={{ color: C.amber }}> Connect Reddit in Accounts to post from here.</span>}
+        {!connected && <span style={{ color: C.amber }}> Until Reddit approves API access you post by hand: open a post, <b>Open on Reddit to post</b> (title filled in, photo saved to Downloads, text copied), then <b>✓ I posted it</b>.</span>}
       </div>
 
       {days.map(d => {
@@ -259,10 +286,14 @@ export default function SocialCalendar({ st, showToast }) {
                             <option value="">None</option>{flairs[it.sub].map(f => <option key={f.id} value={f.id}>{f.text}</option>)}</select>
                         : <button disabled={!connected} onClick={() => loadFlairs(it.sub)} style={{ ...btn(), padding: "4px 10px", fontSize: 12 }}>Load r/{it.sub}'s flairs</button>}
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-                        {it.status !== "posted" && (it.status === "approved"
+                        {connected && it.status !== "posted" && (it.status === "approved"
                           ? <button onClick={() => update(it.id, { status: "draft" })} style={btn()}>Un-approve</button>
                           : <button disabled={!connected || !it.title} onClick={() => update(it.id, { status: "approved", error: "" })} style={btn(C.blue, "#fff")}>✓ Approve for {new Date(it.at).toLocaleDateString(undefined, { weekday: "short" })} {new Date(it.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</button>)}
-                        {it.status !== "posted" && <button disabled={!connected || !it.title || busy === it.id} onClick={() => postNow(it)} style={btn(C.ink, "#FAF0DC")}>{busy === it.id ? "…" : "Post now"}</button>}
+                        {it.status !== "posted" && (connected
+                          ? <button disabled={!it.title || busy === it.id} onClick={() => postNow(it)} style={btn(C.ink, "#FAF0DC")}>{busy === it.id ? "…" : "Post now"}</button>
+                          : <button disabled={!it.title} onClick={() => byHand(it)} style={btn(C.ink, "#FAF0DC")}>Open on Reddit to post</button>)}
+                        {it.status !== "posted" && !connected && it.hand && it.kind === "image" && <button onClick={() => navigator.clipboard.writeText(it.comment || "").then(() => showToast("First comment copied"))} style={btn()}>Copy first comment</button>}
+                        {it.status !== "posted" && !connected && it.hand && <button onClick={() => markPosted(it)} style={btn(C.green, "#fff")}>✓ I posted it</button>}
                         {it.type === "show" && it.status !== "posted" && <button disabled={busy === it.id} onClick={() => redraft(it)} style={btn()}>↻ Draft again</button>}
                         <button onClick={() => navigator.clipboard.writeText([it.title, it.kind === "image" ? it.comment : it.body].join("\n\n")).then(() => showToast("Copied"))} style={btn()}>Copy</button>
                         {it.status !== "posted" && <button onClick={() => update(it.id, { status: "skipped" })} style={btn()}>Skip</button>}
