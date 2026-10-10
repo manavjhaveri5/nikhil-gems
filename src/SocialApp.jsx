@@ -474,6 +474,7 @@ const answeredIds = () => { try { return JSON.parse(localStorage.getItem(ANSWERE
 function Community({ st, showToast }) {
   const [threads, setThreads] = useState(null);
   const [canPost, setCanPost] = useState(false);
+  const [feedAt, setFeedAt] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [drafts, setDrafts] = useState({});
@@ -481,7 +482,7 @@ function Community({ st, showToast }) {
   const [showDone, setShowDone] = useState(false);
   const load = useCallback(async () => {
     setBusy("load"); setErr("");
-    try { const d = await api("reddit_questions"); setThreads(d.threads || []); setCanPost(!!d.canPost); } catch (e) { setErr(e.message); }
+    try { const d = await api("reddit_questions"); setThreads(d.threads || []); setCanPost(!!d.canPost); setFeedAt(d.feedAt || ""); } catch (e) { setErr(e.message); }
     setBusy("");
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -512,7 +513,7 @@ function Community({ st, showToast }) {
       <div style={{ ...card, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 200 }}>
           <b style={{ fontSize: 15 }}>Reddit questions — r/whatsthisrock, r/crystals</b>
-          <div style={{ fontSize: 12, color: C.inkMid }}>Newest first, last 2 days. Draft a reply from the photos, make it yours, post. No shop, no links — this builds the name.</div>
+          <div style={{ fontSize: 12, color: C.inkMid }}>Newest first, last 2 days. Draft a reply from the photos, make it yours, post. No shop, no links — this builds the name.{feedAt ? ` · Updated ${ago(feedAt)} from the Mac — double-click Refresh Reddit on the Desktop for newer.` : ""}</div>
         </div>
         {answered > 0 && <label style={{ fontSize: 12, color: C.inkMid, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)} /> show {answered} answered</label>}
         <button disabled={busy === "load"} onClick={load} style={btn()}>{busy === "load" ? "Loading…" : "↻ Refresh"}</button>

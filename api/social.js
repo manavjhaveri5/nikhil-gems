@@ -440,8 +440,12 @@ async function redditRss(sub) {
 
 let rssMemo = null;
 async function redditQuestions() {
-  // API access (once Reddit approves it) gives reply counts; until then, the RSS feeds.
+  // API access (once Reddit approves it) gives reply counts. Until then Reddit
+  // refuses Vercel, so the feed comes from the relay on the office Mac
+  // (scripts/reddit-relay.mjs → app_data ng-reddit-feed-v1), else the RSS.
   if (!env("REDDIT_CLIENT_ID")) {
+    const relay = await appData("ng-reddit-feed-v1").catch(() => null);
+    if (relay?.threads?.length) return Object.assign(relay.threads.filter(p => Date.now() - Date.parse(p.at) < 48 * 3600e3), { feedAt: relay.at });
     const ASKS = /\?|\b(what|which|is (this|it)|real|fake|dyed|identif\w*|id\b|help|anyone know|any idea|found)\b/i;
     // One sub at a time, a beat apart, kept 5 minutes: Reddit rate-limits feeds fetched back to back.
     if (rssMemo && Date.now() - rssMemo.at < 5 * 60e3) return rssMemo.list;
@@ -840,7 +844,7 @@ export default async function handler(req, res) {
     }
 
     if (action === "reddit_search") return res.json({ threads: await redditSearch(Array.isArray(body.terms) ? body.terms : []) });
-    if (action === "reddit_questions") return res.json({ threads: await redditQuestions(), canPost: !!(await getSecret("tok_reddit"))?.access_token });
+    if (action === "reddit_questions") { const threads = await redditQuestions(); return res.json({ threads, feedAt: threads.feedAt || "", canPost: !!(await getSecret("tok_reddit"))?.access_token }); }
     // A reply posted as the connected account (needs Reddit's API approval and Accounts → Reddit).
     if (action === "reddit_reply") {
       const id = String(body.id || "").replace(/^t3_/, "").replace(/[^\w]/g, ""), text = String(body.text || "").trim();
