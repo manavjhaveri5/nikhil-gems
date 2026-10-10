@@ -20,8 +20,7 @@ import { C, FI, mob } from "./lmTheme.js";
 import { loadK } from "./utils.js";
 import { fetchWithRetry } from "./aiClient.js";
 import { draftAnswer } from "./redditAnswer.js";
-import { BOOKMARKLET } from "./RedditReply.jsx";
-import { VOICE, Replies } from "./StoreSocial.jsx";
+import { VOICE } from "./StoreSocial.jsx";
 import { INSTAGRAM_VOICE, instagramShape, HASHTAG_ENDING } from "../lib/instagramVoice.js";
 const SocialStories = lazy(() => import("./SocialStories.jsx"));
 const Captions = lazy(() => import("./StoreSocial.jsx"));
@@ -465,106 +464,80 @@ Return ONLY JSON: {"topics":[{"topic":"the article's subject, as a working title
 }
 
 /* ── Community: Reddit threads about our stones, replies drafted ───────── */
+/* Reddit, inside the ERP: the newest questions in r/whatsthisrock and
+   r/crystals, a reply drafted from each post's photos in the voice of someone
+   who has handled a lot of rough (never selling), and Post. Posting needs
+   Reddit's API approval and Accounts → Reddit; until then Post copies the
+   reply and opens the thread. */
+const ANSWERED = "ee-reddit-answered";
+const answeredIds = () => { try { return JSON.parse(localStorage.getItem(ANSWERED) || "{}"); } catch { return {}; } };
 function Community({ st, showToast }) {
   const [threads, setThreads] = useState(null);
+  const [canPost, setCanPost] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
   const [drafts, setDrafts] = useState({});
-  const [terms, setTerms] = useState([]);
-  useEffect(() => {
-    // The stones we have most of, as the search words.
-    loadK("ng-listings-v1").then(ls => {
-      const n = new Map();
-      for (const l of Array.isArray(ls) ? ls : []) { const m = String(l.material || "").trim(); if (m && m.length < 30) n.set(m, (n.get(m) || 0) + 1); }
-      setTerms([...n.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([m]) => m));
-    }).catch(() => {});
+  const [done, setDone] = useState(answeredIds);
+  const [showDone, setShowDone] = useState(false);
+  const load = useCallback(async () => {
+    setBusy("load"); setErr("");
+    try { const d = await api("reddit_questions"); setThreads(d.threads || []); setCanPost(!!d.canPost); } catch (e) { setErr(e.message); }
+    setBusy("");
   }, []);
-  const [mode, setMode] = useState("questions");   // "questions" (r/whatsthisrock, r/crystals) | "stones" (threads naming what we stock)
-  const find = async (m = mode) => {
-    setBusy("find"); setErr(""); setMode(m);
-    try { setThreads((m === "questions" ? await api("reddit_questions") : await api("reddit_search", { body: { terms } })).threads); } catch (e) { setErr(e.message); }
-    setBusy("");
-  };
-  const draft = async t => {
+  useEffect(() => { load(); }, [load]);
+  const mark = (id, url = "") => setDone(d => { const n = { ...d, [id]: url || true }; try { localStorage.setItem(ANSWERED, JSON.stringify(n)); } catch { /* full */ } return n; });
+  const draft = async (t, extra = "") => {
     setBusy(t.id);
-    try {
-      const out = mode === "questions" ? await draftAnswer(t) : await ask(`A post on r/${t.sub}:\nTitle: ${t.title}\n${t.text}\n\nWrite a reply as Earth Editions' founder, a collector who cuts stone in India: genuinely helpful, specific, 2-5 sentences, the way a knowledgeable person talks on Reddit. No selling, no links, no brand name unless directly asked where to buy. If it's an ID request and the photo can't be seen, ask for the details that would settle it. Return only the reply.`, 500);
-      setDrafts(d => ({ ...d, [t.id]: out }));
-    } catch (e) { showToast(`⚠ ${e.message}`); }
+    try { const r = await draftAnswer(t, extra); setDrafts(d => ({ ...d, [t.id]: r })); } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
-  /* Draft from a post you're looking at: paste its title/text, paste or drop
-     its photo. Works without any Reddit API access. */
-  const [pasted, setPasted] = useState({ text: "", sub: "whatsthisrock", images: [], reply: "" });
-  const addPhotos = files => Promise.all([...files].filter(f => f.type.startsWith("image/")).slice(0, 3).map(f => new Promise(res => {
-    const img = new Image(); img.onload = () => { const k = Math.min(1, 1400 / Math.max(img.width, img.height)); const c = document.createElement("canvas"); c.width = img.width * k; c.height = img.height * k; c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); res(c.toDataURL("image/jpeg", .85)); URL.revokeObjectURL(img.src); };
-    img.src = URL.createObjectURL(f);
-  }))).then(urls => setPasted(p => ({ ...p, images: [...p.images, ...urls].slice(0, 3) })));
-  const draftPasted = async () => {
-    setBusy("paste");
-    try { const lines = pasted.text.trim().split("\n"); setPasted(p => ({ ...p, reply: "" })); const reply = await draftAnswer({ sub: pasted.sub, title: lines[0] || "", text: lines.slice(1).join("\n"), images: pasted.images }); setPasted(p => ({ ...p, reply })); }
+  const post = async t => {
+    const text = drafts[t.id];
+    if (!canPost) {
+      try { await navigator.clipboard.writeText(text); } catch { /* not allowed */ }
+      window.open(t.url, "_blank");
+      mark(t.id);
+      showToast("Copied — paste it as a comment on Reddit");
+      return;
+    }
+    setBusy(`post-${t.id}`);
+    try { const d = await api("reddit_reply", { body: { id: t.id, text } }); mark(t.id, d.url); showToast("✓ Posted on Reddit"); }
     catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
+  const list = (threads || []).filter(t => showDone || !done[t.id]);
+  const answered = (threads || []).filter(t => done[t.id]).length;
   return (
     <div style={{ display: "grid", gap: 12 }}>
-      <div style={card} onPaste={e => { if (e.clipboardData?.files?.length) { e.preventDefault(); addPhotos(e.clipboardData.files); } }}
-        onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); addPhotos(e.dataTransfer.files); }}>
-        <div style={{ background: C.card, borderRadius: 10, padding: "10px 12px", marginBottom: 12, fontSize: 13, lineHeight: 1.5 }}>
-          <b>Easiest: the EE reply bookmark.</b> Drag this to your bookmarks bar → <a href={BOOKMARKLET} onClick={e => { e.preventDefault(); showToast("Drag it to your bookmarks bar — then click it on a Reddit post"); }} style={{ ...btn(C.ink, "#FAF0DC"), textDecoration: "none", display: "inline-block", padding: "3px 10px" }}>EE reply</a>. On any Reddit question, click it: a small window drafts the answer from the post and its photos and copies it. Paste, post. (Show the bar with ⌘⇧B.)
+      <div style={{ ...card, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <b style={{ fontSize: 15 }}>Reddit questions — r/whatsthisrock, r/crystals</b>
+          <div style={{ fontSize: 12, color: C.inkMid }}>Newest first, last 2 days. Draft a reply from the photos, make it yours, post. No shop, no links — this builds the name.</div>
         </div>
-        <b style={{ fontSize: 15 }}>Or: answer a post you're looking at</b>
-        <div style={{ fontSize: 12, color: C.inkMid, margin: "2px 0 8px" }}>Paste the post's title (first line) and text, and paste or drop its photo (a screenshot is fine). You get a reply in the voice of someone who's handled a lot of rough — no shop, no links. Make it yours, then post it on Reddit yourself.</div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
-          {["whatsthisrock", "crystals", "Minerals", "geology"].map(x => <button key={x} onClick={() => setPasted(p => ({ ...p, sub: x }))} style={btn(pasted.sub === x ? C.ink : undefined, pasted.sub === x ? "#FAF0DC" : undefined)}>r/{x}</button>)}
-        </div>
-        <textarea value={pasted.text} onChange={e => setPasted(p => ({ ...p, text: e.target.value }))} rows={3} placeholder={"Found this on a beach in Oregon, what is it?\nHeavy for its size, scratches glass…"} style={FI({ fontSize: 13 })} />
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
-          {pasted.images.map((u, i) => <img key={i} src={u} alt="" onClick={() => setPasted(p => ({ ...p, images: p.images.filter((_, j) => j !== i) }))} title="Click to remove" style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 7, cursor: "pointer" }} />)}
-          <label style={{ ...btn(), display: "inline-block" }}>＋ Photo<input type="file" accept="image/*" multiple hidden onChange={e => { addPhotos(e.target.files); e.target.value = ""; }} /></label>
-          <span style={{ fontSize: 11.5, color: C.inkFaint }}>or paste / drop it here</span>
-          <div style={{ flex: 1 }} />
-          <button disabled={busy === "paste" || (!pasted.text.trim() && !pasted.images.length)} onClick={draftPasted} style={btn(C.ink, "#FAF0DC")}>{busy === "paste" ? "Drafting…" : pasted.reply ? "↻ Draft again" : "Draft a reply"}</button>
-        </div>
-        {pasted.reply && <>
-          <textarea value={pasted.reply} onChange={e => setPasted(p => ({ ...p, reply: e.target.value }))} rows={5} style={FI({ fontSize: 13, marginTop: 8 })} />
-          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-            <button onClick={() => navigator.clipboard.writeText(pasted.reply).then(() => showToast("Copied — paste it on Reddit"))} style={btn(C.ink, "#FAF0DC")}>Copy reply</button>
-            <button onClick={() => setPasted({ text: "", sub: pasted.sub, images: [], reply: "" })} style={btn()}>Next post</button>
-          </div>
-        </>}
+        {answered > 0 && <label style={{ fontSize: 12, color: C.inkMid, display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={showDone} onChange={e => setShowDone(e.target.checked)} /> show {answered} answered</label>}
+        <button disabled={busy === "load"} onClick={load} style={btn()}>{busy === "load" ? "Loading…" : "↻ Refresh"}</button>
       </div>
-      <div style={card}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <div style={{ flex: 1 }}>
-            <b style={{ fontSize: 15 }}>{mode === "questions" ? "Questions to answer — r/whatsthisrock, r/crystals" : "Reddit this week"}</b>
-            <div style={{ fontSize: 12, color: C.inkMid }}>{mode === "questions"
-              ? "New posts from the last 2 days asking what a stone is, or if it's real, with few answers yet. The reply is drafted from the photos, as someone who's handled a lot of rough — no shop, no links, no selling. Read it, make it yours, then Copy & open the thread and post it yourself. A few good answers a day builds the name."
-              : <>Threads in r/crystals, r/MineralCollectors, r/Rockhounds, r/whatsthisrock and others that mention stones you stock: {terms.slice(0, 8).join(", ") || "…"}. A reply is drafted to post yourself — Reddit and Mindat ban accounts for automated posting.</>}</div>
+      {!canPost && threads && <div style={{ fontSize: 12, color: C.inkMid, padding: "0 4px" }}>Posting straight from here starts once Reddit approves the API access and Reddit is connected in Accounts. Until then, Post copies the reply and opens the post — paste it as a comment.</div>}
+      {err && <div style={{ ...card, color: C.red, fontSize: 13 }}>⚠ {err}</div>}
+      {threads && !list.length && <div style={{ ...card, color: C.inkFaint, fontSize: 13 }}>{threads.length ? "All answered — refresh later for new ones." : "No new questions right now."}</div>}
+      {list.map(t => (
+        <div key={t.id} style={{ ...card, display: "flex", gap: 12, alignItems: "flex-start", opacity: done[t.id] ? .6 : 1 }}>
+          {t.image ? <a href={t.url} target="_blank" rel="noreferrer"><img src={t.image} alt="" style={{ width: 110, height: 110, objectFit: "cover", borderRadius: 9, flex: "none" }} /></a> : <div style={{ width: 110 }} />}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: C.inkFaint }}>r/{t.sub} · {ago(t.at)}{t.comments != null ? ` · ${t.comments} replies` : ""}{done[t.id] ? " · ✓ answered" : ""}</div>
+            <a href={t.url} target="_blank" rel="noreferrer" style={{ fontSize: 14.5, fontWeight: 700, color: C.ink, textDecoration: "none" }}>{t.title}</a>
+            {t.text && <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 3, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{t.text}</div>}
+            {drafts[t.id] != null ? <>
+              <textarea value={drafts[t.id]} onChange={e => setDrafts(d => ({ ...d, [t.id]: e.target.value }))} rows={4} style={FI({ fontSize: 13, marginTop: 8 })} />
+              <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                <button disabled={busy === `post-${t.id}` || !drafts[t.id].trim()} onClick={() => post(t)} style={btn(C.ink, "#FAF0DC")}>{busy === `post-${t.id}` ? "Posting…" : canPost ? "Post reply" : "Copy & open to post"}</button>
+                <button disabled={busy === t.id} onClick={() => draft(t)} style={btn()}>{busy === t.id ? "…" : "↻ Another"}</button>
+                <button disabled={busy === t.id} onClick={() => draft(t, "Make it shorter: 1-2 sentences.")} style={btn()}>Shorter</button>
+              </div>
+            </> : <button disabled={busy === t.id} onClick={() => draft(t)} style={{ ...btn(), marginTop: 8 }}>{busy === t.id ? "Looking at the photos…" : "Draft reply"}</button>}
           </div>
-          <button disabled={!!busy} onClick={() => find("questions")} style={btn(C.ink, "#FAF0DC")}>{busy === "find" && mode === "questions" ? "Searching…" : "Questions to answer"}</button>
-          <button disabled={!!busy || !terms.length} onClick={() => find("stones")} style={btn()}>{busy === "find" && mode === "stones" ? "Searching…" : "Threads about our stones"}</button>
         </div>
-        {!st?.reddit?.ready && <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 6 }}>If Reddit blocks the search, make a free "script" app at reddit.com/prefs/apps and add REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in Vercel.</div>}
-        {err && <div style={{ color: C.red, fontSize: 13, marginTop: 8 }}>⚠ {err}</div>}
-        {threads && !threads.length && <div style={{ color: C.inkFaint, fontSize: 13, marginTop: 8 }}>Nothing this week.</div>}
-        {(threads || []).map(t => (
-          <div key={t.id} style={{ borderTop: `1px solid ${C.border}`, padding: "10px 0", display: "flex", gap: 10 }}>
-            {t.image && <img src={t.image} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 7 }} />}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <a href={t.url} target="_blank" rel="noreferrer" style={{ fontSize: 13.5, fontWeight: 650, color: C.ink, textDecoration: "none" }}>{t.title} ↗</a>
-              <div style={{ fontSize: 11, color: C.inkFaint }}>r/{t.sub} · {t.comments} comments · {ago(t.at)}</div>
-              {drafts[t.id] != null
-                ? <><textarea value={drafts[t.id]} onChange={e => setDrafts(d => ({ ...d, [t.id]: e.target.value }))} rows={4} style={FI({ fontSize: 13, marginTop: 6 })} />
-                    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                      <button onClick={() => { navigator.clipboard.writeText(drafts[t.id]); window.open(t.url, "_blank"); }} style={btn(C.ink, "#FAF0DC")}>Copy & open thread</button>
-                      <button onClick={() => draft(t)} style={btn()}>↻</button></div></>
-                : <button disabled={busy === t.id} onClick={() => draft(t)} style={{ ...btn(), marginTop: 6, padding: "4px 10px", fontSize: 12 }}>{busy === t.id ? "Drafting…" : "Draft a reply"}</button>}
-            </div>
-          </div>
-        ))}
-      </div>
-      <Replies site={SITE} showToast={showToast} />
+      ))}
     </div>
   );
 }

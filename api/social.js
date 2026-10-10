@@ -418,7 +418,45 @@ const SUBS = ["crystals", "MineralCollectors", "Rockhounds", "whatsthisrock", "m
 /* Questions worth answering: the newest posts in r/whatsthisrock and
    r/crystals that ask something (an ID, "is this real", "what is this") and
    haven't been answered to death yet — where a good answer is seen. */
+/* Without API access Reddit refuses the JSON, but its RSS feeds still answer:
+   the same new posts, with title, text and photo. No reply counts there. */
+const unxml = t => String(t || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+async function redditRss(sub) {
+  const r = await fetch(`https://www.reddit.com/r/${sub}/new/.rss?limit=50`, { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141 Safari/537.36", Accept: "application/atom+xml,application/xml" } });
+  if (!r.ok) fail(502, `Reddit: ${r.status}`);
+  const xml = await r.text();
+  return [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(([, e]) => {
+    const tag = n => (e.match(new RegExp(`<${n}[^>]*>([\\s\\S]*?)</${n}>`)) || [])[1] || "";
+    const html = unxml(tag("content"));
+    const id = (tag("id").match(/t3_(\w+)/) || [])[1] || "";
+    const link = (e.match(/<link href="([^"]+)"/) || [])[1] || "";
+    const imgs = [...html.matchAll(/(?:src|href)="(https:\/\/(?:i|preview)\.redd\.it\/[^"]+)"/g)].map(m => unxml(m[1]));
+    const thumb = (html.match(/<img src="([^"]+)"/) || [])[1] || "";
+    const text = unxml((html.match(/<div class="md">([\s\S]*?)<\/div>/) || [])[1] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    return { id, sub, title: unxml(tag("title")), text: text.slice(0, 800), url: link, image: imgs[0] || unxml(thumb), images: [...new Set([...imgs, unxml(thumb)].filter(Boolean))].slice(0, 3),
+      flair: "", comments: null, at: new Date(tag("updated") || tag("published") || Date.now()).toISOString() };
+  }).filter(p => p.id);
+}
+
+let rssMemo = null;
 async function redditQuestions() {
+  // API access (once Reddit approves it) gives reply counts; until then, the RSS feeds.
+  if (!env("REDDIT_CLIENT_ID")) {
+    const ASKS = /\?|\b(what|which|is (this|it)|real|fake|dyed|identif\w*|id\b|help|anyone know|any idea|found)\b/i;
+    // One sub at a time, a beat apart, kept 5 minutes: Reddit rate-limits feeds fetched back to back.
+    if (rssMemo && Date.now() - rssMemo.at < 5 * 60e3) return rssMemo.list;
+    const got = [];
+    for (const sub of ["whatsthisrock", "crystals"]) {
+      try { got.push(...await redditRss(sub)); } catch (e) { if (!got.length && sub === "crystals") throw e; }
+      await new Promise(r => setTimeout(r, 1200));
+    }
+    const all = got
+      .filter(p => Date.now() - Date.parse(p.at) < 48 * 3600e3)
+      .filter(p => p.sub === "whatsthisrock" || ASKS.test(`${p.title} ${p.text.slice(0, 300)}`));
+    const list = all.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50);
+    if (list.length) rssMemo = { at: Date.now(), list };
+    return list;
+  }
   let auth = {};
   if (env("REDDIT_CLIENT_ID")) {
     const tk = await json(await fetch("https://www.reddit.com/api/v1/access_token", { method: "POST",
@@ -802,7 +840,16 @@ export default async function handler(req, res) {
     }
 
     if (action === "reddit_search") return res.json({ threads: await redditSearch(Array.isArray(body.terms) ? body.terms : []) });
-    if (action === "reddit_questions") return res.json({ threads: await redditQuestions() });
+    if (action === "reddit_questions") return res.json({ threads: await redditQuestions(), canPost: !!(await getSecret("tok_reddit"))?.access_token });
+    // A reply posted as the connected account (needs Reddit's API approval and Accounts → Reddit).
+    if (action === "reddit_reply") {
+      const id = String(body.id || "").replace(/^t3_/, "").replace(/[^\w]/g, ""), text = String(body.text || "").trim();
+      if (!id || !text) fail(400, "Which post, and the reply");
+      const t = await token("reddit");
+      const d = await rd("/api/comment", t, { thing_id: `t3_${id}`, text, api_type: "json" });
+      const c = d.json?.data?.things?.[0]?.data || {};
+      return res.json({ ok: true, url: c.permalink ? `https://www.reddit.com${c.permalink}` : "" });
+    }
 
     if (action === "journal_list") return res.json(await journalList());
     if (action === "journal_plan") return res.json({ planned: await setPlanned(body.planned) });
