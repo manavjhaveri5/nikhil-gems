@@ -1,4 +1,4 @@
-// Reddit relay: reads the newest posts in r/whatsthisrock and r/crystals from
+// Reddit relay: reads the posts worth answering across the stone subs (GROUPS) from
 // this Mac (Reddit answers a home connection; it refuses Vercel's servers
 // without API access) and saves them to app_data "ng-reddit-feed-v1", which
 // Social → Community shows. Run on demand from ~/Desktop/"Refresh Reddit.command"
@@ -39,16 +39,31 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}` };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // The last good feed: a sub Reddit refuses this time keeps its posts from then.
 const prev = await fetch(`${URL_}/rest/v1/app_data?key=eq.ng-reddit-feed-v1&select=value`, { headers: H }).then(r => r.json()).then(d => d?.[0]?.value?.threads || []).catch(() => []);
-const errors = [];
-let got = null;
-for (let tryN = 0; tryN < 3 && !got; tryN++) {
-  try { got = await rss("whatsthisrock+crystals+minerals"); } catch (e) { if (tryN === 2) errors.push(e.message); else { console.log(`Reddit busy (${e.message}), trying again in 45s…`); await sleep(45000); } }
+/* Where an answer from someone who knows stone gets noticed. Two groups, one
+   request each, half a minute apart (Reddit refuses requests back to back):
+     core   — rock ID and crystal people: every question
+     wider  — gem, lapidary, rockhound, opal and collector subs (questions), and
+              the makers who buy stones and cabochons — wire wrapping, jewellery
+              making, beading — only when the post is about the stone. */
+const GROUPS = [
+  { subs: "whatsthisrock+crystals+minerals", cap: 70 },
+  { subs: "Gemstones+Lapidary+rockhounds+Rockhounding+Opals+mineralcollectors+Agates+SpiritualCrystals+Moldavite+WireWrapping+jewelrymaking+Beading", cap: 50 },
+];
+const MAKERS = /^(wirewrapping|jewelrymaking|beading)$/;
+const STONE = /\b(stone|crystal|gem|cab|cabochon|rough|bead|quartz|agate|jasper|opal|turquoise|amethyst|garnet|moonstone|labradorite|ruby|sapphire|emerald|tourmaline|malachite|lapis|jade|onyx|citrine|tiger|aventurine|chalcedony|kyanite|fluorite|real|fake|natural|dyed)\b/i;
+const errors = [], keep = [];
+for (const [gi, g] of GROUPS.entries()) {
+  if (gi) await sleep(30000);
+  let got = null;
+  for (let tryN = 0; tryN < 3 && !got; tryN++) {
+    try { got = await rss(g.subs); } catch (e) { if (tryN === 2) errors.push(e.message); else { console.log(`Reddit busy (${e.message}), trying again in 45s…`); await sleep(45000); } }
+  }
+  const mine = new Set(g.subs.toLowerCase().split("+"));
+  keep.push(...(got || prev.filter(p => mine.has(p.sub)))
+    .filter(p => Date.now() - Date.parse(p.at) < 72 * 3600e3)
+    .filter(p => { const t = `${p.title} ${p.text.slice(0, 300)}`; return p.sub === "whatsthisrock" || (ASKS.test(t) && (!MAKERS.test(p.sub) || STONE.test(t))); })
+    .slice(0, g.cap));
 }
-const threads = got || prev;
-const keep = threads
-  .filter(p => Date.now() - Date.parse(p.at) < 72 * 3600e3)
-  .filter(p => p.sub === "whatsthisrock" || ASKS.test(`${p.title} ${p.text.slice(0, 300)}`))
-  .slice(0, 90);
 
 if (!keep.length) { console.error(`reddit-relay: nothing read (${errors.join("; ") || "empty"}) — keeping the last feed`); process.exit(errors.length ? 1 : 0); }
 const r = await fetch(`${URL_}/rest/v1/app_data?on_conflict=key`, {
