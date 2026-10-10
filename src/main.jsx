@@ -123,8 +123,15 @@ try {
   if (msg) { history.replaceState(null, "", location.pathname); setTimeout(() => alert(`${msg}\n\nSocial → Accounts`), 600); }
 } catch { /* no message */ }
 
-createRoot(document.getElementById("root")).render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
+/* /reddit-reply is the EE reply bookmark's small window: it only drafts a
+   Reddit answer, so it skips the whole ERP shell. */
+if (window.location.pathname === "/reddit-reply") {
+  import("./RedditReply.jsx").then(({ default: RedditReply }) =>
+    createRoot(document.getElementById("root")).render(<StrictMode><RedditReply /></StrictMode>));
+} else {
+  createRoot(document.getElementById("root")).render(
+    <StrictMode>
+      <App />
+    </StrictMode>
+  );
+}
