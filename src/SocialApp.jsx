@@ -15,7 +15,7 @@
    Log — what went where.
 
    The server side is api/social.js. */
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { C, FI, mob } from "./lmTheme.js";
 import { loadK } from "./utils.js";
 import { fetchWithRetry } from "./aiClient.js";
@@ -487,9 +487,14 @@ function Community({ st, showToast }) {
   }, []);
   useEffect(() => { load(); }, [load]);
   const mark = (id, url = "") => setDone(d => { const n = { ...d, [id]: url || true }; try { localStorage.setItem(ANSWERED, JSON.stringify(n)); } catch { /* full */ } return n; });
+  // What the writer last gave per post: anything else in the box is Manav's own
+  // word (an ID, a correction, a note) and the next draft is built on it.
+  const written = useRef({});
   const draft = async (t, extra = "") => {
     setBusy(t.id);
-    try { const r = await draftAnswer(t, extra); setDrafts(d => ({ ...d, [t.id]: r })); } catch (e) { showToast(`⚠ ${e.message}`); }
+    const mine = (drafts[t.id] || "").trim();
+    const told = mine && mine !== written.current[t.id] ? `Manav (the rock expert) wrote this in the box; it is his call — build the reply on it, keep his ID and facts, don't contradict them: "${mine}".` : "";
+    try { const r = await draftAnswer(t, [told, extra].filter(Boolean).join(" ")); written.current[t.id] = r.trim(); setDrafts(d => ({ ...d, [t.id]: r })); } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
   };
   const post = async t => {
@@ -532,7 +537,7 @@ function Community({ st, showToast }) {
               <textarea value={drafts[t.id]} onChange={e => setDrafts(d => ({ ...d, [t.id]: e.target.value }))} rows={4} style={FI({ fontSize: 13, marginTop: 8 })} />
               <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
                 <button disabled={busy === `post-${t.id}` || !drafts[t.id].trim()} onClick={() => post(t)} style={btn(C.ink, "#FAF0DC")}>{busy === `post-${t.id}` ? "Posting…" : canPost ? "Post reply" : "Copy & open to post"}</button>
-                <button disabled={busy === t.id} onClick={() => draft(t)} style={btn()}>{busy === t.id ? "…" : "↻ Another"}</button>
+                <button disabled={busy === t.id} onClick={() => draft(t)} style={btn()}>{busy === t.id ? "…" : (drafts[t.id] || "").trim() && (drafts[t.id] || "").trim() !== written.current[t.id] ? "✎ Write from my note" : "↻ Another"}</button>
                 <button disabled={busy === t.id} onClick={() => draft(t, "Make it shorter: 1-2 sentences.")} style={btn()}>Shorter</button>
               </div>
             </> : <button disabled={busy === t.id} onClick={() => draft(t)} style={{ ...btn(), marginTop: 8 }}>{busy === t.id ? "Looking at the photos…" : "Draft reply"}</button>}
