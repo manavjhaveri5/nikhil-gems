@@ -415,6 +415,39 @@ async function igMedia() {
 }
 
 const SUBS = ["crystals", "MineralCollectors", "Rockhounds", "whatsthisrock", "mineralporn", "CrystalCollectors"];
+/* Questions worth answering: the newest posts in r/whatsthisrock and
+   r/crystals that ask something (an ID, "is this real", "what is this") and
+   haven't been answered to death yet — where a good answer is seen. */
+async function redditQuestions() {
+  let auth = {};
+  if (env("REDDIT_CLIENT_ID")) {
+    const tk = await json(await fetch("https://www.reddit.com/api/v1/access_token", { method: "POST",
+      headers: { Authorization: basic(env("REDDIT_CLIENT_ID"), env("REDDIT_CLIENT_SECRET")), "Content-Type": "application/x-www-form-urlencoded", "User-Agent": "web:earth-editions-erp:1.0" }, body: form({ grant_type: "client_credentials" }) }));
+    if (tk.access_token) auth = { Authorization: `Bearer ${tk.access_token}` };
+  }
+  const host = auth.Authorization ? "https://oauth.reddit.com" : "https://www.reddit.com";
+  const ASKS = /\?|\b(what|which|is (this|it)|real|fake|dyed|identif\w*|id\b|help|anyone know|any idea|found)\b/i;
+  const out = [];
+  for (const sub of ["whatsthisrock", "crystals"]) {
+    const r = await fetch(`${host}/r/${sub}/new${auth.Authorization ? "" : ".json"}?limit=60`, { headers: { ...auth, "User-Agent": "web:earth-editions-erp:1.0" } });
+    if (!r.ok) fail(502, r.status === 403 || r.status === 429 ? "Reddit blocked the search — add REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET in Vercel" : `Reddit: ${r.status}`);
+    const d = await json(r);
+    for (const p of (d.data?.children || []).map(c => c.data)) {
+      if (p.stickied || p.locked || p.removed_by_category) continue;
+      const age = Date.now() / 1000 - p.created_utc;
+      if (age > 48 * 3600 || p.num_comments > 8) continue;
+      if (sub === "crystals" && !ASKS.test(`${p.title} ${p.link_flair_text || ""} ${String(p.selftext || "").slice(0, 300)}`)) continue;
+      const gallery = p.is_gallery && p.media_metadata ? Object.values(p.media_metadata).map(m => m?.s?.u || m?.s?.gif).filter(Boolean).map(u => u.replace(/&amp;/g, "&")) : [];
+      const image = p.preview?.images?.[0]?.source?.url?.replace(/&amp;/g, "&") || (/\.(jpe?g|png|webp)$/i.test(p.url || "") ? p.url : "") || gallery[0] || "";
+      out.push({ id: p.id, sub: p.subreddit, title: p.title, text: String(p.selftext || "").slice(0, 800), url: `https://www.reddit.com${p.permalink}`,
+        image, images: [image, ...gallery].filter(Boolean).filter((u, i, a) => a.indexOf(u) === i).slice(0, 3), flair: p.link_flair_text || "",
+        comments: p.num_comments, at: new Date(p.created_utc * 1000).toISOString() });
+    }
+  }
+  // Fewest answers first, then newest: where a good answer is most likely to be read.
+  return out.sort((a, b) => a.comments - b.comments || b.at.localeCompare(a.at)).slice(0, 40);
+}
+
 async function redditSearch(terms) {
   let auth = {};
   if (env("REDDIT_CLIENT_ID")) {
@@ -769,6 +802,7 @@ export default async function handler(req, res) {
     }
 
     if (action === "reddit_search") return res.json({ threads: await redditSearch(Array.isArray(body.terms) ? body.terms : []) });
+    if (action === "reddit_questions") return res.json({ threads: await redditQuestions() });
 
     if (action === "journal_list") return res.json(await journalList());
     if (action === "journal_plan") return res.json({ planned: await setPlanned(body.planned) });

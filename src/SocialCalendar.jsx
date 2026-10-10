@@ -2,9 +2,9 @@
 
    The standing plan (a week at a time, "Plan this week"):
      Mon  r/crystals          a piece worth talking about
-     Wed  r/Minerals          a specimen — locality, habit, association
-     Fri  r/mineralcollectors a specimen, for collectors
-     Sun  r/Crystalsforsale   ten pieces from eartheditions.co, priced
+     Thu  r/Minerals          a specimen — locality, habit, association
+     Sun  r/crystals          the sale post (Sundays allow selling there): this
+                              week's newest pieces from eartheditions.co, priced
 
    Nothing goes out unless it's been read and approved here: "Approve" lets
    the autopilot post it at its time (api/social.js, every hour), "Post
@@ -31,9 +31,8 @@ const DAY = 864e5;
 // The weekly plan. dow: 0 Sunday … 6 Saturday. Posting at 14:00 UTC — mid-morning in the US, where most of these readers are.
 export const PLAN = [
   { dow: 1, sub: "crystals", type: "show", what: "a piece worth talking about" },
-  { dow: 3, sub: "Minerals", type: "show", what: "a mineral specimen", specimen: true },
-  { dow: 5, sub: "mineralcollectors", type: "show", what: "a specimen for collectors", specimen: true },
-  { dow: 0, sub: "Crystalsforsale", type: "sale", what: "ten pieces from the store" },
+  { dow: 4, sub: "Minerals", type: "show", what: "a mineral specimen", specimen: true },
+  { dow: 0, sub: "crystals", type: "sale", what: "this week's newest pieces from the store" },
 ];
 const HOUR_UTC = 14;
 
@@ -44,7 +43,7 @@ const localInput = iso => { const d = new Date(iso); const p = n => String(n).pa
 
 /* How a person writes on Reddit. The drafts are a starting point, read and
    edited every time — but they should already sound like someone, not a shop. */
-const REDDIT = `You're helping a man who cuts and collects stone in India (family business, buys rough at the source) write his own Reddit posts. Write exactly the way a knowledgeable, slightly understated hobbyist writes on Reddit — not a brand, not a marketer.
+const REDDIT = `You're helping a man in India who has bought, sorted and wholesaled rough stone for years, and cuts and collects it (family business, buys rough at the source), write his own Reddit posts. Write exactly the way a knowledgeable, slightly understated hobbyist writes on Reddit — not a brand, not a marketer.
 - First person, plain, specific. Mix short and long sentences. Contractions. It's fine to be a little dry.
 - No hashtags, no emojis, no exclamation marks, no "check out", "stunning", "mesmerizing", "gorgeous", "beautiful energy", "I'm excited to share", "Hey everyone", "Hope you enjoy".
 - No links, no shop name, nothing for sale in show-and-tell posts — subs remove self-promotion.
@@ -69,9 +68,10 @@ async function draftShow(l, sub) {
   const out = await ask(`Draft an image post for r/${sub}. The photo shows this piece:\n${factsOf(l)}\n\nReturn ONLY JSON: {"title":"plain and specific, under 110 characters, no clickbait","comment":"the first comment under the photo: 2-4 short paragraphs of real detail, ending with one genuine question"}`);
   return { title: out.title || l.title, comment: out.comment || "" };
 }
-async function draftSale(rows) {
-  const out = await ask(`Draft the opening and closing lines for this week's sale post on r/Crystalsforsale. The list of pieces is added separately — don't repeat it. Pieces: ${rows.map(r => r.name).join("; ")}.
-Return ONLY JSON: {"title":"starts with [WTS], under 160 characters, names 2-3 of the stones, says ships worldwide from India","intro":"1-2 plain sentences, no hype","outro":"1-2 lines: comment or DM to claim, happy to send more photos or video"}`, 500);
+async function draftSale(rows, sub = "crystals") {
+  const wts = /forsale/i.test(sub);
+  const out = await ask(`Draft the opening and closing lines for this week's ${wts ? "sale post on r/" + sub : "Sunday sale post on r/crystals (selling is allowed there on Sundays only)"}. They are new pieces just added to our shop. The list of pieces is added separately — don't repeat it. Pieces: ${rows.map(r => r.name).join("; ")}.
+Return ONLY JSON: {"title":"${wts ? "starts with [WTS], " : "plain, e.g. 'Sunday sale: new in this week — ' then 2-3 of the stones, "}under 160 characters, says ships worldwide from India","intro":"1-2 plain sentences: what came in this week, no hype","outro":"1-2 lines: comment or DM to claim, happy to send more photos or video"}`, 500);
   return out;
 }
 
@@ -139,12 +139,13 @@ export default function SocialCalendar({ st, showToast }) {
           made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "show", kind: "image", title: d.title, comment: d.comment, body: "",
             images: (l.images || []).filter(u => typeof u === "string").slice(0, 6), image: 0, listing_ids: [l.id], piece: l.title, status: "draft" });
         } else {
+          // The newest pieces on the store: the sale post is "new in this week".
           const rows = pool.filter(l => store[l.id]?.status === "active" && +store[l.id]?.price > 0 && !used.has(l.id))
-            .sort(() => Math.random() - .5).slice(0, 10)
+            .sort((a, b) => String(store[b.id]?.created_at || b.created_at || "").localeCompare(String(store[a.id]?.created_at || a.created_at || ""))).slice(0, 10)
             .map(l => ({ id: l.id, name: [l.material, l.shape].filter(Boolean).join(" ") || l.title, size: [l.size, l.weight].filter(Boolean).join(", "), price: +store[l.id].price, url: `${SITE}/products/${store[l.id].handle}?utm_source=reddit&utm_medium=social` }));
           if (!rows.length) continue;
-          const d = await draftSale(rows);
-          made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "sale", kind: "self", title: d.title || "[WTS] This week's pieces — ships worldwide from India",
+          const d = await draftSale(rows, s.sub);
+          made.push({ id: uid(), plan: `${s.sub}:${at.slice(0, 10)}`, at, platform: "reddit", sub: s.sub, type: "sale", kind: "self", title: d.title || (/forsale/i.test(s.sub) ? "[WTS] This week's pieces — ships worldwide from India" : "Sunday sale: new in this week — ships worldwide from India"),
             body: saleBody(rows, d), comment: "", images: [], listing_ids: rows.map(r => r.id), piece: `${rows.length} pieces`, status: "draft" });
         }
       }
@@ -200,7 +201,7 @@ export default function SocialCalendar({ st, showToast }) {
         <button disabled={busy === "plan" || !items} onClick={plan} style={btn(C.ink, "#FAF0DC")}>{busy === "plan" ? "Drafting the week…" : "✨ Plan this week"}</button>
       </div>
       <div style={{ fontSize: 12.5, color: C.inkMid }}>
-        Mon r/crystals · Wed r/Minerals · Fri r/mineralcollectors — a piece worth talking about, posted as a photo with the story in the first comment. Sun r/Crystalsforsale — ten pieces from the store with prices. Every post waits for you: <b>Approve</b> and it goes out at its time, or <b>Post now</b>.
+        Mon r/crystals · Thu r/Minerals — a piece worth talking about, posted as a photo with the story in the first comment. Sun r/crystals — the Sunday sale post: this week's newest pieces from the store, with prices. Every post waits for you: <b>Approve</b> and it goes out at its time, or <b>Post now</b>.
         {!connected && <span style={{ color: C.amber }}> Connect Reddit in Accounts to post from here.</span>}
       </div>
 

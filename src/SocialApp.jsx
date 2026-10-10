@@ -463,6 +463,27 @@ Return ONLY JSON: {"topics":[{"topic":"the article's subject, as a working title
 }
 
 /* ── Community: Reddit threads about our stones, replies drafted ───────── */
+/* Answers on Reddit, to build a name as someone who knows rough stone — never
+   to sell. The voice is a person, not the shop: no brand, no links, no "DM me".
+   r/whatsthisrock is all photos, so the photos go to the model with the post. */
+const ANSWER = `You write Reddit replies for a man in India who has spent years buying, sorting and wholesaling rough stone and minerals — he's handled tonnes of it and can tell most stones at a glance, and he's honest when he can't. He answers to help, never to sell.
+
+How he answers:
+- Lead with the answer: what it most likely is, then the one or two things in the photo that say so (luster, habit, cleavage or fracture, colour zoning, inclusions, matrix, weight for size, how it's been cut or polished).
+- If it's uncertain, say what it could be and the quick check that would settle it (scratch/hardness, streak, magnet, UV, a chipped edge, heft, a loupe on the surface).
+- Call out fakes and treatments plainly when they're likely: dyed agate/howlite, glass sold as "opalite" or citrine, heated amethyst, resin, reconstituted turquoise.
+- 2-5 sentences, plain Reddit English, contractions, a little dry. Speak from experience ("we get a lot of this from…", "in rough it usually…") but never invent a specific fact, place or number you aren't sure of.
+- Never: the name Earth Editions, a shop, a link, prices, "DM me", offers to sell, emojis, exclamation marks, hashtags, health or metaphysical claims.`;
+async function draftAnswer(t) {
+  const content = [{ type: "text", text: `r/${t.sub} post${t.flair ? ` [${t.flair}]` : ""}\nTitle: ${t.title}\n${t.text || "(photo only)"}\n\nWrite his reply. Return only the reply.` },
+    ...(t.images || (t.image ? [t.image] : [])).map(url => ({ type: "image", source: { type: "url", url } }))];
+  const res = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "gpt-4.1", max_tokens: 400, temperature: 0.6, messages: [{ role: "system", content: ANSWER }, { role: "user", content }] }) }, { tries: 2, timeoutMs: 90000 });
+  const d = await res.json();
+  if (d.error) throw new Error(d.error?.message || d.error);
+  return (d.content || []).map(b => b.text || "").join("").trim();
+}
+
 function Community({ st, showToast }) {
   const [threads, setThreads] = useState(null);
   const [err, setErr] = useState("");
@@ -477,15 +498,16 @@ function Community({ st, showToast }) {
       setTerms([...n.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([m]) => m));
     }).catch(() => {});
   }, []);
-  const find = async () => {
-    setBusy("find"); setErr("");
-    try { setThreads((await api("reddit_search", { body: { terms } })).threads); } catch (e) { setErr(e.message); }
+  const [mode, setMode] = useState("questions");   // "questions" (r/whatsthisrock, r/crystals) | "stones" (threads naming what we stock)
+  const find = async (m = mode) => {
+    setBusy("find"); setErr(""); setMode(m);
+    try { setThreads((m === "questions" ? await api("reddit_questions") : await api("reddit_search", { body: { terms } })).threads); } catch (e) { setErr(e.message); }
     setBusy("");
   };
   const draft = async t => {
     setBusy(t.id);
     try {
-      const out = await ask(`A post on r/${t.sub}:\nTitle: ${t.title}\n${t.text}\n\nWrite a reply as Earth Editions' founder, a collector who cuts stone in India: genuinely helpful, specific, 2-5 sentences, the way a knowledgeable person talks on Reddit. No selling, no links, no brand name unless directly asked where to buy. If it's an ID request and the photo can't be seen, ask for the details that would settle it. Return only the reply.`, 500);
+      const out = mode === "questions" ? await draftAnswer(t) : await ask(`A post on r/${t.sub}:\nTitle: ${t.title}\n${t.text}\n\nWrite a reply as Earth Editions' founder, a collector who cuts stone in India: genuinely helpful, specific, 2-5 sentences, the way a knowledgeable person talks on Reddit. No selling, no links, no brand name unless directly asked where to buy. If it's an ID request and the photo can't be seen, ask for the details that would settle it. Return only the reply.`, 500);
       setDrafts(d => ({ ...d, [t.id]: out }));
     } catch (e) { showToast(`⚠ ${e.message}`); }
     setBusy("");
@@ -495,10 +517,13 @@ function Community({ st, showToast }) {
       <div style={card}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <div style={{ flex: 1 }}>
-            <b style={{ fontSize: 15 }}>Reddit this week</b>
-            <div style={{ fontSize: 12, color: C.inkMid }}>Threads in r/crystals, r/MineralCollectors, r/Rockhounds, r/whatsthisrock and others that mention stones you stock: {terms.slice(0, 8).join(", ") || "…"}. A reply is drafted to post yourself — Reddit and Mindat ban accounts for automated posting.</div>
+            <b style={{ fontSize: 15 }}>{mode === "questions" ? "Questions to answer — r/whatsthisrock, r/crystals" : "Reddit this week"}</b>
+            <div style={{ fontSize: 12, color: C.inkMid }}>{mode === "questions"
+              ? "New posts from the last 2 days asking what a stone is, or if it's real, with few answers yet. The reply is drafted from the photos, as someone who's handled a lot of rough — no shop, no links, no selling. Read it, make it yours, then Copy & open the thread and post it yourself. A few good answers a day builds the name."
+              : <>Threads in r/crystals, r/MineralCollectors, r/Rockhounds, r/whatsthisrock and others that mention stones you stock: {terms.slice(0, 8).join(", ") || "…"}. A reply is drafted to post yourself — Reddit and Mindat ban accounts for automated posting.</>}</div>
           </div>
-          <button disabled={!!busy || !terms.length} onClick={find} style={btn(C.ink, "#FAF0DC")}>{busy === "find" ? "Searching…" : threads ? "↻ Search again" : "Find threads"}</button>
+          <button disabled={!!busy} onClick={() => find("questions")} style={btn(C.ink, "#FAF0DC")}>{busy === "find" && mode === "questions" ? "Searching…" : "Questions to answer"}</button>
+          <button disabled={!!busy || !terms.length} onClick={() => find("stones")} style={btn()}>{busy === "find" && mode === "stones" ? "Searching…" : "Threads about our stones"}</button>
         </div>
         {!st?.reddit?.ready && <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 6 }}>If Reddit blocks the search, make a free "script" app at reddit.com/prefs/apps and add REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in Vercel.</div>}
         {err && <div style={{ color: C.red, fontSize: 13, marginTop: 8 }}>⚠ {err}</div>}

@@ -34,6 +34,11 @@ function convertContent(content) {
       converted.push({ type: "input_text", text: part.text || "" });
       continue;
     }
+    // A photo on the web (a Reddit post's, say), passed by its address.
+    if (part.type === "image" && part.source?.type === "url" && /^https:\/\//.test(part.source.url || "")) {
+      converted.push({ type: "input_image", image_url: part.source.url });
+      continue;
+    }
     if (part.type === "image" && part.source?.data) {
       converted.push({
         type: "input_image",
