@@ -12994,7 +12994,8 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   const [cardFY,setCardFY]=useState(()=>fyOf(new Date().toISOString().slice(0,10)));
   const fyLabel=y=>`FY ${y}-${String(y+1).slice(2)}`;
   const fyYears=[...new Set(invoices.map(i=>fyOf(i.date)).filter(y=>y!=null))].sort((a,b)=>b-a);
-  const cardInvoices=cardFY==="all"?liveInvoices:liveInvoices.filter(i=>fyOf(i.date)===cardFY);
+  // Proformas are quotes, not sales: the cards count commercial invoices only.
+  const cardInvoices=liveInvoices.filter(i=>!invIsProforma(i)&&(cardFY==="all"||fyOf(i.date)===cardFY));
   const cardUnpaid=cardInvoices.filter(i=>["draft","sent","partial"].includes(i.status)).length;
   const cancelledCount=invoices.length-liveInvoices.length;
   const quickSave=async(inv)=>{
