@@ -12989,6 +12989,13 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
 
   const unpaid=invoices.filter(i=>["draft","sent","partial"].includes(i.status)).length;
   const liveInvoices=invoices.filter(i=>!invCancelled(i));
+  // The cards count one Indian financial year (April–March); this year's to start.
+  const fyOf=d=>{const m=String(d||"").match(/^(\d{4})-(\d{2})/);if(!m)return null;const y=+m[1];return +m[2]>=4?y:y-1;};
+  const [cardFY,setCardFY]=useState(()=>fyOf(new Date().toISOString().slice(0,10)));
+  const fyLabel=y=>`FY ${y}-${String(y+1).slice(2)}`;
+  const fyYears=[...new Set(invoices.map(i=>fyOf(i.date)).filter(y=>y!=null))].sort((a,b)=>b-a);
+  const cardInvoices=cardFY==="all"?liveInvoices:liveInvoices.filter(i=>fyOf(i.date)===cardFY);
+  const cardUnpaid=cardInvoices.filter(i=>["draft","sent","partial"].includes(i.status)).length;
   const cancelledCount=invoices.length-liveInvoices.length;
   const quickSave=async(inv)=>{
     try{
@@ -13089,8 +13096,14 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
       {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
       {loaded&&view==="list"&&(
         <div>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}>
+            <select value={cardFY} onChange={e=>setCardFY(e.target.value==="all"?"all":+e.target.value)} style={{...FI,width:"auto",fontSize:mob?16:12,padding:"4px 8px",cursor:"pointer",fontWeight:600}}>
+              {[...new Set([cardFY==="all"?null:cardFY,...fyYears].filter(y=>y!=null))].sort((a,b)=>b-a).map(y=><option key={y} value={y}>{fyLabel(y)}</option>)}
+              <option value="all">All years</option>
+            </select>
+          </div>
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:mob?8:11,marginBottom:16}}>
-            {[[liveInvoices.length,t("Invoices"),C.blue,C.blueBg],[`${liveInvoices.filter(i=>i.currency==="USD").reduce((a,i)=>a+(+i.totalAmt||0),0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}`,t("Total USD"),C.green,C.greenBg],[unpaid,t("Unpaid/Draft"),C.red,C.redBg],[liveInvoices.filter(i=>i.status==="paid").length,t("Paid"),C.teal,C.tealBg]].map(([v,l,col,bg])=>(
+            {[[cardInvoices.length,t("Invoices"),C.blue,C.blueBg],[`${cardInvoices.filter(i=>i.currency==="USD").reduce((a,i)=>a+(+i.totalAmt||0),0).toLocaleString("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2})}`,t("Total USD"),C.green,C.greenBg],[cardUnpaid,t("Unpaid/Draft"),C.red,C.redBg],[cardInvoices.filter(i=>i.status==="paid").length,t("Paid"),C.teal,C.tealBg]].map(([v,l,col,bg])=>(
               <div key={l} style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,boxShadow:"0 1px 4px rgba(26,19,8,.04)",padding:mob?"10px 12px":"13px 16px"}}>
                 <div style={{fontSize:mob?10:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:4}}>{l}</div>
                 <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?22:20,fontWeight:600,color:col,wordBreak:"break-all"}}>{v}</div>
