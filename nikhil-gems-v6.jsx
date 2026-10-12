@@ -12373,6 +12373,8 @@ const invUnderpaid=inv=>{
 // A cancelled invoice keeps its number on record — once the thing is printed the
 // sequence has to stay intact — but it is void: locked from edits, and out of
 // receivables, totals and payment pickers.
+// A proforma is one saved as such, or one numbered "Proforma…" by hand.
+const invIsProforma=inv=>inv?.type==="proforma"||/^\s*proforma/i.test(String(inv?.invNo||""));
 const invCancelled=inv=>String(inv?.status||"").toLowerCase()==="cancelled";
 // Printing is what finalises an invoice: the document leaves the building, so the
 // record is stamped and locked. Corrections after this are a cancellation, not an edit.
@@ -12641,6 +12643,8 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
     // A cancelled invoice is locked — reinstate it first (that also re-deducts stock).
     if(invCancelled(invoices.find(i=>i.id===inv.id))&&invCancelled(inv)){showToast("This invoice is cancelled — reinstate it to make changes");return;}
     inv=await persistInvoiceShipmentAttachments(inv,company);
+    // Numbered "Proforma…" by hand on a commercial draft: it's a proforma.
+    if(invIsProforma(inv)&&inv.type!=="proforma")inv={...inv,type:"proforma"};
     inv=reconcileInvoiceStatus(inv);
     setDraft(d=>d?.id===inv.id?inv:d);
     const openedVersion=Number.isFinite(+inv._version)?+inv._version:0;
@@ -13004,7 +13008,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   const invSortClick=field=>{if(invSortBy===field){setInvSortDir(d=>d==="asc"?"desc":"asc");}else{setInvSortBy(field);setInvSortDir("desc");}};
   const filteredInvoices=invoices.filter(inv=>{
     if(filterStatus!=="all"&&inv.status!==filterStatus)return false;
-    if(invTypeF!=="all"&&inv.type!==invTypeF)return false;
+    if(invTypeF!=="all"&&(invIsProforma(inv)?"proforma":"commercial")!==invTypeF)return false;
     if(invCurrF!=="all"&&inv.currency!==invCurrF)return false;
     if(invMonthF.size&&!invMonthF.has(String(inv.date||"").slice(0,7)))return false;
     if(invBuyerF!=="all"&&inv.buyerId!==invBuyerF)return false;
@@ -13190,7 +13194,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                       </div>
                       <div style={{fontSize:12,color:C.inkMid,marginBottom:7}}>{buyer?.name||inv.buyerName||inv.buyer||"—"} · {fmtDate(inv.date)}</div>
                       <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
-                        <span style={{fontSize:9,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"2px 6px",flexShrink:0}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span>
+                        <span style={{fontSize:9,fontWeight:600,color:invIsProforma(inv)?C.amber:C.blue,background:invIsProforma(inv)?C.amberBg:C.blueBg,borderRadius:3,padding:"2px 6px",flexShrink:0}}>{invIsProforma(inv)?"PROFORMA":"COMMERCIAL"}</span>
                         <span style={{fontSize:9,fontWeight:600,color:invCancelled(inv)?C.red:inv.status==="paid"?C.green:inv.status==="partial"?C.amber:C.inkMid,background:C.card,borderRadius:3,padding:"2px 6px",border:`1px solid ${C.border}`,flexShrink:0}}>{inv.status?.toUpperCase()||"DRAFT"}</span>
                         {!invCancelled(inv)&&invPrinted(inv)&&<span style={{fontSize:9,fontWeight:600,color:C.blue,background:C.blueBg,borderRadius:3,padding:"2px 6px",flexShrink:0}}>🖨 PRINTED</span>}
                         {totalPaidAmt>0&&!isPaid&&<span style={{fontSize:9,color:C.green,flexShrink:0}}>pd {totalPaidAmt.toLocaleString("en-IN",{minimumFractionDigits:2})}</span>}
@@ -13250,7 +13254,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
                         {invCancelled(inv)&&<div style={{fontFamily:"inherit",fontSize:9,fontWeight:700,color:C.red,textDecoration:"none",letterSpacing:.5}}>CANCELLED</div>}
                         {!invCancelled(inv)&&invPrinted(inv)&&<div title={`Printed ${fmtDate(String(inv.printedAt).slice(0,10))}${(+inv.printCount||0)>1?` · ${+inv.printCount} prints`:""}`} style={{fontFamily:"inherit",fontSize:9,fontWeight:700,color:C.blue,letterSpacing:.4}}>🖨 PRINTED</div>}
                       </div>
-                      <div><span style={{fontSize:10,fontWeight:600,color:inv.type==="proforma"?C.amber:C.blue,background:inv.type==="proforma"?C.amberBg:C.blueBg,borderRadius:3,padding:"1px 6px"}}>{inv.type==="proforma"?"PROFORMA":"COMMERCIAL"}</span></div>
+                      <div><span style={{fontSize:10,fontWeight:600,color:invIsProforma(inv)?C.amber:C.blue,background:invIsProforma(inv)?C.amberBg:C.blueBg,borderRadius:3,padding:"1px 6px"}}>{invIsProforma(inv)?"PROFORMA":"COMMERCIAL"}</span></div>
                       <div style={{fontSize:13}}>{buyer?.name||inv.buyerName||inv.buyer||"—"}</div>
                       <div style={{fontSize:11,color:C.inkMid}}>{fmtDate(inv.date)}</div>
                       <div>
