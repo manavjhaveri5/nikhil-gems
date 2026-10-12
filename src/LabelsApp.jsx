@@ -31,7 +31,18 @@ const LANGS = [
 ];
 const langOf = code => LANGS.find(l => l.code === code) || LANGS[0];
 const PAPER = { letter: { label: "US Letter", css: "letter" }, a4: { label: "A4", css: "A4" } };
-const PER_PAGE = 10;   // two across, five down: 3.5 × 1.85 in cards
+/* Card sizes, chosen per set. Each fits Letter and A4 with the sheet's margins;
+   k scales everything on the card (type, rules, padding) to suit. */
+const SIZES = {
+  s10: { label: "Small · 10 a page (3.5 × 1.85 in)", w: 3.5, h: 1.854, cols: 2, rows: 5, k: 1 },
+  s8:  { label: "Medium · 8 a page (3.5 × 2.45 in)", w: 3.5, h: 2.45, cols: 2, rows: 4, k: 1.25 },
+  s6:  { label: "Large · 6 a page (3.5 × 3.25 in)", w: 3.5, h: 3.25, cols: 2, rows: 3, k: 1.5 },
+  s4:  { label: "Extra large · 4 a page (3.5 × 4.9 in)", w: 3.5, h: 4.9, cols: 2, rows: 2, k: 1.85 },
+  s2:  { label: "Shelf card · 2 a page (7 × 4.9 in)", w: 7, h: 4.9, cols: 1, rows: 2, k: 2.5 },
+};
+// On top of the card size, the writing itself can be set larger or smaller.
+const TEXT = [["0.85", "Smaller text"], ["1", "Normal text"], ["1.2", "Larger text"], ["1.4", "Largest text"]];
+const geom = set => { const z = SIZES[set?.size] || SIZES.s10; return { ...z, k: z.k * (+set?.text || 1), per: z.cols * z.rows }; };
 
 const FIELDS = ["code", "en", "local", "type", "origin", "qty", "price"];
 const blank = () => ({ id: uid(), code: "", en: "", local: "", type: "", origin: "", qty: "", price: "" });
@@ -87,13 +98,15 @@ const japanSet = () => ({
   updatedAt: new Date().toISOString(),
 });
 
-/* A long name shrinks to fit its line, to 60% at the most — on screen and on
-   the print sheet alike (the print window runs the same loop). */
+/* A long name wraps onto a second line, and only past two lines (or a single
+   word too wide for the card) does it shrink, to 60% at the most — on screen
+   and on the print sheet alike (the print window runs the same loop). */
 function fit(el, base) {
   if (!el) return;
   el.style.fontSize = base + "px";
   let s = base;
-  while (el.scrollWidth > el.clientWidth + 1 && s > base * 0.6) { s -= 0.5; el.style.fontSize = s + "px"; }
+  const over = () => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > s * 1.3 * 2 + 2;
+  while (over() && s > base * 0.6) { s -= 0.5; el.style.fontSize = s + "px"; }
 }
 
 /* Uncontrolled on purpose (as in NameCard.jsx): a contentEditable React
@@ -115,14 +128,14 @@ function Editable({ value, onCommit, ph, className, style, onInput }) {
   );
 }
 
-function Card({ c, lang, onPatch, onAct, index, total }) {
+function Card({ c, lang, onPatch, onAct, index, total, g }) {
   const en = useRef(null), loc = useRef(null);
   const L = langOf(lang);
-  const refit = useCallback(() => { fit(en.current?.querySelector(".lbl-ed"), 18); fit(loc.current?.querySelector(".lbl-ed"), 17); }, []);
-  useEffect(() => { document.fonts?.ready.then(refit); refit(); }, [c.en, c.local, lang, refit]);
+  const refit = useCallback(() => { fit(en.current?.querySelector(".lbl-ed"), 18 * g.k); fit(loc.current?.querySelector(".lbl-ed"), 17 * g.k); }, [g.k]);
+  useEffect(() => { document.fonts?.ready.then(refit); refit(); }, [c.en, c.local, lang, refit, g.w, g.h]);
   const f = (k, cls, ph, style) => <Editable value={c[k]} ph={ph} className={cls} style={style} onInput={k === "en" || k === "local" ? refit : undefined} onCommit={v => onPatch({ [k]: v })} />;
   return (
-    <div className="lbl-card">
+    <div className="lbl-card" style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
       <div className="lbl-code">{f("code", "", "code")}</div>
       <div ref={en} className="lbl-line">{f("en", "lbl-en", "English name")}</div>
       {lang && <div ref={loc} className="lbl-line">{f("local", "lbl-jp", L.ph, L.font ? { fontFamily: L.font } : undefined)}</div>}
@@ -142,16 +155,16 @@ function Card({ c, lang, onPatch, onAct, index, total }) {
 }
 
 const CARD_CSS = `
-.lbl-card{position:relative;background:#fff;border:1px solid #cfb793;border-top:6px solid #8a6a3e;display:flex;flex-direction:column;align-items:center;padding:12px 18px 0;color:#1d1a17;font-family:"Cormorant Garamond",Garamond,serif;width:336px;height:178px;box-sizing:border-box;overflow:hidden}
-.lbl-code{position:absolute;left:6px;top:3px;font-size:8px;color:#8a6a3e;min-width:10px}
+.lbl-card{--k:1;position:relative;background:#fff;border:1px solid #cfb793;border-top:calc(6px*var(--k)) solid #8a6a3e;display:flex;flex-direction:column;align-items:center;padding:calc(12px*var(--k)) calc(18px*var(--k)) 0;color:#1d1a17;font-family:"Cormorant Garamond",Garamond,serif;width:336px;height:178px;box-sizing:border-box;overflow:hidden}
+.lbl-code{position:absolute;left:6px;top:3px;font-size:calc(8px*var(--k));color:#8a6a3e;min-width:10px}
 .lbl-line{width:100%;display:flex;justify-content:center}
-.lbl-en{font-size:18px;letter-spacing:.03em;line-height:1.15;white-space:nowrap;max-width:100%;text-align:center;min-height:21px}
-.lbl-jp{font-family:"Noto Serif JP","Hiragino Mincho ProN","Yu Mincho",serif;font-size:17px;letter-spacing:.04em;line-height:1.3;white-space:nowrap;max-width:100%;text-align:center;min-height:22px}
+.lbl-en{font-size:calc(18px*var(--k));letter-spacing:.03em;line-height:1.15;white-space:normal;overflow-wrap:break-word;width:100%;max-width:100%;text-align:center;min-height:calc(21px*var(--k))}
+.lbl-jp{font-family:"Noto Serif JP","Hiragino Mincho ProN","Yu Mincho",serif;font-size:calc(17px*var(--k));letter-spacing:.04em;line-height:1.3;white-space:nowrap;max-width:100%;text-align:center;min-height:calc(22px*var(--k))}
 .lbl-rule1{align-self:stretch;border-top:1px solid #e2d6c4;margin-top:auto}
-.lbl-type{font-size:8.5px;letter-spacing:.24em;text-transform:uppercase;color:#8a6a3e;margin-top:6px;min-height:11px;text-align:center}
-.lbl-origin{font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:#a29a90;margin-top:4px;min-height:10px;text-align:center}
-.lbl-rule2{align-self:stretch;border-top:1px solid #e2d6c4;border-bottom:1px solid #e2d6c4;height:5px;margin-top:8px}
-.lbl-foot{align-self:stretch;display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;padding:7px 0 12px;font-variant-numeric:oldstyle-nums}
+.lbl-type{font-size:calc(8.5px*var(--k));letter-spacing:.24em;text-transform:uppercase;color:#8a6a3e;margin-top:calc(6px*var(--k));min-height:calc(11px*var(--k));text-align:center}
+.lbl-origin{font-size:calc(8px*var(--k));letter-spacing:.2em;text-transform:uppercase;color:#a29a90;margin-top:calc(4px*var(--k));min-height:calc(10px*var(--k));text-align:center}
+.lbl-rule2{align-self:stretch;border-top:1px solid #e2d6c4;border-bottom:1px solid #e2d6c4;height:calc(5px*var(--k));margin-top:calc(8px*var(--k))}
+.lbl-foot{align-self:stretch;display:flex;justify-content:space-between;align-items:baseline;font-size:calc(11.5px*var(--k));padding:calc(7px*var(--k)) 0 calc(12px*var(--k));font-variant-numeric:oldstyle-nums}
 .lbl-foot>div{min-width:20px}.lbl-price{text-align:right}
 `;
 const EDIT_CSS = `
@@ -173,7 +186,8 @@ function printSet(set) {
   const L = langOf(set.lang);
   const esc = t => String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const pages = [];
-  for (let i = 0; i < set.cards.length; i += PER_PAGE) pages.push(set.cards.slice(i, i + PER_PAGE));
+  const g = geom(set);
+  for (let i = 0; i < set.cards.length; i += g.per) pages.push(set.cards.slice(i, i + g.per));
   const card = c => `<div class="lbl-card"><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en)}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local)}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
   const w = window.open("", "_blank");
   if (!w) return false;
@@ -184,16 +198,16 @@ function printSet(set) {
 .bar{position:sticky;top:0;background:#fff;border-bottom:1px solid #d6d0c7;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .bar b{font:500 18px "Cormorant Garamond",serif}.bar span{font-size:12px;color:#7a7268}
 .bar button{background:#6f5430;color:#fff;border:0;border-radius:6px;padding:9px 16px;font-size:13px;cursor:pointer}
-.sheet{width:7.3in;margin:16px auto;background:#fff;padding:.28in 0;display:grid;grid-template-columns:3.5in 3.5in;grid-auto-rows:1.854in;gap:.073in;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.18)}
-.lbl-card{width:3.5in;height:1.854in}
+.sheet{width:7.3in;margin:16px auto;background:#fff;padding:.28in 0;display:grid;grid-template-columns:repeat(${g.cols},${g.w}in);grid-auto-rows:${g.h}in;gap:.073in;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.lbl-card{--k:${g.k};width:${g.w}in;height:${g.h}in}
 @page{size:${paper.css};margin:.28in .5in}
 @media print{body{background:#fff}.bar{display:none}.sheet{margin:0 auto;padding:0;box-shadow:none;break-after:page}.sheet:last-child{break-after:auto}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
 <div class="bar"><div><b>${esc(set.name)}</b> <span>· ${set.cards.length} card${set.cards.length === 1 ? "" : "s"} · ${pages.length} page${pages.length === 1 ? "" : "s"} · ${paper.label}</span></div><button onclick="window.print()">🖨 Print / Save as PDF</button></div>
 ${pages.map(p => `<div class="sheet">${p.map(card).join("")}</div>`).join("")}
 <script>
-function fit(el,base){el.style.fontSize=base+"px";var s=base;while(el.scrollWidth>el.clientWidth+1&&s>base*.6){s-=.5;el.style.fontSize=s+"px";}}
-(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,18)});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,17)});});
+function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){return el.scrollWidth>el.clientWidth+1||el.scrollHeight>s*1.3*2+2}while(over()&&s>base*.6){s-=.5;el.style.fontSize=s+"px";}}
+(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,${18 * g.k})});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,${17 * g.k})});});
 </script></body></html>`);
   w.document.close();
   return true;
@@ -351,6 +365,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
   };
 
   const zoom = Math.min(1, (window.innerWidth - 24) / 816);
+  const g = geom(set);
 
   return (
     <div style={{ minHeight: "100vh", background: "#e9e6e1", color: "#2a2622" }}>
@@ -363,6 +378,8 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
             <input key={set.id} defaultValue={set.name} onKeyDown={e => e.key === "Enter" && e.currentTarget.blur()} style={{ font: "500 20px 'Cormorant Garamond',serif", border: "1px solid transparent", borderRadius: 6, padding: "2px 6px", minWidth: 120, flex: mob() ? "1 1 100%" : "0 1 260px" }} onFocus={e => e.target.style.borderColor = "#d6d0c7"} onBlur={e => { e.target.style.borderColor = "transparent"; const v = e.target.value.trim() || "Labels"; if (v !== set.name) patchSet({ name: v }); }} />
             <select value={set.lang} onChange={e => patchSet({ lang: e.target.value })} style={{ ...btn(), padding: "7px 8px" }} title="Second line on each card">{LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}</select>
             <select value={set.paper} onChange={e => patchSet({ paper: e.target.value })} style={{ ...btn(), padding: "7px 8px" }}>{Object.entries(PAPER).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}</select>
+            <select value={SIZES[set.size] ? set.size : "s10"} onChange={e => patchSet({ size: e.target.value })} style={{ ...btn(), padding: "7px 8px" }} title="Card size">{Object.entries(SIZES).map(([k, z]) => <option key={k} value={k}>{z.label}</option>)}</select>
+            <select value={set.text || "1"} onChange={e => patchSet({ text: e.target.value })} style={{ ...btn(), padding: "7px 8px" }} title="Text size">{TEXT.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
             <div style={{ flex: 1 }} />
             <button onClick={() => patchSet({ cards: [...current().cards, blank()] })} style={btn()}>＋ Card</button>
             <button onClick={() => setPicker(true)} style={btn()}>＋ From Stock</button>
@@ -371,7 +388,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
           </>
         ) : (
           <>
-            <div><div style={{ font: "500 22px 'Cormorant Garamond',serif" }}>Make Labels</div><div style={{ fontSize: 12, color: "#7a7268" }}>Name cards for shows, shelves and boxes · 10 to a page</div></div>
+            <div><div style={{ font: "500 22px 'Cormorant Garamond',serif" }}>Make Labels</div><div style={{ fontSize: 12, color: "#7a7268" }}>Name cards for shows, shelves and boxes · 2 to 10 a page</div></div>
             <div style={{ flex: 1 }} />
             <button onClick={newSet} style={btn(true)}>＋ New label set</button>
           </>
@@ -386,7 +403,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
               <div style={{ width: 54, height: 30, border: "1px solid #cfb793", borderTop: "4px solid #8a6a3e", background: "#fff", flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ font: "500 18px 'Cormorant Garamond',serif" }}>{s.name}</div>
-                <div style={{ fontSize: 12, color: "#7a7268" }}>{s.cards.length} card{s.cards.length === 1 ? "" : "s"} · {langOf(s.lang).label} · {(PAPER[s.paper] || PAPER.letter).label}</div>
+                <div style={{ fontSize: 12, color: "#7a7268" }}>{s.cards.length} card{s.cards.length === 1 ? "" : "s"} · {langOf(s.lang).label} · {(PAPER[s.paper] || PAPER.letter).label} · {geom(s).per} a page</div>
               </div>
               <button onClick={e => { e.stopPropagation(); copySet(s); }} style={btn()} title="Make a copy">⧉</button>
               <button onClick={e => { e.stopPropagation(); if (!printSet(s)) say("Allow pop-ups to open the print sheet"); }} style={btn()} title="Print">🖨</button>
@@ -399,15 +416,15 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
       {set && (
         <>
           <p style={{ fontSize: 12.5, color: "#7a7268", maxWidth: 816, margin: "12px auto 0", padding: "0 16px", fontFamily: "system-ui,sans-serif" }}>
-            Click any text on a card to change it. Hover a card to copy, move or delete it. Saved as you go · {set.cards.length} cards on {Math.max(1, Math.ceil(set.cards.length / PER_PAGE))} page{set.cards.length > PER_PAGE ? "s" : ""}.
+            Click any text on a card to change it. Hover a card to copy, move or delete it. Saved as you go · {set.cards.length} cards on {Math.max(1, Math.ceil(set.cards.length / g.per))} page{set.cards.length > g.per ? "s" : ""}.
           </p>
           <div style={{ overflowX: "auto", padding: "14px 0 40px" }}>
             <div style={{ width: 816, margin: "0 auto", zoom }}>
-              {Array.from({ length: Math.max(1, Math.ceil(set.cards.length / PER_PAGE)) }, (_, p) => (
-                <div key={p} className="lbl-sheet">
-                  {set.cards.slice(p * PER_PAGE, p * PER_PAGE + PER_PAGE).map((c, k) => {
-                    const i = p * PER_PAGE + k;
-                    return <Card key={c.id} c={c} lang={set.lang} index={i} total={set.cards.length} onPatch={pp => patchCard(c.id, pp)} onAct={a => act(i, a)} />;
+              {Array.from({ length: Math.max(1, Math.ceil(set.cards.length / g.per)) }, (_, p) => (
+                <div key={p} className="lbl-sheet" style={{ gridTemplateColumns: `repeat(${g.cols}, ${g.w * 96}px)`, gridAutoRows: `${g.h * 96}px` }}>
+                  {set.cards.slice(p * g.per, p * g.per + g.per).map((c, k) => {
+                    const i = p * g.per + k;
+                    return <Card key={c.id} c={c} g={g} lang={set.lang} index={i} total={set.cards.length} onPatch={pp => patchCard(c.id, pp)} onAct={a => act(i, a)} />;
                   })}
                 </div>
               ))}
