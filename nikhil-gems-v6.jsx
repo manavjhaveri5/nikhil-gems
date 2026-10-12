@@ -13535,6 +13535,21 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
      and the Gmail draft opens beside it — a compose link cannot carry a file,
      so the attaching is the one step left to do by hand. */
   const [valuationBusy,setValuationBusy]=useState(false);
+  /* On a phone the two files go out through the share sheet (Gmail, Mail…)
+     with both attached. Downloads and a Gmail tab don't work there: an iPhone
+     opens the first download in place of the ERP, drops the second, and blocks
+     a tab opened after the files were made. The share needs a fresh tap, so the
+     files are made first and a Share button appears for that tap. */
+  const [valuationShare,setValuationShare]=useState(null);
+  const shareValuation=async()=>{
+    const v=valuationShare;if(!v)return;
+    try{await navigator.clipboard?.writeText(VALUER_EMAIL);}catch{}
+    try{
+      await navigator.share({files:v.files,title:v.subject,text:v.body});
+      showToast?.(`Sent to the share sheet — ${VALUER_EMAIL} is copied, paste it in To`,9000);
+      setValuationShare(null);
+    }catch(e){if(e?.name!=="AbortError")showToast?.("Couldn't share: "+(e?.message||e));}
+  };
   const requestValuation=async()=>{
     if(valuationBusy)return;
     const cur=draft.currency||"USD";
@@ -13563,11 +13578,9 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     try{
       const bytes=await renderInvoicePacketPdf(draft,buyers,company);
       const file=`${stem}.pdf`;
-      save(bytes,file,"application/pdf");
       // The valuer works off his own form, so the working sheet goes with it.
-      const xlsxName=`${stem}_valuation.xlsx`;
-      save(await buildValuationXlsx(draft,company,fx),xlsxName,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      const xlsxName=`${stem}_valuation.xlsx`, XLSX_TYPE="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+      const xbytes=await buildValuationXlsx(draft,company,fx);
 
       /* Outlook junks a first-contact Gmail carrying an invoice number, three
          template lines and no signature — it is the exact shape of invoice
@@ -13577,6 +13590,16 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
       const subject=`Valuation Certificate — Invoice ${draft.invNo||""}`.trim();
       const sign=[co.name,String(co.address||"").replace(/\n/g," "),`Tel: ${co.tel}`,`GST: ${co.gstin}`,co.email].filter(Boolean).join("\n");
       const body=`Dear Madam,\n\nPlease find attached our invoice ${draft.invNo||""}${draft.date?` dated ${fmtDate(draft.date)}`:""} along with the valuation working sheet. Kindly issue the valuation certificate for this shipment.\n\nThank you,\n\n${sign}`;
+      const files=[new File([bytes],file,{type:"application/pdf"}),new File([xbytes],xlsxName,{type:XLSX_TYPE})];
+      const phone=matchMedia?.("(pointer:coarse)")?.matches&&navigator.canShare?.({files});
+      if(phone){
+        setValuationShare({files,subject,body});
+        showToast?.("Files ready — tap Share to send them",6000);
+        setValuationBusy(false);
+        return;
+      }
+      save(bytes,file,"application/pdf");
+      save(xbytes,xlsxName,XLSX_TYPE);
       const gmail=`https://mail.google.com/mail/?view=cm&fs=1&tf=1&to=${encodeURIComponent(VALUER_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
       // No "noopener" feature string here: some browsers return null for it even
       // when the tab opened, and that reads as a blocked pop-up.
@@ -14256,7 +14279,9 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             style={{cursor:valuationBusy?"default":"pointer",opacity:valuationBusy?0.6:1,display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
             📧 {valuationBusy?"Preparing files…":"Request Valuation Certificate"}
           </button>
-          <span style={{fontSize:11,color:C.inkFaint}}>Downloads the invoice PDF and the valuation sheet, and opens a Gmail draft to {VALUER_EMAIL} — attach both there</span>
+          {valuationShare
+            ?<button type="button" onClick={shareValuation} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,padding:"6px 14px",border:`1px solid ${C.green}`,borderRadius:5,background:C.greenBg,color:C.green,fontFamily:"inherit"}}>📤 Share both files</button>
+            :<span style={{fontSize:11,color:C.inkFaint}}>On a computer: downloads the invoice PDF and the valuation sheet and opens a Gmail draft to {VALUER_EMAIL}. On a phone: makes both files, then Share sends them to Gmail or Mail with both attached.</span>}
         </div>
         {/* Ticked by hand once the email has actually gone: the button only opens a draft. */}
         <label style={{display:"flex",alignItems:"center",gap:6,cursor:shipLock?"default":"pointer",fontSize:12,color:draft.valuationSentAt?C.green:C.inkMid,marginBottom:10}}>

@@ -31,7 +31,59 @@ const LANGS = [
 ];
 const langOf = code => LANGS.find(l => l.code === code) || LANGS[0];
 const PAPER = { letter: { label: "US Letter", css: "letter" }, a4: { label: "A4", css: "A4" } };
-const PER_PAGE = 10;   // two across, five down: 3.5 × 1.85 in cards
+/* Card sizes, chosen per set. Each fits Letter and A4 with the sheet's margins;
+   k scales everything on the card (type, rules, padding) to suit. */
+const SIZES = {
+  s10: { label: "Small · 10 a page (3.5 × 1.85 in)", w: 3.5, h: 1.854, cols: 2, rows: 5, k: 1 },
+  s8:  { label: "Medium · 8 a page (3.5 × 2.45 in)", w: 3.5, h: 2.45, cols: 2, rows: 4, k: 1.25 },
+  s6:  { label: "Large · 6 a page (3.5 × 3.25 in)", w: 3.5, h: 3.25, cols: 2, rows: 3, k: 1.5 },
+  s4:  { label: "Extra large · 4 a page (3.5 × 4.9 in)", w: 3.5, h: 4.9, cols: 2, rows: 2, k: 1.85 },
+  s2:  { label: "Shelf card · 2 a page (7 × 4.9 in)", w: 7, h: 4.9, cols: 1, rows: 2, k: 2.5 },
+};
+// On top of the card size, the writing itself can be set larger or smaller.
+const TEXT = [["0.85", "Smaller text"], ["1", "Normal text"], ["1.2", "Larger text"], ["1.4", "Largest text"]];
+/* Any other size: typed in inches. As many go on a page as fit inside the
+   sheet's printable area (7.3 × 10.4 in on Letter, the tighter of the two
+   papers); the type grows with the card the way the set sizes do. */
+const clampIn = (v, lo, hi, d) => Math.min(hi, Math.max(lo, +v || d));
+const geom = set => {
+  let z = SIZES[set?.size];
+  if (set?.size === "custom") {
+    const w = clampIn(set.cw, 1.5, 7.3, 3.5), h = clampIn(set.ch, 1, 10.4, 1.854);
+    const cols = Math.max(1, Math.floor((7.3 + 0.073) / (w + 0.073))), rows = Math.max(1, Math.floor((10.4 + 0.073) / (h + 0.073)));
+    z = { w, h, cols, rows, k: Math.max(0.75, Math.min(w / 3.5, h / 1.854) ** 0.7) };
+  }
+  z = z || SIZES.s10;
+  const L = layoutOf(set);
+  return { ...z, k: z.k * (+set?.text || 1), per: z.cols * z.rows, kn: L.name.s, kl: L.local.s };
+};
+
+/* Where things sit on the card and how big each is, per set: every part has
+   its own size (a share of the card's own), the name and the type lines can
+   sit left, centred or right, the name at the top or in the middle, and any
+   part can be left off. */
+const PARTS = [["name", "Name"], ["local", "Second-language name"], ["type", "Type"], ["origin", "Origin"], ["foot", "Qty & price"], ["code", "Code"]];
+const SCALES = [0.7, 0.85, 1, 1.2, 1.4, 1.7, 2, 2.5];
+const LAYOUT0 = { name: { s: 1, align: "center", pos: "top", show: true }, local: { s: 1, show: true }, type: { s: 1, align: "center", show: true }, origin: { s: 1, show: true }, foot: { s: 1, show: true }, code: { s: 1, show: true } };
+function layoutOf(set) {
+  const l = set?.layout || {};
+  return Object.fromEntries(Object.entries(LAYOUT0).map(([k, d]) => [k, { ...d, ...(l[k] || {}) }]));
+}
+function layoutCss(set) {
+  const L = layoutOf(set);
+  const ta = a => (a === "left" ? "left" : a === "right" ? "right" : "center");
+  const jc = a => (a === "left" ? "flex-start" : a === "right" ? "flex-end" : "center");
+  return `
+.lbl-card{--kn:${L.name.s};--kl:${L.local.s};--kt:${L.type.s};--ko:${L.origin.s};--kf:${L.foot.s};--kc:${L.code.s}}
+.lbl-line{justify-content:${jc(L.name.align)}}.lbl-en,.lbl-jp{text-align:${ta(L.name.align)}}
+.lbl-type,.lbl-origin{align-self:stretch;text-align:${ta(L.type.align)}}
+${L.name.pos === "middle" ? ".lbl-code+.lbl-line{margin-top:auto}" : ""}
+${L.name.show ? "" : ".lbl-code+.lbl-line{display:none}"}
+${L.local.show ? "" : ".lbl-code+.lbl-line+.lbl-line{display:none}"}
+${L.type.show ? "" : ".lbl-type{display:none}"}${L.origin.show ? "" : ".lbl-origin{display:none}"}
+${L.foot.show ? "" : ".lbl-rule2,.lbl-foot{display:none}"}${L.code.show ? "" : ".lbl-code{display:none}"}
+${L.type.show || L.origin.show ? "" : ".lbl-rule1{border-top:0}"}`;
+}
 
 const FIELDS = ["code", "en", "local", "type", "origin", "qty", "price"];
 const blank = () => ({ id: uid(), code: "", en: "", local: "", type: "", origin: "", qty: "", price: "" });
@@ -87,13 +139,15 @@ const japanSet = () => ({
   updatedAt: new Date().toISOString(),
 });
 
-/* A long name shrinks to fit its line, to 60% at the most — on screen and on
-   the print sheet alike (the print window runs the same loop). */
+/* A long name wraps onto a second line, and only past two lines (or a single
+   word too wide for the card) does it shrink, to 60% at the most — on screen
+   and on the print sheet alike (the print window runs the same loop). */
 function fit(el, base) {
   if (!el) return;
   el.style.fontSize = base + "px";
   let s = base;
-  while (el.scrollWidth > el.clientWidth + 1 && s > base * 0.6) { s -= 0.5; el.style.fontSize = s + "px"; }
+  const over = () => el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > s * 1.3 * 2 + 2;
+  while (over() && s > base * 0.6) { s -= 0.5; el.style.fontSize = s + "px"; }
 }
 
 /* Uncontrolled on purpose (as in NameCard.jsx): a contentEditable React
@@ -115,14 +169,14 @@ function Editable({ value, onCommit, ph, className, style, onInput }) {
   );
 }
 
-function Card({ c, lang, onPatch, onAct, index, total }) {
+function Card({ c, lang, onPatch, onAct, index, total, g }) {
   const en = useRef(null), loc = useRef(null);
   const L = langOf(lang);
-  const refit = useCallback(() => { fit(en.current?.querySelector(".lbl-ed"), 18); fit(loc.current?.querySelector(".lbl-ed"), 17); }, []);
-  useEffect(() => { document.fonts?.ready.then(refit); refit(); }, [c.en, c.local, lang, refit]);
+  const refit = useCallback(() => { fit(en.current?.querySelector(".lbl-ed"), 18 * g.k * g.kn); fit(loc.current?.querySelector(".lbl-ed"), 17 * g.k * g.kl); }, [g.k, g.kn, g.kl]);
+  useEffect(() => { document.fonts?.ready.then(refit); refit(); }, [c.en, c.local, lang, refit, g.w, g.h]);
   const f = (k, cls, ph, style) => <Editable value={c[k]} ph={ph} className={cls} style={style} onInput={k === "en" || k === "local" ? refit : undefined} onCommit={v => onPatch({ [k]: v })} />;
   return (
-    <div className="lbl-card">
+    <div className="lbl-card" style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
       <div className="lbl-code">{f("code", "", "code")}</div>
       <div ref={en} className="lbl-line">{f("en", "lbl-en", "English name")}</div>
       {lang && <div ref={loc} className="lbl-line">{f("local", "lbl-jp", L.ph, L.font ? { fontFamily: L.font } : undefined)}</div>}
@@ -142,16 +196,16 @@ function Card({ c, lang, onPatch, onAct, index, total }) {
 }
 
 const CARD_CSS = `
-.lbl-card{position:relative;background:#fff;border:1px solid #cfb793;border-top:6px solid #8a6a3e;display:flex;flex-direction:column;align-items:center;padding:12px 18px 0;color:#1d1a17;font-family:"Cormorant Garamond",Garamond,serif;width:336px;height:178px;box-sizing:border-box;overflow:hidden}
-.lbl-code{position:absolute;left:6px;top:3px;font-size:8px;color:#8a6a3e;min-width:10px}
+.lbl-card{--k:1;position:relative;background:#fff;border:1px solid #cfb793;border-top:calc(6px*var(--k)) solid #8a6a3e;display:flex;flex-direction:column;align-items:center;padding:calc(12px*var(--k)) calc(18px*var(--k)) 0;color:#1d1a17;font-family:"Cormorant Garamond",Garamond,serif;width:336px;height:178px;box-sizing:border-box;overflow:hidden}
+.lbl-code{position:absolute;left:6px;top:3px;font-size:calc(8px*var(--k)*var(--kc,1));color:#8a6a3e;min-width:10px}
 .lbl-line{width:100%;display:flex;justify-content:center}
-.lbl-en{font-size:18px;letter-spacing:.03em;line-height:1.15;white-space:nowrap;max-width:100%;text-align:center;min-height:21px}
-.lbl-jp{font-family:"Noto Serif JP","Hiragino Mincho ProN","Yu Mincho",serif;font-size:17px;letter-spacing:.04em;line-height:1.3;white-space:nowrap;max-width:100%;text-align:center;min-height:22px}
+.lbl-en{font-size:calc(18px*var(--k)*var(--kn,1));letter-spacing:.03em;line-height:1.15;white-space:normal;overflow-wrap:break-word;width:100%;max-width:100%;text-align:center;min-height:calc(21px*var(--k)*var(--kn,1))}
+.lbl-jp{font-family:"Noto Serif JP","Hiragino Mincho ProN","Yu Mincho",serif;font-size:calc(17px*var(--k)*var(--kl,1));letter-spacing:.04em;line-height:1.3;white-space:nowrap;max-width:100%;text-align:center;min-height:calc(22px*var(--k)*var(--kl,1))}
 .lbl-rule1{align-self:stretch;border-top:1px solid #e2d6c4;margin-top:auto}
-.lbl-type{font-size:8.5px;letter-spacing:.24em;text-transform:uppercase;color:#8a6a3e;margin-top:6px;min-height:11px;text-align:center}
-.lbl-origin{font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:#a29a90;margin-top:4px;min-height:10px;text-align:center}
-.lbl-rule2{align-self:stretch;border-top:1px solid #e2d6c4;border-bottom:1px solid #e2d6c4;height:5px;margin-top:8px}
-.lbl-foot{align-self:stretch;display:flex;justify-content:space-between;align-items:baseline;font-size:11.5px;padding:7px 0 12px;font-variant-numeric:oldstyle-nums}
+.lbl-type{font-size:calc(8.5px*var(--k)*var(--kt,1));letter-spacing:.24em;text-transform:uppercase;color:#8a6a3e;margin-top:calc(6px*var(--k));min-height:calc(11px*var(--k));text-align:center}
+.lbl-origin{font-size:calc(8px*var(--k)*var(--ko,1));letter-spacing:.2em;text-transform:uppercase;color:#a29a90;margin-top:calc(4px*var(--k));min-height:calc(10px*var(--k));text-align:center}
+.lbl-rule2{align-self:stretch;border-top:1px solid #e2d6c4;border-bottom:1px solid #e2d6c4;height:calc(5px*var(--k));margin-top:calc(8px*var(--k))}
+.lbl-foot{align-self:stretch;display:flex;justify-content:space-between;align-items:baseline;font-size:calc(11.5px*var(--k)*var(--kf,1));padding:calc(7px*var(--k)) 0 calc(12px*var(--k));font-variant-numeric:oldstyle-nums}
 .lbl-foot>div{min-width:20px}.lbl-price{text-align:right}
 `;
 const EDIT_CSS = `
@@ -173,7 +227,8 @@ function printSet(set) {
   const L = langOf(set.lang);
   const esc = t => String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const pages = [];
-  for (let i = 0; i < set.cards.length; i += PER_PAGE) pages.push(set.cards.slice(i, i + PER_PAGE));
+  const g = geom(set);
+  for (let i = 0; i < set.cards.length; i += g.per) pages.push(set.cards.slice(i, i + g.per));
   const card = c => `<div class="lbl-card"><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en)}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local)}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
   const w = window.open("", "_blank");
   if (!w) return false;
@@ -184,16 +239,17 @@ function printSet(set) {
 .bar{position:sticky;top:0;background:#fff;border-bottom:1px solid #d6d0c7;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .bar b{font:500 18px "Cormorant Garamond",serif}.bar span{font-size:12px;color:#7a7268}
 .bar button{background:#6f5430;color:#fff;border:0;border-radius:6px;padding:9px 16px;font-size:13px;cursor:pointer}
-.sheet{width:7.3in;margin:16px auto;background:#fff;padding:.28in 0;display:grid;grid-template-columns:3.5in 3.5in;grid-auto-rows:1.854in;gap:.073in;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.18)}
-.lbl-card{width:3.5in;height:1.854in}
+.sheet{width:7.3in;margin:16px auto;background:#fff;padding:.28in 0;display:grid;grid-template-columns:repeat(${g.cols},${g.w}in);grid-auto-rows:${g.h}in;gap:.073in;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.lbl-card{--k:${g.k};width:${g.w}in;height:${g.h}in}
+${layoutCss(set)}
 @page{size:${paper.css};margin:.28in .5in}
 @media print{body{background:#fff}.bar{display:none}.sheet{margin:0 auto;padding:0;box-shadow:none;break-after:page}.sheet:last-child{break-after:auto}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
 <div class="bar"><div><b>${esc(set.name)}</b> <span>· ${set.cards.length} card${set.cards.length === 1 ? "" : "s"} · ${pages.length} page${pages.length === 1 ? "" : "s"} · ${paper.label}</span></div><button onclick="window.print()">🖨 Print / Save as PDF</button></div>
 ${pages.map(p => `<div class="sheet">${p.map(card).join("")}</div>`).join("")}
 <script>
-function fit(el,base){el.style.fontSize=base+"px";var s=base;while(el.scrollWidth>el.clientWidth+1&&s>base*.6){s-=.5;el.style.fontSize=s+"px";}}
-(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,18)});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,17)});});
+function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){return el.scrollWidth>el.clientWidth+1||el.scrollHeight>s*1.3*2+2}while(over()&&s>base*.6){s-=.5;el.style.fontSize=s+"px";}}
+(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,${18 * g.k * g.kn})});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,${17 * g.k * g.kl})});});
 </script></body></html>`);
   w.document.close();
   return true;
@@ -272,6 +328,7 @@ export default function LabelsApp({ onHome }) {
   openRef.current = openId;
   const chain = useRef(Promise.resolve());
   const [picker, setPicker] = useState(false);
+  const [showLayout, setShowLayout] = useState(false);
   const [busy, setBusy] = useState("");
   const [toast, setToast] = useState("");
   const say = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
@@ -351,10 +408,11 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
   };
 
   const zoom = Math.min(1, (window.innerWidth - 24) / 816);
+  const g = geom(set);
 
   return (
     <div style={{ minHeight: "100vh", background: "#e9e6e1", color: "#2a2622" }}>
-      <style>{CARD_CSS + EDIT_CSS}</style>
+      <style>{CARD_CSS + EDIT_CSS + (set ? layoutCss(set) : "")}</style>
       {toast && <div style={{ position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 1100, background: "#2a2622", color: "#fff", padding: "10px 18px", borderRadius: 6, fontSize: 13 }}>{toast}</div>}
       <div style={{ position: "sticky", top: 0, zIndex: 20, background: "#fff", borderBottom: "1px solid #d6d0c7", padding: "10px 16px", display: "flex", flexWrap: "wrap", gap: "10px 14px", alignItems: "center" }}>
         <button onClick={set ? () => setOpenId(null) : onHome} style={{ ...btn(), background: "none", border: "none", color: "#7a7268", paddingLeft: 0 }}>← {set ? "All labels" : "Home"}</button>
@@ -363,6 +421,15 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
             <input key={set.id} defaultValue={set.name} onKeyDown={e => e.key === "Enter" && e.currentTarget.blur()} style={{ font: "500 20px 'Cormorant Garamond',serif", border: "1px solid transparent", borderRadius: 6, padding: "2px 6px", minWidth: 120, flex: mob() ? "1 1 100%" : "0 1 260px" }} onFocus={e => e.target.style.borderColor = "#d6d0c7"} onBlur={e => { e.target.style.borderColor = "transparent"; const v = e.target.value.trim() || "Labels"; if (v !== set.name) patchSet({ name: v }); }} />
             <select value={set.lang} onChange={e => patchSet({ lang: e.target.value })} style={{ ...btn(), padding: "7px 8px" }} title="Second line on each card">{LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}</select>
             <select value={set.paper} onChange={e => patchSet({ paper: e.target.value })} style={{ ...btn(), padding: "7px 8px" }}>{Object.entries(PAPER).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}</select>
+            <select value={SIZES[set.size] || set.size === "custom" ? set.size : "s10"} onChange={e => patchSet({ size: e.target.value, ...(e.target.value === "custom" && !set.cw ? { cw: g.w, ch: g.h } : {}) })} style={{ ...btn(), padding: "7px 8px" }} title="Card size">{Object.entries(SIZES).map(([k, z]) => <option key={k} value={k}>{z.label}</option>)}<option value="custom">Custom size…</option></select>
+            {set.size === "custom" && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12.5, color: "#4a4036" }}>
+                <input key={"w" + set.id} type="number" step="0.05" min="1.5" max="7.3" defaultValue={g.w} onBlur={e => patchSet({ cw: clampIn(e.target.value, 1.5, 7.3, 3.5) })} style={{ ...btn(), width: 64, padding: "6px 6px" }} title="Width, inches" />×
+                <input key={"h" + set.id} type="number" step="0.05" min="1" max="10.4" defaultValue={g.h} onBlur={e => patchSet({ ch: clampIn(e.target.value, 1, 10.4, 1.854) })} style={{ ...btn(), width: 64, padding: "6px 6px" }} title="Height, inches" />in · {g.per} a page
+              </span>
+            )}
+            <select value={set.text || "1"} onChange={e => patchSet({ text: e.target.value })} style={{ ...btn(), padding: "7px 8px" }} title="Text size">{TEXT.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+            <button onClick={() => setShowLayout(v => !v)} style={{ ...btn(), ...(showLayout ? { background: "#e9e1d4" } : {}) }}>▤ Layout</button>
             <div style={{ flex: 1 }} />
             <button onClick={() => patchSet({ cards: [...current().cards, blank()] })} style={btn()}>＋ Card</button>
             <button onClick={() => setPicker(true)} style={btn()}>＋ From Stock</button>
@@ -371,7 +438,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
           </>
         ) : (
           <>
-            <div><div style={{ font: "500 22px 'Cormorant Garamond',serif" }}>Make Labels</div><div style={{ fontSize: 12, color: "#7a7268" }}>Name cards for shows, shelves and boxes · 10 to a page</div></div>
+            <div><div style={{ font: "500 22px 'Cormorant Garamond',serif" }}>Make Labels</div><div style={{ fontSize: 12, color: "#7a7268" }}>Name cards for shows, shelves and boxes · 2 to 10 a page</div></div>
             <div style={{ flex: 1 }} />
             <button onClick={newSet} style={btn(true)}>＋ New label set</button>
           </>
@@ -386,7 +453,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
               <div style={{ width: 54, height: 30, border: "1px solid #cfb793", borderTop: "4px solid #8a6a3e", background: "#fff", flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ font: "500 18px 'Cormorant Garamond',serif" }}>{s.name}</div>
-                <div style={{ fontSize: 12, color: "#7a7268" }}>{s.cards.length} card{s.cards.length === 1 ? "" : "s"} · {langOf(s.lang).label} · {(PAPER[s.paper] || PAPER.letter).label}</div>
+                <div style={{ fontSize: 12, color: "#7a7268" }}>{s.cards.length} card{s.cards.length === 1 ? "" : "s"} · {langOf(s.lang).label} · {(PAPER[s.paper] || PAPER.letter).label} · {geom(s).per} a page</div>
               </div>
               <button onClick={e => { e.stopPropagation(); copySet(s); }} style={btn()} title="Make a copy">⧉</button>
               <button onClick={e => { e.stopPropagation(); if (!printSet(s)) say("Allow pop-ups to open the print sheet"); }} style={btn()} title="Print">🖨</button>
@@ -396,18 +463,42 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
         </div>
       )}
 
+      {set && showLayout && (() => {
+        const L = layoutOf(set);
+        const put = (part, patch) => patchSet({ layout: { ...(set.layout || {}), [part]: { ...(set.layout?.[part] || {}), ...patch } } });
+        const seg = (part, key, opts) => (
+          <span style={{ display: "inline-flex", border: "1px solid #d6d0c7", borderRadius: 6, overflow: "hidden" }}>
+            {opts.map(([v, l]) => <button key={v} onClick={() => put(part, { [key]: v })} style={{ border: 0, padding: "5px 9px", fontSize: 12, cursor: "pointer", background: L[part][key] === v ? "#6f5430" : "#fff", color: L[part][key] === v ? "#fff" : "#4a4036" }}>{l}</button>)}
+          </span>
+        );
+        return (
+          <div style={{ background: "#fff", borderBottom: "1px solid #d6d0c7", padding: "10px 16px", display: "grid", gap: 8, fontSize: 13, fontFamily: "system-ui,sans-serif" }}>
+            {PARTS.filter(([k]) => k !== "local" || set.lang).map(([k, label]) => (
+              <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, width: 190 }}><input type="checkbox" checked={L[k].show} onChange={e => put(k, { show: e.target.checked })} />{label}</label>
+                <select value={L[k].s} disabled={!L[k].show} onChange={e => put(k, { s: +e.target.value })} style={{ ...btn(), padding: "5px 6px" }} title="Size">{SCALES.map(v => <option key={v} value={v}>{Math.round(v * 100)}%</option>)}</select>
+                {k === "name" && seg("name", "align", [["left", "Left"], ["center", "Centre"], ["right", "Right"]])}
+                {k === "name" && seg("name", "pos", [["top", "Top"], ["middle", "Middle"]])}
+                {k === "type" && <>{seg("type", "align", [["left", "Left"], ["center", "Centre"], ["right", "Right"]])}<span style={{ fontSize: 11.5, color: "#7a7268" }}>type & origin lines</span></>}
+              </div>
+            ))}
+            <div><button onClick={() => patchSet({ layout: {} })} style={{ ...btn(), padding: "5px 10px", fontSize: 12 }}>Reset layout</button></div>
+          </div>
+        );
+      })()}
+
       {set && (
         <>
           <p style={{ fontSize: 12.5, color: "#7a7268", maxWidth: 816, margin: "12px auto 0", padding: "0 16px", fontFamily: "system-ui,sans-serif" }}>
-            Click any text on a card to change it. Hover a card to copy, move or delete it. Saved as you go · {set.cards.length} cards on {Math.max(1, Math.ceil(set.cards.length / PER_PAGE))} page{set.cards.length > PER_PAGE ? "s" : ""}.
+            Click any text on a card to change it. Hover a card to copy, move or delete it. Saved as you go · {set.cards.length} cards on {Math.max(1, Math.ceil(set.cards.length / g.per))} page{set.cards.length > g.per ? "s" : ""}.
           </p>
           <div style={{ overflowX: "auto", padding: "14px 0 40px" }}>
             <div style={{ width: 816, margin: "0 auto", zoom }}>
-              {Array.from({ length: Math.max(1, Math.ceil(set.cards.length / PER_PAGE)) }, (_, p) => (
-                <div key={p} className="lbl-sheet">
-                  {set.cards.slice(p * PER_PAGE, p * PER_PAGE + PER_PAGE).map((c, k) => {
-                    const i = p * PER_PAGE + k;
-                    return <Card key={c.id} c={c} lang={set.lang} index={i} total={set.cards.length} onPatch={pp => patchCard(c.id, pp)} onAct={a => act(i, a)} />;
+              {Array.from({ length: Math.max(1, Math.ceil(set.cards.length / g.per)) }, (_, p) => (
+                <div key={p} className="lbl-sheet" style={{ gridTemplateColumns: `repeat(${g.cols}, ${g.w * 96}px)`, gridAutoRows: `${g.h * 96}px` }}>
+                  {set.cards.slice(p * g.per, p * g.per + g.per).map((c, k) => {
+                    const i = p * g.per + k;
+                    return <Card key={c.id} c={c} g={g} lang={set.lang} index={i} total={set.cards.length} onPatch={pp => patchCard(c.id, pp)} onAct={a => act(i, a)} />;
                   })}
                 </div>
               ))}
