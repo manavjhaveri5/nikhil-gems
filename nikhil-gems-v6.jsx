@@ -12402,6 +12402,72 @@ const reconcileInvoiceList=list=>{
   return {next,changed};
 };
 
+/* The year in numbers: sales by currency, collected vs owed, countries, buyers
+   (new and returning), months, what sold, freight and goods. Rankings across
+   currencies use ≈ USD at the Finance tab's rates. */
+function InvoiceStats({invs,all,buyers,rates,fy,mob}){
+  const usdRate=+rates?.USD||84;
+  const toUSD=(a,c)=>{c=c||"USD";if(c==="USD")return a;const r=c==="INR"?1:+rates?.[c]||({EUR:91,GBP:107,JPY:.56,AUD:55,CAD:61,AED:23})[c]||0;return r?a*r/usdRate:0;};
+  const fmt=(v,d=0)=>(+v||0).toLocaleString("en-US",{maximumFractionDigits:d});
+  const usd=v=>`$${fmt(v)}`;
+  const buyerOf=i=>buyers.find(b=>b.id===i.buyerId);
+  const nameOf=i=>buyerOf(i)?.name||i.buyerName||i.buyer||i.buyerId||"—";
+  const countryOf=i=>{const c=String(i.consigneeSameAsBuyer===false&&i.consigneeCountry?i.consigneeCountry:(buyerOf(i)?.country||i.consigneeCountry||"")).trim();if(!c)return "Not set";const k=c.toLowerCase().replace(/[.\s]+/g," ").trim();
+    const alias={"usa":"USA","u s a":"USA","us":"USA","u s":"USA","united states":"USA","united states of america":"USA","america":"USA","uk":"United Kingdom","u k":"United Kingdom","great britain":"United Kingdom","england":"United Kingdom","uae":"UAE","u a e":"UAE","united arab emirates":"UAE"};
+    return alias[k]||k.replace(/\b\w/g,x=>x.toUpperCase());};
+  const paidOf=i=>i.status==="paid"?+i.totalAmt||0:Math.min(+i.totalAmt||0,(i.payments||[]).reduce((a,p)=>a+(+p.amount||0),0)+(+i.paidAmount||0));
+  const byCur={},paidCur={},owedCur={};
+  for(const i of invs){const c=i.currency||"USD";byCur[c]=(byCur[c]||0)+(+i.totalAmt||0);paidCur[c]=(paidCur[c]||0)+paidOf(i);if(!["draft"].includes(i.status))owedCur[c]=(owedCur[c]||0)+Math.max(0,(+i.totalAmt||0)-paidOf(i));}
+  const curLine=o=>Object.entries(o).filter(([,v])=>v>0.005).map(([c,v])=>`${c} ${fmt(v,c==="INR"?0:2)}`).join(" + ")||"—";
+  const totalUSD=invs.reduce((a,i)=>a+toUSD(+i.totalAmt||0,i.currency),0);
+  const group=key=>{const m=new Map();for(const i of invs){const k=key(i);const e=m.get(k)||{k,n:0,usd:0,ids:new Set()};e.n++;e.usd+=toUSD(+i.totalAmt||0,i.currency);e.ids.add(i.buyerId||nameOf(i));m.set(k,e);}return [...m.values()].sort((a,b)=>b.usd-a.usd);};
+  const countries=group(countryOf), buyersG=group(nameOf);
+  // New = no commercial invoice to them before this year began.
+  const startOfFY=fy==="all"?null:`${fy}-04-01`;
+  const allTime=all||[];
+  const buyerIds=[...new Set(invs.map(i=>i.buyerId).filter(Boolean))];
+  const newBuyers=startOfFY?buyerIds.filter(id=>!allTime.some(x=>x.buyerId===id&&!invCancelled(x)&&!invIsProforma(x)&&String(x.date||"")<startOfFY)).length:buyerIds.length;
+  const months=fy==="all"?null:Array.from({length:12},(_,k)=>{const d=new Date(fy,3+k,1);const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;const mi=invs.filter(i=>String(i.date||"").startsWith(key));return {label:d.toLocaleDateString("en-GB",{month:"short"}),n:mi.length,usd:mi.reduce((a,i)=>a+toUSD(+i.totalAmt||0,i.currency),0)};});
+  const maxM=months?Math.max(1,...months.map(m=>m.usd)):1;
+  const goods={kg:0,pcs:0,cts:0};const what=new Map();
+  for(const i of invs)for(const it of i.items||[]){const q=+it.qty||0,u=String(it.unit||"").toLowerCase();if(/^kg/.test(u))goods.kg+=q;else if(/^(g|gm|gms)$/.test(u))goods.kg+=q/1000;else if(/^ct/.test(u))goods.cts+=q;else goods.pcs+=q;
+    const k=String(it.acctDesc||it.customDesc||it.desc||"Other").split(/[,·(]/)[0].trim()||"Other";const e=what.get(k)||{k,usd:0,n:0};e.usd+=toUSD(+it.amt||((+it.qty||0)*(+it.rate||0)),i.currency);e.n++;what.set(k,e);}
+  const whatL=[...what.values()].sort((a,b)=>b.usd-a.usd).slice(0,8);
+  const freight=invs.reduce((a,i)=>a+toUSD(+i.shippingCost||0,i.currency),0);
+  const box={background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:mob?"10px 12px":"12px 16px"};
+  const h={fontSize:9.5,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7,marginBottom:6};
+  const big={fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?20:19,fontWeight:600,color:C.ink};
+  const Bar=({rows,label})=>{const max=Math.max(1,...rows.map(r=>r.usd));return <div style={{display:"grid",gap:5}}>{rows.map(r=><div key={r.k} style={{display:"grid",gridTemplateColumns:"minmax(90px,1.2fr) 2fr auto",gap:8,alignItems:"center",fontSize:12}}>
+    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={r.k}>{r.k}</span>
+    <div style={{height:8,background:C.bg,borderRadius:4}}><div style={{width:`${Math.max(2,r.usd/max*100)}%`,height:"100%",background:C.gold,borderRadius:4}}/></div>
+    <span style={{color:C.inkMid,whiteSpace:"nowrap"}}>{usd(r.usd)} · {r.n} {label}{r.n===1?"":"s"}{totalUSD?` · ${Math.round(r.usd/totalUSD*100)}%`:""}</span></div>)}</div>;};
+  if(!invs.length)return <div style={{...box,marginBottom:16,fontSize:13,color:C.inkFaint}}>No commercial invoices in this period.</div>;
+  return <div style={{display:"grid",gap:mob?8:11,marginBottom:16}}>
+    <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:mob?8:11}}>
+      <div style={box}><div style={h}>Sales</div><div style={big}>{usd(totalUSD)}</div><div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{curLine(byCur)}</div></div>
+      <div style={box}><div style={h}>Collected / owed</div><div style={{...big,color:C.green}}>{curLine(paidCur)}</div><div style={{fontSize:11,color:C.red,marginTop:2}}>Owed: {curLine(owedCur)}</div></div>
+      <div style={box}><div style={h}>Countries · buyers</div><div style={big}>{countries.filter(c=>c.k!=="Not set").length} countries · {buyerIds.length} buyers</div><div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{newBuyers} new{startOfFY?" this year":""} · {buyerIds.length-newBuyers} returning</div></div>
+      <div style={box}><div style={h}>Average invoice</div><div style={big}>{usd(totalUSD/invs.length)}</div><div style={{fontSize:11,color:C.inkMid,marginTop:2}}>Largest {usd(Math.max(...invs.map(i=>toUSD(+i.totalAmt||0,i.currency))))} · freight billed {usd(freight)}</div></div>
+    </div>
+    {months&&<div style={box}><div style={h}>By month (≈ USD)</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(12,1fr)",gap:4,alignItems:"end",height:110}}>
+        {months.map(m=><div key={m.label} title={`${m.label}: ${usd(m.usd)} · ${m.n} invoice${m.n===1?"":"s"}`} style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%",gap:3}}>
+          <span style={{fontSize:9.5,color:C.inkMid}}>{m.usd?`${fmt(m.usd/1000,m.usd<10000?1:0)}k`:""}</span>
+          <div style={{width:"70%",height:`${m.usd/maxM*75}%`,minHeight:m.usd?2:0,background:C.gold,borderRadius:"3px 3px 0 0"}}/>
+          <span style={{fontSize:10,color:C.inkFaint}}>{m.label}</span></div>)}
+      </div></div>}
+    <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:mob?8:11}}>
+      <div style={box}><div style={h}>Countries ({countries.length})</div><Bar rows={countries} label="invoice"/></div>
+      <div style={box}><div style={h}>Top buyers</div><Bar rows={buyersG.slice(0,10)} label="invoice"/></div>
+      <div style={box}><div style={h}>What sold</div><Bar rows={whatL} label="line"/></div>
+      <div style={box}><div style={h}>Goods shipped</div>
+        <div style={big}>{[goods.kg?`${fmt(goods.kg,1)} kg`:"",goods.pcs?`${fmt(goods.pcs)} pcs`:"",goods.cts?`${fmt(goods.cts,1)} ct`:""].filter(Boolean).join(" · ")||"—"}</div>
+        <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>{invs.filter(i=>i.goodsShipped).length} of {invs.length} invoices marked shipped · {invs.filter(i=>i.status==="paid").length} paid</div>
+        <div style={{fontSize:10.5,color:C.inkFaint,marginTop:8}}>Cross-currency figures are ≈ USD at the Finance tab's rates.</div></div>
+    </div>
+  </div>;
+}
+
 function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   const t=useT();
   // Company-scoped: Nikhil Gems and Atyahara keep separate invoices / buyers / acc-stock.
@@ -12996,6 +13062,9 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
   const fyYears=[...new Set(invoices.map(i=>fyOf(i.date)).filter(y=>y!=null))].sort((a,b)=>b-a);
   // Proformas are quotes, not sales: the cards count commercial invoices only.
   const cardInvoices=liveInvoices.filter(i=>!invIsProforma(i)&&(cardFY==="all"||fyOf(i.date)===cardFY));
+  const [showStats,setShowStats]=useState(()=>{try{return localStorage.getItem("ng-inv-stats")==="1";}catch{return false;}});
+  const [invRates,setInvRates]=useState({});
+  useEffect(()=>{loadK("ng-fin-rates-v1").then(r=>setInvRates(r||{})).catch(()=>{});},[]);
   const cardUnpaid=cardInvoices.filter(i=>["draft","sent","partial"].includes(i.status)).length;
   const cancelledCount=invoices.length-liveInvoices.length;
   const quickSave=async(inv)=>{
@@ -13097,7 +13166,8 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
       {!loaded&&<p style={{color:C.inkFaint,textAlign:"center",paddingTop:60,fontSize:13}}>Loading...</p>}
       {loaded&&view==="list"&&(
         <div>
-          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:6}}>
+            <button onClick={()=>setShowStats(v=>{try{localStorage.setItem("ng-inv-stats",v?"0":"1");}catch{}return !v;})} style={{...FI,width:"auto",fontSize:mob?14:12,padding:"4px 10px",cursor:"pointer",fontWeight:600,color:showStats?C.gold:C.ink}}>{showStats?"▾ Hide stats":"▸ More stats"}</button>
             <select value={cardFY} onChange={e=>setCardFY(e.target.value==="all"?"all":+e.target.value)} style={{...FI,width:"auto",fontSize:mob?16:12,padding:"4px 8px",cursor:"pointer",fontWeight:600}}>
               {[...new Set([cardFY==="all"?null:cardFY,...fyYears].filter(y=>y!=null))].sort((a,b)=>b-a).map(y=><option key={y} value={y}>{fyLabel(y)}</option>)}
               <option value="all">All years</option>
@@ -13111,6 +13181,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
               </div>
             ))}
           </div>
+          {showStats&&<InvoiceStats invs={cardInvoices} all={invoices} buyers={buyers} rates={invRates} fy={cardFY} mob={mob}/>}
           <div style={{display:"flex",gap:mob?6:9,marginBottom:8,alignItems:"center",flexWrap:mob?"nowrap":"wrap",overflowX:mob?"auto":"visible",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}}>
             <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder={mob?"Search…":"Search invoice / buyer…"} style={{...FI,width:mob?120:190,fontSize:mob?16:12,flexShrink:0,minHeight:mob?40:undefined}}/>
             <div style={{display:"flex",gap:4,flexShrink:0}}>
