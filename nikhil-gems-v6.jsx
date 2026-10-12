@@ -12427,7 +12427,8 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   const [invSortDir,setInvSortDir]=useState("desc");
   const [invBuyerF,setInvBuyerF]=useState("all");
   const [invCurrF,setInvCurrF]=useState("all");
-  const [invMonthF,setInvMonthF]=useState("all");
+  const [invMonthF,setInvMonthF]=useState(()=>new Set());   // "YYYY-MM"s ticked; none = every month
+  const [invMonthOpen,setInvMonthOpen]=useState(false);
   const [invTypeF,setInvTypeF]=useState("all");
   const [accStock,setAccStock]=useState([]);
   const [finTxns,setFinTxns]=useState([]);
@@ -13005,7 +13006,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
     if(filterStatus!=="all"&&inv.status!==filterStatus)return false;
     if(invTypeF!=="all"&&inv.type!==invTypeF)return false;
     if(invCurrF!=="all"&&inv.currency!==invCurrF)return false;
-    if(invMonthF!=="all"&&String(inv.date||"").slice(0,7)!==invMonthF)return false;
+    if(invMonthF.size&&!invMonthF.has(String(inv.date||"").slice(0,7)))return false;
     if(invBuyerF!=="all"&&inv.buyerId!==invBuyerF)return false;
     if(searchQ){const b=buyers.find(b=>b.id===inv.buyerId);const s=`${inv.invNo} ${b?.name||inv.buyerName||inv.buyer||""}`.toLowerCase();if(!s.includes(searchQ.toLowerCase()))return false;}
     return true;
@@ -13112,13 +13113,32 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
               <option value="all">{t("All Buyers")}</option>
               {invBuyerOptions.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
-            {/* Month filter: newest first, with how many in each */}
-            <select value={invMonthF} onChange={e=>setInvMonthF(e.target.value)} style={{...FI,fontSize:mob?16:11,padding:mob?"6px 8px":"4px 8px",cursor:"pointer",maxWidth:mob?150:170,flexShrink:0,minHeight:mob?36:undefined}}>
-              <option value="all">All months</option>
-              {Object.entries(invoices.reduce((m,i)=>{const k=String(i.date||"").slice(0,7);if(/^\d{4}-\d{2}$/.test(k))m[k]=(m[k]||0)+1;return m;},{})).sort((a,b)=>b[0].localeCompare(a[0])).map(([k,n])=>(
-                <option key={k} value={k}>{new Date(k+"-01T00:00:00").toLocaleDateString("en-GB",{month:"short",year:"numeric"})} · {n}</option>
-              ))}
-            </select>
+            {/* Month filter: tick one or more months, newest first, with how many in each */}
+            {(()=>{
+              const months=Object.entries(invoices.reduce((m,i)=>{const k=String(i.date||"").slice(0,7);if(/^\d{4}-\d{2}$/.test(k))m[k]=(m[k]||0)+1;return m;},{})).sort((a,b)=>b[0].localeCompare(a[0]));
+              const name=k=>new Date(k+"-01T00:00:00").toLocaleDateString("en-GB",{month:"short",year:"numeric"});
+              const tick=k=>setInvMonthF(s=>{const n=new Set(s);n.has(k)?n.delete(k):n.add(k);return n;});
+              const label=!invMonthF.size?"All months":invMonthF.size===1?name([...invMonthF][0]):`${invMonthF.size} months`;
+              return <div style={{position:"relative",flexShrink:0}}>
+                <button onClick={()=>setInvMonthOpen(o=>!o)} style={{...FI,fontSize:mob?16:11,padding:mob?"6px 8px":"4px 8px",cursor:"pointer",width:"auto",minHeight:mob?36:undefined,border:`1px solid ${invMonthF.size?C.gold:C.border}`,color:invMonthF.size?C.gold:C.ink,fontWeight:invMonthF.size?600:400}}>{label} ▾</button>
+                {invMonthOpen&&<>
+                  <div onClick={()=>setInvMonthOpen(false)} style={{position:"fixed",inset:0,zIndex:40}}/>
+                  <div style={{position:mob?"fixed":"absolute",top:mob?"20%":"110%",left:mob?16:0,right:mob?16:"auto",zIndex:41,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 6px 24px rgba(0,0,0,.15)",padding:6,minWidth:190,maxHeight:320,overflowY:"auto"}}>
+                    <div style={{display:"flex",gap:6,padding:"2px 4px 6px",borderBottom:`1px solid ${C.border}`,marginBottom:4}}>
+                      <button onClick={()=>setInvMonthF(new Set())} style={{fontSize:11,border:"none",background:"transparent",color:C.inkMid,cursor:"pointer",padding:0}}>All months</button>
+                      <span style={{flex:1}}/>
+                      <button onClick={()=>setInvMonthOpen(false)} style={{fontSize:11,border:"none",background:"transparent",color:C.gold,fontWeight:700,cursor:"pointer",padding:0}}>Done</button>
+                    </div>
+                    {months.map(([k,n])=>(
+                      <label key={k} style={{display:"flex",alignItems:"center",gap:8,padding:mob?"8px 6px":"4px 6px",fontSize:mob?14:12,cursor:"pointer",borderRadius:4,background:invMonthF.has(k)?C.goldLight:"transparent"}}>
+                        <input type="checkbox" checked={invMonthF.has(k)} onChange={()=>tick(k)}/>
+                        <span style={{flex:1}}>{name(k)}</span><span style={{color:C.inkFaint,fontSize:11}}>{n}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>}
+              </div>;
+            })()}
             {/* Currency filter */}
             {invCurrencies.length>1&&<div style={{display:"flex",gap:3}}>
               {["all",...invCurrencies].map(c=>(
@@ -13126,8 +13146,8 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
               ))}
             </div>}
             {/* Clear filters */}
-            {(invTypeF!=="all"||invBuyerF!=="all"||invCurrF!=="all"||invMonthF!=="all")&&<button onClick={()=>{setInvTypeF("all");setInvBuyerF("all");setInvCurrF("all");setInvMonthF("all");}} style={{fontSize:11,padding:"3px 9px",borderRadius:4,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint}}>Clear ×</button>}
-            <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{filteredInvoices.length} invoice{filteredInvoices.length!==1?"s":""}{invMonthF!=="all"&&filteredInvoices.length>0?` · ${Object.entries(filteredInvoices.filter(i=>i.status!=="cancelled").reduce((m,i)=>{const c=i.currency||"USD";m[c]=(m[c]||0)+(+i.totalAmt||0);return m;},{})).map(([c,v])=>`${c} ${v.toLocaleString("en-US",{maximumFractionDigits:2})}`).join(" + ")}`:""}</span>
+            {(invTypeF!=="all"||invBuyerF!=="all"||invCurrF!=="all"||invMonthF.size>0)&&<button onClick={()=>{setInvTypeF("all");setInvBuyerF("all");setInvCurrF("all");setInvMonthF(new Set());}} style={{fontSize:11,padding:"3px 9px",borderRadius:4,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint}}>Clear ×</button>}
+            <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{filteredInvoices.length} invoice{filteredInvoices.length!==1?"s":""}{invMonthF.size>0&&filteredInvoices.length>0?` · ${Object.entries(filteredInvoices.filter(i=>i.status!=="cancelled").reduce((m,i)=>{const c=i.currency||"USD";m[c]=(m[c]||0)+(+i.totalAmt||0);return m;},{})).map(([c,v])=>`${c} ${v.toLocaleString("en-US",{maximumFractionDigits:2})}`).join(" + ")}`:""}</span>
           </div>
           {/* Bulk action bar */}
           {selectedInvIds.size>0&&<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:"#1e293b",color:"#fff",borderRadius:8,padding:"10px 14px",marginBottom:10}}>
