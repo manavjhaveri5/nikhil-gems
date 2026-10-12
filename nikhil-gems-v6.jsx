@@ -12427,6 +12427,7 @@ function InvoicesApp({onHome,startDraft,startInvoiceId,onInvoiceIdConsumed}){
   const [invSortDir,setInvSortDir]=useState("desc");
   const [invBuyerF,setInvBuyerF]=useState("all");
   const [invCurrF,setInvCurrF]=useState("all");
+  const [invMonthF,setInvMonthF]=useState("all");
   const [invTypeF,setInvTypeF]=useState("all");
   const [accStock,setAccStock]=useState([]);
   const [finTxns,setFinTxns]=useState([]);
@@ -13004,6 +13005,7 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
     if(filterStatus!=="all"&&inv.status!==filterStatus)return false;
     if(invTypeF!=="all"&&inv.type!==invTypeF)return false;
     if(invCurrF!=="all"&&inv.currency!==invCurrF)return false;
+    if(invMonthF!=="all"&&String(inv.date||"").slice(0,7)!==invMonthF)return false;
     if(invBuyerF!=="all"&&inv.buyerId!==invBuyerF)return false;
     if(searchQ){const b=buyers.find(b=>b.id===inv.buyerId);const s=`${inv.invNo} ${b?.name||inv.buyerName||inv.buyer||""}`.toLowerCase();if(!s.includes(searchQ.toLowerCase()))return false;}
     return true;
@@ -13110,6 +13112,13 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
               <option value="all">{t("All Buyers")}</option>
               {invBuyerOptions.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
+            {/* Month filter: newest first, with how many in each */}
+            <select value={invMonthF} onChange={e=>setInvMonthF(e.target.value)} style={{...FI,fontSize:mob?16:11,padding:mob?"6px 8px":"4px 8px",cursor:"pointer",maxWidth:mob?150:170,flexShrink:0,minHeight:mob?36:undefined}}>
+              <option value="all">All months</option>
+              {Object.entries(invoices.reduce((m,i)=>{const k=String(i.date||"").slice(0,7);if(/^\d{4}-\d{2}$/.test(k))m[k]=(m[k]||0)+1;return m;},{})).sort((a,b)=>b[0].localeCompare(a[0])).map(([k,n])=>(
+                <option key={k} value={k}>{new Date(k+"-01T00:00:00").toLocaleDateString("en-GB",{month:"short",year:"numeric"})} · {n}</option>
+              ))}
+            </select>
             {/* Currency filter */}
             {invCurrencies.length>1&&<div style={{display:"flex",gap:3}}>
               {["all",...invCurrencies].map(c=>(
@@ -13117,8 +13126,8 @@ Extract all line items. Currency from invoice (USD/JPY/EUR/INR). If buyer=consig
               ))}
             </div>}
             {/* Clear filters */}
-            {(invTypeF!=="all"||invBuyerF!=="all"||invCurrF!=="all")&&<button onClick={()=>{setInvTypeF("all");setInvBuyerF("all");setInvCurrF("all");}} style={{fontSize:11,padding:"3px 9px",borderRadius:4,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint}}>Clear ×</button>}
-            <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{filteredInvoices.length} invoice{filteredInvoices.length!==1?"s":""}</span>
+            {(invTypeF!=="all"||invBuyerF!=="all"||invCurrF!=="all"||invMonthF!=="all")&&<button onClick={()=>{setInvTypeF("all");setInvBuyerF("all");setInvCurrF("all");setInvMonthF("all");}} style={{fontSize:11,padding:"3px 9px",borderRadius:4,cursor:"pointer",border:`1px solid ${C.border}`,background:C.surface,color:C.inkFaint}}>Clear ×</button>}
+            <span style={{fontSize:11,color:C.inkFaint,marginLeft:"auto"}}>{filteredInvoices.length} invoice{filteredInvoices.length!==1?"s":""}{invMonthF!=="all"&&filteredInvoices.length>0?` · ${Object.entries(filteredInvoices.filter(i=>i.status!=="cancelled").reduce((m,i)=>{const c=i.currency||"USD";m[c]=(m[c]||0)+(+i.totalAmt||0);return m;},{})).map(([c,v])=>`${c} ${v.toLocaleString("en-US",{maximumFractionDigits:2})}`).join(" + ")}`:""}</span>
           </div>
           {/* Bulk action bar */}
           {selectedInvIds.size>0&&<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:"#1e293b",color:"#fff",borderRadius:8,padding:"10px 14px",marginBottom:10}}>
