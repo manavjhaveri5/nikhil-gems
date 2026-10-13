@@ -195,6 +195,74 @@ function Card({ c, lang, onPatch, onAct, index, total, g }) {
   );
 }
 
+/* Bulk edit: every card as a row to type in, and one change made across many
+   at once — set a field, find and replace in it, or add to its start or end —
+   on the ticked cards, or all of them when none are ticked. */
+function BulkTable({ set, onCards, say }) {
+  const L = langOf(set.lang);
+  const cols = [["code", "Code"], ["en", "Name"], ...(set.lang ? [["local", L.label || "Second name"]] : []), ["type", "Type"], ["origin", "Origin"], ["qty", "Qty"], ["price", "Price"]];
+  const [sel, setSel] = useState(() => new Set());
+  const [field, setField] = useState("price"), [mode, setMode] = useState("set"), [a, setA] = useState(""), [b, setB] = useState("");
+  const live = new Set(set.cards.map(c => c.id));
+  const picked = [...sel].filter(id => live.has(id));
+  const targets = picked.length ? new Set(picked) : live;
+  const apply = () => {
+    if (mode === "replace" && !a) return say("Type what to find first");
+    let n = 0;
+    onCards(cards => cards.map(c => {
+      if (!targets.has(c.id)) return c;
+      const v = String(c[field] || "");
+      const nv = mode === "set" ? a : mode === "replace" ? v.split(a).join(b) : mode === "prefix" ? a + v : v + a;
+      if (nv === v) return c;
+      n++; return { ...c, [field]: nv };
+    }));
+    say(`✓ ${n} card${n === 1 ? "" : "s"} changed`);
+  };
+  const cell = { border: "1px solid #e4ddd2", padding: 0 };
+  const inp = { width: "100%", border: 0, padding: "7px 8px", fontSize: 13, fontFamily: "system-ui,sans-serif", background: "transparent", boxSizing: "border-box" };
+  const label = cols.find(([k]) => k === field)?.[1] || field;
+  return (
+    <div style={{ maxWidth: 1100, margin: "12px auto 40px", padding: "0 12px", fontFamily: "system-ui,sans-serif" }}>
+      <div style={{ background: "#fff", border: "1px solid #d6d0c7", borderRadius: 10, padding: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 13, marginBottom: 10 }}>
+        <b style={{ fontWeight: 600 }}>Change</b>
+        <select value={field} onChange={e => setField(e.target.value)} style={{ ...btn(), padding: "6px 6px" }}>{cols.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+        <select value={mode} onChange={e => setMode(e.target.value)} style={{ ...btn(), padding: "6px 6px" }}>
+          <option value="set">set to</option><option value="replace">find & replace</option><option value="prefix">add at start</option><option value="suffix">add at end</option>
+        </select>
+        <input value={a} onChange={e => setA(e.target.value)} placeholder={mode === "replace" ? "find" : mode === "set" ? `new ${label.toLowerCase()} (blank clears it)` : "text"} style={{ ...btn(), padding: "6px 8px", minWidth: 150, cursor: "text" }} />
+        {mode === "replace" && <input value={b} onChange={e => setB(e.target.value)} placeholder="replace with" style={{ ...btn(), padding: "6px 8px", minWidth: 130, cursor: "text" }} />}
+        <button onClick={apply} style={btn(true)}>Apply to {picked.length ? `${picked.length} ticked` : `all ${set.cards.length}`}</button>
+        {picked.length > 0 && <>
+          <button onClick={() => setSel(new Set())} style={btn()}>Untick</button>
+          <button onClick={() => { if (!confirm(`Delete ${picked.length} card${picked.length === 1 ? "" : "s"}?`)) return; onCards(cards => cards.filter(c => !targets.has(c.id))); setSel(new Set()); }} style={{ ...btn(), color: "#9b2c2c" }}>Delete ticked</button>
+        </>}
+      </div>
+      <div style={{ overflowX: "auto", background: "#fff", border: "1px solid #d6d0c7", borderRadius: 10 }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 760 }}>
+          <thead><tr style={{ background: "#f4f2ee", fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".05em", color: "#7a7268" }}>
+            <th style={{ ...cell, width: 34, padding: 6 }}><input type="checkbox" checked={picked.length === set.cards.length && set.cards.length > 0} onChange={e => setSel(e.target.checked ? new Set(live) : new Set())} /></th>
+            <th style={{ ...cell, width: 30, padding: 6 }}>#</th>
+            {cols.map(([k, l]) => <th key={k} style={{ ...cell, padding: "6px 8px", textAlign: "left", fontWeight: 600 }}>{l}</th>)}
+          </tr></thead>
+          <tbody>{set.cards.map((c, i) => (
+            <tr key={c.id} style={{ background: sel.has(c.id) ? "#f7f1e6" : "#fff" }}>
+              <td style={{ ...cell, textAlign: "center" }}><input type="checkbox" checked={sel.has(c.id)} onChange={e => setSel(s0 => { const n = new Set(s0); e.target.checked ? n.add(c.id) : n.delete(c.id); return n; })} /></td>
+              <td style={{ ...cell, textAlign: "center", fontSize: 12, color: "#7a7268" }}>{i + 1}</td>
+              {cols.map(([k]) => (
+                <td key={k} style={{ ...cell, minWidth: k === "en" || k === "local" ? 200 : k === "code" ? 80 : 110 }}>
+                  <input key={`${c.id}:${k}:${c[k] || ""}`} defaultValue={c[k] || ""} style={inp}
+                    onKeyDown={e => e.key === "Enter" && e.currentTarget.blur()}
+                    onBlur={e => { const v = e.target.value.trim(); if (v !== (c[k] || "")) onCards(cards => cards.map(x => x.id === c.id ? { ...x, [k]: v } : x)); }} />
+                </td>
+              ))}
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const CARD_CSS = `
 .lbl-card{--k:1;position:relative;background:#fff;border:1px solid #cfb793;border-top:calc(6px*var(--k)) solid #8a6a3e;display:flex;flex-direction:column;align-items:center;padding:calc(12px*var(--k)) calc(18px*var(--k)) 0;color:#1d1a17;font-family:"Cormorant Garamond",Garamond,serif;width:336px;height:178px;box-sizing:border-box;overflow:hidden}
 .lbl-code{position:absolute;left:6px;top:3px;font-size:calc(8px*var(--k)*var(--kc,1));color:#8a6a3e;min-width:10px}
@@ -329,6 +397,7 @@ export default function LabelsApp({ onHome }) {
   const chain = useRef(Promise.resolve());
   const [picker, setPicker] = useState(false);
   const [showLayout, setShowLayout] = useState(false);
+  const [bulk, setBulk] = useState(false);
   const [busy, setBusy] = useState("");
   const [toast, setToast] = useState("");
   const say = m => { setToast(m); setTimeout(() => setToast(""), 3500); };
@@ -430,6 +499,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
             )}
             <select value={set.text || "1"} onChange={e => patchSet({ text: e.target.value })} style={{ ...btn(), padding: "7px 8px" }} title="Text size">{TEXT.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
             <button onClick={() => setShowLayout(v => !v)} style={{ ...btn(), ...(showLayout ? { background: "#e9e1d4" } : {}) }}>▤ Layout</button>
+            <button onClick={() => setBulk(v => !v)} style={{ ...btn(), ...(bulk ? { background: "#e9e1d4" } : {}) }}>{bulk ? "▣ Back to cards" : "▦ Bulk edit"}</button>
             <div style={{ flex: 1 }} />
             <button onClick={() => patchSet({ cards: [...current().cards, blank()] })} style={btn()}>＋ Card</button>
             <button onClick={() => setPicker(true)} style={btn()}>＋ From Stock</button>
@@ -487,7 +557,9 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
         );
       })()}
 
-      {set && (
+      {set && bulk && <BulkTable set={set} say={say} onCards={f => { const s0 = current(); if (s0) patchSet({ cards: f(s0.cards) }); }} />}
+
+      {set && !bulk && (
         <>
           <p style={{ fontSize: 12.5, color: "#7a7268", maxWidth: 816, margin: "12px auto 0", padding: "0 16px", fontFamily: "system-ui,sans-serif" }}>
             Click any text on a card to change it. Hover a card to copy, move or delete it. Saved as you go · {set.cards.length} cards on {Math.max(1, Math.ceil(set.cards.length / g.per))} page{set.cards.length > g.per ? "s" : ""}.
