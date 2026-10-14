@@ -6650,7 +6650,12 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     }else{setAccStock(loadedAccStock);}
   });
   loadK(KEYS.vendors).then(v=>setVendors(v||[]));
-  loadK(SHOWS_KEY).then(s=>setShows(s||[]));
+  loadKFresh(SHOWS_KEY).catch(()=>loadK(SHOWS_KEY)).then(async s=>{
+    const list=Array.isArray(s)?s:[];
+    const next=showNextEditions(list);
+    for(const sh of next)await upsertItemK(SHOWS_KEY,sh,{prepend:false}).catch(()=>{});
+    setShows([...list,...next]);
+  });
   loadK(INV_KEYS.buyers).then(b=>setBuyers(b||[]));
   },[]);
   // Re-sync stock only when the stock key itself is invalidated (not every module save)
@@ -16285,6 +16290,38 @@ const DEFAULT_SHOWS=[
   {id:"munich-2026",name:"Munich Mineral Show",city:"Munich, Germany",startDate:"2026-10-25",endDate:"2026-10-28",year:2026,color:"#6A3A1A"},
   {id:"ikebukuro-2026",name:"Ikebukuro Mineral Show",city:"Tokyo, Japan",startDate:"2026-12-05",endDate:"2026-12-10",year:2026,color:"#2A5A8A"},
 ];
+/* Shows come round every year, but each show here is one year's edition — its
+   sales, stock sent, shipments and checklist belong to that year. Nothing ever
+   made the next one, so once a show ended it sat on last year's dates and
+   dropped out of everything that looks ahead (Tucson stayed on Jan–Feb 2026
+   and vanished from Send to Show). Now, once an edition is over and there is
+   no later one of the same show, next year's is made: same name, place and
+   colour, the same dates a year on (marked as carried over, to be checked),
+   a fresh checklist and nothing else. Its id is the show's id with the new
+   year, so two devices doing this at once make the same record, not two. */
+function showNextEditions(list,on=today()){
+  const shows=(Array.isArray(list)?list:[]).filter(Boolean);
+  const key=sh=>String(sh.name||"").toLowerCase().replace(/\b(19|20)\d{2}\b/g,"").replace(/[^a-z0-9]+/g," ").trim();
+  const ids=new Set(shows.map(sh=>sh.id));
+  const shift=(iso,n)=>{const m=String(iso||"").match(/^(\d{4})(-\d{2}-\d{2}.*)$/);return m?`${+m[1]+n}${m[2]}`:iso;};
+  const latest=new Map();
+  for(const sh of shows){if(!sh.name||!sh.endDate)continue;const k=key(sh);const cur=latest.get(k);if(!cur||String(sh.endDate)>String(cur.endDate))latest.set(k,sh);}
+  const out=[];
+  for(const sh of latest.values()){
+    if(String(sh.endDate)>=on)continue;   // the newest edition hasn't ended yet
+    let n=1;while(shift(sh.endDate,n)<on&&n<10)n++;
+    const year=(+String(sh.startDate||sh.endDate).slice(0,4)||+sh.year||new Date().getFullYear())+n;
+    const id=`${String(sh.id).replace(/[-_]?(19|20)\d{2}$/,"")}-${year}`;
+    if(ids.has(id))continue;
+    ids.add(id);
+    out.push({id,name:String(sh.name).replace(/\b(19|20)\d{2}\b/,String(year)),city:sh.city||"",color:sh.color,
+      ...(sh.venue?{venue:sh.venue}:{}),...(sh.country?{country:sh.country}:{}),
+      startDate:shift(sh.startDate,n),endDate:shift(sh.endDate,n),year,datesCarried:true,rolledFrom:sh.id,
+      checklist:(Array.isArray(sh.checklist)&&sh.checklist.length?sh.checklist.map(c=>c.task||c.text).filter(Boolean):DEFAULT_CHECKLIST).map(task=>({id:uid(),task,done:false})),
+      shipments:[],bagItems:[],files:[],notes:""});
+  }
+  return out;
+}
 const DEFAULT_CHECKLIST=["Booth confirmed","Flights booked","Hotel booked","Shipping arranged","Stock packed","Invoices ready","Business cards","Display materials"];
 const readShowsDraft=()=>{
   try{
@@ -18301,7 +18338,14 @@ function ShowsApp({onHome,isAdmin=true}){
     });
     // Always reconcile with Supabase on open so a device that missed a live update
     // (was closed/backgrounded) doesn't keep showing a stale buying plan.
-    loadKFresh(SHOWS_KEY).then(s=>{if(Array.isArray(s)&&s.length)applyShows(withShowsDraft(s));}).catch(()=>{});
+    loadKFresh(SHOWS_KEY).then(s=>{
+      if(!Array.isArray(s)||!s.length)return;
+      const list=withShowsDraft(s);
+      applyShows(list);
+      // Next year's edition of each show that has ended, made once from the server's copy.
+      const next=showNextEditions(list);
+      if(next.length){save([...list,...next]);showToast(`Added next year's ${next.map(n=>n.name).join(", ")} — dates carried over, check them`,6000);}
+    }).catch(()=>{});
     /* The same is true of the invoice book, and it is read over a customer's
        shoulder: two phones at one booth showed Saved (8) and Saved (9) because
        the cache is served for ten minutes before anything goes to the network,
