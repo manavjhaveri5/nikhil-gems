@@ -8905,7 +8905,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <span style={{fontSize:12,fontWeight:600,color:"#6B48CC",flexShrink:0}}>✈ Send {selectedIds.size} item{selectedIds.size!==1?"s":""} to show:</span>
                   <select value={sendToShowId} onChange={e=>setSendToShowId(e.target.value)} style={{...FI,fontSize:12,padding:"5px 9px",flex:1,minWidth:160}}>
                     <option value="">— pick a show —</option>
-                    {shows.filter(sh=>sh.name&&(!sh.endDate||sh.endDate>=today())).map(sh=><option key={sh.id} value={sh.id}>{sh.name}{sh.city?` · ${sh.city}`:""}</option>)}
+                    {/* Coming up first; a show whose dates have passed is still listed below
+                        rather than left out. A show kept from last year (Tucson's dates
+                        never moved on) disappeared from here with nothing saying why. */}
+                    {(()=>{const named=shows.filter(sh=>sh.name),up=named.filter(sh=>!sh.endDate||sh.endDate>=today()),past=named.filter(sh=>sh.endDate&&sh.endDate<today());
+                      const opt=sh=><option key={sh.id} value={sh.id}>{sh.name}{sh.city?` · ${sh.city}`:""}{sh.startDate&&sh.endDate&&sh.endDate<today()?` (dates ${sh.startDate} – ${sh.endDate})`:""}</option>;
+                      return <>{up.map(opt)}{past.length>0&&<optgroup label="Past dates — update the show's dates in Shows">{past.map(opt)}</optgroup>}</>;})()}
                   </select>
                   <button onClick={()=>openSendQtyDialog(sendToShowId,selectedIds)} disabled={!sendToShowId||selectedIds.size===0} style={{background:sendToShowId?"#6B48CC":"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:sendToShowId?"pointer":"default",flexShrink:0}}>Send →</button>
                   <button onClick={()=>setSendToShowOpen(false)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:18,lineHeight:1,padding:0,flexShrink:0}}>×</button>
