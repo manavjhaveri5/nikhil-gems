@@ -21183,7 +21183,12 @@ thead{display:table-header-group;}
                               {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.9)",borderRadius:12,padding:"2px 8px",fontSize:10.5,fontWeight:700}}>Box {s.location}</div>}
                             </div>
                             <div style={{padding:"9px 11px 11px"}}>
-                              <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</div>
+                              <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+                                <span style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{s.material||"Item"}</span>
+                                {s.grade
+                                  ?<span title="Grade" style={{flexShrink:0,fontSize:10,fontWeight:800,letterSpacing:.6,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>
+                                  :<span onClick={e=>{e.stopPropagation();setEditCard({...s,market:Array.isArray(s.market)?s.market:String(s.market||"").split(",").map(x=>x.trim()).filter(Boolean)});}} title="No grade yet — add it" style={{flexShrink:0,fontSize:10,color:C.inkFaint,border:`1px dashed ${C.border}`,borderRadius:10,padding:"0 7px",lineHeight:1.6,cursor:"pointer"}}>+ grade</span>}
+                              </div>
                               <div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · {flowQtyLines(s).join(" · ")}</div>
                               {/* Cost, for pricing: per unit, per piece where the card counts pieces,
                                   and the card's total. Missing, it can be typed in right here. */}
