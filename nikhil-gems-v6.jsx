@@ -19065,7 +19065,6 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [shipQ,setShipQ]=useState("");
   const [bulkFlat,setBulkFlat]=useState(false);           // ticked bar: the price is for the whole card
   const [flatMode,setFlatMode]=useState({});              // per card, while typing: true = flat price
-  const [labelPick,setLabelPick]=useState(null);          // preview before Make Labels: Set of ids
   const [labelDup,setLabelDup]=useState(false);
   const [aiBusy,setAiBusy]=useState("");
   const [sellId,setSellId]=useState(null);
@@ -19758,11 +19757,6 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const selectTotalOf=s=>(+s.listPrice||0)*basisOf(s);
   const cardValUsd=s=>selectTotalOf(s)||flatTotalOf(s);
   const money=v=>`$${(+v).toLocaleString("en-US",{maximumFractionDigits:2})}`;
-  // What a label prints: the select price (per kg, or each), then the whole-flat deal.
-  const labelPriceOf=s=>{const per=(parseFloat(s.qty)||0)>0?s.unit:s.unit2;const each=/^(pcs?|pieces?)$/i.test(String(per||""));
-    const sel=+s.listPrice>0?`${money(s.listPrice)}${each?" each":`/${per||"unit"}`}`:"";
-    const fl=+s.showFlatRate>0?`${money(s.showFlatRate)}/kg whole flat`:flatTotalOf(s)>0?`Flat ${money(flatTotalOf(s))}`:"";
-    return [sel,sel&&fl?fl.replace(" whole flat"," whole").replace("Flat ","whole "):fl].filter(Boolean).join(" · ");};
   // mode: "sp" select price per unit · "flatkg" whole flat per kg · "flat" whole flat total
   const priceTicked=async(mode,planned=false)=>{
     const v=parseFloat(mode==="sp"?shipSp:shipFlat);if(!(v>0))return;
@@ -21093,7 +21087,7 @@ thead{display:table-header-group;}
                       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Planned</div><div style={{fontSize:18,fontWeight:750}}>{shipTagged.length} cards</div><div style={{fontSize:10,color:C.inkFaint}}>tag more in Stock → Market</div></div>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>① Priced</div><div style={{fontSize:18,fontWeight:750,color:priced===shipTagged.length&&priced?C.green:C.ink}}>{priced} / {shipTagged.length}</div><div style={{fontSize:10,color:C.inkFaint}}>{valueUsd>0?`${fmtUsd(valueUsd)} on the table`:"type a SP on each card"}</div></div>
-                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>② Labels</div><button disabled={!shipTagged.length} onClick={()=>setLabelPick(new Set((tagSel.size?shipTagged.filter(s=>tagSel.has(s.id)):shipTagged).map(s=>s.id)))} style={{marginTop:3,background:"#8B6F47",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🏷 Make labels{tagSel.size?` (${tagSel.size})`:" for all"}</button></div>
+                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>② Labels</div><button disabled={!shipTagged.length} onClick={()=>openInMakeLabels(true,new Set((tagSel.size?shipTagged.filter(s=>tagSel.has(s.id)):shipTagged).map(s=>s.id)))} style={{marginTop:3,background:"#8B6F47",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🏷 Make labels{tagSel.size?` (${tagSel.size})`:" for all"}</button></div>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>③ Pack</div>{isAdmin?<button disabled={!tagSel.size} onClick={()=>sendTaggedPacked(tagSel)} style={{marginTop:3,background:tagSel.size?C.ink:"#ccc",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:tagSel.size?"pointer":"default"}}>📦 Pack {tagSel.size||"ticked"} & send</button>:<div style={{fontSize:11,color:C.inkFaint}}>Ask an admin</div>}</div>
                       </div>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10,background:tagSel.size?"#1e293b":"transparent",color:tagSel.size?"#fff":C.inkMid,borderRadius:9,padding:tagSel.size?"8px 12px":"0 2px",fontSize:11.5}}>
@@ -21109,7 +21103,7 @@ thead{display:table-header-group;}
                           <button onClick={()=>setTagSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button></>}
                       </div>
                       {!shipTagged.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing planned for {show.name}. In Stock, tag cards with this show under Market and they'll appear here.</div>:
-                      <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+                      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(250px,1fr))",gap:12}}>
                         {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);const b=basisOf(s);const val=cardValUsd(s);const pcs=pcsOf(s);const cost=cardCostInr(s);const flat=flatMode[s.id]||(+s.showFlatRate>0||(!(+s.showFlatPrice>0)&&kgOf(s)>0)?"kg":"total");const per=(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg");return(
                           <div key={s.id} onClick={()=>setTagSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?C.amberBg:C.surface,borderRadius:14,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:"var(--e-1)"}}>
                             <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
@@ -21144,45 +21138,13 @@ thead{display:table-header-group;}
                                   <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>{(kgOf(s)>0?[["kg","/kg"],["total","total"]]:[["total","total"]]).map(([v,l])=><button key={v} onClick={()=>setFlatMode(m=>({...m,[s.id]:v}))} style={{background:flat===v?"#10b981":"transparent",color:flat===v?"#fff":C.inkMid,border:"none",padding:"3px 6px",fontSize:10,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
                                   <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:flatTotalOf(s)>0?"#0f7a55":C.inkFaint,whiteSpace:"nowrap"}}>{flatTotalOf(s)>0?fmtUsd(flatTotalOf(s)):"—"}</span>
                                 </div>
-                                {selectTotalOf(s)>0&&flatTotalOf(s)>0&&<div style={{fontSize:10,color:flatTotalOf(s)<selectTotalOf(s)?"#0f7a55":C.red,textAlign:"right"}}>{flatTotalOf(s)<selectTotalOf(s)?`Whole flat saves ${Math.round((1-flatTotalOf(s)/selectTotalOf(s))*100)}%`:"Whole flat isn't cheaper than selecting"}</div>}
-                                {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right"}}>{selectTotalOf(s)>0?`${money(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${money(flatTotalOf(s)/pcs)}/pc whole`:""}{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
+                                {selectTotalOf(s)>0&&flatTotalOf(s)>0&&<div style={{fontSize:10,color:flatTotalOf(s)<selectTotalOf(s)?"#0f7a55":C.red,textAlign:"right",whiteSpace:"normal"}}>{flatTotalOf(s)<selectTotalOf(s)?`Whole flat saves ${Math.round((1-flatTotalOf(s)/selectTotalOf(s))*100)}%`:"Whole flat isn't cheaper than selecting"}</div>}
+                                {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.4}}>{selectTotalOf(s)>0?`${money(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${money(flatTotalOf(s)/pcs)}/pc whole`:""}{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
                               </div>
                             </div>
                           </div>);})}
                       </div>}
                     </>);
-                  })()}
-                  {labelPick&&(()=>{
-                    const cards=[...shipTagged,...shipItems].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i&&(shipTagged.some(t=>t.id===s.id)));
-                    const tog=id=>setLabelPick(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
-                    return(
-                      <div onClick={()=>setLabelPick(null)} style={{position:"fixed",inset:0,background:"rgba(20,15,5,.5)",zIndex:950,display:"grid",placeItems:"center",padding:16}}>
-                        <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:14,width:"min(920px,100%)",maxHeight:"90vh",display:"flex",flexDirection:"column"}}>
-                          <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:10}}>
-                            <b style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,flex:1}}>Labels for {show.name}</b>
-                            <button onClick={()=>setLabelPick(new Set(cards.map(c=>c.id)))} style={{background:"none",border:"none",color:C.blue,fontWeight:700,fontSize:12,cursor:"pointer"}}>Tick all</button>
-                            <button onClick={()=>setLabelPick(new Set())} style={{background:"none",border:"none",color:C.blue,fontWeight:700,fontSize:12,cursor:"pointer"}}>Untick all</button>
-                            <button onClick={()=>setLabelPick(null)} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:C.inkFaint}}>×</button>
-                          </div>
-                          <div style={{overflowY:"auto",padding:16,display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(260px,1fr))",gap:12,background:C.bg}}>
-                            {cards.map(s=>{const on=labelPick.has(s.id);const price=labelPriceOf(s);const qty=flowQtyLines(s)[0]||"";return(
-                              <label key={s.id} style={{position:"relative",cursor:"pointer",background:"#fff",border:"1px solid #cfb793",borderTop:"5px solid #8a6a3e",borderRadius:4,padding:"12px 16px 10px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Cormorant Garamond',Georgia,serif",color:"#1d1a17",opacity:on?1:.45,boxShadow:on?"0 0 0 2px #8a6a3e44":"none"}}>
-                                <input type="checkbox" checked={on} onChange={()=>tog(s.id)} style={{position:"absolute",top:8,left:8}}/>
-                                <span style={{position:"absolute",top:8,right:10,fontFamily:"system-ui",fontSize:9,color:"#9a8a73"}}>{s.location?`Box ${s.location}`:""}</span>
-                                <span style={{fontSize:20,fontWeight:500,lineHeight:1.15,textAlign:"center",marginTop:6}}>{String(s.labelEn||[s.material,s.shape].filter(Boolean).join(" ")).trim()||"—"}</span>
-                                <span style={{fontSize:12,fontStyle:"italic",color:"#6f5a3c"}}>{[s.labelShape||s.shape,s.labelOrigin||s.origin].filter(Boolean).join(" · ")||" "}</span>
-                                <div style={{display:"flex",justifyContent:"space-between",width:"100%",borderTop:"1px solid #e2d3b8",marginTop:8,paddingTop:5,fontSize:13}}>
-                                  <span>{qty}</span><b style={{color:price?"#1d1a17":"#c0392b",fontWeight:600}}>{price||"no price"}</b>
-                                </div>
-                              </label>);})}
-                          </div>
-                          <div style={{padding:"12px 18px",borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                            <span style={{fontSize:12,color:C.inkMid,flex:1}}>{labelPick.size} label{labelPick.size===1?"":"s"} · {cards.filter(s=>labelPick.has(s.id)&&!labelPriceOf(s)).length} without a price · edit and print in Make Labels</span>
-                            <button onClick={()=>setLabelPick(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",cursor:"pointer",fontSize:12.5}}>Cancel</button>
-                            <button disabled={!labelPick.size} onClick={()=>{const ids=labelPick;setLabelPick(null);openInMakeLabels(true,ids);}} style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontWeight:700,fontSize:12.5,cursor:labelPick.size?"pointer":"default",opacity:labelPick.size?1:.5}}>🏷 Make {labelPick.size} labels</button>
-                          </div>
-                        </div>
-                      </div>);
                   })()}
                   {(shipStep||(shipTagged.length?"planned":"sent"))==="sent"&&<>
                   {/* What is at the show. It gets here through Stock → Send to show;

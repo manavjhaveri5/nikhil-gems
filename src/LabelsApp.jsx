@@ -325,18 +325,16 @@ function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){ret
 
 /* Stock → cards. What the shipment labels already know about a stone comes
    with it: its English and local names, origin and form. */
-const stockName = s => String(s.labelEn || [s.material, s.shape].filter(Boolean).join(" ") || s.name || "").trim();
-/* The price line, as a show's Shipment tab sets it: the select price (per kg,
-   or each) and, when there is one, the cheaper whole-flat deal. */
-function labelPrice(s, cur) {
-  const m = v => `${cur}${(+v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
-  const per = parseFloat(s.qty) > 0 ? s.unit : s.unit2;
-  const each = /^(pcs?|pieces?)$/i.test(String(per || "pcs"));
-  const sel = +s.listPrice > 0 ? `${m(s.listPrice)}${each ? "" : `/${per || "kg"}`}` : "";
-  const flat = +s.showFlatRate > 0 ? `${m(s.showFlatRate)}/kg` : +s.showFlatPrice > 0 ? m(s.showFlatPrice) : "";
-  if (sel && flat) return `${sel} · whole ${flat}`;
-  if (flat) return +s.showFlatRate > 0 ? `${flat} whole flat` : `Flat ${flat}`;
-  return sel;
+// The label's name is the stone; the shape prints on its own line below.
+const stockName = s => String(s.labelEn || s.material || s.name || "").trim();
+/* The price line, written as a code so a customs officer reading the table
+   sees no prices: "500 S 400 F" — S the select price (per kg, or each), F the
+   whole-flat price (per kg, or the lot's total). No currency, no units. */
+function labelPrice(s) {
+  const n = v => (+v).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const sel = +s.listPrice > 0 ? `${n(s.listPrice)} S` : "";
+  const flat = +s.showFlatRate > 0 ? `${n(s.showFlatRate)} F` : +s.showFlatPrice > 0 ? `${n(s.showFlatPrice)} F` : "";
+  return [sel, flat].filter(Boolean).join(" ");
 }
 function cardFromStock(s, lang, cur) {
   const qty = parseFloat(s.qty) > 0 ? `${s.qty}${s.unit === "pcs" ? "pcs" : ` ${s.unit || ""}`.trimEnd()}` : "";
@@ -348,7 +346,7 @@ function cardFromStock(s, lang, cur) {
     type: String(s.labelShape || s.shape || "").trim(),
     origin: String(s.labelOrigin || s.origin || "").trim(),
     qty,
-    price: labelPrice(s, cur),
+    price: labelPrice(s),
     stockId: s.id,
   };
 }
@@ -390,7 +388,7 @@ function StockPicker({ lang, onAdd, onClose, boxFirst = false }) {
             <label key={s.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}`, cursor: "pointer", fontSize: 13 }}>
               <input type="checkbox" checked={picked.has(s.id)} onChange={() => tog(s.id)} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{stockName(s) || "—"}</div>
+                <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{[stockName(s), s.shape].filter(Boolean).join(" · ") || "—"}</div>
                 <div style={{ fontSize: 11.5, color: C.inkFaint }}>{[s.origin, s.qty ? `${s.qty} ${s.unit || ""}` : "", s.showTag, s.location ? (/^(stk|box)?\s*\d+$/i.test(s.location) ? `Box ${s.location}` : s.location) : ""].filter(Boolean).join(" · ")}</div>
               </div>
               {+s.listPrice > 0 && <span style={{ fontSize: 12, color: C.inkMid }}>${(+s.listPrice).toLocaleString("en-US")}</span>}
@@ -401,6 +399,67 @@ function StockPicker({ lang, onAdd, onClose, boxFirst = false }) {
           <span style={{ fontSize: 12.5, color: C.inkMid, marginRight: "auto" }}>{picked.size} ticked</span>
           <button onClick={onClose} style={btn()}>Cancel</button>
           <button disabled={!picked.size} onClick={() => onAdd((stock || []).filter(s => picked.has(s.id)).map(s => cardFromStock(s, lang, cur)))} style={btn(true)}>Add {picked.size || ""} card{picked.size === 1 ? "" : "s"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Labels sent from a show's Shipment tab. They are shown in the set's own
+   design — the same cards printed from here — each with a tick, and go into
+   a set already made for the show (cards already there for the same stock are
+   updated: price, quantity) or a new one. */
+function ShowImport({ incoming, sets, onClose, onDone }) {
+  const town = String(incoming.name || "").split(/\s+/)[0].toLowerCase();
+  const guess = [...sets].filter(s => town && s.name.toLowerCase().includes(town)).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+  const [targetId, setTargetId] = useState(guess?.id || "new");
+  const [cards, setCards] = useState(incoming.cards);
+  const [on, setOn] = useState(() => new Set(incoming.cards.map(c => c.id)));
+  const target = sets.find(s => s.id === targetId) || { id: "new", name: incoming.name, lang: incoming.lang, paper: "letter", cards: [] };
+  const g = geom(target);
+  const zoom = Math.min(1, ((mob() ? window.innerWidth - 40 : 860) / 2 - 20) / (g.w * 96));
+  const keyOf = c => `${String(c.en || "").trim().toLowerCase()}|${String(c.type || "").trim().toLowerCase()}`;
+  const place = () => {
+    const picked = cards.filter(c => on.has(c.id));
+    if (!picked.length) return;
+    if (targetId === "new") return onDone({ id: uid(), name: incoming.name, lang: incoming.lang, paper: "letter", cards: picked, updatedAt: new Date().toISOString() }, true, picked.length);
+    const next = [...(target.cards || [])];
+    for (const c of picked) {
+      const at = next.findIndex(x => (c.stockId && x.stockId === c.stockId) || (!x.stockId && keyOf(x) === keyOf(c)));
+      if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type };
+      else next.push(c);
+    }
+    onDone({ ...target, cards: next.filter(x => x.en || x.local || x.price) }, false, picked.length);
+  };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,15,5,.5)", display: "grid", placeItems: "center", padding: mob() ? 0 : 20 }}>
+      <style>{layoutCss(target) + ".lbl-import .lbl-ctl{display:none}"}</style>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: mob() ? 0 : 12, width: "min(920px,100%)", maxHeight: mob() ? "100vh" : "92vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <b style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 21, flex: 1, minWidth: 180 }}>Labels from {incoming.name}</b>
+          <label style={{ fontSize: 12.5, color: C.inkMid }}>Add to <select value={targetId} onChange={e => setTargetId(e.target.value)} style={{ ...btn(), padding: "6px 8px" }}>
+            <option value="new">A new set</option>{sets.map(s => <option key={s.id} value={s.id}>{s.name} · {s.cards?.length || 0} cards</option>)}</select></label>
+          <button onClick={() => setOn(new Set(cards.map(c => c.id)))} style={btn()}>Tick all</button>
+          <button onClick={() => setOn(new Set())} style={btn()}>Untick all</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button>
+        </div>
+        <div style={{ padding: "8px 18px", fontSize: 12, color: C.inkMid, borderBottom: `1px solid ${C.border}` }}>Prices print as a code: <b>S</b> select, <b>F</b> whole flat — no currency. Click any text to change it before adding.</div>
+        <div className="lbl-import" style={{ overflowY: "auto", padding: 16, background: "#e9e6e1", display: "grid", gridTemplateColumns: `repeat(auto-fill, ${g.w * 96 * zoom + 8}px)`, gap: 12, justifyContent: "center" }}>
+          {cards.map((c, i) => {
+            const ticked = on.has(c.id);
+            return (
+              <div key={c.id} style={{ position: "relative", width: g.w * 96 * zoom + 8, opacity: ticked ? 1 : .45 }}>
+                <input type="checkbox" checked={ticked} onChange={() => setOn(s => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} style={{ position: "absolute", top: 10, left: 10, zIndex: 2, width: 18, height: 18, accentColor: "#6f5430" }} />
+                <div style={{ zoom, padding: 4 }}>
+                  <Card c={c} lang={target.lang} g={g} index={i} total={cards.length} onAct={() => {}} onPatch={p => setCards(cs => cs.map(x => x.id === c.id ? { ...x, ...p } : x))} />
+                </div>
+              </div>);
+          })}
+        </div>
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12.5, color: C.inkMid, flex: 1 }}>{on.size} ticked{targetId !== "new" ? ` · cards already in “${target.name}” for the same stone and shape get the new price and quantity` : ""}</span>
+          <button onClick={onClose} style={btn()}>Cancel</button>
+          <button disabled={!on.size} onClick={place} style={btn(true)}>{targetId === "new" ? `Make ${on.size} labels` : `Add ${on.size} to ${target.name}`}</button>
         </div>
       </div>
     </div>
@@ -419,6 +478,7 @@ export default function LabelsApp({ onHome }) {
   openRef.current = openId;
   const chain = useRef(Promise.resolve());
   const [picker, setPicker] = useState(false);   // false | "stock" | "box"
+  const [incoming, setIncoming] = useState(null); // cards sent from a show, waiting to be placed
   const [showLayout, setShowLayout] = useState(false);
   const [bulk, setBulk] = useState(false);
   const [busy, setBusy] = useState("");
@@ -445,12 +505,8 @@ export default function LabelsApp({ onHome }) {
       if (pending?.stockIds?.length) {
         const all = await loadK("ng-stock-v5").catch(() => []);
         const ids = new Set(pending.stockIds);
-        const cur = pending.lang === "ja" ? "¥" : "$";
-        const cards = (Array.isArray(all) ? all : []).filter(x => ids.has(x.id)).map(x => cardFromStock(x, pending.lang || "", cur));
-        if (cards.length) {
-          const s0 = { id: uid(), name: pending.name || "Show labels", lang: pending.lang || "", paper: "letter", cards, updatedAt: new Date().toISOString() };
-          saveSet(s0); setOpenId(s0.id); say(`✓ ${cards.length} labels from ${s0.name}`);
-        }
+        const cards = (Array.isArray(all) ? all : []).filter(x => ids.has(x.id)).map(x => cardFromStock(x, pending.lang || "", ""));
+        if (cards.length) setIncoming({ name: pending.name || "Show labels", lang: pending.lang || "", cards });
       }
     }).catch(() => put([]));
     return onCacheRefresh(keys => { if (keys.includes(KEY)) load().catch(() => {}); });
@@ -520,6 +576,8 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
   return (
     <div style={{ minHeight: "100vh", background: "#e9e6e1", color: "#2a2622" }}>
       <style>{CARD_CSS + EDIT_CSS + (set ? layoutCss(set) : "")}</style>
+      {incoming && sets && <ShowImport incoming={incoming} sets={list} onClose={() => setIncoming(null)}
+        onDone={(target, isNew, n) => { saveSet(target); setOpenId(target.id); setIncoming(null); say(`✓ ${n} label${n === 1 ? "" : "s"} ${isNew ? "in a new set" : `added to ${target.name}`}`); }} />}
       {toast && <div style={{ position: "fixed", bottom: 20, left: "50%", transform: "translateX(-50%)", zIndex: 1100, background: "#2a2622", color: "#fff", padding: "10px 18px", borderRadius: 6, fontSize: 13 }}>{toast}</div>}
       <div style={{ position: "sticky", top: 0, zIndex: 20, background: "#fff", borderBottom: "1px solid #d6d0c7", padding: "10px 16px", display: "flex", flexWrap: "wrap", gap: "10px 14px", alignItems: "center" }}>
         <button onClick={set ? () => setOpenId(null) : onHome} style={{ ...btn(), background: "none", border: "none", color: "#7a7268", paddingLeft: 0 }}>← {set ? "All labels" : "Home"}</button>
