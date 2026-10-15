@@ -19069,6 +19069,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [flatMode,setFlatMode]=useState({});              // per card, while typing: true = flat price
   const [labelIds,setLabelIds]=useState(null);            // cards being made into labels, in place
   const [labelFilter,setLabelFilter]=useState("all");     // planned cards: all | made | todo
+  const [editCard,setEditCard]=useState(null);            // stock card open in the pop-up editor: a draft copy
   // Prices typed in $ or ₹ (stored in $ either way; ₹ at the show's rate).
   const [priceCur,setPriceCur]=useState(()=>{try{return localStorage.getItem("ng-ship-price-cur")||"usd";}catch{return "usd";}});
   const [labelDup,setLabelDup]=useState(false);
@@ -21087,6 +21088,50 @@ thead{display:table-header-group;}
                         </button>))}
                       <input value={shipQ} onChange={e=>setShipQ(e.target.value)} placeholder="Search stone, shape, box, vendor…" style={{...FI,flex:"1 1 220px",maxWidth:360,marginLeft:"auto",borderRadius:20,padding:"8px 14px",fontSize:mob?16:12.5}}/>
                     </div>);})()}
+                  {editCard&&(()=>{
+                    const d=editCard;const set=(k,v)=>setEditCard(x=>({...x,[k]:v}));
+                    const orig=shipTagged.find(x=>x.id===d.id)||shipItems.find(x=>x.id===d.id)||{};
+                    const FIELDS=["material","shape","size","grade","origin","qty","unit","qty2","unit2","costPrice","vendor","location","notes"];
+                    const save=async()=>{
+                      const patch={};for(const k of FIELDS){const v=String(d[k]??"").trim();if(v!==String(orig[k]??"").trim())patch[k]=v;}
+                      const m=(d.market||[]).filter(Boolean),om=(Array.isArray(orig.market)?orig.market:String(orig.market||"").split(",").map(x=>x.trim()).filter(Boolean));
+                      if(m.join("|")!==om.join("|"))patch.market=m;
+                      if(patch.location!==undefined)patch.boxNumber=patch.location;
+                      if(Object.keys(patch).length){await onPatchStockItem?.(d.id,patch);onToast?.("✓ Card saved");}
+                      setEditCard(null);
+                    };
+                    const UNITS_=["pcs","kg","gm","ct","lot"];
+                    const lab={fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3,display:"block"};
+                    const inp={...FI,width:"100%",boxSizing:"border-box",fontSize:mob?16:13,padding:"7px 9px"};
+                    const F=(k,label,extra={})=><label style={{display:"block",...(extra.wrap||{})}}><span style={lab}>{label}</span><input value={d[k]??""} onChange={e=>set(k,e.target.value)} inputMode={extra.num?"decimal":undefined} list={extra.list} style={inp}/></label>;
+                    const marketsHere=[...new Set(["India","Etsy/Online",show.name,...(d.market||[])])];
+                    return(
+                      <div onClick={()=>setEditCard(null)} style={{position:"fixed",inset:0,background:"rgba(20,15,5,.5)",zIndex:950,display:"grid",placeItems:"center",padding:16}}>
+                        <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:14,width:"min(620px,100%)",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+                          <div style={{display:"flex",gap:12,alignItems:"center",padding:"14px 18px",borderBottom:`1px solid ${C.border}`}}>
+                            {stockCover(d)&&<img src={thumbUrl(stockCover(d),160)} alt="" style={{width:52,height:52,objectFit:"cover",borderRadius:8}}/>}
+                            <div style={{flex:1}}><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600}}>Edit stock card</div><div style={{fontSize:11,color:C.inkFaint}}>{d.sku||d.id}{d.location?` · Box ${d.location}`:""}</div></div>
+                            <button onClick={()=>setEditCard(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkFaint}}>×</button>
+                          </div>
+                          <div style={{padding:"14px 18px",display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:10}}>
+                            {F("material","Stone",{wrap:{gridColumn:mob?"1 / -1":"span 2"}})}
+                            {F("shape","Shape",{list:"edit-shapes"})}
+                            {F("size","Size")}{F("grade","Grade")}{F("origin","Origin")}
+                            <label style={{display:"block"}}><span style={lab}>Qty</span><div style={{display:"flex",gap:4}}><input value={d.qty??""} onChange={e=>set("qty",e.target.value)} inputMode="decimal" style={{...inp,flex:1}}/><select value={d.unit||"pcs"} onChange={e=>set("unit",e.target.value)} style={{...FI,fontSize:mob?16:12,padding:"6px 4px"}}>{UNITS_.map(u=><option key={u}>{u}</option>)}</select></div></label>
+                            <label style={{display:"block"}}><span style={lab}>Second qty</span><div style={{display:"flex",gap:4}}><input value={d.qty2??""} onChange={e=>set("qty2",e.target.value)} inputMode="decimal" style={{...inp,flex:1}}/><select value={d.unit2||"kg"} onChange={e=>set("unit2",e.target.value)} style={{...FI,fontSize:mob?16:12,padding:"6px 4px"}}>{UNITS_.map(u=><option key={u}>{u}</option>)}</select></div></label>
+                            {F("costPrice",`Cost ₹/${d.unit||"pc"}`,{num:true})}
+                            {F("vendor","Vendor")}{F("location","Box")}
+                            <div style={{gridColumn:"1 / -1"}}><span style={lab}>Market</span><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{marketsHere.map(m=>{const on=(d.market||[]).includes(m);return <button key={m} type="button" onClick={()=>set("market",on?d.market.filter(x=>x!==m):[...(d.market||[]),m])} style={{fontSize:11.5,padding:"4px 10px",borderRadius:12,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:"transparent",color:on?C.ink:C.inkMid,cursor:"pointer",fontWeight:on?650:400}}>{m}</button>;})}</div></div>
+                            <label style={{display:"block",gridColumn:"1 / -1"}}><span style={lab}>Notes</span><textarea value={d.notes??""} onChange={e=>set("notes",e.target.value)} rows={2} style={{...inp,resize:"vertical"}}/></label>
+                            <datalist id="edit-shapes">{SHAPES.map(x=><option key={x} value={x}/>)}</datalist>
+                          </div>
+                          <div style={{display:"flex",gap:8,justifyContent:"flex-end",padding:"12px 18px",borderTop:`1px solid ${C.border}`}}>
+                            <button onClick={()=>setEditCard(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13}}>Cancel</button>
+                            <button onClick={save} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:8,padding:"8px 18px",cursor:"pointer",fontSize:13,fontWeight:700}}>Save card</button>
+                          </div>
+                        </div>
+                      </div>);
+                  })()}
                   {labelIds&&<React.Suspense fallback={null}><ShowLabelImport name={show.name} lang={shipRegion==="Japan"?"ja":""} stockIds={labelIds} onClose={()=>setLabelIds(null)}
                     onSaved={(m,made,setName)=>{onToast?.(m);if(made?.length){const ts=new Date().toISOString();onPatchStockItems?.(Object.fromEntries(made.map(id=>[id,{labelMadeAt:ts,labelSet:setName||""}])));}}}/></React.Suspense>}
                   {/* PLANNED — tagged for this show in Stock, not packed yet. The order of
@@ -21164,6 +21209,7 @@ thead{display:table-header-group;}
                                 {selectTotalOf(s)>0&&flatTotalOf(s)>0&&<div style={{fontSize:10,color:flatTotalOf(s)<selectTotalOf(s)?"#0f7a55":C.red,textAlign:"right",whiteSpace:"normal"}}>{flatTotalOf(s)<selectTotalOf(s)?`Whole flat saves ${Math.round((1-flatTotalOf(s)/selectTotalOf(s))*100)}%`:"Whole flat isn't cheaper than selecting"}</div>}
                                 <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3}}>
                                   {s.labelMadeAt?<span title={`Label made ${fmtDate(String(s.labelMadeAt).slice(0,10))}${s.labelSet?` · ${s.labelSet}`:""}`} style={{fontSize:10,fontWeight:700,color:"#0f7a55",background:"#E5F4EC",borderRadius:10,padding:"2px 8px"}}>🏷 Label made</span>:null}
+                                  <button onClick={()=>setEditCard({...s,market:Array.isArray(s.market)?s.market:String(s.market||"").split(",").map(x=>x.trim()).filter(Boolean)})} style={{background:"none",border:`1px solid ${C.border}`,color:C.inkMid,borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>✎ Edit card</button>
                                   <button onClick={()=>setLabelIds([s.id])} style={{marginLeft:"auto",background:"none",border:`1px solid #8B6F47`,color:"#8B6F47",borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>{s.labelMadeAt?"✎ Edit label":"🏷 Make label"}</button>
                                 </div>
                                 {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.4}}>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
