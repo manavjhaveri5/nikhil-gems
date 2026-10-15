@@ -9079,7 +9079,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
                         style={{display:"flex",height:mob?15:17,flexShrink:0}}>
                         {flags.map(f=><div key={f.key} style={{flex:1,minWidth:0,background:f.live?f.bg:stockStripe(f.lead),display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
-                          <span style={{fontSize:mob?8:8.5,fontWeight:800,letterSpacing:1.4,textTransform:"uppercase",color:"#fff",background:"rgba(20,14,6,.55)",borderRadius:6,lineHeight:1.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 6px"}}>{f.label}</span>
+                          <span style={{fontSize:mob?8:8.5,fontWeight:800,letterSpacing:1.4,textTransform:"uppercase",color:"#fff",background:"rgba(20,14,6,.55)",borderRadius:6,lineHeight:1.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 6px"}}>{f.live?f.label:`${f.label} · to list`}</span>
                         </div>)}
                       </div>}
                       {/* Photo */}
