@@ -7170,6 +7170,33 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     try{await saveStockK(newStock,{deletedIds:[dropId]});showToast("✓ Items merged");setSelectedIds(new Set());setSelectMode(false);setMergeOpen(false);}
     catch(e){showToast("⚠ Save failed: "+e.message);}
   };
+  /* Split a card: part of it goes to another box as a card of its own (same stone,
+     cost per unit, photos, notes); the original keeps the rest. Moving all of it is
+     just a change of box. The new card isn't listed anywhere yet. */
+  const [splitDlg,setSplitDlg]=useState(null);   // {item,q1,q2,box}
+  const doSplit=async()=>{
+    const {item,q1,q2,box}=splitDlg||{};
+    const a1=parseFloat(item?.qty)||0,a2=parseFloat(item?.qty2)||0,m1=parseFloat(q1)||0,m2=parseFloat(q2)||0;
+    const b=String(box||"").trim();
+    if(!item||!b)return showToast("Type the box it's going to");
+    if(!(m1>0||m2>0))return showToast("Type how much is moving");
+    if(m1>a1+1e-9||m2>a2+1e-9)return showToast("That's more than the card holds");
+    const ts=new Date().toISOString(),r=v=>String(+(+v).toFixed(4));
+    let next;
+    if(Math.abs(m1-a1)<1e-9&&Math.abs(m2-a2)<1e-9){
+      next=stock.map(x=>x.id===item.id?{...x,location:b,boxNumber:b,updatedAt:ts}:x);
+    }else{
+      const share=a1>0?m1/a1:a2>0?m2/a2:0;
+      const w=parseFloat(item.weightGm)||0;
+      const piece=newStockRowFrom(item,{id:uid(),qty:r(m1),qty2:item.qty2!==undefined&&item.qty2!==""?r(m2):"",location:b,boxNumber:b,splitFromId:item.id,
+        weightGm:w>0?Math.round(w*share):item.weightGm,createdAt:ts,updatedAt:ts,addedDate:today(),labelMadeAt:"",labelSet:"",
+        postedEtsy:false,postedEbay:false,postedShopify:false,postedShopifyEarth:false,postedShopifyAtyahara:false,postedWix:false,shopifyProductId:"",linked_listing_id:""});
+      next=[piece,...stock.map(x=>x.id===item.id?{...x,qty:r(a1-m1),qty2:x.qty2!==undefined&&x.qty2!==""?r(a2-m2):x.qty2,weightGm:w>0?Math.round(w*(1-share)):x.weightGm,updatedAt:ts}:x)];
+    }
+    setStock(next);
+    try{const saved=await saveStockK(next);setStock(syncStockVersions(next,saved));showToast(`✓ ${Math.abs(m1-a1)<1e-9&&Math.abs(m2-a2)<1e-9?"Moved":"Split"} — ${[m1>0?`${r(m1)} ${item.unit||"pcs"}`:"",m2>0?`${r(m2)} ${item.unit2||"kg"}`:""].filter(Boolean).join(" · ")} now in box ${b}`);setSplitDlg(null);setSelectedIds(new Set());}
+    catch(e){showToast("Split failed: "+e.message);}
+  };
   const swapQtyBulk=async ids=>{if(!ids.size)return;const list=stock.map(s=>ids.has(s.id)?{...s,qty:s.qty2||"",unit:s.unit2||"pcs",qty2:s.qty||"",unit2:s.unit||"pcs",updatedAt:new Date().toISOString()}:s);setStock(list);try{await saveStockK(list);showToast(ids.size+" items swapped");}catch(e){showToast("Swap failed: "+e.message);};};
   const applyBulkEdit=async(ids,fields)=>{
     if(!ids.size)return;
@@ -8967,6 +8994,36 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               )}
               {/* Picking several: on a wide screen the actions float at the left edge,
                   so editing the cards ticked far down the grid needs no scroll back up. */}
+              {splitDlg&&(()=>{const it=splitDlg.item;const a1=parseFloat(it.qty)||0,a2=parseFloat(it.qty2)||0;const set=(k,v)=>setSplitDlg(d=>({...d,[k]:v}));
+                const auto=v=>{const n=parseFloat(v)||0;if(!(a1>0&&a2>0&&n>0))return "";const q=n/a1*a2;return /^pcs?$/i.test(it.unit2||"")?String(Math.round(q)):String(+q.toFixed(3));};
+                const inp={...FI,width:"100%",boxSizing:"border-box",fontSize:mob?16:13,padding:"8px 10px"};
+                const left1=a1-(parseFloat(splitDlg.q1)||0),left2=a2-(parseFloat(splitDlg.q2)||0);
+                return(
+                <div onClick={()=>setSplitDlg(null)} style={{position:"fixed",inset:0,background:"rgba(20,15,5,.5)",zIndex:960,display:"grid",placeItems:"center",padding:16}}>
+                  <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:14,width:"min(460px,100%)",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+                    <div style={{display:"flex",gap:12,alignItems:"center",padding:"14px 18px",borderBottom:`1px solid ${C.border}`}}>
+                      {stockCover(it)&&<img src={thumbUrl(stockCover(it),160)} alt="" style={{width:48,height:48,objectFit:"cover",borderRadius:8}}/>}
+                      <div style={{flex:1}}><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:19,fontWeight:600}}>Split / move to another box</div>
+                        <div style={{fontSize:11.5,color:C.inkMid}}>{it.material}{it.shape?` · ${it.shape}`:""} · box {it.location||"—"} · {[a1?`${it.qty} ${it.unit||"pcs"}`:"",a2?`${it.qty2} ${it.unit2||"kg"}`:""].filter(Boolean).join(" · ")}</div></div>
+                      <button onClick={()=>setSplitDlg(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkFaint}}>×</button>
+                    </div>
+                    <div style={{padding:"14px 18px",display:"grid",gridTemplateColumns:a2?"1fr 1fr":"1fr",gap:10}}>
+                      <label><span style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Moving · {it.unit||"pcs"}</span>
+                        <input autoFocus value={splitDlg.q1} onChange={e=>{const v=e.target.value.replace(/[^\d.]/g,"");setSplitDlg(d=>({...d,q1:v,q2:d.q2Touched?d.q2:auto(v)}));}} inputMode="decimal" placeholder={`of ${it.qty||0}`} style={inp}/></label>
+                      {a2>0&&<label><span style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Moving · {it.unit2||"kg"}</span>
+                        <input value={splitDlg.q2} onChange={e=>setSplitDlg(d=>({...d,q2:e.target.value.replace(/[^\d.]/g,""),q2Touched:true}))} inputMode="decimal" placeholder={`of ${it.qty2}`} style={inp}/></label>}
+                      <label style={{gridColumn:"1 / -1"}}><span style={{fontSize:10,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>To box</span>
+                        <input value={splitDlg.box} onChange={e=>set("box",e.target.value)} onKeyDown={e=>e.key==="Enter"&&doSplit()} placeholder="e.g. 720" style={inp}/></label>
+                      <div style={{gridColumn:"1 / -1",fontSize:11.5,color:left1<-1e-9||left2<-1e-9?C.red:C.inkMid,background:C.bg,borderRadius:8,padding:"8px 10px"}}>
+                        {left1<-1e-9||left2<-1e-9?"That's more than the card holds.":<>Box {it.location||"—"} keeps <b>{[a1?`${+left1.toFixed(4)} ${it.unit||"pcs"}`:"",a2?`${+left2.toFixed(4)} ${it.unit2||"kg"}`:""].filter(Boolean).join(" · ")}</b>{splitDlg.box?<> · box <b>{splitDlg.box}</b> gets what's moving, as its own card</>:null}. Cost per unit stays the same.</>}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:8,justifyContent:"flex-end",padding:"12px 18px",borderTop:`1px solid ${C.border}`}}>
+                      <button onClick={()=>setSplitDlg(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",cursor:"pointer",fontSize:13}}>Cancel</button>
+                      <button onClick={doSplit} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13,fontWeight:700}}>✂ Split</button>
+                    </div>
+                  </div>
+                </div>);})()}
               <div className={selectMode&&!mob?"stk-float":undefined}>
               {selectMode&&(
                 <div style={mob?{display:"flex",gap:8,alignItems:"center",background:C.amberBg,border:`1px solid #F0C890`,borderRadius:7,padding:"9px 14px",marginBottom:12,flexWrap:"wrap"}:{display:"flex",flexDirection:"column",gap:6,alignItems:"stretch",background:C.surface,borderRadius:16,padding:"14px 12px",marginBottom:8,boxShadow:"0 0 0 1px rgba(26,19,8,.06), 0 12px 34px rgba(26,19,8,.16)"}}>
@@ -8976,6 +9033,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#6B48CC",borderColor:"#6B48CC",background:"#F0EBFF"}} disabled={selectedIds.size===0} onClick={()=>{setSendToShowOpen(v=>!v);setSendToShowId("");}}>✈ Send to Show</button>
                   {stockRegion!=="India"&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#1A6A1A",borderColor:"#1A6A1A",background:"#EDF7ED"}} disabled={selectedIds.size===0} onClick={()=>openReturnQtyDialog(selectedIds)}>🇮🇳 Return to India</button>}
                   {selectedIds.size===2&&<button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#0369A1",borderColor:"#0369A1",background:"#E0F2FE"}} onClick={()=>{setMergeOpen(v=>!v);const [id1]=([...selectedIds]);setMergeKeepId(id1);}}>⇌ Merge</button>}
+                  <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#7A4E12",borderColor:"#C9A05A",background:"#FBF1DA"}} disabled={selectedIds.size!==1} title={selectedIds.size===1?"Move part (or all) of this card to another box":"Tick one card to split it"} onClick={()=>{const it=stock.find(x=>selectedIds.has(x.id));if(it)setSplitDlg({item:it,q1:"",q2:"",box:""});}}>✂ Split / move to box</button>
                   {!mob&&<><button className="bs" style={{fontSize:12}} disabled={selectedIds.size===0} onClick={()=>swapQtyBulk(selectedIds)}>⇄ Swap Qty</button>
                   <button className="bs" style={{fontSize:12,color:C.green,borderColor:C.green,background:C.greenBg}} disabled={selectedIds.size===0} onClick={()=>{setBoxAssignOpen(v=>!v);setBoxAssignVal("");}}>📦 Box</button>
                   <button className="bs" style={{fontSize:12,color:C.blue,borderColor:C.blue,background:C.blueBg}} disabled={selectedIds.size===0} onClick={()=>{setBulkEditOpen(true);setBulkEditFields({material:"",vendor:"",location:"",shape:"",costPrice:"",sellPriceMode:"manual",sellPrice:"",sellMultiplier:"",market:[],photographed:null,postedEtsy:null,postedShopify:null,postedShopifyAtyahara:null,postedShopifyEarth:null,postedWix:null,postedEbay:null});}}>✏ Edit</button></>}
