@@ -8867,9 +8867,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <button className="bs" style={{fontSize:12,color:C.red,borderColor:C.red,background:C.surface}} onClick={openShowListingSweep}>Review &amp; delete listings</button>
                 </div>
               )}
+              {/* Picking several: on a wide screen the actions float at the left edge,
+                  so editing the cards ticked far down the grid needs no scroll back up. */}
+              <div className={selectMode&&!mob?"stk-float":undefined}>
               {selectMode&&(
-                <div style={{display:"flex",gap:8,alignItems:"center",background:C.amberBg,border:`1px solid #F0C890`,borderRadius:7,padding:"9px 14px",marginBottom:12,flexWrap:"wrap"}}>
-                  <span style={{fontSize:13,fontWeight:600,color:C.ink,flex:"1 1 100%"}}>{selectedIds.size} selected{mob&&selectedIds.size===0?" — tap items below to select":""}</span>
+                <div style={mob?{display:"flex",gap:8,alignItems:"center",background:C.amberBg,border:`1px solid #F0C890`,borderRadius:7,padding:"9px 14px",marginBottom:12,flexWrap:"wrap"}:{display:"flex",flexDirection:"column",gap:6,alignItems:"stretch",background:C.surface,borderRadius:16,padding:"14px 12px",marginBottom:8,boxShadow:"0 0 0 1px rgba(26,19,8,.06), 0 12px 34px rgba(26,19,8,.16)"}}>
+                  <span style={mob?{fontSize:13,fontWeight:600,color:C.ink,flex:"1 1 100%"}:{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.ink,padding:"0 4px 4px"}}>{selectedIds.size} selected{mob&&selectedIds.size===0?" — tap items below to select":""}</span>
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined}} onClick={()=>setSelectedIds(new Set(filtered.map(s=>s.id)))}>All ({filtered.length})</button>
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined}} onClick={()=>setSelectedIds(new Set())}>None</button>
                   <button className="bs" style={{fontSize:mob?13:12,minHeight:mob?40:undefined,color:"#6B48CC",borderColor:"#6B48CC",background:"#F0EBFF"}} disabled={selectedIds.size===0} onClick={()=>{setSendToShowOpen(v=>!v);setSendToShowId("");}}>✈ Send to Show</button>
@@ -8951,12 +8954,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   <button onClick={()=>setSendToShowOpen(false)} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:18,lineHeight:1,padding:0,flexShrink:0}}>×</button>
                 </div>
               )}
+              </div>
               {(()=>{const futureCount=stock.filter(s=>{if(!s.addedDate)return false;const t=new Date(s.addedDate).getTime();return!isNaN(t)&&s.addedDate>today();}).length;return futureCount>0&&(<div style={{background:C.amberBg,border:`1px solid ${C.amber}`,borderRadius:7,padding:"10px 14px",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}><span style={{fontSize:12,color:C.amber}}>⚠ {futureCount} item{futureCount>1?"s have":" has"} a future date (showing ⚠ on card)</span><button className="bs" style={{fontSize:11,color:C.amber,borderColor:C.amber,whiteSpace:"nowrap",flexShrink:0}} onClick={fixFutureDates}>Fix — move back 1 year</button></div>);})()}
               {filtered.length===0?(<div style={{background:C.surface,borderRadius:16,boxShadow:"var(--e-1)",padding:"56px 24px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}><div style={{width:72,height:72,borderRadius:"50%",background:"var(--c-fill)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>💎</div><div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.ink,marginBottom:3}}>{activeFilterCount>0?"No matching stock":"No stock yet"}</div><p style={{fontSize:13,color:C.inkFaint,maxWidth:300}}>{activeFilterCount>0?"Try clearing a filter to see more items.":"Add your first physical stock item to get started."}</p></div>{activeFilterCount>0?<button className="bs" onClick={()=>{clearAllFilters();setOpenFilter(null);}}>Clear filters</button>:<button className="bp" onClick={()=>{setFormType("physical");setForm({...blank});setTab("physical");}}>+ Add Physical Stock</button>}</div>):(
                 <div>
 
-                  <style>{`.stk-card .stk-act{opacity:0;transform:translateY(3px);transition:opacity .18s,transform .18s}.stk-card:hover .stk-act{opacity:1;transform:none}.stk-card .stk-img{transition:transform .6s cubic-bezier(.2,.7,.2,1)}.stk-card:hover .stk-img{transform:scale(1.045)}.stk-card .stk-ib:hover,.stk-card .stk-act a:hover,.stk-card .stk-act button:hover{background:rgba(26,19,8,.07)!important}@media (hover:none){.stk-card .stk-act{opacity:1;transform:none}}`}</style>
-                  <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(220px,1fr))",gap:mob?10:18}}>
+                  <style>{`.stk-float{position:fixed;left:16px;top:96px;width:216px;max-height:calc(100vh - 112px);overflow-y:auto;z-index:60;display:flex;flex-direction:column;gap:8px}.stk-float button.bs,.stk-float button.bp{width:100%;justify-content:center;text-align:center}.stk-float select{width:100%}.stk-card .stk-act{opacity:0;transform:translateY(3px);transition:opacity .18s,transform .18s}.stk-card:hover .stk-act{opacity:1;transform:none}.stk-card .stk-img{transition:transform .6s cubic-bezier(.2,.7,.2,1)}.stk-card:hover .stk-img{transform:scale(1.045)}.stk-card .stk-ib:hover,.stk-card .stk-act a:hover,.stk-card .stk-act button:hover{background:rgba(26,19,8,.07)!important}@media (hover:none){.stk-card .stk-act{opacity:1;transform:none}}`}</style>
+                  <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(220px,1fr))",gap:mob?10:18,marginLeft:selectMode&&!mob?236:0,transition:"margin-left .2s"}}>
                   {visibleStock.map((s,idx)=>{
                     const isSel=selectedIds.has(s.id);
                     const age=daysSince(s.addedDate);
@@ -9004,10 +9008,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                             {s.grade&&<div style={{fontSize:9,color:C.inkFaint,fontWeight:700,letterSpacing:.5}}>{s.grade}</div>}
                           </div>
                         }
-                        {selectMode&&<div style={{position:"absolute",top:8,left:8}}><input type="checkbox" readOnly checked={isSel} style={{accentColor:C.amber,width:16,height:16,cursor:"pointer"}}/></div>}
                         {/* Box / location pill — top left */}
                         {cover&&<div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(20,14,6,.28) 0%,rgba(20,14,6,0) 38%),linear-gradient(to bottom,rgba(20,14,6,.18) 0%,rgba(20,14,6,0) 26%)",pointerEvents:"none"}}/>}
-                        {s.location&&<div style={{position:"absolute",top:9,left:selectMode?34:9,display:"inline-flex",alignItems:"baseline",gap:4,background:"rgba(255,252,246,.9)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 10px 3px 9px",boxShadow:"0 1px 6px rgba(26,19,8,.14)",color:"#2a2218"}}>
+                        {s.location&&<div style={{position:"absolute",top:9,left:9,display:"inline-flex",alignItems:"baseline",gap:4,background:"rgba(255,252,246,.9)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 10px 3px 9px",boxShadow:"0 1px 6px rgba(26,19,8,.14)",color:"#2a2218"}}>
                           <span style={{fontSize:7.5,fontWeight:800,letterSpacing:1.1,opacity:.5}}>{/^(stk|box)?\s*\d+$/i.test(s.location)?"BOX":""}</span><span className="tnum" style={{fontSize:11,fontWeight:700,letterSpacing:.2}}>{String(s.location).replace(/^box\s*/i,"")}</span>
                         </div>}
                         {!s.location&&!selectMode&&<div style={{position:"absolute",top:9,left:9,display:"inline-flex",alignItems:"center",gap:5,background:"rgba(255,252,246,.9)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 10px 3px 8px",boxShadow:"0 1px 6px rgba(26,19,8,.14)",fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:12,fontWeight:600,color:"#9a5a12"}}><span style={{width:6,height:6,borderRadius:"50%",background:"#D9822B"}}/>no box</div>}
