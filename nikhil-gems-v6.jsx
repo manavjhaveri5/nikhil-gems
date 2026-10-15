@@ -19069,6 +19069,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [flatMode,setFlatMode]=useState({});              // per card, while typing: true = flat price
   const [labelIds,setLabelIds]=useState(null);            // cards being made into labels, in place
   const [labelFilter,setLabelFilter]=useState("all");     // planned cards: all | made | todo
+  const [readySel,setReadySel]=useState(()=>new Set());   // step 2: labelled cards ticked to send
   const [editCard,setEditCard]=useState(null);            // stock card open in the pop-up editor: a draft copy
   // Prices typed in $ or ₹ (stored in $ either way; ₹ at the show's rate).
   const [priceCur,setPriceCur]=useState(()=>{try{return localStorage.getItem("ng-ship-price-cur")||"usd";}catch{return "usd";}});
@@ -19747,7 +19748,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     if(!confirm(`Send ${pick.length} card${pick.length===1?"":"s"} to ${show.name} as packed?`))return;
     const ts=new Date().toISOString();
     await onPatchStockItems?.(Object.fromEntries(pick.map(s=>[s.id,{region:shipRegion,showTag:show.name,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",sentAt:today(),packedAt:ts}])));
-    setTagSel(new Set());onToast?.(`📦 ${pick.length} packed for ${show.name}`);
+    setTagSel(new Set());setReadySel(new Set());onToast?.(`📦 ${pick.length} sent to ${show.name}`);
   };
   // Prices for the ticked cards: an SP per unit, or one flat price for each card
   // (kept as the per-unit rate it works out to, so every total stays rate × qty).
@@ -21089,7 +21090,7 @@ thead{display:table-header-group;}
                 <>
                   {(()=>{const step=shipStep||(shipTagged.length?"planned":"sent");return(
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
-                      {[["planned","1 · Planned",shipTagged.length,"Price, label, pack"],["sent","2 · Packed & at the show",shipItems.length,"What went"]].map(([k,label,n,sub])=>(
+                      {[["planned","1 · Planned",shipTagged.length,"Price and label"],["ready","2 · Labelled, ready to send",shipTagged.filter(s=>s.labelMadeAt).length,"Pack and send to the show"],["sent","3 · At the show",shipItems.length,"What went"]].map(([k,label,n,sub])=>(
                         <button key={k} onClick={()=>setShipStep(k)} style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1,background:step===k?C.ink:C.surface,color:step===k?"#FAF0DC":C.ink,border:`1px solid ${step===k?C.ink:C.border}`,borderRadius:10,padding:"8px 14px",cursor:"pointer",minWidth:150}}>
                           <span style={{fontSize:12.5,fontWeight:750}}>{label} <span style={{opacity:.7,fontWeight:600}}>· {n}</span></span>
                           <span style={{fontSize:10,opacity:.7}}>{sub}</span>
@@ -21240,6 +21241,41 @@ thead{display:table-header-group;}
                                   <button onClick={()=>setLabelIds([s.id])} style={{marginLeft:"auto",background:"none",border:`1px solid #8B6F47`,color:"#8B6F47",borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>{s.labelMadeAt?"✎ Edit label":"🏷 Make label"}</button>
                                 </div>
                                 {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.4}}>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
+                              </div>
+                            </div>
+                          </div>);})}
+                      </div>}
+                    </>);
+                  })()}
+                  {/* READY — labelled (the green ones), still here: tick and send to the show. */}
+                  {(shipStep||(shipTagged.length?"planned":"sent"))==="ready"&&(()=>{
+                    const ready=shipTagged.filter(s=>s.labelMadeAt).filter(matchQ);
+                    const notYet=shipTagged.filter(s=>!s.labelMadeAt).length;
+                    const all=readySel.size===ready.length&&ready.length>0;
+                    return(<>
+                      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#EAF6EF",border:"1px solid #3FA36B55",borderRadius:12,padding:"12px 14px"}}>
+                        <div style={{flex:1,minWidth:200}}>
+                          <div style={{fontSize:14,fontWeight:750,color:C.ink}}>{ready.length} labelled card{ready.length===1?"":"s"} ready to go</div>
+                          <div style={{fontSize:11.5,color:C.inkMid}}>{notYet?`${notYet} still need a label in step 1 · `:""}Sending moves them to {show.name} as packed.</div>
+                        </div>
+                        <button onClick={()=>setReadySel(all?new Set():new Set(ready.map(s=>s.id)))} disabled={!ready.length} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:C.ink}}>{all?"Untick all":`Tick all ${ready.length}`}</button>
+                        {isAdmin&&<button disabled={!readySel.size} onClick={()=>sendTaggedPacked(readySel)} style={{background:readySel.size?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:readySel.size?"pointer":"default"}}>📦 Send {readySel.size||""} to the show</button>}
+                      </div>
+                      {!ready.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>{shipTagged.length?"No labelled cards yet — make labels in step 1 and they'll be here, green.":"Nothing planned for this show."}</div>:
+                      <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(210px,1fr))",gap:12}}>
+                        {ready.map(s=>{const on=readySel.has(s.id);const cov=stockCover(s);return(
+                          <div key={s.id} onClick={()=>setReadySel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?"#D3EEDD":"#EAF6EF",borderRadius:12,overflow:"hidden",cursor:"pointer",boxShadow:on?"0 0 0 2.5px #0f7a55":"0 0 0 1.5px #3FA36B66"}}>
+                            <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
+                              {cov&&<img src={thumbUrl(cov,400)} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+                              <div style={{position:"absolute",top:8,left:8,width:22,height:22,borderRadius:6,background:on?"#0f7a55":"rgba(255,255,255,.92)",display:"grid",placeItems:"center",color:"#fff",fontSize:13,fontWeight:800,boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}>{on?"✓":""}</div>
+                              {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.92)",borderRadius:12,padding:"2px 9px",fontSize:11.5,fontWeight:800}}>Box {s.location}</div>}
+                            </div>
+                            <div style={{padding:"8px 11px 10px"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
+                              <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,...flowQtyLines(s)].filter(Boolean).join(" · ")}</div>
+                              <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
+                                <span style={{color:"#0f7a55",fontWeight:700}}>🏷 {s.labelSet||"Label made"}</span>
+                                <span style={{fontWeight:700,color:C.ink}}>{cardValUsd(s)>0?fmtCur(cardValUsd(s)):""}</span>
                               </div>
                             </div>
                           </div>);})}
