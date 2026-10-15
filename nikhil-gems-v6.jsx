@@ -45,6 +45,16 @@ const stockPhotos=item=>{
   return [...aliases,...photos].filter((url,i,arr)=>arr.indexOf(url)===i);
 };
 const stockCover=item=>stockPhotos(item)[0]||"";
+/* The module a tab is on: written to the address and this tab's session (and,
+   for a new tab, the last one opened anywhere). */
+function rememberMod(id){
+  try{sessionStorage.setItem("ng-last-mod",id);localStorage.setItem("ng-last-mod",id);}catch{}
+  try{const u=new URL(window.location.href);u.searchParams.set("m",id);window.history.replaceState(window.history.state,"",u);}catch{}
+}
+function forgetMod(){
+  try{sessionStorage.removeItem("ng-last-mod");localStorage.removeItem("ng-last-mod");}catch{}
+  try{const u=new URL(window.location.href);if(u.searchParams.has("m")){u.searchParams.delete("m");window.history.replaceState(window.history.state,"",u);}}catch{}
+}
 /* One stone, however it was typed: "Sonora sunrise", "Sonora Sunrise " and
    "sonora sunrise" are the same. The key compares them; the name shown is the
    best-capitalised spelling on file. */
@@ -18526,8 +18536,8 @@ function ShowsApp({onHome,isAdmin=true}){
   const [ngBuyers,setNgBuyers]=useState([]);
   const [loaded,setLoaded]=useState(false);
   // The open show survives a refresh.
-  const [detailId,setDetailIdRaw]=useState(()=>{try{return localStorage.getItem("ng-shows-open")||null;}catch{return null;}});
-  const setDetailId=id=>{setDetailIdRaw(id);try{id?localStorage.setItem("ng-shows-open",id):localStorage.removeItem("ng-shows-open");}catch{}};
+  const [detailId,setDetailIdRaw]=useState(()=>{try{const t=sessionStorage.getItem("ng-shows-open");return t!==null?(t||null):(localStorage.getItem("ng-shows-open")||null);}catch{return null;}});
+  const setDetailId=id=>{setDetailIdRaw(id);try{sessionStorage.setItem("ng-shows-open",id||"");id?localStorage.setItem("ng-shows-open",id):localStorage.removeItem("ng-shows-open");}catch{}};
   const [toast,setToast]=useState("");
   const showToast=(m,ms=3000)=>{setToast(m);setTimeout(()=>setToast(""),ms);};
   const todayStr=today();
@@ -24580,7 +24590,7 @@ export default function Root({onSignOut}){
         saveK(`ng-shopify-creds-${storeKey}`,{store:shop,token,scopes}).then(()=>{
           window.history.replaceState(null,"",window.location.pathname);
           // Navigate to stock so user can push
-          setMod("stock");setScreen("app");localStorage.setItem("ng-last-mod","stock");
+          setMod("stock");setScreen("app");rememberMod("stock");
         });
       }
     } else if(hash.includes("shopify-error=")){
@@ -24589,12 +24599,16 @@ export default function Root({onSignOut}){
       window.history.replaceState(null,"",window.location.pathname);
     }
   },[]);
-  const _savedMod=localStorage.getItem("ng-last-mod");
+  // Each tab keeps its own module: in the address (?m=shows) and this tab's session,
+  // so two tabs on two modules each refresh back to their own.
+  const _savedMod=new URLSearchParams(window.location.search).get("m")||(()=>{try{return sessionStorage.getItem("ng-last-mod");}catch{return null;}})()||localStorage.getItem("ng-last-mod");
   const _stockParam=new URLSearchParams(window.location.search).get("stock");
   const _locationParam=new URLSearchParams(window.location.search).get("location");
   const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startInvoiceId,setStartInvoiceId]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);
+  // Whatever opens a module (a button, a link from another module), this tab remembers it.
+  useEffect(()=>{if(screen==="app"&&mod)rememberMod(mod);},[mod,screen]);
   // Another module can hand over to one by name (a show's cards → Make Labels).
-  useEffect(()=>{const h=e=>{if(!e.detail)return;setMod(e.detail);setScreen("app");try{localStorage.setItem("ng-last-mod",e.detail);}catch{}};window.addEventListener("ng-open-module",h);return()=>window.removeEventListener("ng-open-module",h);},[]);
+  useEffect(()=>{const h=e=>{if(!e.detail)return;setMod(e.detail);setScreen("app");rememberMod(e.detail);};window.addEventListener("ng-open-module",h);return()=>window.removeEventListener("ng-open-module",h);},[]);
   const go=(id,sv=null)=>{
     /* A group's landing page is not a module and is not in allowedMods, so it
        is let through here and gated where it is rendered — on the modules the
@@ -24605,7 +24619,7 @@ export default function Root({onSignOut}){
     }
     // Block access to modules not in allowedMods
     if(userProfile&&userProfile!==false&&!allowedMods.find(m=>m.id===id))return;
-    setMod(id);setStartView(sv);setScreen("app");localStorage.setItem("ng-last-mod",id);
+    setMod(id);setStartView(sv);setScreen("app");rememberMod(id);
     logModuleOpen(id);
   };
   // Usage counters (ng-usage-v1): one row per day+user+module, incremented at
@@ -24640,7 +24654,7 @@ export default function Root({onSignOut}){
     </div>
   );
   let content;
-  const goHome=()=>{setScreen("welcome");localStorage.removeItem("ng-last-mod");};
+  const goHome=()=>{setScreen("welcome");forgetMod();};
   const openInvoiceModuleTarget=target=>{
     const company=target?.company==="at"?"at":"ng";
     localStorage.setItem("ng-vendors-company",company);
