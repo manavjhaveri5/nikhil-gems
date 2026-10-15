@@ -44,6 +44,17 @@ const stockPhotos=item=>{
   return [...aliases,...photos].filter((url,i,arr)=>arr.indexOf(url)===i);
 };
 const stockCover=item=>stockPhotos(item)[0]||"";
+/* One stone, however it was typed: "Sonora sunrise", "Sonora Sunrise " and
+   "sonora sunrise" are the same. The key compares them; the name shown is the
+   best-capitalised spelling on file. */
+const stoneKey=m=>String(m||"").trim().toLowerCase().replace(/\s+/g," ");
+const stoneNames=list=>{const best=new Map();const caps=x=>(x.match(/\b[A-Z]/g)||[]).length;
+  for(const it of list||[]){const raw=String(it?.material||"").trim().replace(/\s+/g," ");if(!raw)continue;const k=stoneKey(raw);const cur=best.get(k);if(!cur||caps(raw)>caps(cur))best.set(k,raw);}
+  return best;};
+// A quantity in grams, kilos or pieces, for telling whether two say the same thing.
+const qtyBase=(q,u)=>{const n=parseFloat(q);if(!(n>0))return null;const x=String(u||"").trim().toLowerCase();
+  if(/^kgs?$/.test(x))return ["w",n*1000];if(/^(g|gm|gms|grams?)$/.test(x))return ["w",n];if(/^(ct|cts|carats?)$/.test(x))return ["w",n*0.2];if(/^(pcs?|pieces?|nos?)$/.test(x))return ["p",n];return [x,n];};
+const sameQty=(q1,u1,q2,u2)=>{const a=qtyBase(q1,u1),b=qtyBase(q2,u2);return !!(a&&b&&a[0]===b[0]&&Math.abs(a[1]-b[1])<1e-6);};
 const thumbUrl=(url)=>url||"";
 /* ── Stock card colours ───────────────────────────────────────────────────────
    Where a piece has gone, read off the grid without opening anything: each card
@@ -7330,7 +7341,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     if(!regionOk)return false;
     const q=!search||[s.material||s.name,s.shape,s.productType,s.location,s.origin,s.notes].join(" ").toLowerCase().includes(search.toLowerCase());
     const sMarkets=Array.isArray(s.market)?s.market:[s.market||""];
-    const stone=fsStones.size===0||fsStones.has(s.material);
+    const stone=fsStones.size===0||[...fsStones].some(v=>stoneKey(v)===stoneKey(s.material));
     const shape=fsShapes.size===0||fsShapes.has(s.shape);
     const mkt=fsMarkets.size===0||sMarkets.some(m=>fsMarkets.has(m));
     const typ=fsTypes.size===0||fsTypes.has(s.productType);
@@ -7404,7 +7415,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
   const visibleStock=filtered.slice(pageStart,pageStart+pageSize);
   // Jumping pages should put you at the top of the new page, not mid-grid.
   const goPage=n=>{const t=Math.min(Math.max(1,n),pageCount);setPage(t);window.scrollTo({top:0,behavior:"smooth"});};
-  const stones=useMemo(()=>[...new Set(stock.map(s=>s.material).filter(Boolean))].sort(),[stock]);
+  const stoneCanon=useMemo(()=>stoneNames(stock),[stock]);
+  const stones=useMemo(()=>[...stoneCanon.values()].sort((a,b)=>a.localeCompare(b)),[stoneCanon]);
   const shapes=useMemo(()=>[...new Set(stock.map(s=>s.shape).filter(Boolean))].sort(),[stock]);
   const markets=useMemo(()=>[...new Set(stock.flatMap(s=>Array.isArray(s.market)?s.market:[s.market||""]).filter(m=>m&&m!=="Unassigned"))].sort(),[stock]);
   const types=useMemo(()=>[...new Set(stock.map(s=>s.productType).filter(Boolean))].sort(),[stock]);
@@ -9120,7 +9132,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       <div style={{padding:mob?"10px 11px 11px":"13px 15px 14px",display:"flex",flexDirection:"column",flex:1}}>
                         {/* Material · Shape */}
                         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:mob?15:18,color:C.ink,lineHeight:1.15,letterSpacing:.1,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                          {s.material||s.name||"—"}
+                          {(s.material&&stoneCanon.get(stoneKey(s.material)))||s.material||s.name||"—"}
                         </div>
                         {(s.shape||s.grade)&&<div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8,minWidth:0}}>
                           {s.shape&&<span style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{s.shape}{s.size?` · ${s.size}`:""}</span>}
@@ -9129,7 +9141,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         {/* Primary stat row: qty + weight */}
                         <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:4}}>
                           {qty>0&&<span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?17:20,fontWeight:600,lineHeight:1,color:qty<5&&s.unit==="pcs"?C.red:C.ink}}>{+parseFloat(qty.toFixed(3))}<span style={{fontFamily:"inherit",fontWeight:500,fontSize:mob?11:12,fontStyle:"italic",color:C.inkFaint,marginLeft:3}}>{s.unit}</span></span>}
-                          {s.qty2&&+s.qty2>0&&!(String(s.unit2||"kg").toLowerCase()===String(s.unit||"").toLowerCase()&&Math.abs(+s.qty2-qty)<1e-9)&&<span style={{display:"inline-flex",alignItems:"center",gap:3}}>
+                          {s.qty2&&+s.qty2>0&&!sameQty(s.qty,s.unit,s.qty2,s.unit2||"kg")&&<span style={{display:"inline-flex",alignItems:"center",gap:3}}>
                             <span style={{color:C.border,fontSize:12}}>·</span>
                             <span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?15:17,fontWeight:600,lineHeight:1,color:"#8B6F47"}}>{(()=>{const v=+parseFloat((+s.qty2).toFixed(4));return v<1&&/^kg/i.test(s.unit2||"kg")?<>{(v*1000).toFixed(0)}<span style={{fontStyle:"italic",fontWeight:500,fontSize:mob?11:12,color:C.inkFaint,marginLeft:3}}>g</span></>:<>{v}<span style={{fontStyle:"italic",fontWeight:500,fontSize:mob?11:12,color:C.inkFaint,marginLeft:3}}>{s.unit2||"kg"}</span></>;})()}</span>
                             <button className="stk-act" onClick={e=>{e.stopPropagation();quickUpdateItem(s.id,{qty2:"",unit2:""});}} title="Clear secondary quantity"
