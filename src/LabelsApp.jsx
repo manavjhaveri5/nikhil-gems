@@ -326,6 +326,18 @@ function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){ret
 /* Stock → cards. What the shipment labels already know about a stone comes
    with it: its English and local names, origin and form. */
 const stockName = s => String(s.labelEn || [s.material, s.shape].filter(Boolean).join(" ") || s.name || "").trim();
+/* The price line, as a show's Shipment tab sets it: the select price (per kg,
+   or each) and, when there is one, the cheaper whole-flat deal. */
+function labelPrice(s, cur) {
+  const m = v => `${cur}${(+v).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  const per = parseFloat(s.qty) > 0 ? s.unit : s.unit2;
+  const each = /^(pcs?|pieces?)$/i.test(String(per || "pcs"));
+  const sel = +s.listPrice > 0 ? `${m(s.listPrice)}${each ? "" : `/${per || "kg"}`}` : "";
+  const flat = +s.showFlatRate > 0 ? `${m(s.showFlatRate)}/kg` : +s.showFlatPrice > 0 ? m(s.showFlatPrice) : "";
+  if (sel && flat) return `${sel} · whole ${flat}`;
+  if (flat) return +s.showFlatRate > 0 ? `${flat} whole flat` : `Flat ${flat}`;
+  return sel;
+}
 function cardFromStock(s, lang, cur) {
   const qty = parseFloat(s.qty) > 0 ? `${s.qty}${s.unit === "pcs" ? "pcs" : ` ${s.unit || ""}`.trimEnd()}` : "";
   return {
@@ -336,9 +348,7 @@ function cardFromStock(s, lang, cur) {
     type: String(s.labelShape || s.shape || "").trim(),
     origin: String(s.labelOrigin || s.origin || "").trim(),
     qty,
-    // A lot priced flat shows its one price; a weighed card shows its rate per kg; pieces show each.
-    price: +s.showFlatPrice > 0 ? `${cur}${(+s.showFlatPrice).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
-      : +s.listPrice > 0 ? `${cur}${(+s.listPrice).toLocaleString("en-US", { maximumFractionDigits: 2 })}${/^(pcs?|pieces?)$/i.test(String((parseFloat(s.qty) > 0 ? s.unit : s.unit2) || "pcs")) ? "" : `/${(parseFloat(s.qty) > 0 ? s.unit : s.unit2) || "kg"}`}` : "",
+    price: labelPrice(s, cur),
     stockId: s.id,
   };
 }

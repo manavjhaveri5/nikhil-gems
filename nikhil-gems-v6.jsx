@@ -19734,19 +19734,32 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   // How many pieces a card holds, whichever quantity counts them.
   const pcsOf=s=>{const isPc=u=>/^(pcs?|pieces?|nos?)$/i.test(String(u||"").trim());return isPc(s.unit)&&+s.qty>0?+s.qty:isPc(s.unit2)&&+s.qty2>0?+s.qty2:0;};
   const cardCostInr=s=>(parseFloat(s.costPrice)||0)*basisOf(s);
-  const cardValUsd=s=>+s.showFlatPrice>0?+s.showFlatPrice:(+s.listPrice||0)*basisOf(s);
-  // What a label prints as the price: the lot's flat price, per kg for weighed cards, each otherwise.
-  const labelPriceOf=s=>{const per=(parseFloat(s.qty)||0)>0?s.unit:s.unit2;if(+s.showFlatPrice>0)return `$${(+s.showFlatPrice).toLocaleString("en-US",{maximumFractionDigits:0})}`;if(!(+s.listPrice>0))return "";const p=`$${(+s.listPrice).toLocaleString("en-US",{maximumFractionDigits:2})}`;return /^(pcs?|pieces?)$/i.test(String(per||""))?`${p} each`:`${p}/${per||"unit"}`;};
+  /* Two prices a card can carry at a show:
+       select     — listPrice, per unit (per kg, or each): the buyer picks pieces
+       whole flat — cheaper, for taking the lot: a rate per kg (showFlatRate) or
+                    one total (showFlatPrice). Minerals often have only this one. */
+  const kgOf=s=>{const k=(q,u)=>/^kgs?$/i.test(String(u||""))?+q||0:/^(g|gm|gms|grams?)$/i.test(String(u||""))?(+q||0)/1000:0;return k(s.qty,s.unit)||k(s.qty2,s.unit2)||(+s.weightGm>0?+s.weightGm/1000:0);};
+  const flatTotalOf=s=>+s.showFlatRate>0&&kgOf(s)>0?Math.round(+s.showFlatRate*kgOf(s)*100)/100:+s.showFlatPrice>0?+s.showFlatPrice:0;
+  const selectTotalOf=s=>(+s.listPrice||0)*basisOf(s);
+  const cardValUsd=s=>selectTotalOf(s)||flatTotalOf(s);
+  const money=v=>`$${(+v).toLocaleString("en-US",{maximumFractionDigits:2})}`;
+  // What a label prints: the select price (per kg, or each), then the whole-flat deal.
+  const labelPriceOf=s=>{const per=(parseFloat(s.qty)||0)>0?s.unit:s.unit2;const each=/^(pcs?|pieces?)$/i.test(String(per||""));
+    const sel=+s.listPrice>0?`${money(s.listPrice)}${each?" each":`/${per||"unit"}`}`:"";
+    const fl=+s.showFlatRate>0?`${money(s.showFlatRate)}/kg whole flat`:flatTotalOf(s)>0?`Flat ${money(flatTotalOf(s))}`:"";
+    return [sel,sel&&fl?fl.replace(" whole flat"," whole").replace("Flat ","whole "):fl].filter(Boolean).join(" · ");};
+  // mode: "sp" select price per unit · "flatkg" whole flat per kg · "flat" whole flat total
   const priceTicked=async(mode,planned=false)=>{
-    const v=parseFloat(mode==="flat"?shipFlat:shipSp);if(!(v>0))return;
+    const v=parseFloat(mode==="sp"?shipSp:shipFlat);if(!(v>0))return;
     const pick=planned?shipTagged.filter(s=>tagSel.has(s.id)):shipItems.filter(s=>shipSel.has(s.id));if(!pick.length)return;
     const patches={};let skipped=0;
     for(const s of pick){
-      if(mode==="flat"){const b=basisOf(s);if(!(b>0)){skipped++;continue;}patches[s.id]={listPrice:String(+(v/b).toFixed(4)),showFlatPrice:String(v)};}
-      else patches[s.id]={listPrice:String(v),showFlatPrice:""};
+      if(mode==="flatkg"){const kg=kgOf(s);if(!(kg>0)){skipped++;continue;}patches[s.id]={showFlatRate:String(v),showFlatPrice:String(Math.round(v*kg*100)/100)};}
+      else if(mode==="flat")patches[s.id]={showFlatPrice:String(v),showFlatRate:""};
+      else patches[s.id]={listPrice:String(v)};
     }
     await onPatchStockItems?.(patches);
-    onToast?.(`✓ ${Object.keys(patches).length} priced${mode==="flat"?` at $${v} each`:` at $${v}/unit`}${skipped?` · ${skipped} without a quantity skipped`:""}`);
+    onToast?.(`✓ ${Object.keys(patches).length} priced — ${mode==="sp"?`select $${v}/unit`:mode==="flatkg"?`whole flat $${v}/kg`:`whole flat $${v} a card`}${skipped?` · ${skipped} without a kg weight skipped`:""}`);
     if(planned)setTagSel(new Set());else setShipSel(new Set());setShipSp("");setShipFlat("");
   };
   // Make Labels takes these cards (or the ticked ones) as a new set.
@@ -21057,8 +21070,8 @@ thead{display:table-header-group;}
                       work: price them, make their labels (with the prices on), then pack. */}
                   {(shipStep||(shipTagged.length?"planned":"sent"))==="planned"&&(()=>{
                     const list=shipTagged.filter(matchQ);
-                    const priced=shipTagged.filter(s=>+s.listPrice>0).length;
-                    const valueUsd=shipTagged.reduce((a,s)=>a+(+s.listPrice||0)*basisOf(s),0);
+                    const priced=shipTagged.filter(s=>cardValUsd(s)>0).length;
+                    const valueUsd=shipTagged.reduce((a,s)=>a+cardValUsd(s),0);
                     const ticked=shipTagged.filter(s=>tagSel.has(s.id));
                     const stepBox={flex:"1 1 150px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px"};
                     return(<>
@@ -21071,15 +21084,18 @@ thead{display:table-header-group;}
                       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10,background:tagSel.size?"#1e293b":"transparent",color:tagSel.size?"#fff":C.inkMid,borderRadius:9,padding:tagSel.size?"8px 12px":"0 2px",fontSize:11.5}}>
                         <button onClick={()=>setTagSel(prev=>prev.size===list.length&&list.length?new Set():new Set(list.map(s=>s.id)))} style={{background:"none",border:"none",fontSize:11.5,fontWeight:700,color:tagSel.size?"#93c5fd":C.blue,cursor:"pointer",padding:0}}>{tagSel.size&&tagSel.size===list.length?"Untick all":`Tick all ${list.length}`}</button>
                         {tagSel.size>0&&<><b>{tagSel.size} ticked</b><span style={{flex:1}}/>
-                          <span>{bulkFlat?"Flat $ per card":"SP $ per unit"}</span>
-                          <input value={bulkFlat?shipFlat:shipSp} onChange={e=>{const v=e.target.value.replace(/[^\d.]/g,"");bulkFlat?setShipFlat(v):setShipSp(v);}} onKeyDown={e=>e.key==="Enter"&&priceTicked(bulkFlat?"flat":"sp",true)} inputMode="decimal" style={{width:80,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
-                          <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}><input type="checkbox" checked={bulkFlat} onChange={e=>setBulkFlat(e.target.checked)}/>Flat price</label>
-                          <button onClick={()=>priceTicked(bulkFlat?"flat":"sp",true)} disabled={!(+(bulkFlat?shipFlat:shipSp)>0)} style={{background:bulkFlat?"#10b981":"#3b82f6",color:"#fff",border:"none",borderRadius:5,padding:"4px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set for {tagSel.size}</button>
+                          <span>Select $/unit</span>
+                          <input value={shipSp} onChange={e=>setShipSp(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked("sp",true)} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
+                          <button onClick={()=>priceTicked("sp",true)} disabled={!(+shipSp>0)} style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
+                          <span style={{marginLeft:8}}>Whole flat $</span>
+                          <input value={shipFlat} onChange={e=>setShipFlat(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked(bulkFlat?"flat":"flatkg",true)} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
+                          <span style={{display:"inline-flex",border:"1px solid #475569",borderRadius:5,overflow:"hidden"}}>{[[false,"/kg"],[true,"total"]].map(([v,l])=><button key={l} onClick={()=>setBulkFlat(v)} style={{background:bulkFlat===v?"#10b981":"transparent",color:"#fff",border:"none",padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
+                          <button onClick={()=>priceTicked(bulkFlat?"flat":"flatkg",true)} disabled={!(+shipFlat>0)} style={{background:"#10b981",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
                           <button onClick={()=>setTagSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button></>}
                       </div>
                       {!shipTagged.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing planned for {show.name}. In Stock, tag cards with this show under Market and they'll appear here.</div>:
                       <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
-                        {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);const b=basisOf(s);const val=cardValUsd(s);const pcs=pcsOf(s);const cost=cardCostInr(s);const flat=flatMode[s.id]??(+s.showFlatPrice>0);const per=(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg");return(
+                        {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);const b=basisOf(s);const val=cardValUsd(s);const pcs=pcsOf(s);const cost=cardCostInr(s);const flat=flatMode[s.id]||(+s.showFlatRate>0||(!(+s.showFlatPrice>0)&&kgOf(s)>0)?"kg":"total");const per=(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg");return(
                           <div key={s.id} onClick={()=>setTagSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?C.amberBg:C.surface,borderRadius:14,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:"var(--e-1)"}}>
                             <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
                               {cov&&<img src={thumbUrl(cov,400)} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
@@ -21093,15 +21109,26 @@ thead{display:table-header-group;}
                               {cost>0&&<div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,background:C.bg,borderRadius:6,padding:"3px 7px"}}>
                                 Cost {pcs>0?<><b>₹{Math.round(cost/pcs).toLocaleString("en-IN")}/pc</b> <span style={{color:C.inkFaint}}>(${(cost/pcs/usdInr).toFixed(2)})</span> · </>:null}₹{Math.round(cost).toLocaleString("en-IN")} card
                               </div>}
-                              <div onClick={e=>e.stopPropagation()} style={{display:"flex",alignItems:"center",gap:6}}>
-                                <span style={{fontSize:10,color:C.inkFaint,whiteSpace:"nowrap"}}>{flat?"Flat $":`SP $/${per}`}</span>
-                                {flat
-                                  ?<input key={`pf-${s.id}-${s.showFlatPrice||""}`} defaultValue={s.showFlatPrice||""} inputMode="decimal" placeholder="card total" onBlur={e=>{const v=parseFloat(e.target.value);if(v>0&&String(v)!==String(s.showFlatPrice||"")){onPatchStockItem?.(s.id,b>0?{showFlatPrice:String(v),listPrice:String(+(v/b).toFixed(4))}:{showFlatPrice:String(v)});}}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:72,padding:"4px 7px",fontSize:mob?16:12,borderColor:+s.showFlatPrice>0?C.border:C.amber}}/>
-                                  :<input key={`pp-${s.id}-${s.listPrice||""}`} defaultValue={s.listPrice||""} inputMode="decimal" placeholder="—" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.listPrice||"")||+s.showFlatPrice>0)onPatchStockItem?.(s.id,{listPrice:v,showFlatPrice:""});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:72,padding:"4px 7px",fontSize:mob?16:12,borderColor:+s.listPrice>0?C.border:C.amber}}/>}
-                                <label title="Price the whole card at one flat price" style={{display:"flex",alignItems:"center",gap:3,fontSize:10,color:C.inkMid,cursor:"pointer"}}><input type="checkbox" checked={flat} onChange={e=>setFlatMode(m=>({...m,[s.id]:e.target.checked}))}/>Flat</label>
-                                <span style={{marginLeft:"auto",fontSize:12,fontWeight:750,color:val>0?C.ink:C.inkFaint,whiteSpace:"nowrap"}}>{val>0?fmtUsd(val):"unpriced"}</span>
+                              <div onClick={e=>e.stopPropagation()} style={{display:"grid",gap:5}}>
+                                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                  <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Select $/{per==="pcs"?"pc":per}</span>
+                                  <input key={`pp-${s.id}-${s.listPrice||""}`} defaultValue={s.listPrice||""} inputMode="decimal" placeholder="—" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.listPrice||""))onPatchStockItem?.(s.id,{listPrice:v});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:70,padding:"4px 7px",fontSize:mob?16:12}}/>
+                                  <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:selectTotalOf(s)>0?C.ink:C.inkFaint,whiteSpace:"nowrap"}}>{selectTotalOf(s)>0?fmtUsd(selectTotalOf(s)):"—"}</span>
+                                </div>
+                                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                  <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Whole flat</span>
+                                  <input key={`pf-${s.id}-${flat}-${s.showFlatRate||""}-${s.showFlatPrice||""}`} defaultValue={flat==="kg"?(s.showFlatRate||""):(+s.showFlatRate>0?"":(s.showFlatPrice||""))} inputMode="decimal" placeholder={flat==="kg"?"$/kg":"$ total"}
+                                    onBlur={e=>{const v=parseFloat(e.target.value);const cur=flat==="kg"?+s.showFlatRate||0:(+s.showFlatRate>0?0:+s.showFlatPrice||0);if((v||0)===cur)return;
+                                      if(!(v>0))onPatchStockItem?.(s.id,{showFlatRate:"",showFlatPrice:""});
+                                      else if(flat==="kg")onPatchStockItem?.(s.id,{showFlatRate:String(v),showFlatPrice:String(Math.round(v*kgOf(s)*100)/100)});
+                                      else onPatchStockItem?.(s.id,{showFlatPrice:String(v),showFlatRate:""});}}
+                                    onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:70,padding:"4px 7px",fontSize:mob?16:12,borderColor:flatTotalOf(s)>0?"#10b981":C.border}}/>
+                                  <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>{(kgOf(s)>0?[["kg","/kg"],["total","total"]]:[["total","total"]]).map(([v,l])=><button key={v} onClick={()=>setFlatMode(m=>({...m,[s.id]:v}))} style={{background:flat===v?"#10b981":"transparent",color:flat===v?"#fff":C.inkMid,border:"none",padding:"3px 6px",fontSize:10,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
+                                  <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:flatTotalOf(s)>0?"#0f7a55":C.inkFaint,whiteSpace:"nowrap"}}>{flatTotalOf(s)>0?fmtUsd(flatTotalOf(s)):"—"}</span>
+                                </div>
+                                {selectTotalOf(s)>0&&flatTotalOf(s)>0&&<div style={{fontSize:10,color:flatTotalOf(s)<selectTotalOf(s)?"#0f7a55":C.red,textAlign:"right"}}>{flatTotalOf(s)<selectTotalOf(s)?`Whole flat saves ${Math.round((1-flatTotalOf(s)/selectTotalOf(s))*100)}%`:"Whole flat isn't cheaper than selecting"}</div>}
+                                {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right"}}>{selectTotalOf(s)>0?`${money(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${money(flatTotalOf(s)/pcs)}/pc whole`:""}{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
                               </div>
-                              {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:4,textAlign:"right"}}>${(val/pcs).toFixed(2)}/pc{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
                             </div>
                           </div>);})}
                       </div>}
