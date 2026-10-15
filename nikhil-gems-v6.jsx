@@ -86,7 +86,10 @@ const hexA=(hex,a)=>{
 const STOCK_FLAGS=[
   {key:"etsy", label:"Etsy",           lead:"#F56400", bg:"#F56400"},
   {key:"ebay", label:"eBay",           lead:"#8A8F98", bg:"#8A8F98"},
-  {key:"usa",  label:"Denver / Tucson",lead:"#B22234", bg:"linear-gradient(90deg,#B22234 0 33.33%,#FFFFFF 33.33% 66.66%,#3C3B6E 66.66% 100%)"},
+  // Stars and stripes, at ribbon size: the blue canton, then red and white bands
+  // running across (side-by-side red-white-blue read as France).
+  {key:"usa",  label:"US show (Denver / Tucson)",lead:"#B22234", bg:"linear-gradient(90deg,#3C3B6E 0 26%,transparent 26%),repeating-linear-gradient(180deg,#B22234 0 1px,#FFFFFF 1px 2px)"},
+  {key:"eu",   label:"Europe show (Munich)",lead:"#DD0000", bg:"linear-gradient(180deg,#000000 0 33.33%,#DD0000 33.33% 66.66%,#FFCE00 66.66% 100%)"},
   {key:"japan",label:"Japan show",     lead:"#BC002D", bg:"radial-gradient(circle at 50% 50%,#BC002D 0 42%,#FFFFFF 43% 100%)"},
 ];
 /* Planned, not done: the same hue laid down as a soft diagonal candy stripe. */
@@ -103,7 +106,8 @@ const stockFlags=s=>{
   if(s?.postedEtsy) st.etsy="live"; else if(at(/etsy|online/)) st.etsy="planned";
   if(s?.postedEbay) st.ebay="live";
   if(at(/tucson|denver/)) st.usa="live";
-  if(at(/japan|tokyo|osaka/)) st.japan="live";
+  if(at(/japan|tokyo|osaka|kyoto|ikebukuro/)) st.japan="live";
+  if(at(/munich|europe|germany/)) st.eu="live";
   return STOCK_FLAGS.filter(f=>st[f.key]).map(f=>({...f,live:st[f.key]==="live"}));
 };
 const fmtStockQtyValue=v=>{
@@ -8964,7 +8968,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       onMouseLeave={e=>{e.currentTarget.style.boxShadow=restShadow;e.currentTarget.style.transform="none";}}>
                       {/* Destination ribbon — one segment per place this piece is going. */}
                       {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
-                        style={{display:"flex",height:6,flexShrink:0,boxShadow:"inset 0 -1px 0 rgba(0,0,0,.07)"}}>
+                        style={{display:"flex",height:7,flexShrink:0,boxShadow:"inset 0 -1px 0 rgba(0,0,0,.07)"}}>
                         {flags.map(f=><div key={f.key} style={{flex:1,background:f.live?f.bg:stockStripe(f.lead)}}/>)}
                       </div>}
                       {/* Photo */}
