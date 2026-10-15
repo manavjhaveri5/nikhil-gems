@@ -8986,8 +8986,10 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       onMouseLeave={e=>{e.currentTarget.style.boxShadow=restShadow;e.currentTarget.style.transform="none";}}>
                       {/* Destination ribbon — one segment per place this piece is going. */}
                       {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
-                        style={{display:"flex",height:4,flexShrink:0}}>
-                        {flags.map(f=><div key={f.key} style={{flex:1,background:f.live?f.bg:stockStripe(f.lead)}}/>)}
+                        style={{display:"flex",height:mob?15:17,flexShrink:0}}>
+                        {flags.map(f=><div key={f.key} style={{flex:1,minWidth:0,background:f.live?f.bg:stockStripe(f.lead),display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+                          <span style={{fontSize:mob?8:8.5,fontWeight:800,letterSpacing:1.6,textTransform:"uppercase",color:"#fff",textShadow:"0 1px 2px rgba(0,0,0,.35)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 6px"}}>{f.label}</span>
+                        </div>)}
                       </div>}
                       {/* Photo */}
                       <div style={{position:"relative",aspectRatio:cover?"4 / 3":"4 / 2",overflow:"hidden",background:`radial-gradient(120% 90% at 30% 20%,${C.surface} 0%,${C.card} 55%,${C.border} 100%)`,flexShrink:0}}>
@@ -9005,16 +9007,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           <span style={{fontSize:7.5,fontWeight:800,letterSpacing:1.1,opacity:.5}}>{/^(stk|box)?\s*\d+$/i.test(s.location)?"BOX":""}</span><span className="tnum" style={{fontSize:11,fontWeight:700,letterSpacing:.2}}>{String(s.location).replace(/^box\s*/i,"")}</span>
                         </div>}
                         {!s.location&&!selectMode&&<div style={{position:"absolute",top:9,left:9,display:"inline-flex",alignItems:"center",gap:5,background:"rgba(255,252,246,.9)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 10px 3px 8px",boxShadow:"0 1px 6px rgba(26,19,8,.14)",fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:12,fontWeight:600,color:"#9a5a12"}}><span style={{width:6,height:6,borderRadius:"50%",background:"#D9822B"}}/>no box</div>}
-                        {/* Where it's headed, written on the photo like a gallery tag. */}
-                        {flags.some(f=>!["etsy","ebay"].includes(f.key))&&<div style={{position:"absolute",left:8,bottom:8,display:"flex",gap:4,pointerEvents:"none"}}>
-                          {flags.filter(f=>!["etsy","ebay"].includes(f.key)).map(f=>(
-                            <span key={f.key} style={{display:"inline-flex",alignItems:"center",gap:5,background:"rgba(255,252,246,.86)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",borderRadius:20,padding:"2px 9px 2px 4px",boxShadow:"0 1px 6px rgba(26,19,8,.18)",fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:12.5,fontWeight:600,color:"#2a2218",letterSpacing:.2}}>
-                              <span style={{width:12,height:12,borderRadius:"50%",background:f.bg,boxShadow:"inset 0 0 0 1px rgba(255,255,255,.6)"}}/>{f.label}
-                            </span>
-                          ))}
-                        </div>}
                         {/* Age dot — top right */}
-                        <div style={{position:"absolute",top:12,right:12,width:8,height:8,borderRadius:"50%",background:age==null?C.border:ageCol,boxShadow:"0 0 0 2.5px rgba(255,252,246,.9), 0 1px 4px rgba(0,0,0,.2)"}} title={age==null?"No date":`${age} days in stock`}/>
+                        {/* The dot is also the way into picking several: tap it and this
+                            card is ticked, with the rest of the grid ready to tick. */}
+                        {!selectMode&&<button onClick={e=>{e.stopPropagation();setSelectMode(true);setSelectedIds(prev=>{const n=new Set(prev);n.add(s.id);return n;});}} title={`${age==null?"No date":`${age} days in stock`} — tap to select`}
+                          style={{position:"absolute",top:5,right:5,width:22,height:22,border:"none",background:"transparent",cursor:"pointer",padding:0,display:"grid",placeItems:"center"}}>
+                          <span style={{width:9,height:9,borderRadius:"50%",background:age==null?C.border:ageCol,boxShadow:"0 0 0 2.5px rgba(255,252,246,.9), 0 1px 4px rgba(0,0,0,.2)"}}/>
+                        </button>}
+                        {selectMode&&<div style={{position:"absolute",top:8,right:8,width:20,height:20,borderRadius:"50%",background:isSel?C.amber:"rgba(255,252,246,.9)",boxShadow:"0 1px 4px rgba(0,0,0,.2)",display:"grid",placeItems:"center",color:"#fff",fontSize:12,fontWeight:800}}>{isSel?"✓":""}</div>}
                         {/* Quick actions on hover — desktop only */}
                         {!selectMode&&!mob&&<div className="stk-act" style={{position:"absolute",bottom:8,right:8,display:"flex",gap:2,background:"rgba(255,252,246,.92)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 4px",boxShadow:"0 2px 10px rgba(26,19,8,.18)"}} onClick={e=>e.stopPropagation()}>
                           {stockRegion!=="India"&&<button onClick={()=>{setMarkSoldItem(s);setMarkSoldQty(s.qty||"1");setMarkSoldRate("");}} style={{background:"rgba(255,255,255,.95)",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:4,lineHeight:1,color:REGION_CFG[stockRegion]?.color||C.ink}}>💰 Sold</button>}
@@ -9500,7 +9500,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       <div style={{flex:1}}>
                         <input value={form.material||""} onChange={e=>setForm(f=>({...f,material:e.target.value,sku:f.sku||generateSKU(e.target.value,f.shape)}))} style={{...FI,width:"100%",boxSizing:"border-box"}} placeholder="e.g. Alexandrite" list="mat-list-manual"/>
                         <datalist id="mat-list-manual">
-                          {[...new Set([...glossary.map(g=>g.material),...stones].filter(Boolean))].sort().map(m=><option key={m} value={m}/>)}
+                          {/* One spelling per stone: "Green aventurine" and "green aventurine"
+                              are the same, and the capitalised one names it. */}
+                          {[...[...glossary.map(g=>g.material),...stones].filter(Boolean).map(m=>String(m).trim()).reduce((acc,m)=>{const k=m.toLowerCase().replace(/\s+/g," ");const cur=acc.get(k);const score=x=>(x.match(/\b[A-Z]/g)||[]).length;if(!cur||score(m)>score(cur))acc.set(k,m);return acc;},new Map()).values()].sort((a,b)=>a.localeCompare(b)).map(m=><option key={m} value={m}/>)}
                         </datalist>
                       </div>
                       <GlossaryPicker glossary={glossary} onPick={g=>setForm(f=>({...f,material:g.material,shape:g.shape||f.shape,productType:g.productType||g.shape||f.productType,origin:g.origin||f.origin,size:g.size||f.size,grade:g.grade||f.grade,sku:f.sku||generateSKU(g.material,g.shape||f.shape)}))}>
