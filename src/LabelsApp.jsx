@@ -310,16 +310,18 @@ const EDIT_CSS = `
 
 /* The print sheet: its own document with inch geometry, the same card CSS and
    the same fit loop, so it prints what the editor shows. */
-function printSet(set) {
+function printSet(set, win = null) {
   const L = langOf(set.lang);
   const esc = t => String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const pages = [];
   const g = geom(set);
   for (let i = 0; i < set.cards.length; i += g.per) pages.push(set.cards.slice(i, i + g.per));
   const card = c => `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-box"><div>${esc(c.box)}</div></div><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en).replace(/\n/g, "<br>")}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local).replace(/\n/g, "<br>")}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
-  const w = window.open("", "_blank");
+  // A window opened in the click itself, by a caller that had to load first.
+  const w = win || window.open("", "_blank");
   if (!w) return false;
   const paper = PAPER[set.paper] || PAPER.letter;
+  w.document.open();
   w.document.write(`<!DOCTYPE html><html lang="${set.lang || "en"}"><head><meta charset="UTF-8"><title>${esc(set.name)} — labels</title>
 <link href="${FONT_LINK}" rel="stylesheet"><style>${CARD_CSS}
 *{box-sizing:border-box}body{margin:0;background:#e9e6e1;font-family:system-ui,sans-serif}
@@ -554,6 +556,32 @@ export function ShowLabelImport({ name, lang = "", stockIds = [], onClose, onSav
         }} />
     </>
   );
+}
+
+/* Printing a show's labels from its Shipment tab: the labels for these stock
+   cards, from the sets they were made in, on one sheet in the set's own design.
+   Then, if asked, they're marked printed in their sets. */
+export async function printStockLabels(stockIds, win) {
+  const sets = await loadK(KEY).catch(() => []);
+  const ids = new Set(stockIds);
+  const hits = [];
+  for (const s of Array.isArray(sets) ? sets : []) for (const c of s.cards || []) if (c.stockId && ids.has(c.stockId)) hits.push({ s, c });
+  // One label per stock card: the newest.
+  const best = new Map();
+  for (const h of hits) { const o = best.get(h.c.stockId); if (!o || String(h.c.addedAt || "") > String(o.c.addedAt || "")) best.set(h.c.stockId, h); }
+  const picked = [...best.values()];
+  if (!picked.length) { win?.close(); return { printed: 0, missing: stockIds.length }; }
+  const counts = new Map(); for (const h of picked) counts.set(h.s.id, (counts.get(h.s.id) || 0) + 1);
+  const base = picked.find(h => h.s.id === [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]).s;
+  printSet({ ...base, name: base.name, cards: picked.map(h => h.c) }, win);
+  return { printed: picked.length, missing: stockIds.length - picked.length, mark: async () => {
+    const ts = new Date().toISOString();
+    const bySet = new Map(); for (const h of picked) { const a = bySet.get(h.s.id) || new Set(); a.add(h.c.id); bySet.set(h.s.id, a); }
+    for (const s of Array.isArray(sets) ? sets : []) {
+      const want = bySet.get(s.id); if (!want) continue;
+      await upsertItemK(KEY, { ...s, cards: s.cards.map(c => want.has(c.id) ? { ...c, printedAt: ts } : c), updatedAt: ts });
+    }
+  } };
 }
 
 const btn = (primary = false) => ({ background: primary ? "#6f5430" : "#f4f2ee", color: primary ? "#fff" : "#2a2622", border: `1px solid ${primary ? "#6f5430" : "#d6d0c7"}`, borderRadius: 6, padding: "8px 13px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "system-ui,sans-serif", whiteSpace: "nowrap" });

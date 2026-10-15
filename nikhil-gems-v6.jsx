@@ -19142,6 +19142,21 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [labelFilter,setLabelFilterRaw]=useState(()=>{try{return (isDetail&&localStorage.getItem(`ng-show-${show.id}-lf`))||"all";}catch{return "all";}});     // planned cards: all | made | todo
   const setLabelFilter=v=>{setLabelFilterRaw(v);try{localStorage.setItem(`ng-show-${show.id}-lf`,v);}catch{}};
   const [readySel,setReadySel]=useState(()=>new Set());   // step 2: labelled cards ticked to send
+  const [readyFilter,setReadyFilter]=useState("all");     // step 2: all | todo (not printed) | printed
+  // Which stock cards' labels are printed — read from the label sets (Make Labels marks them too).
+  const [printedMap,setPrintedMap]=useState(()=>new Map());
+  const loadPrinted=useCallback(()=>loadK("ng-label-sets-v1").then(v=>{const m=new Map();for(const st of Array.isArray(v)?v:[])for(const c of st.cards||[])if(c.stockId){const o=m.get(c.stockId);if(!o||String(c.addedAt||"")>String(o.at||""))m.set(c.stockId,{at:String(c.addedAt||""),printedAt:c.printedAt||""});}setPrintedMap(m);}).catch(()=>{}),[]);
+  useEffect(()=>{if(!isDetail)return;loadPrinted();return onCacheRefresh(keys=>{if(keys.includes("ng-label-sets-v1"))loadPrinted();});},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  const printLabelsFor=ids=>{
+    if(!ids.length)return;
+    const w=window.open("","_blank");if(!w){onToast?.("Allow pop-ups to open the print sheet");return;}
+    w.document.write("<p style='font:14px system-ui;padding:20px'>Preparing labels…</p>");
+    import("./src/LabelsApp.jsx").then(m=>m.printStockLabels(ids,w)).then(async r=>{
+      if(!r?.printed){onToast?.("No labels found for these cards — make them first");return;}
+      if(r.missing)onToast?.(`${r.missing} card${r.missing===1?" has":"s have"} no label yet`);
+      setTimeout(async()=>{if(window.confirm(`Mark these ${r.printed} label${r.printed===1?"":"s"} as printed?`)){await r.mark();await loadPrinted();onToast?.(`✓ ${r.printed} marked printed`);}},800);
+    }).catch(e=>{w.close();onToast?.("⚠ "+e.message);});
+  };
   const [editCard,setEditCard]=useState(null);            // stock card open in the pop-up editor: a draft copy
   // Prices typed in $ or ₹ (stored in $ either way; ₹ at the show's rate).
   const [priceCur,setPriceCur]=useState(()=>{try{return localStorage.getItem("ng-ship-price-cur")||"usd";}catch{return "usd";}});
@@ -21334,7 +21349,9 @@ thead{display:table-header-group;}
                   })()}
                   {/* READY — labelled (the green ones), still here: tick and send to the show. */}
                   {(shipStep||(shipTagged.length?"planned":"sent"))==="ready"&&(()=>{
-                    const ready=shipTagged.filter(s=>s.labelMadeAt).filter(matchQ);
+                    const isPrinted=s=>!!printedMap.get(s.id)?.printedAt;
+                    const readyAll=shipTagged.filter(s=>s.labelMadeAt).filter(matchQ);
+                    const ready=readyAll.filter(s=>readyFilter==="all"||(readyFilter==="printed"?isPrinted(s):!isPrinted(s)));
                     const notYet=shipTagged.filter(s=>!s.labelMadeAt).length;
                     const all=readySel.size===ready.length&&ready.length>0;
                     return(<>
@@ -21343,7 +21360,12 @@ thead{display:table-header-group;}
                           <div style={{fontSize:14,fontWeight:750,color:C.ink}}>{ready.length} labelled card{ready.length===1?"":"s"} ready to go</div>
                           <div style={{fontSize:11.5,color:C.inkMid}}>{notYet?`${notYet} still need a label in step 1 · `:""}Sending moves them to {show.name} as packed.</div>
                         </div>
+                        <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",background:C.surface}}>
+                          {[["all",`All · ${readyAll.length}`],["todo",`To print · ${readyAll.filter(s=>!isPrinted(s)).length}`],["printed",`✓ Printed · ${readyAll.filter(isPrinted).length}`]].map(([k,l])=>(
+                            <button key={k} onClick={()=>{setReadyFilter(k);setReadySel(new Set());}} style={{background:readyFilter===k?C.ink:"transparent",color:readyFilter===k?"#fff":C.inkMid,border:"none",padding:"7px 10px",fontSize:11.5,fontWeight:700,cursor:"pointer"}}>{l}</button>))}
+                        </span>
                         <button onClick={()=>setReadySel(all?new Set():new Set(ready.map(s=>s.id)))} disabled={!ready.length} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:C.ink}}>{all?"Untick all":`Tick all ${ready.length}`}</button>
+                        <button onClick={()=>printLabelsFor((readySel.size?ready.filter(s=>readySel.has(s.id)):ready.filter(s=>!isPrinted(s))).map(s=>s.id))} disabled={!ready.length} style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:8,padding:"9px 14px",fontSize:12.5,fontWeight:750,cursor:"pointer"}}>🖨 Print {readySel.size?`${readySel.size} label${readySel.size===1?"":"s"}`:"unprinted labels"}</button>
                         {isAdmin&&<button disabled={!readySel.size} onClick={()=>sendTaggedPacked(readySel)} style={{background:readySel.size?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:readySel.size?"pointer":"default"}}>📦 Send {readySel.size||""} to the show</button>}
                       </div>
                       {!ready.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>{shipTagged.length?"No labelled cards yet — make labels in step 1 and they'll be here, green.":"Nothing planned for this show."}</div>:
@@ -21359,7 +21381,7 @@ thead{display:table-header-group;}
                               <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{textTransform:"uppercase",fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
                               <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,...flowQtyLines(s)].filter(Boolean).join(" · ")}</div>
                               <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
-                                <span style={{color:"#0f7a55",fontWeight:700}}>🏷 {s.labelSet||"Label made"}</span>
+                                <span style={{fontWeight:700,color:isPrinted(s)?"#0f7a55":"#9a5a12"}}>{isPrinted(s)?"🖨 Printed":"🏷 Not printed"}</span>
                                 <span style={{fontWeight:700,color:C.ink}}>{cardValUsd(s)>0?fmtCur(cardValUsd(s)):""}</span>
                               </div>
                             </div>
