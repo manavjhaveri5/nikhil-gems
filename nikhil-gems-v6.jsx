@@ -19048,6 +19048,9 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [tagSel,setTagSel]=useState(()=>new Set());       // tagged in stock, ticked to send
   const [shipStep,setShipStep]=useState(null);              // "planned" | "sent"; null = whichever has cards
   const [shipQ,setShipQ]=useState("");
+  const [bulkFlat,setBulkFlat]=useState(false);           // ticked bar: the price is for the whole card
+  const [flatMode,setFlatMode]=useState({});              // per card, while typing: true = flat price
+  const [labelPick,setLabelPick]=useState(null);          // preview before Make Labels: Set of ids
   const [labelDup,setLabelDup]=useState(false);
   const [aiBusy,setAiBusy]=useState("");
   const [sellId,setSellId]=useState(null);
@@ -19728,6 +19731,12 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   // Prices for the ticked cards: an SP per unit, or one flat price for each card
   // (kept as the per-unit rate it works out to, so every total stays rate × qty).
   const basisOf=s=>(parseFloat(s.qty)||0)>0?(parseFloat(s.qty)||0):(parseFloat(s.qty2)||0);
+  // How many pieces a card holds, whichever quantity counts them.
+  const pcsOf=s=>{const isPc=u=>/^(pcs?|pieces?|nos?)$/i.test(String(u||"").trim());return isPc(s.unit)&&+s.qty>0?+s.qty:isPc(s.unit2)&&+s.qty2>0?+s.qty2:0;};
+  const cardCostInr=s=>(parseFloat(s.costPrice)||0)*basisOf(s);
+  const cardValUsd=s=>+s.showFlatPrice>0?+s.showFlatPrice:(+s.listPrice||0)*basisOf(s);
+  // What a label prints as the price: the lot's flat price, per kg for weighed cards, each otherwise.
+  const labelPriceOf=s=>{const per=(parseFloat(s.qty)||0)>0?s.unit:s.unit2;if(+s.showFlatPrice>0)return `$${(+s.showFlatPrice).toLocaleString("en-US",{maximumFractionDigits:0})}`;if(!(+s.listPrice>0))return "";const p=`$${(+s.listPrice).toLocaleString("en-US",{maximumFractionDigits:2})}`;return /^(pcs?|pieces?)$/i.test(String(per||""))?`${p} each`:`${p}/${per||"unit"}`;};
   const priceTicked=async(mode,planned=false)=>{
     const v=parseFloat(mode==="flat"?shipFlat:shipSp);if(!(v>0))return;
     const pick=planned?shipTagged.filter(s=>tagSel.has(s.id)):shipItems.filter(s=>shipSel.has(s.id));if(!pick.length)return;
@@ -19741,10 +19750,10 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     if(planned)setTagSel(new Set());else setShipSel(new Set());setShipSp("");setShipFlat("");
   };
   // Make Labels takes these cards (or the ticked ones) as a new set.
-  const openInMakeLabels=(planned=false)=>{
-    const pick=planned?(tagSel.size?shipTagged.filter(s=>tagSel.has(s.id)):shipTagged):(shipSel.size?shipItems.filter(s=>shipSel.has(s.id)):shipItems);if(!pick.length)return;
+  const openInMakeLabels=(planned=false,ids=null)=>{
+    const pick=ids?[...shipTagged,...shipItems].filter((s,i,a)=>ids.has(s.id)&&a.findIndex(x=>x.id===s.id)===i):planned?(tagSel.size?shipTagged.filter(s=>tagSel.has(s.id)):shipTagged):(shipSel.size?shipItems.filter(s=>shipSel.has(s.id)):shipItems);if(!pick.length)return;
     const unpriced=pick.filter(s=>!(+s.listPrice>0)).length;
-    if(unpriced&&!confirm(`${unpriced} of ${pick.length} card${pick.length===1?" has":"s have"} no price yet — their labels will print without one. Make labels anyway?`))return;
+    if(!ids&&unpriced&&!confirm(`${unpriced} of ${pick.length} card${pick.length===1?" has":"s have"} no price yet — their labels will print without one. Make labels anyway?`))return;
     try{localStorage.setItem("ng-labels-pending",JSON.stringify({name:show.name,lang:shipRegion==="Japan"?"ja":"",stockIds:pick.map(s=>s.id)}));}catch{}
     window.dispatchEvent(new CustomEvent("ng-open-module",{detail:"labels"}));
   };
@@ -21056,21 +21065,21 @@ thead{display:table-header-group;}
                       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Planned</div><div style={{fontSize:18,fontWeight:750}}>{shipTagged.length} cards</div><div style={{fontSize:10,color:C.inkFaint}}>tag more in Stock → Market</div></div>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>① Priced</div><div style={{fontSize:18,fontWeight:750,color:priced===shipTagged.length&&priced?C.green:C.ink}}>{priced} / {shipTagged.length}</div><div style={{fontSize:10,color:C.inkFaint}}>{valueUsd>0?`${fmtUsd(valueUsd)} on the table`:"type a SP on each card"}</div></div>
-                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>② Labels</div><button disabled={!shipTagged.length} onClick={()=>openInMakeLabels(true)} style={{marginTop:3,background:"#8B6F47",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🏷 Make labels{tagSel.size?` (${tagSel.size})`:" for all"}</button></div>
+                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>② Labels</div><button disabled={!shipTagged.length} onClick={()=>setLabelPick(new Set((tagSel.size?shipTagged.filter(s=>tagSel.has(s.id)):shipTagged).map(s=>s.id)))} style={{marginTop:3,background:"#8B6F47",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🏷 Make labels{tagSel.size?` (${tagSel.size})`:" for all"}</button></div>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>③ Pack</div>{isAdmin?<button disabled={!tagSel.size} onClick={()=>sendTaggedPacked(tagSel)} style={{marginTop:3,background:tagSel.size?C.ink:"#ccc",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:tagSel.size?"pointer":"default"}}>📦 Pack {tagSel.size||"ticked"} & send</button>:<div style={{fontSize:11,color:C.inkFaint}}>Ask an admin</div>}</div>
                       </div>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10,background:tagSel.size?"#1e293b":"transparent",color:tagSel.size?"#fff":C.inkMid,borderRadius:9,padding:tagSel.size?"8px 12px":"0 2px",fontSize:11.5}}>
                         <button onClick={()=>setTagSel(prev=>prev.size===list.length&&list.length?new Set():new Set(list.map(s=>s.id)))} style={{background:"none",border:"none",fontSize:11.5,fontWeight:700,color:tagSel.size?"#93c5fd":C.blue,cursor:"pointer",padding:0}}>{tagSel.size&&tagSel.size===list.length?"Untick all":`Tick all ${list.length}`}</button>
                         {tagSel.size>0&&<><b>{tagSel.size} ticked</b><span style={{flex:1}}/>
-                          <span>SP $/unit</span><input value={shipSp} onChange={e=>setShipSp(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked("sp",true)} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
-                          <button onClick={()=>priceTicked("sp",true)} disabled={!(+shipSp>0)} style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
-                          <span style={{marginLeft:6}}>Flat $ each</span><input value={shipFlat} onChange={e=>setShipFlat(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked("flat",true)} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
-                          <button onClick={()=>priceTicked("flat",true)} disabled={!(+shipFlat>0)} style={{background:"#10b981",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
+                          <span>{bulkFlat?"Flat $ per card":"SP $ per unit"}</span>
+                          <input value={bulkFlat?shipFlat:shipSp} onChange={e=>{const v=e.target.value.replace(/[^\d.]/g,"");bulkFlat?setShipFlat(v):setShipSp(v);}} onKeyDown={e=>e.key==="Enter"&&priceTicked(bulkFlat?"flat":"sp",true)} inputMode="decimal" style={{width:80,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
+                          <label style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}}><input type="checkbox" checked={bulkFlat} onChange={e=>setBulkFlat(e.target.checked)}/>Flat price</label>
+                          <button onClick={()=>priceTicked(bulkFlat?"flat":"sp",true)} disabled={!(+(bulkFlat?shipFlat:shipSp)>0)} style={{background:bulkFlat?"#10b981":"#3b82f6",color:"#fff",border:"none",borderRadius:5,padding:"4px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set for {tagSel.size}</button>
                           <button onClick={()=>setTagSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button></>}
                       </div>
                       {!shipTagged.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing planned for {show.name}. In Stock, tag cards with this show under Market and they'll appear here.</div>:
                       <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
-                        {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);const b=basisOf(s);const val=(+s.listPrice||0)*b;return(
+                        {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);const b=basisOf(s);const val=cardValUsd(s);const pcs=pcsOf(s);const cost=cardCostInr(s);const flat=flatMode[s.id]??(+s.showFlatPrice>0);const per=(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg");return(
                           <div key={s.id} onClick={()=>setTagSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?C.amberBg:C.surface,borderRadius:14,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:"var(--e-1)"}}>
                             <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
                               {cov&&<img src={thumbUrl(cov,400)} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
@@ -21080,15 +21089,55 @@ thead{display:table-header-group;}
                             <div style={{padding:"9px 11px 11px"}}>
                               <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</div>
                               <div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · {flowQtyLines(s).join(" · ")}</div>
+                              {/* Cost, for pricing: per piece where the card counts pieces. */}
+                              {cost>0&&<div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,background:C.bg,borderRadius:6,padding:"3px 7px"}}>
+                                Cost {pcs>0?<><b>₹{Math.round(cost/pcs).toLocaleString("en-IN")}/pc</b> <span style={{color:C.inkFaint}}>(${(cost/pcs/usdInr).toFixed(2)})</span> · </>:null}₹{Math.round(cost).toLocaleString("en-IN")} card
+                              </div>}
                               <div onClick={e=>e.stopPropagation()} style={{display:"flex",alignItems:"center",gap:6}}>
-                                <span style={{fontSize:10,color:C.inkFaint}}>SP $/{(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg")}</span>
-                                <input key={`pp-${s.id}-${s.listPrice||""}`} defaultValue={s.listPrice||""} inputMode="decimal" placeholder="—" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.listPrice||""))onPatchStockItem?.(s.id,{listPrice:v,showFlatPrice:""});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:72,padding:"4px 7px",fontSize:mob?16:12,borderColor:+s.listPrice>0?C.border:C.amber}}/>
-                                <span style={{marginLeft:"auto",fontSize:12,fontWeight:750,color:val>0?C.ink:C.inkFaint}}>{val>0?fmtUsd(val):"unpriced"}</span>
+                                <span style={{fontSize:10,color:C.inkFaint,whiteSpace:"nowrap"}}>{flat?"Flat $":`SP $/${per}`}</span>
+                                {flat
+                                  ?<input key={`pf-${s.id}-${s.showFlatPrice||""}`} defaultValue={s.showFlatPrice||""} inputMode="decimal" placeholder="card total" onBlur={e=>{const v=parseFloat(e.target.value);if(v>0&&String(v)!==String(s.showFlatPrice||"")){onPatchStockItem?.(s.id,b>0?{showFlatPrice:String(v),listPrice:String(+(v/b).toFixed(4))}:{showFlatPrice:String(v)});}}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:72,padding:"4px 7px",fontSize:mob?16:12,borderColor:+s.showFlatPrice>0?C.border:C.amber}}/>
+                                  :<input key={`pp-${s.id}-${s.listPrice||""}`} defaultValue={s.listPrice||""} inputMode="decimal" placeholder="—" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.listPrice||"")||+s.showFlatPrice>0)onPatchStockItem?.(s.id,{listPrice:v,showFlatPrice:""});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:72,padding:"4px 7px",fontSize:mob?16:12,borderColor:+s.listPrice>0?C.border:C.amber}}/>}
+                                <label title="Price the whole card at one flat price" style={{display:"flex",alignItems:"center",gap:3,fontSize:10,color:C.inkMid,cursor:"pointer"}}><input type="checkbox" checked={flat} onChange={e=>setFlatMode(m=>({...m,[s.id]:e.target.checked}))}/>Flat</label>
+                                <span style={{marginLeft:"auto",fontSize:12,fontWeight:750,color:val>0?C.ink:C.inkFaint,whiteSpace:"nowrap"}}>{val>0?fmtUsd(val):"unpriced"}</span>
                               </div>
+                              {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,marginTop:4,textAlign:"right"}}>${(val/pcs).toFixed(2)}/pc{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
                             </div>
                           </div>);})}
                       </div>}
                     </>);
+                  })()}
+                  {labelPick&&(()=>{
+                    const cards=[...shipTagged,...shipItems].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i&&(shipTagged.some(t=>t.id===s.id)));
+                    const tog=id=>setLabelPick(p=>{const n=new Set(p);n.has(id)?n.delete(id):n.add(id);return n;});
+                    return(
+                      <div onClick={()=>setLabelPick(null)} style={{position:"fixed",inset:0,background:"rgba(20,15,5,.5)",zIndex:950,display:"grid",placeItems:"center",padding:16}}>
+                        <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:14,width:"min(920px,100%)",maxHeight:"90vh",display:"flex",flexDirection:"column"}}>
+                          <div style={{padding:"14px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:10}}>
+                            <b style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,flex:1}}>Labels for {show.name}</b>
+                            <button onClick={()=>setLabelPick(new Set(cards.map(c=>c.id)))} style={{background:"none",border:"none",color:C.blue,fontWeight:700,fontSize:12,cursor:"pointer"}}>Tick all</button>
+                            <button onClick={()=>setLabelPick(new Set())} style={{background:"none",border:"none",color:C.blue,fontWeight:700,fontSize:12,cursor:"pointer"}}>Untick all</button>
+                            <button onClick={()=>setLabelPick(null)} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:C.inkFaint}}>×</button>
+                          </div>
+                          <div style={{overflowY:"auto",padding:16,display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(260px,1fr))",gap:12,background:C.bg}}>
+                            {cards.map(s=>{const on=labelPick.has(s.id);const price=labelPriceOf(s);const qty=flowQtyLines(s)[0]||"";return(
+                              <label key={s.id} style={{position:"relative",cursor:"pointer",background:"#fff",border:"1px solid #cfb793",borderTop:"5px solid #8a6a3e",borderRadius:4,padding:"12px 16px 10px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,fontFamily:"'Cormorant Garamond',Georgia,serif",color:"#1d1a17",opacity:on?1:.45,boxShadow:on?"0 0 0 2px #8a6a3e44":"none"}}>
+                                <input type="checkbox" checked={on} onChange={()=>tog(s.id)} style={{position:"absolute",top:8,left:8}}/>
+                                <span style={{position:"absolute",top:8,right:10,fontFamily:"system-ui",fontSize:9,color:"#9a8a73"}}>{s.location?`Box ${s.location}`:""}</span>
+                                <span style={{fontSize:20,fontWeight:500,lineHeight:1.15,textAlign:"center",marginTop:6}}>{String(s.labelEn||[s.material,s.shape].filter(Boolean).join(" ")).trim()||"—"}</span>
+                                <span style={{fontSize:12,fontStyle:"italic",color:"#6f5a3c"}}>{[s.labelShape||s.shape,s.labelOrigin||s.origin].filter(Boolean).join(" · ")||" "}</span>
+                                <div style={{display:"flex",justifyContent:"space-between",width:"100%",borderTop:"1px solid #e2d3b8",marginTop:8,paddingTop:5,fontSize:13}}>
+                                  <span>{qty}</span><b style={{color:price?"#1d1a17":"#c0392b",fontWeight:600}}>{price||"no price"}</b>
+                                </div>
+                              </label>);})}
+                          </div>
+                          <div style={{padding:"12px 18px",borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                            <span style={{fontSize:12,color:C.inkMid,flex:1}}>{labelPick.size} label{labelPick.size===1?"":"s"} · {cards.filter(s=>labelPick.has(s.id)&&!labelPriceOf(s)).length} without a price · edit and print in Make Labels</span>
+                            <button onClick={()=>setLabelPick(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",cursor:"pointer",fontSize:12.5}}>Cancel</button>
+                            <button disabled={!labelPick.size} onClick={()=>{const ids=labelPick;setLabelPick(null);openInMakeLabels(true,ids);}} style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontWeight:700,fontSize:12.5,cursor:labelPick.size?"pointer":"default",opacity:labelPick.size?1:.5}}>🏷 Make {labelPick.size} labels</button>
+                          </div>
+                        </div>
+                      </div>);
                   })()}
                   {(shipStep||(shipTagged.length?"planned":"sent"))==="sent"&&<>
                   {/* What is at the show. It gets here through Stock → Send to show;

@@ -336,7 +336,9 @@ function cardFromStock(s, lang, cur) {
     type: String(s.labelShape || s.shape || "").trim(),
     origin: String(s.labelOrigin || s.origin || "").trim(),
     qty,
-    price: +s.listPrice > 0 ? `${cur}${(+s.listPrice).toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "",
+    // A lot priced flat shows its one price; a weighed card shows its rate per kg; pieces show each.
+    price: +s.showFlatPrice > 0 ? `${cur}${(+s.showFlatPrice).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+      : +s.listPrice > 0 ? `${cur}${(+s.listPrice).toLocaleString("en-US", { maximumFractionDigits: 2 })}${/^(pcs?|pieces?)$/i.test(String((parseFloat(s.qty) > 0 ? s.unit : s.unit2) || "pcs")) ? "" : `/${(parseFloat(s.qty) > 0 ? s.unit : s.unit2) || "kg"}`}` : "",
     stockId: s.id,
   };
 }
