@@ -18467,7 +18467,9 @@ function ShowsApp({onHome,isAdmin=true}){
      again is how the same customer ends up as two records with two spellings. */
   const [ngBuyers,setNgBuyers]=useState([]);
   const [loaded,setLoaded]=useState(false);
-  const [detailId,setDetailId]=useState(null);
+  // The open show survives a refresh.
+  const [detailId,setDetailIdRaw]=useState(()=>{try{return localStorage.getItem("ng-shows-open")||null;}catch{return null;}});
+  const setDetailId=id=>{setDetailIdRaw(id);try{id?localStorage.setItem("ng-shows-open",id):localStorage.removeItem("ng-shows-open");}catch{}};
   const [toast,setToast]=useState("");
   const showToast=(m,ms=3000)=>{setToast(m);setTimeout(()=>setToast(""),ms);};
   const todayStr=today();
@@ -19063,12 +19065,14 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [shipSp,setShipSp]=useState("");
   const [shipFlat,setShipFlat]=useState("");
   const [tagSel,setTagSel]=useState(()=>new Set());       // tagged in stock, ticked to send
-  const [shipStep,setShipStep]=useState(null);              // "planned" | "sent"; null = whichever has cards
+  const [shipStep,setShipStepRaw]=useState(()=>{try{return (isDetail&&localStorage.getItem(`ng-show-${show.id}-step`))||null;}catch{return null;}});              // "planned" | "ready" | "sent"; null = whichever has cards
+  const setShipStep=v=>{setShipStepRaw(v);try{localStorage.setItem(`ng-show-${show.id}-step`,v);}catch{}};
   const [shipQ,setShipQ]=useState("");
   const [bulkFlat,setBulkFlat]=useState(false);           // ticked bar: the price is for the whole card
   const [flatMode,setFlatMode]=useState({});              // per card, while typing: true = flat price
   const [labelIds,setLabelIds]=useState(null);            // cards being made into labels, in place
-  const [labelFilter,setLabelFilter]=useState("all");     // planned cards: all | made | todo
+  const [labelFilter,setLabelFilterRaw]=useState(()=>{try{return (isDetail&&localStorage.getItem(`ng-show-${show.id}-lf`))||"all";}catch{return "all";}});     // planned cards: all | made | todo
+  const setLabelFilter=v=>{setLabelFilterRaw(v);try{localStorage.setItem(`ng-show-${show.id}-lf`,v);}catch{}};
   const [readySel,setReadySel]=useState(()=>new Set());   // step 2: labelled cards ticked to send
   const [editCard,setEditCard]=useState(null);            // stock card open in the pop-up editor: a draft copy
   // Prices typed in $ or ₹ (stored in $ either way; ₹ at the show's rate).
@@ -19079,7 +19083,20 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [sellPrice,setSellPrice]=useState("");
   const [sellCurrency,setSellCurrency]=useState("USD");
   const [sellBuyer,setSellBuyer]=useState("");
-  const [showTab,setShowTab]=useState(isNow&&isAdmin?"sales":"prep");
+  const memo=(k,d)=>{try{return (isDetail&&localStorage.getItem(`ng-show-${show.id}-${k}`))||d;}catch{return d;}};
+  const [showTab,setShowTab]=useState(()=>memo("tab",isNow&&isAdmin?"sales":"prep"));
+  /* Where you were on this show — tab, shipment step, label filter, scroll —
+     comes back after a refresh. */
+  useEffect(()=>{if(!isDetail)return;try{localStorage.setItem(`ng-show-${show.id}-tab`,showTab);}catch{}},[showTab]);// eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{
+    if(!isDetail)return;
+    const key=`ng-show-${show.id}-scroll`;
+    let y=0;try{y=+sessionStorage.getItem(key)||0;}catch{}
+    const t=y>0?setTimeout(()=>window.scrollTo(0,y),700):null;
+    let raf=0;const onScroll=()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(()=>{try{sessionStorage.setItem(key,String(Math.round(window.scrollY)));}catch{}});};
+    window.addEventListener("scroll",onScroll,{passive:true});
+    return()=>{clearTimeout(t);window.removeEventListener("scroll",onScroll);};
+  },[]);// eslint-disable-line react-hooks/exhaustive-deps
   const [saleDate,setSaleDate]=useState(todayStr);
   const [saleAmt,setSaleAmt]=useState("");
   const [saleCur,setSaleCur]=useState("USD");
