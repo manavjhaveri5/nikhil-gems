@@ -19044,6 +19044,8 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [shipSp,setShipSp]=useState("");
   const [shipFlat,setShipFlat]=useState("");
   const [tagSel,setTagSel]=useState(()=>new Set());       // tagged in stock, ticked to send
+  const [shipStep,setShipStep]=useState(null);              // "planned" | "sent"; null = whichever has cards
+  const [shipQ,setShipQ]=useState("");
   const [labelDup,setLabelDup]=useState(false);
   const [aiBusy,setAiBusy]=useState("");
   const [sellId,setSellId]=useState(null);
@@ -19709,6 +19711,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     const next=(allShows||[]).filter(x=>{const n=String(x.name||"").toLowerCase();return t===n||n.includes(t)||String(x.city||"").toLowerCase().includes(t)||(t==="japan"&&getShowRegion(x)==="Japan");})
       .filter(x=>showEnd(x)>=today()).sort((a,b)=>showStart(a).localeCompare(showStart(b)))[0];
     return !next||next.id===show.id;};
+  const matchQ=s=>{const w=shipQ.toLowerCase().split(/\s+/).filter(Boolean);if(!w.length)return true;const h=`${s.material||""} ${s.shape||""} ${s.size||""} ${s.location||""} box ${s.location||""} ${s.vendor||""} ${s.origin||""}`.toLowerCase();return w.every(x=>h.includes(x));};
   const marketsOf=s=>(Array.isArray(s.market)?s.market:String(s.market||"").split(",")).map(x=>String(x).trim()).filter(Boolean);
   const shipTagged=stock.filter(s=>!s.soldDate&&hasStockQty(s)&&!itemAtShow(s,show,allShows)
     &&!(s.showId&&(s.region||"India")!=="India")&&marketsOf(s).some(tagMatchesShow)).sort(shipSort);
@@ -19723,9 +19726,9 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   // Prices for the ticked cards: an SP per unit, or one flat price for each card
   // (kept as the per-unit rate it works out to, so every total stays rate × qty).
   const basisOf=s=>(parseFloat(s.qty)||0)>0?(parseFloat(s.qty)||0):(parseFloat(s.qty2)||0);
-  const priceTicked=async mode=>{
+  const priceTicked=async(mode,planned=false)=>{
     const v=parseFloat(mode==="flat"?shipFlat:shipSp);if(!(v>0))return;
-    const pick=shipItems.filter(s=>shipSel.has(s.id));if(!pick.length)return;
+    const pick=planned?shipTagged.filter(s=>tagSel.has(s.id)):shipItems.filter(s=>shipSel.has(s.id));if(!pick.length)return;
     const patches={};let skipped=0;
     for(const s of pick){
       if(mode==="flat"){const b=basisOf(s);if(!(b>0)){skipped++;continue;}patches[s.id]={listPrice:String(+(v/b).toFixed(4)),showFlatPrice:String(v)};}
@@ -19733,11 +19736,13 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     }
     await onPatchStockItems?.(patches);
     onToast?.(`✓ ${Object.keys(patches).length} priced${mode==="flat"?` at $${v} each`:` at $${v}/unit`}${skipped?` · ${skipped} without a quantity skipped`:""}`);
-    setShipSel(new Set());setShipSp("");setShipFlat("");
+    if(planned)setTagSel(new Set());else setShipSel(new Set());setShipSp("");setShipFlat("");
   };
   // Make Labels takes these cards (or the ticked ones) as a new set.
-  const openInMakeLabels=()=>{
-    const pick=shipSel.size?shipItems.filter(s=>shipSel.has(s.id)):shipItems;if(!pick.length)return;
+  const openInMakeLabels=(planned=false)=>{
+    const pick=planned?(tagSel.size?shipTagged.filter(s=>tagSel.has(s.id)):shipTagged):(shipSel.size?shipItems.filter(s=>shipSel.has(s.id)):shipItems);if(!pick.length)return;
+    const unpriced=pick.filter(s=>!(+s.listPrice>0)).length;
+    if(unpriced&&!confirm(`${unpriced} of ${pick.length} card${pick.length===1?" has":"s have"} no price yet — their labels will print without one. Make labels anyway?`))return;
     try{localStorage.setItem("ng-labels-pending",JSON.stringify({name:show.name,lang:shipRegion==="Japan"?"ja":"",stockIds:pick.map(s=>s.id)}));}catch{}
     window.dispatchEvent(new CustomEvent("ng-open-module",{detail:"labels"}));
   };
@@ -21028,6 +21033,62 @@ thead{display:table-header-group;}
 
               {shipView==="plan"?(
                 <>
+                  {(()=>{const step=shipStep||(shipTagged.length?"planned":"sent");return(
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
+                      {[["planned","1 · Planned",shipTagged.length,"Price, label, pack"],["sent","2 · Packed & at the show",shipItems.length,"What went"]].map(([k,label,n,sub])=>(
+                        <button key={k} onClick={()=>setShipStep(k)} style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1,background:step===k?C.ink:C.surface,color:step===k?"#FAF0DC":C.ink,border:`1px solid ${step===k?C.ink:C.border}`,borderRadius:10,padding:"8px 14px",cursor:"pointer",minWidth:150}}>
+                          <span style={{fontSize:12.5,fontWeight:750}}>{label} <span style={{opacity:.7,fontWeight:600}}>· {n}</span></span>
+                          <span style={{fontSize:10,opacity:.7}}>{sub}</span>
+                        </button>))}
+                      <input value={shipQ} onChange={e=>setShipQ(e.target.value)} placeholder="Search stone, shape, box, vendor…" style={{...FI,flex:"1 1 220px",maxWidth:360,marginLeft:"auto",borderRadius:20,padding:"8px 14px",fontSize:mob?16:12.5}}/>
+                    </div>);})()}
+                  {/* PLANNED — tagged for this show in Stock, not packed yet. The order of
+                      work: price them, make their labels (with the prices on), then pack. */}
+                  {(shipStep||(shipTagged.length?"planned":"sent"))==="planned"&&(()=>{
+                    const list=shipTagged.filter(matchQ);
+                    const priced=shipTagged.filter(s=>+s.listPrice>0).length;
+                    const valueUsd=shipTagged.reduce((a,s)=>a+(+s.listPrice||0)*basisOf(s),0);
+                    const ticked=shipTagged.filter(s=>tagSel.has(s.id));
+                    const stepBox={flex:"1 1 150px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px"};
+                    return(<>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Planned</div><div style={{fontSize:18,fontWeight:750}}>{shipTagged.length} cards</div><div style={{fontSize:10,color:C.inkFaint}}>tag more in Stock → Market</div></div>
+                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>① Priced</div><div style={{fontSize:18,fontWeight:750,color:priced===shipTagged.length&&priced?C.green:C.ink}}>{priced} / {shipTagged.length}</div><div style={{fontSize:10,color:C.inkFaint}}>{valueUsd>0?`${fmtUsd(valueUsd)} on the table`:"type a SP on each card"}</div></div>
+                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>② Labels</div><button disabled={!shipTagged.length} onClick={()=>openInMakeLabels(true)} style={{marginTop:3,background:"#8B6F47",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🏷 Make labels{tagSel.size?` (${tagSel.size})`:" for all"}</button></div>
+                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>③ Pack</div>{isAdmin?<button disabled={!tagSel.size} onClick={()=>sendTaggedPacked(tagSel)} style={{marginTop:3,background:tagSel.size?C.ink:"#ccc",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:tagSel.size?"pointer":"default"}}>📦 Pack {tagSel.size||"ticked"} & send</button>:<div style={{fontSize:11,color:C.inkFaint}}>Ask an admin</div>}</div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10,background:tagSel.size?"#1e293b":"transparent",color:tagSel.size?"#fff":C.inkMid,borderRadius:9,padding:tagSel.size?"8px 12px":"0 2px",fontSize:11.5}}>
+                        <button onClick={()=>setTagSel(prev=>prev.size===list.length&&list.length?new Set():new Set(list.map(s=>s.id)))} style={{background:"none",border:"none",fontSize:11.5,fontWeight:700,color:tagSel.size?"#93c5fd":C.blue,cursor:"pointer",padding:0}}>{tagSel.size&&tagSel.size===list.length?"Untick all":`Tick all ${list.length}`}</button>
+                        {tagSel.size>0&&<><b>{tagSel.size} ticked</b><span style={{flex:1}}/>
+                          <span>SP $/unit</span><input value={shipSp} onChange={e=>setShipSp(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked("sp",true)} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
+                          <button onClick={()=>priceTicked("sp",true)} disabled={!(+shipSp>0)} style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
+                          <span style={{marginLeft:6}}>Flat $ each</span><input value={shipFlat} onChange={e=>setShipFlat(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked("flat",true)} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
+                          <button onClick={()=>priceTicked("flat",true)} disabled={!(+shipFlat>0)} style={{background:"#10b981",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
+                          <button onClick={()=>setTagSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button></>}
+                      </div>
+                      {!shipTagged.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing planned for {show.name}. In Stock, tag cards with this show under Market and they'll appear here.</div>:
+                      <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+                        {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);const b=basisOf(s);const val=(+s.listPrice||0)*b;return(
+                          <div key={s.id} onClick={()=>setTagSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?C.amberBg:C.surface,borderRadius:14,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:"var(--e-1)"}}>
+                            <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
+                              {cov&&<img src={thumbUrl(cov,400)} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+                              <div style={{position:"absolute",top:8,left:8,width:20,height:20,borderRadius:6,background:on?C.amber:"rgba(255,255,255,.9)",display:"grid",placeItems:"center",color:"#fff",fontSize:12,fontWeight:800,boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}>{on?"✓":""}</div>
+                              {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.9)",borderRadius:12,padding:"2px 8px",fontSize:10.5,fontWeight:700}}>Box {s.location}</div>}
+                            </div>
+                            <div style={{padding:"9px 11px 11px"}}>
+                              <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</div>
+                              <div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · {flowQtyLines(s).join(" · ")}</div>
+                              <div onClick={e=>e.stopPropagation()} style={{display:"flex",alignItems:"center",gap:6}}>
+                                <span style={{fontSize:10,color:C.inkFaint}}>SP $/{(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg")}</span>
+                                <input key={`pp-${s.id}-${s.listPrice||""}`} defaultValue={s.listPrice||""} inputMode="decimal" placeholder="—" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.listPrice||""))onPatchStockItem?.(s.id,{listPrice:v,showFlatPrice:""});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:72,padding:"4px 7px",fontSize:mob?16:12,borderColor:+s.listPrice>0?C.border:C.amber}}/>
+                                <span style={{marginLeft:"auto",fontSize:12,fontWeight:750,color:val>0?C.ink:C.inkFaint}}>{val>0?fmtUsd(val):"unpriced"}</span>
+                              </div>
+                            </div>
+                          </div>);})}
+                      </div>}
+                    </>);
+                  })()}
+                  {(shipStep||(shipTagged.length?"planned":"sent"))==="sent"&&<>
                   {/* What is at the show. It gets here through Stock → Send to show;
                       this screen reports it and prints its cards. */}
                   <div style={{border:`1px solid ${C.border}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:12}}>
@@ -21051,25 +21112,7 @@ thead{display:table-header-group;}
                     </div>
                     <div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Cost and SP are per-unit rates; value is what went times SP.</div>
                   </div>
-                  {shipTagged.length>0&&(
-                    <div style={{border:`1px solid ${C.amber}55`,borderRadius:9,background:C.amberBg,padding:"10px 12px",marginBottom:12}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
-                        <span style={{fontSize:9,fontWeight:800,color:C.amber,textTransform:"uppercase",letterSpacing:.7,flex:1}}>Tagged for this show in Stock · not sent yet ({shipTagged.length})</span>
-                        <button onClick={()=>setTagSel(prev=>prev.size===shipTagged.length?new Set():new Set(shipTagged.map(s=>s.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>{tagSel.size===shipTagged.length?"Untick all":"Tick all"}</button>
-                        {isAdmin&&<button disabled={!tagSel.size} onClick={()=>sendTaggedPacked(tagSel)} style={{background:tagSel.size?C.ink:"#ccc",color:"#fff",border:"none",borderRadius:6,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:tagSel.size?"pointer":"default"}}>📦 Send {tagSel.size||""} as packed</button>}
-                      </div>
-                      <div style={{display:"grid",gap:4,maxHeight:300,overflowY:"auto"}}>
-                        {shipTagged.map(s=>(
-                          <label key={s.id} style={{display:"flex",alignItems:"center",gap:8,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,padding:"5px 9px",cursor:"pointer"}}>
-                            <input type="checkbox" checked={tagSel.has(s.id)} onChange={()=>setTagSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})}/>
-                            {stockCover(s)?<img src={thumbUrl(stockCover(s),120)} alt="" style={{width:26,height:26,objectFit:"cover",borderRadius:4}}/>:null}
-                            <span style={{fontSize:11,fontWeight:700,color:C.ink,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.material||"Item"}{s.shape?` · ${s.shape}`:""}{s.size?` · ${s.size}`:""}</span>
-                            <span style={{fontSize:10,color:C.inkMid,whiteSpace:"nowrap"}}>{flowQtyLines(s).join(" · ")}{s.location?` · Box ${s.location}`:""}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {/* (planned step moved above: see PLANNED) */}
                   {shipSel.size>0&&(
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:"#1e293b",color:"#fff",borderRadius:8,padding:"8px 12px",marginBottom:8,fontSize:11}}>
                       <b>{shipSel.size} ticked</b>
@@ -21078,7 +21121,7 @@ thead{display:table-header-group;}
                       <button onClick={()=>priceTicked("sp")} disabled={!(+shipSp>0)} style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
                       <span style={{marginLeft:8}}>Flat $ each card</span><input value={shipFlat} onChange={e=>setShipFlat(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked("flat")} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
                       <button onClick={()=>priceTicked("flat")} disabled={!(+shipFlat>0)} style={{background:"#10b981",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
-                      <button onClick={openInMakeLabels} style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>🏷 Labels for these</button>
+                      <button onClick={()=>openInMakeLabels(false)} style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>🏷 Labels for these</button>
                       <button onClick={()=>setShipSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button>
                     </div>
                   )}
@@ -21086,7 +21129,7 @@ thead{display:table-header-group;}
                     <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Cards at the show{shipSent.length>0&&<button onClick={()=>setShipSel(prev=>prev.size===shipSent.length?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:"0 0 0 10px",textTransform:"none",letterSpacing:0}}>{shipSel.size===shipSent.length?"Untick all":"Tick all"}</button>}</span>
                     {shipSent.length>0&&(
                       <span style={{display:"flex",gap:12,alignItems:"center"}}>
-                        <button onClick={e=>{e.stopPropagation();openInMakeLabels();}} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>🏷 Make labels</button>
+                        <button onClick={e=>{e.stopPropagation();openInMakeLabels(false);}} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>🏷 Make labels</button>
                         <button onClick={e=>{e.stopPropagation();printPriceList();}} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>🖨 Price list</button>
                         <button onClick={()=>setSentOpen(prev=>prev.size?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>{sentOpen.size?"Collapse all":"Expand all"}</button>
                       </span>
@@ -21112,7 +21155,7 @@ thead{display:table-header-group;}
                         </div>
                       )}
                       <div style={{display:"grid",gap:5}}>
-                        {shipSent.map(item=>{
+                        {shipSent.filter(matchQ).map(item=>{
                           // Everything else the stock card knows, listed only when it is
                           // actually filled in — the row stays a row, and the detail
                           // slides out underneath when someone wants it.
@@ -21187,6 +21230,7 @@ thead{display:table-header-group;}
                       </div>
                     </>
                   )}
+                  </>}
                 </>
               ):(
                 <>
