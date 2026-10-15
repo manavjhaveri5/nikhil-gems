@@ -19760,7 +19760,14 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
        whole flat — cheaper, for taking the lot: a rate per kg (showFlatRate) or
                     one total (showFlatPrice). Minerals often have only this one. */
   const kgOf=s=>{const k=(q,u)=>/^kgs?$/i.test(String(u||""))?+q||0:/^(g|gm|gms|grams?)$/i.test(String(u||""))?(+q||0)/1000:0;return k(s.qty,s.unit)||k(s.qty2,s.unit2)||(+s.weightGm>0?+s.weightGm/1000:0);};
-  const flatTotalOf=s=>+s.showFlatRate>0&&kgOf(s)>0?Math.round(+s.showFlatRate*kgOf(s)*100)/100:+s.showFlatPrice>0?+s.showFlatPrice:0;
+  // A whole-flat rate is per the card's own weight unit: per gram when it's weighed in grams.
+  const isG=u=>/^(g|gm|gms|grams?)$/i.test(String(u||"").trim()),isKg=u=>/^kgs?$/i.test(String(u||"").trim());
+  const flatUnitOf=s=>s.showFlatUnit||((+s.qty>0&&isG(s.unit))||(!(+s.qty>0&&isKg(s.unit))&&+s.qty2>0&&isG(s.unit2))?"gm":"kg");
+  const weightIn=(s,u)=>u==="gm"?kgOf(s)*1000:kgOf(s);
+  const flatTotalOf=s=>+s.showFlatRate>0&&kgOf(s)>0?Math.round(+s.showFlatRate*weightIn(s,flatUnitOf(s))*100)/100:+s.showFlatPrice>0?+s.showFlatPrice:0;
+  // Swap which quantity leads; cost and select price restated per the new unit.
+  const swapCardQty=s=>{const q1=parseFloat(s.qty)||0,q2=parseFloat(s.qty2)||0;const per=v=>{const n=parseFloat(v);return n>0&&q1>0&&q2>0?String(+(n*q1/q2).toFixed(4)):(v??"");};
+    onPatchStockItem?.(s.id,{qty:s.qty2??"",unit:s.unit2||"kg",qty2:s.qty??"",unit2:s.unit||"pcs",costPrice:per(s.costPrice),listPrice:per(s.listPrice),showFlatUnit:flatUnitOf(s)});};
   const selectTotalOf=s=>(+s.listPrice||0)*basisOf(s);
   const cardValUsd=s=>selectTotalOf(s)||flatTotalOf(s);
   const money=v=>`$${(+v).toLocaleString("en-US",{maximumFractionDigits:2})}`;
@@ -19776,12 +19783,12 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     const pick=planned?shipTagged.filter(s=>tagSel.has(s.id)):shipItems.filter(s=>shipSel.has(s.id));if(!pick.length)return;
     const patches={};let skipped=0;
     for(const s of pick){
-      if(mode==="flatkg"){const kg=kgOf(s);if(!(kg>0)){skipped++;continue;}patches[s.id]={showFlatRate:String(v),showFlatPrice:String(Math.round(v*kg*100)/100)};}
+      if(mode==="flatkg"){const u=flatUnitOf(s),w=weightIn(s,u);if(!(w>0)){skipped++;continue;}patches[s.id]={showFlatRate:String(v),showFlatUnit:u,showFlatPrice:String(Math.round(v*w*100)/100)};}
       else if(mode==="flat")patches[s.id]={showFlatPrice:String(v),showFlatRate:""};
       else patches[s.id]={listPrice:String(v)};
     }
     await onPatchStockItems?.(patches);
-    onToast?.(`✓ ${Object.keys(patches).length} priced — ${mode==="sp"?`select ${moneyCur(v)}/unit`:mode==="flatkg"?`whole flat ${moneyCur(v)}/kg`:`whole flat ${moneyCur(v)} a card`}${skipped?` · ${skipped} without a kg weight skipped`:""}`);
+    onToast?.(`✓ ${Object.keys(patches).length} priced — ${mode==="sp"?`select ${moneyCur(v)}/unit`:mode==="flatkg"?`whole flat ${moneyCur(v)} per card's weight unit (kg or gm)`:`whole flat ${moneyCur(v)} a card`}${skipped?` · ${skipped} without a kg weight skipped`:""}`);
     if(planned)setTagSel(new Set());else setShipSel(new Set());setShipSp("");setShipFlat("");
   };
   // Make Labels takes these cards (or the ticked ones) as a new set.
@@ -21177,7 +21184,7 @@ thead{display:table-header-group;}
                           <button onClick={()=>priceTicked("sp",true)} disabled={!(+shipSp>0)} style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
                           <span style={{marginLeft:8}}>Whole flat {curSym}</span>
                           <input value={shipFlat} onChange={e=>setShipFlat(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked(bulkFlat?"flat":"flatkg",true)} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
-                          <span style={{display:"inline-flex",border:"1px solid #475569",borderRadius:5,overflow:"hidden"}}>{[[false,"/kg"],[true,"total"]].map(([v,l])=><button key={l} onClick={()=>setBulkFlat(v)} style={{background:bulkFlat===v?"#10b981":"transparent",color:"#fff",border:"none",padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
+                          <span style={{display:"inline-flex",border:"1px solid #475569",borderRadius:5,overflow:"hidden"}}>{[[false,"/kg·gm"],[true,"total"]].map(([v,l])=><button key={l} onClick={()=>setBulkFlat(v)} style={{background:bulkFlat===v?"#10b981":"transparent",color:"#fff",border:"none",padding:"4px 8px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
                           <button onClick={()=>priceTicked(bulkFlat?"flat":"flatkg",true)} disabled={!(+shipFlat>0)} style={{background:"#10b981",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
                           <button onClick={()=>setTagSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button></>}
                       </div>
@@ -21197,7 +21204,10 @@ thead{display:table-header-group;}
                                   ?<span title="Grade" style={{flexShrink:0,fontSize:10,fontWeight:800,letterSpacing:.6,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>
                                   :<span onClick={e=>{e.stopPropagation();setEditCard({...s,market:Array.isArray(s.market)?s.market:String(s.market||"").split(",").map(x=>x.trim()).filter(Boolean)});}} title="No grade yet — add it" style={{flexShrink:0,fontSize:10,color:C.inkFaint,border:`1px dashed ${C.border}`,borderRadius:10,padding:"0 7px",lineHeight:1.6,cursor:"pointer"}}>+ grade</span>}
                               </div>
-                              <div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · {flowQtyLines(s).join(" · ")}</div>
+                              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                                <span style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · {flowQtyLines(s).join(" · ")}</span>
+                                {+s.qty>0&&+s.qty2>0&&<button onClick={e=>{e.stopPropagation();swapCardQty(s);}} title="Swap the two quantities — cost and price are restated per the new unit" style={{flexShrink:0,marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"0 7px",fontSize:10.5,fontWeight:700,color:C.blue,cursor:"pointer"}}>⇄</button>}
+                              </div>
                               {/* Cost, for pricing: per unit, per piece where the card counts pieces,
                                   and the card's total. Missing, it can be typed in right here. */}
                               <div onClick={e=>e.stopPropagation()} style={{fontSize:10.5,color:C.inkMid,marginBottom:6,background:cost>0?C.bg:C.amberBg,borderRadius:6,padding:"4px 7px",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
@@ -21213,13 +21223,13 @@ thead{display:table-header-group;}
                                 </div>
                                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                                   <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Whole flat</span>
-                                  <input key={`pf-${s.id}-${priceCur}-${flat}-${s.showFlatRate||""}-${s.showFlatPrice||""}`} defaultValue={flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice))} inputMode="decimal" placeholder={flat==="kg"?`${curSym}/kg`:`${curSym} total`}
+                                  <input key={`pf-${s.id}-${priceCur}-${flat}-${s.showFlatRate||""}-${s.showFlatPrice||""}`} defaultValue={flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice))} inputMode="decimal" placeholder={flat==="kg"?`${curSym}/${flatUnitOf(s)}`:`${curSym} total`}
                                     onBlur={e=>{const shown=flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice));if(e.target.value.trim()===shown)return;const v=fromIn(e.target.value);
                                       if(!(v>0))onPatchStockItem?.(s.id,{showFlatRate:"",showFlatPrice:""});
-                                      else if(flat==="kg")onPatchStockItem?.(s.id,{showFlatRate:String(v),showFlatPrice:String(Math.round(v*kgOf(s)*100)/100)});
+                                      else if(flat==="kg")onPatchStockItem?.(s.id,{showFlatRate:String(v),showFlatUnit:flatUnitOf(s),showFlatPrice:String(Math.round(v*weightIn(s,flatUnitOf(s))*100)/100)});
                                       else onPatchStockItem?.(s.id,{showFlatPrice:String(v),showFlatRate:""});}}
                                     onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:70,padding:"4px 7px",fontSize:mob?16:12,borderColor:flatTotalOf(s)>0?"#10b981":C.border}}/>
-                                  <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>{(kgOf(s)>0?[["kg","/kg"],["total","total"]]:[["total","total"]]).map(([v,l])=><button key={v} onClick={()=>setFlatMode(m=>({...m,[s.id]:v}))} style={{background:flat===v?"#10b981":"transparent",color:flat===v?"#fff":C.inkMid,border:"none",padding:"3px 6px",fontSize:10,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
+                                  <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>{(kgOf(s)>0?[["kg",`/${flatUnitOf(s)}`],["total","total"]]:[["total","total"]]).map(([v,l])=><button key={v} onClick={()=>setFlatMode(m=>({...m,[s.id]:v}))} style={{background:flat===v?"#10b981":"transparent",color:flat===v?"#fff":C.inkMid,border:"none",padding:"3px 6px",fontSize:10,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
                                   <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:flatTotalOf(s)>0?"#0f7a55":C.inkFaint,whiteSpace:"nowrap"}}>{flatTotalOf(s)>0?fmtCur(flatTotalOf(s)):"—"}</span>
                                 </div>
                                 {selectTotalOf(s)>0&&flatTotalOf(s)>0&&<div style={{fontSize:10,color:flatTotalOf(s)<selectTotalOf(s)?"#0f7a55":C.red,textAlign:"right",whiteSpace:"normal"}}>{flatTotalOf(s)<selectTotalOf(s)?`Whole flat saves ${Math.round((1-flatTotalOf(s)/selectTotalOf(s))*100)}%`:"Whole flat isn't cheaper than selecting"}</div>}
