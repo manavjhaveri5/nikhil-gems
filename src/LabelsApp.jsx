@@ -310,7 +310,7 @@ const EDIT_CSS = `
 
 /* The print sheet: its own document with inch geometry, the same card CSS and
    the same fit loop, so it prints what the editor shows. */
-function printSet(set, win = null) {
+function printSet(set, win = null, onPrinted = null) {
   const L = langOf(set.lang);
   const esc = t => String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const pages = [];
@@ -341,6 +341,10 @@ function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){ret
 (document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,${18 * g.k * g.kn * (set.lang ? 1 : 1.3)})});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,${17 * g.k * g.kl})});});
 </script></body></html>`);
   w.document.close();
+  // Printed from the sheet (its button or ⌘P): the caller marks the labels printed.
+  // A confirm() here would be lost — this tab is behind the sheet by then. Added
+  // after the write, since document.open() clears the window's listeners.
+  if (onPrinted) w.addEventListener("afterprint", () => onPrinted(), { once: true });
   return true;
 }
 
@@ -560,28 +564,35 @@ export function ShowLabelImport({ name, lang = "", stockIds = [], onClose, onSav
 
 /* Printing a show's labels from its Shipment tab: the labels for these stock
    cards, from the sets they were made in, on one sheet in the set's own design.
-   Then, if asked, they're marked printed in their sets. */
-export async function printStockLabels(stockIds, win) {
-  const sets = await loadK(KEY).catch(() => []);
-  const ids = new Set(stockIds);
-  const hits = [];
-  for (const s of Array.isArray(sets) ? sets : []) for (const c of s.cards || []) if (c.stockId && ids.has(c.stockId)) hits.push({ s, c });
-  // One label per stock card: the newest.
-  const best = new Map();
-  for (const h of hits) { const o = best.get(h.c.stockId); if (!o || String(h.c.addedAt || "") > String(o.c.addedAt || "")) best.set(h.c.stockId, h); }
-  const picked = [...best.values()];
-  if (!picked.length) { win?.close(); return { printed: 0, missing: stockIds.length }; }
+   When the sheet prints, onPrinted gets the stock ids that were on it. */
+// The newest label of each stock card — the one printed, and the one the Shipment tab reads.
+function newestLabels(sets, stockIds) {
+  const ids = new Set(stockIds), best = new Map();
+  for (const s of Array.isArray(sets) ? sets : []) for (const c of s.cards || []) if (c.stockId && ids.has(c.stockId)) {
+    const o = best.get(c.stockId); if (!o || String(c.addedAt || "") > String(o.c.addedAt || "")) best.set(c.stockId, { s, c });
+  }
+  return best;
+}
+export async function printStockLabels(stockIds, win, onPrinted) {
+  const picked = [...newestLabels(await loadK(KEY).catch(() => []), stockIds).values()];
+  if (!picked.length) { win?.close(); return { printed: 0, missing: stockIds.length, ids: [] }; }
   const counts = new Map(); for (const h of picked) counts.set(h.s.id, (counts.get(h.s.id) || 0) + 1);
   const base = picked.find(h => h.s.id === [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]).s;
-  printSet({ ...base, name: base.name, cards: picked.map(h => h.c) }, win);
-  return { printed: picked.length, missing: stockIds.length - picked.length, mark: async () => {
-    const ts = new Date().toISOString();
-    const bySet = new Map(); for (const h of picked) { const a = bySet.get(h.s.id) || new Set(); a.add(h.c.id); bySet.set(h.s.id, a); }
-    for (const s of Array.isArray(sets) ? sets : []) {
-      const want = bySet.get(s.id); if (!want) continue;
-      await upsertItemK(KEY, { ...s, cards: s.cards.map(c => want.has(c.id) ? { ...c, printedAt: ts } : c), updatedAt: ts });
-    }
-  } };
+  const ids = picked.map(h => h.c.stockId);
+  printSet({ ...base, name: base.name, cards: picked.map(h => h.c) }, win, onPrinted ? () => onPrinted(ids) : null);
+  return { printed: picked.length, missing: stockIds.length - picked.length, ids };
+}
+
+/* Marks these stock cards' labels printed (or not) in their sets. Read at the
+   time, not when the sheet opened, so an edit made in between isn't undone. */
+export async function markStockLabelsPrinted(stockIds, printed = true) {
+  const best = newestLabels(await loadK(KEY).catch(() => []), stockIds);
+  const ts = new Date().toISOString();
+  const bySet = new Map();
+  for (const { s, c } of best.values()) if (!!c.printedAt !== printed) { const e = bySet.get(s.id) || { s, ids: new Set() }; e.ids.add(c.id); bySet.set(s.id, e); }
+  for (const { s, ids } of bySet.values())
+    await upsertItemK(KEY, { ...s, cards: s.cards.map(c => ids.has(c.id) ? { ...c, printedAt: printed ? ts : "" } : c), updatedAt: ts });
+  return { ids: [...best.keys()], missing: stockIds.length - best.size };
 }
 
 const btn = (primary = false) => ({ background: primary ? "#6f5430" : "#f4f2ee", color: primary ? "#fff" : "#2a2622", border: `1px solid ${primary ? "#6f5430" : "#d6d0c7"}`, borderRadius: 6, padding: "8px 13px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "system-ui,sans-serif", whiteSpace: "nowrap" });
@@ -742,14 +753,15 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
               const todo = view.filter(c => !c.printedAt);
               const only = todo.length && todo.length < view.length && window.confirm(`Print only the ${todo.length} not printed yet?\n\nCancel prints all ${view.length}.`);
               const cards = only ? todo : view;
-              if (!printSet({ ...set, cards })) return say("Allow pop-ups to open the print sheet");
-              const unmarked = cards.filter(c => !c.printedAt);
-              setTimeout(() => {
-                if (unmarked.length && window.confirm(`Mark these ${unmarked.length} label${unmarked.length === 1 ? "" : "s"} as printed?`)) {
-                  const ids = new Set(unmarked.map(c => c.id)); const ts = new Date().toISOString();
-                  patchSet({ cards: current().cards.map(c => ids.has(c.id) ? { ...c, printedAt: ts } : c) });
-                }
-              }, 600);
+              // Printing the sheet marks the unprinted ones printed — in this set, even if another is open by then.
+              const sid = set.id, ids = new Set(cards.filter(c => !c.printedAt).map(c => c.id));
+              const onPrinted = ids.size ? () => {
+                const s0 = (setsRef.current || []).find(x => x.id === sid); if (!s0) return;
+                const ts = new Date().toISOString();
+                saveSet({ ...s0, cards: s0.cards.map(c => ids.has(c.id) && !c.printedAt ? { ...c, printedAt: ts } : c) });
+                say(`✓ ${ids.size} label${ids.size === 1 ? "" : "s"} marked printed`);
+              } : null;
+              if (!printSet({ ...set, cards }, null, onPrinted)) return say("Allow pop-ups to open the print sheet");
             }} style={btn(true)}>🖨 Print / PDF</button>
           </>
         ) : (

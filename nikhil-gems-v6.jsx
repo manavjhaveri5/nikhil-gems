@@ -19148,14 +19148,26 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [printedMap,setPrintedMap]=useState(()=>new Map());
   const loadPrinted=useCallback(()=>loadK("ng-label-sets-v1").then(v=>{const m=new Map();for(const st of Array.isArray(v)?v:[])for(const c of st.cards||[])if(c.stockId){const o=m.get(c.stockId);if(!o||String(c.addedAt||"")>String(o.at||""))m.set(c.stockId,{at:String(c.addedAt||""),printedAt:c.printedAt||""});}setPrintedMap(m);}).catch(()=>{}),[]);
   useEffect(()=>{if(!isDetail)return;loadPrinted();return onCacheRefresh(keys=>{if(keys.includes("ng-label-sets-v1"))loadPrinted();});},[]);// eslint-disable-line react-hooks/exhaustive-deps
+  // Marks these cards' labels printed (or not) in their label sets — by hand, or when the sheet prints.
+  const markPrinted=async(ids,on=true)=>{
+    if(!ids.length)return;
+    try{
+      const r=await import("./src/LabelsApp.jsx").then(m=>m.markStockLabelsPrinted(ids,on));
+      await loadPrinted();
+      const n=r.ids.length;
+      onToast?.(n?`✓ ${n} label${n===1?"":"s"} marked ${on?"printed":"not printed"}${r.missing?` · ${r.missing} ha${r.missing===1?"s":"ve"} no label in Make Labels`:""}`:"No labels found for these cards — make them in step 1");
+    }catch(e){onToast?.("⚠ Not saved: "+e.message);}
+  };
+  const [printPending,setPrintPending]=useState(null);    // step 2: {ids} — a print sheet is open, not printed yet
   const printLabelsFor=ids=>{
     if(!ids.length)return;
     const w=window.open("","_blank");if(!w){onToast?.("Allow pop-ups to open the print sheet");return;}
     w.document.write("<p style='font:14px system-ui;padding:20px'>Preparing labels…</p>");
-    import("./src/LabelsApp.jsx").then(m=>m.printStockLabels(ids,w)).then(async r=>{
+    // Printing the sheet marks them printed; until it does, a bar here offers to.
+    import("./src/LabelsApp.jsx").then(m=>m.printStockLabels(ids,w,got=>{setPrintPending(null);markPrinted(got,true);})).then(r=>{
       if(!r?.printed){onToast?.("No labels found for these cards — make them first");return;}
       if(r.missing)onToast?.(`${r.missing} card${r.missing===1?" has":"s have"} no label yet`);
-      setTimeout(async()=>{if(window.confirm(`Mark these ${r.printed} label${r.printed===1?"":"s"} as printed?`)){await r.mark();await loadPrinted();onToast?.(`✓ ${r.printed} marked printed`);}},800);
+      setPrintPending({ids:r.ids});
     }).catch(e=>{w.close();onToast?.("⚠ "+e.message);});
   };
   const [editCard,setEditCard]=useState(null);            // stock card open in the pop-up editor: a draft copy
@@ -21378,7 +21390,11 @@ thead{display:table-header-group;}
                     const readyAll=shipTagged.filter(s=>s.labelMadeAt).filter(matchQ);
                     const ready=readyAll.filter(s=>readyFilter==="all"||(readyFilter==="printed"?isPrinted(s):!isPrinted(s)));
                     const notYet=shipTagged.filter(s=>!s.labelMadeAt).length;
-                    const all=readySel.size===ready.length&&ready.length>0;
+                    // Only ticked cards on screen count — a filter or search hides the rest from print and send.
+                    const sel=ready.filter(s=>readySel.has(s.id));
+                    const all=sel.length===ready.length&&ready.length>0;
+                    const selPrinted=sel.length>0&&sel.every(isPrinted);
+                    const toPrint=sel.length?sel:ready.filter(s=>!isPrinted(s));
                     return(<>
                       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#EAF6EF",border:"1px solid #3FA36B55",borderRadius:12,padding:"12px 14px"}}>
                         <div style={{flex:1,minWidth:200}}>
@@ -21390,9 +21406,17 @@ thead{display:table-header-group;}
                             <button key={k} onClick={()=>{setReadyFilter(k);setReadySel(new Set());}} style={{background:readyFilter===k?C.ink:"transparent",color:readyFilter===k?"#fff":C.inkMid,border:"none",padding:"7px 10px",fontSize:11.5,fontWeight:700,cursor:"pointer"}}>{l}</button>))}
                         </span>
                         <button onClick={()=>setReadySel(all?new Set():new Set(ready.map(s=>s.id)))} disabled={!ready.length} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:C.ink}}>{all?"Untick all":`Tick all ${ready.length}`}</button>
-                        <button onClick={()=>printLabelsFor((readySel.size?ready.filter(s=>readySel.has(s.id)):ready.filter(s=>!isPrinted(s))).map(s=>s.id))} disabled={!ready.length} style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:8,padding:"9px 14px",fontSize:12.5,fontWeight:750,cursor:"pointer"}}>🖨 Print {readySel.size?`${readySel.size} label${readySel.size===1?"":"s"}`:"unprinted labels"}</button>
-                        {isAdmin&&<button disabled={!readySel.size} onClick={()=>sendTaggedPacked(readySel)} style={{background:readySel.size?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:readySel.size?"pointer":"default"}}>📦 Send {readySel.size||""} to the show</button>}
+                        {sel.length>0&&(()=>{const ids=sel.filter(s=>isPrinted(s)===selPrinted).map(s=>s.id);return(
+                          <button onClick={()=>markPrinted(ids,!selPrinted)} title={selPrinted?"These labels need printing again":"Printed some other way — mark them done"} style={{background:C.surface,border:`1px solid ${selPrinted?C.border:"#0f7a55"}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:selPrinted?C.inkMid:"#0f7a55"}}>{selPrinted?"↺ Mark":"✓ Mark"} {ids.length} {selPrinted?"not printed":"printed"}</button>);})()}
+                        <button onClick={()=>printLabelsFor(toPrint.map(s=>s.id))} disabled={!toPrint.length} style={{background:toPrint.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 14px",fontSize:12.5,fontWeight:750,cursor:toPrint.length?"pointer":"default"}}>🖨 Print {sel.length?`${sel.length} label${sel.length===1?"":"s"}`:"unprinted labels"}</button>
+                        {isAdmin&&<button disabled={!sel.length} onClick={()=>sendTaggedPacked(new Set(sel.map(s=>s.id)))} style={{background:sel.length?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:sel.length?"pointer":"default"}}>📦 Send {sel.length||""} to the show</button>}
                       </div>
+                      {printPending&&(()=>{const n=printPending.ids.length;return(
+                        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#FBF3E4",border:"1px solid #8B6F4766",borderRadius:12,padding:"10px 14px"}}>
+                          <div style={{flex:1,minWidth:200,fontSize:12.5,color:C.ink}}>🖨 The sheet with {n} label{n===1?"":"s"} is open in a new tab — printing it marks {n===1?"it":"them"} printed here.</div>
+                          <button onClick={()=>{setPrintPending(null);markPrinted(printPending.ids,true);}} style={{background:"#0f7a55",color:"#fff",border:"none",borderRadius:8,padding:"8px 13px",fontSize:12.5,fontWeight:750,cursor:"pointer"}}>✓ Mark {n} printed now</button>
+                          <button onClick={()=>setPrintPending(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:C.inkMid}}>Not printed</button>
+                        </div>);})()}
                       {!ready.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>{shipTagged.length?"No labelled cards yet — make labels in step 1 and they'll be here, green.":"Nothing planned for this show."}</div>:
                       <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(210px,1fr))",gap:12}}>
                         {ready.map(s=>{const on=readySel.has(s.id);const cov=stockCover(s);return(
@@ -21406,7 +21430,7 @@ thead{display:table-header-group;}
                               <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{textTransform:"uppercase",fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
                               <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,...flowQtyLines(s)].filter(Boolean).join(" · ")}</div>
                               <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
-                                <span style={{fontWeight:700,color:isPrinted(s)?"#0f7a55":"#9a5a12"}}>{isPrinted(s)?"🖨 Printed":"🏷 Not printed"}</span>
+                                <button onClick={e=>{e.stopPropagation();markPrinted([s.id],!isPrinted(s));}} title={isPrinted(s)?`Printed ${fmtDate(String(printedMap.get(s.id).printedAt).slice(0,10))} — click to mark not printed`:"Click to mark printed"} style={{fontWeight:700,fontSize:11,color:isPrinted(s)?"#0f7a55":"#9a5a12",background:isPrinted(s)?"#D9F0E3":"#FBEBD6",border:`1px solid ${isPrinted(s)?"#0f7a5533":"#9a5a1233"}`,borderRadius:10,padding:"1px 8px",cursor:"pointer"}}>{isPrinted(s)?"🖨 Printed":"🏷 Not printed"}</button>
                                 <span style={{fontWeight:700,color:C.ink}}>{cardValUsd(s)>0?fmtCur(cardValUsd(s)):""}</span>
                               </div>
                             </div>
