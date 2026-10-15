@@ -458,7 +458,7 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
   const [targetId, setTargetId] = useState(guess?.id || "new");
   // A label already in the chosen set is shown as it is there (any wording changed
   // by hand kept), with today's price and quantity from the stock card.
-  const withExisting = id => { const tgt = sets.find(s => s.id === id); return incoming.cards.map(c => { const old = tgt?.cards?.find(x => c.stockId && x.stockId === c.stockId); return old ? { ...old, qty: c.qty || old.qty, price: c.price || old.price, stockId: c.stockId, id: c.id, _was: old.id } : c; }); };
+  const withExisting = id => { const tgt = sets.find(s => s.id === id); return incoming.cards.map(c => { const old = tgt?.cards?.find(x => c.stockId && x.stockId === c.stockId); return old ? { ...old, qty: c.qty || old.qty, price: c.price || old.price, box: c.box || old.box || "", origin: old.origin || c.origin || "", type: old.type || c.type || "", stockId: c.stockId, id: c.id, _was: old.id } : c; }); };
   const [cards, setCards] = useState(() => withExisting(guess?.id || "new"));
   useEffect(() => { setCards(withExisting(targetId)); }, [targetId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [on, setOn] = useState(() => new Set(incoming.cards.map(c => c.id)));
