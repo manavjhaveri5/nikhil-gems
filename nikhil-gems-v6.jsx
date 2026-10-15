@@ -21340,7 +21340,13 @@ thead{display:table-header-group;}
                                   <button onClick={()=>setEditCard({...s,market:Array.isArray(s.market)?s.market:String(s.market||"").split(",").map(x=>x.trim()).filter(Boolean)})} style={{background:"none",border:`1px solid ${C.border}`,color:C.inkMid,borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>✎ Edit card</button>
                                   <button onClick={()=>setLabelIds([s.id])} style={{marginLeft:"auto",background:"none",border:`1px solid #8B6F47`,color:"#8B6F47",borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>{s.labelMadeAt?"✎ Edit label":"🏷 Make label"}</button>
                                 </div>
-                                {val>0&&pcs>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.4}}>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}{cost>0?` · ${((val*usdInr)/cost).toFixed(1)}× cost`:""}</div>}
+                                {/* The numbers that help price: per piece where the card counts pieces,
+                                    and what each price is on cost — for weighed cards too. */}
+                                {val>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.5}}>
+                                  {pcs>0&&<div>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}</div>}
+                                  {cost>0&&<div>{selectTotalOf(s)>0?<>Select <b style={{color:C.inkMid}}>{((selectTotalOf(s)*usdInr)/cost).toFixed(1)}×</b> cost</>:null}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?<>Whole <b style={{color:C.inkMid}}>{((flatTotalOf(s)*usdInr)/cost).toFixed(1)}×</b> cost</>:null} <span style={{opacity:.8}}>(profit {fmtCur(Math.max(selectTotalOf(s),flatTotalOf(s))-cost/usdInr).replace("-","−")}{flatTotalOf(s)>0&&selectTotalOf(s)>0?` select · ${fmtCur(flatTotalOf(s)-cost/usdInr).replace("-","−")} whole`:""})</span></div>}
+                                  {!cost&&<div style={{color:C.amber}}>Add the cost to see the markup</div>}
+                                </div>}
                               </div>
                             </div>
                           </div>);})}
