@@ -172,11 +172,13 @@ function Editable({ value, onCommit, ph, className, style, onInput }) {
 function Card({ c, lang, onPatch, onAct, index, total, g }) {
   const en = useRef(null), loc = useRef(null);
   const L = langOf(lang);
-  const refit = useCallback(() => { fit(en.current?.querySelector(".lbl-ed"), 18 * g.k * g.kn); fit(loc.current?.querySelector(".lbl-ed"), 17 * g.k * g.kl); }, [g.k, g.kn, g.kl]);
+  // English only: the name takes the second line's room, a size larger.
+  const solo = !lang;
+  const refit = useCallback(() => { fit(en.current?.querySelector(".lbl-ed"), 18 * g.k * g.kn * (solo ? 1.3 : 1)); fit(loc.current?.querySelector(".lbl-ed"), 17 * g.k * g.kl); }, [g.k, g.kn, g.kl, solo]);
   useEffect(() => { document.fonts?.ready.then(refit); refit(); }, [c.en, c.local, lang, refit, g.w, g.h]);
   const f = (k, cls, ph, style) => <Editable value={c[k]} ph={ph} className={cls} style={style} onInput={k === "en" || k === "local" ? refit : undefined} onCommit={v => onPatch({ [k]: v })} />;
   return (
-    <div className="lbl-card" style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
+    <div className={solo ? "lbl-card lbl-solo" : "lbl-card"} style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
       <div className="lbl-code">{f("code", "", "code")}</div>
       <div ref={en} className="lbl-line">{f("en", "lbl-en", "English name")}</div>
       {lang && <div ref={loc} className="lbl-line">{f("local", "lbl-jp", L.ph, L.font ? { fontFamily: L.font } : undefined)}</div>}
@@ -275,6 +277,7 @@ const CARD_CSS = `
 .lbl-rule2{align-self:stretch;border-top:1px solid #e2d6c4;border-bottom:1px solid #e2d6c4;height:calc(5px*var(--k));margin-top:calc(8px*var(--k))}
 .lbl-foot{align-self:stretch;display:flex;justify-content:space-between;align-items:baseline;font-size:calc(11.5px*var(--k)*var(--kf,1));padding:calc(7px*var(--k)) 0 calc(12px*var(--k));font-variant-numeric:oldstyle-nums}
 .lbl-foot>div{min-width:20px}.lbl-price{text-align:right}
+.lbl-solo .lbl-code+.lbl-line{flex:1;align-items:center}
 `;
 const EDIT_CSS = `
 .lbl-ed{cursor:text;border-radius:2px;outline:none}
@@ -297,7 +300,7 @@ function printSet(set) {
   const pages = [];
   const g = geom(set);
   for (let i = 0; i < set.cards.length; i += g.per) pages.push(set.cards.slice(i, i + g.per));
-  const card = c => `<div class="lbl-card"><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en)}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local)}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
+  const card = c => `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en)}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local)}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
   const w = window.open("", "_blank");
   if (!w) return false;
   const paper = PAPER[set.paper] || PAPER.letter;
@@ -317,7 +320,7 @@ ${layoutCss(set)}
 ${pages.map(p => `<div class="sheet">${p.map(card).join("")}</div>`).join("")}
 <script>
 function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){return el.scrollWidth>el.clientWidth+1||el.scrollHeight>s*1.3*2+2}while(over()&&s>base*.6){s-=.5;el.style.fontSize=s+"px";}}
-(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,${18 * g.k * g.kn})});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,${17 * g.k * g.kl})});});
+(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,${18 * g.k * g.kn * (set.lang ? 1 : 1.3)})});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,${17 * g.k * g.kl})});});
 </script></body></html>`);
   w.document.close();
   return true;
