@@ -62,9 +62,9 @@ const geom = set => {
    its own size (a share of the card's own), the name and the type lines can
    sit left, centred or right, the name at the top or in the middle, and any
    part can be left off. */
-const PARTS = [["name", "Name"], ["local", "Second-language name"], ["type", "Type"], ["origin", "Origin"], ["foot", "Qty & price"], ["code", "Code"]];
+const PARTS = [["name", "Name"], ["local", "Second-language name"], ["type", "Type"], ["origin", "Origin"], ["foot", "Qty & price"], ["box", "Box number"], ["code", "Code"]];
 const SCALES = [0.7, 0.85, 1, 1.2, 1.4, 1.7, 2, 2.5];
-const LAYOUT0 = { name: { s: 1, align: "center", pos: "top", show: true }, local: { s: 1, show: true }, type: { s: 1, align: "center", show: true }, origin: { s: 1, show: true }, foot: { s: 1, show: true }, code: { s: 1, show: true } };
+const LAYOUT0 = { name: { s: 1, align: "center", pos: "top", show: true }, local: { s: 1, show: true }, type: { s: 1, align: "center", show: true }, origin: { s: 1, show: true }, foot: { s: 1, show: true }, box: { s: 1, show: true }, code: { s: 1, show: true } };
 function layoutOf(set) {
   const l = set?.layout || {};
   return Object.fromEntries(Object.entries(LAYOUT0).map(([k, d]) => [k, { ...d, ...(l[k] || {}) }]));
@@ -74,18 +74,18 @@ function layoutCss(set) {
   const ta = a => (a === "left" ? "left" : a === "right" ? "right" : "center");
   const jc = a => (a === "left" ? "flex-start" : a === "right" ? "flex-end" : "center");
   return `
-.lbl-card{--kn:${L.name.s};--kl:${L.local.s};--kt:${L.type.s};--ko:${L.origin.s};--kf:${L.foot.s};--kc:${L.code.s}}
+.lbl-card{--kn:${L.name.s};--kl:${L.local.s};--kt:${L.type.s};--ko:${L.origin.s};--kf:${L.foot.s};--kc:${L.code.s};--kb:${L.box.s}}
 .lbl-line{justify-content:${jc(L.name.align)}}.lbl-en,.lbl-jp{text-align:${ta(L.name.align)}}
 .lbl-type,.lbl-origin{align-self:stretch;text-align:${ta(L.type.align)}}
 ${L.name.pos === "middle" ? ".lbl-code+.lbl-line{margin-top:auto}" : ""}
 ${L.name.show ? "" : ".lbl-code+.lbl-line{display:none}"}
 ${L.local.show ? "" : ".lbl-code+.lbl-line+.lbl-line{display:none}"}
 ${L.type.show ? "" : ".lbl-type{display:none}"}${L.origin.show ? "" : ".lbl-origin{display:none}"}
-${L.foot.show ? "" : ".lbl-rule2,.lbl-foot{display:none}"}${L.code.show ? "" : ".lbl-code{display:none}"}
+${L.foot.show ? "" : ".lbl-rule2,.lbl-foot{display:none}"}${L.code.show ? "" : ".lbl-code{display:none}"}${L.box.show ? "" : ".lbl-box{display:none}"}
 ${L.type.show || L.origin.show ? "" : ".lbl-rule1{border-top:0}"}`;
 }
 
-const FIELDS = ["code", "en", "local", "type", "origin", "qty", "price"];
+const FIELDS = ["box", "code", "en", "local", "type", "origin", "qty", "price"];
 const blank = () => ({ id: uid(), code: "", en: "", local: "", type: "", origin: "", qty: "", price: "", addedAt: new Date().toISOString() });
 /* Newest on top: cards added or updated most recently first, and the ones
    already printed after the ones still to print. Cards from before this kept
@@ -186,6 +186,7 @@ function Card({ c, lang, onPatch, onAct, index, total, g }) {
   return (
     <div className={`lbl-card${solo ? " lbl-solo" : ""}${c.printedAt ? " lbl-printed" : ""}`} style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
       {c.printedAt && <div className="lbl-badge" title={`Printed ${String(c.printedAt).slice(0, 10)}`}>✓ Printed</div>}
+      <div className="lbl-box">{f("box", "", "box")}</div>
       <div className="lbl-code">{f("code", "", "code")}</div>
       <div ref={en} className="lbl-line">{f("en", "lbl-en", "English name")}</div>
       {lang && <div ref={loc} className="lbl-line">{f("local", "lbl-jp", L.ph, L.font ? { fontFamily: L.font } : undefined)}</div>}
@@ -210,7 +211,7 @@ function Card({ c, lang, onPatch, onAct, index, total, g }) {
    on the ticked cards, or all of them when none are ticked. */
 function BulkTable({ set, onCards, say }) {
   const L = langOf(set.lang);
-  const cols = [["code", "Code"], ["en", "Name"], ...(set.lang ? [["local", L.label || "Second name"]] : []), ["type", "Type"], ["origin", "Origin"], ["qty", "Qty"], ["price", "Price"]];
+  const cols = [["box", "Box"], ["code", "Code"], ["en", "Name"], ...(set.lang ? [["local", L.label || "Second name"]] : []), ["type", "Type"], ["origin", "Origin"], ["qty", "Qty"], ["price", "Price"]];
   const [sel, setSel] = useState(() => new Set());
   const [field, setField] = useState("price"), [mode, setMode] = useState("set"), [a, setA] = useState(""), [b, setB] = useState("");
   const live = new Set(set.cards.map(c => c.id));
@@ -275,7 +276,9 @@ function BulkTable({ set, onCards, say }) {
 
 const CARD_CSS = `
 .lbl-card{--k:1;position:relative;background:#fff;border:1px solid #cfb793;border-top:calc(6px*var(--k)) solid #8a6a3e;display:flex;flex-direction:column;align-items:center;padding:calc(12px*var(--k)) calc(18px*var(--k)) 0;color:#1d1a17;font-family:"Cormorant Garamond",Garamond,serif;width:336px;height:178px;box-sizing:border-box;overflow:hidden}
-.lbl-code{position:absolute;left:6px;top:3px;font-size:calc(8px*var(--k)*var(--kc,1));color:#8a6a3e;min-width:10px}
+.lbl-code{position:absolute;right:6px;top:3px;font-size:calc(8px*var(--k)*var(--kc,1));color:#8a6a3e;min-width:10px;text-align:right}
+.lbl-box{position:absolute;left:6px;top:3px;font-size:calc(9px*var(--k)*var(--kb,1));font-weight:600;letter-spacing:.04em;color:#5a4527;min-width:10px;font-family:system-ui,-apple-system,sans-serif}
+.lbl-box>div:not(:empty)::before{content:"BOX ";font-size:.8em;letter-spacing:.12em;opacity:.6}
 .lbl-line{width:100%;display:flex;justify-content:center}
 .lbl-en{font-size:calc(18px*var(--k)*var(--kn,1));letter-spacing:.03em;line-height:1.15;white-space:normal;overflow-wrap:break-word;width:100%;max-width:100%;text-align:center;min-height:calc(21px*var(--k)*var(--kn,1))}
 .lbl-jp{font-family:"Noto Serif JP","Hiragino Mincho ProN","Yu Mincho",serif;font-size:calc(17px*var(--k)*var(--kl,1));letter-spacing:.04em;line-height:1.3;white-space:nowrap;max-width:100%;text-align:center;min-height:calc(22px*var(--k)*var(--kl,1))}
@@ -289,7 +292,7 @@ const CARD_CSS = `
 `;
 const EDIT_CSS = `
 .lbl-printed{opacity:.55}.lbl-printed:hover{opacity:1}
-.lbl-badge{position:absolute;right:6px;top:4px;z-index:2;font:700 9px system-ui,sans-serif;letter-spacing:.06em;color:#fff;background:#3FA36B;border-radius:8px;padding:1px 7px}
+.lbl-badge{position:absolute;right:6px;top:18px;z-index:2;font:700 9px system-ui,sans-serif;letter-spacing:.06em;color:#fff;background:#3FA36B;border-radius:8px;padding:1px 7px}
 .lbl-manual .lbl-ctl button.mv{display:inline-block}.lbl-ctl button.mv{display:none}
 .lbl-ed{cursor:text;border-radius:2px;outline:none}
 .lbl-ed:hover{background:rgba(138,106,62,.08)}
@@ -311,7 +314,7 @@ function printSet(set) {
   const pages = [];
   const g = geom(set);
   for (let i = 0; i < set.cards.length; i += g.per) pages.push(set.cards.slice(i, i + g.per));
-  const card = c => `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en)}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local)}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
+  const card = c => `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-box"><div>${esc(c.box)}</div></div><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en)}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local)}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
   const w = window.open("", "_blank");
   if (!w) return false;
   const paper = PAPER[set.paper] || PAPER.letter;
@@ -361,6 +364,7 @@ function cardFromStock(s, lang, cur) {
     origin: String(s.labelOrigin || s.origin || "").trim(),
     qty,
     price: labelPrice(s),
+    box: String(s.location || "").replace(/^box\s*/i, "").trim(),
     addedAt: new Date().toISOString(),
     stockId: s.id,
   };
@@ -475,7 +479,7 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
       // Changed, so it goes to the top and is due a fresh print.
       const now = { addedAt: new Date().toISOString(), printedAt: "" };
       if (at >= 0 && _was) next[at] = { ...next[at], ...card, ...now, id: next[at].id };
-      else if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type, ...now };
+      else if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, box: c.box || next[at].box || "", code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type, ...now };
       else next.unshift({ ...card, ...now });
     }
     onDone({ ...target, cards: next.filter(x => x.en || x.local || x.price) }, false, picked.length, made);
@@ -594,6 +598,19 @@ export default function LabelsApp({ onHome }) {
 
   const list = sets || [];
   const set = list.find(s => s.id === openId);
+  /* Labels made before the box was printed: those linked to a stock card get its
+     box filled in when the set is opened, so staff know where each one goes. */
+  useEffect(() => {
+    const s0 = (setsRef.current || []).find(x => x.id === openId);
+    if (!s0 || !(s0.cards || []).some(c => c.stockId && !c.box)) return;
+    loadK("ng-stock-v5").then(all => {
+      const loc = new Map((Array.isArray(all) ? all : []).map(x => [x.id, String(x.location || "").replace(/^box\s*/i, "").trim()]));
+      const cur = (setsRef.current || []).find(x => x.id === openId); if (!cur) return;
+      let n = 0;
+      const cards = cur.cards.map(c => c.stockId && !c.box && loc.get(c.stockId) ? (n++, { ...c, box: loc.get(c.stockId) }) : c);
+      if (n) { saveSet({ ...cur, cards }); say(`Box numbers added to ${n} label${n === 1 ? "" : "s"}`); }
+    }).catch(() => {});
+  }, [openId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Saves are per set, so two people on two sets never overwrite each other.
   function saveSet(next) {
     next = { ...next, updatedAt: new Date().toISOString() };
