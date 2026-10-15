@@ -159,7 +159,8 @@ function fit(el, base) {
 /* Uncontrolled on purpose (as in NameCard.jsx): a contentEditable React
    re-renders under the caret loses it mid-word, so text is written when the
    value changes from outside and edits commit on blur. */
-function Editable({ value, onCommit, ph, className, style, onInput }) {
+/* multiline: Enter starts a new line (names); elsewhere Enter finishes the field. */
+function Editable({ value, onCommit, ph, className, style, onInput, multiline = false }) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -170,8 +171,8 @@ function Editable({ value, onCommit, ph, className, style, onInput }) {
       data-ph={ph}
       onInput={onInput}
       onPaste={e => { e.preventDefault(); document.execCommand("insertText", false, e.clipboardData.getData("text").replace(/\s*\n\s*/g, " ")); }}
-      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); } }}
-      onBlur={e => { const v = e.currentTarget.innerText.replace(/\s+/g, " ").trim(); e.currentTarget.innerText = v; if (v !== (value || "")) onCommit(v); }} />
+      onKeyDown={e => { if (e.key === "Enter" && !(multiline && !e.metaKey && !e.ctrlKey)) { e.preventDefault(); e.currentTarget.blur(); } else if (e.key === "Enter") { e.preventDefault(); document.execCommand("insertLineBreak"); } }}
+      onBlur={e => { const v = multiline ? e.currentTarget.innerText.split(/\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n") : e.currentTarget.innerText.replace(/\s+/g, " ").trim(); e.currentTarget.innerText = v; if (v !== (value || "")) onCommit(v); }} />
   );
 }
 
@@ -182,7 +183,7 @@ function Card({ c, lang, onPatch, onAct, index, total, g }) {
   const solo = !lang;
   const refit = useCallback(() => { fit(en.current?.querySelector(".lbl-ed"), 18 * g.k * g.kn * (solo ? 1.3 : 1)); fit(loc.current?.querySelector(".lbl-ed"), 17 * g.k * g.kl); }, [g.k, g.kn, g.kl, solo]);
   useEffect(() => { document.fonts?.ready.then(refit); refit(); }, [c.en, c.local, lang, refit, g.w, g.h]);
-  const f = (k, cls, ph, style) => <Editable value={c[k]} ph={ph} className={cls} style={style} onInput={k === "en" || k === "local" ? refit : undefined} onCommit={v => onPatch({ [k]: v })} />;
+  const f = (k, cls, ph, style) => <Editable value={c[k]} ph={ph} className={cls} style={style} multiline={k === "en" || k === "local"} onInput={k === "en" || k === "local" ? refit : undefined} onCommit={v => onPatch({ [k]: v })} />;
   return (
     <div className={`lbl-card${solo ? " lbl-solo" : ""}${c.printedAt ? " lbl-printed" : ""}`} style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
       {c.printedAt && <div className="lbl-badge" title={`Printed ${String(c.printedAt).slice(0, 10)}`}>✓ Printed</div>}
@@ -289,6 +290,7 @@ const CARD_CSS = `
 .lbl-foot{align-self:stretch;display:flex;justify-content:space-between;align-items:baseline;font-size:calc(11.5px*var(--k)*var(--kf,1));padding:calc(7px*var(--k)) 0 calc(12px*var(--k));font-variant-numeric:oldstyle-nums}
 .lbl-foot>div{min-width:20px}.lbl-price{text-align:right}
 .lbl-solo .lbl-code+.lbl-line{flex:1;align-items:center}
+.lbl-en{white-space:pre-line}.lbl-jp{white-space:pre}
 `;
 const EDIT_CSS = `
 .lbl-printed{opacity:.55}.lbl-printed:hover{opacity:1}
@@ -314,7 +316,7 @@ function printSet(set) {
   const pages = [];
   const g = geom(set);
   for (let i = 0; i < set.cards.length; i += g.per) pages.push(set.cards.slice(i, i + g.per));
-  const card = c => `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-box"><div>${esc(c.box)}</div></div><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en)}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local)}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
+  const card = c => `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-box"><div>${esc(c.box)}</div></div><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en).replace(/\n/g, "<br>")}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local).replace(/\n/g, "<br>")}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
   const w = window.open("", "_blank");
   if (!w) return false;
   const paper = PAPER[set.paper] || PAPER.letter;
