@@ -9122,11 +9122,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:mob?15:18,color:C.ink,lineHeight:1.15,letterSpacing:.1,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                           {s.material||s.name||"—"}
                         </div>
-                        {s.shape&&<div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.2,marginBottom:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.shape}{s.size?` · ${s.size}`:""}</div>}
+                        {(s.shape||s.grade)&&<div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8,minWidth:0}}>
+                          {s.shape&&<span style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{s.shape}{s.size?` · ${s.size}`:""}</span>}
+                          {s.grade&&<span title="Grade" style={{flexShrink:0,fontSize:9.5,fontWeight:800,letterSpacing:.8,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>}
+                        </div>}
                         {/* Primary stat row: qty + weight */}
                         <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:4}}>
                           {qty>0&&<span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?17:20,fontWeight:600,lineHeight:1,color:qty<5&&s.unit==="pcs"?C.red:C.ink}}>{+parseFloat(qty.toFixed(3))}<span style={{fontFamily:"inherit",fontWeight:500,fontSize:mob?11:12,fontStyle:"italic",color:C.inkFaint,marginLeft:3}}>{s.unit}</span></span>}
-                          {s.qty2&&+s.qty2>0&&<span style={{display:"inline-flex",alignItems:"center",gap:3}}>
+                          {s.qty2&&+s.qty2>0&&!(String(s.unit2||"kg").toLowerCase()===String(s.unit||"").toLowerCase()&&Math.abs(+s.qty2-qty)<1e-9)&&<span style={{display:"inline-flex",alignItems:"center",gap:3}}>
                             <span style={{color:C.border,fontSize:12}}>·</span>
                             <span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?15:17,fontWeight:600,lineHeight:1,color:"#8B6F47"}}>{(()=>{const v=+parseFloat((+s.qty2).toFixed(4));return v<1&&/^kg/i.test(s.unit2||"kg")?<>{(v*1000).toFixed(0)}<span style={{fontStyle:"italic",fontWeight:500,fontSize:mob?11:12,color:C.inkFaint,marginLeft:3}}>g</span></>:<>{v}<span style={{fontStyle:"italic",fontWeight:500,fontSize:mob?11:12,color:C.inkFaint,marginLeft:3}}>{s.unit2||"kg"}</span></>;})()}</span>
                             <button className="stk-act" onClick={e=>{e.stopPropagation();quickUpdateItem(s.id,{qty2:"",unit2:""});}} title="Clear secondary quantity"
