@@ -21091,7 +21091,15 @@ thead{display:table-header-group;}
                   {editCard&&(()=>{
                     const d=editCard;const set=(k,v)=>setEditCard(x=>({...x,[k]:v}));
                     const orig=shipTagged.find(x=>x.id===d.id)||shipItems.find(x=>x.id===d.id)||{};
-                    const FIELDS=["material","shape","size","grade","origin","qty","unit","qty2","unit2","costPrice","vendor","location","notes"];
+                    const FIELDS=["material","shape","size","grade","origin","qty","unit","qty2","unit2","costPrice","listPrice","vendor","location","notes"];
+                    /* Swap which quantity leads. Cost and select price are per unit of the
+                       first quantity, so they're restated for the new one — the card's
+                       totals don't change. */
+                    const swapQty=()=>setEditCard(x=>{
+                      const q1=parseFloat(x.qty)||0,q2=parseFloat(x.qty2)||0;
+                      const per=v=>{const n=parseFloat(v);return n>0&&q1>0&&q2>0?String(+(n*q1/q2).toFixed(4)):(v??"");};
+                      return {...x,qty:x.qty2??"",unit:x.unit2||"kg",qty2:x.qty??"",unit2:x.unit||"pcs",costPrice:per(x.costPrice),listPrice:per(x.listPrice)};
+                    });
                     const save=async()=>{
                       const patch={};for(const k of FIELDS){const v=String(d[k]??"").trim();if(v!==String(orig[k]??"").trim())patch[k]=v;}
                       const m=(d.market||[]).filter(Boolean),om=(Array.isArray(orig.market)?orig.market:String(orig.market||"").split(",").map(x=>x.trim()).filter(Boolean));
@@ -21118,7 +21126,7 @@ thead{display:table-header-group;}
                             {F("shape","Shape",{list:"edit-shapes"})}
                             {F("size","Size")}{F("grade","Grade")}{F("origin","Origin")}
                             <label style={{display:"block"}}><span style={lab}>Qty</span><div style={{display:"flex",gap:4}}><input value={d.qty??""} onChange={e=>set("qty",e.target.value)} inputMode="decimal" style={{...inp,flex:"1 1 auto",minWidth:0,width:"auto"}}/><select value={d.unit||"pcs"} onChange={e=>set("unit",e.target.value)} style={{...FI,width:68,flex:"0 0 68px",fontSize:mob?16:12,padding:"6px 4px"}}>{UNITS_.map(u=><option key={u}>{u}</option>)}</select></div></label>
-                            <label style={{display:"block"}}><span style={lab}>Second qty</span><div style={{display:"flex",gap:4}}><input value={d.qty2??""} onChange={e=>set("qty2",e.target.value)} inputMode="decimal" style={{...inp,flex:"1 1 auto",minWidth:0,width:"auto"}}/><select value={d.unit2||"kg"} onChange={e=>set("unit2",e.target.value)} style={{...FI,width:68,flex:"0 0 68px",fontSize:mob?16:12,padding:"6px 4px"}}>{UNITS_.map(u=><option key={u}>{u}</option>)}</select></div></label>
+                            <label style={{display:"block"}}><span style={{...lab,display:"flex",alignItems:"center",gap:6}}>Second qty<button type="button" onClick={swapQty} title="Swap with the first quantity — cost and price are restated per the new unit" style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"0 8px",fontSize:11,fontWeight:700,color:C.blue,cursor:"pointer",textTransform:"none",letterSpacing:0}}>⇄ Swap</button></span><div style={{display:"flex",gap:4}}><input value={d.qty2??""} onChange={e=>set("qty2",e.target.value)} inputMode="decimal" style={{...inp,flex:"1 1 auto",minWidth:0,width:"auto"}}/><select value={d.unit2||"kg"} onChange={e=>set("unit2",e.target.value)} style={{...FI,width:68,flex:"0 0 68px",fontSize:mob?16:12,padding:"6px 4px"}}>{UNITS_.map(u=><option key={u}>{u}</option>)}</select></div></label>
                             {F("costPrice",`Cost ₹/${d.unit||"pc"}`,{num:true})}
                             {F("vendor","Vendor",{list:"edit-vendors"})}{F("location","Box")}
                             <div style={{gridColumn:"1 / -1"}}><span style={lab}>Market</span><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{marketsHere.map(m=>{const on=(d.market||[]).includes(m);return <button key={m} type="button" onClick={()=>set("market",on?d.market.filter(x=>x!==m):[...(d.market||[]),m])} style={{fontSize:11.5,padding:"4px 10px",borderRadius:12,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:"transparent",color:on?C.ink:C.inkMid,cursor:"pointer",fontWeight:on?650:400}}>{m}</button>;})}</div></div>
