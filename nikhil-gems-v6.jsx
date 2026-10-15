@@ -92,6 +92,8 @@ const STOCK_FLAGS=[
   {key:"tucson", label:"Tucson",    lead:"#C4553B", bg:"linear-gradient(90deg,#B8452F 0%,#E39B5B 48%,#9DB07A 78%,#5F7F55 100%)"},
   {key:"denver", label:"Denver",    lead:"#4A6782", bg:"linear-gradient(90deg,#2F4A63 0%,#6F8DA8 55%,#DCE6EE 100%)"},
   {key:"japan",  label:"Japan",     lead:"#D9667A", bg:"linear-gradient(90deg,#F6D3DA 0%,#E8899A 50%,#B8323F 100%)"},
+  // India: saffron into marigold into peacock.
+  {key:"india",  label:"India",     lead:"#D9622B", bg:"linear-gradient(90deg,#D9622B 0%,#F0A63A 50%,#2E8B7A 100%)"},
   {key:"eu",     label:"Munich",    lead:"#5F7A4E", bg:"linear-gradient(90deg,#2F4A3A 0%,#7A8F5C 55%,#C9A646 100%)"},
 ];
 /* Planned, not done: the same hue laid down as a soft diagonal candy stripe. */
@@ -111,6 +113,8 @@ const stockFlags=s=>{
   if(at(/denver/)) st.denver="live";
   if(at(/japan|tokyo|osaka|kyoto|ikebukuro/)) st.japan="live";
   if(at(/munich|europe|germany/)) st.eu="live";
+  // India as a market (sell here), not the region every card starts in.
+  if(mkts.some(m=>/^india$/.test(m.trim()))) st.india="live";
   return STOCK_FLAGS.filter(f=>st[f.key]).map(f=>({...f,live:st[f.key]==="live"}));
 };
 const fmtStockQtyValue=v=>{
