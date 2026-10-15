@@ -689,6 +689,10 @@ const MODS=[
   {id:"documents",icon:"📁",title:"Documents",desc:"Passports, ITRs, bills, licences — searchable with expiry alerts",group:"admin",ready:true},
 ];
 // ── FINANCIAL CHART (standalone — Y-axis + hover tooltips) ────────
+// The home page's cards: paper on paper, the same lift as the stock cards.
+const DASH_SHADOW="0 0 0 1px rgba(26,19,8,.05), 0 1px 2px rgba(26,19,8,.04), 0 6px 18px rgba(26,19,8,.05)";
+const DASH_SHADOW_HI="0 0 0 1px rgba(26,19,8,.07), 0 12px 30px rgba(26,19,8,.11)";
+const DASH_NUM={fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?22:28,fontWeight:500,color:"var(--c-ink,#1d1a17)",fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em",lineHeight:1.1};
 function FinancialChart({chartData,months6,nextM,openPOtotal,pendingReceivables,todayStr}){
   const [tip,setTip]=useState(null);
   const W=600,H=mob?140:260,PL=46,PR=10,PT=10,PB=28;
@@ -848,15 +852,16 @@ function SideModule({m,hov,setHov,onEnter,t,small=false}){
   const d=small?26:30;
   return(
     <button onClick={()=>m.ready&&onEnter(m.id)}
-      style={{display:"flex",alignItems:"center",gap:small?8:10,width:"100%",padding:small?"5px 7px":"7px 8px",marginBottom:1,border:"none",borderRadius:9,cursor:m.ready?"pointer":"default",background:hov===m.id?"rgba(0,0,0,0.04)":"transparent",opacity:m.ready?1:.4,transition:"background .12s",textAlign:"left",color:C.ink,fontFamily:"inherit"}}
+      style={{display:"flex",alignItems:"center",gap:small?9:11,width:"100%",padding:small?"5px 8px":"7px 9px",marginBottom:1,border:"none",borderRadius:11,cursor:m.ready?"pointer":"default",background:hov===m.id?"rgba(139,111,71,0.08)":"transparent",opacity:m.ready?1:.4,transition:"background .12s",textAlign:"left",color:C.ink,fontFamily:"inherit"}}
       onMouseEnter={()=>m.ready&&setHov(m.id)} onMouseLeave={()=>setHov(null)}>
-      <div style={{width:d,height:d,borderRadius:small?7:8,background:mc,boxShadow:`0 1px 4px ${mc}55`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:small?13:15,flexShrink:0,lineHeight:1}}>
+      {/* A soft wash of the module's colour, not a lit-up app icon. */}
+      <div style={{width:d,height:d,borderRadius:small?8:9,background:hexA(mc,.13),boxShadow:`inset 0 0 0 1px ${hexA(mc,.18)}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:small?13:15,flexShrink:0,lineHeight:1}}>
         {m.icon}
       </div>
       <div style={{flex:1,minWidth:0}}>
         {/* t() returns the key itself when there is no translation, which shows
             a module's id in lower case. Its own title is the better fallback. */}
-        <div style={{fontSize:small?11.5:12,fontWeight:500,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t(m.id)===m.id?m.title:t(m.id)}</div>
+        <div style={{fontSize:small?12:12.5,fontWeight:500,color:C.ink,letterSpacing:.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{t(m.id)===m.id?m.title:t(m.id)}</div>
         {!m.ready&&<div style={{fontSize:8,color:C.inkFaint,letterSpacing:.6,fontWeight:600}}>SOON</div>}
       </div>
     </button>
@@ -1119,7 +1124,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
         {!mob&&(
           <div style={{width:200,borderRight:"0.5px solid rgba(0,0,0,0.07)",background:C.surface,position:"sticky",top:56,height:"calc(100vh - 56px)",overflowY:"auto",flexShrink:0,display:"flex",flexDirection:"column"}}>
             <div style={{padding:"14px 10px",flex:1}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:8,paddingLeft:8}}>Modules</div>
+              <div style={{fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.6,marginBottom:10,paddingLeft:9}}>Modules</div>
               {/* A module on its own — Ask AI — sits above the groups, because it
                   answers questions about all of them and belongs under none. */}
               {ungrouped(visibleMods).map(m=>(
@@ -1135,7 +1140,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
                       onMouseEnter={()=>setHov(g.id)} onMouseLeave={()=>setHov(null)}>
                       <span style={{fontSize:9,color:C.inkFaint,width:9,flexShrink:0,transform:open?"rotate(90deg)":"none",transition:"transform .14s"}}>▶</span>
                       <span style={{fontSize:14,lineHeight:1}}>{g.icon}</span>
-                      <span style={{flex:1,minWidth:0,fontSize:11.5,fontWeight:800,letterSpacing:.2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.title}</span>
+                      <span style={{flex:1,minWidth:0,fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:15,fontWeight:600,letterSpacing:.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{g.title}</span>
                       <span style={{fontSize:10,color:C.inkFaint}}>{g.mods.length}</span>
                     </button>
                     {open&&(
@@ -1157,10 +1162,10 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
         <div style={{flex:1,minWidth:0,padding:mob?"12px":"20px 24px",paddingBottom:mob?"calc(68px + env(safe-area-inset-bottom))":undefined}}>
 
           {/* ── Tab switcher — iOS Segmented Control ── */}
-          <div style={{display:"inline-flex",background:"rgba(118,118,128,0.12)",borderRadius:10,padding:3,marginBottom:18}}>
+          <div style={{display:"inline-flex",background:"rgba(139,111,71,0.09)",borderRadius:20,padding:3,marginBottom:mob?14:20}}>
             {[["overview","Overview"],["activity","Activity"]].map(([id,label])=>(
               <button key={id} onClick={()=>setDashTab(id)}
-                style={{background:dashTab===id?C.surface:"transparent",boxShadow:dashTab===id?"0 1px 3px rgba(0,0,0,0.10)":"none",border:"none",borderRadius:8,padding:"6px 18px",fontSize:13,fontWeight:dashTab===id?600:400,color:dashTab===id?C.ink:C.inkMid,cursor:"pointer",transition:"all .15s",fontFamily:"inherit"}}>
+                style={{background:dashTab===id?C.surface:"transparent",boxShadow:dashTab===id?"0 1px 4px rgba(26,19,8,0.12)":"none",border:"none",borderRadius:18,padding:"6px 18px",fontSize:13,fontWeight:dashTab===id?600:400,color:dashTab===id?C.ink:C.inkMid,cursor:"pointer",transition:"all .15s",fontFamily:"inherit"}}>
                 {label}
               </button>
             ))}
@@ -1230,12 +1235,13 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               setTimeout(()=>el.focus(),450);
             };
             return(
-              <div style={{marginBottom:12,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .06s both":"none"}}>
-                <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?22:26,fontWeight:600,color:C.ink,lineHeight:1.2}}>
-                  Hi {displayName} 👋 <span style={{fontSize:mob?15:17,fontWeight:400,color:C.inkMid}}>{hello}!</span>
+              <div style={{marginBottom:mob?14:20,marginTop:mob?0:4,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .06s both":"none"}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.6,marginBottom:6}}>{new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div>
+                <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?28:38,fontWeight:500,color:C.ink,lineHeight:1.05,letterSpacing:"-.01em"}}>
+                  {hello}, <span style={{fontStyle:"italic",fontWeight:600}}>{displayName}</span>
                 </div>
-                <button onClick={focusTodos} style={{background:"none",border:"none",cursor:"pointer",padding:0,marginTop:3,fontSize:12.5,color:C.gold,fontWeight:600,fontFamily:"inherit"}}>
-                  📝 Set your tasks for the day →
+                <button onClick={focusTodos} style={{background:"none",border:"none",cursor:"pointer",padding:0,marginTop:8,fontSize:12.5,color:"#8B6F47",fontWeight:600,fontFamily:"inherit",borderBottom:"1px solid rgba(139,111,71,.35)",paddingBottom:1}}>
+                  Set your tasks for the day →
                 </button>
               </div>
             );
@@ -1259,18 +1265,24 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           )}
 
           {/* Row 1: Show countdown + stat cards */}
-          {isAdmin&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:11,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .1s both":"none"}}>
-            {/* Next show */}
-            <div style={{background:nextShow?`linear-gradient(135deg,${nextShow.color}14,${C.surface} 70%)`:C.surface,borderRadius:16,padding:"16px 18px",display:"flex",flexDirection:"column",justifyContent:"space-between",boxShadow:"var(--e-1)"}}>
-              <div style={{fontSize:10,fontWeight:700,color:nextShow?.color||C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:6}}>Next Gem Show</div>
-              {nextShow
-                ?<><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:14,fontWeight:600,color:C.ink,marginBottom:2,lineHeight:1.3}}>{nextShow.name}</div><div style={{fontSize:10,color:C.inkMid,marginBottom:8}}>📍 {nextShow.city} · {fmtDate(nextShow.startDate)}</div><div style={{display:"flex",alignItems:"baseline",gap:5}}>{isNow?<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:nextShow.color}}>Now!</span>:<><span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?30:34,fontWeight:600,color:nextShow.color,lineHeight:1,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>{nextShowDays}</span><span style={{fontSize:10,color:C.inkFaint}}>days</span></>}</div></>
-                :<div style={{fontSize:11,color:C.inkFaint}}>No upcoming shows</div>
-              }
-            </div>
+          {isAdmin&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":"minmax(250px,300px) 1fr",gap:14,marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .1s both":"none"}}>
+            {/* Next show — painted in its place's colours, the same little
+                landscape its pieces carry in Stock. */}
+            {(()=>{const where=`${nextShow?.name||""} ${nextShow?.city||""}`;const land=(STOCK_FLAGS.find(f=>new RegExp(f.key==="eu"?"munich|germany|europe":f.key==="japan"?"japan|tokyo|osaka|kyoto|ikebukuro":f.key,"i").test(where))||{}).bg||`linear-gradient(135deg,#6B5434,#C9A646)`;
+              return <div onClick={()=>onEnter("shows")} style={{position:"relative",overflow:"hidden",background:nextShow?land:C.surface,borderRadius:20,padding:"18px 20px",minHeight:mob?150:176,display:"flex",flexDirection:"column",justifyContent:"space-between",boxShadow:"0 10px 30px rgba(26,19,8,.14)",cursor:"pointer",color:"#fff"}}>
+                {nextShow&&<div style={{position:"absolute",inset:0,background:"linear-gradient(180deg,rgba(15,10,4,.05) 0%,rgba(15,10,4,.45) 100%)"}}/>}
+                <div style={{position:"relative",fontSize:9.5,fontWeight:800,textTransform:"uppercase",letterSpacing:1.8,opacity:.9,color:nextShow?"#fff":C.inkFaint}}>Next show</div>
+                {nextShow
+                  ?<div style={{position:"relative"}}>
+                    <div style={{display:"flex",alignItems:"baseline",gap:7,marginBottom:8}}>{isNow?<span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:40,fontWeight:500,fontStyle:"italic",lineHeight:1}}>On now</span>:<><span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?52:62,fontWeight:500,lineHeight:.9,fontVariantNumeric:"tabular-nums",letterSpacing:"-.03em",textShadow:"0 2px 14px rgba(0,0,0,.18)"}}>{nextShowDays}</span><span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:18,opacity:.9}}>{nextShowDays===1?"day to go":"days to go"}</span></>}</div>
+                    <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:19,fontWeight:600,lineHeight:1.15,textShadow:"0 1px 8px rgba(0,0,0,.2)"}}>{nextShow.name}</div>
+                    <div style={{fontSize:11,opacity:.88,marginTop:3,letterSpacing:.2}}>{nextShow.city} · {fmtDate(nextShow.startDate)}</div>
+                  </div>
+                  :<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:16,color:C.inkFaint}}>No shows planned</div>}
+              </div>;})()}
 
             {/* Stat cards */}
-            <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(3,1fr)",gap:9}}>
+            <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(2,1fr)",gap:14}}>
               {[
                 [null,"Receivables",C.green,"invoices","Invoices + proformas"],
                 [null,"Payables",C.red,"purchases","Bills you owe"],
@@ -1279,34 +1291,34 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               ].map(([v,l,col,modId,hint])=>{
                 return(
                   <div key={l} onClick={()=>{if(modId)onEnter(modId);}}
-                    style={{background:C.surface,borderRadius:14,padding:mob?"10px 12px":"12px 15px",cursor:"pointer",transition:"all .18s",boxShadow:"var(--e-1)"}}
-                    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 20px rgba(0,0,0,0.08),0 0 0 2px ${col}22`;}}
-                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow="var(--e-1)";}}>
-                    <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:5}}>
-                      <div style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0}}/>
-                      <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>{l}</div>
+                    style={{background:C.surface,borderRadius:18,padding:mob?"12px 14px":"15px 18px",cursor:"pointer",transition:"all .2s",boxShadow:DASH_SHADOW,display:"flex",flexDirection:"column"}}
+                    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=DASH_SHADOW_HI;}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow=DASH_SHADOW;}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}>
+                      <div style={{width:7,height:7,borderRadius:"50%",background:col,flexShrink:0,boxShadow:`0 0 0 3px ${col}1f`}}/>
+                      <div style={{fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.5}}>{l}</div>
                     </div>
                     {l==="Receivables"?(
                       <>
                         {Object.entries(receivablesByCur).filter(([,a])=>a>0).map(([cur,amt])=>(
-                          <div key={cur} style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>
-                            {cur==="INR"?inr(amt):`${{USD:"$",EUR:"€",JPY:"¥",GBP:"£"}[cur]||cur} ${amt.toLocaleString("en-US",{maximumFractionDigits:0})}`}
+                          <div key={cur} style={DASH_NUM}>
+                            {cur==="INR"?inr(Math.round(amt)).replace(/\.00$/,""):`${{USD:"$",EUR:"€",JPY:"¥",GBP:"£"}[cur]||cur} ${amt.toLocaleString("en-US",{maximumFractionDigits:0})}`}
                           </div>
                         ))}
                         {Object.values(receivablesByCur).every(a=>a<=0)&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:C.inkFaint}}>—</div>}
                       </>
                     ):l==="Payables"?(
                       <>
-                        {payablesINR>0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>{inr(payablesINR)}</div>}
-                        {payablesUSD>0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>$ {payablesUSD.toLocaleString("en-US",{maximumFractionDigits:0})}</div>}
+                        {payablesINR>0&&<div style={DASH_NUM}>{inr(Math.round(payablesINR)).replace(/\.00$/,"")}</div>}
+                        {payablesUSD>0&&<div style={DASH_NUM}>$ {payablesUSD.toLocaleString("en-US",{maximumFractionDigits:0})}</div>}
                         {payablesINR===0&&payablesUSD===0&&<div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:C.inkFaint}}>—</div>}
                       </>
                     ):(
-                      <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:20,fontWeight:600,color:col,fontVariantNumeric:"tabular-nums",letterSpacing:"-.02em"}}>
-                        {v}
+                      <div style={DASH_NUM}>
+                        {String(v).replace(/\.00$/,"")}
                       </div>
                     )}
-                    {!mob&&<div style={{fontSize:9,color:C.inkFaint,marginTop:3}}>{hint}</div>}
+                    {!mob&&<div style={{fontSize:11,color:C.inkFaint,marginTop:"auto",paddingTop:6,fontStyle:"italic",fontFamily:"'Cormorant Garamond',Georgia,serif"}}>{hint}</div>}
                   </div>
                 );
               })}
@@ -1315,38 +1327,38 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
           {/* Unassigned stock reminder */}
           {unassignedStock.length>0&&(
-            <div style={{background:`linear-gradient(135deg,${C.amberBg},${C.surface})`,borderRadius:14,padding:mob?"12px 14px":"13px 18px",marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .14s both":"none",display:"flex",flexWrap:"wrap",alignItems:"center",gap:10,boxShadow:"var(--e-1)"}}>
-              <div style={{fontSize:17,flexShrink:0}}>⚠️</div>
+            <div style={{position:"relative",overflow:"hidden",background:C.surface,borderRadius:18,padding:mob?"14px 16px 14px 20px":"16px 22px 16px 26px",marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .14s both":"none",display:"flex",flexWrap:"wrap",alignItems:"center",gap:14,boxShadow:DASH_SHADOW}}>
+              <div style={{position:"absolute",left:0,top:0,bottom:0,width:5,background:"linear-gradient(180deg,#E8A33D,#C9772B)"}}/>
               <div style={{flex:1,minWidth:180}}>
-                <div style={{fontWeight:600,fontSize:12,color:C.ink,marginBottom:3}}>{unassignedStock.length} stock item{unassignedStock.length>1?"s":""} not yet packed / no bin location</div>
+                <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:mob?17:19,color:C.ink,marginBottom:6,lineHeight:1.2}}><span className="tnum">{unassignedStock.length}</span> piece{unassignedStock.length>1?"s":""} <span style={{fontStyle:"italic",fontWeight:500,color:C.inkMid}}>waiting for a box</span></div>
                 <div style={{fontSize:11,color:C.inkMid,display:"flex",flexWrap:"wrap",gap:6}}>
-                  {unassignedStock.slice(0,3).map(s=>{const d=daysSince(s.addedDate);return(<span key={s.id} style={{background:C.surface,borderRadius:4,padding:"2px 7px"}}>{s.material||"Unknown"}{s.shape?` ${s.shape}`:""} <span style={{color:d>30?C.red:C.amber,fontWeight:600}}>{d}d</span></span>);})}
+                  {unassignedStock.slice(0,3).map(s=>{const d=daysSince(s.addedDate);return(<span key={s.id} style={{background:C.bg,borderRadius:20,padding:"3px 10px"}}>{s.material||"Unknown"}{s.shape?` ${s.shape}`:""} <span style={{color:d>30?C.red:C.amber,fontWeight:650}}>{d>999?"long ago":`${d}d`}</span></span>);})}
                   {unassignedStock.length>3&&<span style={{color:C.inkFaint}}>+{unassignedStock.length-3} more</span>}
                 </div>
               </div>
-              <button onClick={()=>setAssignOpen(true)} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:10,padding:"6px 14px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Assign Locations →</button>
+              <button onClick={()=>setAssignOpen(true)} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:20,padding:"9px 18px",fontSize:12.5,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,boxShadow:"0 4px 14px rgba(26,19,8,.18)"}}>Assign boxes →</button>
             </div>
           )}
 
           {/* ── To-Do + Watch List + Open POs row ── */}
-          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1fr 1fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .16s both":"none"}}>
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1fr 1fr":"1fr",gap:14,marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .16s both":"none"}}>
             {/* To-Do Widget */}
-            <div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"var(--e-1)"}}>
+            <div style={{background:C.surface,borderRadius:18,padding:"16px 18px",minHeight:160,boxShadow:DASH_SHADOW}}>
               <TodoWidget todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser}/>
             </div>
-            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"var(--e-1)"}}>
+            {isAdmin&&<div style={{background:C.surface,borderRadius:18,padding:"16px 18px",minHeight:160,boxShadow:DASH_SHADOW}}>
               <WatchListWidget/>
             </div>}
-            {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:"13px 16px",minHeight:160,boxShadow:"var(--e-1)"}}>
-              <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1,marginBottom:9}}>Open Purchase Orders</div>
+            {isAdmin&&<div style={{background:C.surface,borderRadius:18,padding:"16px 18px",minHeight:160,boxShadow:DASH_SHADOW}}>
+              <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?16:17,fontWeight:600,color:C.ink,marginBottom:10}}>Open purchase orders</div>
               {openPOs.length===0
                 ?<div style={{fontSize:11,color:C.inkFaint,padding:"6px 0"}}>No open POs</div>
                 :<div style={{display:"flex",flexDirection:"column",gap:5}}>
                   {openPOs.slice(0,6).map(po=>(
                     <div key={po.id} onClick={()=>onEnter("purchases")}
-                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"rgba(88,86,214,0.07)",borderRadius:9,padding:"7px 10px",cursor:"pointer",transition:"background .12s"}}
-                      onMouseEnter={e=>e.currentTarget.style.background="rgba(88,86,214,0.12)"}
-                      onMouseLeave={e=>e.currentTarget.style.background="rgba(88,86,214,0.07)"}>
+                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"transparent",borderBottom:`1px solid ${C.border}`,borderRadius:0,padding:"8px 2px",cursor:"pointer",transition:"background .12s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.bg}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontWeight:600,fontSize:11,color:C.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{po.poNumber||"PO"}{po.supplier?` · ${po.supplier}`:""}</div>
                         <div style={{fontSize:10,color:C.inkMid}}>{fmtDate(po.date)} · {po.status||"open"}</div>
