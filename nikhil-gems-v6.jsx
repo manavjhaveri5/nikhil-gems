@@ -21103,7 +21103,7 @@ thead{display:table-header-group;}
                     const UNITS_=["pcs","kg","gm","ct","lot"];
                     const lab={fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3,display:"block"};
                     const inp={...FI,width:"100%",boxSizing:"border-box",fontSize:mob?16:13,padding:"7px 9px"};
-                    const F=(k,label,extra={})=><label style={{display:"block",...(extra.wrap||{})}}><span style={lab}>{label}</span><input value={d[k]??""} onChange={e=>set(k,e.target.value)} inputMode={extra.num?"decimal":undefined} list={extra.list} style={inp}/></label>;
+                    const F=(k,label,extra={})=><label style={{display:"block",...(extra.wrap||{})}}><span style={lab}>{label}{extra.list?" ▾":""}</span><input value={d[k]??""} onChange={e=>set(k,e.target.value)} inputMode={extra.num?"decimal":undefined} list={extra.list} placeholder={extra.list?"Pick or type…":undefined} style={inp}/></label>;
                     const marketsHere=[...new Set(["India","Etsy/Online",show.name,...(d.market||[])])];
                     return(
                       <div onClick={()=>setEditCard(null)} style={{position:"fixed",inset:0,background:"rgba(20,15,5,.5)",zIndex:950,display:"grid",placeItems:"center",padding:16}}>
@@ -21114,16 +21114,19 @@ thead{display:table-header-group;}
                             <button onClick={()=>setEditCard(null)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkFaint}}>×</button>
                           </div>
                           <div style={{padding:"14px 18px",display:"grid",gridTemplateColumns:mob?"1fr 1fr":"1fr 1fr 1fr",gap:10}}>
-                            {F("material","Stone",{wrap:{gridColumn:mob?"1 / -1":"span 2"}})}
+                            {F("material","Stone",{wrap:{gridColumn:mob?"1 / -1":"span 2"},list:"edit-stones"})}
                             {F("shape","Shape",{list:"edit-shapes"})}
                             {F("size","Size")}{F("grade","Grade")}{F("origin","Origin")}
                             <label style={{display:"block"}}><span style={lab}>Qty</span><div style={{display:"flex",gap:4}}><input value={d.qty??""} onChange={e=>set("qty",e.target.value)} inputMode="decimal" style={{...inp,flex:"1 1 auto",minWidth:0,width:"auto"}}/><select value={d.unit||"pcs"} onChange={e=>set("unit",e.target.value)} style={{...FI,width:68,flex:"0 0 68px",fontSize:mob?16:12,padding:"6px 4px"}}>{UNITS_.map(u=><option key={u}>{u}</option>)}</select></div></label>
                             <label style={{display:"block"}}><span style={lab}>Second qty</span><div style={{display:"flex",gap:4}}><input value={d.qty2??""} onChange={e=>set("qty2",e.target.value)} inputMode="decimal" style={{...inp,flex:"1 1 auto",minWidth:0,width:"auto"}}/><select value={d.unit2||"kg"} onChange={e=>set("unit2",e.target.value)} style={{...FI,width:68,flex:"0 0 68px",fontSize:mob?16:12,padding:"6px 4px"}}>{UNITS_.map(u=><option key={u}>{u}</option>)}</select></div></label>
                             {F("costPrice",`Cost ₹/${d.unit||"pc"}`,{num:true})}
-                            {F("vendor","Vendor")}{F("location","Box")}
+                            {F("vendor","Vendor",{list:"edit-vendors"})}{F("location","Box")}
                             <div style={{gridColumn:"1 / -1"}}><span style={lab}>Market</span><div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{marketsHere.map(m=>{const on=(d.market||[]).includes(m);return <button key={m} type="button" onClick={()=>set("market",on?d.market.filter(x=>x!==m):[...(d.market||[]),m])} style={{fontSize:11.5,padding:"4px 10px",borderRadius:12,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:"transparent",color:on?C.ink:C.inkMid,cursor:"pointer",fontWeight:on?650:400}}>{m}</button>;})}</div></div>
                             <label style={{display:"block",gridColumn:"1 / -1"}}><span style={lab}>Notes</span><textarea value={d.notes??""} onChange={e=>set("notes",e.target.value)} rows={2} style={{...inp,resize:"vertical"}}/></label>
-                            <datalist id="edit-shapes">{SHAPES.map(x=><option key={x} value={x}/>)}</datalist>
+                            <datalist id="edit-shapes">{[...stoneNames(stock.map(x=>({material:x.shape})).concat(SHAPES.map(x=>({material:x})))).values()].sort((a,b)=>a.localeCompare(b)).map(x=><option key={x} value={x}/>)}</datalist>
+                            {/* The stones already on file, one spelling each — pick one so every card of a stone matches. */}
+                            <datalist id="edit-stones">{[...stoneNames(stock).values()].sort((a,b)=>a.localeCompare(b)).map(x=><option key={x} value={x}/>)}</datalist>
+                            <datalist id="edit-vendors">{[...new Set(stock.map(x=>String(x.vendor||"").trim()).filter(Boolean))].sort().map(x=><option key={x} value={x}/>)}</datalist>
                           </div>
                           <div style={{display:"flex",gap:8,justifyContent:"flex-end",padding:"12px 18px",borderTop:`1px solid ${C.border}`}}>
                             <button onClick={()=>setEditCard(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13}}>Cancel</button>
