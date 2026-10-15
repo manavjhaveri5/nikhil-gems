@@ -425,14 +425,15 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
   const place = () => {
     const picked = cards.filter(c => on.has(c.id));
     if (!picked.length) return;
-    if (targetId === "new") return onDone({ id: uid(), name: incoming.name, lang: incoming.lang, paper: "letter", cards: picked, updatedAt: new Date().toISOString() }, true, picked.length);
+    const made = picked.map(c => c.stockId).filter(Boolean);
+    if (targetId === "new") return onDone({ id: uid(), name: incoming.name, lang: incoming.lang, paper: "letter", cards: picked, updatedAt: new Date().toISOString() }, true, picked.length, made);
     const next = [...(target.cards || [])];
     for (const c of picked) {
       const at = next.findIndex(x => (c.stockId && x.stockId === c.stockId) || (!x.stockId && keyOf(x) === keyOf(c)));
       if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type };
       else next.push(c);
     }
-    onDone({ ...target, cards: next.filter(x => x.en || x.local || x.price) }, false, picked.length);
+    onDone({ ...target, cards: next.filter(x => x.en || x.local || x.price) }, false, picked.length, made);
   };
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,15,5,.5)", display: "grid", placeItems: "center", padding: mob() ? 0 : 20 }}>
@@ -488,8 +489,8 @@ export function ShowLabelImport({ name, lang = "", stockIds = [], onClose, onSav
     <>
       <style>{CARD_CSS + EDIT_CSS}</style>
       <ShowImport incoming={{ name, lang, cards }} sets={sets} onClose={onClose}
-        onDone={async (target, isNew, n) => {
-          try { await upsertItemK(KEY, { ...target, updatedAt: new Date().toISOString() }); onSaved?.(`✓ ${n} label${n === 1 ? "" : "s"} ${isNew ? `in a new set “${target.name}”` : `added to ${target.name}`} — print them from Make Labels`); }
+        onDone={async (target, isNew, n, made) => {
+          try { await upsertItemK(KEY, { ...target, updatedAt: new Date().toISOString() }); onSaved?.(`✓ ${n} label${n === 1 ? "" : "s"} ${isNew ? `in a new set “${target.name}”` : `added to ${target.name}`} — print them from Make Labels`, made, target.name); }
           catch (e) { onSaved?.(`⚠ Labels not saved: ${e.message}`); return; }
           onClose?.();
         }} />
