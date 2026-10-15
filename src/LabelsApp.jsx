@@ -86,7 +86,13 @@ ${L.type.show || L.origin.show ? "" : ".lbl-rule1{border-top:0}"}`;
 }
 
 const FIELDS = ["code", "en", "local", "type", "origin", "qty", "price"];
-const blank = () => ({ id: uid(), code: "", en: "", local: "", type: "", origin: "", qty: "", price: "" });
+const blank = () => ({ id: uid(), code: "", en: "", local: "", type: "", origin: "", qty: "", price: "", addedAt: new Date().toISOString() });
+/* Newest on top: cards added or updated most recently first, and the ones
+   already printed after the ones still to print. Cards from before this kept
+   their places among themselves. */
+const ordered = set => (set.cards || []).map((c, i) => ({ c, i })).sort((a, b) =>
+  (!!a.c.printedAt - !!b.c.printedAt) || String(b.c.addedAt || "").localeCompare(String(a.c.addedAt || "")) || a.i - b.i);
+const viewOf = set => set.order === "manual" ? (set.cards || []).map((c, i) => ({ c, i })) : ordered(set);
 
 // The first set: the Japan show's cards, as they were made.
 const JAPAN = [
@@ -178,7 +184,8 @@ function Card({ c, lang, onPatch, onAct, index, total, g }) {
   useEffect(() => { document.fonts?.ready.then(refit); refit(); }, [c.en, c.local, lang, refit, g.w, g.h]);
   const f = (k, cls, ph, style) => <Editable value={c[k]} ph={ph} className={cls} style={style} onInput={k === "en" || k === "local" ? refit : undefined} onCommit={v => onPatch({ [k]: v })} />;
   return (
-    <div className={solo ? "lbl-card lbl-solo" : "lbl-card"} style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
+    <div className={`lbl-card${solo ? " lbl-solo" : ""}${c.printedAt ? " lbl-printed" : ""}`} style={{ "--k": g.k, width: g.w * 96, height: g.h * 96 }}>
+      {c.printedAt && <div className="lbl-badge" title={`Printed ${String(c.printedAt).slice(0, 10)}`}>✓ Printed</div>}
       <div className="lbl-code">{f("code", "", "code")}</div>
       <div ref={en} className="lbl-line">{f("en", "lbl-en", "English name")}</div>
       {lang && <div ref={loc} className="lbl-line">{f("local", "lbl-jp", L.ph, L.font ? { fontFamily: L.font } : undefined)}</div>}
@@ -188,9 +195,10 @@ function Card({ c, lang, onPatch, onAct, index, total, g }) {
       <div className="lbl-rule2" />
       <div className="lbl-foot">{f("qty", "", "qty")}{f("price", "lbl-price", "price")}</div>
       <div className="lbl-ctl">
+        <button title={c.printedAt ? "Mark as not printed" : "Mark as printed"} onClick={() => onAct("printed")}>{c.printedAt ? "↺" : "✓"}</button>
         <button title="Duplicate" onClick={() => onAct("dup")}>⧉</button>
-        <button title="Move earlier" disabled={!index} onClick={() => onAct("up")}>◀</button>
-        <button title="Move later" disabled={index === total - 1} onClick={() => onAct("down")}>▶</button>
+        <button className="mv" title="Move earlier" disabled={!index} onClick={() => onAct("up")}>◀</button>
+        <button className="mv" title="Move later" disabled={index === total - 1} onClick={() => onAct("down")}>▶</button>
         <button title="Delete" onClick={() => onAct("del")}>✕</button>
       </div>
     </div>
@@ -280,6 +288,9 @@ const CARD_CSS = `
 .lbl-solo .lbl-code+.lbl-line{flex:1;align-items:center}
 `;
 const EDIT_CSS = `
+.lbl-printed{opacity:.55}.lbl-printed:hover{opacity:1}
+.lbl-badge{position:absolute;right:6px;top:4px;z-index:2;font:700 9px system-ui,sans-serif;letter-spacing:.06em;color:#fff;background:#3FA36B;border-radius:8px;padding:1px 7px}
+.lbl-manual .lbl-ctl button.mv{display:inline-block}.lbl-ctl button.mv{display:none}
 .lbl-ed{cursor:text;border-radius:2px;outline:none}
 .lbl-ed:hover{background:rgba(138,106,62,.08)}
 .lbl-ed:focus{background:rgba(138,106,62,.12)}
@@ -350,6 +361,7 @@ function cardFromStock(s, lang, cur) {
     origin: String(s.labelOrigin || s.origin || "").trim(),
     qty,
     price: labelPrice(s),
+    addedAt: new Date().toISOString(),
     stockId: s.id,
   };
 }
@@ -438,9 +450,11 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
       const { _was, ...card } = c;
       const at = next.findIndex(x => (_was && x.id === _was) || (c.stockId && x.stockId === c.stockId) || (!x.stockId && keyOf(x) === keyOf(c)));
       // Shown as it is in the set (and edited here): the card as shown replaces it.
-      if (at >= 0 && _was) next[at] = { ...next[at], ...card, id: next[at].id };
-      else if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type };
-      else next.push(card);
+      // Changed, so it goes to the top and is due a fresh print.
+      const now = { addedAt: new Date().toISOString(), printedAt: "" };
+      if (at >= 0 && _was) next[at] = { ...next[at], ...card, ...now, id: next[at].id };
+      else if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type, ...now };
+      else next.unshift({ ...card, ...now });
     }
     onDone({ ...target, cards: next.filter(x => x.en || x.local || x.price) }, false, picked.length, made);
   };
@@ -571,7 +585,8 @@ export default function LabelsApp({ onHome }) {
   const patchCard = (id, p) => { const s0 = current(); if (s0) saveSet({ ...s0, cards: s0.cards.map(c => c.id === id ? { ...c, ...p } : c) }); };
   const act = (i, a) => {
     const cards = [...current().cards];
-    if (a === "dup") cards.splice(i + 1, 0, { ...cards[i], id: uid() });
+    if (a === "dup") cards.splice(i + 1, 0, { ...cards[i], id: uid(), addedAt: new Date().toISOString(), printedAt: "" });
+    if (a === "printed") cards[i] = { ...cards[i], printedAt: cards[i].printedAt ? "" : new Date().toISOString() };
     if (a === "up" && i > 0) [cards[i - 1], cards[i]] = [cards[i], cards[i - 1]];
     if (a === "down" && i < cards.length - 1) [cards[i + 1], cards[i]] = [cards[i], cards[i + 1]];
     if (a === "del") { if (!window.confirm(`Delete "${cards[i].en || "this card"}"?`)) return; cards.splice(i, 1); }
@@ -641,11 +656,26 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
             <button onClick={() => setShowLayout(v => !v)} style={{ ...btn(), ...(showLayout ? { background: "#e9e1d4" } : {}) }}>▤ Layout</button>
             <button onClick={() => setBulk(v => !v)} style={{ ...btn(), ...(bulk ? { background: "#e9e1d4" } : {}) }}>{bulk ? "▣ Back to cards" : "▦ Bulk edit"}</button>
             <div style={{ flex: 1 }} />
-            <button onClick={() => patchSet({ cards: [...current().cards, blank()] })} style={btn()}>＋ Card</button>
+            <button onClick={() => patchSet({ cards: [blank(), ...current().cards] })} style={btn()}>＋ Card</button>
             <button onClick={() => setPicker("box")} style={btn()}>📦 From box</button>
             <button onClick={() => setPicker("stock")} style={btn()}>＋ From Stock</button>
             <button onClick={aiFill} disabled={!!busy} style={btn()}>{busy === "ai" ? "Filling…" : "✨ AI fill names"}</button>
-            <button onClick={() => { if (!printSet(set)) say("Allow pop-ups to open the print sheet"); }} style={btn(true)}>🖨 Print / PDF</button>
+            <select value={set.order === "manual" ? "manual" : "newest"} onChange={e => patchSet({ order: e.target.value })} style={{ ...btn(), padding: "7px 8px" }} title="Card order">
+              <option value="newest">Newest first</option><option value="manual">As arranged</option></select>
+            <button onClick={() => {
+              const view = viewOf(set).map(x => x.c);
+              const todo = view.filter(c => !c.printedAt);
+              const only = todo.length && todo.length < view.length && window.confirm(`Print only the ${todo.length} not printed yet?\n\nCancel prints all ${view.length}.`);
+              const cards = only ? todo : view;
+              if (!printSet({ ...set, cards })) return say("Allow pop-ups to open the print sheet");
+              const unmarked = cards.filter(c => !c.printedAt);
+              setTimeout(() => {
+                if (unmarked.length && window.confirm(`Mark these ${unmarked.length} label${unmarked.length === 1 ? "" : "s"} as printed?`)) {
+                  const ids = new Set(unmarked.map(c => c.id)); const ts = new Date().toISOString();
+                  patchSet({ cards: current().cards.map(c => ids.has(c.id) ? { ...c, printedAt: ts } : c) });
+                }
+              }, 600);
+            }} style={btn(true)}>🖨 Print / PDF</button>
           </>
         ) : (
           <>
@@ -703,23 +733,22 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
       {set && !bulk && (
         <>
           <p style={{ fontSize: 12.5, color: "#7a7268", maxWidth: 816, margin: "12px auto 0", padding: "0 16px", fontFamily: "system-ui,sans-serif" }}>
-            Click any text on a card to change it. Hover a card to copy, move or delete it. Saved as you go · {set.cards.length} cards on {Math.max(1, Math.ceil(set.cards.length / g.per))} page{set.cards.length > g.per ? "s" : ""}.
+            Click any text on a card to change it. Hover a card to mark it printed, copy{set.order === "manual" ? ", move" : ""} or delete it. Saved as you go · {set.cards.length} cards on {Math.max(1, Math.ceil(set.cards.length / g.per))} page{set.cards.length > g.per ? "s" : ""}{set.cards.some(c => c.printedAt) ? ` · ${set.cards.filter(c => c.printedAt).length} printed` : ""}.
           </p>
           <div style={{ overflowX: "auto", padding: "14px 0 40px" }}>
-            <div style={{ width: 816, margin: "0 auto", zoom }}>
+            <div className={set.order === "manual" ? "lbl-manual" : undefined} style={{ width: 816, margin: "0 auto", zoom }}>
               {Array.from({ length: Math.max(1, Math.ceil(set.cards.length / g.per)) }, (_, p) => (
                 <div key={p} className="lbl-sheet" style={{ gridTemplateColumns: `repeat(${g.cols}, ${g.w * 96}px)`, gridAutoRows: `${g.h * 96}px` }}>
-                  {set.cards.slice(p * g.per, p * g.per + g.per).map((c, k) => {
-                    const i = p * g.per + k;
-                    return <Card key={c.id} c={c} g={g} lang={set.lang} index={i} total={set.cards.length} onPatch={pp => patchCard(c.id, pp)} onAct={a => act(i, a)} />;
-                  })}
+                  {viewOf(set).slice(p * g.per, p * g.per + g.per).map(({ c, i }) => (
+                    <Card key={c.id} c={c} g={g} lang={set.lang} index={i} total={set.cards.length} onPatch={pp => patchCard(c.id, pp)} onAct={a => act(i, a)} />
+                  ))}
                 </div>
               ))}
             </div>
           </div>
         </>
       )}
-      {picker && set && <StockPicker lang={set.lang} boxFirst={picker === "box"} onClose={() => setPicker(false)} onAdd={cards => { patchSet({ cards: [...current().cards.filter(c => c.en || c.local || c.price), ...cards] }); setPicker(false); say(`✓ ${cards.length} card${cards.length === 1 ? "" : "s"} added`); }} />}
+      {picker && set && <StockPicker lang={set.lang} boxFirst={picker === "box"} onClose={() => setPicker(false)} onAdd={cards => { patchSet({ cards: [...cards, ...current().cards.filter(c => c.en || c.local || c.price)] }); setPicker(false); say(`✓ ${cards.length} card${cards.length === 1 ? "" : "s"} added`); }} />}
     </div>
   );
 }
