@@ -18642,7 +18642,7 @@ function ShowsApp({onHome,isAdmin=true}){
 
   // Helper: all handler props for ShowCard (avoids repeating twice)
   const mkCardProps=(show)=>({
-    isAdmin,
+    isAdmin,allShows:shows,
     onToggleCheck:toggleCheck,onEditCheckTask:editCheckTask,
     onAddCheckItem:addCheckItem,onDelCheckItem:delCheckItem,
     onUpdateShipment:updateShipment,onAddShipment:addShipment,onDelShipment:delShipment,
@@ -18878,7 +18878,26 @@ function SheetRow({row,datalistId,onCommit,onDelete,onInsert,onContext,onNote,ba
     </tr>
   );
 }
-function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],ngBuyers=[],onSaveShowInvoice,onDelShowInvoice,onRefreshShowInvoices,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
+/* The same show comes round every year under the same name (Tucson 2026,
+   Tucson 2027). A card that names its show only by name belongs to the one its
+   dates point at: sent → the first of that name not yet over by the send date;
+   returned → the last one that had started by the return date. A card that
+   carries the show's id belongs to that show and no other. */
+const showEnd=x=>String(x?.endDate||x?.startDate||"");
+const showStart=x=>String(x?.startDate||x?.endDate||"");
+const sameNameShows=(all,name)=>(all||[]).filter(x=>String(x.name||"").trim().toLowerCase()===String(name||"").trim().toLowerCase());
+const showSentTo=(all,name,date)=>{const c=sameNameShows(all,name).sort((a,b)=>showEnd(a).localeCompare(showEnd(b)));const d=String(date||"").slice(0,10)||today();return c.find(x=>showEnd(x)>=d)||c[c.length-1]||null;};
+const showReturnedFrom=(all,name,date)=>{const c=sameNameShows(all,name).sort((a,b)=>showStart(a).localeCompare(showStart(b)));const d=String(date||"").slice(0,10)||today();return [...c].reverse().find(x=>showStart(x)<=d)||c[0]||null;};
+const itemAtShow=(s,show,all)=>{
+  if(s.showId&&(all||[]).some(x=>x.id===s.showId))return s.showId===show.id;
+  if(String(s.showTag||"").trim().toLowerCase()!==String(show.name||"").trim().toLowerCase())return false;
+  const pick=showSentTo(all,show.name,s.sentAt||s.addedDate);return !pick||pick.id===show.id;};
+const itemBackFromShow=(s,show,all)=>{
+  if(s.returnedFromShowId&&(all||[]).some(x=>x.id===s.returnedFromShowId))return s.returnedFromShowId===show.id;
+  if(String(s.returnedFromShow||"").trim().toLowerCase()!==String(show.name||"").trim().toLowerCase())return false;
+  const pick=showReturnedFrom(all,show.name,s.returnedAt);return !pick||pick.id===show.id;};
+
+function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],ngBuyers=[],onSaveShowInvoice,onDelShowInvoice,onRefreshShowInvoices,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -19457,9 +19476,9 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
   const ssTotalCost=showStock.reduce((s,i)=>s+(+i.costPrice||0)*(+i.qty||1),0);
   const hasStockQty=s=>(parseFloat(s.qty)||0)>0||(parseFloat(s.qty2)||0)>0;
   const showName=(show.name||"").toLowerCase();
-  const showFlowItems=stock.filter(s=>s.showId===show.id||s.returnedFromShowId===show.id||(s.showTag||"").toLowerCase()===showName||(s.returnedFromShow||"").toLowerCase()===showName);
-  const showLiveItems=showFlowItems.filter(s=>s.showId===show.id||(s.showTag||"").toLowerCase()===showName);
-  const showReturnedItems=showFlowItems.filter(s=>s.returnedFromShowId===show.id||(s.returnedFromShow||"").toLowerCase()===showName);
+  const showFlowItems=stock.filter(s=>itemAtShow(s,show,allShows)||itemBackFromShow(s,show,allShows));
+  const showLiveItems=showFlowItems.filter(s=>itemAtShow(s,show,allShows));
+  const showReturnedItems=showFlowItems.filter(s=>itemBackFromShow(s,show,allShows));
   const showStillThere=showLiveItems.filter(s=>(s.region||"India")!=="India"&&hasStockQty(s)&&!s.soldDate);
   const showSoldItems=showLiveItems.filter(s=>s.soldDate||s.soldPrice||s.soldFromShowId===show.id||(s.soldFromShow||"").toLowerCase()===showName);
   const showSentItems=showLiveItems.length?showLiveItems:showFlowItems.filter(s=>s.sentAt||s.returnedFromShow||s.returnedFromShowId);
@@ -19561,11 +19580,15 @@ function ShowCard({show,isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,
      names the show ("Tucson Gem & Mineral Show") or its town ("Tucson"); the
      old country tags still find their show ("Japan" → a Tokyo fair). */
   const tagMatchesShow=m=>{const t=String(m||"").trim().toLowerCase();if(!t||t==="unassigned")return false;
-    if(t===showName||t===String(show.id).toLowerCase())return true;
+    if(t===String(show.id).toLowerCase())return true;
     if(["india","etsy/online","general","export"].includes(t))return false;
-    return showName.includes(t)||String(show.city||"").toLowerCase().includes(t)||(t==="japan"&&shipRegion==="Japan");};
+    if(!(showName.includes(t)||String(show.city||"").toLowerCase().includes(t)||(t==="japan"&&shipRegion==="Japan")))return false;
+    // A tag is a plan for the next one: of the shows it could mean, only the soonest not yet over.
+    const next=(allShows||[]).filter(x=>{const n=String(x.name||"").toLowerCase();return t===n||n.includes(t)||String(x.city||"").toLowerCase().includes(t)||(t==="japan"&&getShowRegion(x)==="Japan");})
+      .filter(x=>showEnd(x)>=today()).sort((a,b)=>showStart(a).localeCompare(showStart(b)))[0];
+    return !next||next.id===show.id;};
   const marketsOf=s=>(Array.isArray(s.market)?s.market:String(s.market||"").split(",")).map(x=>String(x).trim()).filter(Boolean);
-  const shipTagged=stock.filter(s=>!s.soldDate&&hasStockQty(s)&&s.showId!==show.id&&(s.showTag||"").toLowerCase()!==showName
+  const shipTagged=stock.filter(s=>!s.soldDate&&hasStockQty(s)&&!itemAtShow(s,show,allShows)
     &&!(s.showId&&(s.region||"India")!=="India")&&marketsOf(s).some(tagMatchesShow)).sort(shipSort);
   // Packed: it leaves stock for the show exactly as Stock → Send to show does it.
   const sendTaggedPacked=async ids=>{
