@@ -370,6 +370,28 @@ function cardFromStock(s, lang, cur) {
    finds it. Named places (Cupboard 1, Room 2) match as typed. */
 const boxKey = v => { const t = String(v || "").trim().toLowerCase().replace(/\s+/g, " "); const m = t.match(/^(?:stk|box)?\s*0*(\d+)$/); return m ? m[1] : t; };
 
+/* What earlier labels already say about a stone: its origin and its name in
+   each language, from the most recently changed card that has them. A new
+   card for the same stone starts with those filled in. */
+const stoneKeyOf = v => String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+function labelMemory(sets) {
+  const mem = new Map();
+  const all = (sets || []).flatMap(s => (s.cards || []).map(c => ({ c, lang: s.lang || "", at: String(c.addedAt || s.updatedAt || "") })))
+    .sort((a, b) => b.at.localeCompare(a.at));
+  for (const { c, lang } of all) {
+    const k = stoneKeyOf(c.en); if (!k) continue;
+    const m = mem.get(k) || { origin: "", local: {} };
+    if (!m.origin && String(c.origin || "").trim()) m.origin = String(c.origin).trim();
+    if (lang && !m.local[lang] && String(c.local || "").trim()) m.local[lang] = String(c.local).trim();
+    mem.set(k, m);
+  }
+  return mem;
+}
+const withMemory = (cards, mem, lang) => cards.map(c => {
+  const m = mem.get(stoneKeyOf(c.en)); if (!m) return c;
+  return { ...c, origin: c.origin || m.origin || "", local: c.local || (lang && m.local[lang]) || "" };
+});
+
 function StockPicker({ lang, onAdd, onClose, boxFirst = false }) {
   const [stock, setStock] = useState(null);
   const [q, setQ] = useState("");
@@ -507,7 +529,7 @@ export function ShowLabelImport({ name, lang = "", stockIds = [], onClose, onSav
       setSets(Array.isArray(v) ? v : []);
       const items = (Array.isArray(all) ? all : []).filter(x => ids.has(x.id));
       setLastSet(items.map(x => x.labelSet).find(Boolean) || "");
-      setCards(items.map(x => cardFromStock(x, lang, "")));
+      setCards(withMemory(items.map(x => cardFromStock(x, lang, "")), labelMemory(Array.isArray(v) ? v : []), lang));
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!sets || !cards) return <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,15,5,.4)", display: "grid", placeItems: "center", color: "#fff", fontSize: 14 }}>Loading labels…</div>;
@@ -563,7 +585,7 @@ export default function LabelsApp({ onHome }) {
       if (pending?.stockIds?.length) {
         const all = await loadK("ng-stock-v5").catch(() => []);
         const ids = new Set(pending.stockIds);
-        const cards = (Array.isArray(all) ? all : []).filter(x => ids.has(x.id)).map(x => cardFromStock(x, pending.lang || "", ""));
+        const cards = withMemory((Array.isArray(all) ? all : []).filter(x => ids.has(x.id)).map(x => cardFromStock(x, pending.lang || "", "")), labelMemory(setsRef.current || []), pending.lang || "");
         if (cards.length) setIncoming({ name: pending.name || "Show labels", lang: pending.lang || "", cards });
       }
     }).catch(() => put([]));
@@ -582,7 +604,9 @@ export default function LabelsApp({ onHome }) {
   }
   const current = () => (setsRef.current || []).find(s => s.id === openRef.current);
   const patchSet = p => { const s0 = current(); if (s0) saveSet({ ...s0, ...p }); };
-  const patchCard = (id, p) => { const s0 = current(); if (s0) saveSet({ ...s0, cards: s0.cards.map(c => c.id === id ? { ...c, ...p } : c) }); };
+  // Typing a stone's name on a card fills its origin and second name from earlier labels, where empty.
+  const patchCard = (id, p) => { const s0 = current(); if (!s0) return; const mem = p.en !== undefined ? labelMemory(setsRef.current || []) : null;
+    saveSet({ ...s0, cards: s0.cards.map(c => c.id !== id ? c : mem ? withMemory([{ ...c, ...p }], mem, s0.lang)[0] : { ...c, ...p }) }); };
   const act = (i, a) => {
     const cards = [...current().cards];
     if (a === "dup") cards.splice(i + 1, 0, { ...cards[i], id: uid(), addedAt: new Date().toISOString(), printedAt: "" });
@@ -748,7 +772,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
           </div>
         </>
       )}
-      {picker && set && <StockPicker lang={set.lang} boxFirst={picker === "box"} onClose={() => setPicker(false)} onAdd={cards => { patchSet({ cards: [...cards, ...current().cards.filter(c => c.en || c.local || c.price)] }); setPicker(false); say(`✓ ${cards.length} card${cards.length === 1 ? "" : "s"} added`); }} />}
+      {picker && set && <StockPicker lang={set.lang} boxFirst={picker === "box"} onClose={() => setPicker(false)} onAdd={cards0 => { const cards = withMemory(cards0, labelMemory(setsRef.current || []), set.lang); patchSet({ cards: [...cards, ...current().cards.filter(c => c.en || c.local || c.price)] }); setPicker(false); say(`✓ ${cards.length} card${cards.length === 1 ? "" : "s"} added`); }} />}
     </div>
   );
 }
