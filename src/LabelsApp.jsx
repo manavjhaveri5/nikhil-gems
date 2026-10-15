@@ -425,7 +425,22 @@ export default function LabelsApp({ onHome }) {
       return arr;
     });
     // First visit: start with the Japan show's cards.
-    load().then(arr => { if (!arr.length) saveSet(japanSet()); }).catch(() => put([]));
+    load().then(async arr => {
+      if (!arr.length) saveSet(japanSet());
+      /* Sent here from a show's Shipment tab: its cards become a new set. */
+      let pending = null;
+      try { pending = JSON.parse(localStorage.getItem("ng-labels-pending") || "null"); localStorage.removeItem("ng-labels-pending"); } catch { /* none */ }
+      if (pending?.stockIds?.length) {
+        const all = await loadK("ng-stock-v5").catch(() => []);
+        const ids = new Set(pending.stockIds);
+        const cur = pending.lang === "ja" ? "¥" : "$";
+        const cards = (Array.isArray(all) ? all : []).filter(x => ids.has(x.id)).map(x => cardFromStock(x, pending.lang || "", cur));
+        if (cards.length) {
+          const s0 = { id: uid(), name: pending.name || "Show labels", lang: pending.lang || "", paper: "letter", cards, updatedAt: new Date().toISOString() };
+          saveSet(s0); setOpenId(s0.id); say(`✓ ${cards.length} labels from ${s0.name}`);
+        }
+      }
+    }).catch(() => put([]));
     return onCacheRefresh(keys => { if (keys.includes(KEY)) load().catch(() => {}); });
   }, []);
 
