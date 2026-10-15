@@ -64,7 +64,7 @@ const geom = set => {
    part can be left off. */
 const PARTS = [["name", "Name"], ["local", "Second-language name"], ["type", "Type"], ["origin", "Origin"], ["foot", "Qty & price"], ["box", "Box number"], ["code", "Code"]];
 const SCALES = [0.7, 0.85, 1, 1.2, 1.4, 1.7, 2, 2.5];
-const LAYOUT0 = { name: { s: 1, align: "center", pos: "top", show: true }, local: { s: 1, show: true }, type: { s: 1, align: "center", show: true }, origin: { s: 1, show: true }, foot: { s: 1, show: true }, box: { s: 1, show: true }, code: { s: 1, show: true } };
+const LAYOUT0 = { name: { s: 1, align: "center", pos: "top", show: true }, local: { s: 1, show: true }, type: { s: 1, align: "center", show: true }, origin: { s: 1, show: true }, foot: { s: 1, show: true }, box: { s: 1, show: true }, code: { s: 1, show: false } };
 function layoutOf(set) {
   const l = set?.layout || {};
   return Object.fromEntries(Object.entries(LAYOUT0).map(([k, d]) => [k, { ...d, ...(l[k] || {}) }]));
@@ -357,7 +357,7 @@ function cardFromStock(s, lang, cur) {
   const qty = parseFloat(s.qty) > 0 ? `${s.qty}${s.unit === "pcs" ? "pcs" : ` ${s.unit || ""}`.trimEnd()}` : "";
   return {
     ...blank(),
-    code: s.sku || s.code || "",
+    code: "",
     en: stockName(s),
     local: lang ? String((s.labelNames || {})[lang] ?? (lang === "ja" ? s.nameJp || "" : "")).trim() : "",
     type: String(s.labelShape || s.shape || "").trim(),
