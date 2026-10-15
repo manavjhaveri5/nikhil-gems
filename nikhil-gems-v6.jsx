@@ -21108,10 +21108,13 @@ thead{display:table-header-group;}
                             <div style={{padding:"9px 11px 11px"}}>
                               <div style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</div>
                               <div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · {flowQtyLines(s).join(" · ")}</div>
-                              {/* Cost, for pricing: per piece where the card counts pieces. */}
-                              {cost>0&&<div style={{fontSize:10.5,color:C.inkMid,marginBottom:6,background:C.bg,borderRadius:6,padding:"3px 7px"}}>
-                                Cost {pcs>0?<><b>₹{Math.round(cost/pcs).toLocaleString("en-IN")}/pc</b> <span style={{color:C.inkFaint}}>(${(cost/pcs/usdInr).toFixed(2)})</span> · </>:null}₹{Math.round(cost).toLocaleString("en-IN")} card
-                              </div>}
+                              {/* Cost, for pricing: per unit, per piece where the card counts pieces,
+                                  and the card's total. Missing, it can be typed in right here. */}
+                              <div onClick={e=>e.stopPropagation()} style={{fontSize:10.5,color:C.inkMid,marginBottom:6,background:cost>0?C.bg:C.amberBg,borderRadius:6,padding:"4px 7px",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                                <span style={{color:C.inkFaint}}>Cost ₹/{per==="pcs"?"pc":per}</span>
+                                <input key={`pc-${s.id}-${s.costPrice||""}`} defaultValue={s.costPrice||""} inputMode="decimal" placeholder="add" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.costPrice||""))onPatchStockItem?.(s.id,{costPrice:v});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:64,padding:"2px 6px",fontSize:mob?16:11,background:C.surface,borderColor:cost>0?C.border:C.amber}}/>
+                                {cost>0&&<span>{pcs>0&&per!=="pcs"?<><b>₹{Math.round(cost/pcs).toLocaleString("en-IN")}/pc</b> · </>:null}₹{Math.round(cost).toLocaleString("en-IN")} card <span style={{color:C.inkFaint}}>({fmtUsd(cost/usdInr)})</span></span>}
+                              </div>
                               <div onClick={e=>e.stopPropagation()} style={{display:"grid",gap:5}}>
                                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                                   <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Select $/{per==="pcs"?"pc":per}</span>
