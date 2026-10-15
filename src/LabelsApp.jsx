@@ -469,6 +469,34 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
   );
 }
 
+/* The same picker, opened from a show's Shipment tab without leaving it: it
+   reads the label sets and the stock itself, saves into the chosen set, and
+   hands back to the show. */
+export function ShowLabelImport({ name, lang = "", stockIds = [], onClose, onSaved }) {
+  const [sets, setSets] = useState(null);
+  const [cards, setCards] = useState(null);
+  useEffect(() => {
+    if (!document.querySelector(`link[href="${FONT_LINK}"]`)) { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = FONT_LINK; document.head.appendChild(l); }
+    Promise.all([loadK(KEY).catch(() => []), loadK("ng-stock-v5").catch(() => [])]).then(([v, all]) => {
+      const ids = new Set(stockIds);
+      setSets(Array.isArray(v) ? v : []);
+      setCards((Array.isArray(all) ? all : []).filter(x => ids.has(x.id)).map(x => cardFromStock(x, lang, "")));
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!sets || !cards) return <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,15,5,.4)", display: "grid", placeItems: "center", color: "#fff", fontSize: 14 }}>Loading labels…</div>;
+  return (
+    <>
+      <style>{CARD_CSS + EDIT_CSS}</style>
+      <ShowImport incoming={{ name, lang, cards }} sets={sets} onClose={onClose}
+        onDone={async (target, isNew, n) => {
+          try { await upsertItemK(KEY, { ...target, updatedAt: new Date().toISOString() }); onSaved?.(`✓ ${n} label${n === 1 ? "" : "s"} ${isNew ? `in a new set “${target.name}”` : `added to ${target.name}`} — print them from Make Labels`); }
+          catch (e) { onSaved?.(`⚠ Labels not saved: ${e.message}`); return; }
+          onClose?.();
+        }} />
+    </>
+  );
+}
+
 const btn = (primary = false) => ({ background: primary ? "#6f5430" : "#f4f2ee", color: primary ? "#fff" : "#2a2622", border: `1px solid ${primary ? "#6f5430" : "#d6d0c7"}`, borderRadius: 6, padding: "8px 13px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "system-ui,sans-serif", whiteSpace: "nowrap" });
 
 export default function LabelsApp({ onHome }) {
