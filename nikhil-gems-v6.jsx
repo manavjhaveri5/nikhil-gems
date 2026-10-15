@@ -8939,7 +8939,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
               {filtered.length===0?(<div style={{background:C.surface,borderRadius:16,boxShadow:"var(--e-1)",padding:"56px 24px",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:14}}><div style={{width:72,height:72,borderRadius:"50%",background:"var(--c-fill)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32}}>💎</div><div><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,color:C.ink,marginBottom:3}}>{activeFilterCount>0?"No matching stock":"No stock yet"}</div><p style={{fontSize:13,color:C.inkFaint,maxWidth:300}}>{activeFilterCount>0?"Try clearing a filter to see more items.":"Add your first physical stock item to get started."}</p></div>{activeFilterCount>0?<button className="bs" onClick={()=>{clearAllFilters();setOpenFilter(null);}}>Clear filters</button>:<button className="bp" onClick={()=>{setFormType("physical");setForm({...blank});setTab("physical");}}>+ Add Physical Stock</button>}</div>):(
                 <div>
 
-                  <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+                  <style>{`.stk-card .stk-act{opacity:0;transform:translateY(3px);transition:opacity .18s,transform .18s}.stk-card:hover .stk-act{opacity:1;transform:none}.stk-card .stk-img{transition:transform .6s cubic-bezier(.2,.7,.2,1)}.stk-card:hover .stk-img{transform:scale(1.045)}.stk-card .stk-ib:hover,.stk-card .stk-act a:hover,.stk-card .stk-act button:hover{background:rgba(26,19,8,.07)!important}@media (hover:none){.stk-card .stk-act{opacity:1;transform:none}}`}</style>
+                  <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(220px,1fr))",gap:mob?10:18}}>
                   {visibleStock.map((s,idx)=>{
                     const isSel=selectedIds.has(s.id);
                     const age=daysSince(s.addedDate);
@@ -8957,38 +8958,41 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                        loudest where the work is done. */
                     const leadFlag=flags.find(f=>f.live)||flags[0];
                     const lead=leadFlag?.lead||"";
-                    const wash=leadFlag?.live?.06:.03, ring=leadFlag?.live?.3:.16;
-                    const cardBg=isSel?C.amberBg:lead?`linear-gradient(0deg,${hexA(lead,wash)},${hexA(lead,wash)}),${C.surface}`:C.surface;
-                    const restShadow=isSel?`0 0 0 2px ${C.amber}, var(--e-1)`:lead?`0 0 0 1px ${hexA(lead,ring)}, var(--e-1)`:"var(--e-1)";
-                    const hoverShadow=lead?`0 0 0 1px ${hexA(lead,ring+.15)}, var(--e-2)`:"var(--e-2)";
+                    // A clean paper card; where it's going is said by the ribbon and the
+                    // gallery tag, so the surface itself stays quiet.
+                    void lead;
+                    const cardBg=isSel?C.amberBg:C.surface;
+                    const restShadow=isSel?`0 0 0 2px ${C.amber}, 0 6px 18px rgba(26,19,8,.08)`:"0 0 0 1px rgba(26,19,8,.06), 0 1px 2px rgba(26,19,8,.04), 0 4px 14px rgba(26,19,8,.04)";
+                    const hoverShadow="0 0 0 1px rgba(26,19,8,.08), 0 10px 28px rgba(26,19,8,.12)";
                     return(
-                    <div key={s.id}
+                    <div key={s.id} className="stk-card"
                       onClick={()=>{if(selectMode){setSelectedIds(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;});}else setSelected(s);}}
-                      style={{background:cardBg,boxShadow:restShadow,borderRadius:16,overflow:"hidden",cursor:"pointer",
+                      style={{background:cardBg,boxShadow:restShadow,borderRadius:18,overflow:"hidden",cursor:"pointer",display:"flex",flexDirection:"column",
                         animation:`fadeSlideUp .3s ease both`,animationDelay:`${Math.min(idx*.025,.5)}s`,
                         transition:"box-shadow .18s,transform .18s"}}
-                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow=hoverShadow;e.currentTarget.style.transform="translateY(-2px)";}}}
+                      onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow=hoverShadow;e.currentTarget.style.transform="translateY(-3px)";}}}
                       onMouseLeave={e=>{e.currentTarget.style.boxShadow=restShadow;e.currentTarget.style.transform="none";}}>
                       {/* Destination ribbon — one segment per place this piece is going. */}
                       {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
-                        style={{display:"flex",height:5,flexShrink:0,boxShadow:"inset 0 -1px 0 rgba(0,0,0,.07)"}}>
+                        style={{display:"flex",height:4,flexShrink:0}}>
                         {flags.map(f=><div key={f.key} style={{flex:1,background:f.live?f.bg:stockStripe(f.lead)}}/>)}
                       </div>}
                       {/* Photo */}
-                      <div style={{position:"relative",height:cover?(mob?130:155):(mob?80:100),overflow:"hidden",background:`linear-gradient(135deg,${C.card} 0%,${C.border} 100%)`,flexShrink:0}}>
+                      <div style={{position:"relative",aspectRatio:cover?"4 / 3":"4 / 2",overflow:"hidden",background:`radial-gradient(120% 90% at 30% 20%,${C.surface} 0%,${C.card} 55%,${C.border} 100%)`,flexShrink:0}}>
                         {cover
-                          ?<a href={cover} target="_blank" rel="noopener noreferrer" onClick={e=>e.preventDefault()} style={{position:"absolute",inset:0}}><img src={cover} loading="eager" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} alt=""/></a>
+                          ?<a href={cover} target="_blank" rel="noopener noreferrer" onClick={e=>e.preventDefault()} style={{position:"absolute",inset:0}}><img className="stk-img" src={cover} loading="eager" decoding="async" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} alt=""/></a>
                           :<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:4}}>
-                            <div style={{fontSize:mob?22:28,opacity:.12}}>💎</div>
+                            <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:mob?13:14,color:C.inkFaint,opacity:.7}}>no photo yet</div>
                             {s.grade&&<div style={{fontSize:9,color:C.inkFaint,fontWeight:700,letterSpacing:.5}}>{s.grade}</div>}
                           </div>
                         }
                         {selectMode&&<div style={{position:"absolute",top:8,left:8}}><input type="checkbox" readOnly checked={isSel} style={{accentColor:C.amber,width:16,height:16,cursor:"pointer"}}/></div>}
                         {/* Box / location pill — top left */}
-                        {s.location&&<div style={{position:"absolute",top:8,left:selectMode?32:8,background:"rgba(26,19,8,.75)",borderRadius:20,padding:"3px 9px",fontSize:10,color:"#fff",fontWeight:600,letterSpacing:.3}}>
-                          {s.location}
+                        {cover&&<div style={{position:"absolute",inset:0,background:"linear-gradient(to top,rgba(20,14,6,.28) 0%,rgba(20,14,6,0) 38%),linear-gradient(to bottom,rgba(20,14,6,.18) 0%,rgba(20,14,6,0) 26%)",pointerEvents:"none"}}/>}
+                        {s.location&&<div style={{position:"absolute",top:9,left:selectMode?34:9,display:"inline-flex",alignItems:"baseline",gap:4,background:"rgba(255,252,246,.9)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 10px 3px 9px",boxShadow:"0 1px 6px rgba(26,19,8,.14)",color:"#2a2218"}}>
+                          <span style={{fontSize:7.5,fontWeight:800,letterSpacing:1.1,opacity:.5}}>{/^(stk|box)?\s*\d+$/i.test(s.location)?"BOX":""}</span><span className="tnum" style={{fontSize:11,fontWeight:700,letterSpacing:.2}}>{String(s.location).replace(/^box\s*/i,"")}</span>
                         </div>}
-                        {!s.location&&!selectMode&&<div style={{position:"absolute",top:8,left:8,background:"rgba(220,100,0,.85)",borderRadius:20,padding:"3px 8px",fontSize:9,color:"#fff",fontWeight:600}}>no box</div>}
+                        {!s.location&&!selectMode&&<div style={{position:"absolute",top:9,left:9,display:"inline-flex",alignItems:"center",gap:5,background:"rgba(255,252,246,.9)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 10px 3px 8px",boxShadow:"0 1px 6px rgba(26,19,8,.14)",fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:12,fontWeight:600,color:"#9a5a12"}}><span style={{width:6,height:6,borderRadius:"50%",background:"#D9822B"}}/>no box</div>}
                         {/* Where it's headed, written on the photo like a gallery tag. */}
                         {flags.some(f=>!["etsy","ebay"].includes(f.key))&&<div style={{position:"absolute",left:8,bottom:8,display:"flex",gap:4,pointerEvents:"none"}}>
                           {flags.filter(f=>!["etsy","ebay"].includes(f.key)).map(f=>(
@@ -8998,31 +9002,31 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           ))}
                         </div>}
                         {/* Age dot — top right */}
-                        <div style={{position:"absolute",top:10,right:10,width:7,height:7,borderRadius:"50%",background:age==null?C.border:ageCol,boxShadow:"0 0 0 2px rgba(255,255,255,.8)"}} title={age==null?"No date":`${age} days in stock`}/>
+                        <div style={{position:"absolute",top:12,right:12,width:8,height:8,borderRadius:"50%",background:age==null?C.border:ageCol,boxShadow:"0 0 0 2.5px rgba(255,252,246,.9), 0 1px 4px rgba(0,0,0,.2)"}} title={age==null?"No date":`${age} days in stock`}/>
                         {/* Quick actions on hover — desktop only */}
-                        {!selectMode&&!mob&&<div style={{position:"absolute",bottom:6,right:6,display:"flex",gap:3}} onClick={e=>e.stopPropagation()}>
+                        {!selectMode&&!mob&&<div className="stk-act" style={{position:"absolute",bottom:8,right:8,display:"flex",gap:2,background:"rgba(255,252,246,.92)",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",borderRadius:20,padding:"3px 4px",boxShadow:"0 2px 10px rgba(26,19,8,.18)"}} onClick={e=>e.stopPropagation()}>
                           {stockRegion!=="India"&&<button onClick={()=>{setMarkSoldItem(s);setMarkSoldQty(s.qty||"1");setMarkSoldRate("");}} style={{background:"rgba(255,255,255,.95)",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:4,lineHeight:1,color:REGION_CFG[stockRegion]?.color||C.ink}}>💰 Sold</button>}
-                          <button className="bs" style={{padding:"2px 6px",fontSize:9,borderRadius:4,background:"rgba(255,255,255,.9)",border:"none"}} onClick={()=>openEditForm(s)}>✏</button>
-                          {cover&&<a href={cover} download target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"rgba(255,255,255,.9)",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,lineHeight:1,textDecoration:"none",color:C.ink,display:"flex",alignItems:"center"}} title="Download full image">⬇</a>}
-                          <button onClick={()=>{const url=`${window.location.origin}${window.location.pathname}?stock=${s.id}`;navigator.clipboard.writeText(url).then(()=>showToast("Link copied!"));}} style={{background:"rgba(255,255,255,.9)",border:"none",cursor:"pointer",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,lineHeight:1}} title="Copy link">🔗</button>
-                          <button onClick={()=>{if(window.confirm("Delete?"))del(s.id);}} style={{background:"rgba(255,255,255,.9)",border:"none",cursor:"pointer",color:C.red,fontSize:11,fontWeight:700,padding:"2px 5px",borderRadius:4,lineHeight:1}}>&times;</button>
+                          <button className="bs stk-ib" title="Edit" style={{padding:"3px 7px",fontSize:10,borderRadius:14,background:"transparent",border:"none",minHeight:0}} onClick={()=>openEditForm(s)}>✏</button>
+                          {cover&&<a href={cover} download target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:10,fontWeight:700,padding:"3px 7px",borderRadius:14,lineHeight:1,textDecoration:"none",color:C.ink,display:"flex",alignItems:"center"}} title="Download full image">⬇</a>}
+                          <button onClick={()=>{const url=`${window.location.origin}${window.location.pathname}?stock=${s.id}`;navigator.clipboard.writeText(url).then(()=>showToast("Link copied!"));}} style={{background:"transparent",border:"none",cursor:"pointer",fontSize:10,fontWeight:700,padding:"3px 7px",borderRadius:14,lineHeight:1}} title="Copy link">🔗</button>
+                          <button onClick={()=>{if(window.confirm("Delete?"))del(s.id);}} title="Delete" style={{background:"transparent",border:"none",cursor:"pointer",color:C.red,fontSize:12,fontWeight:700,padding:"3px 7px",borderRadius:14,lineHeight:1}}>&times;</button>
                         </div>}
                       </div>
                       {/* Info */}
-                      <div style={{padding:mob?"9px 10px":"11px 13px"}}>
+                      <div style={{padding:mob?"10px 11px 11px":"13px 15px 14px",display:"flex",flexDirection:"column",flex:1}}>
                         {/* Material · Shape */}
-                        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:mob?13:15,color:C.ink,lineHeight:1.25,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontWeight:600,fontSize:mob?15:18,color:C.ink,lineHeight:1.15,letterSpacing:.1,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                           {s.material||s.name||"—"}
                         </div>
-                        {s.shape&&<div style={{fontSize:10,color:C.inkMid,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.shape}{s.size?` · ${s.size}`:""}</div>}
+                        {s.shape&&<div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.2,marginBottom:8,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.shape}{s.size?` · ${s.size}`:""}</div>}
                         {/* Primary stat row: qty + weight */}
-                        <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
-                          {qty>0&&<span className="tnum" style={{fontSize:mob?13:14,fontWeight:700,color:qty<5?C.red:C.ink}}>{qty}<span style={{fontWeight:400,fontSize:10,color:C.inkMid,marginLeft:2}}>{s.unit}</span></span>}
+                        <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:4}}>
+                          {qty>0&&<span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?17:20,fontWeight:600,lineHeight:1,color:qty<5&&s.unit==="pcs"?C.red:C.ink}}>{+parseFloat(qty.toFixed(3))}<span style={{fontFamily:"inherit",fontWeight:500,fontSize:mob?11:12,fontStyle:"italic",color:C.inkFaint,marginLeft:3}}>{s.unit}</span></span>}
                           {s.qty2&&+s.qty2>0&&<span style={{display:"inline-flex",alignItems:"center",gap:3}}>
-                            <span style={{fontSize:mob?12:13,fontWeight:600,color:C.amber}}>{(()=>{const v=+parseFloat((+s.qty2).toFixed(4));return v<1?(v*1000).toFixed(0)+"g":`${v}${s.unit2||"kg"}`;})()}</span>
-                            <button onClick={e=>{e.stopPropagation();quickUpdateItem(s.id,{qty2:"",unit2:""});}} title="Clear secondary quantity"
-                              style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:11,lineHeight:1,padding:"0 1px",opacity:.6}}
-                              onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.6}>×</button>
+                            <span style={{color:C.border,fontSize:12}}>·</span>
+                            <span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:mob?15:17,fontWeight:600,lineHeight:1,color:"#8B6F47"}}>{(()=>{const v=+parseFloat((+s.qty2).toFixed(4));return v<1&&/^kg/i.test(s.unit2||"kg")?<>{(v*1000).toFixed(0)}<span style={{fontStyle:"italic",fontWeight:500,fontSize:mob?11:12,color:C.inkFaint,marginLeft:3}}>g</span></>:<>{v}<span style={{fontStyle:"italic",fontWeight:500,fontSize:mob?11:12,color:C.inkFaint,marginLeft:3}}>{s.unit2||"kg"}</span></>;})()}</span>
+                            <button className="stk-act" onClick={e=>{e.stopPropagation();quickUpdateItem(s.id,{qty2:"",unit2:""});}} title="Clear secondary quantity"
+                              style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:11,lineHeight:1,padding:"0 1px"}}>×</button>
                           </span>}
                           {!qty&&!s.qty2&&<span style={{fontSize:12,color:C.inkFaint}}>—</span>}
                         </div>
@@ -9039,22 +9043,21 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                             {key:"wix",    label:"Wix",    short:"W",  color:"#7B2FF7", listed:!!s.postedWix},
                           ];
                           const chips=[];
-                          if(s.photographed) chips.push({icon:"📷",label:"Photographed",key:"photo"});
+                          void MARKET_ICON;
                           mkts.filter(m=>m&&m!=="Unassigned").forEach(m=>chips.push({icon:MARKET_ICON[m]||"📍",label:m,key:"mkt-"+m}));
                           if(s.billLineId)    chips.push({icon:"↗",label:"From bill",key:"bill",color:C.teal});
                           if(isFutureDate)    chips.push({icon:"⚠",label:"Future date",key:"future",color:C.amber});
                           return(
                             <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:4,marginTop:6}}>
-                              {STOCK_PLATFORMS.map(p=>(
-                                <span key={p.key} title={p.listed?`Listed on ${p.label}`:`Not listed on ${p.label}`} style={p.listed
-                                  ?{background:p.color,color:"#fff",borderRadius:10,padding:"1px 6px",fontSize:8,fontWeight:700,lineHeight:1.5,letterSpacing:.2}
-                                  :{background:C.card,color:C.inkFaint,border:`1px solid ${C.border}`,borderRadius:10,padding:"0 5px",fontSize:8,fontWeight:700,lineHeight:1.5,letterSpacing:.2,opacity:.4}}>{p.short}</span>
+                              {STOCK_PLATFORMS.filter(p=>p.listed).map(p=>(
+                                <span key={p.key} title={`Listed on ${p.label}`} style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:9.5,fontWeight:650,color:C.inkMid,background:hexA(p.color,.08),borderRadius:10,padding:"2px 7px 2px 6px"}}>
+                                  <span style={{width:5,height:5,borderRadius:"50%",background:p.color}}/>{p.label}</span>
                               ))}
-                              {chips.map(c=>(
+                              {chips.filter(c=>!c.key.startsWith("mkt-")).map(c=>(
                                 <span key={c.key} title={c.label} style={c.color?{fontSize:12,lineHeight:1,color:c.color}:{fontSize:12,lineHeight:1,filter:"grayscale(1)",opacity:.5}}>{c.icon}</span>
                               ))}
                               {(()=>{const lm=lmForBox(s.location);return lm?<span title={`Live listings referencing box ${s.location}:\n${lm.titles.join("\n")}`} style={{background:"#FFF3E0",color:"#BF360C",borderRadius:10,padding:"1px 7px",fontSize:8,fontWeight:700,whiteSpace:"nowrap"}}>🏷 {lmSummary(lm)}</span>:null;})()}
-                              {s.showTag&&<span style={{background:"var(--c-fill)",color:C.inkMid,borderRadius:10,padding:"1px 7px",fontSize:8,fontWeight:600,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={s.showTag}>{s.showTag}</span>}
+
                             </div>
                           );
                         })()}
@@ -9063,12 +9066,12 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           const wKg=s.unit==="kg"?+s.qty||0:s.unit==="gm"?(+s.qty||0)/1000:s.unit2==="kg"?+s.qty2||0:s.unit2==="gm"?(+s.qty2||0)/1000:s.weightGm?(+s.weightGm||0)/1000:0;
                           const perKg=wKg>0?(+s.costPrice||0)*(+s.qty||1)/wKg:0;
                           return(
-                            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:6,flexWrap:"wrap"}}>
-                              {s.costPrice&&+s.costPrice>0&&<span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:11,color:C.inkFaint,display:"inline-flex",alignItems:"baseline",gap:4}}>
+                            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:"auto",paddingTop:9,borderTop:`1px solid ${hexA("#1a1308",.06)}`,flexWrap:"wrap"}}>
+                              {s.costPrice&&+s.costPrice>0&&<span className="tnum" style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:13,fontWeight:600,color:C.inkMid,display:"inline-flex",alignItems:"baseline",gap:4}}>
                                 {inr(+s.costPrice*(+s.qty||1))}
-                                {perKg>0&&<span style={{fontSize:9}}>· {inr(perKg)}/kg</span>}
+                                {perKg>0&&<span style={{fontSize:10.5,fontWeight:500,fontStyle:"italic",color:C.inkFaint}}>{inr(perKg)}/kg</span>}
                               </span>}
-                              {s.productType&&<span style={{background:"var(--c-fill)",color:C.inkMid,borderRadius:10,padding:"1px 7px",fontSize:9,fontWeight:600,marginLeft:"auto",display:"inline-flex",alignItems:"center",gap:4}}><span style={{width:5,height:5,borderRadius:"50%",background:C.purple}}/>{s.productType}</span>}
+                              {s.productType&&<span style={{color:C.inkFaint,fontSize:8.5,fontWeight:800,textTransform:"uppercase",letterSpacing:1,marginLeft:"auto"}}>{s.productType}</span>}
                             </div>
                           );
                         })()}
