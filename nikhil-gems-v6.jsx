@@ -19143,6 +19143,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const setLabelFilter=v=>{setLabelFilterRaw(v);try{localStorage.setItem(`ng-show-${show.id}-lf`,v);}catch{}};
   const [readySel,setReadySel]=useState(()=>new Set());   // step 2: labelled cards ticked to send
   const [readyFilter,setReadyFilter]=useState("all");     // step 2: all | todo (not printed) | printed
+  const [multEdit,setMultEdit]=useState(null);            // {id, which:"select"|"flat", val} — typing a markup
   // Which stock cards' labels are printed — read from the label sets (Make Labels marks them too).
   const [printedMap,setPrintedMap]=useState(()=>new Map());
   const loadPrinted=useCallback(()=>loadK("ng-label-sets-v1").then(v=>{const m=new Map();for(const st of Array.isArray(v)?v:[])for(const c of st.cards||[])if(c.stockId){const o=m.get(c.stockId);if(!o||String(c.addedAt||"")>String(o.at||""))m.set(c.stockId,{at:String(c.addedAt||""),printedAt:c.printedAt||""});}setPrintedMap(m);}).catch(()=>{}),[]);
@@ -19867,6 +19868,16 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const flatUnitOf=s=>(+s.qty>0&&isG(s.unit))||(!(+s.qty>0&&isKg(s.unit))&&+s.qty2>0&&isG(s.unit2))?"gm":"kg";
   const weightIn=(s,u)=>u==="gm"?kgOf(s)*1000:kgOf(s);
   const flatTotalOf=s=>+s.showFlatRate>0&&kgOf(s)>0?Math.round(+s.showFlatRate*weightIn(s,flatUnitOf(s))*100)/100:+s.showFlatPrice>0?+s.showFlatPrice:0;
+  /* A markup typed against cost, turned back into a price: select per its unit;
+     whole flat per kg/gm when that's how it's priced, else the flat's total. */
+  const applyMult=(s,which,m,flatMode)=>{
+    const cost=cardCostInr(s),b=basisOf(s);m=parseFloat(m);
+    if(!(m>0)||!(cost>0))return;
+    const totalUsd=cost*m/usdInr;
+    if(which==="select"){if(b>0)onPatchStockItem?.(s.id,{listPrice:String(+(totalUsd/b).toFixed(4))});}
+    else if(flatMode==="kg"&&kgOf(s)>0){const u=flatUnitOf(s),w=weightIn(s,u);onPatchStockItem?.(s.id,{showFlatRate:String(+(totalUsd/w).toFixed(4)),showFlatPrice:String(Math.round(totalUsd*100)/100)});}
+    else onPatchStockItem?.(s.id,{showFlatPrice:String(Math.round(totalUsd*100)/100),showFlatRate:""});
+  };
   // Swap which quantity leads; cost and select price restated per the new unit.
   const swapCardQty=s=>{const q1=parseFloat(s.qty)||0,q2=parseFloat(s.qty2)||0;const per=v=>{const n=parseFloat(v);return n>0&&q1>0&&q2>0?String(+(n*q1/q2).toFixed(4)):(v??"");};
     onPatchStockItem?.(s.id,{qty:s.qty2??"",unit:s.unit2||"kg",qty2:s.qty??"",unit2:s.unit||"pcs",costPrice:per(s.costPrice),listPrice:per(s.listPrice)});};
@@ -21342,10 +21353,18 @@ thead{display:table-header-group;}
                                 </div>
                                 {/* The numbers that help price: per piece where the card counts pieces,
                                     and what each price is on cost — for weighed cards too. */}
-                                {val>0&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.5}}>
-                                  {pcs>0&&<div>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}</div>}
-                                  {cost>0&&<div>{selectTotalOf(s)>0?<>Select <b style={{color:C.inkMid}}>{((selectTotalOf(s)*usdInr)/cost).toFixed(1)}×</b> cost</>:null}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?<>Whole <b style={{color:C.inkMid}}>{((flatTotalOf(s)*usdInr)/cost).toFixed(1)}×</b> cost</>:null} <span style={{opacity:.8}}>(profit {fmtCur(Math.max(selectTotalOf(s),flatTotalOf(s))-cost/usdInr).replace("-","−")}{flatTotalOf(s)>0&&selectTotalOf(s)>0?` select · ${fmtCur(flatTotalOf(s)-cost/usdInr).replace("-","−")} whole`:""})</span></div>}
-                                  {!cost&&<div style={{color:C.amber}}>Add the cost to see the markup</div>}
+                                {(val>0||cost>0)&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.5}}>
+                                  {pcs>0&&val>0&&<div>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}</div>}
+                                  {cost>0&&(()=>{
+                                    const xSel=selectTotalOf(s)>0?(selectTotalOf(s)*usdInr)/cost:0,xFlat=flatTotalOf(s)>0?(flatTotalOf(s)*usdInr)/cost:0;
+                                    const M=(which,x)=>multEdit?.id===s.id&&multEdit.which===which
+                                      ?<input autoFocus value={multEdit.val} onChange={e=>setMultEdit(m=>({...m,val:e.target.value.replace(/[^\d.]/g,"")}))}
+                                          onKeyDown={e=>{if(e.key==="Enter"){applyMult(s,which,multEdit.val,flat);setMultEdit(null);}if(e.key==="Escape")setMultEdit(null);}}
+                                          onBlur={()=>{applyMult(s,which,multEdit.val,flat);setMultEdit(null);}} inputMode="decimal" style={{width:38,padding:"0 4px",fontSize:10.5,border:`1px solid ${C.blue}`,borderRadius:4,textAlign:"right"}}/>
+                                      :<button title={`Type a markup on cost and the ${which==="select"?"select":"whole-flat"} price is filled in`} onClick={()=>setMultEdit({id:s.id,which,val:x?x.toFixed(1):""})} style={{background:"none",border:"none",borderBottom:`1px dashed ${C.blue}`,padding:0,font:"inherit",fontWeight:800,color:C.blue,cursor:"pointer"}}>{x?`${x.toFixed(1)}×`:"set ×"}</button>;
+                                    return <div>Select {M("select",xSel)} · Whole {M("flat",xFlat)} cost{(xSel||xFlat)?<span style={{opacity:.8}}> (profit {xSel?`${fmtCur(selectTotalOf(s)-cost/usdInr).replace("-","−")} select`:""}{xSel&&xFlat?" · ":""}{xFlat?`${fmtCur(flatTotalOf(s)-cost/usdInr).replace("-","−")} whole`:""})</span>:null}</div>;
+                                  })()}
+                                  {!cost&&val>0&&<div style={{color:C.amber}}>Add the cost to see the markup</div>}
                                 </div>}
                               </div>
                             </div>
