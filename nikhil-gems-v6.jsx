@@ -19762,12 +19762,13 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const kgOf=s=>{const k=(q,u)=>/^kgs?$/i.test(String(u||""))?+q||0:/^(g|gm|gms|grams?)$/i.test(String(u||""))?(+q||0)/1000:0;return k(s.qty,s.unit)||k(s.qty2,s.unit2)||(+s.weightGm>0?+s.weightGm/1000:0);};
   // A whole-flat rate is per the card's own weight unit: per gram when it's weighed in grams.
   const isG=u=>/^(g|gm|gms|grams?)$/i.test(String(u||"").trim()),isKg=u=>/^kgs?$/i.test(String(u||"").trim());
-  const flatUnitOf=s=>s.showFlatUnit||((+s.qty>0&&isG(s.unit))||(!(+s.qty>0&&isKg(s.unit))&&+s.qty2>0&&isG(s.unit2))?"gm":"kg");
+  // Always from how the card is weighed now (a saved unit went stale when quantities were swapped).
+  const flatUnitOf=s=>(+s.qty>0&&isG(s.unit))||(!(+s.qty>0&&isKg(s.unit))&&+s.qty2>0&&isG(s.unit2))?"gm":"kg";
   const weightIn=(s,u)=>u==="gm"?kgOf(s)*1000:kgOf(s);
   const flatTotalOf=s=>+s.showFlatRate>0&&kgOf(s)>0?Math.round(+s.showFlatRate*weightIn(s,flatUnitOf(s))*100)/100:+s.showFlatPrice>0?+s.showFlatPrice:0;
   // Swap which quantity leads; cost and select price restated per the new unit.
   const swapCardQty=s=>{const q1=parseFloat(s.qty)||0,q2=parseFloat(s.qty2)||0;const per=v=>{const n=parseFloat(v);return n>0&&q1>0&&q2>0?String(+(n*q1/q2).toFixed(4)):(v??"");};
-    onPatchStockItem?.(s.id,{qty:s.qty2??"",unit:s.unit2||"kg",qty2:s.qty??"",unit2:s.unit||"pcs",costPrice:per(s.costPrice),listPrice:per(s.listPrice),showFlatUnit:flatUnitOf(s)});};
+    onPatchStockItem?.(s.id,{qty:s.qty2??"",unit:s.unit2||"kg",qty2:s.qty??"",unit2:s.unit||"pcs",costPrice:per(s.costPrice),listPrice:per(s.listPrice)});};
   const selectTotalOf=s=>(+s.listPrice||0)*basisOf(s);
   const cardValUsd=s=>selectTotalOf(s)||flatTotalOf(s);
   const money=v=>`$${(+v).toLocaleString("en-US",{maximumFractionDigits:2})}`;
@@ -19783,7 +19784,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     const pick=planned?shipTagged.filter(s=>tagSel.has(s.id)):shipItems.filter(s=>shipSel.has(s.id));if(!pick.length)return;
     const patches={};let skipped=0;
     for(const s of pick){
-      if(mode==="flatkg"){const u=flatUnitOf(s),w=weightIn(s,u);if(!(w>0)){skipped++;continue;}patches[s.id]={showFlatRate:String(v),showFlatUnit:u,showFlatPrice:String(Math.round(v*w*100)/100)};}
+      if(mode==="flatkg"){const u=flatUnitOf(s),w=weightIn(s,u);if(!(w>0)){skipped++;continue;}patches[s.id]={showFlatRate:String(v),showFlatPrice:String(Math.round(v*w*100)/100)};}
       else if(mode==="flat")patches[s.id]={showFlatPrice:String(v),showFlatRate:""};
       else patches[s.id]={listPrice:String(v)};
     }
@@ -21226,7 +21227,7 @@ thead{display:table-header-group;}
                                   <input key={`pf-${s.id}-${priceCur}-${flat}-${s.showFlatRate||""}-${s.showFlatPrice||""}`} defaultValue={flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice))} inputMode="decimal" placeholder={flat==="kg"?`${curSym}/${flatUnitOf(s)}`:`${curSym} total`}
                                     onBlur={e=>{const shown=flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice));if(e.target.value.trim()===shown)return;const v=fromIn(e.target.value);
                                       if(!(v>0))onPatchStockItem?.(s.id,{showFlatRate:"",showFlatPrice:""});
-                                      else if(flat==="kg")onPatchStockItem?.(s.id,{showFlatRate:String(v),showFlatUnit:flatUnitOf(s),showFlatPrice:String(Math.round(v*weightIn(s,flatUnitOf(s))*100)/100)});
+                                      else if(flat==="kg")onPatchStockItem?.(s.id,{showFlatRate:String(v),showFlatPrice:String(Math.round(v*weightIn(s,flatUnitOf(s))*100)/100)});
                                       else onPatchStockItem?.(s.id,{showFlatPrice:String(v),showFlatRate:""});}}
                                     onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:70,padding:"4px 7px",fontSize:mob?16:12,borderColor:flatTotalOf(s)>0?"#10b981":C.border}}/>
                                   <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>{(kgOf(s)>0?[["kg",`/${flatUnitOf(s)}`],["total","total"]]:[["total","total"]]).map(([v,l])=><button key={v} onClick={()=>setFlatMode(m=>({...m,[s.id]:v}))} style={{background:flat===v?"#10b981":"transparent",color:flat===v?"#fff":C.inkMid,border:"none",padding:"3px 6px",fontSize:10,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
