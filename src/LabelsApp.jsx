@@ -502,7 +502,11 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
             const ticked = on.has(c.id);
             return (
               <div key={c.id} style={{ position: "relative", width: g.w * 96 * zoom + 8, opacity: ticked ? 1 : .45 }}>
-                <input type="checkbox" checked={ticked} onChange={() => setOn(s => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} style={{ position: "absolute", top: 10, left: 10, zIndex: 2, width: 18, height: 18, accentColor: "#6f5430" }} />
+                {/* The tick sits above the card, clear of the box number in its corner. */}
+                <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 4px 4px", fontSize: 12, color: "#5a4527", cursor: "pointer", fontFamily: "system-ui,sans-serif" }}>
+                  <input type="checkbox" checked={ticked} onChange={() => setOn(s => { const n = new Set(s); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} style={{ width: 16, height: 16, accentColor: "#6f5430" }} />
+                  {ticked ? "Make this label" : "Skip"}{c.box ? <b style={{ marginLeft: "auto" }}>Box {c.box}</b> : <span style={{ marginLeft: "auto", color: "#c0392b" }}>no box on the card</span>}
+                </label>
                 <div style={{ zoom, padding: 4 }}>
                   <Card c={c} lang={target.lang} g={g} index={i} total={cards.length} onAct={() => {}} onPatch={p => setCards(cs => cs.map(x => x.id === c.id ? { ...x, ...p } : x))} />
                 </div>
