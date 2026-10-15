@@ -36,7 +36,12 @@ def curl_upload(path, sha, size):
         f"--post-file={path}",
         url
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=130)
+    # A hung upload is retried (Vercel already has what went before — 409s are
+    # instant), instead of one stalled file throwing and killing the deploy.
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return False, "timed out"
     # wget writes response headers to stderr, body to stdout
     if result.returncode not in (0, 8):  # 8 = server error response but still got one
         return False, result.stderr[:200]
@@ -97,11 +102,11 @@ print(f"Found {len(files)} static files + {len(api_files)-1} api functions")
 # Upload all files
 for fi in all_files:
     ok, out = False, ""
-    for attempt in range(3):
+    for attempt in range(5):
         ok, out = curl_upload(fi["path"], fi["sha"], fi["size"])
         if ok:
             break
-        if attempt < 2:
+        if attempt < 4:
             time.sleep(2 + attempt * 2)
     kb = fi["size"] // 1024
     tag = "fn" if fi["kind"] == "function" else fi["kind"]

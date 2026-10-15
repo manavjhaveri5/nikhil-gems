@@ -83,14 +83,16 @@ const hexA=(hex,a)=>{
 };
 /* `bg` is what the ribbon segment paints. Stripes are hard-stopped so they read
    as a flag rather than a smear; Japan is a radial stop, which is the disc. */
+/* Each destination is a little landscape rather than a flag: Tucson a desert
+   dusk running into saguaro green, Denver slate mountains into snow, Japan
+   cherry blossom deepening to vermilion, Munich forest into brass. */
 const STOCK_FLAGS=[
-  {key:"etsy", label:"Etsy",           lead:"#F56400", bg:"#F56400"},
-  {key:"ebay", label:"eBay",           lead:"#8A8F98", bg:"#8A8F98"},
-  // Stars and stripes, at ribbon size: the blue canton, then red and white bands
-  // running across (side-by-side red-white-blue read as France).
-  {key:"usa",  label:"US show (Denver / Tucson)",lead:"#B22234", bg:"linear-gradient(90deg,#3C3B6E 0 26%,transparent 26%),repeating-linear-gradient(180deg,#B22234 0 1px,#FFFFFF 1px 2px)"},
-  {key:"eu",   label:"Europe show (Munich)",lead:"#DD0000", bg:"linear-gradient(180deg,#000000 0 33.33%,#DD0000 33.33% 66.66%,#FFCE00 66.66% 100%)"},
-  {key:"japan",label:"Japan show",     lead:"#BC002D", bg:"radial-gradient(circle at 50% 50%,#BC002D 0 42%,#FFFFFF 43% 100%)"},
+  {key:"etsy",   label:"Etsy",      lead:"#E8743B", bg:"linear-gradient(90deg,#F4B36B,#E8743B)"},
+  {key:"ebay",   label:"eBay",      lead:"#8A8F98", bg:"linear-gradient(90deg,#C7CCD3,#8A8F98)"},
+  {key:"tucson", label:"Tucson",    lead:"#C4553B", bg:"linear-gradient(90deg,#B8452F 0%,#E39B5B 48%,#9DB07A 78%,#5F7F55 100%)"},
+  {key:"denver", label:"Denver",    lead:"#4A6782", bg:"linear-gradient(90deg,#2F4A63 0%,#6F8DA8 55%,#DCE6EE 100%)"},
+  {key:"japan",  label:"Japan",     lead:"#D9667A", bg:"linear-gradient(90deg,#F6D3DA 0%,#E8899A 50%,#B8323F 100%)"},
+  {key:"eu",     label:"Munich",    lead:"#5F7A4E", bg:"linear-gradient(90deg,#2F4A3A 0%,#7A8F5C 55%,#C9A646 100%)"},
 ];
 /* Planned, not done: the same hue laid down as a soft diagonal candy stripe. */
 const stockStripe=lead=>`repeating-linear-gradient(45deg,${hexA(lead,.5)} 0 3px,${hexA(lead,.13)} 3px 6px)`;
@@ -105,7 +107,8 @@ const stockFlags=s=>{
   // "meant to go online" — the listing itself is what makes it solid.
   if(s?.postedEtsy) st.etsy="live"; else if(at(/etsy|online/)) st.etsy="planned";
   if(s?.postedEbay) st.ebay="live";
-  if(at(/tucson|denver/)) st.usa="live";
+  if(at(/tucson/)) st.tucson="live";
+  if(at(/denver/)) st.denver="live";
   if(at(/japan|tokyo|osaka|kyoto|ikebukuro/)) st.japan="live";
   if(at(/munich|europe|germany/)) st.eu="live";
   return STOCK_FLAGS.filter(f=>st[f.key]).map(f=>({...f,live:st[f.key]==="live"}));
@@ -8968,7 +8971,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       onMouseLeave={e=>{e.currentTarget.style.boxShadow=restShadow;e.currentTarget.style.transform="none";}}>
                       {/* Destination ribbon — one segment per place this piece is going. */}
                       {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
-                        style={{display:"flex",height:7,flexShrink:0,boxShadow:"inset 0 -1px 0 rgba(0,0,0,.07)"}}>
+                        style={{display:"flex",height:5,flexShrink:0,boxShadow:"inset 0 -1px 0 rgba(0,0,0,.07)"}}>
                         {flags.map(f=><div key={f.key} style={{flex:1,background:f.live?f.bg:stockStripe(f.lead)}}/>)}
                       </div>}
                       {/* Photo */}
@@ -8986,6 +8989,14 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                           {s.location}
                         </div>}
                         {!s.location&&!selectMode&&<div style={{position:"absolute",top:8,left:8,background:"rgba(220,100,0,.85)",borderRadius:20,padding:"3px 8px",fontSize:9,color:"#fff",fontWeight:600}}>no box</div>}
+                        {/* Where it's headed, written on the photo like a gallery tag. */}
+                        {flags.some(f=>!["etsy","ebay"].includes(f.key))&&<div style={{position:"absolute",left:8,bottom:8,display:"flex",gap:4,pointerEvents:"none"}}>
+                          {flags.filter(f=>!["etsy","ebay"].includes(f.key)).map(f=>(
+                            <span key={f.key} style={{display:"inline-flex",alignItems:"center",gap:5,background:"rgba(255,252,246,.86)",backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",borderRadius:20,padding:"2px 9px 2px 4px",boxShadow:"0 1px 6px rgba(26,19,8,.18)",fontFamily:"'Cormorant Garamond',Georgia,serif",fontStyle:"italic",fontSize:12.5,fontWeight:600,color:"#2a2218",letterSpacing:.2}}>
+                              <span style={{width:12,height:12,borderRadius:"50%",background:f.bg,boxShadow:"inset 0 0 0 1px rgba(255,255,255,.6)"}}/>{f.label}
+                            </span>
+                          ))}
+                        </div>}
                         {/* Age dot — top right */}
                         <div style={{position:"absolute",top:10,right:10,width:7,height:7,borderRadius:"50%",background:age==null?C.border:ageCol,boxShadow:"0 0 0 2px rgba(255,255,255,.8)"}} title={age==null?"No date":`${age} days in stock`}/>
                         {/* Quick actions on hover — desktop only */}
