@@ -9205,7 +9205,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                         </div>
                         {(s.shape||s.grade)&&<div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8,minWidth:0}}>
                           {s.shape&&<span style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{s.shape}{s.size?` · ${s.size}`:""}</span>}
-                          {s.grade&&<span title="Grade" style={{flexShrink:0,fontSize:9.5,fontWeight:800,letterSpacing:.8,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>}
+                          {s.grade&&<span title="Grade" style={{textTransform:"uppercase",flexShrink:0,fontSize:9.5,fontWeight:800,letterSpacing:.8,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>}
                         </div>}
                         {/* Primary stat row: qty + weight */}
                         <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:4}}>
@@ -21195,7 +21195,7 @@ thead{display:table-header-group;}
                       return {...x,qty:x.qty2??"",unit:x.unit2||"kg",qty2:x.qty??"",unit2:x.unit||"pcs",costPrice:per(x.costPrice),listPrice:per(x.listPrice)};
                     });
                     const save=async()=>{
-                      const patch={};for(const k of FIELDS){const v=String(d[k]??"").trim();if(v!==String(orig[k]??"").trim())patch[k]=v;}
+                      const patch={};for(const k of FIELDS){let v=String(d[k]??"").trim();if(k==="grade"&&v.length<=6)v=v.toUpperCase();if(v!==String(orig[k]??"").trim())patch[k]=v;}
                       const m=(d.market||[]).filter(Boolean),om=(Array.isArray(orig.market)?orig.market:String(orig.market||"").split(",").map(x=>x.trim()).filter(Boolean));
                       if(m.join("|")!==om.join("|"))patch.market=m;
                       if(patch.location!==undefined)patch.boxNumber=patch.location;
@@ -21288,7 +21288,7 @@ thead{display:table-header-group;}
                               <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
                                 <span style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{s.material||"Item"}</span>
                                 {s.grade
-                                  ?<span title="Grade" style={{flexShrink:0,fontSize:10,fontWeight:800,letterSpacing:.6,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>
+                                  ?<span title="Grade" style={{textTransform:"uppercase",flexShrink:0,fontSize:10,fontWeight:800,letterSpacing:.6,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>
                                   :<span onClick={e=>{e.stopPropagation();setEditCard({...s,market:Array.isArray(s.market)?s.market:String(s.market||"").split(",").map(x=>x.trim()).filter(Boolean)});}} title="No grade yet — add it" style={{flexShrink:0,fontSize:10,color:C.inkFaint,border:`1px dashed ${C.border}`,borderRadius:10,padding:"0 7px",lineHeight:1.6,cursor:"pointer"}}>+ grade</span>}
                               </div>
                               <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
@@ -21356,7 +21356,7 @@ thead{display:table-header-group;}
                               {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.92)",borderRadius:12,padding:"2px 9px",fontSize:11.5,fontWeight:800}}>Box {s.location}</div>}
                             </div>
                             <div style={{padding:"8px 11px 10px"}}>
-                              <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
+                              <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{textTransform:"uppercase",fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
                               <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,...flowQtyLines(s)].filter(Boolean).join(" · ")}</div>
                               <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
                                 <span style={{color:"#0f7a55",fontWeight:700}}>🏷 {s.labelSet||"Label made"}</span>
