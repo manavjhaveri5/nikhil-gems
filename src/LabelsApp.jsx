@@ -414,9 +414,15 @@ function StockPicker({ lang, onAdd, onClose, boxFirst = false }) {
    updated: price, quantity) or a new one. */
 function ShowImport({ incoming, sets, onClose, onDone }) {
   const town = String(incoming.name || "").split(/\s+/)[0].toLowerCase();
-  const guess = [...sets].filter(s => town && s.name.toLowerCase().includes(town)).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+  // The set these labels were last put in, else the newest one named for the show's town.
+  const guess = sets.find(s => incoming.setName && s.name === incoming.setName)
+    || [...sets].filter(s => town && s.name.toLowerCase().includes(town)).sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
   const [targetId, setTargetId] = useState(guess?.id || "new");
-  const [cards, setCards] = useState(incoming.cards);
+  // A label already in the chosen set is shown as it is there (any wording changed
+  // by hand kept), with today's price and quantity from the stock card.
+  const withExisting = id => { const tgt = sets.find(s => s.id === id); return incoming.cards.map(c => { const old = tgt?.cards?.find(x => c.stockId && x.stockId === c.stockId); return old ? { ...old, qty: c.qty || old.qty, price: c.price || old.price, stockId: c.stockId, id: c.id, _was: old.id } : c; }); };
+  const [cards, setCards] = useState(() => withExisting(guess?.id || "new"));
+  useEffect(() => { setCards(withExisting(targetId)); }, [targetId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [on, setOn] = useState(() => new Set(incoming.cards.map(c => c.id)));
   const target = sets.find(s => s.id === targetId) || { id: "new", name: incoming.name, lang: incoming.lang, paper: "letter", cards: [] };
   const g = geom(target);
@@ -426,12 +432,15 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
     const picked = cards.filter(c => on.has(c.id));
     if (!picked.length) return;
     const made = picked.map(c => c.stockId).filter(Boolean);
-    if (targetId === "new") return onDone({ id: uid(), name: incoming.name, lang: incoming.lang, paper: "letter", cards: picked, updatedAt: new Date().toISOString() }, true, picked.length, made);
+    if (targetId === "new") return onDone({ id: uid(), name: incoming.name, lang: incoming.lang, paper: "letter", cards: picked.map(({ _was, ...c }) => c), updatedAt: new Date().toISOString() }, true, picked.length, made);
     const next = [...(target.cards || [])];
     for (const c of picked) {
-      const at = next.findIndex(x => (c.stockId && x.stockId === c.stockId) || (!x.stockId && keyOf(x) === keyOf(c)));
-      if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type };
-      else next.push(c);
+      const { _was, ...card } = c;
+      const at = next.findIndex(x => (_was && x.id === _was) || (c.stockId && x.stockId === c.stockId) || (!x.stockId && keyOf(x) === keyOf(c)));
+      // Shown as it is in the set (and edited here): the card as shown replaces it.
+      if (at >= 0 && _was) next[at] = { ...next[at], ...card, id: next[at].id };
+      else if (at >= 0) next[at] = { ...next[at], stockId: c.stockId, qty: c.qty || next[at].qty, price: c.price || next[at].price, code: next[at].code || c.code, origin: next[at].origin || c.origin, type: next[at].type || c.type };
+      else next.push(card);
     }
     onDone({ ...target, cards: next.filter(x => x.en || x.local || x.price) }, false, picked.length, made);
   };
@@ -476,19 +485,22 @@ function ShowImport({ incoming, sets, onClose, onDone }) {
 export function ShowLabelImport({ name, lang = "", stockIds = [], onClose, onSaved }) {
   const [sets, setSets] = useState(null);
   const [cards, setCards] = useState(null);
+  const [lastSet, setLastSet] = useState("");
   useEffect(() => {
     if (!document.querySelector(`link[href="${FONT_LINK}"]`)) { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = FONT_LINK; document.head.appendChild(l); }
     Promise.all([loadK(KEY).catch(() => []), loadK("ng-stock-v5").catch(() => [])]).then(([v, all]) => {
       const ids = new Set(stockIds);
       setSets(Array.isArray(v) ? v : []);
-      setCards((Array.isArray(all) ? all : []).filter(x => ids.has(x.id)).map(x => cardFromStock(x, lang, "")));
+      const items = (Array.isArray(all) ? all : []).filter(x => ids.has(x.id));
+      setLastSet(items.map(x => x.labelSet).find(Boolean) || "");
+      setCards(items.map(x => cardFromStock(x, lang, "")));
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!sets || !cards) return <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,15,5,.4)", display: "grid", placeItems: "center", color: "#fff", fontSize: 14 }}>Loading labels…</div>;
   return (
     <>
       <style>{CARD_CSS + EDIT_CSS}</style>
-      <ShowImport incoming={{ name, lang, cards }} sets={sets} onClose={onClose}
+      <ShowImport incoming={{ name, lang, cards, setName: lastSet }} sets={sets} onClose={onClose}
         onDone={async (target, isNew, n, made) => {
           try { await upsertItemK(KEY, { ...target, updatedAt: new Date().toISOString() }); onSaved?.(`✓ ${n} label${n === 1 ? "" : "s"} ${isNew ? `in a new set “${target.name}”` : `added to ${target.name}`} — print them from Make Labels`, made, target.name); }
           catch (e) { onSaved?.(`⚠ Labels not saved: ${e.message}`); return; }
