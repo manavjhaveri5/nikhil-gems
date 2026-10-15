@@ -1318,8 +1318,8 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           {/* Greeting + daily-tasks prompt */}
           {(()=>{
             const firstName=(currentUser?.name||"").trim().split(/\s+/)[0];
-            // The admin login has no staff profile (name "Admin") — that's Manav.
-            const displayName=(!firstName||firstName==="Admin")?"Manav":firstName;
+            // The admin login has no staff profile (name "Admin") — that's Manav. Staff never get his name.
+            const displayName=isAdmin&&(!firstName||firstName==="Admin")?"Manav":(firstName||"there");
             const hr=new Date().getHours();
             const hello=hr<12?"Good morning":hr<17?"Good afternoon":"Good evening";
             const focusTodos=()=>{
@@ -24223,7 +24223,7 @@ function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssign
 
 export default function Root({onSignOut}){
   const [currentEmail,setCurrentEmail]=useState(null);
-  const [userProfile,setUserProfile]=useState(undefined); // undefined=loading, false=admin, {...}=staff
+  const [userProfile,setUserProfile]=useState(undefined); // undefined=loading, null=couldn't verify, false=admin, {...}=staff
   const [allUsers,setAllUsers]=useState([]);
   const [newAssignedTasks,setNewAssignedTasks]=useState([]);
   const [activeLang,setActiveLang]=useState(()=>localStorage.getItem("ng-user-lang")||"en");
@@ -24285,14 +24285,37 @@ export default function Root({onSignOut}){
     const finish=async email=>{
       if(settled)return; settled=true;
       setCurrentEmail(email);
-      let arr=[];
-      try{const users=await loadK("ng-users-v1");arr=Array.isArray(users)?users:[];}catch{}
+      // Admin means "signed in, and the staff list — read from the server just now —
+      // doesn't name you". Anything we can't confirm is NOT admin: a missing email,
+      // an expired token or a failed read used to fall through to the owner's view
+      // (empty list → no staff profile → admin), so staff saw "Hi Manav".
+      if(!email){setUserProfile(null);return;}
+      const em=email.toLowerCase();
+      let fresh=null;
+      try{
+        const{data,error}=await supabase.from("app_data").select("value").eq("key","ng-users-v1").maybeSingle();
+        // No row is what RLS returns to a request without a valid session — not "no staff".
+        if(!error&&data&&Array.isArray(data.value))fresh=data.value;
+      }catch{}
+      let arr=fresh;
+      if(!arr){try{const users=await loadK("ng-users-v1");arr=Array.isArray(users)?users:[];}catch{arr=[];}}
       setAllUsers(arr);
-      const profile=arr.find(u=>u.email?.toLowerCase()===email?.toLowerCase());
+      const profile=arr.find(u=>u.email?.toLowerCase()===em);
+      let verifiedAdmin=null;
+      try{verifiedAdmin=localStorage.getItem("ng-verified-admin-v1");}catch{}
+      let next;
+      if(profile)next=profile;
+      else if(fresh)next=false;
+      else if(verifiedAdmin===em)next=false; // offline: this account was confirmed as admin on this device before
+      else next=null;
+      try{
+        if(fresh&&next===false)localStorage.setItem("ng-verified-admin-v1",em);
+        else if(fresh&&profile)localStorage.removeItem("ng-verified-admin-v1");
+      }catch{}
       const savedLang=localStorage.getItem("ng-user-lang");
       if(profile?.language==="mr")setActiveLang(savedLang==="en"||savedLang==="mr"?savedLang:"mr");
       else{localStorage.setItem("ng-user-lang","en");setActiveLang("en");}
-      setUserProfile(profile||false);
+      setUserProfile(next);
     };
     // Identity from the local session first (no network → can't hang).
     supabase.auth.getSession().then(({data:{session}})=>{if(session?.user)finish(session.user.email||null);}).catch(()=>{});
@@ -24303,7 +24326,7 @@ export default function Root({onSignOut}){
     return()=>clearTimeout(t);
   },[]);
   useEffect(()=>{
-    if(!currentEmail||userProfile===undefined||userProfile===false)return;
+    if(!currentEmail||!userProfile)return;
     const key=TODO_KEY_FOR(currentEmail);
     const seenKey=`ng-notif-seen-${currentEmail}`;
     loadK(key).then(todos=>{
@@ -24343,7 +24366,7 @@ export default function Root({onSignOut}){
     else{setShowInstall(false);localStorage.setItem("ng-install-dismissed-v1","1");}
   };
   const dismissInstall=()=>{setShowInstall(false);localStorage.setItem("ng-install-dismissed-v1","1");};
-  const isAdmin=userProfile===false||userProfile===undefined;
+  const isAdmin=userProfile===false;
   const todoKey=isAdmin?"ng-todos-v1":TODO_KEY_FOR(currentEmail);
   const currentUser=isAdmin?{name:"Admin",email:currentEmail,role:"admin"}:userProfile||null;
   const allowedMods=isAdmin?[...MODS,{id:"users",icon:"👥",title:"Users",desc:"Manage staff and permissions",group:"admin",ready:true},{id:"datasets",icon:"🗂️",title:"Datasets",desc:"Manage shapes, categories, markets and more",group:"admin",ready:true}]:MODS.filter(m=>(userProfile?.allowedModules||[]).includes(m.id)||(m.id==="orders"&&(userProfile?.allowedModules||[]).includes("etsy")));
@@ -24412,6 +24435,19 @@ export default function Root({onSignOut}){
     }catch{}
   };
   if(userProfile===undefined){const _ll=localStorage.getItem("ng-user-lang")||"en";return<LanguageProvider language={_ll}><div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--c-bg)",color:"#8C7E66",fontSize:13,fontFamily:"system-ui,sans-serif"}}>{_ll==="mr"?"लोड होत आहे…":"Loading…"}</div></LanguageProvider>;}
+  if(userProfile===null)return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"var(--c-bg)",padding:16,fontFamily:"system-ui,sans-serif"}}>
+      <div style={{maxWidth:340,textAlign:"center",color:"#8C7E66",fontSize:13,lineHeight:1.5}}>
+        <div style={{fontSize:32,marginBottom:8}}>🔒</div>
+        <div style={{fontSize:15,fontWeight:600,color:"var(--c-ink, #2B2620)",marginBottom:6}}>Couldn't confirm your account</div>
+        <div style={{marginBottom:16}}>Check your internet connection and try again. If this keeps happening, sign out and sign back in.</div>
+        <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+          <button onClick={()=>window.location.reload()} style={{background:"#2B2620",color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:600,cursor:"pointer"}}>Try again</button>
+          <button onClick={onSignOut} style={{background:"none",color:"#2B2620",border:"1px solid #D8CFC0",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:600,cursor:"pointer"}}>Sign out</button>
+        </div>
+      </div>
+    </div>
+  );
   let content;
   const goHome=()=>{setScreen("welcome");localStorage.removeItem("ng-last-mod");};
   const openInvoiceModuleTarget=target=>{

@@ -3,7 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-  if (!(await requireUser(req, res))) return;
+  const caller = await requireUser(req, res);
+  if (!caller) return;
 
   const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -15,6 +16,22 @@ export default async function handler(req, res) {
   const supabaseAdmin = createClient(url, key, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+
+  // Creating logins, resetting passwords and deleting accounts is the admin's
+  // alone. Staff are the accounts named in ng-users-v1 (same rule as the app);
+  // ADMIN_EMAILS, when set, narrows it to those addresses. If the staff list
+  // can't be read, refuse rather than guess.
+  const callerEmail = (caller.email || "").toLowerCase();
+  const { data: staffRow, error: staffErr } = await supabaseAdmin
+    .from("app_data").select("value").eq("key", "ng-users-v1").maybeSingle();
+  if (staffErr || !staffRow || !Array.isArray(staffRow.value)) {
+    return res.status(503).json({ error: "Couldn't verify admin access — try again" });
+  }
+  const admins = (process.env.ADMIN_EMAILS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  const isStaff = staffRow.value.some(u => u?.email?.toLowerCase() === callerEmail);
+  if (!callerEmail || isStaff || (admins.length && !admins.includes(callerEmail))) {
+    return res.status(403).json({ error: "Only the admin can manage logins" });
+  }
 
   const { email, password, action, userId } = req.body || {};
 
