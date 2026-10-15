@@ -115,7 +115,9 @@ const stockFlags=s=>{
   if(at(/munich|europe|germany/)) st.eu="live";
   // India as a market (sell here), not the region every card starts in.
   if(mkts.some(m=>/^india$/.test(m.trim()))) st.india="live";
-  return STOCK_FLAGS.filter(f=>st[f.key]).map(f=>({...f,live:st[f.key]==="live"}));
+  // Etsy's to-do has two steps before it goes live: photograph it, then list it.
+  const todo=f=>st[f.key]==="live"?"":f.key==="etsy"&&!s?.photographed?"to photograph":"to list";
+  return STOCK_FLAGS.filter(f=>st[f.key]).map(f=>({...f,live:st[f.key]==="live",todo:todo(f)}));
 };
 const fmtStockQtyValue=v=>{
   if(v===undefined||v===null||v==="")return"";
@@ -9076,10 +9078,10 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       onMouseEnter={e=>{if(!isSel){e.currentTarget.style.boxShadow=hoverShadow;e.currentTarget.style.transform="translateY(-3px)";}}}
                       onMouseLeave={e=>{e.currentTarget.style.boxShadow=restShadow;e.currentTarget.style.transform="none";}}>
                       {/* Destination ribbon — one segment per place this piece is going. */}
-                      {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
+                      {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":f.todo==="to photograph"?"needs photos before it can be listed":"photographed, not listed yet"}`).join("\n")}
                         style={{display:"flex",height:mob?15:17,flexShrink:0}}>
                         {flags.map(f=><div key={f.key} style={{flex:1,minWidth:0,background:f.live?f.bg:stockStripe(f.lead),display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
-                          <span style={{fontSize:mob?8:8.5,fontWeight:800,letterSpacing:1.4,textTransform:"uppercase",color:"#fff",background:"rgba(20,14,6,.55)",borderRadius:6,lineHeight:1.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 6px"}}>{f.live?f.label:`${f.label} · to list`}</span>
+                          <span style={{fontSize:mob?8:8.5,fontWeight:800,letterSpacing:1.4,textTransform:"uppercase",color:"#fff",background:"rgba(20,14,6,.55)",borderRadius:6,lineHeight:1.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 6px"}}>{f.live?f.label:`${f.label} · ${f.todo}`}</span>
                         </div>)}
                       </div>}
                       {/* Photo */}
