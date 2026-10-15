@@ -83,18 +83,18 @@ const hexA=(hex,a)=>{
 };
 /* `bg` is what the ribbon segment paints. Stripes are hard-stopped so they read
    as a flag rather than a smear; Japan is a radial stop, which is the disc. */
-/* Each destination is a little landscape rather than a flag: Tucson a desert
-   dusk running into saguaro green, Denver slate mountains into snow, Japan
-   cherry blossom deepening to vermilion, Munich forest into brass. */
+/* Each destination is its country's flag, drawn to fit the bar, with the
+   place written across the middle. Etsy and eBay aren't countries, so they
+   keep their own colours. */
+const FLAG_US="linear-gradient(90deg,#3C3B6E 0 30%,transparent 30%),repeating-linear-gradient(180deg,#B22234 0 1.31px,#FFFFFF 1.31px 2.62px)";
 const STOCK_FLAGS=[
-  {key:"etsy",   label:"Etsy",      lead:"#E8743B", bg:"linear-gradient(90deg,#F4B36B,#E8743B)"},
-  {key:"ebay",   label:"eBay",      lead:"#8A8F98", bg:"linear-gradient(90deg,#C7CCD3,#8A8F98)"},
-  {key:"tucson", label:"Tucson",    lead:"#C4553B", bg:"linear-gradient(90deg,#B8452F 0%,#E39B5B 48%,#9DB07A 78%,#5F7F55 100%)"},
-  {key:"denver", label:"Denver",    lead:"#4A6782", bg:"linear-gradient(90deg,#2F4A63 0%,#6F8DA8 55%,#DCE6EE 100%)"},
-  {key:"japan",  label:"Japan",     lead:"#D9667A", bg:"linear-gradient(90deg,#F6D3DA 0%,#E8899A 50%,#B8323F 100%)"},
-  // India: saffron into marigold into peacock.
-  {key:"india",  label:"India",     lead:"#D9622B", bg:"linear-gradient(90deg,#D9622B 0%,#F0A63A 50%,#2E8B7A 100%)"},
-  {key:"eu",     label:"Munich",    lead:"#5F7A4E", bg:"linear-gradient(90deg,#2F4A3A 0%,#7A8F5C 55%,#C9A646 100%)"},
+  {key:"etsy",   label:"Etsy",   lead:"#F56400", bg:"#F56400"},
+  {key:"ebay",   label:"eBay",   lead:"#8A8F98", bg:"#8A8F98"},
+  {key:"tucson", label:"Tucson", lead:"#B22234", bg:FLAG_US},
+  {key:"denver", label:"Denver", lead:"#B22234", bg:FLAG_US},
+  {key:"japan",  label:"Japan",  lead:"#BC002D", bg:"radial-gradient(circle at 50% 50%,#BC002D 0 6.5px,#FFFFFF 7px)"},
+  {key:"india",  label:"India",  lead:"#FF9933", bg:"radial-gradient(circle at 50% 50%,#000080 0 2px,transparent 2.5px),linear-gradient(180deg,#FF9933 0 33.33%,#FFFFFF 33.33% 66.66%,#138808 66.66% 100%)"},
+  {key:"eu",     label:"Munich", lead:"#DD0000", bg:"linear-gradient(180deg,#000000 0 33.33%,#DD0000 33.33% 66.66%,#FFCE00 66.66% 100%)"},
 ];
 /* Planned, not done: the same hue laid down as a soft diagonal candy stripe. */
 const stockStripe=lead=>`repeating-linear-gradient(45deg,${hexA(lead,.5)} 0 3px,${hexA(lead,.13)} 3px 6px)`;
@@ -867,6 +867,99 @@ function SideModule({m,hov,setHov,onEnter,t,small=false}){
   );
 }
 
+/* Stock cards needing attention. A card is complete when it has a primary
+   quantity, a name, a shape, a cost price, a vendor, a market and a box. New
+   cards (added from 15 Oct 2026, when this list began) that miss any of these
+   show here with just the missing boxes to fill, so a half-entered card gets
+   finished the same day. The admin can also open the older ones. */
+const ATTN_SINCE="2026-10-15";
+const ATTN_FIELDS=[
+  ["qty","Qty",s=>(parseFloat(s.qty)||0)>0],
+  ["material","Stone",s=>String(s.material||"").trim()],
+  ["shape","Shape",s=>String(s.shape||"").trim()],
+  ["costPrice","Cost ₹",s=>(parseFloat(s.costPrice)||0)>0],
+  ["vendor","Vendor",s=>String(s.vendor||"").trim()],
+  ["market","Market",s=>(Array.isArray(s.market)?s.market:String(s.market||"").split(",")).map(x=>String(x).trim()).some(m=>m&&m!=="Unassigned")],
+  ["location","Box",s=>String(s.location||"").trim()],
+];
+const attnMissing=s=>ATTN_FIELDS.filter(([,,ok])=>!ok(s)).map(([k])=>k);
+function StockAttention({isAdmin=false}){
+  const [stock,setStock]=useState(null);
+  const [shows,setShows]=useState([]);
+  const [older,setOlder]=useState(false);
+  const [draft,setDraft]=useState({});
+  const [busy,setBusy]=useState("");
+  const [open,setOpen]=useState(true);
+  useEffect(()=>{loadK(KEYS.stock).then(s=>setStock(Array.isArray(s)?s:[])).catch(()=>setStock([]));loadK("ng-shows-v1").then(x=>setShows(Array.isArray(x)?x:[])).catch(()=>{});
+    return onCacheRefresh(keys=>{if(keys.includes(KEYS.stock))loadK(KEYS.stock).then(s=>Array.isArray(s)&&setStock(s));});},[]);
+  if(!stock)return null;
+  const live=stock.filter(s=>!s.soldDate&&!s.returnedAt);
+  const added=s=>String(s.addedDate||s.createdAt||"").slice(0,10);
+  const need=live.map(s=>({s,miss:attnMissing(s)})).filter(x=>x.miss.length);
+  const fresh=need.filter(x=>added(x.s)>=ATTN_SINCE), old=need.filter(x=>added(x.s)<ATTN_SINCE);
+  const rows=(older&&isAdmin?[...fresh,...old]:fresh).sort((a,b)=>added(b.s).localeCompare(added(a.s)));
+  if(!fresh.length&&!(isAdmin&&old.length))return null;
+  const markets=[...new Set(["India","Etsy/Online",...shows.filter(x=>x.name&&!/^new show$/i.test(x.name)&&String(x.endDate||x.startDate||"")>=today()).sort((a,b)=>String(a.startDate||"").localeCompare(String(b.startDate||""))).map(x=>x.name)])];
+  const short=m=>String(m).replace(/\s*(gem\s*&\s*)?mineral\s+(show|fair)\b/i,"").trim()||m;
+  const vendors=[...new Set(stock.map(s=>String(s.vendor||"").trim()).filter(Boolean))].sort();
+  const shapes=[...new Set([...SHAPES,...stock.map(s=>String(s.shape||"").trim())].filter(Boolean))].sort();
+  const set=(id,k,v)=>setDraft(d=>({...d,[id]:{...(d[id]||{}),[k]:v}}));
+  const save=async s=>{
+    const d=draft[s.id]||{};const patch={};
+    for(const[k,v]of Object.entries(d)){if(k==="market"){if(v?.length)patch.market=v;}else if(String(v??"").trim())patch[k]=String(v).trim();}
+    if(!Object.keys(patch).length)return;
+    setBusy(s.id);
+    try{
+      const all=await loadKFresh(KEYS.stock);
+      const ts=new Date().toISOString();
+      const upd=(all||[]).map(x=>x.id===s.id?{...x,...patch,updatedAt:ts}:x);
+      await saveStockK(upd);setStock(upd);setDraft(dd=>{const n={...dd};delete n[s.id];return n;});
+    }catch(e){alert("Couldn't save: "+e.message);}
+    setBusy("");
+  };
+  const box={...FI,padding:"6px 8px",fontSize:mob?15:12,boxSizing:"border-box"};
+  return(
+    <div style={{background:C.surface,borderRadius:16,padding:mob?"12px 14px":"14px 18px",marginBottom:11,boxShadow:"var(--e-1)",border:`1px solid ${C.amber}33`}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:open?10:0}}>
+        <span style={{fontSize:16}}>📝</span>
+        <div style={{flex:1,minWidth:160}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.ink}}>Stock cards needing details · {rows.length}</div>
+          <div style={{fontSize:11,color:C.inkMid}}>Every card needs qty, stone, shape, cost, vendor, market and box. Fill the gaps and save.</div>
+        </div>
+        {isAdmin&&old.length>0&&<button onClick={()=>setOlder(v=>!v)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:C.inkMid}}>{older?"New only":`+ ${old.length} older`}</button>}
+        <button onClick={()=>setOpen(v=>!v)} style={{background:"none",border:"none",fontSize:12,cursor:"pointer",color:C.blue,fontWeight:600}}>{open?"Hide":"Show"}</button>
+      </div>
+      {open&&<div style={{display:"grid",gap:8,maxHeight:mob?520:460,overflowY:"auto"}}>
+        <datalist id="attn-vendors">{vendors.map(v=><option key={v} value={v}/>)}</datalist>
+        <datalist id="attn-shapes">{shapes.map(v=><option key={v} value={v}/>)}</datalist>
+        {rows.slice(0,older?200:60).map(({s,miss})=>{
+          const d=draft[s.id]||{};const cover=stockCover(s);
+          const chosen=d.market||[];
+          return(
+            <div key={s.id} style={{display:"flex",gap:10,alignItems:"flex-start",background:C.bg,borderRadius:10,padding:"9px 10px"}}>
+              {cover?<img src={thumbUrl(cover,120)} alt="" style={{width:44,height:44,objectFit:"cover",borderRadius:8,flexShrink:0}}/>:<div style={{width:44,height:44,borderRadius:8,background:C.card,flexShrink:0}}/>}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12.5,fontWeight:700,color:C.ink,marginBottom:2}}>{s.material||"Unnamed card"}{s.shape?` · ${s.shape}`:""}{s.location?` · Box ${s.location}`:""}</div>
+                <div style={{fontSize:10.5,color:C.inkFaint,marginBottom:6}}>Added {added(s)?fmtDate(added(s)):"—"} · missing {miss.map(k=>ATTN_FIELDS.find(f=>f[0]===k)[1].replace(" ₹","")).join(", ").toLowerCase()}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {miss.includes("qty")&&<input inputMode="decimal" placeholder={`Qty (${s.unit||"pcs"})`} value={d.qty||""} onChange={e=>set(s.id,"qty",e.target.value.replace(/[^\d.]/g,""))} style={{...box,width:90}}/>}
+                  {miss.includes("material")&&<input placeholder="Stone" value={d.material||""} onChange={e=>set(s.id,"material",e.target.value)} style={{...box,width:140}}/>}
+                  {miss.includes("shape")&&<input placeholder="Shape" list="attn-shapes" value={d.shape||""} onChange={e=>set(s.id,"shape",e.target.value)} style={{...box,width:120}}/>}
+                  {miss.includes("costPrice")&&<input inputMode="decimal" placeholder={`Cost ₹/${s.unit||"pc"}`} value={d.costPrice||""} onChange={e=>set(s.id,"costPrice",e.target.value.replace(/[^\d.]/g,""))} style={{...box,width:100}}/>}
+                  {miss.includes("vendor")&&<input placeholder="Vendor" list="attn-vendors" value={d.vendor||""} onChange={e=>set(s.id,"vendor",e.target.value)} style={{...box,width:120}}/>}
+                  {miss.includes("location")&&<input placeholder="Box no." value={d.location||""} onChange={e=>set(s.id,"location",e.target.value)} style={{...box,width:80}}/>}
+                  {miss.includes("market")&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{markets.map(m=>{const on=chosen.includes(m);return <button key={m} type="button" title={m} onClick={()=>set(s.id,"market",on?chosen.filter(x=>x!==m):[...chosen,m])} style={{fontSize:mob?12:10.5,padding:"4px 8px",borderRadius:12,border:`1px solid ${on?C.amber:C.border}`,background:on?C.amberBg:C.surface,color:on?C.ink:C.inkMid,cursor:"pointer",fontWeight:on?650:400}}>{short(m)}</button>;})}</div>}
+                  <button disabled={busy===s.id||!Object.values(d).some(v=>Array.isArray(v)?v.length:String(v||"").trim())} onClick={()=>save(s)} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:8,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer",opacity:Object.values(d).some(v=>Array.isArray(v)?v.length:String(v||"").trim())?1:.4}}>{busy===s.id?"Saving…":"Save"}</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>}
+    </div>
+  );
+}
+
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
   /* Which groups are open. Remembered, because a sidebar that folds itself shut
      on every visit is a sidebar you stop trusting; Accounting is open the first
@@ -1331,6 +1424,8 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               <button onClick={()=>setAssignOpen(true)} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:10,padding:"6px 14px",fontSize:12,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>Assign Locations →</button>
             </div>
           )}
+
+          <StockAttention isAdmin={isAdmin}/>
 
           {/* ── To-Do + Watch List + Open POs row ── */}
           <div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1fr 1fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .16s both":"none"}}>
@@ -8984,7 +9079,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                       {!!flags.length&&<div title={flags.map(f=>`${f.label} — ${f.live?"listed / going":"planned, not listed yet"}`).join("\n")}
                         style={{display:"flex",height:mob?15:17,flexShrink:0}}>
                         {flags.map(f=><div key={f.key} style={{flex:1,minWidth:0,background:f.live?f.bg:stockStripe(f.lead),display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
-                          <span style={{fontSize:mob?8:8.5,fontWeight:800,letterSpacing:1.6,textTransform:"uppercase",color:"#fff",textShadow:"0 1px 2px rgba(0,0,0,.35)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 6px"}}>{f.label}</span>
+                          <span style={{fontSize:mob?8:8.5,fontWeight:800,letterSpacing:1.4,textTransform:"uppercase",color:"#fff",background:"rgba(20,14,6,.55)",borderRadius:6,lineHeight:1.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",padding:"0 6px"}}>{f.label}</span>
                         </div>)}
                       </div>}
                       {/* Photo */}
