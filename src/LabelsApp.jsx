@@ -341,14 +341,20 @@ function cardFromStock(s, lang, cur) {
   };
 }
 
-function StockPicker({ lang, onAdd, onClose }) {
+/* A box is written "STK65", "65" or "stk 065" across the stock; any of them
+   finds it. Named places (Cupboard 1, Room 2) match as typed. */
+const boxKey = v => { const t = String(v || "").trim().toLowerCase().replace(/\s+/g, " "); const m = t.match(/^(?:stk|box)?\s*0*(\d+)$/); return m ? m[1] : t; };
+
+function StockPicker({ lang, onAdd, onClose, boxFirst = false }) {
   const [stock, setStock] = useState(null);
   const [q, setQ] = useState("");
+  const [box, setBox] = useState("");
   const [picked, setPicked] = useState(new Set());
   const [cur, setCur] = useState(lang === "ja" ? "¥" : lang && lang !== "" ? "€" : "$");
   useEffect(() => { loadK("ng-stock-v5").then(a => setStock((Array.isArray(a) ? a : []).filter(s => !s.soldDate))).catch(() => setStock([])); }, []);
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = (stock || []).filter(s => words.every(w => `${stockName(s)} ${s.origin || ""} ${s.sku || ""} ${s.showTag || ""} ${s.location || ""}`.toLowerCase().includes(w))).slice(0, 300);
+  const inBox = box.trim() ? (stock || []).filter(s => s.location && boxKey(s.location) === boxKey(box)) : null;
+  const list = (inBox || stock || []).filter(s => words.every(w => `${stockName(s)} ${s.origin || ""} ${s.sku || ""} ${s.showTag || ""} ${s.location || ""}`.toLowerCase().includes(w))).slice(0, 300);
   const tog = id => setPicked(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(20,15,5,.45)", display: "flex", alignItems: mob() ? "flex-end" : "center", justifyContent: "center", padding: mob() ? 0 : 20 }}>
@@ -358,17 +364,22 @@ function StockPicker({ lang, onAdd, onClose }) {
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer" }}>×</button>
         </div>
         <div style={{ padding: "10px 18px", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", borderBottom: `1px solid ${C.border}` }}>
-          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search stone, origin, show, box…" style={{ flex: 1, minWidth: 180, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13 }} />
+          <input autoFocus={boxFirst} value={box} onChange={e => setBox(e.target.value)} placeholder="Box no. e.g. 65" style={{ width: 120, padding: "8px 11px", border: `1px solid ${box ? "#8a6a3e" : C.border}`, borderRadius: 7, fontSize: 13, fontWeight: box ? 600 : 400 }} />
+          <input autoFocus={!boxFirst} value={q} onChange={e => setQ(e.target.value)} placeholder="Search stone, origin, show…" style={{ flex: 1, minWidth: 160, padding: "8px 11px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13 }} />
           <label style={{ fontSize: 12.5, color: C.inkMid }}>Price in <select value={cur} onChange={e => setCur(e.target.value)} style={{ padding: "5px 6px", borderRadius: 6, border: `1px solid ${C.border}` }}>{["$", "¥", "€", "£", "₹"].map(x => <option key={x}>{x}</option>)}</select></label>
         </div>
         <div style={{ overflowY: "auto", flex: 1, padding: "4px 18px" }}>
           {!stock && <div style={{ padding: 16, color: C.inkFaint, fontSize: 13 }}>Loading stock…</div>}
+          {inBox && <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
+            <span style={{ flex: 1 }}>{inBox.length ? <><b>{inBox.length}</b> in box {box.trim()}{[...new Set(inBox.map(s => s.location))].length > 1 ? ` (${[...new Set(inBox.map(s => s.location))].join(", ")})` : ""}</> : <span style={{ color: C.inkFaint }}>Nothing in box {box.trim()}</span>}</span>
+            {inBox.length > 0 && <button onClick={() => onAdd(inBox.map(s => cardFromStock(s, lang, cur)))} style={btn(true)}>Make all {inBox.length} labels</button>}
+          </div>}
           {list.map(s => (
             <label key={s.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.border}`, cursor: "pointer", fontSize: 13 }}>
               <input type="checkbox" checked={picked.has(s.id)} onChange={() => tog(s.id)} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{stockName(s) || "—"}</div>
-                <div style={{ fontSize: 11.5, color: C.inkFaint }}>{[s.origin, s.qty ? `${s.qty} ${s.unit || ""}` : "", s.showTag, s.location ? `Box ${s.location}` : ""].filter(Boolean).join(" · ")}</div>
+                <div style={{ fontSize: 11.5, color: C.inkFaint }}>{[s.origin, s.qty ? `${s.qty} ${s.unit || ""}` : "", s.showTag, s.location ? (/^(stk|box)?\s*\d+$/i.test(s.location) ? `Box ${s.location}` : s.location) : ""].filter(Boolean).join(" · ")}</div>
               </div>
               {+s.listPrice > 0 && <span style={{ fontSize: 12, color: C.inkMid }}>${(+s.listPrice).toLocaleString("en-US")}</span>}
             </label>
@@ -395,7 +406,7 @@ export default function LabelsApp({ onHome }) {
   const openRef = useRef(null);
   openRef.current = openId;
   const chain = useRef(Promise.resolve());
-  const [picker, setPicker] = useState(false);
+  const [picker, setPicker] = useState(false);   // false | "stock" | "box"
   const [showLayout, setShowLayout] = useState(false);
   const [bulk, setBulk] = useState(false);
   const [busy, setBusy] = useState("");
@@ -502,7 +513,8 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
             <button onClick={() => setBulk(v => !v)} style={{ ...btn(), ...(bulk ? { background: "#e9e1d4" } : {}) }}>{bulk ? "▣ Back to cards" : "▦ Bulk edit"}</button>
             <div style={{ flex: 1 }} />
             <button onClick={() => patchSet({ cards: [...current().cards, blank()] })} style={btn()}>＋ Card</button>
-            <button onClick={() => setPicker(true)} style={btn()}>＋ From Stock</button>
+            <button onClick={() => setPicker("box")} style={btn()}>📦 From box</button>
+            <button onClick={() => setPicker("stock")} style={btn()}>＋ From Stock</button>
             <button onClick={aiFill} disabled={!!busy} style={btn()}>{busy === "ai" ? "Filling…" : "✨ AI fill names"}</button>
             <button onClick={() => { if (!printSet(set)) say("Allow pop-ups to open the print sheet"); }} style={btn(true)}>🖨 Print / PDF</button>
           </>
@@ -578,7 +590,7 @@ Return ONLY a JSON array of ${todo.length} objects in order, each {"local":"..."
           </div>
         </>
       )}
-      {picker && set && <StockPicker lang={set.lang} onClose={() => setPicker(false)} onAdd={cards => { patchSet({ cards: [...current().cards.filter(c => c.en || c.local || c.price), ...cards] }); setPicker(false); say(`✓ ${cards.length} card${cards.length === 1 ? "" : "s"} added`); }} />}
+      {picker && set && <StockPicker lang={set.lang} boxFirst={picker === "box"} onClose={() => setPicker(false)} onAdd={cards => { patchSet({ cards: [...current().cards.filter(c => c.en || c.local || c.price), ...cards] }); setPicker(false); say(`✓ ${cards.length} card${cards.length === 1 ? "" : "s"} added`); }} />}
     </div>
   );
 }
