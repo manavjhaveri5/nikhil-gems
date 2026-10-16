@@ -7377,7 +7377,7 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
   /* A comma makes the search a list — "490, 491, 486" finds any of them. A number
      in a list is a box: it matches that box exactly, so 49 doesn't bring in 490
      or a note that says "49 pcs". Words in a list match as the plain search does. */
-  const searchTerms=useMemo(()=>search.includes(",")?search.split(",").map(t=>t.trim().toLowerCase()).filter(Boolean):null,[search]);
+  const searchTerms=useMemo(()=>search.includes(",")?search.split(",").map(t=>t.trim().toLowerCase().replace(/^box\s*/,"")).filter(Boolean):null,[search]);
   const stockHay=s=>[s.material||s.name,s.shape,s.productType,s.location,s.origin,s.notes].join(" ").toLowerCase();
   const termHit=(s,t)=>/^\d+$/.test(t)?(String(s.location||"").match(/\d+/g)||[]).some(n=>+n===+t):stockHay(s).includes(t);
   const filtered=useMemo(()=>stock.filter(s=>{
@@ -19860,7 +19860,13 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     const next=(allShows||[]).filter(x=>{const n=String(x.name||"").toLowerCase();return t===n||n.includes(t)||String(x.city||"").toLowerCase().includes(t)||(t==="japan"&&getShowRegion(x)==="Japan");})
       .filter(x=>showEnd(x)>=today()).sort((a,b)=>showStart(a).localeCompare(showStart(b)))[0];
     return !next||next.id===show.id;};
-  const matchQ=s=>{const w=shipQ.toLowerCase().split(/\s+/).filter(Boolean);if(!w.length)return true;const h=`${s.material||""} ${s.shape||""} ${s.size||""} ${s.location||""} box ${s.location||""} ${s.vendor||""} ${s.origin||""}`.toLowerCase();return w.every(x=>h.includes(x));};
+  /* A comma makes the search a list, as on Stock: "490, 491, 486" finds any of
+     those boxes. A number in a list matches that box exactly; anything else
+     matches as the plain search does, every word of it. */
+  const shipTerms=shipQ.includes(",")?shipQ.toLowerCase().split(",").map(t=>t.trim().replace(/^box\s*/,"")).filter(Boolean):null;
+  const shipWordsHit=(s,q)=>{const w=q.split(/\s+/).filter(Boolean);const h=`${s.material||""} ${s.shape||""} ${s.size||""} ${s.location||""} box ${s.location||""} ${s.vendor||""} ${s.origin||""}`.toLowerCase();return w.every(x=>h.includes(x));};
+  const shipTermHit=(s,t)=>/^\d+$/.test(t)?(String(s.location||"").match(/\d+/g)||[]).some(n=>+n===+t):shipWordsHit(s,t);
+  const matchQ=s=>shipTerms?(!shipTerms.length||shipTerms.some(t=>shipTermHit(s,t))):shipWordsHit(s,shipQ.toLowerCase());
   const marketsOf=s=>(Array.isArray(s.market)?s.market:String(s.market||"").split(",")).map(x=>String(x).trim()).filter(Boolean);
   const shipTagged=stock.filter(s=>!s.soldDate&&hasStockQty(s)&&!itemAtShow(s,show,allShows)
     &&!(s.showId&&(s.region||"India")!=="India")&&marketsOf(s).some(tagMatchesShow)).sort(shipSort);
@@ -21220,7 +21226,11 @@ thead{display:table-header-group;}
 
               {shipView==="plan"?(
                 <>
-                  {(()=>{const step=shipStep||(shipTagged.length?"planned":"sent");return(
+                  {(()=>{const step=shipStep||(shipTagged.length?"planned":"sent");
+                    // The listed boxes or words that find nothing in this step.
+                    const base=step==="sent"?shipSent:step==="ready"?shipTagged.filter(s=>s.labelMadeAt):shipTagged;
+                    const missing=(shipTerms||[]).filter(t=>!base.some(s=>shipTermHit(s,t)));
+                    return(
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
                       {[["planned","1 · Planned",shipTagged.length,"Price and label"],["ready","2 · Labelled, ready to send",shipTagged.filter(s=>s.labelMadeAt).length,"Pack and send to the show"],["sent","3 · At the show",shipItems.length,"What went"]].map(([k,label,n,sub])=>(
                         <button key={k} onClick={()=>setShipStep(k)} style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1,background:step===k?C.ink:C.surface,color:step===k?"#FAF0DC":C.ink,border:`1px solid ${step===k?C.ink:C.border}`,borderRadius:10,padding:"8px 14px",cursor:"pointer",minWidth:150}}>
@@ -21228,6 +21238,7 @@ thead{display:table-header-group;}
                           <span style={{fontSize:10,opacity:.7}}>{sub}</span>
                         </button>))}
                       <input value={shipQ} onChange={e=>setShipQ(e.target.value)} placeholder="Search stone, shape, box, vendor…" style={{...FI,flex:"1 1 220px",maxWidth:360,marginLeft:"auto",borderRadius:20,padding:"8px 14px",fontSize:mob?16:12.5}}/>
+                      {missing.length>0&&<div style={{flexBasis:"100%",textAlign:"right",fontSize:11,color:C.amber,fontWeight:600}}>Nothing found for {missing.map(t=>/^\d+$/.test(t)?`box ${t}`:`“${t}”`).join(", ")}</div>}
                     </div>);})()}
                   {editCard&&(()=>{
                     const d=editCard;const set=(k,v)=>setEditCard(x=>({...x,[k]:v}));
