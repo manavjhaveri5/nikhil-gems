@@ -21387,8 +21387,17 @@ thead{display:table-header-group;}
                   {/* READY — labelled (the green ones), still here: tick and send to the show. */}
                   {(shipStep||(shipTagged.length?"planned":"sent"))==="ready"&&(()=>{
                     const isPrinted=s=>!!printedMap.get(s.id)?.printedAt;
+                    const printedAt=s=>String(printedMap.get(s.id)?.printedAt||"");
                     const readyAll=shipTagged.filter(s=>s.labelMadeAt).filter(matchQ);
-                    const ready=readyAll.filter(s=>readyFilter==="all"||(readyFilter==="printed"?isPrinted(s):!isPrinted(s)));
+                    // Still to print first, then the most recently printed.
+                    const ready=readyAll.filter(s=>readyFilter==="all"||(readyFilter==="printed"?isPrinted(s):!isPrinted(s)))
+                      .map((s,i)=>({s,i})).sort((a,b)=>(isPrinted(a.s)-isPrinted(b.s))||printedAt(b.s).localeCompare(printedAt(a.s))||a.i-b.i).map(x=>x.s);
+                    /* Print jobs: the labels marked printed in the same minute — one sheet,
+                       or one Mark printed — newest first, each one reprintable. */
+                    const jobs=[];
+                    for(const s of ready)if(isPrinted(s)){const k=printedAt(s).slice(0,16),j=jobs[jobs.length-1];j&&j.k===k?j.cards.push(s):jobs.push({k,at:printedAt(s),cards:[s]});}
+                    const unprinted=ready.filter(s=>!isPrinted(s));
+                    const jobWhen=t=>{const d=new Date(t);if(isNaN(d))return"Printed";const day=d.toDateString()===new Date().toDateString()?"Today":d.toDateString()===new Date(Date.now()-864e5).toDateString()?"Yesterday":d.toLocaleDateString("en-IN",{day:"numeric",month:"short"});return`${day}, ${d.toLocaleTimeString("en-IN",{hour:"numeric",minute:"2-digit"})}`;};
                     const notYet=shipTagged.filter(s=>!s.labelMadeAt).length;
                     // Only ticked cards on screen count — a filter or search hides the rest from print and send.
                     const sel=ready.filter(s=>readySel.has(s.id));
@@ -21419,7 +21428,14 @@ thead{display:table-header-group;}
                         </div>);})()}
                       {!ready.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>{shipTagged.length?"No labelled cards yet — make labels in step 1 and they'll be here, green.":"Nothing planned for this show."}</div>:
                       <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(210px,1fr))",gap:12}}>
-                        {ready.map(s=>{const on=readySel.has(s.id);const cov=stockCover(s);return(
+                        {(()=>{
+                          const head=(key,label,ids,extra)=>{const allOn=ids.every(id=>readySel.has(id));return(
+                            <div key={key} style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",borderBottom:`1px solid ${C.border}`,padding:"10px 2px 6px",marginTop:4}}>
+                              <div style={{flex:1,minWidth:160,fontSize:12.5,fontWeight:750,color:C.ink}}>{label} <span style={{fontWeight:600,color:C.inkMid}}>· {ids.length} label{ids.length===1?"":"s"}</span></div>
+                              <button onClick={()=>setReadySel(prev=>{const n=new Set(prev);ids.forEach(id=>allOn?n.delete(id):n.add(id));return n;})} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 10px",fontSize:11.5,fontWeight:700,cursor:"pointer",color:C.ink}}>{allOn?"Untick these":"Tick these"}</button>
+                              {extra}
+                            </div>);};
+                          const card=s=>{const on=readySel.has(s.id);const cov=stockCover(s);return(
                           <div key={s.id} onClick={()=>setReadySel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?"#D3EEDD":"#EAF6EF",borderRadius:12,overflow:"hidden",cursor:"pointer",boxShadow:on?"0 0 0 2.5px #0f7a55":"0 0 0 1.5px #3FA36B66"}}>
                             <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
                               {cov&&<img src={thumbUrl(cov,400)} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
@@ -21430,11 +21446,20 @@ thead{display:table-header-group;}
                               <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{textTransform:"uppercase",fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
                               <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,...flowQtyLines(s)].filter(Boolean).join(" · ")}</div>
                               <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
-                                <button onClick={e=>{e.stopPropagation();markPrinted([s.id],!isPrinted(s));}} title={isPrinted(s)?`Printed ${fmtDate(String(printedMap.get(s.id).printedAt).slice(0,10))} — click to mark not printed`:"Click to mark printed"} style={{fontWeight:700,fontSize:11,color:isPrinted(s)?"#0f7a55":"#9a5a12",background:isPrinted(s)?"#D9F0E3":"#FBEBD6",border:`1px solid ${isPrinted(s)?"#0f7a5533":"#9a5a1233"}`,borderRadius:10,padding:"1px 8px",cursor:"pointer"}}>{isPrinted(s)?"🖨 Printed":"🏷 Not printed"}</button>
+                                <button onClick={e=>{e.stopPropagation();markPrinted([s.id],!isPrinted(s));}} title={isPrinted(s)?`Printed ${jobWhen(printedAt(s))} — click to mark not printed`:"Click to mark printed"} style={{fontWeight:700,fontSize:11,color:isPrinted(s)?"#0f7a55":"#9a5a12",background:isPrinted(s)?"#D9F0E3":"#FBEBD6",border:`1px solid ${isPrinted(s)?"#0f7a5533":"#9a5a1233"}`,borderRadius:10,padding:"1px 8px",cursor:"pointer"}}>{isPrinted(s)?"🖨 Printed":"🏷 Not printed"}</button>
                                 <span style={{fontWeight:700,color:C.ink}}>{cardValUsd(s)>0?fmtCur(cardValUsd(s)):""}</span>
                               </div>
                             </div>
-                          </div>);})}
+                          </div>);};
+                          if(!jobs.length)return ready.map(card);
+                          return[
+                            ...(unprinted.length?[head("todo","🏷 Not printed yet",unprinted.map(s=>s.id)),...unprinted.map(card)]:[]),
+                            ...jobs.flatMap(j=>{const ids=j.cards.map(s=>s.id);return[
+                              head(j.k,`🖨 ${jobWhen(j.at)}`,ids,
+                                <button onClick={()=>printLabelsFor(ids)} title="Open these labels on a print sheet again" style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:8,padding:"6px 11px",fontSize:11.5,fontWeight:750,cursor:"pointer"}}>🖨 Reprint {ids.length}</button>),
+                              ...j.cards.map(card)];}),
+                          ];
+                        })()}
                       </div>}
                     </>);
                   })()}
