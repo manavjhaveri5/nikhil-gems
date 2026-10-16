@@ -7374,10 +7374,16 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
       localUrls.forEach(url=>URL.revokeObjectURL(url));
     }
   };
+  /* A comma makes the search a list — "490, 491, 486" finds any of them. A number
+     in a list is a box: it matches that box exactly, so 49 doesn't bring in 490
+     or a note that says "49 pcs". Words in a list match as the plain search does. */
+  const searchTerms=useMemo(()=>search.includes(",")?search.split(",").map(t=>t.trim().toLowerCase()).filter(Boolean):null,[search]);
+  const stockHay=s=>[s.material||s.name,s.shape,s.productType,s.location,s.origin,s.notes].join(" ").toLowerCase();
+  const termHit=(s,t)=>/^\d+$/.test(t)?(String(s.location||"").match(/\d+/g)||[]).some(n=>+n===+t):stockHay(s).includes(t);
   const filtered=useMemo(()=>stock.filter(s=>{
     const regionOk=(s.region||"India")===stockRegion;
     if(!regionOk)return false;
-    const q=!search||[s.material||s.name,s.shape,s.productType,s.location,s.origin,s.notes].join(" ").toLowerCase().includes(search.toLowerCase());
+    const q=!search||(searchTerms?searchTerms.some(t=>termHit(s,t)):stockHay(s).includes(search.toLowerCase()));
     const sMarkets=Array.isArray(s.market)?s.market:[s.market||""];
     const stone=fsStones.size===0||[...fsStones].some(v=>stoneKey(v)===stoneKey(s.material));
     const shape=fsShapes.size===0||fsShapes.has(s.shape);
@@ -7440,7 +7446,9 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
     const act=ts(a.createdAt);const bct=ts(b.createdAt);
     if(act==null&&bct==null)return 0;if(act==null)return 1;if(bct==null)return -1;
     return bct-act;
-  }),[stock,search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
+  }),[stock,search,searchTerms,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);// eslint-disable-line react-hooks/exhaustive-deps
+  // The listed boxes or words that found nothing here, so a mistyped box doesn't go unnoticed.
+  const searchMissing=useMemo(()=>searchTerms?searchTerms.filter(t=>!filtered.some(s=>termHit(s,t))):[],[searchTerms,filtered]);// eslint-disable-line react-hooks/exhaustive-deps
   /* Reset to page 1 when the *criteria* change — not when `filtered` changes
      identity. A background refresh of `stock` rebuilds that memo every time,
      which would yank you back to page 1 mid-browse. Out-of-range pages are
@@ -8991,7 +8999,8 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                 </div>
                 );
               })()}
-              <div style={{marginBottom:13,display:"flex",alignItems:"center",justifyContent:"flex-end"}}>
+              <div style={{marginBottom:13,display:"flex",alignItems:"center",justifyContent:"flex-end",gap:10,flexWrap:"wrap"}}>
+                {searchMissing.length>0&&<span style={{fontSize:11,color:C.amber,fontWeight:600}}>Nothing found for {searchMissing.map(t=>/^\d+$/.test(t)?`box ${t}`:`“${t}”`).join(", ")}</span>}
                 <span style={{fontSize:11,color:C.inkFaint}}>{filtered.length} item{filtered.length!==1?"s":""}{activeFilterCount>0?` (${activeFilterCount} filter${activeFilterCount>1?"s":""} active)`:""}</span>
               </div>
               {strandedShowListings.length>0&&!showListingSweep&&(
