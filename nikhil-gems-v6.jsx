@@ -19139,6 +19139,8 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [labelLang,setLabelLang]=useState(null);
   const [sentOpen,setSentOpen]=useState(()=>new Set());
   const [shipSel,setShipSel]=useState(()=>new Set());     // cards at the show ticked for a price
+  const [sentView,setSentViewRaw]=useState(()=>{try{return localStorage.getItem("ng-ship-sent-view")||"cards";}catch{return "cards";}}); // step 3: "cards" | "list"
+  const setSentView=v=>{setSentViewRaw(v);try{localStorage.setItem("ng-ship-sent-view",v);}catch{}};
   const [shipSp,setShipSp]=useState("");
   const [shipFlat,setShipFlat]=useState("");
   const [tagSel,setTagSel]=useState(()=>new Set());       // tagged in stock, ticked to send
@@ -19917,6 +19919,64 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const fromIn=v=>{const n=parseFloat(v);return n>0?(inInr?+(n/usdInr).toFixed(4):n):0;};
   const fmtCur=usd=>inInr?`₹${Math.round(usd*usdInr).toLocaleString("en-IN")}`:fmtUsd(usd);
   const moneyCur=usd=>inInr?`₹${Math.round(usd*usdInr).toLocaleString("en-IN")}`:money(+(+usd).toFixed(2));
+  // Enter saves a price and goes to the same price on the next card, down the column as in a sheet.
+  const nextPrice=e=>{if(e.key!=="Enter")return;e.preventDefault();const el=e.currentTarget,all=[...document.querySelectorAll(`input[data-pf="${el.dataset.pf}"]`)],n=all[all.indexOf(el)+1];el.blur();if(n){n.focus();n.select();}};
+  /* The pricing on a card — its cost, the select and whole-flat prices, each
+     with the card's total, and the markup on cost. Planned cards (step 1) and
+     the cards at the show (step 3) both use it. */
+  const pricePanel=(s,{labels=true}={})=>{
+    const val=cardValUsd(s),pcs=pcsOf(s),cost=cardCostInr(s);
+    const flat=flatMode[s.id]||(+s.showFlatRate>0||(!(+s.showFlatPrice>0)&&kgOf(s)>0)?"kg":"total");
+    const per=(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg");
+    return(<>
+      {/* Cost, for pricing: per unit, per piece where the card counts pieces,
+          and the card's total. Missing, it can be typed in right here. */}
+      <div onClick={e=>e.stopPropagation()} style={{fontSize:10.5,color:C.inkMid,marginBottom:6,background:cost>0?C.bg:C.amberBg,borderRadius:6,padding:"4px 7px",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+        <span style={{color:C.inkFaint}}>Cost ₹/{per==="pcs"?"pc":per}</span>
+        <input data-pf="cost" key={`pc-${s.id}-${s.costPrice||""}`} defaultValue={s.costPrice||""} inputMode="decimal" placeholder="add" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.costPrice||""))onPatchStockItem?.(s.id,{costPrice:v});}} onKeyDown={nextPrice} onFocus={e=>e.target.select()} style={{...FI,width:78,padding:"4px 7px",fontSize:mob?16:12.5,background:C.surface,borderColor:cost>0?C.border:C.amber}}/>
+        {cost>0&&<span>{pcs>0&&per!=="pcs"?<><b>₹{Math.round(cost/pcs).toLocaleString("en-IN")}/pc</b> · </>:null}₹{Math.round(cost).toLocaleString("en-IN")} card <span style={{color:C.inkFaint}}>({fmtUsd(cost/usdInr)})</span></span>}
+      </div>
+      <div onClick={e=>e.stopPropagation()} style={{display:"grid",gap:5}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Select {curSym}/{per==="pcs"?"pc":per}</span>
+          <input data-pf="sp" key={`pp-${s.id}-${priceCur}-${s.listPrice||""}`} defaultValue={toIn(s.listPrice)} inputMode="decimal" placeholder="—" onBlur={e=>{const v=e.target.value.trim();if(v===toIn(s.listPrice))return;const usd=fromIn(v);onPatchStockItem?.(s.id,{listPrice:usd>0?String(usd):""});}} onKeyDown={nextPrice} onFocus={e=>e.target.select()} style={{...FI,width:82,padding:"5px 8px",fontSize:mob?16:13}}/>
+          <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:selectTotalOf(s)>0?C.ink:C.inkFaint,whiteSpace:"nowrap"}}>{selectTotalOf(s)>0?fmtCur(selectTotalOf(s)):"—"}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Whole flat</span>
+          <input data-pf="flat" key={`pf-${s.id}-${priceCur}-${flat}-${s.showFlatRate||""}-${s.showFlatPrice||""}`} defaultValue={flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice))} inputMode="decimal" placeholder={flat==="kg"?`${curSym}/${flatUnitOf(s)}`:`${curSym} total`}
+            onBlur={e=>{const shown=flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice));if(e.target.value.trim()===shown)return;const v=fromIn(e.target.value);
+              if(!(v>0))onPatchStockItem?.(s.id,{showFlatRate:"",showFlatPrice:""});
+              else if(flat==="kg")onPatchStockItem?.(s.id,{showFlatRate:String(v),showFlatPrice:String(Math.round(v*weightIn(s,flatUnitOf(s))*100)/100)});
+              else onPatchStockItem?.(s.id,{showFlatPrice:String(v),showFlatRate:""});}}
+            onKeyDown={nextPrice} onFocus={e=>e.target.select()} style={{...FI,width:82,padding:"5px 8px",fontSize:mob?16:13,borderColor:flatTotalOf(s)>0?"#10b981":C.border}}/>
+          <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>{(kgOf(s)>0?[["kg",`/${flatUnitOf(s)}`],["total","total"]]:[["total","total"]]).map(([v,l])=><button key={v} onClick={()=>setFlatMode(m=>({...m,[s.id]:v}))} style={{background:flat===v?"#10b981":"transparent",color:flat===v?"#fff":C.inkMid,border:"none",padding:"3px 6px",fontSize:10,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
+          <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:flatTotalOf(s)>0?"#0f7a55":C.inkFaint,whiteSpace:"nowrap"}}>{flatTotalOf(s)>0?fmtCur(flatTotalOf(s)):"—"}</span>
+        </div>
+        {selectTotalOf(s)>0&&flatTotalOf(s)>0&&<div style={{fontSize:10,color:flatTotalOf(s)<selectTotalOf(s)?"#0f7a55":C.red,textAlign:"right",whiteSpace:"normal"}}>{flatTotalOf(s)<selectTotalOf(s)?`Whole flat saves ${Math.round((1-flatTotalOf(s)/selectTotalOf(s))*100)}%`:"Whole flat isn't cheaper than selecting"}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3}}>
+          {labels&&s.labelMadeAt?<span title={`Label made ${fmtDate(String(s.labelMadeAt).slice(0,10))}${s.labelSet?` · ${s.labelSet}`:""}`} style={{fontSize:10,fontWeight:700,color:"#0f7a55",background:"#E5F4EC",borderRadius:10,padding:"2px 8px"}}>🏷 Label made</span>:null}
+          <button onClick={()=>setEditCard({...s,market:Array.isArray(s.market)?s.market:String(s.market||"").split(",").map(x=>x.trim()).filter(Boolean)})} style={{background:"none",border:`1px solid ${C.border}`,color:C.inkMid,borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>✎ Edit card</button>
+          {labels&&<button onClick={()=>setLabelIds([s.id])} style={{marginLeft:"auto",background:"none",border:`1px solid #8B6F47`,color:"#8B6F47",borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>{s.labelMadeAt?"✎ Edit label":"🏷 Make label"}</button>}
+        </div>
+        {/* The numbers that help price: per piece where the card counts pieces,
+            and what each price is on cost — for weighed cards too. */}
+        {(val>0||cost>0)&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.5}}>
+          {pcs>0&&val>0&&<div>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}</div>}
+          {cost>0&&(()=>{
+            const xSel=selectTotalOf(s)>0?(selectTotalOf(s)*usdInr)/cost:0,xFlat=flatTotalOf(s)>0?(flatTotalOf(s)*usdInr)/cost:0;
+            const M=(which,x)=>multEdit?.id===s.id&&multEdit.which===which
+              ?<input autoFocus value={multEdit.val} onChange={e=>setMultEdit(m=>({...m,val:e.target.value.replace(/[^\d.]/g,"")}))}
+                  onKeyDown={e=>{if(e.key==="Enter"){applyMult(s,which,multEdit.val,flat);setMultEdit(null);}if(e.key==="Escape")setMultEdit(null);}}
+                  onBlur={()=>{applyMult(s,which,multEdit.val,flat);setMultEdit(null);}} inputMode="decimal" style={{width:38,padding:"0 4px",fontSize:10.5,border:`1px solid ${C.blue}`,borderRadius:4,textAlign:"right"}}/>
+              :<button title={`Type a markup on cost and the ${which==="select"?"select":"whole-flat"} price is filled in`} onClick={()=>setMultEdit({id:s.id,which,val:x?x.toFixed(1):""})} style={{background:"none",border:"none",borderBottom:`1px dashed ${C.blue}`,padding:0,font:"inherit",fontWeight:800,color:C.blue,cursor:"pointer"}}>{x?`${x.toFixed(1)}×`:"set ×"}</button>;
+            return <div>Select {M("select",xSel)} · Whole {M("flat",xFlat)} cost{(xSel||xFlat)?<span style={{opacity:.8}}> (profit {xSel?`${fmtCur(selectTotalOf(s)-cost/usdInr).replace("-","−")} select`:""}{xSel&&xFlat?" · ":""}{xFlat?`${fmtCur(flatTotalOf(s)-cost/usdInr).replace("-","−")} whole`:""})</span>:null}</div>;
+          })()}
+          {!cost&&val>0&&<div style={{color:C.amber}}>Add the cost to see the markup</div>}
+        </div>}
+      </div>
+    </>);
+  };
   // mode: "sp" select price per unit · "flatkg" whole flat per kg · "flat" whole flat total
   const priceTicked=async(mode,planned=false)=>{
     const v=fromIn(mode==="sp"?shipSp:shipFlat);if(!(v>0))return;
@@ -21335,7 +21395,7 @@ thead{display:table-header-group;}
                       </div>
                       {!shipTagged.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing planned for {show.name}. In Stock, tag cards with this show under Market and they'll appear here.</div>:
                       <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(3,minmax(0,1fr))",gap:14}}>
-                        {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);const b=basisOf(s);const val=cardValUsd(s);const pcs=pcsOf(s);const cost=cardCostInr(s);const flat=flatMode[s.id]||(+s.showFlatRate>0||(!(+s.showFlatPrice>0)&&kgOf(s)>0)?"kg":"total");const per=(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg");return(
+                        {list.map(s=>{const on=tagSel.has(s.id);const cov=stockCover(s);return(
                           <div key={s.id} onClick={()=>setTagSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?C.amberBg:s.labelMadeAt?"#EAF6EF":C.surface,borderRadius:14,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:s.labelMadeAt?"0 0 0 1.5px #3FA36B, var(--e-1)":"var(--e-1)"}}>
                             <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
                               {cov&&<img src={thumbUrl(cov,400)} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
@@ -21353,52 +21413,7 @@ thead{display:table-header-group;}
                                 <span style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · {flowQtyLines(s).join(" · ")}</span>
                                 {+s.qty>0&&+s.qty2>0&&<button onClick={e=>{e.stopPropagation();swapCardQty(s);}} title="Swap the two quantities — cost and price are restated per the new unit" style={{flexShrink:0,marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"0 7px",fontSize:10.5,fontWeight:700,color:C.blue,cursor:"pointer"}}>⇄</button>}
                               </div>
-                              {/* Cost, for pricing: per unit, per piece where the card counts pieces,
-                                  and the card's total. Missing, it can be typed in right here. */}
-                              <div onClick={e=>e.stopPropagation()} style={{fontSize:10.5,color:C.inkMid,marginBottom:6,background:cost>0?C.bg:C.amberBg,borderRadius:6,padding:"4px 7px",display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                                <span style={{color:C.inkFaint}}>Cost ₹/{per==="pcs"?"pc":per}</span>
-                                <input key={`pc-${s.id}-${s.costPrice||""}`} defaultValue={s.costPrice||""} inputMode="decimal" placeholder="add" onBlur={e=>{const v=e.target.value.trim();if(v!==String(s.costPrice||""))onPatchStockItem?.(s.id,{costPrice:v});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:64,padding:"2px 6px",fontSize:mob?16:11,background:C.surface,borderColor:cost>0?C.border:C.amber}}/>
-                                {cost>0&&<span>{pcs>0&&per!=="pcs"?<><b>₹{Math.round(cost/pcs).toLocaleString("en-IN")}/pc</b> · </>:null}₹{Math.round(cost).toLocaleString("en-IN")} card <span style={{color:C.inkFaint}}>({fmtUsd(cost/usdInr)})</span></span>}
-                              </div>
-                              <div onClick={e=>e.stopPropagation()} style={{display:"grid",gap:5}}>
-                                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                  <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Select {curSym}/{per==="pcs"?"pc":per}</span>
-                                  <input key={`pp-${s.id}-${priceCur}-${s.listPrice||""}`} defaultValue={toIn(s.listPrice)} inputMode="decimal" placeholder="—" onBlur={e=>{const v=e.target.value.trim();if(v===toIn(s.listPrice))return;const usd=fromIn(v);onPatchStockItem?.(s.id,{listPrice:usd>0?String(usd):""});}} onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:70,padding:"4px 7px",fontSize:mob?16:12}}/>
-                                  <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:selectTotalOf(s)>0?C.ink:C.inkFaint,whiteSpace:"nowrap"}}>{selectTotalOf(s)>0?fmtCur(selectTotalOf(s)):"—"}</span>
-                                </div>
-                                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                  <span style={{fontSize:10,color:C.inkFaint,width:62,whiteSpace:"nowrap"}}>Whole flat</span>
-                                  <input key={`pf-${s.id}-${priceCur}-${flat}-${s.showFlatRate||""}-${s.showFlatPrice||""}`} defaultValue={flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice))} inputMode="decimal" placeholder={flat==="kg"?`${curSym}/${flatUnitOf(s)}`:`${curSym} total`}
-                                    onBlur={e=>{const shown=flat==="kg"?toIn(s.showFlatRate):(+s.showFlatRate>0?"":toIn(s.showFlatPrice));if(e.target.value.trim()===shown)return;const v=fromIn(e.target.value);
-                                      if(!(v>0))onPatchStockItem?.(s.id,{showFlatRate:"",showFlatPrice:""});
-                                      else if(flat==="kg")onPatchStockItem?.(s.id,{showFlatRate:String(v),showFlatPrice:String(Math.round(v*weightIn(s,flatUnitOf(s))*100)/100)});
-                                      else onPatchStockItem?.(s.id,{showFlatPrice:String(v),showFlatRate:""});}}
-                                    onKeyDown={e=>e.key==="Enter"&&e.currentTarget.blur()} style={{...FI,width:70,padding:"4px 7px",fontSize:mob?16:12,borderColor:flatTotalOf(s)>0?"#10b981":C.border}}/>
-                                  <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden"}}>{(kgOf(s)>0?[["kg",`/${flatUnitOf(s)}`],["total","total"]]:[["total","total"]]).map(([v,l])=><button key={v} onClick={()=>setFlatMode(m=>({...m,[s.id]:v}))} style={{background:flat===v?"#10b981":"transparent",color:flat===v?"#fff":C.inkMid,border:"none",padding:"3px 6px",fontSize:10,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
-                                  <span style={{marginLeft:"auto",fontSize:11.5,fontWeight:700,color:flatTotalOf(s)>0?"#0f7a55":C.inkFaint,whiteSpace:"nowrap"}}>{flatTotalOf(s)>0?fmtCur(flatTotalOf(s)):"—"}</span>
-                                </div>
-                                {selectTotalOf(s)>0&&flatTotalOf(s)>0&&<div style={{fontSize:10,color:flatTotalOf(s)<selectTotalOf(s)?"#0f7a55":C.red,textAlign:"right",whiteSpace:"normal"}}>{flatTotalOf(s)<selectTotalOf(s)?`Whole flat saves ${Math.round((1-flatTotalOf(s)/selectTotalOf(s))*100)}%`:"Whole flat isn't cheaper than selecting"}</div>}
-                                <div style={{display:"flex",alignItems:"center",gap:6,marginTop:3}}>
-                                  {s.labelMadeAt?<span title={`Label made ${fmtDate(String(s.labelMadeAt).slice(0,10))}${s.labelSet?` · ${s.labelSet}`:""}`} style={{fontSize:10,fontWeight:700,color:"#0f7a55",background:"#E5F4EC",borderRadius:10,padding:"2px 8px"}}>🏷 Label made</span>:null}
-                                  <button onClick={()=>setEditCard({...s,market:Array.isArray(s.market)?s.market:String(s.market||"").split(",").map(x=>x.trim()).filter(Boolean)})} style={{background:"none",border:`1px solid ${C.border}`,color:C.inkMid,borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>✎ Edit card</button>
-                                  <button onClick={()=>setLabelIds([s.id])} style={{marginLeft:"auto",background:"none",border:`1px solid #8B6F47`,color:"#8B6F47",borderRadius:7,padding:"3px 10px",fontSize:10.5,fontWeight:700,cursor:"pointer"}}>{s.labelMadeAt?"✎ Edit label":"🏷 Make label"}</button>
-                                </div>
-                                {/* The numbers that help price: per piece where the card counts pieces,
-                                    and what each price is on cost — for weighed cards too. */}
-                                {(val>0||cost>0)&&<div style={{fontSize:10,color:C.inkFaint,textAlign:"right",whiteSpace:"normal",lineHeight:1.5}}>
-                                  {pcs>0&&val>0&&<div>{selectTotalOf(s)>0?`${moneyCur(selectTotalOf(s)/pcs)}/pc select`:""}{selectTotalOf(s)>0&&flatTotalOf(s)>0?" · ":""}{flatTotalOf(s)>0?`${moneyCur(flatTotalOf(s)/pcs)}/pc whole`:""}</div>}
-                                  {cost>0&&(()=>{
-                                    const xSel=selectTotalOf(s)>0?(selectTotalOf(s)*usdInr)/cost:0,xFlat=flatTotalOf(s)>0?(flatTotalOf(s)*usdInr)/cost:0;
-                                    const M=(which,x)=>multEdit?.id===s.id&&multEdit.which===which
-                                      ?<input autoFocus value={multEdit.val} onChange={e=>setMultEdit(m=>({...m,val:e.target.value.replace(/[^\d.]/g,"")}))}
-                                          onKeyDown={e=>{if(e.key==="Enter"){applyMult(s,which,multEdit.val,flat);setMultEdit(null);}if(e.key==="Escape")setMultEdit(null);}}
-                                          onBlur={()=>{applyMult(s,which,multEdit.val,flat);setMultEdit(null);}} inputMode="decimal" style={{width:38,padding:"0 4px",fontSize:10.5,border:`1px solid ${C.blue}`,borderRadius:4,textAlign:"right"}}/>
-                                      :<button title={`Type a markup on cost and the ${which==="select"?"select":"whole-flat"} price is filled in`} onClick={()=>setMultEdit({id:s.id,which,val:x?x.toFixed(1):""})} style={{background:"none",border:"none",borderBottom:`1px dashed ${C.blue}`,padding:0,font:"inherit",fontWeight:800,color:C.blue,cursor:"pointer"}}>{x?`${x.toFixed(1)}×`:"set ×"}</button>;
-                                    return <div>Select {M("select",xSel)} · Whole {M("flat",xFlat)} cost{(xSel||xFlat)?<span style={{opacity:.8}}> (profit {xSel?`${fmtCur(selectTotalOf(s)-cost/usdInr).replace("-","−")} select`:""}{xSel&&xFlat?" · ":""}{xFlat?`${fmtCur(flatTotalOf(s)-cost/usdInr).replace("-","−")} whole`:""})</span>:null}</div>;
-                                  })()}
-                                  {!cost&&val>0&&<div style={{color:C.amber}}>Add the cost to see the markup</div>}
-                                </div>}
-                              </div>
+                              {pricePanel(s)}
                             </div>
                           </div>);})}
                       </div>}
@@ -21520,20 +21535,66 @@ thead{display:table-header-group;}
                       <button onClick={()=>setShipSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button>
                     </div>
                   )}
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:10,flexWrap:"wrap"}}>
                     <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>Cards at the show{shipSent.length>0&&<button onClick={()=>setShipSel(prev=>prev.size===shipSent.length?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:"0 0 0 10px",textTransform:"none",letterSpacing:0}}>{shipSel.size===shipSent.length?"Untick all":"Tick all"}</button>}</span>
                     {shipSent.length>0&&(
-                      <span style={{display:"flex",gap:12,alignItems:"center"}}>
+                      <span style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+                        <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:7,overflow:"hidden"}}>{[["cards","▦ Cards"],["list","☰ List"]].map(([k,l])=><button key={k} onClick={()=>setSentView(k)} style={{background:sentView===k?C.ink:"transparent",color:sentView===k?"#fff":C.inkMid,border:"none",padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span>
+                        {sentView==="cards"&&<span style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:11,color:C.inkMid}}>Prices in<span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:7,overflow:"hidden"}}>{[["usd","$"],["inr","₹"]].map(([k,l])=><button key={k} title={k==="inr"?`Typed in ₹ at ₹${usdInr}/$ · saved and printed in $`:"Typed in $"} onClick={()=>{setPriceCur(k);try{localStorage.setItem("ng-ship-price-cur",k);}catch{}}} style={{background:priceCur===k?C.ink:"transparent",color:priceCur===k?"#fff":C.inkMid,border:"none",padding:"4px 9px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{l}</button>)}</span></span>}
                         <button onClick={e=>{e.stopPropagation();openInMakeLabels(false);}} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>🏷 Make labels</button>
                         <button onClick={e=>{e.stopPropagation();printPriceList();}} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>🖨 Price list</button>
-                        <button onClick={()=>setSentOpen(prev=>prev.size?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>{sentOpen.size?"Collapse all":"Expand all"}</button>
+                        {sentView==="list"&&<button onClick={()=>setSentOpen(prev=>prev.size?new Set():new Set(shipSent.map(i=>i.id)))} style={{background:"none",border:"none",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",padding:0}}>{sentOpen.size?"Collapse all":"Expand all"}</button>}
                       </span>
                     )}
                   </div>
 
                   {shipItems.length===0?(
                     <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing has been sent to {show.name} yet. Use <strong>Send → show</strong> in the Stock module.</div>
-                  ):(
+                  ):sentView==="cards"?(()=>{
+                    /* Cards, grouped by the day they were sent, newest first — each with
+                       what is at the show, the cost and both prices per unit and for the
+                       whole box, typed in place. */
+                    const dayOf=s=>String(s.sentAt||"").slice(0,10);
+                    const groups=[];
+                    shipSent.filter(matchQ).map((s,i)=>({s,i})).sort((a,b)=>dayOf(b.s).localeCompare(dayOf(a.s))||a.i-b.i)
+                      .forEach(({s})=>{const d=dayOf(s),g=groups[groups.length-1];g&&g.day===d?g.cards.push(s):groups.push({day:d,cards:[s]});});
+                    const toggle=id=>setShipSel(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
+                    return groups.map(g=>{
+                      const ids=g.cards.map(s=>s.id),allOn=ids.every(id=>shipSel.has(id));
+                      const costInr=g.cards.reduce((a,s)=>a+cardCostInr(s),0),valUsd=g.cards.reduce((a,s)=>a+cardValUsd(s),0);
+                      const unpriced=g.cards.filter(s=>!(cardValUsd(s)>0)).length;
+                      return(
+                      <div key={g.day||"undated"} style={{marginBottom:20}}>
+                        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",borderBottom:`1px solid ${C.border}`,padding:"2px 2px 8px",marginBottom:12}}>
+                          <div style={{flex:1,minWidth:200}}>
+                            <div style={{fontSize:13.5,fontWeight:750,color:C.ink}}>📦 Sent {g.day?fmtDate(g.day):"— date not recorded"} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"}</span></div>
+                            <div style={{fontSize:11,color:C.inkMid}}>{costInr>0?`Cost ₹${Math.round(costInr).toLocaleString("en-IN")} (${fmtUsd(costInr/usdInr)})`:"No cost yet"} · {valUsd>0?`${fmtCur(valUsd)} on the table${costInr>0?` · ${((valUsd*usdInr)/costInr).toFixed(1)}× cost`:""}`:"not priced yet"}{unpriced>0&&valUsd>0?<span style={{color:C.amber}}> · {unpriced} unpriced</span>:null}</div>
+                          </div>
+                          <button onClick={()=>setShipSel(prev=>{const n=new Set(prev);ids.forEach(id=>allOn?n.delete(id):n.add(id));return n;})} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 10px",fontSize:11.5,fontWeight:700,cursor:"pointer",color:C.ink}}>{allOn?"Untick these":"Tick these"}</button>
+                        </div>
+                        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(290px,1fr))",gap:14}}>
+                          {g.cards.map(s=>{const on=shipSel.has(s.id);const cov=stockCover(s);return(
+                            <div key={s.id} onClick={()=>toggle(s.id)} style={{background:on?C.amberBg:C.surface,borderRadius:14,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:"var(--e-1)"}}>
+                              <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
+                                {cov&&<img src={thumbUrl(cov,400)} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+                                <div style={{position:"absolute",top:8,left:8,width:20,height:20,borderRadius:6,background:on?C.amber:"rgba(255,255,255,.9)",display:"grid",placeItems:"center",color:"#fff",fontSize:12,fontWeight:800,boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}>{on?"✓":""}</div>
+                                {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.92)",borderRadius:12,padding:"2px 9px",fontSize:11.5,fontWeight:800}}>Box {s.location}</div>}
+                                {s.sentAt&&<div style={{position:"absolute",bottom:8,left:8,background:"rgba(26,19,8,.72)",color:"#fff",borderRadius:12,padding:"2px 9px",fontSize:10.5,fontWeight:700}}>Sent {fmtDate(s.sentAt)}</div>}
+                                {s.soldDate&&<div style={{position:"absolute",bottom:8,right:8,background:C.green,color:"#fff",borderRadius:12,padding:"2px 9px",fontSize:10.5,fontWeight:700}}>Sold</div>}
+                              </div>
+                              <div style={{padding:"9px 11px 11px"}}>
+                                <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+                                  <span style={{fontSize:13,fontWeight:700,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>{s.material||"Item"}</span>
+                                  {s.grade&&<span title="Grade" style={{textTransform:"uppercase",flexShrink:0,fontSize:10,fontWeight:800,letterSpacing:.6,color:"#7A5A1E",background:"linear-gradient(180deg,#FBF1DA,#F3E1B8)",border:"1px solid #E2C88E",borderRadius:10,padding:"0 7px",lineHeight:1.6}}>{s.grade}</span>}
+                                </div>
+                                <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginBottom:6}}>{[s.shape,s.size].filter(Boolean).join(" · ")||"—"} · <b style={{color:C.ink}}>{flowQtyLines(s).join(" · ")||"—"}</b>{s.vendor?` · ${s.vendor}`:""}</div>
+                                {pricePanel(s,{labels:false})}
+                              </div>
+                            </div>);})}
+                        </div>
+                      </div>);
+                    });
+                  })():(
                     <>
                       {!mob&&(
                         <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) 132px 84px 74px 88px 88px 128px",gap:8,padding:"0 10px 5px",fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.5}}>
@@ -21589,13 +21650,13 @@ thead{display:table-header-group;}
                                 ?<span style={{fontSize:10,color:C.inkFaint,fontWeight:700}}>—</span>
                                 :qtyLines.map((line,i)=><span key={i} style={{fontSize:10,color:C.ink,fontWeight:700,whiteSpace:"nowrap"}}>{line}</span>)}
                             </div>
-                            <input key={`scp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"Cost ₹":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
-                            <input key={`ssp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} type="number" min="0" step="0.01" placeholder={mob?"SP $":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
+                            <input data-pf="cost" key={`scp-${item.id}-${item.costPrice||""}`} defaultValue={item.costPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.costPrice||""))onPatchStockItem?.(item.id,{costPrice:v});}} onKeyDown={nextPrice} onFocus={e=>e.target.select()} inputMode="decimal" placeholder={mob?"Cost ₹":"₹"} style={{...FI,fontSize:mob?16:12,padding:"5px 7px",width:"100%",boxSizing:"border-box"}}/>
+                            <input data-pf="sp" key={`ssp-${item.id}-${item.listPrice||""}`} defaultValue={item.listPrice||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.listPrice||""))onPatchStockItem?.(item.id,{listPrice:v});}} onKeyDown={nextPrice} onFocus={e=>e.target.select()} inputMode="decimal" placeholder={mob?"SP $":"$"} style={{...FI,fontSize:mob?16:12,padding:"5px 7px",width:"100%",boxSizing:"border-box",color:item.listPrice?C.green:C.ink,fontWeight:item.listPrice?700:400}}/>
                             {(()=>{const b=(parseFloat(item.qty)||0)>0?(parseFloat(item.qty)||0):(parseFloat(item.qty2)||0);const v=(parseFloat(item.listPrice)||0)*b;const c=(parseFloat(item.costPrice)||0)*b;const m=v-(usdInr>0?c/usdInr:0);return(<>
                               <span style={{fontSize:11,fontWeight:800,color:v>0?C.ink:C.inkFaint}}>{v>0?fmtUsd(v):"—"}</span>
                               <span style={{fontSize:11,fontWeight:800,color:v<=0?C.inkFaint:m<0?C.red:C.green}}>{v>0?fmtUsd(m):"—"}</span>
                             </>);})()}
-                            <input key={`svn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} placeholder={mob?"Vendor":""} style={{...FI,fontSize:10,padding:"3px 6px",width:"100%",boxSizing:"border-box"}}/>
+                            <input data-pf="vendor" key={`svn-${item.id}-${item.vendor||""}`} defaultValue={item.vendor||""} onClick={e=>e.stopPropagation()} onBlur={e=>{const v=e.target.value.trim();if(v!==String(item.vendor||""))onPatchStockItem?.(item.id,{vendor:v});}} onKeyDown={nextPrice} placeholder={mob?"Vendor":""} style={{...FI,fontSize:mob?16:12,padding:"5px 7px",width:"100%",boxSizing:"border-box"}}/>
                           </div>
                           {open&&(
                             <div style={{borderTop:`1px solid ${C.border}`,background:C.card,padding:"9px 12px 10px"}}>
