@@ -19190,6 +19190,9 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [cartonMsg,setCartonMsg]=useState({});            // step 3: what each typed number turned out to be
   const [cartonEditNo,setCartonEditNo]=useState(null);    // step 3: the carton being renumbered
   const [cartonsOpen,setCartonsOpen]=useState(false);     // step 3, on a phone: the cartons panel open
+  // step 3, on a computer: the cartons drawer tucked away to a tab at the edge
+  const [cartonsHidden,setCartonsHiddenRaw]=useState(()=>{try{return localStorage.getItem("ng-ship-cartons-hidden")==="1";}catch{return false;}});
+  const setCartonsHidden=v=>{setCartonsHiddenRaw(v);try{localStorage.setItem("ng-ship-cartons-hidden",v?"1":"0");}catch{}};
   const [multEdit,setMultEdit]=useState(null);            // {id, which:"select"|"flat", val} — typing a markup
   // Which stock cards' labels are printed — read from the label sets (Make Labels marks them too).
   const [printedMap,setPrintedMap]=useState(()=>new Map());
@@ -20199,6 +20202,16 @@ ${loose.length?`<div class="warn">${block("Packed, in no carton",`${boxCount(loo
     &&!(s.showId&&(s.region||"India")!=="India")&&marketsOf(s).some(tagMatchesShow)).sort(shipSort);
   // The step on screen: the one chosen, else the first that has cards.
   const shipStepNow=shipStep||(shipTagged.length?"planned":packedItems.length?"packed":"sent");
+  /* Step 3's cartons drawer sits over the right of the screen; the Shipment
+     tab keeps clear of it by just as much as it reaches under it — nothing on
+     a wide screen, where the page's own margin already leaves the room. */
+  const cartonDrawerOn=isDetail&&!mob&&showTab==="shipment"&&shipView==="plan"&&shipStepNow==="packed"&&packedItems.length>0&&!cartonsHidden;
+  const step3Ref=useRef(null);
+  const [drawerPad,setDrawerPad]=useState(0);
+  useEffect(()=>{
+    const fit=()=>{const el=step3Ref.current;if(!el)return;setDrawerPad(Math.max(0,Math.round(el.getBoundingClientRect().right-(window.innerWidth-376))));};
+    fit();window.addEventListener("resize",fit);return()=>window.removeEventListener("resize",fit);
+  },[cartonDrawerOn]);// eslint-disable-line react-hooks/exhaustive-deps
   // Prices for the ticked cards: an SP per unit, or one flat price for each card
   // (kept as the per-unit rate it works out to, so every total stays rate × qty).
   const basisOf=s=>(parseFloat(s.qty)||0)>0?(parseFloat(s.qty)||0):(parseFloat(s.qty2)||0);
@@ -21613,7 +21626,7 @@ thead{display:table-header-group;}
 
           {/* ── SHIPMENT ── */}
           {showTab==="shipment"&&(
-            <div style={{padding:"14px 16px"}}>
+            <div ref={step3Ref} style={{padding:"14px 16px",paddingRight:16+(cartonDrawerOn?drawerPad:0)}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                 <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>What goes to {show.name} · {shipRegion}</span>
                 <div style={{display:"flex",gap:6}}>
@@ -21866,13 +21879,18 @@ thead{display:table-header-group;}
                     const ghost={background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:C.ink};
                     const small={background:"none",border:"none",padding:0,fontSize:11,fontWeight:700,cursor:"pointer"};
                     const live=cartonSorted.filter(c=>!cartonGone(c)),gone=cartonSorted.filter(cartonGone);
-                    // The cartons: a floating sidebar beside the flats (a panel above them on a phone).
-                    const sidebar=(
-                      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,boxShadow:"var(--e-1)",overflow:"hidden"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:8,padding:"11px 12px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
-                          <b style={{flex:1,fontSize:13.5,color:C.ink}}>📦 Cartons <span style={{fontWeight:600,color:C.inkMid}}>· {live.length}</span></b>
+                    /* The cartons: a drawer fixed to the right edge of the screen, as Stock's
+                       card drawer is, so it stays put while the flats scroll — tucked to a
+                       tab when not wanted. On a phone, a panel above the flats. */
+                    const DRAWER_W=360;
+                    const drawerOn=cartonDrawerOn;
+                    const sidebar=drawer=>(
+                      <div style={drawer?{}:{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,boxShadow:"var(--e-1)",overflow:"hidden"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,padding:drawer?"20px 14px 14px 16px":"11px 12px",borderBottom:`1px solid ${C.border}`,background:C.card,...(drawer?{position:"sticky",top:0,zIndex:2}:{})}}>
+                          <b style={{flex:1,fontSize:drawer?15:13.5,color:C.ink}}>📦 Cartons <span style={{fontWeight:600,color:C.inkMid}}>· {live.length}</span></b>
                           {packedItems.length>0&&<button onClick={printPackingList} title="Every carton and what is in it" style={{...small,color:C.blue}}>🖨 Packing list</button>}
                           {isAdmin&&<button onClick={newCarton} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11.5,fontWeight:750,cursor:"pointer"}}>+ New</button>}
+                          {drawer&&<button onClick={()=>setCartonsHidden(true)} title="Tuck the cartons away" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,width:28,height:28,fontSize:15,lineHeight:1,cursor:"pointer",color:C.inkMid}}>›</button>}
                         </div>
                         <div style={{display:"flex",gap:6,padding:"9px 12px",flexWrap:"wrap",borderBottom:`1px solid ${C.border}`}}>
                           {[["all",`All packed · ${flats}`],["none",`In no carton · ${boxCount(loose)}`]].map(([k,l])=>(
@@ -21937,10 +21955,12 @@ thead{display:table-header-group;}
                         </div>)}
                       {mob&&packedItems.length>0&&<div style={{marginBottom:12}}>
                         <button onClick={()=>setCartonsOpen(o=>!o)} style={{...ghost,width:"100%",display:"flex",justifyContent:"space-between"}}><span>📦 Cartons · {live.length}{loose.length?` · ${boxCount(loose)} flats in none`:""}</span><span>{cartonsOpen?"▴":"▾"}</span></button>
-                        {cartonsOpen&&<div style={{marginTop:8}}>{sidebar}</div>}
+                        {cartonsOpen&&<div style={{marginTop:8}}>{sidebar(false)}</div>}
                       </div>}
-                      <div style={{display:"flex",gap:16,alignItems:"flex-start"}}>
-                        <div style={{flex:1,minWidth:0}}>
+                      {drawerOn&&<aside style={{position:"fixed",top:0,right:0,bottom:0,width:DRAWER_W,background:C.surface,borderLeft:`1px solid ${C.border}`,zIndex:900,overflowY:"auto",boxShadow:"-4px 0 20px rgba(0,0,0,.08)"}}>{sidebar(true)}</aside>}
+                      {!mob&&packedItems.length>0&&cartonsHidden&&<button onClick={()=>setCartonsHidden(false)} title="Show the cartons" style={{position:"fixed",right:0,top:140,zIndex:900,background:C.ink,color:"#FAF0DC",border:"none",borderRadius:"10px 0 0 10px",padding:"10px 12px",fontSize:12.5,fontWeight:750,cursor:"pointer",boxShadow:"-2px 2px 10px rgba(0,0,0,.18)"}}>‹ 📦 Cartons · {live.length}{loose.length?<span style={{display:"block",fontSize:10.5,fontWeight:600,color:"#F3C98B"}}>{boxCount(loose)} loose</span>:null}</button>}
+                      <div>
+                        <div>
                           {!packedItems.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing packed and waiting. Mark labelled cards packed in step 2.{onWayItems.length?<> {onWayItems.length} card{onWayItems.length===1?" is":"s are"} on the way — <button onClick={()=>setShipStep("sent")} style={{background:"none",border:"none",padding:0,font:"inherit",color:C.blue,fontWeight:700,cursor:"pointer"}}>step 4</button>.</>:null}</div>:
                           !visible.length?<div style={{fontSize:12,color:C.inkFaint,padding:14,textAlign:"center"}}>{view==="none"?"Every packed flat is in a carton.":view!=="all"?"Nothing in this carton yet — tick flats and put them in, or type their numbers in the sidebar.":"No packed card matches the search."}</div>:
                           groups.map(g=>{const ids=g.cards.map(s=>s.id),on=ids.every(id=>packSel.has(id)),gk=flowSentKgTotal(g.cards),gb=boxCount(g.cards);return(
@@ -21955,7 +21975,6 @@ thead{display:table-header-group;}
                               </div>
                             </div>);})}
                         </div>
-                        {!mob&&packedItems.length>0&&<aside style={{width:300,flexShrink:0,position:"sticky",top:84,maxHeight:"calc(100vh - 100px)",overflowY:"auto"}}>{sidebar}</aside>}
                       </div>
                     </>);
                   })()}
