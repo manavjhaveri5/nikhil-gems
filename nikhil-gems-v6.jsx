@@ -6625,6 +6625,21 @@ function VendorPickerField({value,onChange,vendors,onVendorCreated,allowFreeText
   );
 }
 
+// Storage locations run in two numbered series: box numbers ("731") and STK
+// shelves ("STK59"). The next free one is one past the top of the series, written
+// the way the top one is — a lone number far above the rest (a stray 998 while the
+// boxes run to 731) isn't the top. The stock bot numbers boxes by the same rule.
+const LOC_SERIES={box:/^(?:box\s*[-_#]?\s*|#\s*)?(\d{1,5})$/i,stk:/^stk\s*[-_#]?\s*(\d{1,5})$/i};
+const nextLocation=(stock,series)=>{
+  const byNum=new Map();
+  for(const s of stock){const l=String(s.location||"").trim();const m=l.match(LOC_SERIES[series]);if(m)byNum.set(+m[1],l);}
+  const nums=[...byNum.keys()].sort((a,b)=>a-b);
+  if(!nums.length)return series==="stk"?"STK1":"1";
+  let top=nums[nums.length-1];
+  for(let i=nums.length-1;i>0;i--)if(nums[i]-nums[i-1]<=50){top=nums[i];break;}
+  return byNum.get(top).replace(/\d+$/,d=>String(top+1).padStart(d.length,"0"));
+};
+
 function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onStockIdConsumed,startLocationFilter,onLocationConsumed}){
   const t=useT();
   // Capture on mount so clearing the parent prop doesn't lose the value before StockBinsView mounts
@@ -9728,7 +9743,16 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
                   </Field>
                   <Field label="Cost Price (₹)"><input type="number" value={form.costPrice||""} onChange={e=>setForm(f=>({...f,costPrice:e.target.value}))} style={FI} placeholder="0.00"/></Field>
                   <Field label="List Price / USD"><input type="number" value={form.listPrice||""} onChange={e=>setForm(f=>({...f,listPrice:e.target.value}))} style={FI} placeholder="Shopify selling price"/></Field>
-                  <Field label="Storage Location"><input value={form.location||""} onChange={e=>setForm(f=>({...f,location:e.target.value}))} style={FI} placeholder="Bin A1, Shelf B2…" list="loc-list"/><datalist id="loc-list">{[...new Set(stock.map(s=>s.location).filter(Boolean))].map(l=><option key={l} value={l}/>)}</datalist></Field>
+                  <Field label="Storage Location">
+                    <div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:6,alignItems:"center"}}>
+                      <input value={form.location||""} onChange={e=>setForm(f=>({...f,location:e.target.value}))} style={FI} placeholder="Bin A1, Shelf B2…" list="loc-list"/>
+                      {/* Each button shows the next free place in its series; a tap puts it in the field. */}
+                      {[["stk","Next free STK shelf"],["box","Next free box number"]].map(([series,title])=>{const next=nextLocation(stock,series);return(
+                        <button key={series} type="button" title={title} onClick={()=>setForm(f=>({...f,location:next}))} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"5px 8px",cursor:"pointer",fontSize:10,color:C.inkMid,flexShrink:0,whiteSpace:"nowrap"}}>+ {next}</button>
+                      );})}
+                    </div>
+                    <datalist id="loc-list">{[...new Set(stock.map(s=>s.location).filter(Boolean))].map(l=><option key={l} value={l}/>)}</datalist>
+                  </Field>
                 </div>
 
                 {/* ── Lot pricing ──────────────────────────────────────────
