@@ -19185,6 +19185,11 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [shipForm,setShipForm]=useState(null);            // a shipment being sent, edited or received: a draft
   const [invQ,setInvQ]=useState("");                      // searching the export invoices to link
   const [viewLabel,setViewLabel]=useState(null);          // a stock card whose label is open to look at
+  const [cartonView,setCartonView]=useState("all");       // step 3: all | none (in no carton) | a carton's id
+  const [cartonIn,setCartonIn]=useState({});              // step 3: flat numbers being typed into each carton
+  const [cartonMsg,setCartonMsg]=useState({});            // step 3: what each typed number turned out to be
+  const [cartonEditNo,setCartonEditNo]=useState(null);    // step 3: the carton being renumbered
+  const [cartonsOpen,setCartonsOpen]=useState(false);     // step 3, on a phone: the cartons panel open
   const [multEdit,setMultEdit]=useState(null);            // {id, which:"select"|"flat", val} — typing a markup
   // Which stock cards' labels are printed — read from the label sets (Make Labels marks them too).
   const [printedMap,setPrintedMap]=useState(()=>new Map());
@@ -19901,7 +19906,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     await onPatchStockItems?.(Object.fromEntries(pick.map(s=>{
       const p=s.packPrev&&!s.packPrev.showId?s.packPrev:{};
       const m=marketsOf(s);
-      return[s.id,{...Object.fromEntries(SHOW_FIELDS.map(k=>[k,p[k]??""])),region:p.region||"India",shipmentId:"",packedAt:"",packPrev:null,...(m.some(tagMatchesShow)?{}:{market:[...m,show.name]})}];
+      return[s.id,{...Object.fromEntries(SHOW_FIELDS.map(k=>[k,p[k]??""])),region:p.region||"India",shipmentId:"",cartonId:"",packedAt:"",packPrev:null,...(m.some(tagMatchesShow)?{}:{market:[...m,show.name]})}];
     })));
     setPackSel(new Set());
     onToast?.(`↩ ${n} card${n===1?"":"s"} unpacked`);
@@ -19986,28 +19991,138 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   };
   const openSend=ids=>{setInvQ("");setShipForm({mode:"send",ids,pick:plannedShipments[0]?`plan:${plannedShipments[0].id}`:"new:Sea Freight",sentAt:today(),cost:"",costCurrency:"INR",ref:"",eta:"",invoiceId:"",notes:plannedShipments[0]?.notes||""});};
   const openDetails=sh=>{setInvQ("");setShipForm({mode:"edit",id:sh.id,sentAt:sh.sentAt||today(),cost:sh.cost||"",costCurrency:sh.costCurrency||"INR",ref:sh.ref||"",eta:sh.eta||"",invoiceId:sh.invoiceId||"",notes:sh.notes||""});};
-  // "+ Add to ▾" — the shipments on their way, for packed cards that missed one.
-  const addMenuFor=(key,ids,label,style)=>{
-    const open=packMenu?.key===key,n=ids.size;
+  /* A button that opens a short menu of places to put the ticked cards — the
+     shipments on their way (for packed cards that missed one), or the cartons. */
+  const menuFor=(key,title,entries,label,style,disabled=false)=>{
+    const open=packMenu?.key===key;
     // Placed on screen from the button, so it never hangs off an edge.
     const place=el=>{const r=el.getBoundingClientRect(),W=window.innerWidth,H=window.innerHeight,w=Math.min(280,W-16);
       return{key,left:Math.max(8,Math.min(r.right-w,W-w-8)),width:w,...(r.bottom>H-300?{bottom:H-r.top+6}:{top:r.bottom+6})};};
     const item={display:"flex",alignItems:"center",gap:10,width:"100%",background:"none",border:"none",borderRadius:8,padding:"8px 10px",cursor:"pointer",textAlign:"left",fontSize:12.5,color:C.ink};
     return(
       <span style={{position:"relative",display:"inline-flex"}}>
-        <button disabled={!n} onClick={e=>{e.stopPropagation();setPackMenu(open?null:place(e.currentTarget));}} style={style}>{label} ▾</button>
-        {open&&n>0&&<>
+        <button disabled={disabled} onClick={e=>{e.stopPropagation();setPackMenu(open?null:place(e.currentTarget));}} style={style}>{label} ▾</button>
+        {open&&!disabled&&<>
           <div onClick={e=>{e.stopPropagation();setPackMenu(null);}} onWheel={()=>setPackMenu(null)} onTouchMove={()=>setPackMenu(null)} style={{position:"fixed",inset:0,zIndex:960}}/>
           <div onClick={e=>e.stopPropagation()} style={{position:"fixed",left:packMenu.left,width:packMenu.width,...(packMenu.bottom!=null?{bottom:packMenu.bottom}:{top:packMenu.top}),zIndex:961,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 12px 32px rgba(0,0,0,.2)",maxHeight:"60vh",overflowY:"auto",padding:6}}>
-            <div style={{fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,padding:"4px 10px 6px"}}>Add {n} card{n===1?"":"s"} to</div>
-            {onWayShipments.map(sh=>{const c=cardsIn(sh.id).length;return(
-              <button key={sh.id} onClick={()=>addToShipment(ids,sh)} onMouseEnter={e=>e.currentTarget.style.background=C.card} onMouseLeave={e=>e.currentTarget.style.background="none"} style={item}>
-                <span style={{fontSize:18}}>{shipIcon(sh)}</span>
-                <span style={{flex:1,minWidth:0}}><b>{shipLabel(sh)}</b><span style={{display:"block",fontSize:10.5,color:C.inkMid}}>Sent {fmtDate(sh.sentAt)} · {c} card{c===1?"":"s"}</span></span>
-              </button>);})}
+            <div style={{fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,padding:"4px 10px 6px"}}>{title}</div>
+            {entries.map(en=>(
+              <button key={en.key} onClick={()=>{setPackMenu(null);en.onClick();}} onMouseEnter={e=>e.currentTarget.style.background=C.card} onMouseLeave={e=>e.currentTarget.style.background="none"} style={{...item,color:en.faint?C.inkMid:C.ink}}>
+                <span style={{fontSize:18}}>{en.icon}</span>
+                <span style={{flex:1,minWidth:0}}>{en.faint?en.title:<b>{en.title}</b>}{en.sub&&<span style={{display:"block",fontSize:10.5,color:C.inkMid}}>{en.sub}</span>}</span>
+              </button>))}
           </div>
         </>}
       </span>);
+  };
+  const addMenuFor=(key,ids,label,style)=>menuFor(key,`Add ${ids.size} card${ids.size===1?"":"s"} to`,
+    onWayShipments.map(sh=>{const c=cardsIn(sh.id).length;return{key:sh.id,icon:shipIcon(sh),title:shipLabel(sh),sub:`Sent ${fmtDate(sh.sentAt)} · ${c} card${c===1?"":"s"}`,onClick:()=>addToShipment(ids,sh)};}),label,style,!ids.size);
+  /* ── Cartons ─────────────────────────────────────────────────────────
+     Flats travel in cartons, three or four to one. A carton is numbered
+     (1, 2, 3… — any number can be changed) and holds the packed flats put in
+     it, by ticking them or by typing the number on each flat as it goes in.
+     Typing is the last check before a carton is closed: a number that isn't
+     a flat packed for this show says so, and says what it is instead. */
+  const cartons=show.cartons||[];
+  const cartonById=new Map(cartons.map(c=>[c.id,c]));
+  const cartonOf=s=>(s.cartonId&&cartonById.get(s.cartonId))||null;
+  const cartonName=c=>`Carton ${c?.no||"?"}`;
+  const inCarton=id=>shipItems.filter(s=>s.cartonId===id);
+  const cartonSorted=cartons.slice().sort((a,b)=>String(a.no).localeCompare(String(b.no),undefined,{numeric:true}));
+  // A carton whose flats have all gone with a shipment is closed here.
+  const cartonGone=c=>{const cs=inCarton(c.id);return cs.length>0&&cs.every(s=>!isPacked(s));};
+  const saveCartons=fn=>onPatchShow?.(show.id,s=>({cartons:fn(s.cartons||[])}));
+  const newCarton=async()=>{
+    const nums=cartons.map(c=>parseInt(c.no,10)).filter(n=>n>0);
+    const c={id:uid(),no:String(nums.length?Math.max(...nums)+1:1),kg:"",createdAt:new Date().toISOString()};
+    await saveCartons(list=>[...list,c]);
+    return c;
+  };
+  const putInCarton=async(ids,c)=>{
+    const pick=packedItems.filter(s=>ids.has(s.id)&&s.cartonId!==c.id);
+    if(pick.length)await onPatchStockItems?.(Object.fromEntries(pick.map(s=>[s.id,{cartonId:c.id}])));
+    setPackSel(new Set());
+    onToast?.(pick.length?`📦 ${boxCount(pick)||pick.length} flat${(boxCount(pick)||pick.length)===1?"":"s"} into ${cartonName(c)}`:`Already in ${cartonName(c)}`);
+  };
+  const putInNewCarton=async ids=>{const c=await newCarton();await putInCarton(ids,c);};
+  const takeOutOfCarton=async ids=>{
+    const pick=packedItems.filter(s=>ids.has(s.id)&&s.cartonId);if(!pick.length)return;
+    await onPatchStockItems?.(Object.fromEntries(pick.map(s=>[s.id,{cartonId:""}])));
+    setPackSel(new Set());
+  };
+  const flatHit=(s,t)=>/^\d+$/.test(t)?(String(s.location||"").match(/\d+/g)||[]).some(n=>+n===+t):String(s.location||"").trim().toLowerCase()===t.toLowerCase();
+  // "301, 303 307": each number checked against the flats packed for this show, and the packed ones put in.
+  const addByNumber=async(c,text)=>{
+    const nums=[...new Set(String(text||"").split(/[\s,;]+/).map(t=>t.trim().replace(/^box\s*/i,"")).filter(Boolean))];
+    if(!nums.length)return;
+    const add=[],lines=[];
+    for(const t of nums){
+      const here=packedItems.filter(s=>flatHit(s,t));
+      if(here.length){
+        const from=[...new Set(here.filter(s=>s.cartonId&&s.cartonId!==c.id).map(s=>cartonName(cartonOf(s))))];
+        add.push(...here.filter(s=>s.cartonId!==c.id));
+        lines.push({ok:true,text:here.every(s=>s.cartonId===c.id)?`${t} — already in this carton`:`${t} — ${[...new Set(here.map(s=>s.material||"Item"))].join(", ")}${from.length?` (moved from ${from.join(", ")})`:""}`});
+        continue;
+      }
+      const gone=shipItems.filter(s=>flatHit(s,t));
+      const labelled=shipTagged.filter(s=>flatHit(s,t));
+      const other=stock.filter(s=>flatHit(s,t)&&!s.soldDate);
+      const sold=stock.filter(s=>flatHit(s,t)&&s.soldDate);
+      const what=list=>[...new Set(list.map(s=>s.material||"Item"))].slice(0,2).join(", ");
+      lines.push({ok:false,text:gone.length?`${t} — ${what(gone)}, already shipped`
+        :labelled.length?`${t} — ${what(labelled)}, not marked packed yet (step 2)`
+        :other.length?`${t} — ${what(other)}, in stock but not for ${show.name}`
+        :sold.length?`${t} — ${what(sold)}, sold`
+        :`${t} — no flat with this number in stock`});
+    }
+    if(add.length)await onPatchStockItems?.(Object.fromEntries(add.map(s=>[s.id,{cartonId:c.id}])));
+    setCartonMsg(m=>({...m,[c.id]:lines}));setCartonIn(m=>({...m,[c.id]:""}));
+  };
+  const renumberCarton=async(c,no)=>{
+    no=String(no||"").trim();setCartonEditNo(null);
+    if(!no||no===String(c.no))return;
+    if(cartons.some(x=>x.id!==c.id&&String(x.no).toLowerCase()===no.toLowerCase())){onToast?.(`There is already a Carton ${no}`);return;}
+    await saveCartons(list=>list.map(x=>x.id===c.id?{...x,no}:x));
+  };
+  const delCarton=async c=>{
+    const cs=inCarton(c.id).filter(isPacked);
+    if(cs.length&&!confirm(`Empty and delete ${cartonName(c)}? Its ${boxCount(cs)||cs.length} flat${(boxCount(cs)||cs.length)===1?"":"s"} stay packed, in no carton.`))return;
+    if(cs.length)await onPatchStockItems?.(Object.fromEntries(cs.map(s=>[s.id,{cartonId:""}])));
+    await saveCartons(list=>list.filter(x=>x.id!==c.id));
+    if(cartonView===c.id)setCartonView("all");
+  };
+  const cartonMenuFor=(ids,label,style)=>menuFor("carton",`Put ${boxCount(packedItems.filter(s=>ids.has(s.id)))||ids.size} flat${(boxCount(packedItems.filter(s=>ids.has(s.id)))||ids.size)===1?"":"s"} in`,
+    [...cartonSorted.filter(c=>!cartonGone(c)).map(c=>{const cs=inCarton(c.id);return{key:c.id,icon:"📦",title:cartonName(c),sub:`${boxCount(cs)} flat${boxCount(cs)===1?"":"s"}${c.kg?` · ${c.kg} kg`:""}`,onClick:()=>putInCarton(ids,c)};}),
+     {key:"new",icon:"＋",title:"A new carton",faint:true,onClick:()=>putInNewCarton(ids)}],label,style,!ids.size);
+  // The packing list: every carton and what is in it, then whatever is packed and in none.
+  const printPackingList=()=>{
+    const esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+    const byFlat=(a,b)=>String(a.location||"").localeCompare(String(b.location||""),undefined,{numeric:true})||shipSort(a,b);
+    const loose=packedItems.filter(s=>!cartonOf(s)).sort(byFlat);
+    const parts=cartonSorted.map(c=>({c,cards:inCarton(c.id).sort(byFlat)})).filter(x=>x.cards.length);
+    if(!parts.length&&!loose.length){onToast?.("Nothing packed to list yet");return;}
+    const row=s=>`<tr><td class="bx">${esc(s.location)||"&mdash;"}</td><td><b>${esc(s.material||"Item")}</b>${s.shape?` · ${esc(s.shape)}`:""}${s.size?` · ${esc(s.size)}`:""}</td><td>${esc(flowQtyLines(s).join(" · "))}</td><td class="n">${s.vendor?esc(s.vendor):""}</td></tr>`;
+    const block=(title,sub,cards)=>`<section><h2>${esc(title)} <span>${esc(sub)}</span></h2><table><thead><tr><th>Flat</th><th>Item</th><th>Quantity</th><th class="n">Vendor</th></tr></thead><tbody>${cards.map(row).join("")}</tbody></table></section>`;
+    const sh=c=>{const cs=inCarton(c.id),sent=cs.map(shipOf).find(Boolean);return sent?` · sent with the ${shipLabel(sent)} ${fmtDate(sent.sentAt)}`:"";};
+    const allCards=[...parts.flatMap(x=>x.cards),...loose];
+    const w=window.open("","_blank");if(!w){onToast?.("Allow pop-ups to open the packing list");return;}
+    w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Packing list — ${esc(show.name)}</title><style>
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;color:#1a1a1a;margin:0;background:#f2ede7;padding:20px}
+.bar{max-width:210mm;margin:0 auto 14px;background:#fff;border-radius:10px;padding:12px 18px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+.bar button{background:#8B6F47;color:#fff;border:0;border-radius:6px;padding:8px 16px;font-size:13px;cursor:pointer}
+.sheet{width:210mm;margin:0 auto;background:#fff;padding:12mm 13mm}
+h1{font-size:18pt;margin:0}.sub{color:#6b6157;font-size:10pt;margin:3px 0 8mm}
+h2{font-size:12pt;margin:6mm 0 2mm;border-bottom:.5mm solid #1a1a1a;padding-bottom:1.5mm}h2 span{font-weight:400;color:#6b6157;font-size:9.5pt}
+table{width:100%;border-collapse:collapse}th{font-size:7.5pt;letter-spacing:.12em;text-transform:uppercase;color:#8a8177;text-align:left;padding:0 2mm 1.5mm 0}
+td{font-size:9.5pt;padding:1.6mm 2mm 1.6mm 0;border-bottom:.2mm solid #eee;vertical-align:top}.bx{font-weight:700;white-space:nowrap;width:16mm}.n{text-align:right}
+section{break-inside:avoid}.warn h2{color:#a0461b;border-color:#a0461b}
+@media print{body{background:#fff;padding:0}.bar{display:none}.sheet{width:auto;padding:10mm}@page{size:A4;margin:0}}
+</style></head><body><div class="bar"><span>${esc(show.name)} · ${parts.length} carton${parts.length===1?"":"s"} · ${boxCount(allCards)} flats</span><button onclick="window.print()">🖨 Print / Save as PDF</button></div>
+<div class="sheet"><h1>Packing list</h1><div class="sub">${esc(show.name)} · ${parts.length} carton${parts.length===1?"":"s"} · ${boxCount(allCards)} flats · ${allCards.length} stock cards · ${esc(fmtDate(today()))}</div>
+${parts.map(({c,cards})=>block(cartonName(c),`${boxCount(cards)} flat${boxCount(cards)===1?"":"s"}${c.kg?` · ${c.kg} kg gross`:""}${sh(c)}`,cards)).join("")}
+${loose.length?`<div class="warn">${block("Packed, in no carton",`${boxCount(loose)} flat${boxCount(loose)===1?"":"s"}`,loose)}</div>`:""}
+</div></body></html>`);
+    w.document.close();
   };
   // A small card for packed and on-the-way lists: photo, box, stone, quantity, value.
   const miniCard=(s,on,toggle,foot)=>{const cov=stockCover(s);return(
@@ -20016,6 +20131,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
         {cov&&<img src={thumbUrl(cov,400)} alt="" loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
         <div style={{position:"absolute",top:8,left:8,width:22,height:22,borderRadius:6,background:on?C.amber:"rgba(255,255,255,.92)",display:"grid",placeItems:"center",color:"#fff",fontSize:13,fontWeight:800,boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}>{on?"✓":""}</div>
         {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.92)",borderRadius:12,padding:"2px 9px",fontSize:11.5,fontWeight:800}}>Box {s.location}</div>}
+        {cartonOf(s)&&<div style={{position:"absolute",bottom:8,left:8,background:"rgba(26,19,8,.8)",color:"#fff",borderRadius:12,padding:"2px 9px",fontSize:11,fontWeight:750}}>📦 {cartonName(cartonOf(s))}</div>}
       </div>
       <div style={{padding:"8px 11px 10px"}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{textTransform:"uppercase",fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
@@ -21513,7 +21629,8 @@ thead{display:table-header-group;}
                     // The listed boxes or words that find nothing in this step.
                     const base=step==="sent"?[...onWayItems,...shipSent]:step==="packed"?packedItems:step==="ready"?shipTagged.filter(s=>s.labelMadeAt):shipTagged;
                     const pb=boxCount(packedItems);
-                    const packedSub=packedItems.length?`${pb?`${pb} box${pb===1?"":"es"} · `:""}send a shipment`:"Send shipments from here";
+                    const pc=new Set(packedItems.map(s=>s.cartonId).filter(id=>cartonById.has(id))).size,pl=boxCount(packedItems.filter(s=>!cartonOf(s)));
+                    const packedSub=packedItems.length?`${pb?`${pb} flat${pb===1?"":"s"} · `:""}${pc?`${pc} carton${pc===1?"":"s"}${pl?` · ${pl} loose`:""}`:"no cartons yet"}`:"Cartons, then send";
                     const missing=(shipTerms||[]).filter(t=>!base.some(s=>shipTermHit(s,t)));
                     return(
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
@@ -21726,50 +21843,120 @@ thead{display:table-header-group;}
                       </div>}
                     </>);
                   })()}
-                  {/* PACKED — committed to the show, not shipped. Tick what goes, or send
-                      it all, as one shipment with its date, freight and papers. */}
+                  {/* PACKED — committed to the show, not shipped. The flats go into
+                      numbered cartons (the sidebar), and a shipment is sent from the
+                      ticked cards — or all of them — with its date, freight and papers. */}
                   {shipStepNow==="packed"&&(()=>{
                     const dayOf=s=>String(s.packedAt||s.sentAt||"").slice(0,10);
                     const byBox=(a,b)=>String(a.location||"").localeCompare(String(b.location||""),undefined,{numeric:true})||shipSort(a,b);
-                    const visible=packedItems.filter(matchQ);
-                    // Only ticked cards on screen count — a search hides the rest from sending.
+                    const view=cartonView==="all"||cartonView==="none"||cartonById.has(cartonView)?cartonView:"all";
+                    const inView=s=>view==="all"||(view==="none"?!cartonOf(s):s.cartonId===view);
+                    const visible=packedItems.filter(matchQ).filter(inView);
+                    // Only ticked cards on screen count — a search or a carton filter hides the rest.
                     const sel=visible.filter(s=>packSel.has(s.id));
+                    const selIds=new Set(sel.map(s=>s.id));
                     const toSend=sel.length?sel:visible;
                     const allOn=sel.length===visible.length&&visible.length>0;
-                    const kg=flowSentKgTotal(packedItems),boxes=boxCount(packedItems);
+                    const kg=flowSentKgTotal(packedItems),flats=boxCount(packedItems);
+                    const loose=packedItems.filter(s=>!cartonOf(s));
                     const groups=[];
-                    visible.slice().sort((a,b)=>dayOf(b).localeCompare(dayOf(a))||byBox(a,b)).forEach(s=>{const d=dayOf(s),g=groups[groups.length-1];g&&g.day===d?g.cards.push(s):groups.push({day:d,cards:[s]});});
+                    // In a carton's view, its flats in number order; otherwise by the day they were packed.
+                    if(view!=="all"&&view!=="none")groups.push({day:"",title:cartonName(cartonById.get(view)),cards:visible.slice().sort(byBox)});
+                    else visible.slice().sort((a,b)=>dayOf(b).localeCompare(dayOf(a))||byBox(a,b)).forEach(s=>{const d=dayOf(s),g=groups[groups.length-1];g&&g.day===d?g.cards.push(s):groups.push({day:d,cards:[s]});});
                     const ghost={background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:C.ink};
+                    const small={background:"none",border:"none",padding:0,fontSize:11,fontWeight:700,cursor:"pointer"};
+                    const live=cartonSorted.filter(c=>!cartonGone(c)),gone=cartonSorted.filter(cartonGone);
+                    // The cartons: a floating sidebar beside the flats (a panel above them on a phone).
+                    const sidebar=(
+                      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,boxShadow:"var(--e-1)",overflow:"hidden"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,padding:"11px 12px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
+                          <b style={{flex:1,fontSize:13.5,color:C.ink}}>📦 Cartons <span style={{fontWeight:600,color:C.inkMid}}>· {live.length}</span></b>
+                          {packedItems.length>0&&<button onClick={printPackingList} title="Every carton and what is in it" style={{...small,color:C.blue}}>🖨 Packing list</button>}
+                          {isAdmin&&<button onClick={newCarton} style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11.5,fontWeight:750,cursor:"pointer"}}>+ New</button>}
+                        </div>
+                        <div style={{display:"flex",gap:6,padding:"9px 12px",flexWrap:"wrap",borderBottom:`1px solid ${C.border}`}}>
+                          {[["all",`All packed · ${flats}`],["none",`In no carton · ${boxCount(loose)}`]].map(([k,l])=>(
+                            <button key={k} onClick={()=>{setCartonView(k);setPackSel(new Set());}} style={{fontSize:11.5,fontWeight:700,borderRadius:14,padding:"4px 10px",cursor:"pointer",border:`1px solid ${view===k?(k==="none"&&loose.length?C.amber:C.ink):C.border}`,background:view===k?(k==="none"&&loose.length?C.amberBg:C.ink):"transparent",color:view===k&&!(k==="none"&&loose.length)?"#fff":k==="none"&&loose.length?"#9a5a12":C.inkMid}}>{l}</button>))}
+                        </div>
+                        {!live.length&&<div style={{fontSize:12,color:C.inkMid,padding:"12px",lineHeight:1.5}}>No cartons yet. Make one with <b>+ New</b>, then tick flats and put them in — or type each flat's number as it goes in.</div>}
+                        {live.map(c=>{
+                          const cs=inCarton(c.id).filter(isPacked),locs=[...new Set(cs.map(s=>String(s.location||"").trim()||"—"))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+                          const on=view===c.id,ck=flowSentKgTotal(cs),msg=cartonMsg[c.id];
+                          return(
+                          <div key={c.id} style={{borderBottom:`1px solid ${C.border}`,padding:"10px 12px",background:on?"#FBF3E4":"transparent"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              {cartonEditNo===c.id
+                                ?<span style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:13.5,fontWeight:750}}>Carton<input autoFocus defaultValue={c.no} onBlur={e=>renumberCarton(c,e.target.value)} onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();if(e.key==="Escape")setCartonEditNo(null);}} style={{...FI,width:56,padding:"2px 6px",fontSize:mob?16:13}}/></span>
+                                :<button onClick={()=>{setCartonView(on?"all":c.id);setPackSel(new Set());}} title={on?"Show all packed flats":"Show only this carton's flats"} style={{background:"none",border:"none",padding:0,fontSize:13.5,fontWeight:750,color:C.ink,cursor:"pointer"}}>{cartonName(c)}</button>}
+                              {isAdmin&&cartonEditNo!==c.id&&<button onClick={()=>setCartonEditNo(c.id)} title="Change its number" style={{...small,color:C.inkFaint}}>✎</button>}
+                              <span style={{flex:1}}/>
+                              <span style={{fontSize:11,color:C.inkMid}}>{locs.length} flat{locs.length===1?"":"s"}{ck>0?` · ${fmtFlowNum(+ck.toFixed(2))} kg`:""}</span>
+                            </div>
+                            {locs.length>0&&<div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>
+                              {locs.map(l=><span key={l} style={{display:"inline-flex",alignItems:"center",gap:3,fontSize:11,fontWeight:700,background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"1px 4px 1px 7px"}}>{l}
+                                {isAdmin&&<button onClick={()=>takeOutOfCarton(new Set(cs.filter(s=>(String(s.location||"").trim()||"—")===l).map(s=>s.id)))} title={`Take flat ${l} out of this carton`} style={{background:"none",border:"none",padding:"0 2px",fontSize:12,lineHeight:1,color:C.inkFaint,cursor:"pointer"}}>×</button>}</span>)}
+                            </div>}
+                            {isAdmin&&<>
+                              {sel.length>0&&<button onClick={()=>putInCarton(selIds,c)} style={{marginTop:7,width:"100%",background:"#24518F",color:"#fff",border:"none",borderRadius:7,padding:"6px 8px",fontSize:12,fontWeight:750,cursor:"pointer"}}>+ Put {boxCount(sel)||sel.length} ticked flat{(boxCount(sel)||sel.length)===1?"":"s"} here</button>}
+                              <input value={cartonIn[c.id]||""} onChange={e=>setCartonIn(m=>({...m,[c.id]:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addByNumber(c,e.currentTarget.value);}}} inputMode="numeric" placeholder="Type flat no. as it goes in ↵"
+                                style={{...FI,width:"100%",boxSizing:"border-box",marginTop:7,padding:"6px 9px",fontSize:mob?16:12}}/>
+                            </>}
+                            {msg?.length>0&&<div style={{marginTop:5,display:"grid",gap:2}}>
+                              {msg.map((m,i)=><div key={i} style={{fontSize:11,color:m.ok?"#0f7a55":C.red,lineHeight:1.35}}>{m.ok?"✓":"✗"} {m.text}</div>)}
+                              <button onClick={()=>setCartonMsg(x=>({...x,[c.id]:null}))} style={{...small,color:C.inkFaint,justifySelf:"start"}}>Clear</button>
+                            </div>}
+                            <div style={{display:"flex",alignItems:"center",gap:8,marginTop:7,fontSize:11,color:C.inkMid}}>
+                              <label style={{display:"inline-flex",alignItems:"center",gap:4}}>Gross<input key={`kg-${c.id}-${c.kg||""}`} defaultValue={c.kg||""} disabled={!isAdmin} onBlur={e=>{const v=e.target.value.replace(/[^\d.]/g,"");if(v!==String(c.kg||""))saveCartons(list=>list.map(x=>x.id===c.id?{...x,kg:v}:x));}} inputMode="decimal" placeholder="—" style={{...FI,width:56,padding:"2px 6px",fontSize:mob?16:11.5}}/>kg</label>
+                              <span style={{flex:1}}/>
+                              {cs.length>0&&<button onClick={()=>{setCartonView(c.id);setPackSel(new Set(cs.map(s=>s.id)));}} title="Tick this carton's flats — to send them, say" style={{...small,color:C.blue}}>Tick these</button>}
+                              {isAdmin&&<button onClick={()=>delCarton(c)} style={{...small,color:C.red}}>Delete</button>}
+                            </div>
+                          </div>);
+                        })}
+                        {gone.length>0&&<div style={{padding:"9px 12px",fontSize:11,color:C.inkFaint,lineHeight:1.5}}>Shipped: {gone.map(c=>{const sh=inCarton(c.id).map(shipOf).find(Boolean);return`${cartonName(c)}${sh?` (${shipLabel(sh)})`:""}`;}).join(", ")}</div>}
+                      </div>);
                     return(<>
                       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#FBF3E4",border:"1px solid #8B6F4755",borderRadius:12,padding:"12px 14px"}}>
                         <div style={{flex:"1 1 240px",minWidth:0}}>
-                          <div style={{fontSize:14,fontWeight:750,color:C.ink}}>{packedItems.length} card{packedItems.length===1?"":"s"} packed, not shipped{boxes?` · ${boxes} box${boxes===1?"":"es"}`:""}{kg>0?` · ${fmtFlowNum(+kg.toFixed(2))} kg`:""}</div>
-                          <div style={{fontSize:11.5,color:C.inkMid}}>Tick what goes — or send them all — as one shipment, with its date, freight and papers. Sent, it moves to step 4 until it's received.{plannedShipments.length?<> Planned in Prep: {plannedShipments.map(sh=>`${shipIcon(sh)} ${shipLabel(sh)}${sh.date?` · send by ${fmtDate(sh.date)}`:""}`).join(", ")}.</>:null}</div>
+                          <div style={{fontSize:14,fontWeight:750,color:C.ink}}>{flats||packedItems.length} flat{(flats||packedItems.length)===1?"":"s"} packed, not shipped{kg>0?` · ${fmtFlowNum(+kg.toFixed(2))} kg`:""}{packedItems.length?<span style={{fontWeight:600,color:loose.length?"#9a5a12":"#0f7a55"}}> · {loose.length?`${boxCount(loose)} in no carton`:"all in cartons"}</span>:null}</div>
+                          <div style={{fontSize:11.5,color:C.inkMid}}>Put the flats in numbered cartons — tick them, or type each flat's number as it goes in to check it's packed stock. Then tick what goes, or send it all, as one shipment.{plannedShipments.length?<> Planned in Prep: {plannedShipments.map(sh=>`${shipIcon(sh)} ${shipLabel(sh)}${sh.date?` · send by ${fmtDate(sh.date)}`:""}`).join(", ")}.</>:null}</div>
                         </div>
                         {visible.length>0&&<button onClick={()=>setPackSel(allOn?new Set():new Set(visible.map(s=>s.id)))} style={ghost}>{allOn?"Untick all":`Tick all ${visible.length}`}</button>}
-                        {isAdmin&&toSend.length>0&&<button onClick={()=>openSend(toSend.map(s=>s.id))} style={{background:toSend.length?"#24518F":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:toSend.length?"pointer":"default"}}>🚚 Send {sel.length?sel.length:`all ${toSend.length}`} as a shipment</button>}
+                        {isAdmin&&toSend.length>0&&<button onClick={()=>openSend(toSend.map(s=>s.id))} style={{background:"#24518F",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:"pointer"}}>🚚 Send {sel.length?sel.length:`all ${toSend.length}`} as a shipment</button>}
                       </div>
                       {sel.length>0&&(
                         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:"#1e293b",color:"#fff",borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:12,position:"sticky",top:8,zIndex:30}}>
-                          <b>{sel.length} ticked</b><span style={{opacity:.75}}>· {boxCount(sel)} box{boxCount(sel)===1?"":"es"}</span>
+                          <b>{sel.length} ticked</b><span style={{opacity:.75}}>· {boxCount(sel)} flat{boxCount(sel)===1?"":"s"}</span>
                           <span style={{flex:1}}/>
+                          {isAdmin&&cartonMenuFor(selIds,"📦 Into carton",{background:"#8B6F47",color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"})}
+                          {isAdmin&&sel.some(s=>s.cartonId)&&<button onClick={()=>takeOutOfCarton(selIds)} style={{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>Out of carton</button>}
                           {isAdmin&&<button onClick={()=>openSend(sel.map(s=>s.id))} style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🚚 Send these</button>}
-                          {isAdmin&&onWayShipments.length>0&&addMenuFor("add",new Set(sel.map(s=>s.id)),"+ Add to",{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"})}
-                          {isAdmin&&<button onClick={()=>unpack(new Set(sel.map(s=>s.id)))} title="Back to India stock, still tagged for this show" style={{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>↩ Unpack</button>}
+                          {isAdmin&&onWayShipments.length>0&&addMenuFor("add",selIds,"+ Add to",{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"})}
+                          {isAdmin&&<button onClick={()=>unpack(selIds)} title="Back to India stock, still tagged for this show" style={{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>↩ Unpack</button>}
                           <button onClick={()=>setPackSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:6,padding:"6px 9px",fontSize:12,cursor:"pointer"}}>✕</button>
                         </div>)}
-                      {!packedItems.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing packed and waiting. Mark labelled cards packed in step 2.{onWayItems.length?<> {onWayItems.length} card{onWayItems.length===1?" is":"s are"} on the way — <button onClick={()=>setShipStep("sent")} style={{background:"none",border:"none",padding:0,font:"inherit",color:C.blue,fontWeight:700,cursor:"pointer"}}>step 4</button>.</>:null}</div>:
-                      !visible.length?<div style={{fontSize:12,color:C.inkFaint,padding:14,textAlign:"center"}}>No packed card matches the search.</div>:
-                      groups.map(g=>{const ids=g.cards.map(s=>s.id),on=ids.every(id=>packSel.has(id)),gk=flowSentKgTotal(g.cards),gb=boxCount(g.cards);return(
-                        <div key={g.day||"undated"} style={{marginBottom:18}}>
-                          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",borderBottom:`1px solid ${C.border}`,padding:"2px 2px 8px",marginBottom:12}}>
-                            <div style={{flex:1,minWidth:180,fontSize:13.5,fontWeight:750,color:C.ink}}>📦 Packed {g.day?fmtDate(g.day):"— date not recorded"} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"}{gb?` · ${gb} box${gb===1?"":"es"}`:""}{gk>0?` · ${fmtFlowNum(+gk.toFixed(2))} kg`:""}</span></div>
-                            <button onClick={()=>setPackSel(prev=>{const n=new Set(prev);ids.forEach(id=>on?n.delete(id):n.add(id));return n;})} style={{...ghost,padding:"5px 10px",fontSize:11.5}}>{on?"Untick these":"Tick these"}</button>
-                          </div>
-                          <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(190px,1fr))",gap:10}}>
-                            {g.cards.map(s=>miniCard(s,packSel.has(s.id),()=>setPackSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;}),s.vendor||""))}
-                          </div>
-                        </div>);})}
+                      {mob&&packedItems.length>0&&<div style={{marginBottom:12}}>
+                        <button onClick={()=>setCartonsOpen(o=>!o)} style={{...ghost,width:"100%",display:"flex",justifyContent:"space-between"}}><span>📦 Cartons · {live.length}{loose.length?` · ${boxCount(loose)} flats in none`:""}</span><span>{cartonsOpen?"▴":"▾"}</span></button>
+                        {cartonsOpen&&<div style={{marginTop:8}}>{sidebar}</div>}
+                      </div>}
+                      <div style={{display:"flex",gap:16,alignItems:"flex-start"}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          {!packedItems.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing packed and waiting. Mark labelled cards packed in step 2.{onWayItems.length?<> {onWayItems.length} card{onWayItems.length===1?" is":"s are"} on the way — <button onClick={()=>setShipStep("sent")} style={{background:"none",border:"none",padding:0,font:"inherit",color:C.blue,fontWeight:700,cursor:"pointer"}}>step 4</button>.</>:null}</div>:
+                          !visible.length?<div style={{fontSize:12,color:C.inkFaint,padding:14,textAlign:"center"}}>{view==="none"?"Every packed flat is in a carton.":view!=="all"?"Nothing in this carton yet — tick flats and put them in, or type their numbers in the sidebar.":"No packed card matches the search."}</div>:
+                          groups.map(g=>{const ids=g.cards.map(s=>s.id),on=ids.every(id=>packSel.has(id)),gk=flowSentKgTotal(g.cards),gb=boxCount(g.cards);return(
+                            <div key={g.title||g.day||"undated"} style={{marginBottom:18}}>
+                              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",borderBottom:`1px solid ${C.border}`,padding:"2px 2px 8px",marginBottom:12}}>
+                                <div style={{flex:1,minWidth:180,fontSize:13.5,fontWeight:750,color:C.ink}}>📦 {g.title||`Packed ${g.day?fmtDate(g.day):"— date not recorded"}`} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"}{gb?` · ${gb} flat${gb===1?"":"s"}`:""}{gk>0?` · ${fmtFlowNum(+gk.toFixed(2))} kg`:""}</span></div>
+                                {g.title&&<button onClick={()=>setCartonView("all")} style={{...ghost,padding:"5px 10px",fontSize:11.5}}>Show all</button>}
+                                <button onClick={()=>setPackSel(prev=>{const n=new Set(prev);ids.forEach(id=>on?n.delete(id):n.add(id));return n;})} style={{...ghost,padding:"5px 10px",fontSize:11.5}}>{on?"Untick these":"Tick these"}</button>
+                              </div>
+                              <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(190px,1fr))",gap:10}}>
+                                {g.cards.map(s=>miniCard(s,packSel.has(s.id),()=>setPackSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;}),s.vendor||""))}
+                              </div>
+                            </div>);})}
+                        </div>
+                        {!mob&&packedItems.length>0&&<aside style={{width:300,flexShrink:0,position:"sticky",top:84,maxHeight:"calc(100vh - 100px)",overflowY:"auto"}}>{sidebar}</aside>}
+                      </div>
                     </>);
                   })()}
                   {/* A card's label, to look at. */}
@@ -21822,13 +22009,24 @@ thead{display:table-header-group;}
                     const hits=invs.filter(i=>!q||`${invText(i)} ${i.portDischarge||""}`.toLowerCase().includes(q)).slice(0,6);
                     const linked=invs.find(i=>i.id===f.invoiceId)||(f.invoiceId?{id:f.invoiceId,invNo:sh?.invoiceNo||"(invoice)"}:null);
                     const ok=!!f.sentAt&&(f.mode!=="send"||sendCards.length>0);
-                    return shell(shipIcon(picked),f.mode==="send"?"Send a shipment":`${shipLabel(sh)} details`,`${sendCards.length} card${sendCards.length===1?"":"s"}${sb?` · ${sb} box${sb===1?"":"es"}`:""}${sk>0?` · ${fmtFlowNum(+sk.toFixed(2))} kg`:""}${f.mode!=="send"?` · sent ${fmtDate(sh.sentAt)}`:""}`,
+                    return shell(shipIcon(picked),f.mode==="send"?"Send a shipment":`${shipLabel(sh)} details`,`${sendCards.length} card${sendCards.length===1?"":"s"}${sb?` · ${sb} flat${sb===1?"":"s"}`:""}${sk>0?` · ${fmtFlowNum(+sk.toFixed(2))} kg`:""}${f.mode!=="send"?` · sent ${fmtDate(sh.sentAt)}`:""}`,
                       <>
                         {f.mode==="send"&&<label style={{display:"block"}}><span style={lab}>Shipment</span>
                           <select value={f.pick} onChange={e=>{const v=e.target.value;setShipForm(x=>({...x,pick:v,...(v.startsWith("plan:")?{notes:shipmentById.get(v.slice(5))?.notes||x.notes}:{})}));}} style={{...inp,cursor:"pointer"}}>
                             {plannedShipments.map(p=><option key={p.id} value={`plan:${p.id}`}>{shipIcon(p)} {shipLabel(p)} — planned in Prep{p.date?`, send by ${fmtDate(p.date)}`:""}</option>)}
                             {SHIP_TYPES.map(([t,ic,l])=><option key={t} value={`new:${t}`}>{ic} New {l.toLowerCase()} shipment</option>)}
                           </select></label>}
+                        {/* Which cartons go — and what would be left loose or split. */}
+                        {f.mode==="send"&&sendCards.length>0&&(()=>{
+                          const cs=[...new Set(sendCards.map(s=>s.cartonId).filter(id=>cartonById.has(id)))].map(id=>cartonById.get(id)).sort((a,b)=>String(a.no).localeCompare(String(b.no),undefined,{numeric:true}));
+                          const loose=sendCards.filter(s=>!cartonOf(s));
+                          const split=cs.filter(c=>inCarton(c.id).some(s=>isPacked(s)&&!sendCards.includes(s)));
+                          return(<div style={{fontSize:12,color:C.inkMid,background:C.card,border:`1px solid ${loose.length||split.length?"#8B6F4766":C.border}`,borderRadius:8,padding:"8px 10px",lineHeight:1.5}}>
+                            <div>📦 {cs.length?`${cs.length} carton${cs.length===1?"":"s"}: ${cs.map(c=>c.no).join(", ")}`:"In no carton yet"}</div>
+                            {loose.length>0&&cs.length>0&&<div style={{color:"#9a5a12",fontWeight:700}}>⚠ {boxCount(loose)||loose.length} flat{(boxCount(loose)||loose.length)===1?" isn't":"s aren't"} in a carton</div>}
+                            {split.length>0&&<div style={{color:"#9a5a12",fontWeight:700}}>⚠ {split.map(cartonName).join(", ")} {split.length===1?"has":"have"} flats not ticked — they'd stay behind</div>}
+                          </div>);
+                        })()}
                         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                           <label style={{display:"block"}}><span style={lab}>Sent on</span><input type="date" value={f.sentAt||""} onChange={e=>set("sentAt",e.target.value)} style={inp}/></label>
                           <label style={{display:"block"}}><span style={lab}>Due to arrive · optional</span><input type="date" value={f.eta||""} onChange={e=>set("eta",e.target.value)} style={inp}/></label>
@@ -21890,7 +22088,7 @@ thead{display:table-header-group;}
                                 <span style={{fontSize:11,fontWeight:750,borderRadius:10,padding:"2px 9px",background:"#DCE7F7",color:"#24518F"}}>🚚 On the way · sent {fmtDate(sh.sentAt)}</span>
                                 {sh.eta&&<span style={{fontSize:11,color:C.inkMid}}>due {fmtDate(sh.eta)}</span>}
                               </div>
-                              <div style={{fontSize:12,color:C.inkMid,marginTop:4}}><b style={{color:C.ink}}>{all.length} card{all.length===1?"":"s"}</b>{boxes?` · ${boxes} box${boxes===1?"":"es"}`:""}{kg>0?` · ${fmtFlowNum(+kg.toFixed(2))} kg`:""}{costInr>0?` · cost ₹${Math.round(costInr).toLocaleString("en-IN")}`:""}{valUsd>0?` · ${fmtCur(valUsd)} on the table`:""}</div>
+                              <div style={{fontSize:12,color:C.inkMid,marginTop:4}}><b style={{color:C.ink}}>{all.length} card{all.length===1?"":"s"}</b>{boxes?` · ${boxes} flat${boxes===1?"":"s"}`:""}{(()=>{const n=new Set(all.map(s=>s.cartonId).filter(id=>cartonById.has(id))).size;return n?` · ${n} carton${n===1?"":"s"}`:"";})()}{kg>0?` · ${fmtFlowNum(+kg.toFixed(2))} kg`:""}{costInr>0?` · cost ₹${Math.round(costInr).toLocaleString("en-IN")}`:""}{valUsd>0?` · ${fmtCur(valUsd)} on the table`:""}</div>
                               <div style={{fontSize:11.5,color:C.inkMid,marginTop:5,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
                                 {sh.ref&&<span>B/L · AWB <b style={{color:C.ink}}>{sh.ref}</b></span>}
                                 {+sh.cost>0?<span>Freight <b style={{color:C.ink}}>{sh.costCurrency||"INR"} {(+sh.cost).toLocaleString("en-IN")}</b>{booked?<span style={{color:"#0f7a55",fontWeight:700}}> · in Costs</span>:<span style={{color:C.amber,fontWeight:700}}> · not in Costs — open Details and save</span>}</span>:<span style={{color:C.amber}}>No freight cost yet</span>}
