@@ -19163,7 +19163,7 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
   const [readyFilter,setReadyFilter]=useState("all");     // step 2: all | todo (not printed) | printed
   const [packSel,setPackSel]=useState(()=>new Set());     // step 3: packed cards ticked to move or take out
   const [packMenu,setPackMenu]=useState(null);            // the open "pack into…" menu: {key, where it sits on screen}
-  const [shipForm,setShipForm]=useState(null);            // a shipment being marked sent / reached: a draft
+  const [shipForm,setShipForm]=useState(null);            // a shipment being sent, edited or received: a draft
   const [invQ,setInvQ]=useState("");                      // searching the export invoices to link
   const [multEdit,setMultEdit]=useState(null);            // {id, which:"select"|"flat", val} — typing a markup
   // Which stock cards' labels are printed — read from the label sets (Make Labels marks them too).
@@ -19833,119 +19833,141 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     if(cur.dir===first)return{key,dir:first==="desc"?"asc":"desc"};
     return null;
   });
-  /* ── Shipments ─────────────────────────────────────────────────────────
-     The goods for a show travel in shipments — the sea freight months ahead,
-     the air freight later. Packing a labelled card puts it in one: it leaves
-     India stock for the show then, as sending always did, but it waits in
-     step 3 while its shipment is packed and on the way, and reaches step 4
-     only when the shipment is marked reached. A card sent before shipments
-     existed belongs to none and is simply at the show. */
+  /* ── Packing and shipments ────────────────────────────────────────────
+     Packed is a card committed to the show: it has left India stock for it
+     (step 2 marks it, or Stock → Send to show did). It waits in step 3 until
+     it goes in a shipment, sent from step 3 with its date, freight and
+     papers. Then it is on the way, in step 4, until the shipment is marked
+     received. A shipment is made when it is sent; one planned in Prep (a
+     send-by date) is there to be picked when it goes. Before a show opens, a
+     card in no shipment is still packed; once the show has started, such a
+     card got there some other way and is simply at the show. */
   const SHIP_TYPES=[["Sea Freight","🚢","Sea"],["Air Freight","✈️","Air"],["Courier","📮","Courier"],["Hand Carry","🧳","Hand carry"]];
   const shipments=show.shipments||[];
   const shipmentById=new Map(shipments.map(sh=>[sh.id,sh]));
   const shipIcon=sh=>(SHIP_TYPES.find(x=>x[0]===sh?.type)||SHIP_TYPES[0])[1];
   // "Sea shipment", or "Sea shipment 2" when there are two by sea.
   const shipLabel=sh=>{const t=SHIP_TYPES.find(x=>x[0]===sh?.type);const same=shipments.filter(x=>x.type===sh?.type);const i=same.findIndex(x=>x.id===sh?.id);const n=i<0?same.length+1:i+1,of=i<0?same.length+1:same.length;return`${t?t[2]:sh?.type||"Sea"} shipment${of>1?` ${n}`:""}`;};
-  const inTransit=s=>{const sh=s.shipmentId&&shipmentById.get(s.shipmentId);return !!sh&&!sh.reachedAt;};
-  const packedItems=shipItems.filter(inTransit);
-  const arrivedItems=shipItems.filter(s=>!inTransit(s));
+  const showOpen=showStart(show)<=today();
+  const shipOf=s=>{const sh=s.shipmentId&&shipmentById.get(s.shipmentId);return sh&&sh.sentAt?sh:null;};
+  const isPacked=s=>!shipOf(s)&&!showOpen;
+  const isOnWay=s=>{const sh=shipOf(s);return !!sh&&!sh.reachedAt;};
+  const packedItems=shipItems.filter(isPacked);
+  const onWayItems=shipItems.filter(isOnWay);
+  const arrivedItems=shipItems.filter(s=>!isPacked(s)&&!isOnWay(s));
   const cardsIn=id=>shipItems.filter(s=>s.shipmentId===id);
-  // Shipments that can still take cards — packing, or on the way and not there yet.
-  const liveShipments=shipments.filter(sh=>!sh.reachedAt);
+  const plannedShipments=shipments.filter(sh=>!sh.sentAt);
+  const onWayShipments=shipments.filter(sh=>sh.sentAt&&!sh.reachedAt).sort((a,b)=>String(a.sentAt).localeCompare(String(b.sentAt)));
+  const boxCount=list=>new Set(list.map(s=>String(s.location||"").trim()).filter(Boolean)).size;
   const saveShipment=(id,patch)=>onPatchShow?.(show.id,s=>({shipments:(s.shipments||[]).map(sh=>sh.id===id?{...sh,...patch,updatedAt:new Date().toISOString()}:sh)}));
-  const newShipment=async type=>{
-    const sh={id:uid(),type,date:"",notes:"",createdAt:new Date().toISOString()};
-    await onPatchShow?.(show.id,s=>({shipments:[...(s.shipments||[]),sh]}));
-    return sh;
-  };
-  /* What a card was before it was packed — so taking it out puts it back
-     exactly: a labelled card to step 2, a card already at the show back there. */
+  // What a card was before it was packed, so unpacking puts it back.
   const SHOW_FIELDS=["region","showTag","showId","showSentQty","showSentQty2","sentAt"];
-  const packInto=async(ids,sh)=>{
-    if(!sh)return;
-    const pool=[...shipTagged,...shipItems];
-    const pick=pool.filter((s,i,a)=>ids.has(s.id)&&a.findIndex(x=>x.id===s.id)===i&&s.shipmentId!==sh.id);
-    if(!pick.length)return;
+  // Step 2 → 3: packed for the show. It leaves India stock now, as sending always did.
+  const markPacked=async ids=>{
+    const pick=shipTagged.filter(s=>ids.has(s.id));if(!pick.length)return;
     const ts=new Date().toISOString();
-    await onPatchStockItems?.(Object.fromEntries(pick.map(s=>{
-      const committed=itemAtShow(s,show,allShows);
-      const prev=s.shipmentId&&s.packPrev?s.packPrev:Object.fromEntries(SHOW_FIELDS.map(k=>[k,s[k]??""]));
-      return[s.id,{
-        ...(committed?{}:{region:shipRegion,showTag:show.name,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||""}),
-        // A card leaves when its shipment does.
-        sentAt:sh.sentAt||"",shipmentId:sh.id,packedAt:s.shipmentId&&s.packedAt?s.packedAt:ts,packPrev:prev}];
-    })));
+    await onPatchStockItems?.(Object.fromEntries(pick.map(s=>[s.id,{region:shipRegion,showTag:show.name,showId:show.id,showSentQty:s.showSentQty||s.qty||"",showSentQty2:s.showSentQty2||s.qty2||"",
+      sentAt:"",shipmentId:"",packedAt:ts,packPrev:Object.fromEntries(SHOW_FIELDS.map(k=>[k,s[k]??""]))}])));
     // Packed for a show = not on the shelf to ship: its trade-site deals come off the site.
-    const fresh=pick.filter(s=>!itemAtShow(s,show,allShows)).map(s=>s.id);
-    if(fresh.length)import("./src/TradeSiteApp.jsx").then(m=>m.undealForStock(fresh)).catch(()=>{});
-    setTagSel(new Set());setReadySel(new Set());setPackSel(new Set());setShipSel(new Set());setPackMenu(null);
-    onToast?.(`📦 ${pick.length} card${pick.length===1?"":"s"} packed into the ${shipLabel(sh)}`);
+    import("./src/TradeSiteApp.jsx").then(m=>m.undealForStock(pick.map(s=>s.id))).catch(()=>{});
+    setTagSel(new Set());setReadySel(new Set());
+    onToast?.(`📦 ${pick.length} card${pick.length===1?"":"s"} packed — in step 3`);
   };
-  const packIntoNew=async(ids,type)=>{const sh=await newShipment(type);await packInto(ids,sh);};
+  // Not packed after all: back to India stock, still tagged for this show.
   const unpack=async ids=>{
-    const pick=shipItems.filter(s=>ids.has(s.id)&&s.shipmentId);if(!pick.length)return;
-    const toReady=pick.filter(s=>!(s.packPrev?.showId)).length;
-    if(!confirm(`Take ${pick.length} card${pick.length===1?"":"s"} out of the shipment?\n\n${toReady?`${toReady} go${toReady===1?"es":""} back to step 2 — labelled, in India stock.`:""}${toReady&&toReady<pick.length?"\n":""}${pick.length-toReady?`${pick.length-toReady} go${pick.length-toReady===1?"es":""} back to At the show, where ${pick.length-toReady===1?"it was":"they were"}.`:""}`))return;
+    const pick=packedItems.filter(s=>ids.has(s.id));if(!pick.length)return;
+    const n=pick.length;
+    if(!confirm(`Unpack ${n} card${n===1?"":"s"}? ${n===1?"It goes":"They go"} back to India stock, still tagged for ${show.name} (step 1, or step 2 once labelled).`))return;
     await onPatchStockItems?.(Object.fromEntries(pick.map(s=>{
-      const p=s.packPrev||{};
-      return[s.id,{...Object.fromEntries(SHOW_FIELDS.map(k=>[k,p[k]??""])),shipmentId:"",packedAt:"",packPrev:null}];
+      const p=s.packPrev&&!s.packPrev.showId?s.packPrev:{};
+      const m=marketsOf(s);
+      return[s.id,{...Object.fromEntries(SHOW_FIELDS.map(k=>[k,p[k]??""])),region:p.region||"India",shipmentId:"",packedAt:"",packPrev:null,...(m.some(tagMatchesShow)?{}:{market:[...m,show.name]})}];
     })));
-    setPackSel(new Set());setShipSel(new Set());
-    onToast?.(`↩ ${pick.length} card${pick.length===1?"":"s"} taken out`);
+    setPackSel(new Set());
+    onToast?.(`↩ ${n} card${n===1?"":"s"} unpacked`);
   };
-  /* Marking a shipment sent records the day it left, on it and on every card
-     in it, and books its freight as a Shipping expense of the show — one
-     expense per shipment, kept in step with it when the cost is changed. */
+  /* Sending a shipment: it is made (or the one planned in Prep is used), its
+     cards carry it and the day it left, and its freight is booked as a
+     Shipping cost of the show — one expense per shipment, kept in step with
+     it when the amount changes. The same form saves a sent shipment's details. */
   const shipNote=(sh,n,f)=>[`${shipLabel(sh)} freight`,`${n} card${n===1?"":"s"}`,f.ref,f.invoiceNo?`invoice ${f.invoiceNo}`:""].filter(Boolean).join(" · ");
-  const confirmSent=async f=>{
-    const sh=shipmentById.get(f.id);if(!sh||!f.sentAt)return;
-    const cards=cardsIn(sh.id);
+  const saveSent=async f=>{
+    if(!f.sentAt)return;
+    let sh=f.id?shipmentById.get(f.id):null;
+    if(!sh){
+      const planned=String(f.pick||"").startsWith("plan:")?shipmentById.get(f.pick.slice(5)):null;
+      sh=planned||{id:uid(),type:String(f.pick||"new:Sea Freight").slice(4),date:"",notes:"",createdAt:new Date().toISOString(),madeOnSend:true};
+    }
+    const adding=f.ids?packedItems.filter(s=>f.ids.includes(s.id)):[];
+    if(!f.id&&!adding.length)return;
+    const n=cardsIn(sh.id).length+adding.length;
     const amt=parseFloat(rawAmt(f.cost))||0;
     const inv=(ngInvoices||[]).find(i=>i.id===f.invoiceId);
     const patch={sentAt:f.sentAt,cost:amt>0?String(amt):"",costCurrency:f.costCurrency||"INR",ref:String(f.ref||"").trim(),eta:f.eta||"",invoiceId:inv?.id||"",invoiceNo:inv?.invNo||"",notes:f.notes??sh.notes??""};
     await onPatchShow?.(show.id,s=>{
+      const list=s.shipments||[];
+      const cur=list.find(x=>x.id===sh.id)||sh;
       const exps=s.showExpenses||[];
-      let expenseId=sh.expenseId||"",next=exps;
+      let expenseId=cur.expenseId||"",next=exps;
       const has=!!expenseId&&exps.some(x=>x.id===expenseId);
-      const exp={category:"Shipping",date:patch.sentAt,amount:String(amt),currency:patch.costCurrency,notes:shipNote(sh,cards.length,patch),shipmentId:sh.id};
+      const exp={category:"Shipping",date:patch.sentAt,amount:String(amt),currency:patch.costCurrency,notes:shipNote(cur,n,patch),shipmentId:sh.id};
       if(amt>0){
         if(has)next=exps.map(x=>x.id===expenseId?{...x,...exp}:x);
         else{expenseId=uid();next=[...exps,{id:expenseId,...exp,createdAt:new Date().toISOString()}];}
       }else if(has){next=exps.filter(x=>x.id!==expenseId);expenseId="";}
-      return{showExpenses:next,shipments:(s.shipments||[]).map(x=>x.id===sh.id?{...x,...patch,expenseId,updatedAt:new Date().toISOString()}:x)};
+      const base=list.some(x=>x.id===sh.id)?list:[...list,sh];
+      return{showExpenses:next,shipments:base.map(x=>x.id===sh.id?{...x,...patch,expenseId,updatedAt:new Date().toISOString()}:x)};
     });
-    const stale=cards.filter(s=>s.sentAt!==patch.sentAt);
-    if(stale.length)await onPatchStockItems?.(Object.fromEntries(stale.map(s=>[s.id,{sentAt:patch.sentAt}])));
-    setShipForm(null);setInvQ("");
-    onToast?.(`🚚 ${shipLabel(sh)} ${sh.sentAt?"updated":`sent ${fmtDate(patch.sentAt)}`}${amt>0?` · ${patch.costCurrency} ${amt.toLocaleString("en-IN")} in Costs`:""}`);
+    // Its cards left with it. A card that never had a packed day keeps the day it was sent to the show.
+    const stamp=[...cardsIn(sh.id).filter(s=>s.sentAt!==patch.sentAt),...adding];
+    if(stamp.length)await onPatchStockItems?.(Object.fromEntries(stamp.map(s=>[s.id,{shipmentId:sh.id,sentAt:patch.sentAt,packedAt:s.packedAt||s.sentAt||""}])));
+    setShipForm(null);setInvQ("");setPackSel(new Set());
+    onToast?.(f.id?`✓ ${shipLabel(sh)} saved${amt>0?` · ${patch.costCurrency} ${amt.toLocaleString("en-IN")} in Costs`:""}`:`🚚 ${shipLabel(sh)} sent ${fmtDate(patch.sentAt)} with ${n} card${n===1?"":"s"} — in step 4${amt>0?` · ${patch.costCurrency} ${amt.toLocaleString("en-IN")} in Costs`:""}`);
   };
-  // Not sent after all: the date comes off it and its cards, and its freight out of Costs.
+  // Forgot a few: packed cards join a shipment already on its way.
+  const addToShipment=async(ids,sh)=>{
+    const pick=packedItems.filter(s=>ids.has(s.id));if(!pick.length||!sh)return;
+    await onPatchStockItems?.(Object.fromEntries(pick.map(s=>[s.id,{shipmentId:sh.id,sentAt:sh.sentAt||"",packedAt:s.packedAt||s.sentAt||""}])));
+    setPackSel(new Set());setPackMenu(null);
+    onToast?.(`🚚 ${pick.length} card${pick.length===1?"":"s"} added to the ${shipLabel(sh)}`);
+  };
+  // Not in that shipment after all: back to step 3, packed.
+  const backToPacked=async ids=>{
+    const pick=onWayItems.filter(s=>ids.has(s.id));if(!pick.length)return;
+    const n=pick.length;
+    if(!confirm(`Take ${n} card${n===1?"":"s"} out of the shipment? ${n===1?"It goes":"They go"} back to step 3, packed.`))return;
+    await onPatchStockItems?.(Object.fromEntries(pick.map(s=>[s.id,{shipmentId:"",sentAt:""}])));
+    setPackSel(new Set());
+  };
+  // Not sent after all: its cards go back to packed, its freight out of Costs.
   const unsend=async sh=>{
-    if(!confirm(`Mark the ${shipLabel(sh)} as not sent?${sh.expenseId?" Its freight comes out of Costs (the amount stays on the shipment).":""}`))return;
+    const n=cardsIn(sh.id).length;
+    if(!confirm(`Undo sending the ${shipLabel(sh)}? Its ${n} card${n===1?"":"s"} go back to step 3, packed${sh.expenseId?", and its freight comes out of Costs":""}.`))return;
     await onPatchShow?.(show.id,s=>({
       showExpenses:(s.showExpenses||[]).filter(x=>!sh.expenseId||x.id!==sh.expenseId),
-      shipments:(s.shipments||[]).map(x=>x.id===sh.id?{...x,sentAt:"",reachedAt:"",expenseId:"",updatedAt:new Date().toISOString()}:x)}));
-    const cards=cardsIn(sh.id).filter(s=>s.sentAt);
-    if(cards.length)await onPatchStockItems?.(Object.fromEntries(cards.map(s=>[s.id,{sentAt:""}])));
+      shipments:sh.madeOnSend?(s.shipments||[]).filter(x=>x.id!==sh.id):(s.shipments||[]).map(x=>x.id===sh.id?{...x,sentAt:"",reachedAt:"",expenseId:"",updatedAt:new Date().toISOString()}:x)}));
+    const cards=cardsIn(sh.id);
+    if(cards.length)await onPatchStockItems?.(Object.fromEntries(cards.map(s=>[s.id,{shipmentId:"",sentAt:""}])));
+    setShipForm(null);
   };
-  const confirmReached=async f=>{
+  const confirmReceived=async f=>{
     const sh=shipmentById.get(f.id);if(!sh||!f.reachedAt)return;
     await saveShipment(sh.id,{reachedAt:f.reachedAt});
     setShipForm(null);
     const n=cardsIn(sh.id).length;
-    onToast?.(`✓ ${shipLabel(sh)} reached ${fmtDate(f.reachedAt)} — ${n} card${n===1?"":"s"} at the show`);
+    onToast?.(`✓ ${shipLabel(sh)} received ${fmtDate(f.reachedAt)} — ${n} card${n===1?"":"s"} at the show`);
   };
   const delShipmentById=async sh=>{
-    if(cardsIn(sh.id).length){onToast?.("Take its cards out first");return;}
+    if(cardsIn(sh.id).length){onToast?.("It has cards — undo sending it in Shipment → step 4 first");return;}
     if(!confirm(`Delete the ${shipLabel(sh)}?`))return;
     await onPatchShow?.(show.id,s=>({
       showExpenses:(s.showExpenses||[]).filter(x=>!sh.expenseId||x.id!==sh.expenseId),
       shipments:(s.shipments||[]).filter(x=>x.id!==sh.id)}));
   };
-  /* "Pack into ▾" — the shipments still to reach the show, and a new sea or
-     air one. The same menu moves cards between shipments, and puts cards that
-     went before shipments existed into one. */
-  const packMenuFor=(key,ids,label,style)=>{
+  const openSend=ids=>{setInvQ("");setShipForm({mode:"send",ids,pick:plannedShipments[0]?`plan:${plannedShipments[0].id}`:"new:Sea Freight",sentAt:today(),cost:"",costCurrency:"INR",ref:"",eta:"",invoiceId:"",notes:plannedShipments[0]?.notes||""});};
+  const openDetails=sh=>{setInvQ("");setShipForm({mode:"edit",id:sh.id,sentAt:sh.sentAt||today(),cost:sh.cost||"",costCurrency:sh.costCurrency||"INR",ref:sh.ref||"",eta:sh.eta||"",invoiceId:sh.invoiceId||"",notes:sh.notes||""});};
+  // "+ Add to ▾" — the shipments on their way, for packed cards that missed one.
+  const addMenuFor=(key,ids,label,style)=>{
     const open=packMenu?.key===key,n=ids.size;
     // Placed on screen from the button, so it never hangs off an edge.
     const place=el=>{const r=el.getBoundingClientRect(),W=window.innerWidth,H=window.innerHeight,w=Math.min(280,W-16);
@@ -19957,19 +19979,33 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
         {open&&n>0&&<>
           <div onClick={e=>{e.stopPropagation();setPackMenu(null);}} onWheel={()=>setPackMenu(null)} onTouchMove={()=>setPackMenu(null)} style={{position:"fixed",inset:0,zIndex:960}}/>
           <div onClick={e=>e.stopPropagation()} style={{position:"fixed",left:packMenu.left,width:packMenu.width,...(packMenu.bottom!=null?{bottom:packMenu.bottom}:{top:packMenu.top}),zIndex:961,background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 12px 32px rgba(0,0,0,.2)",maxHeight:"60vh",overflowY:"auto",padding:6}}>
-            <div style={{fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,padding:"4px 10px 6px"}}>Pack {n} card{n===1?"":"s"} into</div>
-            {liveShipments.map(sh=>{const c=cardsIn(sh.id).length;return(
-              <button key={sh.id} onClick={()=>packInto(ids,sh)} onMouseEnter={e=>e.currentTarget.style.background=C.card} onMouseLeave={e=>e.currentTarget.style.background="none"} style={item}>
+            <div style={{fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,padding:"4px 10px 6px"}}>Add {n} card{n===1?"":"s"} to</div>
+            {onWayShipments.map(sh=>{const c=cardsIn(sh.id).length;return(
+              <button key={sh.id} onClick={()=>addToShipment(ids,sh)} onMouseEnter={e=>e.currentTarget.style.background=C.card} onMouseLeave={e=>e.currentTarget.style.background="none"} style={item}>
                 <span style={{fontSize:18}}>{shipIcon(sh)}</span>
-                <span style={{flex:1,minWidth:0}}><b>{shipLabel(sh)}</b><span style={{display:"block",fontSize:10.5,color:C.inkMid}}>{sh.sentAt?`On the way · sent ${fmtDate(sh.sentAt)}`:sh.date?`Packing · send by ${fmtDate(sh.date)}`:"Packing"} · {c} card{c===1?"":"s"}</span></span>
+                <span style={{flex:1,minWidth:0}}><b>{shipLabel(sh)}</b><span style={{display:"block",fontSize:10.5,color:C.inkMid}}>Sent {fmtDate(sh.sentAt)} · {c} card{c===1?"":"s"}</span></span>
               </button>);})}
-            {liveShipments.length>0&&<div style={{borderTop:`1px solid ${C.border}`,margin:"4px 6px"}}/>}
-            {[["Sea Freight","🚢","sea"],["Air Freight","✈️","air"]].map(([t,ic,l])=>(
-              <button key={t} onClick={()=>packIntoNew(ids,t)} onMouseEnter={e=>e.currentTarget.style.background=C.card} onMouseLeave={e=>e.currentTarget.style.background="none"} style={{...item,color:C.inkMid}}><span style={{fontSize:18}}>{ic}</span><span>+ New {l} shipment</span></button>))}
           </div>
         </>}
       </span>);
   };
+  // A small card for packed and on-the-way lists: photo, box, stone, quantity, value.
+  const miniCard=(s,on,toggle,foot)=>{const cov=stockCover(s);return(
+    <div key={s.id} onClick={toggle} style={{background:on?C.amberBg:C.surface,borderRadius:12,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:"var(--e-1)"}}>
+      <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
+        {cov&&<img src={thumbUrl(cov,400)} alt="" loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
+        <div style={{position:"absolute",top:8,left:8,width:22,height:22,borderRadius:6,background:on?C.amber:"rgba(255,255,255,.92)",display:"grid",placeItems:"center",color:"#fff",fontSize:13,fontWeight:800,boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}>{on?"✓":""}</div>
+        {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.92)",borderRadius:12,padding:"2px 9px",fontSize:11.5,fontWeight:800}}>Box {s.location}</div>}
+      </div>
+      <div style={{padding:"8px 11px 10px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{textTransform:"uppercase",fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
+        <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,...flowQtyLines(s)].filter(Boolean).join(" · ")}</div>
+        <div style={{display:"flex",justifyContent:"space-between",gap:6,marginTop:4,fontSize:11}}>
+          <span style={{color:C.inkFaint,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{foot}</span>
+          <span style={{fontWeight:700,color:C.ink,whiteSpace:"nowrap"}}>{cardValUsd(s)>0?fmtCur(cardValUsd(s)):""}</span>
+        </div>
+      </div>
+    </div>);};
   const shipSentAll=(()=>{
     const rows=shipItems.slice();
     const col=sentSort&&SENT_COLS.find(c=>c.key===sentSort.key);
@@ -19983,8 +20019,8 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
       return cmp===0?shipSort(a,b):cmp*sign;
     });
   })();
-  // Step 4 lists what has reached; the price list covers everything going.
-  const shipSent=shipSentAll.filter(s=>!inTransit(s));
+  // Step 4 lists what has been received; the price list covers everything going.
+  const shipSent=shipSentAll.filter(s=>!isPacked(s)&&!isOnWay(s));
   /* Cost and SP are per-unit rates, so the totals for what has actually gone are
      rate times what went — the same arithmetic the plan uses and the same the
      rows print. Summing the rates themselves (which is what this did) answered
@@ -20507,10 +20543,10 @@ thead{display:table-header-group;}
                         <select value={sh.type||"Sea Freight"} onChange={e=>onUpdateShipment(show.id,i,"type",e.target.value)} style={{...FI,fontSize:11,padding:"3px 5px",flex:1,cursor:"pointer"}} onClick={e=>e.stopPropagation()}>
                           {SHIP_TYPES.map(([opt])=><option key={opt}>{opt}</option>)}
                         </select>
-                        <button onClick={e=>{e.stopPropagation();onPatchShow?delShipmentById(sh):onDelShipment(show.id,i);}} title={n?"Take its cards out in Shipment → step 3 first":"Delete"} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13}}>&times;</button>
+                        <button onClick={e=>{e.stopPropagation();onPatchShow?delShipmentById(sh):onDelShipment(show.id,i);}} title={n?"It has cards — undo sending it in Shipment → step 4 first":"Delete"} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13}}>&times;</button>
                       </div>
                       {/* Where it stands, from the Shipment tab. */}
-                      <button onClick={e=>{e.stopPropagation();setShowTab("shipment");setShipView("plan");setShipStep(sh.reachedAt?"sent":"packed");}} style={{display:"block",background:"none",border:"none",padding:"0 0 5px",fontSize:10.5,fontWeight:700,cursor:"pointer",color:sh.reachedAt?C.green:sh.sentAt?"#24518F":C.inkMid,textAlign:"left"}}>{sh.reachedAt?`✓ Reached ${fmtDate(sh.reachedAt)}`:sh.sentAt?`🚚 Sent ${fmtDate(sh.sentAt)}`:"📦 Packing"} · {n} card{n===1?"":"s"} ›</button>
+                      <button onClick={e=>{e.stopPropagation();setShowTab("shipment");setShipView("plan");setShipStep(sh.sentAt?"sent":"packed");}} style={{display:"block",background:"none",border:"none",padding:"0 0 5px",fontSize:10.5,fontWeight:700,cursor:"pointer",color:sh.reachedAt?C.green:sh.sentAt?"#24518F":C.inkMid,textAlign:"left"}}>{sh.reachedAt?`✓ Received ${fmtDate(sh.reachedAt)} · ${n} card${n===1?"":"s"}`:sh.sentAt?`🚚 Sent ${fmtDate(sh.sentAt)} · ${n} card${n===1?"":"s"}`:"📋 Planned — send it from Shipment, step 3"} ›</button>
                       {!sh.sentAt&&<>
                       <div style={{fontSize:9,color:C.inkFaint,marginBottom:2}}>SEND BY</div>
                       <input type="date" value={sh.date||""} onChange={e=>onUpdateShipment(show.id,i,"date",e.target.value)} onClick={e=>e.stopPropagation()} style={{...FI,fontSize:11,padding:"3px 5px",width:"100%"}}/>
@@ -21437,13 +21473,14 @@ thead{display:table-header-group;}
                 <>
                   {(()=>{const step=shipStepNow;
                     // The listed boxes or words that find nothing in this step.
-                    const base=step==="sent"?shipSent:step==="packed"?packedItems:step==="ready"?shipTagged.filter(s=>s.labelMadeAt):shipTagged;
-                    const packedSub=liveShipments.length?liveShipments.map(sh=>`${shipIcon(sh)} ${sh.sentAt?"on the way":"packing"}`).join(" · "):"Sea now, air later";
+                    const base=step==="sent"?[...onWayItems,...shipSent]:step==="packed"?packedItems:step==="ready"?shipTagged.filter(s=>s.labelMadeAt):shipTagged;
+                    const pb=boxCount(packedItems);
+                    const packedSub=packedItems.length?`${pb?`${pb} box${pb===1?"":"es"} · `:""}send a shipment`:"Send shipments from here";
                     const missing=(shipTerms||[]).filter(t=>!base.some(s=>shipTermHit(s,t)));
                     return(
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:12}}>
-                      {[["planned","1 · Planned",shipTagged.length,"Price and label"],["ready","2 · Labelled, ready to pack",shipTagged.filter(s=>s.labelMadeAt).length,"Print labels, pack"],["packed","3 · Packed, shipping",packedItems.length,packedSub],["sent","4 · At the show",arrivedItems.length,"Goods reached"]].map(([k,label,n,sub])=>(
-                        <button key={k} onClick={()=>setShipStep(k)} style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1,background:step===k?C.ink:C.surface,color:step===k?"#FAF0DC":C.ink,border:`1px solid ${step===k?C.ink:C.border}`,borderRadius:10,padding:"8px 14px",cursor:"pointer",minWidth:140}}>
+                      {[["planned","1 · Planned",shipTagged.length,"Price and label"],["ready","2 · Labelled, ready to pack",shipTagged.filter(s=>s.labelMadeAt).length,"Print labels, mark packed"],["packed","3 · Packed, not shipped",packedItems.length,packedSub],["sent","4 · At the show",onWayItems.length+arrivedItems.length,onWayItems.length?`🚚 ${onWayItems.length} on the way`:"Goods received"]].map(([k,label,n,sub])=>(
+                        <button key={k} onClick={()=>{setShipStep(k);setPackSel(new Set());}} style={{display:"flex",flexDirection:"column",alignItems:"flex-start",gap:1,background:step===k?C.ink:C.surface,color:step===k?"#FAF0DC":C.ink,border:`1px solid ${step===k?C.ink:C.border}`,borderRadius:10,padding:"8px 14px",cursor:"pointer",minWidth:140}}>
                           <span style={{fontSize:12.5,fontWeight:750}}>{label} <span style={{opacity:.7,fontWeight:600}}>· {n}</span></span>
                           <span style={{fontSize:10,opacity:.7}}>{sub}</span>
                         </button>))}
@@ -21520,7 +21557,7 @@ thead{display:table-header-group;}
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>Planned</div><div style={{fontSize:18,fontWeight:750}}>{shipTagged.length} cards</div><div style={{fontSize:10,color:C.inkFaint}}>tag more in Stock → Market</div></div>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>① Priced</div><div style={{fontSize:18,fontWeight:750,color:priced===shipTagged.length&&priced?C.green:C.ink}}>{priced} / {shipTagged.length}</div><div style={{fontSize:10,color:C.inkFaint}}>{valueUsd>0?`${fmtUsd(valueUsd)} on the table`:"type a SP on each card"}</div></div>
                         <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>② Labels · {shipTagged.filter(s=>s.labelMadeAt).length} / {shipTagged.length} made</div><button disabled={!shipTagged.length} onClick={()=>openInMakeLabels(true,new Set((tagSel.size?shipTagged.filter(s=>tagSel.has(s.id)):shipTagged).map(s=>s.id)))} style={{marginTop:3,background:"#8B6F47",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🏷 Make labels{tagSel.size?` (${tagSel.size})`:" for all"}</button></div>
-                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>③ Pack</div>{isAdmin?<div style={{marginTop:3}}>{packMenuFor("planned",tagSel,`📦 Pack ${tagSel.size||"ticked"} into`,{background:tagSel.size?C.ink:"#ccc",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:tagSel.size?"pointer":"default"})}</div>:<div style={{fontSize:11,color:C.inkFaint}}>Ask an admin</div>}</div>
+                        <div style={stepBox}><div style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>③ Pack</div>{isAdmin?<button disabled={!tagSel.size} onClick={()=>markPacked(tagSel)} style={{marginTop:3,background:tagSel.size?C.ink:"#ccc",color:"#fff",border:"none",borderRadius:7,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:tagSel.size?"pointer":"default"}}>📦 Mark {tagSel.size||"ticked"} packed</button>:<div style={{fontSize:11,color:C.inkFaint}}>Ask an admin</div>}</div>
                       </div>
                       <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:6,marginBottom:6,fontSize:11.5,color:C.inkMid,flexWrap:"wrap"}}>
                         <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:7,overflow:"hidden",marginRight:"auto"}}>
@@ -21593,7 +21630,7 @@ thead{display:table-header-group;}
                       <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#EAF6EF",border:"1px solid #3FA36B55",borderRadius:12,padding:"12px 14px"}}>
                         <div style={{flex:1,minWidth:200}}>
                           <div style={{fontSize:14,fontWeight:750,color:C.ink}}>{ready.length} labelled card{ready.length===1?"":"s"} ready to go</div>
-                          <div style={{fontSize:11.5,color:C.inkMid}}>{notYet?`${notYet} still need a label in step 1 · `:""}Tick what's packed and put it in a shipment — it waits in step 3 until the shipment reaches {show.name}.</div>
+                          <div style={{fontSize:11.5,color:C.inkMid}}>{notYet?`${notYet} still need a label in step 1 · `:""}Tick what's packed and mark it — it waits in step 3 until it goes in a shipment.</div>
                         </div>
                         <span style={{display:"inline-flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",background:C.surface}}>
                           {[["all",`All · ${readyAll.length}`],["todo",`To print · ${readyAll.filter(s=>!isPrinted(s)).length}`],["printed",`✓ Printed · ${readyAll.filter(isPrinted).length}`]].map(([k,l])=>(
@@ -21603,7 +21640,7 @@ thead{display:table-header-group;}
                         {sel.length>0&&(()=>{const ids=sel.filter(s=>isPrinted(s)===selPrinted).map(s=>s.id);return(
                           <button onClick={()=>markPrinted(ids,!selPrinted)} title={selPrinted?"These labels need printing again":"Printed some other way — mark them done"} style={{background:C.surface,border:`1px solid ${selPrinted?C.border:"#0f7a55"}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:selPrinted?C.inkMid:"#0f7a55"}}>{selPrinted?"↺ Mark":"✓ Mark"} {ids.length} {selPrinted?"not printed":"printed"}</button>);})()}
                         <button onClick={()=>printLabelsFor(toPrint.map(s=>s.id))} disabled={!toPrint.length} style={{background:toPrint.length?"#8B6F47":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 14px",fontSize:12.5,fontWeight:750,cursor:toPrint.length?"pointer":"default"}}>🖨 Print {sel.length?`${sel.length} label${sel.length===1?"":"s"}`:"unprinted labels"}</button>
-                        {isAdmin&&packMenuFor("ready",new Set(sel.map(s=>s.id)),`📦 Pack ${sel.length||""} into`,{background:sel.length?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:sel.length?"pointer":"default"})}
+                        {isAdmin&&<button disabled={!sel.length} onClick={()=>markPacked(new Set(sel.map(s=>s.id)))} style={{background:sel.length?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:sel.length?"pointer":"default"}}>📦 Mark {sel.length||""} packed</button>}
                       </div>
                       {printPending&&(()=>{const n=printPending.ids.length;return(
                         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#FBF3E4",border:"1px solid #8B6F4766",borderRadius:12,padding:"10px 14px"}}>
@@ -21648,108 +21685,65 @@ thead{display:table-header-group;}
                       </div>}
                     </>);
                   })()}
-                  {/* PACKED — in a shipment, packing or on the way. Sending books the
-                      freight; reaching moves the cards to At the show. */}
+                  {/* PACKED — committed to the show, not shipped. Tick what goes, or send
+                      it all, as one shipment with its date, freight and papers. */}
                   {shipStepNow==="packed"&&(()=>{
-                    const list=liveShipments.slice().sort((a,b)=>(!!a.sentAt-!!b.sentAt)||String(a.date||a.createdAt||"").localeCompare(String(b.date||b.createdAt||"")));
-                    const selCards=packedItems.filter(s=>packSel.has(s.id));
-                    const reached=shipments.filter(sh=>sh.reachedAt);
+                    const dayOf=s=>String(s.packedAt||s.sentAt||"").slice(0,10);
                     const byBox=(a,b)=>String(a.location||"").localeCompare(String(b.location||""),undefined,{numeric:true})||shipSort(a,b);
-                    const ghost={background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 11px",fontSize:12,fontWeight:700,cursor:"pointer",color:C.ink};
+                    const visible=packedItems.filter(matchQ);
+                    // Only ticked cards on screen count — a search hides the rest from sending.
+                    const sel=visible.filter(s=>packSel.has(s.id));
+                    const toSend=sel.length?sel:visible;
+                    const allOn=sel.length===visible.length&&visible.length>0;
+                    const kg=flowSentKgTotal(packedItems),boxes=boxCount(packedItems);
+                    const groups=[];
+                    visible.slice().sort((a,b)=>dayOf(b).localeCompare(dayOf(a))||byBox(a,b)).forEach(s=>{const d=dayOf(s),g=groups[groups.length-1];g&&g.day===d?g.cards.push(s):groups.push({day:d,cards:[s]});});
+                    const ghost={background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",fontSize:12.5,fontWeight:700,cursor:"pointer",color:C.ink};
                     return(<>
-                      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#EEF3FB",border:"1px solid #3B6FB655",borderRadius:12,padding:"12px 14px"}}>
-                        <div style={{flex:1,minWidth:220}}>
-                          <div style={{fontSize:14,fontWeight:750,color:C.ink}}>{packedItems.length} card{packedItems.length===1?"":"s"} packed in {list.length} shipment{list.length===1?"":"s"}</div>
-                          <div style={{fontSize:11.5,color:C.inkMid}}>Mark a shipment sent when it leaves — the date goes on its cards and the freight into Costs. Mark it reached when it lands, and its cards move to At the show.</div>
+                      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12,background:"#FBF3E4",border:"1px solid #8B6F4755",borderRadius:12,padding:"12px 14px"}}>
+                        <div style={{flex:"1 1 240px",minWidth:0}}>
+                          <div style={{fontSize:14,fontWeight:750,color:C.ink}}>{packedItems.length} card{packedItems.length===1?"":"s"} packed, not shipped{boxes?` · ${boxes} box${boxes===1?"":"es"}`:""}{kg>0?` · ${fmtFlowNum(+kg.toFixed(2))} kg`:""}</div>
+                          <div style={{fontSize:11.5,color:C.inkMid}}>Tick what goes — or send them all — as one shipment, with its date, freight and papers. Sent, it moves to step 4 until it's received.{plannedShipments.length?<> Planned in Prep: {plannedShipments.map(sh=>`${shipIcon(sh)} ${shipLabel(sh)}${sh.date?` · send by ${fmtDate(sh.date)}`:""}`).join(", ")}.</>:null}</div>
                         </div>
-                        {isAdmin&&[["Sea Freight","🚢","sea"],["Air Freight","✈️","air"]].map(([t,ic,l])=>(
-                          <button key={t} onClick={()=>newShipment(t)} style={ghost}>{ic} + New {l} shipment</button>))}
+                        {visible.length>0&&<button onClick={()=>setPackSel(allOn?new Set():new Set(visible.map(s=>s.id)))} style={ghost}>{allOn?"Untick all":`Tick all ${visible.length}`}</button>}
+                        {isAdmin&&toSend.length>0&&<button onClick={()=>openSend(toSend.map(s=>s.id))} style={{background:toSend.length?"#24518F":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontSize:13,fontWeight:750,cursor:toSend.length?"pointer":"default"}}>🚚 Send {sel.length?sel.length:`all ${toSend.length}`} as a shipment</button>}
                       </div>
-                      {selCards.length>0&&(
+                      {sel.length>0&&(
                         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:"#1e293b",color:"#fff",borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:12,position:"sticky",top:8,zIndex:30}}>
-                          <b>{selCards.length} ticked</b>
+                          <b>{sel.length} ticked</b><span style={{opacity:.75}}>· {boxCount(sel)} box{boxCount(sel)===1?"":"es"}</span>
                           <span style={{flex:1}}/>
-                          {isAdmin&&packMenuFor("move",new Set(selCards.map(s=>s.id)),"Move to",{background:"#3b82f6",color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"})}
-                          {isAdmin&&<button onClick={()=>unpack(new Set(selCards.map(s=>s.id)))} title="Back where each was before packing — step 2, or At the show" style={{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>↩ Take out</button>}
+                          {isAdmin&&<button onClick={()=>openSend(sel.map(s=>s.id))} style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>🚚 Send these</button>}
+                          {isAdmin&&onWayShipments.length>0&&addMenuFor("add",new Set(sel.map(s=>s.id)),"+ Add to",{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"})}
+                          {isAdmin&&<button onClick={()=>unpack(new Set(sel.map(s=>s.id)))} title="Back to India stock, still tagged for this show" style={{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>↩ Unpack</button>}
                           <button onClick={()=>setPackSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:6,padding:"6px 9px",fontSize:12,cursor:"pointer"}}>✕</button>
                         </div>)}
-                      {!list.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>No shipment on its way to {show.name}. In step 2, tick what's packed and choose <b>Pack into</b> — a new sea or air shipment is made right there.</div>:
-                      list.map(sh=>{
-                        const all=cardsIn(sh.id),cards=all.filter(matchQ).sort(byBox);
-                        const kg=flowSentKgTotal(all);
-                        const boxes=new Set(all.map(s=>String(s.location||"").trim()).filter(Boolean)).size;
-                        const costInr=all.reduce((a,s)=>a+cardCostInr(s),0),valUsd=all.reduce((a,s)=>a+cardValUsd(s),0);
-                        const ids=cards.map(s=>s.id),allOn=ids.length>0&&ids.every(id=>packSel.has(id));
-                        const booked=!!sh.expenseId&&showExpenses.some(x=>x.id===sh.expenseId);
-                        const sent=!!sh.sentAt;
-                        const form=()=>({mode:"sent",id:sh.id,sentAt:sh.sentAt||today(),cost:sh.cost||"",costCurrency:sh.costCurrency||"INR",ref:sh.ref||"",eta:sh.eta||"",invoiceId:sh.invoiceId||"",notes:sh.notes||""});
-                        return(
-                        <div key={sh.id} style={{border:`1px solid ${sent?"#3B6FB666":C.border}`,borderRadius:14,background:C.surface,marginBottom:16,overflow:"hidden"}}>
-                          <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",padding:"12px 14px",background:sent?"#EEF3FB":C.card,borderBottom:`1px solid ${C.border}`}}>
-                            <div style={{fontSize:28,lineHeight:1,paddingTop:2}}>{shipIcon(sh)}</div>
-                            <div style={{flex:"1 1 200px",minWidth:0}}>
-                              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                                <span style={{fontSize:15.5,fontWeight:750,color:C.ink}}>{shipLabel(sh)}</span>
-                                <span style={{fontSize:11,fontWeight:750,borderRadius:10,padding:"2px 9px",background:sent?"#DCE7F7":"#FBEBD6",color:sent?"#24518F":"#9a5a12"}}>{sent?`🚚 On the way · sent ${fmtDate(sh.sentAt)}`:"📦 Packing"}</span>
-                                {sent&&sh.eta&&<span style={{fontSize:11,color:C.inkMid}}>due {fmtDate(sh.eta)}</span>}
-                              </div>
-                              <div style={{fontSize:12,color:C.inkMid,marginTop:4}}><b style={{color:C.ink}}>{all.length} card{all.length===1?"":"s"}</b>{boxes?` · ${boxes} box${boxes===1?"":"es"}`:""}{kg>0?` · ${fmtFlowNum(+kg.toFixed(2))} kg`:""}{costInr>0?` · cost ₹${Math.round(costInr).toLocaleString("en-IN")}`:""}{valUsd>0?` · ${fmtCur(valUsd)} on the table`:""}</div>
-                              <div style={{fontSize:11.5,color:C.inkMid,marginTop:5,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
-                                {!sent&&(isAdmin
-                                  ?<label style={{display:"inline-flex",alignItems:"center",gap:5,whiteSpace:"nowrap"}}>Send by<input type="date" value={sh.date||""} onChange={e=>saveShipment(sh.id,{date:e.target.value})} style={{...FI,fontSize:mob?16:11.5,padding:"2px 6px"}}/></label>
-                                  :sh.date?<span>Send by <b>{fmtDate(sh.date)}</b></span>:null)}
-                                {sh.ref&&<span>B/L · AWB <b style={{color:C.ink}}>{sh.ref}</b></span>}
-                                {+sh.cost>0&&<span>Freight <b style={{color:C.ink}}>{sh.costCurrency||"INR"} {(+sh.cost).toLocaleString("en-IN")}</b>{sent?(booked?<span style={{color:"#0f7a55",fontWeight:700}}> · in Costs</span>:<span style={{color:C.amber,fontWeight:700}}> · not in Costs — open Details and save</span>):null}</span>}
-                                {sh.invoiceNo&&<span>🧾 Invoice <b style={{color:C.ink}}>{sh.invoiceNo}</b></span>}
-                              </div>
-                              {sh.notes&&<div style={{fontSize:11,color:C.inkFaint,marginTop:3,whiteSpace:"pre-wrap"}}>{sh.notes}</div>}
-                            </div>
-                            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",justifyContent:"flex-end"}}>
-                              {ids.length>0&&<button onClick={()=>setPackSel(prev=>{const n=new Set(prev);ids.forEach(id=>allOn?n.delete(id):n.add(id));return n;})} style={ghost}>{allOn?"Untick these":"Tick these"}</button>}
-                              {isAdmin&&!sent&&<button disabled={!all.length} title={all.length?"Record the day it left, its freight and papers":"Pack cards into it first"} onClick={()=>{setInvQ("");setShipForm(form());}} style={{background:all.length?"#24518F":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12.5,fontWeight:750,cursor:all.length?"pointer":"default"}}>🚚 Mark sent</button>}
-                              {isAdmin&&sent&&<button onClick={()=>{setInvQ("");setShipForm(form());}} style={ghost}>✎ Details</button>}
-                              {isAdmin&&sent&&<button onClick={()=>setShipForm({mode:"reached",id:sh.id,reachedAt:today()})} style={{background:"#0f7a55",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12.5,fontWeight:750,cursor:"pointer"}}>✓ Mark reached</button>}
-                              {isAdmin&&!all.length&&<button onClick={()=>delShipmentById(sh)} title="Delete this shipment" style={{...ghost,color:C.red}}>Delete</button>}
-                            </div>
+                      {!packedItems.length?<div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing packed and waiting. Mark labelled cards packed in step 2.{onWayItems.length?<> {onWayItems.length} card{onWayItems.length===1?" is":"s are"} on the way — <button onClick={()=>setShipStep("sent")} style={{background:"none",border:"none",padding:0,font:"inherit",color:C.blue,fontWeight:700,cursor:"pointer"}}>step 4</button>.</>:null}</div>:
+                      !visible.length?<div style={{fontSize:12,color:C.inkFaint,padding:14,textAlign:"center"}}>No packed card matches the search.</div>:
+                      groups.map(g=>{const ids=g.cards.map(s=>s.id),on=ids.every(id=>packSel.has(id)),gk=flowSentKgTotal(g.cards),gb=boxCount(g.cards);return(
+                        <div key={g.day||"undated"} style={{marginBottom:18}}>
+                          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",borderBottom:`1px solid ${C.border}`,padding:"2px 2px 8px",marginBottom:12}}>
+                            <div style={{flex:1,minWidth:180,fontSize:13.5,fontWeight:750,color:C.ink}}>📦 Packed {g.day?fmtDate(g.day):"— date not recorded"} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"}{gb?` · ${gb} box${gb===1?"":"es"}`:""}{gk>0?` · ${fmtFlowNum(+gk.toFixed(2))} kg`:""}</span></div>
+                            <button onClick={()=>setPackSel(prev=>{const n=new Set(prev);ids.forEach(id=>on?n.delete(id):n.add(id));return n;})} style={{...ghost,padding:"5px 10px",fontSize:11.5}}>{on?"Untick these":"Tick these"}</button>
                           </div>
-                          {!all.length?<div style={{fontSize:12,color:C.inkFaint,padding:"18px 14px",textAlign:"center"}}>Nothing packed in it yet — in step 2, tick cards and <b>Pack into</b> this shipment.</div>:
-                          !cards.length?<div style={{fontSize:12,color:C.inkFaint,padding:"14px",textAlign:"center"}}>None of its cards match the search.</div>:
-                          <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(190px,1fr))",gap:10,padding:12}}>
-                            {cards.map(s=>{const on=packSel.has(s.id);const cov=stockCover(s);return(
-                              <div key={s.id} onClick={()=>setPackSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})} style={{background:on?C.amberBg:C.surface,borderRadius:12,overflow:"hidden",cursor:"pointer",boxShadow:on?`0 0 0 2px ${C.amber}`:"var(--e-1)"}}>
-                                <div style={{position:"relative",aspectRatio:"4 / 3",background:C.card}}>
-                                  {cov&&<img src={thumbUrl(cov,400)} alt="" loading="lazy" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>}
-                                  <div style={{position:"absolute",top:8,left:8,width:22,height:22,borderRadius:6,background:on?C.amber:"rgba(255,255,255,.92)",display:"grid",placeItems:"center",color:"#fff",fontSize:13,fontWeight:800,boxShadow:"0 1px 4px rgba(0,0,0,.2)"}}>{on?"✓":""}</div>
-                                  {s.location&&<div style={{position:"absolute",top:8,right:8,background:"rgba(255,252,246,.92)",borderRadius:12,padding:"2px 9px",fontSize:11.5,fontWeight:800}}>Box {s.location}</div>}
-                                </div>
-                                <div style={{padding:"8px 11px 10px"}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:6}}><b style={{fontSize:13,color:C.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.material||"Item"}</b>{s.grade&&<span style={{textTransform:"uppercase",fontSize:9.5,fontWeight:800,color:"#7A5A1E",background:"#F7EACB",borderRadius:9,padding:"0 6px"}}>{s.grade}</span>}</div>
-                                  <div style={{fontSize:10.5,color:C.inkMid,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{[s.shape,...flowQtyLines(s)].filter(Boolean).join(" · ")}</div>
-                                  <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11}}>
-                                    <span style={{color:C.inkFaint}}>{s.packedAt?`packed ${fmtDate(String(s.packedAt).slice(0,10))}`:""}</span>
-                                    <span style={{fontWeight:700,color:C.ink}}>{cardValUsd(s)>0?fmtCur(cardValUsd(s)):""}</span>
-                                  </div>
-                                </div>
-                              </div>);})}
-                          </div>}
-                        </div>);
-                      })}
-                      {reached.length>0&&<div style={{fontSize:11.5,color:C.inkMid,padding:"2px 4px"}}>✓ {reached.map(sh=>`${shipLabel(sh)} reached ${fmtDate(sh.reachedAt)}`).join(" · ")} — {reached.length===1?"its":"their"} cards are in <button onClick={()=>setShipStep("sent")} style={{background:"none",border:"none",padding:0,font:"inherit",color:C.blue,fontWeight:700,cursor:"pointer"}}>At the show</button>.</div>}
+                          <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(190px,1fr))",gap:10}}>
+                            {g.cards.map(s=>miniCard(s,packSel.has(s.id),()=>setPackSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;}),s.vendor||""))}
+                          </div>
+                        </div>);})}
                     </>);
                   })()}
-                  {/* Marking a shipment sent (or its details) and reached. */}
+                  {/* Sending a shipment, its details once sent, and receiving it. */}
                   {shipForm&&(()=>{
-                    const f=shipForm,sh=shipmentById.get(f.id);if(!sh)return null;
+                    const f=shipForm,sh=f.id?shipmentById.get(f.id):null;
+                    if(f.mode!=="send"&&!sh)return null;
                     const set=(k,v)=>setShipForm(x=>({...x,[k]:v}));
-                    const n=cardsIn(sh.id).length;
                     const lab={fontSize:9.5,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:3,display:"block"};
                     const inp={...FI,width:"100%",boxSizing:"border-box",fontSize:mob?16:13,padding:"7px 9px"};
                     const close=()=>{setShipForm(null);setInvQ("");};
-                    const shell=(title,sub,body,actions)=>(
+                    const shell=(icon,title,sub,body,actions)=>(
                       <div onClick={close} style={{position:"fixed",inset:0,background:"rgba(20,15,5,.5)",zIndex:950,display:"grid",placeItems:"center",padding:16}}>
                         <div onClick={e=>e.stopPropagation()} style={{background:C.surface,borderRadius:14,width:"min(560px,100%)",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
                           <div style={{display:"flex",gap:12,alignItems:"center",padding:"14px 18px",borderBottom:`1px solid ${C.border}`}}>
-                            <div style={{fontSize:28}}>{shipIcon(sh)}</div>
+                            <div style={{fontSize:28}}>{icon}</div>
                             <div style={{flex:1}}><div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:21,fontWeight:600}}>{title}</div><div style={{fontSize:11.5,color:C.inkFaint}}>{sub}</div></div>
                             <button onClick={close} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:C.inkFaint}}>×</button>
                           </div>
@@ -21758,25 +21752,34 @@ thead{display:table-header-group;}
                         </div>
                       </div>);
                     const cancel=<button onClick={close} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:13}}>Cancel</button>;
-                    if(f.mode==="reached")return shell(`${shipLabel(sh)} reached`,`${n} card${n===1?"":"s"} · sent ${fmtDate(sh.sentAt)}`,
+                    if(f.mode==="received"){const n=cardsIn(sh.id).length;return shell(shipIcon(sh),`${shipLabel(sh)} received`,`${n} card${n===1?"":"s"} · sent ${fmtDate(sh.sentAt)}`,
                       <>
-                        <label style={{display:"block"}}><span style={lab}>Reached on</span><input type="date" value={f.reachedAt||""} onChange={e=>set("reachedAt",e.target.value)} style={inp}/></label>
-                        <div style={{fontSize:12,color:C.inkMid}}>Its {n} card{n===1?"":"s"} move to <b>At the show</b>.</div>
+                        <label style={{display:"block"}}><span style={lab}>Received on</span><input type="date" value={f.reachedAt||""} onChange={e=>set("reachedAt",e.target.value)} style={inp}/></label>
+                        <div style={{fontSize:12,color:C.inkMid}}>Its {n} card{n===1?"":"s"} are then at the show — priced and sold from step 4.</div>
                       </>,
-                      <>{cancel}<button disabled={!f.reachedAt} onClick={()=>confirmReached(f)} style={{background:f.reachedAt?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",cursor:f.reachedAt?"pointer":"default",fontSize:13,fontWeight:700}}>✓ Mark reached</button></>);
+                      <>{cancel}<button disabled={!f.reachedAt} onClick={()=>confirmReceived(f)} style={{background:f.reachedAt?"#0f7a55":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",cursor:f.reachedAt?"pointer":"default",fontSize:13,fontWeight:700}}>✓ Mark received</button></>);}
+                    // Which shipment: one planned in Prep, or a new one of a kind.
+                    const picked=f.mode==="send"?(String(f.pick).startsWith("plan:")?shipmentById.get(f.pick.slice(5)):{type:String(f.pick||"new:Sea Freight").slice(4)}):sh;
+                    const sendCards=f.mode==="send"?packedItems.filter(s=>(f.ids||[]).includes(s.id)):cardsIn(sh.id);
+                    const sk=flowSentKgTotal(sendCards),sb=boxCount(sendCards);
                     // The export invoices, newest first, to name the one this shipment travels on.
                     const buyerName=Object.fromEntries((ngBuyers||[]).map(b=>[b.id,b.name||b.company||""]));
                     const invs=(ngInvoices||[]).filter(i=>i.invNo&&i.status!=="cancelled").sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
                     const invText=i=>[i.invNo,i.date?fmtDate(i.date):"",[buyerName[i.buyerId],i.consigneeName].filter(Boolean).join(" → "),+i.totalAmt>0?`${i.currency||""} ${(+i.totalAmt).toLocaleString("en-IN",{maximumFractionDigits:0})}`:""].filter(Boolean).join(" · ");
                     const q=invQ.trim().toLowerCase();
                     const hits=invs.filter(i=>!q||`${invText(i)} ${i.portDischarge||""}`.toLowerCase().includes(q)).slice(0,6);
-                    const picked=invs.find(i=>i.id===f.invoiceId)||(f.invoiceId?{id:f.invoiceId,invNo:sh.invoiceNo||"(invoice)"}:null);
-                    const ok=!!f.sentAt;
-                    return shell(sh.sentAt?`${shipLabel(sh)} details`:`Send the ${shipLabel(sh)}`,`${n} card${n===1?"":"s"}${sh.sentAt?` · sent ${fmtDate(sh.sentAt)}`:" packed"}`,
+                    const linked=invs.find(i=>i.id===f.invoiceId)||(f.invoiceId?{id:f.invoiceId,invNo:sh?.invoiceNo||"(invoice)"}:null);
+                    const ok=!!f.sentAt&&(f.mode!=="send"||sendCards.length>0);
+                    return shell(shipIcon(picked),f.mode==="send"?"Send a shipment":`${shipLabel(sh)} details`,`${sendCards.length} card${sendCards.length===1?"":"s"}${sb?` · ${sb} box${sb===1?"":"es"}`:""}${sk>0?` · ${fmtFlowNum(+sk.toFixed(2))} kg`:""}${f.mode!=="send"?` · sent ${fmtDate(sh.sentAt)}`:""}`,
                       <>
+                        {f.mode==="send"&&<label style={{display:"block"}}><span style={lab}>Shipment</span>
+                          <select value={f.pick} onChange={e=>{const v=e.target.value;setShipForm(x=>({...x,pick:v,...(v.startsWith("plan:")?{notes:shipmentById.get(v.slice(5))?.notes||x.notes}:{})}));}} style={{...inp,cursor:"pointer"}}>
+                            {plannedShipments.map(p=><option key={p.id} value={`plan:${p.id}`}>{shipIcon(p)} {shipLabel(p)} — planned in Prep{p.date?`, send by ${fmtDate(p.date)}`:""}</option>)}
+                            {SHIP_TYPES.map(([t,ic,l])=><option key={t} value={`new:${t}`}>{ic} New {l.toLowerCase()} shipment</option>)}
+                          </select></label>}
                         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                           <label style={{display:"block"}}><span style={lab}>Sent on</span><input type="date" value={f.sentAt||""} onChange={e=>set("sentAt",e.target.value)} style={inp}/></label>
-                          <label style={{display:"block"}}><span style={lab}>Due to reach · optional</span><input type="date" value={f.eta||""} onChange={e=>set("eta",e.target.value)} style={inp}/></label>
+                          <label style={{display:"block"}}><span style={lab}>Due to arrive · optional</span><input type="date" value={f.eta||""} onChange={e=>set("eta",e.target.value)} style={inp}/></label>
                         </div>
                         <label style={{display:"block"}}><span style={lab}>Freight cost · goes to Costs as Shipping</span>
                           <div style={{display:"flex",gap:6}}>
@@ -21785,8 +21788,8 @@ thead{display:table-header-group;}
                           </div></label>
                         <label style={{display:"block"}}><span style={lab}>B/L or AWB number · optional</span><input value={f.ref||""} onChange={e=>set("ref",e.target.value)} placeholder="Bill of lading / air waybill" style={inp}/></label>
                         <div><span style={lab}>Export invoice · optional</span>
-                          {picked?<div style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px",fontSize:12.5}}>
-                              <span style={{flex:1,minWidth:0}}>🧾 {picked.date?invText(picked):picked.invNo}</span>
+                          {linked?<div style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 10px",fontSize:12.5}}>
+                              <span style={{flex:1,minWidth:0}}>🧾 {linked.date?invText(linked):linked.invNo}</span>
                               <button onClick={()=>set("invoiceId","")} title="Unlink" style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:C.inkFaint}}>×</button>
                             </div>
                           :<>
@@ -21800,18 +21803,69 @@ thead{display:table-header-group;}
                         <label style={{display:"block"}}><span style={lab}>Notes</span><textarea value={f.notes||""} onChange={e=>set("notes",e.target.value)} rows={2} placeholder="Forwarder, container, anything to remember" style={{...inp,resize:"vertical"}}/></label>
                       </>,
                       <>
-                        {sh.sentAt&&<button onClick={async()=>{close();await unsend(sh);}} style={{background:"none",border:"none",color:C.red,fontSize:12.5,fontWeight:700,cursor:"pointer",padding:"8px 4px"}}>Mark not sent</button>}
+                        {f.mode!=="send"&&<button onClick={()=>unsend(sh)} style={{background:"none",border:"none",color:C.red,fontSize:12.5,fontWeight:700,cursor:"pointer",padding:"8px 4px"}}>Undo send</button>}
                         {cancel}
-                        <button disabled={!ok} onClick={()=>confirmSent(f)} style={{background:ok?"#24518F":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",cursor:ok?"pointer":"default",fontSize:13,fontWeight:700}}>{sh.sentAt?"Save":"🚚 Mark sent"}</button>
+                        <button disabled={!ok} onClick={()=>saveSent(f)} style={{background:ok?"#24518F":"#ccc",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",cursor:ok?"pointer":"default",fontSize:13,fontWeight:700}}>{f.mode==="send"?`🚚 Send ${sendCards.length}`:"Save"}</button>
                       </>);
                   })()}
                   {shipStepNow==="sent"&&<>
-                  {/* What is at the show. It gets here through Stock → Send to show;
-                      this screen reports it and prints its cards. */}
-                  <div style={{border:`1px solid ${C.border}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:12}}>
+                  {/* ON THE WAY — sent, not received yet. Receiving a shipment puts its
+                      cards at the show below. */}
+                  {onWayShipments.length>0&&(()=>{
+                    const sel=onWayItems.filter(s=>packSel.has(s.id)&&matchQ(s));
+                    const ghost={background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 11px",fontSize:12,fontWeight:700,cursor:"pointer",color:C.ink};
+                    return(<div style={{marginBottom:18}}>
+                      {sel.length>0&&(
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:"#1e293b",color:"#fff",borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:12,position:"sticky",top:8,zIndex:30}}>
+                          <b>{sel.length} ticked</b>
+                          <span style={{flex:1}}/>
+                          {isAdmin&&<button onClick={()=>backToPacked(new Set(sel.map(s=>s.id)))} title="Not in this shipment — back to step 3, packed" style={{background:"transparent",color:"#fff",border:"1px solid #64748b",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>↩ Back to packed</button>}
+                          <button onClick={()=>setPackSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:6,padding:"6px 9px",fontSize:12,cursor:"pointer"}}>✕</button>
+                        </div>)}
+                      {onWayShipments.map(sh=>{
+                        const all=cardsIn(sh.id),cards=all.filter(matchQ).sort((a,b)=>String(a.location||"").localeCompare(String(b.location||""),undefined,{numeric:true})||shipSort(a,b));
+                        const kg=flowSentKgTotal(all),boxes=boxCount(all);
+                        const costInr=all.reduce((a,s)=>a+cardCostInr(s),0),valUsd=all.reduce((a,s)=>a+cardValUsd(s),0);
+                        const ids=cards.map(s=>s.id),allOn=ids.length>0&&ids.every(id=>packSel.has(id));
+                        const booked=!!sh.expenseId&&showExpenses.some(x=>x.id===sh.expenseId);
+                        return(
+                        <div key={sh.id} style={{border:"1px solid #3B6FB666",borderRadius:14,background:C.surface,marginBottom:14,overflow:"hidden"}}>
+                          <div style={{display:"flex",gap:12,alignItems:"flex-start",flexWrap:"wrap",padding:"12px 14px",background:"#EEF3FB",borderBottom:`1px solid ${C.border}`}}>
+                            <div style={{fontSize:28,lineHeight:1,paddingTop:2}}>{shipIcon(sh)}</div>
+                            <div style={{flex:"1 1 200px",minWidth:0}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                                <span style={{fontSize:15.5,fontWeight:750,color:C.ink}}>{shipLabel(sh)}</span>
+                                <span style={{fontSize:11,fontWeight:750,borderRadius:10,padding:"2px 9px",background:"#DCE7F7",color:"#24518F"}}>🚚 On the way · sent {fmtDate(sh.sentAt)}</span>
+                                {sh.eta&&<span style={{fontSize:11,color:C.inkMid}}>due {fmtDate(sh.eta)}</span>}
+                              </div>
+                              <div style={{fontSize:12,color:C.inkMid,marginTop:4}}><b style={{color:C.ink}}>{all.length} card{all.length===1?"":"s"}</b>{boxes?` · ${boxes} box${boxes===1?"":"es"}`:""}{kg>0?` · ${fmtFlowNum(+kg.toFixed(2))} kg`:""}{costInr>0?` · cost ₹${Math.round(costInr).toLocaleString("en-IN")}`:""}{valUsd>0?` · ${fmtCur(valUsd)} on the table`:""}</div>
+                              <div style={{fontSize:11.5,color:C.inkMid,marginTop:5,display:"flex",gap:12,flexWrap:"wrap",alignItems:"center"}}>
+                                {sh.ref&&<span>B/L · AWB <b style={{color:C.ink}}>{sh.ref}</b></span>}
+                                {+sh.cost>0?<span>Freight <b style={{color:C.ink}}>{sh.costCurrency||"INR"} {(+sh.cost).toLocaleString("en-IN")}</b>{booked?<span style={{color:"#0f7a55",fontWeight:700}}> · in Costs</span>:<span style={{color:C.amber,fontWeight:700}}> · not in Costs — open Details and save</span>}</span>:<span style={{color:C.amber}}>No freight cost yet</span>}
+                                {sh.invoiceNo&&<span>🧾 Invoice <b style={{color:C.ink}}>{sh.invoiceNo}</b></span>}
+                              </div>
+                              {sh.notes&&<div style={{fontSize:11,color:C.inkFaint,marginTop:3,whiteSpace:"pre-wrap"}}>{sh.notes}</div>}
+                            </div>
+                            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",justifyContent:"flex-end"}}>
+                              {ids.length>0&&<button onClick={()=>setPackSel(prev=>{const n=new Set(prev);ids.forEach(id=>allOn?n.delete(id):n.add(id));return n;})} style={ghost}>{allOn?"Untick these":"Tick these"}</button>}
+                              {isAdmin&&<button onClick={()=>openDetails(sh)} style={ghost}>✎ Details</button>}
+                              {isAdmin&&<button onClick={()=>setShipForm({mode:"received",id:sh.id,reachedAt:today()})} style={{background:"#0f7a55",color:"#fff",border:"none",borderRadius:8,padding:"8px 14px",fontSize:12.5,fontWeight:750,cursor:"pointer"}}>✓ Mark received</button>}
+                            </div>
+                          </div>
+                          {!cards.length?<div style={{fontSize:12,color:C.inkFaint,padding:14,textAlign:"center"}}>{all.length?"None of its cards match the search.":"No cards in it."}</div>:
+                          <div style={{display:"grid",gridTemplateColumns:mob?"repeat(2,1fr)":"repeat(auto-fill,minmax(190px,1fr))",gap:10,padding:12,opacity:.92}}>
+                            {cards.map(s=>miniCard(s,packSel.has(s.id),()=>setPackSel(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;}),s.packedAt?`packed ${fmtDate(String(s.packedAt).slice(0,10))}`:""))}
+                          </div>}
+                        </div>);
+                      })}
+                    </div>);
+                  })()}
+                  {/* What is at the show — its shipment received, or there by the time the
+                      show opened. This screen reports it, prices it and prints its cards. */}
+                  {arrivedItems.length>0&&<div style={{border:`1px solid ${C.border}`,borderRadius:9,background:C.card,padding:"12px 14px",marginBottom:12}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,marginBottom:10,flexWrap:"wrap"}}>
                       <span style={{fontSize:9,fontWeight:800,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.7}}>At the show</span>
-                      <span style={{fontSize:10,color:C.inkFaint}}>{arrivedItems.length} card{arrivedItems.length===1?"":"s"} · reached with a shipment, or sent before shipments{packedItems.length?` · ${packedItems.length} more on the way in step 3`:""}</span>
+                      <span style={{fontSize:10,color:C.inkFaint}}>{arrivedItems.length} card{arrivedItems.length===1?"":"s"} received{onWayItems.length?` · ${onWayItems.length} more on the way`:""}</span>
                     </div>
                     <div style={{display:"grid",gridTemplateColumns:mob?"1fr 1fr":"repeat(4,1fr)",gap:8}}>
                       {[
@@ -21828,7 +21882,7 @@ thead{display:table-header-group;}
                       ))}
                     </div>
                     <div style={{fontSize:10,color:C.inkFaint,marginTop:9}}>Cost and SP are per-unit rates; value is what went times SP.</div>
-                  </div>
+                  </div>}
                   {/* (planned step moved above: see PLANNED) */}
                   {shipSel.size>0&&(
                     <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",background:"#1e293b",color:"#fff",borderRadius:8,padding:"8px 12px",marginBottom:8,fontSize:11}}>
@@ -21839,7 +21893,6 @@ thead{display:table-header-group;}
                       <span style={{marginLeft:8}}>Flat $ each card</span><input value={shipFlat} onChange={e=>setShipFlat(e.target.value.replace(/[^\d.]/g,""))} onKeyDown={e=>e.key==="Enter"&&priceTicked("flat")} inputMode="decimal" style={{width:70,padding:"4px 6px",borderRadius:5,border:"1px solid #475569",background:"#0f172a",color:"#fff"}}/>
                       <button onClick={()=>priceTicked("flat")} disabled={!(+shipFlat>0)} style={{background:"#10b981",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Set</button>
                       <button onClick={()=>openInMakeLabels(false)} style={{background:"#8B6F47",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>🏷 Labels for these</button>
-                      {isAdmin&&packMenuFor("sel",new Set([...shipSel]),"📦 Into a shipment",{background:"#24518F",color:"#fff",border:"none",borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer"})}
                       <button onClick={()=>setShipSel(new Set())} style={{background:"transparent",color:"#94a3b8",border:"1px solid #475569",borderRadius:5,padding:"4px 8px",fontSize:11,cursor:"pointer"}}>✕</button>
                     </div>
                   )}
@@ -21857,7 +21910,7 @@ thead{display:table-header-group;}
                   </div>
 
                   {shipSent.length===0?(
-                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing has reached {show.name} yet.{packedItems.length?<> {packedItems.length} card{packedItems.length===1?" is":"s are"} packed or on the way — they come here when their shipment is marked reached in <button onClick={()=>setShipStep("packed")} style={{background:"none",border:"none",padding:0,font:"inherit",color:C.blue,fontWeight:700,cursor:"pointer"}}>step 3</button>.</>:" Pack labelled cards into a shipment in step 2."}</div>
+                    <div style={{fontSize:12,color:C.inkFaint,background:C.card,border:`1px dashed ${C.border}`,borderRadius:9,padding:22,textAlign:"center"}}>Nothing received at {show.name} yet.{onWayItems.length?` ${onWayItems.length} card${onWayItems.length===1?" is":"s are"} on the way above — mark the shipment received when it lands.`:packedItems.length?<> {packedItems.length} card{packedItems.length===1?" is":"s are"} packed in <button onClick={()=>setShipStep("packed")} style={{background:"none",border:"none",padding:0,font:"inherit",color:C.blue,fontWeight:700,cursor:"pointer"}}>step 3</button>, waiting to be sent.</>:" Mark labelled cards packed in step 2, then send them from step 3."}</div>
                   ):sentView==="cards"?(()=>{
                     /* Cards, grouped by the shipment they came in — and those sent before
                        shipments by the day they went — newest first, each with what is at
@@ -21865,7 +21918,7 @@ thead{display:table-header-group;}
                        typed in place. */
                     const groups=[],byKey=new Map();
                     shipSent.filter(matchQ).forEach(s=>{
-                      const sh=s.shipmentId&&shipmentById.get(s.shipmentId);
+                      const sh=shipOf(s);
                       const day=String(s.sentAt||"").slice(0,10),k=sh?`ship:${sh.id}`:`day:${day}`;
                       let g=byKey.get(k);if(!g){g={key:k,sh,day,cards:[]};byKey.set(k,g);groups.push(g);}
                       g.cards.push(s);
@@ -21881,13 +21934,12 @@ thead{display:table-header-group;}
                         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",borderBottom:`1px solid ${C.border}`,padding:"2px 2px 8px",marginBottom:12}}>
                           <div style={{flex:1,minWidth:200}}>
                             {g.sh
-                              ?<div style={{fontSize:13.5,fontWeight:750,color:C.ink}}>{shipIcon(g.sh)} {shipLabel(g.sh)} · reached {fmtDate(g.sh.reachedAt)} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"}{g.sh.sentAt?` · sent ${fmtDate(g.sh.sentAt)}`:""}</span></div>
-                              :<div style={{fontSize:13.5,fontWeight:750,color:C.ink}}>📦 Sent {g.day?fmtDate(g.day):"— date not recorded"} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"} · before shipments</span></div>}
+                              ?<div style={{fontSize:13.5,fontWeight:750,color:C.ink}}>{shipIcon(g.sh)} {shipLabel(g.sh)} · received {fmtDate(g.sh.reachedAt)} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"}{g.sh.sentAt?` · sent ${fmtDate(g.sh.sentAt)}`:""}</span></div>
+                              :<div style={{fontSize:13.5,fontWeight:750,color:C.ink}}>📦 Sent {g.day?fmtDate(g.day):"— date not recorded"} <span style={{fontWeight:600,color:C.inkMid}}>· {g.cards.length} card{g.cards.length===1?"":"s"}</span></div>}
                             <div style={{fontSize:11,color:C.inkMid}}>{costInr>0?`Cost ₹${Math.round(costInr).toLocaleString("en-IN")} (${fmtUsd(costInr/usdInr)})`:"No cost yet"} · {valUsd>0?`${fmtCur(valUsd)} on the table${costInr>0?` · ${((valUsd*usdInr)/costInr).toFixed(1)}× cost`:""}`:"not priced yet"}{unpriced>0&&valUsd>0?<span style={{color:C.amber}}> · {unpriced} unpriced</span>:null}</div>
                           </div>
                           <button onClick={()=>setShipSel(prev=>{const n=new Set(prev);ids.forEach(id=>allOn?n.delete(id):n.add(id));return n;})} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 10px",fontSize:11.5,fontWeight:700,cursor:"pointer",color:C.ink}}>{allOn?"Untick these":"Tick these"}</button>
-                          {isAdmin&&g.sh&&<button onClick={()=>{if(confirm(`Mark the ${shipLabel(g.sh)} as not reached? Its ${cardsIn(g.sh.id).length} cards go back to step 3.`))saveShipment(g.sh.id,{reachedAt:""});}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 10px",fontSize:11.5,fontWeight:700,cursor:"pointer",color:C.inkMid}}>↺ Not reached</button>}
-                          {isAdmin&&!g.sh&&packMenuFor(g.key,new Set(ids),"📦 Put in a shipment",{background:"#24518F",color:"#fff",border:"none",borderRadius:8,padding:"6px 11px",fontSize:11.5,fontWeight:750,cursor:"pointer"})}
+                          {isAdmin&&g.sh&&<button onClick={()=>{if(confirm(`Mark the ${shipLabel(g.sh)} as not received? Its ${cardsIn(g.sh.id).length} cards go back to on the way.`))saveShipment(g.sh.id,{reachedAt:""});}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"5px 10px",fontSize:11.5,fontWeight:700,cursor:"pointer",color:C.inkMid}}>↺ Not received</button>}
                         </div>
                         <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(auto-fill,minmax(290px,1fr))",gap:14}}>
                           {g.cards.map(s=>{const on=shipSel.has(s.id);const cov=stockCover(s);return(
@@ -22244,7 +22296,7 @@ thead{display:table-header-group;}
                       <span style={{fontSize:13,fontWeight:700,color:C.red}}>{exp.currency} {(+exp.amount||0).toLocaleString("en-IN",{maximumFractionDigits:2})}</span>
                       <span style={{fontSize:10,fontWeight:600,color:C.inkMid,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,padding:"1px 5px"}}>{exp.category}</span>
                       <span style={{fontSize:10,color:C.inkFaint}}>{fmtDate(exp.date)}</span>
-                      {exp.shipmentId&&shipmentById.get(exp.shipmentId)&&<button onClick={e=>{e.stopPropagation();setShowTab("shipment");setShipView("plan");setShipStep(shipmentById.get(exp.shipmentId).reachedAt?"sent":"packed");}} title="Booked when the shipment was marked sent — change it there" style={{fontSize:10,fontWeight:700,color:"#24518F",background:"#EEF3FB",border:"1px solid #3B6FB644",borderRadius:10,padding:"1px 7px",cursor:"pointer"}}>{shipIcon(shipmentById.get(exp.shipmentId))} {shipLabel(shipmentById.get(exp.shipmentId))}</button>}
+                      {exp.shipmentId&&shipmentById.get(exp.shipmentId)&&<button onClick={e=>{e.stopPropagation();setShowTab("shipment");setShipView("plan");setShipStep("sent");}} title="Booked when the shipment was marked sent — change it there" style={{fontSize:10,fontWeight:700,color:"#24518F",background:"#EEF3FB",border:"1px solid #3B6FB644",borderRadius:10,padding:"1px 7px",cursor:"pointer"}}>{shipIcon(shipmentById.get(exp.shipmentId))} {shipLabel(shipmentById.get(exp.shipmentId))}</button>}
                     </div>
                     {exp.notes&&<div style={{fontSize:11,color:C.inkMid,marginTop:2,whiteSpace:"pre-wrap"}}>{exp.notes}</div>}
                   </div>
