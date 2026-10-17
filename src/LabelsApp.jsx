@@ -308,15 +308,24 @@ const EDIT_CSS = `
 .lbl-sheet{width:816px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18);margin:0 auto 24px;padding:27px 0 27px;display:grid;grid-template-columns:336px 336px;grid-auto-rows:178px;gap:7px;justify-content:center;align-content:start;min-height:1056px;box-sizing:border-box}
 `;
 
+const esc = t => String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+// One card as the print sheet writes it — and as the stock card's label preview shows it.
+function cardMarkup(set, c) {
+  const L = langOf(set.lang);
+  return `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-box"><div>${esc(c.box)}</div></div><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en).replace(/\n/g, "<br>")}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local).replace(/\n/g, "<br>")}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
+}
+const fitScript = (set, g) => `<script>
+function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){return el.scrollWidth>el.clientWidth+1||el.scrollHeight>s*1.3*2+2}while(over()&&s>base*.6){s-=.5;el.style.fontSize=s+"px";}}
+(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,${18 * g.k * g.kn * (set.lang ? 1 : 1.3)})});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,${17 * g.k * g.kl})});});
+</script>`;
+
 /* The print sheet: its own document with inch geometry, the same card CSS and
    the same fit loop, so it prints what the editor shows. */
 function printSet(set, win = null, onPrinted = null) {
-  const L = langOf(set.lang);
-  const esc = t => String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
   const pages = [];
   const g = geom(set);
   for (let i = 0; i < set.cards.length; i += g.per) pages.push(set.cards.slice(i, i + g.per));
-  const card = c => `<div class="lbl-card${set.lang ? "" : " lbl-solo"}"><div class="lbl-box"><div>${esc(c.box)}</div></div><div class="lbl-code">${esc(c.code)}</div><div class="lbl-line"><div class="lbl-en">${esc(c.en).replace(/\n/g, "<br>")}</div></div>${set.lang ? `<div class="lbl-line"><div class="lbl-jp"${L.font ? ` style="font-family:${L.font}"` : ""}>${esc(c.local).replace(/\n/g, "<br>")}</div></div>` : ""}<div class="lbl-rule1"></div><div class="lbl-type">${esc(c.type)}</div><div class="lbl-origin">${esc(c.origin)}</div><div class="lbl-rule2"></div><div class="lbl-foot"><div>${esc(c.qty)}</div><div class="lbl-price">${esc(c.price)}</div></div></div>`;
+  const card = c => cardMarkup(set, c);
   // A window opened in the click itself, by a caller that had to load first.
   const w = win || window.open("", "_blank");
   if (!w) return false;
@@ -336,10 +345,7 @@ ${layoutCss(set)}
 </style></head><body>
 <div class="bar"><div><b>${esc(set.name)}</b> <span>· ${set.cards.length} card${set.cards.length === 1 ? "" : "s"} · ${pages.length} page${pages.length === 1 ? "" : "s"} · ${paper.label}</span></div><button onclick="window.print()">🖨 Print / Save as PDF</button></div>
 ${pages.map(p => `<div class="sheet">${p.map(card).join("")}</div>`).join("")}
-<script>
-function fit(el,base){el.style.fontSize=base+"px";var s=base;function over(){return el.scrollWidth>el.clientWidth+1||el.scrollHeight>s*1.3*2+2}while(over()&&s>base*.6){s-=.5;el.style.fontSize=s+"px";}}
-(document.fonts?document.fonts.ready:Promise.resolve()).then(function(){document.querySelectorAll(".lbl-en").forEach(function(e){fit(e,${18 * g.k * g.kn * (set.lang ? 1 : 1.3)})});document.querySelectorAll(".lbl-jp").forEach(function(e){fit(e,${17 * g.k * g.kl})});});
-</script></body></html>`);
+${fitScript(set, g)}</body></html>`);
   w.document.close();
   // Printed from the sheet (its button or ⌘P): the caller marks the labels printed.
   // A confirm() here would be lost — this tab is behind the sheet by then. Added
@@ -593,6 +599,54 @@ export async function markStockLabelsPrinted(stockIds, printed = true) {
   for (const { s, ids } of bySet.values())
     await upsertItemK(KEY, { ...s, cards: s.cards.map(c => ids.has(c.id) ? { ...c, printedAt: printed ? ts : "" } : c), updatedAt: ts });
   return { ids: [...best.keys()], missing: stockIds.length - best.size };
+}
+
+/* A stock card's label, read only and exactly as it prints: the newest one
+   made for it, in its set's own size and layout, drawn in a frame of its own
+   so the sheet's CSS and fit loop apply untouched. Printing it prints that
+   one label and, once printed, marks it so. */
+function labelPreviewHtml(set, c) {
+  const g = geom(set);
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><link href="${FONT_LINK}" rel="stylesheet"><style>${CARD_CSS}
+*{box-sizing:border-box}html,body{margin:0;background:transparent}body{padding:1px}
+.lbl-card{--k:${g.k};width:${g.w}in;height:${g.h}in;box-shadow:0 1px 3px rgba(0,0,0,.14)}
+${layoutCss(set)}</style></head><body>${cardMarkup(set, c)}${fitScript(set, g)}</body></html>`;
+}
+export function StockLabelView({ stockId }) {
+  const [hit, setHit] = useState(undefined);
+  const load = useCallback(() => loadK(KEY).then(v => setHit(newestLabels(v, [stockId]).get(stockId) || null)).catch(() => setHit(null)), [stockId]);
+  useEffect(() => { setHit(undefined); load(); return onCacheRefresh(keys => { if (keys.includes(KEY)) load(); }); }, [load]);
+  // The card is drawn at its print size and scaled down to fit the space it has.
+  const wrap = useRef(null);
+  const [avail, setAvail] = useState(0);
+  useEffect(() => {
+    const el = wrap.current; if (!el) return;
+    setAvail(el.clientWidth);
+    const ro = new ResizeObserver(() => setAvail(el.clientWidth)); ro.observe(el);
+    return () => ro.disconnect();
+  }, [hit]);
+  const note = { fontSize: 12, color: "#7a7268", fontFamily: "system-ui,sans-serif" };
+  if (hit === undefined) return <div style={note}>Loading the label…</div>;
+  if (!hit) return <div style={note}>No label made for this card yet — make one in Make Labels, or from a show's Shipment tab.</div>;
+  const { s: set, c } = hit, g = geom(set);
+  const W = g.w * 96 + 2, H = g.h * 96 + 2, k = avail ? Math.min(1, avail / W) : 1;
+  const day = t => { const d = new Date(t); return isNaN(d) ? String(t).slice(0, 10) : d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" }); };
+  const print = () => {
+    const w = window.open("", "_blank"); if (!w) return;
+    w.document.write("<p style='font:14px system-ui;padding:20px'>Preparing the label…</p>");
+    printStockLabels([stockId], w, ids => markStockLabelsPrinted(ids, true).then(load));
+  };
+  return (
+    <div>
+      <div ref={wrap} style={{ width: "100%", height: H * k, overflow: "hidden" }}>
+        <iframe title="Label" srcDoc={labelPreviewHtml(set, c)} style={{ width: W, height: H, border: 0, transform: `scale(${k})`, transformOrigin: "0 0", display: "block", background: "transparent" }} />
+      </div>
+      <div style={{ ...note, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+        <span style={{ flex: 1, minWidth: 0 }}>In <b style={{ color: "#2a2622" }}>{set.name || "a label set"}</b> · {c.printedAt ? <span style={{ color: "#0f7a55", fontWeight: 600 }}>✓ printed {day(c.printedAt)}</span> : "not printed yet"}</span>
+        <button onClick={print} style={{ ...btn(true), padding: "6px 12px", fontSize: 12 }}>🖨 Print</button>
+      </div>
+    </div>
+  );
 }
 
 const btn = (primary = false) => ({ background: primary ? "#6f5430" : "#f4f2ee", color: primary ? "#fff" : "#2a2622", border: `1px solid ${primary ? "#6f5430" : "#d6d0c7"}`, borderRadius: 6, padding: "8px 13px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "system-ui,sans-serif", whiteSpace: "nowrap" });
