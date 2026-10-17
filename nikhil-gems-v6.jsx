@@ -19926,7 +19926,9 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
      the cards at the show (step 3) both use it. */
   const pricePanel=(s,{labels=true}={})=>{
     const val=cardValUsd(s),pcs=pcsOf(s),cost=cardCostInr(s);
-    const flat=flatMode[s.id]||(+s.showFlatRate>0||(!(+s.showFlatPrice>0)&&kgOf(s)>0)?"kg":"total");
+    // A whole flat is priced the way it was last priced; unpriced, a mineral flat
+    // is priced as a total and other weighed cards per kg.
+    const flat=flatMode[s.id]||(+s.showFlatRate>0?"kg":+s.showFlatPrice>0||/mineral/i.test(s.productType||"")||!(kgOf(s)>0)?"total":"kg");
     const per=(parseFloat(s.qty)||0)>0?(s.unit||"pc"):(s.unit2||"kg");
     return(<>
       {/* Cost, for pricing: per unit, per piece where the card counts pieces,
