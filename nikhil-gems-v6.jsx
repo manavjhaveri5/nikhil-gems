@@ -16051,41 +16051,100 @@ function buildPackingBodyHTML(inv,buyers,company,pl){
    photo, each laid out its own way, so the AI reads the file and maps it onto
    cartons; the reconciliation against the invoice then shows anything that
    didn't come across. Descriptions are matched to the invoice's own wording
-   so the two line up. */
-async function importPackingFile(file,inv){
+   so the two line up.
+
+   The file is read a part at a time — a page of a PDF, a stretch of rows of a
+   sheet. Asked for a 97-carton list in one reply, the AI handed back 14; a page
+   is short enough that every carton on it comes back. A carton that runs over a
+   page break is joined back up, and pages from the workbook's other sheets (a
+   label tracker, a stock list) are left out. */
+async function importPackingFile(file,inv,onProgress){
   const name=file.name||"file",low=name.toLowerCase();
-  const b64=async f=>{const buf=new Uint8Array(await f.arrayBuffer());let s="";for(let i=0;i<buf.length;i+=0x8000)s+=String.fromCharCode(...buf.subarray(i,i+0x8000));return btoa(s);};
-  let part;
+  const b64=buf=>{let s="";for(let i=0;i<buf.length;i+=0x8000)s+=String.fromCharCode(...buf.subarray(i,i+0x8000));return btoa(s);};
+  const str=v=>v==null?"":String(v).trim();
+  const parts=[];
   if(/\.(xlsx|xls|csv|tsv|ods)$/.test(low)){
     const XLSX=await import("xlsx");
     const wb=XLSX.read(await file.arrayBuffer(),{type:"array"});
-    const text=wb.SheetNames.map(n=>`### Sheet: ${n}\n${XLSX.utils.sheet_to_csv(wb.Sheets[n],{blankrows:false})}`).join("\n\n").slice(0,60000);
-    part={type:"text",text:`The packing list, from the spreadsheet "${name}":\n${text}`};
+    const csv=rows=>XLSX.utils.sheet_to_csv(XLSX.utils.aoa_to_sheet(rows));
+    for(const n of wb.SheetNames){
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,blankrows:false,defval:""});
+      // 60 rows at a time; later stretches carry the heading row so their columns still read.
+      for(let i=0;i<rows.length;i+=60)parts.push({
+        where:`rows ${i+1}–${Math.min(i+60,rows.length)} of sheet "${n}"${i?" (its heading row repeated first)":""}`,
+        part:{type:"text",text:`From the spreadsheet "${name}", sheet "${n}":\n${csv(i?[rows[0],...rows.slice(i,i+60)]:rows.slice(0,60))}`},
+      });
+    }
   }else if(/\.pdf$/.test(low)||file.type==="application/pdf"){
-    part={type:"document",source:{media_type:"application/pdf",data:await b64(file),filename:name}};
+    const bytes=new Uint8Array(await file.arrayBuffer());
+    const doc=data=>({type:"document",source:{media_type:"application/pdf",data:b64(data),filename:name}});
+    let pages=null;
+    try{
+      const {PDFDocument}=await import("pdf-lib");
+      const src=await PDFDocument.load(bytes),n=src.getPageCount(),out=[];
+      for(let i=0;i<n;i++){
+        const one=await PDFDocument.create();
+        one.addPage((await one.copyPages(src,[i]))[0]);
+        out.push({where:`page ${i+1} of ${n}`,part:doc(await one.save())});
+      }
+      pages=out;
+    }catch{}
+    parts.push(...(pages||[{where:"the whole file",part:doc(bytes)}])); // a PDF pdf-lib can't split goes whole
   }else if(/^image\//.test(file.type)){
-    part={type:"image",source:{media_type:file.type,data:await b64(file)}};
+    parts.push({where:"the whole file",part:{type:"image",source:{media_type:file.type,data:b64(new Uint8Array(await file.arrayBuffer()))}}});
   }else throw new Error("Use a spreadsheet (.xlsx, .csv), a PDF or a photo");
+  if(!parts.length)throw new Error("No packages found in that file");
   const descs=[...new Set((inv.items||[]).map(packItemDesc).filter(Boolean))];
-  const prompt=`Turn this packing list into JSON for our packing list builder.
+  const ask=async({where,part},known)=>{
+    const prompt=`Turn this packing list into JSON for our packing list builder. This is ${where}${parts.length>1?"; the other parts are read separately":""}.
 
 Two layouts:
 - "detailed": one block per carton/box/package, each with its stones: [{desc, pcs, kgs}], plus that carton's net and gross weight in kg.
 - "bulk": one block per run of identical bags/packages of one stone: lines:[{desc}], bags (how many packages in the run), packing (e.g. GUNNY BAGS, CARTON BOX), dest (destination port/city if written), net and gross = TOTAL kg for the whole run.
 Pick the layout the sheet uses. Keep package order. If the sheet shows mark numbers (e.g. N.G.-296), set prefix ("N.G.") and start_at (the first number).
+${known?`The packing list's layout is "${known.mode}"${known.columns?` and its columns are: ${known.columns}`:""}.\n`:""}
+The file can hold other tables too — a label tracker, a stock list, a summary. Only the packing list counts: if this part has no packing-list rows${known?.columns?" (a table under other column headings isn't it)":""}, reply with no blocks.
+A carton can run over from the part before: rows at the top of this part that come before its first carton number or heading belong to the previous part's last carton. Put them in the first block with "continued":true rather than starting a new carton.
 
 Descriptions: when a line is the same goods as one of these invoice descriptions, use that wording: ${JSON.stringify(descs)}. Otherwise keep the sheet's wording. Either way, write every description in Title Case (Hypersthene Palmstone, Ruby in Fuchsite Heart) and correct spelling mistakes in stone and shape names (e.g. MALACITE → Malachite, CHYSOPHRASE → chrysoprase, HYPERSTIAN → hypersthene, TIFANY → Tiffany, FLOURITE → fluorite). Our shape names: "sabu" is Palmstone, "lingam" is Shivalingam. Don't add or drop words otherwise.
 Weights: copy every weight figure ("kgs", "net", "gross") EXACTLY as written on the sheet. Do not convert units or divide or multiply anything — the figures are checked and converted afterwards.
 Numbers as plain numbers (no units). Leave a field "" if the sheet doesn't give it; never invent weights or counts. Skip total/summary rows.
 
-Reply with JSON only: {"mode":"detailed"|"bulk","prefix":"","start_at":"","blocks":[{"lines":[{"desc":"","pcs":"","kgs":""}],"net":"","gross":"","packing":"","bags":"","dest":""}]}`;
-  const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-4.1",max_tokens:8000,messages:[{role:"user",content:[part,{type:"text",text:prompt}]}]})});
-  const d=await r.json();
-  if(!r.ok||d.error)throw new Error(d.error?.message||`HTTP ${r.status}`);
-  const m=String(d.content?.find(x=>x.type==="text")?.text||"").match(/\{[\s\S]*\}/);
-  const out=m?JSON.parse(m[0]):null;
-  if(!out?.blocks?.length)throw new Error("No packages found in that file");
-  const str=v=>v==null?"":String(v).trim();
+Reply with JSON only: {"mode":"detailed"|"bulk","prefix":"","start_at":"","columns":"the packing list's column headings, as written","blocks":[{"continued":false,"lines":[{"desc":"","pcs":"","kgs":""}],"net":"","gross":"","packing":"","bags":"","dest":""}]}`;
+    // One retry: a part that fails twice stops the import rather than leaving its cartons out.
+    for(let tries=0;;tries++){
+      try{
+        const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-4.1",max_tokens:8000,messages:[{role:"user",content:[part,{type:"text",text:prompt}]}]})});
+        const d=await r.json();
+        if(!r.ok||d.error)throw new Error(d.error?.message||`HTTP ${r.status}`);
+        const m=String(d.content?.find(x=>x.type==="text")?.text||"").match(/\{[\s\S]*\}/);
+        const out=m?JSON.parse(m[0]):null;
+        if(!Array.isArray(out?.blocks))throw new Error("the reply had no cartons in it");
+        return out;
+      }catch(e){if(tries)throw new Error(`${where}: ${e?.message||e}`);}
+    }
+  };
+  // The first part sets the layout and columns the rest are read against; the rest go four at a time.
+  const unit=parts[0].where.startsWith("page")?"pages":"parts";
+  const say=done=>onProgress?.(parts.length>1?`Reading ${name}: ${done} of ${parts.length} ${unit}`:`Reading ${name}`);
+  say(0);
+  const results=[await ask(parts[0])];
+  const known=results[0].blocks.length?{mode:results[0].mode==="bulk"?"bulk":"detailed",columns:str(results[0].columns)}:null;
+  let next=1,done=1;
+  say(done);
+  await Promise.all(Array.from({length:Math.min(4,parts.length-1)},async()=>{
+    while(next<parts.length){const i=next++;results[i]=await ask(parts[i],known);say(++done);}
+  }));
+  const blocks=[];
+  for(const o of results)o.blocks.forEach((b,i)=>{
+    const prev=blocks[blocks.length-1];
+    if(i===0&&b.continued&&prev){
+      prev.lines=[...(prev.lines||[]),...(b.lines||[])];
+      for(const k of ["net","gross","packing","bags","dest"])if(!str(prev[k])&&str(b[k]))prev[k]=b[k];
+    }else blocks.push({...b});
+  });
+  if(!blocks.length)throw new Error("No packages found in that file");
+  const out=results.find(o=>o.blocks.length)||results[0];
   // Title Case, always: "HYPERSTHENE PALMSTONE" and "hypersthene palmstone" both print as Hypersthene Palmstone.
   const SMALL=new Set(["a","an","and","in","of","on","or","the","with","for","to"]);
   const sentence=t=>String(t).toLowerCase().replace(/[\p{L}\d']+/gu,(w,i)=>i>0&&SMALL.has(w)?w:w.charAt(0).toUpperCase()+w.slice(1));
@@ -16107,7 +16166,7 @@ Reply with JSON only: {"mode":"detailed"|"bulk","prefix":"","start_at":"","block
   const mode=out.mode==="bulk"?"bulk":"detailed";
   return{
     mode,prefix:str(out.prefix).replace(/[-\s]+$/,""),startAt:parseInt(out.start_at,10)||0,
-    blocks:out.blocks.map(b=>packingBlock({
+    blocks:blocks.map(b=>packingBlock({
       lines:kgFix((b.lines?.length?b.lines:[{}]).map(l=>({desc:sentence(packTerms(str(l.desc))),pcs:str(l.pcs),kgs:str(l.kgs)})),b.net).map(l=>packingLine(l)),
       net:str(b.net),gross:str(b.gross),packing:str(b.packing)||"GUNNY BAGS",bags:mode==="bulk"?str(b.bags)||"1":"1",dest:str(b.dest),
     })),
@@ -16131,9 +16190,9 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
     if(!file)return;
     const has=pl.blocks.some(b=>packNum(b.net)||packNum(b.gross)||(b.lines||[]).some(l=>packNum(l.pcs)||packNum(l.kgs)));
     if(has&&!confirm(`Replace the cartons here with the ones in "${file.name}"?`))return;
-    setImporting(file.name);
+    setImporting(`Reading ${file.name}`);
     try{
-      const got=await importPackingFile(file,inv);
+      const got=await importPackingFile(file,inv,setImporting);
       setPl(p=>({...p,mode:got.mode,blocks:got.blocks,...(got.prefix?{prefix:got.prefix}:{}),...(got.startAt?{startAt:got.startAt}:{})}));
       showToast?.(`Filled ${got.blocks.length} ${got.mode==="bulk"?"bag run":"carton"}${got.blocks.length>1?"s":""} from ${file.name} — check them against the sheet, then save`);
     }catch(e){showToast?.("Couldn't read that file: "+(e?.message||e));}
@@ -16215,7 +16274,7 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
       <div style={{...box,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",borderStyle:"dashed"}}
         onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();importFile(e.dataTransfer.files?.[0]);}}>
         <input ref={importRef} type="file" accept=".xlsx,.xls,.csv,.tsv,.ods,.pdf,image/*" style={{display:"none"}} onChange={e=>{importFile(e.target.files?.[0]);e.target.value="";}}/>
-        <button className="bp" disabled={!!importing} onClick={()=>importRef.current?.click()}>{importing?`Reading ${importing}…`:"📄 Fill from sheet / PDF"}</button>
+        <button className="bp" disabled={!!importing} onClick={()=>importRef.current?.click()}>{importing?`${importing}…`:"📄 Fill from sheet / PDF"}</button>
         <span style={{fontSize:11,color:C.inkFaint}}>Upload or drop the packing list — Google Sheet downloaded as .xlsx or .csv, a PDF, or a photo. Cartons, stones, pieces and weights are filled in; the check below shows anything that doesn't match the invoice.</span>
       </div>
 
