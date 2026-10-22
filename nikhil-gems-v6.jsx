@@ -15753,6 +15753,22 @@ const packDateParts=v=>{
 const packDateShort=v=>{const p=packDateParts(v);return p?`${String(p.d).padStart(2,"0")}/${String(p.mo).padStart(2,"0")}/${String(p.y).slice(-2)}`:"";};
 const packDateLong=v=>{const p=packDateParts(v);return p?`${String(p.d).padStart(2,"0")}-${PACK_MONTHS[p.mo-1]}-${p.y}`:"";};
 const packDescKey=d=>String(d||"").trim().toUpperCase().replace(/\s+/g," ");
+/* One stone listed several times in a carton — a sheet that weighed each bag of
+   Honey Calcite on its own line — folds into one line with the pieces and kilos
+   added up. The first line keeps its place and its wording; a count left blank on
+   every repeat stays blank rather than turning into 0. */
+const packSum=(a,b)=>{const x=String(a??"").trim(),y=String(b??"").trim();return !x?y:!y?x:packWeight(packNum(x)+packNum(y));};
+const mergePackingLines=lines=>{
+  const out=[],byKey=new Map();
+  for(const l of lines||[]){
+    const k=packDescKey(l.desc);
+    const hit=k&&byKey.get(k);
+    if(!hit){const row={...l};if(k)byKey.set(k,row);out.push(row);continue;}
+    hit.pcs=packSum(hit.pcs,l.pcs);hit.kgs=packSum(hit.kgs,l.kgs);
+  }
+  return out;
+};
+const packRepeats=lines=>(lines||[]).length-mergePackingLines(lines).length;
 const packItemDesc=it=>String(it?.acctDesc||it?.desc||"").trim();
 /* Our names for shapes, not the workshop's: a sabu is a palmstone and a
    lingam is a Shivalingam. Applied on import and again on print, so lists saved
@@ -16347,6 +16363,11 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
             <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{packMarkLabel(pl.prefix,marks[i])}</div>
             <div style={{display:"flex",gap:6}}>
+              {pl.mode!=="bulk"&&packRepeats(b.lines)>0&&(
+                <button className="bs" style={{fontSize:10,padding:"3px 8px",color:C.gold,borderColor:C.gold}}
+                  title="Lines for the same stone become one, with pcs and kgs added up"
+                  onClick={()=>setBlock(i,{lines:mergePackingLines(b.lines)})}>⇊ Simplify · {(b.lines||[]).length} lines → {(b.lines||[]).length-packRepeats(b.lines)}</button>
+              )}
               <button className="bs" style={{fontSize:10,padding:"3px 8px"}}
                 onClick={()=>setPl(p=>{const copy={...p.blocks[i],id:uid(),lines:(p.blocks[i].lines||[]).map(l=>({...l,id:uid()}))};
                   return{...p,blocks:[...p.blocks.slice(0,i+1),copy,...p.blocks.slice(i+1)]};})}>⧉ Duplicate</button>
@@ -16404,6 +16425,15 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
 
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
         <button className="bs" onClick={()=>setPl(p=>({...p,blocks:[...p.blocks,packingBlock()]}))}>+ Carton</button>
+        {pl.mode!=="bulk"&&pl.blocks.some(b=>packRepeats(b.lines)>0)&&(
+          <button className="bs" style={{color:C.gold,borderColor:C.gold}}
+            title="In every carton, lines for the same stone become one, with pcs and kgs added up"
+            onClick={()=>{
+              const n=pl.blocks.reduce((s,b)=>s+packRepeats(b.lines),0);
+              setPl(p=>({...p,blocks:p.blocks.map(b=>({...b,lines:mergePackingLines(b.lines)}))}));
+              showToast?.(`Simplified — ${n} repeated line${n>1?"s":""} merged`);
+            }}>⇊ Simplify all cartons</button>
+        )}
         <button className="bs" onClick={()=>{
           const last=pl.blocks[pl.blocks.length-1];
           setPl(p=>({...p,blocks:[...p.blocks,packingBlock({net:last?.net||"",gross:last?.gross||"",packing:last?.packing||"GUNNY BAGS",dest:last?.dest||"",bags:last?.bags||"1"})]}));
