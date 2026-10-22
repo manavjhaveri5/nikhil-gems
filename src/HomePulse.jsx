@@ -14,6 +14,11 @@ const CACHE_KEY = "ng-home-pulse-v1";
 // One refresh is ~17 Etsy calls; at this rate a home page left open all day stays
 // well inside Etsy's daily allowance, which the listing and order sync need too.
 const FRESH_MS = 15 * 60 * 1000;
+const LIST_CACHE_KEY = "ng-home-listings-v1";
+// Listings change slowly, and a read costs ~10 Etsy calls.
+const LIST_FRESH_MS = 30 * 60 * 1000;
+// What Etsy charges to list or renew a listing for four months.
+const LISTING_FEE_USD = 0.2;
 const ORDERS_KEY = "ng-orders-v1";
 const RATES_KEY = "ng-fin-rates-v1"; // INR per unit of each currency, refreshed by Finance
 const PENDING_DAYS = 60;
@@ -59,7 +64,7 @@ const niceMax = v => {
   return [1, 1.2, 1.6, 2, 2.4, 3, 4, 5, 6, 8, 10].map(m => m * p).find(m => m >= v * 0.9999);
 };
 
-const readCache = () => { try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); return c?.data?.ok ? c : null; } catch { return null; } };
+const readCache = key => { try { const c = JSON.parse(localStorage.getItem(key) || "null"); return c?.data?.ok ? c : null; } catch { return null; } };
 
 function useWidth() {
   const ref = useRef(null);
@@ -77,20 +82,28 @@ function useWidth() {
 }
 
 /* ── the numbers ─────────────────────────────────────────────────────────── */
-function buildModel(data, rates, erpOrders, nowMs) {
+// This month, last month, and the same stretch of last month — so the 22nd is
+// held against the 22nd, not against a whole month.
+function calendar(nowMs) {
   const now = new Date(nowMs);
+  const m0 = monthStart(now), m1 = monthStart(now, 1), mPrev = monthStart(now, -1);
+  return {
+    now, m0, mPrev,
+    daysIn: Math.round((m1 - m0) / DAY), daysPrev: Math.round((m0 - mPrev) / DAY),
+    day: now.getDate(),
+    elapsed: Math.min(1, (nowMs - m0) / (m1 - m0)),
+    prevCut: Math.min(+m0, +mPrev + (nowMs - m0)),
+  };
+}
+
+function buildModel(data, rates, erpOrders, nowMs) {
   const cur = data.currency || "INR";
   const usdRate = +rates?.USD || 84;
   const toUSD = v => cur === "USD" ? v : cur === "INR" ? v / usdRate : v * (+rates?.[cur] || usdRate) / usdRate;
   const shopFmt = cur === "INR" ? rs : cur === "USD" ? usd : v => `${cur} ${Math.round(v).toLocaleString()}`;
 
-  const m0 = monthStart(now), m1 = monthStart(now, 1), mPrev = monthStart(now, -1);
-  const daysIn = Math.round((m1 - m0) / DAY), daysPrev = Math.round((m0 - mPrev) / DAY);
-  const day = now.getDate();
-  const elapsed = Math.min(1, (nowMs - m0) / (m1 - m0));
+  const { now, m0, mPrev, daysIn, daysPrev, day, elapsed, prevCut } = calendar(nowMs);
   const daysLeft = daysIn - day + 1;
-  // The same stretch of last month, so the 22nd is held against the 22nd, not a whole month.
-  const prevCut = Math.min(+m0, +mPrev + (nowMs - m0));
 
   const receipts = (data.receipts || []).map(r => ({ ...r, ms: r.ts * 1000, counted: !VOID.includes(r.status) }));
   const within = (a, b) => receipts.filter(r => r.ms >= a && r.ms < b);
@@ -188,6 +201,40 @@ function buildModel(data, rates, erpOrders, nowMs) {
   };
 }
 
+// Listings: new ones by the date they were first listed, and what's ending or ended.
+function buildListingModel(data, nowMs) {
+  const cal = calendar(nowMs);
+  const { now, m0, mPrev, daysIn, daysPrev, prevCut } = cal;
+  const added = (data.added || []).map(a => a.ts * 1000);
+  const count = (a, b) => added.filter(t => t >= a && t < b).length;
+  const today0 = dayStart(nowMs);
+  const weekStart = today0 - ((now.getDay() + 6) % 7) * DAY; // weeks start on Monday
+  const running = (start, days, upTo) => {
+    const out = [0];
+    for (let d = 1; d <= days; d++) {
+      const from = +new Date(start.getFullYear(), start.getMonth(), d);
+      if (from > upTo) break;
+      out.push(out[d - 1] + count(from, Math.min(+new Date(start.getFullYear(), start.getMonth(), d + 1), upTo + 1)));
+    }
+    return out;
+  };
+  const nowS = nowMs / 1000;
+  const expiring = data.expiring || [];
+  const in7 = expiring.filter(l => l.ends <= nowS + 7 * 86400);
+  const expired = data.expiredLately || [];
+  return {
+    ...cal,
+    today: count(today0, nowMs + 1), yesterday: count(today0 - DAY, today0),
+    week: count(weekStart, nowMs + 1), weekPrev: count(weekStart - 7 * DAY, nowMs - 7 * DAY + 1), weekDays: Math.round((today0 - weekStart) / DAY) + 1,
+    month: count(+m0, nowMs + 1), monthPrevSame: count(+mPrev, prevCut), monthPrev: count(+mPrev, +m0),
+    cumThis: running(m0, daysIn, nowMs), cumPrev: running(mPrev, daysPrev, +m0 - 1),
+    counts: data.counts || {},
+    in7: in7.length, in7Off: in7.filter(l => !l.auto).length,
+    in30: expiring.length, in30Off: expiring.filter(l => !l.auto).length,
+    expired7: expired.filter(l => l.ends >= nowS - 7 * 86400).length, expired30: expired.length,
+  };
+}
+
 /* ── small pieces ─────────────────────────────────────────────────────────── */
 // A signed change against a named period; colour says whether the move is good
 // (upIsGood={null} for a number that's neither, like ad spend).
@@ -238,25 +285,25 @@ function Stat({ label, value, sub, onClick }) {
   );
 }
 
-/* ── month-to-date against last month and the goal ─────────────────────────── */
-function PaceChart({ m }) {
+/* ── a running total through the month, against last month (and a goal) ───── */
+function RaceChart({ m, cumThis, cumPrev, short, full, goal }) {
   const [ref, w] = useWidth();
   const [hover, setHover] = useState(null);
   const H = mob ? 170 : 200, PL = 38, PR = 58, PT = 10, PB = 22;
   const CW = Math.max(10, w - PL - PR), CH = H - PT - PB;
   const xMax = Math.max(m.daysIn, m.daysPrev);
-  const yMax = niceMax(Math.max(GOAL_USD, ...m.cumPrev, ...m.cumThis) * 1.04);
+  const yMax = niceMax(Math.max(goal || 0, ...cumPrev, ...cumThis, 1) * 1.04);
   const x = d => PL + (d / xMax) * CW;
   const y = v => PT + CH * (1 - v / yMax);
   const nowX = m.elapsed * m.daysIn;
   // This month's line ends at this moment, not at the end of today.
-  const thisPts = m.cumThis.map((v, d) => [Math.min(d, nowX), v]);
+  const thisPts = cumThis.map((v, d) => [Math.min(d, nowX), v]);
   const path = pts => pts.map(([d, v], i) => `${i ? "L" : "M"}${x(d).toFixed(1)},${y(v).toFixed(1)}`).join("");
   const last = thisPts[thisPts.length - 1];
-  const prevLast = m.cumPrev[m.cumPrev.length - 1];
+  const prevLast = cumPrev[cumPrev.length - 1];
   const ticks = [0.25, 0.5, 0.75, 1].map(t => t * yMax);
   const prevName = monthLong(m.mPrev), thisName = monthLong(m.m0);
-  const goalLabelY = y(GOAL_USD), prevLabelY = y(prevLast);
+  const goalLabelY = goal ? y(goal) : -99, prevLabelY = y(prevLast);
   const showPrevLabel = Math.abs(goalLabelY - prevLabelY) > 13;
   const onMove = e => {
     const r = e.currentTarget.getBoundingClientRect();
@@ -264,23 +311,23 @@ function PaceChart({ m }) {
     setHover(Math.max(1, Math.min(xMax, d)));
   };
   const hv = hover != null ? {
-    now: hover <= m.cumThis.length - 1 ? m.cumThis[hover] : null,
-    prev: hover <= m.cumPrev.length - 1 ? m.cumPrev[hover] : null,
-    goal: hover <= m.daysIn ? GOAL_USD * hover / m.daysIn : null,
+    now: hover <= cumThis.length - 1 ? cumThis[hover] : null,
+    prev: hover <= cumPrev.length - 1 ? cumPrev[hover] : null,
+    goal: goal && hover <= m.daysIn ? goal * hover / m.daysIn : null,
   } : null;
   return (
     <div ref={ref} style={{ position: "relative", marginTop: 10 }}>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 4 }}>
         <Key color={NOW}>{thisName}</Key>
         <Key color={PREV}>{prevName}</Key>
-        <Key color={C.inkFaint} dash>On track for {usdK(GOAL_USD)}</Key>
+        {goal && <Key color={C.inkFaint} dash>On track for {short(goal)}</Key>}
       </div>
       {w > 0 && (
         <svg width={w} height={H} style={{ display: "block", touchAction: "pan-y" }} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
           {ticks.map(t => (
             <g key={t}>
               <line x1={PL} x2={PL + CW} y1={y(t)} y2={y(t)} stroke={C.border} strokeWidth={1} />
-              <text x={PL - 6} y={y(t) + 3.5} textAnchor="end" fontSize={10} fill={C.inkFaint} style={{ fontVariantNumeric: "tabular-nums" }}>{usdK(t)}</text>
+              <text x={PL - 6} y={y(t) + 3.5} textAnchor="end" fontSize={10} fill={C.inkFaint} style={{ fontVariantNumeric: "tabular-nums" }}>{short(t)}</text>
             </g>
           ))}
           <line x1={PL} x2={PL + CW} y1={y(0)} y2={y(0)} stroke={C.borderHi} strokeWidth={1} />
@@ -288,16 +335,16 @@ function PaceChart({ m }) {
             <text key={d} x={x(d)} y={H - 6} textAnchor="middle" fontSize={10} fill={C.inkFaint}>{d}</text>
           ))}
           {/* goal pace: a straight line to the goal on the last day */}
-          <line x1={x(0)} y1={y(0)} x2={x(m.daysIn)} y2={y(GOAL_USD)} stroke={C.inkFaint} strokeWidth={1.25} strokeDasharray="5 4" />
-          <text x={x(m.daysIn) + 6} y={goalLabelY + 3.5} fontSize={10} fill={C.inkMid} fontWeight={600}>{usdK(GOAL_USD)} goal</text>
+          {goal && <line x1={x(0)} y1={y(0)} x2={x(m.daysIn)} y2={y(goal)} stroke={C.inkFaint} strokeWidth={1.25} strokeDasharray="5 4" />}
+          {goal && <text x={x(m.daysIn) + 6} y={goalLabelY + 3.5} fontSize={10} fill={C.inkMid} fontWeight={600}>{short(goal)} goal</text>}
           {/* last month, whole */}
-          <path d={path(m.cumPrev.map((v, d) => [d, v]))} fill="none" stroke={PREV} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-          {showPrevLabel && <text x={x(m.cumPrev.length - 1) + 6} y={prevLabelY + 3.5} fontSize={10} fill={C.inkMid}>{monthShort(m.mPrev)} {usdK(prevLast)}</text>}
+          <path d={path(cumPrev.map((v, d) => [d, v]))} fill="none" stroke={PREV} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          {showPrevLabel && <text x={x(cumPrev.length - 1) + 6} y={prevLabelY + 3.5} fontSize={10} fill={C.inkMid}>{monthShort(m.mPrev)} {short(prevLast)}</text>}
           {/* this month, so far */}
           <path d={path(thisPts) + `L${x(last[0]).toFixed(1)},${y(0)}L${x(0)},${y(0)}Z`} fill={NOW} fillOpacity={0.1} stroke="none" />
           <path d={path(thisPts)} fill="none" stroke={NOW} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           <circle cx={x(last[0])} cy={y(last[1])} r={4.5} fill={NOW} stroke={C.surface} strokeWidth={2} />
-          <text x={x(last[0])} y={y(last[1]) - 10} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={C.ink}>{usdK(last[1])}</text>
+          <text x={x(last[0])} y={y(last[1]) - 10} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={C.ink}>{short(last[1])}</text>
           {hover != null && (
             <g pointerEvents="none">
               <line x1={x(hover)} x2={x(hover)} y1={PT} y2={PT + CH} stroke={C.inkFaint} strokeWidth={1} />
@@ -310,9 +357,9 @@ function PaceChart({ m }) {
       {hover != null && (
         <Tip x={x(hover)} y={18} w={w}>
           <div style={{ fontWeight: 700 }}>Day {hover}</div>
-          {hv.now != null && <TipRow color={NOW} label={`${monthShort(m.m0)} 1–${hover}`} value={usd(hv.now)} />}
-          {hv.prev != null && <TipRow color={PREV} label={`${monthShort(m.mPrev)} 1–${hover}`} value={usd(hv.prev)} />}
-          {hv.goal != null && <TipRow color={C.inkFaint} dash label="On track" value={usd(hv.goal)} />}
+          {hv.now != null && <TipRow color={NOW} label={`${monthShort(m.m0)} 1–${hover}`} value={full(hv.now)} />}
+          {hv.prev != null && <TipRow color={PREV} label={`${monthShort(m.mPrev)} 1–${hover}`} value={full(hv.prev)} />}
+          {hv.goal != null && <TipRow color={C.inkFaint} dash label="On track" value={full(hv.goal)} />}
         </Tip>
       )}
     </div>
@@ -437,40 +484,136 @@ function AdBars({ m }) {
   );
 }
 
+/* ── listings: new this month, and the ones ending ─────────────────────────── */
+const countShort = v => Number.isInteger(v) ? String(v) : v.toFixed(1);
+const countFull = v => plural(Math.round(v), "listing");
+
+function ListingsRow({ lm, err, loading, usdRate, onOpen }) {
+  if (!lm) {
+    return (
+      <div style={{ ...card, marginBottom: 11 }}>
+        <div style={eyebrow}>Listings</div>
+        <div style={{ fontSize: 11.5, color: err ? C.red : C.inkFaint, marginTop: 8 }}>
+          {err ? `Couldn't read the listings from Etsy — ${err}` : loading ? "Reading the listings from Etsy…" : "Listings load after the sales numbers."}
+        </div>
+      </div>
+    );
+  }
+  const prevPeriod = `${monthShort(lm.mPrev)} 1–${new Date(lm.prevCut - 1).getDate()}`;
+  const c = lm.counts;
+  const renewUSD = lm.in30 * LISTING_FEE_USD;
+  const box = { background: C.card, borderRadius: 10, padding: "9px 12px", minWidth: 0 };
+  const big = { fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: mob ? 26 : 30, fontWeight: 600, color: C.ink, lineHeight: 1.1 };
+  const offNote = (n, off) => !n ? "nothing ending" : off === n ? `auto-renew is off on all ${n} — they'll come off the shop` : `${off} will come off the shop · ${n - off} auto-renew`;
+  const health = [
+    ["🟢", "Active", c.active, `listed on Etsy now${c.sold_out ? ` · ${c.sold_out} sold out` : ""}`, null],
+    ["⏳", "Ending in 7 days", lm.in7, offNote(lm.in7, lm.in7Off), lm.in7Off ? C.red : null],
+    ["🗓️", "Ending in 30 days", lm.in30, lm.in30 ? `${offNote(lm.in30, lm.in30Off)} · renewing all ≈ ${usd(renewUSD)} (${rs(renewUSD * usdRate)})` : "nothing ending", lm.in30Off ? C.amber : null],
+    ["⛔", "Expired", c.expired, `${lm.expired30} in the last 30 days · ${lm.expired7} this week`, null],
+  ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1.5fr) minmax(0,1fr)", gap: 11, marginBottom: 11 }}>
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+          <div style={eyebrow}>New listings · {monthLong(lm.m0)}</div>
+          <span style={{ fontSize: 10.5, color: C.inkFaint }}>by the day first listed — renewals don't count</span>
+          <div style={{ flex: 1 }} />
+          <button onClick={onOpen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0 }}>Open listings →</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 10 }}>
+          <div style={box}>
+            <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>Today</div>
+            <div style={big}>{lm.today}</div>
+            <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2 }}>yesterday {lm.yesterday}</div>
+          </div>
+          <div style={box}>
+            <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This week</div>
+            <div style={big}>{lm.week}</div>
+            <div style={{ marginTop: 2 }}><Delta now={lm.week} prev={lm.weekPrev} label={lm.weekDays === 7 ? "last week" : lm.weekDays === 1 ? "last Monday" : `last Mon–${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][lm.weekDays - 1]}`} /></div>
+          </div>
+          <div style={box}>
+            <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This month</div>
+            <div style={big}>{lm.month}</div>
+            <div style={{ marginTop: 2 }}><Delta now={lm.month} prev={lm.monthPrevSame} label={prevPeriod} /></div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: C.inkMid, marginTop: 9 }}>{monthLong(lm.mPrev)} in full: <b style={{ color: C.ink }}>{plural(lm.monthPrev, "new listing")}</b>{lm.day > 1 ? ` · this month so far ${(lm.month / Math.max(1, lm.elapsed * lm.daysIn)).toFixed(1)} a day, last month ${(lm.monthPrev / lm.daysPrev).toFixed(1)}` : ""}</div>
+        <RaceChart m={lm} cumThis={lm.cumThis} cumPrev={lm.cumPrev} short={countShort} full={countFull} />
+      </div>
+
+      <div style={card}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+          <div style={eyebrow}>Shop listings</div>
+          <div style={{ flex: 1 }} />
+          <button onClick={onOpen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0 }}>Open →</button>
+        </div>
+        {health.map(([icon, label, n, hint, tone]) => (
+          <div key={label} className="pz-row" onClick={onOpen} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, cursor: "pointer" }}>
+            <span style={{ width: 30, height: 30, borderRadius: 8, background: tone === C.red ? C.redBg : tone === C.amber ? C.amberBg : C.card, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{icon}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{label}</div>
+              <div style={{ fontSize: 10.5, color: tone || C.inkFaint, lineHeight: 1.4 }}>{hint}</div>
+            </div>
+            <span style={{ fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: 24, fontWeight: 600, color: C.ink, minWidth: 34, textAlign: "right" }}>{(n ?? 0).toLocaleString("en-IN")}</span>
+          </div>
+        ))}
+        <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 6, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+          Inactive {c.inactive ?? 0} · Drafts {c.draft ?? 0}{lm.in30Off ? " · An Etsy listing runs four months; with auto-renew off it then expires." : ""}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── the page section ─────────────────────────────────────────────────────── */
 export default function EtsyPulse({ onEnter, rates }) {
-  const [cache, setCache] = useState(readCache);
+  const [cache, setCache] = useState(() => readCache(CACHE_KEY));
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [lcache, setLcache] = useState(() => readCache(LIST_CACHE_KEY));
+  const [lloading, setLloading] = useState(false);
+  const [lerr, setLerr] = useState("");
   const [erpOrders, setErpOrders] = useState(null);
   const [ownRates, setOwnRates] = useState(undefined);
   const [tick, setTick] = useState(Date.now());
   const busy = useRef(false);
 
-  const load = async () => {
-    if (busy.current) return;
-    busy.current = true; setLoading(true); setErr("");
+  const fetchInto = async (url, key, set, setBusy, setError) => {
+    setBusy(true); setError("");
     try {
-      const now = new Date();
-      const from = Math.floor(+monthStart(now, -5) / 1000);
-      const adsFrom = Math.floor(+monthStart(now, -1) / 1000);
-      const r = await fetch(`/api/etsy?action=pulse&from=${from}&ads_from=${adsFrom}&_=${Date.now()}`, { cache: "no-store" });
+      const r = await fetch(url, { cache: "no-store" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
       const next = { at: Date.now(), data: d };
-      setCache(next);
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(next)); } catch {}
-    } catch (e) { setErr(e.message || "Couldn't reach Etsy"); }
-    busy.current = false; setLoading(false); setTick(Date.now());
+      set(next);
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
+    } catch (e) { setError(e.message || "Couldn't reach Etsy"); }
+    setBusy(false); setTick(Date.now());
   };
+  const stale = (key, ms) => { const c = readCache(key); return !c || Date.now() - c.at > ms; };
+  /* Sales first, then listings — one after the other, never together, so the
+     two reads never share Etsy's per-second allowance. */
+  const refresh = async force => {
+    if (busy.current) return;
+    busy.current = true;
+    const now = new Date();
+    if (force || stale(CACHE_KEY, FRESH_MS)) {
+      const from = Math.floor(+monthStart(now, -5) / 1000), adsFrom = Math.floor(+monthStart(now, -1) / 1000);
+      await fetchInto(`/api/etsy?action=pulse&from=${from}&ads_from=${adsFrom}&_=${Date.now()}`, CACHE_KEY, setCache, setLoading, setErr);
+    }
+    if (force || stale(LIST_CACHE_KEY, LIST_FRESH_MS)) {
+      await fetchInto(`/api/etsy?action=listing_pulse&from=${Math.floor(+monthStart(now, -1) / 1000)}&_=${Date.now()}`, LIST_CACHE_KEY, setLcache, setLloading, setLerr);
+    }
+    busy.current = false;
+  };
+  const load = () => refresh(true);
 
   useEffect(() => {
-    if (!cache || Date.now() - cache.at > FRESH_MS) load();
+    refresh(false);
     // Left open all day, the page keeps itself current — but only while someone can see it.
     const t = setInterval(() => {
       setTick(Date.now());
-      const c = readCache();
-      if (document.visibilityState === "visible" && (!c || Date.now() - c.at > FRESH_MS)) load();
+      if (document.visibilityState === "visible") refresh(false);
     }, 60000);
     return () => clearInterval(t);
   }, []);
@@ -485,9 +628,10 @@ export default function EtsyPulse({ onEnter, rates }) {
 
   const fx = rates?.USD ? rates : ownRates;
   const m = useMemo(() => cache?.data && fx ? buildModel(cache.data, fx, erpOrders, Date.now()) : null, [cache, fx, erpOrders, tick]);
+  const lm = useMemo(() => lcache?.data ? buildListingModel(lcache.data, Date.now()) : null, [lcache, tick]);
 
   const ago = cache ? Math.round((Date.now() - cache.at) / 60000) : null;
-  const status = loading ? "Updating…" : ago == null ? "" : ago < 1 ? "Updated just now" : `Updated ${ago < 60 ? `${ago} min` : `${Math.round(ago / 60)} h`} ago`;
+  const status = loading || lloading ? "Updating…" : ago == null ? "" : ago < 1 ? "Updated just now" : `Updated ${ago < 60 ? `${ago} min` : `${Math.round(ago / 60)} h`} ago`;
   const reconnect = /oauth|token|authori/i.test(err);
 
   if (!m) {
@@ -538,8 +682,8 @@ export default function EtsyPulse({ onEnter, rates }) {
             <div style={eyebrow}>Etsy · {monthLong(m.m0)} · day {m.day} of {m.daysIn}</div>
             <div style={{ flex: 1 }} />
             <span title={err ? `Last refresh failed: ${err}` : ""} style={{ fontSize: 10.5, color: err ? C.red : C.inkFaint }}>{err ? "Refresh failed · showing last numbers" : status}</span>
-            <button onClick={load} disabled={loading} title="Refresh from Etsy" aria-label="Refresh from Etsy" style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "2px 7px", fontSize: 12, cursor: loading ? "default" : "pointer", color: C.inkMid, lineHeight: 1.3 }}>
-              <span style={{ display: "inline-block", animation: loading ? "spin 1s linear infinite" : "none" }}>↻</span>
+            <button onClick={load} disabled={loading || lloading} title="Refresh from Etsy" aria-label="Refresh from Etsy" style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "2px 7px", fontSize: 12, cursor: loading || lloading ? "default" : "pointer", color: C.inkMid, lineHeight: 1.3 }}>
+              <span style={{ display: "inline-block", animation: loading || lloading ? "spin 1s linear infinite" : "none" }}>↻</span>
             </button>
           </div>
 
@@ -582,7 +726,7 @@ export default function EtsyPulse({ onEnter, rates }) {
             <span style={{ fontSize: 11, color: C.inkMid }}>{monthLong(m.mPrev)} in full: <b style={{ color: C.ink }}>{usd(m.usdPrev)}</b> · {plural(m.ordersPrev, "order")}</span>
           </div>
 
-          <PaceChart m={m} />
+          <RaceChart m={m} cumThis={m.cumThis} cumPrev={m.cumPrev} short={usdK} full={usd} goal={GOAL_USD} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 11, minWidth: 0 }}>
@@ -678,7 +822,10 @@ export default function EtsyPulse({ onEnter, rates }) {
         </div>
       </div>
 
-      {/* ── Row 3: ad spend ── */}
+      {/* ── Row 3: listings — what's new, and what's about to drop off ── */}
+      <ListingsRow lm={lm} err={lerr} loading={lloading} usdRate={m.usdRate} onOpen={() => onEnter("etsy")} />
+
+      {/* ── Row 4: ad spend ── */}
       <div style={{ ...card, display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1fr) minmax(0,1.5fr)", gap: mob ? 12 : 24 }}>
         <div style={{ minWidth: 0 }}>
           <div style={eyebrow}>Ad spend · {monthLong(m.m0)}</div>

@@ -212,40 +212,7 @@ export default async function handler(req, res) {
       const adsFrom = Math.max(nowS - 93 * 86400, parseInt(req.query.ads_from, 10) || nowS - 62 * 86400);
       const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
 
-      // Etsy allows ~10 requests a second per app; every call here goes through
-      // one small queue — at most 4 in flight, starts spaced 125ms apart — so the
-      // parallel pages never trip it, and a 429 waits and retries.
-      let active = 0, nextStart = 0; const waiting = [];
-      const slot = () => active < 4 ? (active++, Promise.resolve()) : new Promise(r => waiting.push(r));
-      const free = () => { const next = waiting.shift(); next ? next() : active--; };
-      const spaced = async () => {
-        const at = Math.max(Date.now(), nextStart);
-        nextStart = at + 125;
-        if (at > Date.now()) await new Promise(s => setTimeout(s, at - Date.now()));
-      };
-      const getJson = async url => {
-        for (let attempt = 0; attempt < 4; attempt++) {
-          await slot();
-          await spaced();
-          let r;
-          try { r = await fetch(url, { headers: authHeaders }); } finally { free(); }
-          if (r.status === 429) { await new Promise(s => setTimeout(s, 700 * (attempt + 1))); continue; }
-          const { data } = await readJsonish(r);
-          if (!r.ok) throw Object.assign(new Error(etsyMessage(data)), { status: r.status });
-          return data;
-        }
-        throw Object.assign(new Error("Etsy is rate-limiting — try again in a minute."), { status: 429 });
-      };
-      // The first page's count says how many more there are; fetch those together.
-      const allPages = async makeUrl => {
-        const first = await getJson(makeUrl(0));
-        const rows = [...(first.results || [])];
-        const total = Math.min(+first.count || rows.length, 3000);
-        const offsets = [];
-        for (let o = 100; o < total; o += 100) offsets.push(o);
-        (await Promise.all(offsets.map(o => getJson(makeUrl(o))))).forEach(p => rows.push(...(p.results || [])));
-        return rows;
-      };
+      const { getJson, allPages } = etsyQueue(authHeaders);
 
       const receiptsP = allPages(offset => {
         const p = new URLSearchParams({ was_paid: "true", limit: "100", offset: String(offset), min_created: String(from), sort_on: "created", sort_order: "desc" });
@@ -328,6 +295,50 @@ export default async function handler(req, res) {
         receipts,
         ads,
         ...(ledgerResult.error ? { adsError: ledgerResult.error } : {}),
+      });
+    }
+
+    // ── listing_pulse: the shop's listings in numbers, for the home page ───────
+    // ?from=<unix s>  listings first published since then. "First" is
+    // original_creation_timestamp — a renewal moves created_timestamp, so counting
+    // by that would call every renewal a new listing.
+    // Never the whole catalog: a listing can't have been first created after its
+    // latest renewal, so newest-first pages stop once created_timestamp passes
+    // `from`; listings run four months from their last renewal, so oldest-first
+    // active pages are the soonest to end and stop past 30 days out.
+    if (action === "listing_pulse") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const from = Math.max(nowS - 400 * 86400, parseInt(req.query.from, 10) || nowS - 62 * 86400);
+      const soon = nowS + 30 * 86400, lately = nowS - 30 * 86400;
+      const { getJson, pagesWhile } = etsyQueue(authHeaders);
+      const url = (state, offset, order = "desc", limit = 100) =>
+        `https://openapi.etsy.com/v3/application/shops/${sid}/listings?${new URLSearchParams({ state, limit: String(limit), offset: String(offset), sort_on: "created", sort_order: order })}`;
+      const sinceFrom = state => pagesWhile(o => url(state, o), last => +last.created_timestamp >= from);
+      const [active, soldOut, inactive, ending, expired, draft] = await Promise.all([
+        sinceFrom("active"), sinceFrom("sold_out"), sinceFrom("inactive"),
+        pagesWhile(o => url("active", o, "asc"), last => +last.ending_timestamp <= soon),
+        pagesWhile(o => url("expired", o), last => +last.ending_timestamp >= lately),
+        getJson(url("draft", 0, "desc", 1)),
+      ]);
+
+      const seen = new Set();
+      const added = [];
+      for (const l of [...active.rows, ...soldOut.rows, ...inactive.rows]) {
+        if (seen.has(l.listing_id) || !(+l.original_creation_timestamp >= from)) continue;
+        seen.add(l.listing_id);
+        added.push({ ts: +l.original_creation_timestamp, state: l.state });
+      }
+      const expiring = ending.rows.filter(l => +l.ending_timestamp <= soon).map(l => ({
+        id: String(l.listing_id), title: String(l.title || "").slice(0, 90), ends: +l.ending_timestamp, auto: !!l.should_auto_renew, qty: +l.quantity || 0,
+      }));
+      const expiredLately = expired.rows.filter(l => +l.ending_timestamp >= lately).map(l => ({ ends: +l.ending_timestamp }));
+
+      return res.json({
+        ok: true, from, at: nowS,
+        counts: { active: active.count, sold_out: soldOut.count, inactive: inactive.count, expired: expired.count, draft: +draft.count || 0 },
+        added, expiring, expiredLately,
       });
     }
 
@@ -903,10 +914,64 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
+}
+
+/* One small queue per request for the home page's reads: at most 4 Etsy calls in
+   flight and starts spaced 125ms apart (Etsy allows ~10 a second per app), so
+   parallel pages never trip the limit; a 429 waits and retries. */
+function etsyQueue(headers) {
+  let active = 0, nextStart = 0;
+  const waiting = [];
+  const slot = () => active < 4 ? (active++, Promise.resolve()) : new Promise(r => waiting.push(r));
+  const free = () => { const next = waiting.shift(); next ? next() : active--; };
+  const spaced = async () => {
+    const at = Math.max(Date.now(), nextStart);
+    nextStart = at + 125;
+    if (at > Date.now()) await new Promise(s => setTimeout(s, at - Date.now()));
+  };
+  const getJson = async url => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await slot();
+      await spaced();
+      let r;
+      try { r = await fetch(url, { headers }); } finally { free(); }
+      if (r.status === 429) { await new Promise(s => setTimeout(s, 700 * (attempt + 1))); continue; }
+      const text = await r.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = { raw: text }; }
+      if (!r.ok) throw Object.assign(new Error(data?.error || data?.message || data?.detail || "Etsy API error"), { status: r.status });
+      return data;
+    }
+    throw Object.assign(new Error("Etsy is rate-limiting — try again in a minute."), { status: 429 });
+  };
+  // The first page's count says how many more there are; fetch those together.
+  const allPages = async makeUrl => {
+    const first = await getJson(makeUrl(0));
+    const rows = [...(first.results || [])];
+    const total = Math.min(+first.count || rows.length, 3000);
+    const offsets = [];
+    for (let o = 100; o < total; o += 100) offsets.push(o);
+    (await Promise.all(offsets.map(o => getJson(makeUrl(o))))).forEach(p => rows.push(...(p.results || [])));
+    return rows;
+  };
+  // Page in order while the last row of each page still qualifies.
+  const pagesWhile = async (makeUrl, more) => {
+    const rows = [];
+    let count = 0;
+    for (let offset = 0; offset < 3000; offset += 100) {
+      const d = await getJson(makeUrl(offset));
+      const page = d.results || [];
+      count = +d.count || count;
+      rows.push(...page);
+      if (page.length < 100 || !more(page[page.length - 1])) break;
+    }
+    return { rows, count };
+  };
+  return { getJson, allPages, pagesWhile };
 }
 
 /* Rating, count and the latest written reviews (4 and 5 stars, English,
