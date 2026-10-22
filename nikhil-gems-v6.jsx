@@ -14,6 +14,7 @@ import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineT
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import NameCard from "./src/NameCard.jsx";
+import EtsyPulse from "./src/HomePulse.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
@@ -1001,8 +1002,6 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   });
   const t=useT();
   const visibleMods=allowedMods||MODS;
-  // Quick Sell is hidden for specific staff who don't sell directly (e.g. Madiha).
-  const hideQuickSell=(currentUser?.name||"").toLowerCase().includes("madiha");
   const [vis,setVis]=useState(false);
   const [dashTab,setDashTab]=useState("overview"); // "overview" | "activity"
   const [activities,setActivities]=useState([]);
@@ -1027,34 +1026,6 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
     let seen="";try{seen=localStorage.getItem(STANDUP_SEEN_KEY)||"";}catch{}
     if(seen!==today())setShowStandup(true);
   },[isAdmin]);
-  // Quick Sell widget state
-  const [qsCustomsDescs,setQsCustomsDescs]=useState([]);
-  useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setQsCustomsDescs(Array.isArray(cd)&&cd.length?cd:[]));},[]);
-  useEffect(()=>onCacheRefresh(keys=>{
-    if(keys.includes("ng-customs-descs-v1"))loadK("ng-customs-descs-v1").then(cd=>{if(Array.isArray(cd)&&cd.length)setQsCustomsDescs(cd);});
-    if(keys.includes(KEYS.stock))loadK(KEYS.stock).then(st=>{if(Array.isArray(st))setQsFullStock(st);});
-  }),[]);
-  const qsShapeToDesc=shape=>{if(!shape)return"";const hit=qsCustomsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.desc:"";};
-  const qsShapeToHsn=shape=>{if(!shape)return"71031029";const hit=qsCustomsDescs.find(d=>customsShapeMatch(d.shape,shape));return hit?hit.hsn||"71031029":"71031029";};
-  const [qsFullStock,setQsFullStock]=useState([]);
-  const [qsToast,setQsToast]=useState("");
-  const [qsSearch,setQsSearch]=useState("");
-  const [qsSelStock,setQsSelStock]=useState(null);
-  const [qsQty,setQsQty]=useState("");
-  const [qsQty2,setQsQty2]=useState("");
-  const [qsRate,setQsRate]=useState("");
-  const [qsLines,setQsLines]=useState([]);
-  const [qsBuyerId,setQsBuyerId]=useState("");
-  const [qsNewInv,setQsNewInv]=useState(false);
-  const [qsSaving,setQsSaving]=useState(false);
-  const [qsOpen,setQsOpen]=useState(true);
-  // Quick Sell: "not in stock" inline add form
-  const [qsAddMode,setQsAddMode]=useState(false);
-  const [qsAddMat,setQsAddMat]=useState("");
-  const [qsAddShape,setQsAddShape]=useState("");
-  const [qsAddQty,setQsAddQty]=useState("");
-  const [qsAddUnit,setQsAddUnit]=useState("pcs");
-  const [qsAddLoc,setQsAddLoc]=useState("");
 
   useEffect(()=>{const t=setTimeout(()=>setVis(true),60);return()=>clearTimeout(t);},[]);
   useEffect(()=>{
@@ -1078,7 +1049,6 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
       setRecurring(rec||[]);
       const ua=(st||[]).filter(item=>!item.location||item.location.trim()==="");
       setUnassignedStock(ua.sort((a,b)=>(a.addedDate||"").localeCompare(b.addedDate||"")));
-      setQsFullStock(st||[]);
       // Compute Bank of India 0451 balance from Finance data
       const accs=finAccs||[];const txns=finTxns||[];
       const bals={};accs.forEach(a=>{bals[a.id]=+(a.openingBal||0);});
@@ -1144,72 +1114,6 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
   const plus30=new Date(todayD);plus30.setDate(plus30.getDate()+30);
   const plus30Str=plus30.toISOString().slice(0,10);
   const upcomingExpAmt=recurring.reduce((a,r)=>r.nextDue&&r.nextDue>=todayStr&&r.nextDue<=plus30Str?a+(+r.amount||0):a,0);
-
-  // Quick Sell helpers
-  const qsFiltered=qsSearch.trim()?qsFullStock.filter(s=>`${s.material} ${s.shape} ${s.origin} ${s.size} ${s.grade} ${s.location}`.toLowerCase().includes(qsSearch.toLowerCase())).slice(0,8):[];
-  const showQsToast=m=>{setQsToast(m);setTimeout(()=>setQsToast(""),5000);};
-  const addQsNewStockAndSelect=async()=>{
-    if(!qsAddMat.trim())return;
-    const newItem={id:uid(),material:qsAddMat.trim(),shape:qsAddShape,origin:"",size:"",grade:"",hsn:"7103",qty:qsAddQty||"0",unit:qsAddUnit,qty2:"",unit2:"kg",weightGm:"",costPrice:"",location:qsAddLoc,market:[],productType:SHAPE_TO_PRODUCT_TYPE[qsAddShape]||"",photographed:false,postedShopify:false,postedShopifyAtyahara:false,postedShopifyEarth:false,postedWix:false,postedEtsy:false,photo:"",photos:[],notes:"",addedDate:today(),source:"manual",sku:"",vendor:""};
-    const updStock=[newItem,...qsFullStock];
-    setQsFullStock(updStock);
-    try{await saveStockK(updStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}
-    setQsSelStock(newItem);setQsSearch("");setQsAddMode(false);
-    setQsAddMat("");setQsAddShape("");setQsAddQty("");setQsAddUnit("pcs");setQsAddLoc("");
-  };
-  const addQsLine=()=>{
-    if(!qsSelStock||!qsQty||+qsQty<=0)return;
-    const i=qsLines.findIndex(l=>l.stockItem.id===qsSelStock.id);
-    if(i>=0){const n=[...qsLines];n[i]={...n[i],qty:String(+n[i].qty+(+qsQty)),qty2:qsQty2?String((+n[i].qty2||0)+(+qsQty2)):n[i].qty2};setQsLines(n);}
-    else setQsLines([...qsLines,{stockItem:qsSelStock,qty:qsQty,qty2:qsQty2,rate:qsRate}]);
-    setQsSelStock(null);setQsSearch("");setQsQty("");setQsQty2("");setQsRate("");
-  };
-  const recordSale=async()=>{
-    if(!qsLines.length||!qsBuyerId)return;
-    setQsSaving(true);
-    try{
-      // Deduct physical stock — must be fresh so quantities are accurate
-      const curStock=await loadKFresh(KEYS.stock)||[];
-      const newStock=curStock.map(s=>{const l=qsLines.find(x=>x.stockItem.id===s.id);if(!l)return s;const rq=+parseFloat(Math.max(0,(+s.qty||0)-(+l.qty||0)).toFixed(4));const rq2=l.qty2&&+l.qty2>0?+parseFloat(Math.max(0,(+s.qty2||0)-(+l.qty2||0)).toFixed(4)):null;const hadQty2=+s.qty2>0;const rqFinal=(rq2===0&&hadQty2)?0:rq;return{...s,qty:String(rqFinal),...(rq2!=null?{qty2:String(rq2)}:{}),updatedAt:new Date().toISOString()};});
-      try{await saveStockK(newStock);}catch(e){showToast?.("⚠ Sync failed — reconnect or reload: "+e.message);}
-      setQsFullStock(newStock);
-      setUnassignedStock(newStock.filter(item=>!item.location||item.location.trim()==="").sort((a,b)=>(a.addedDate||"").localeCompare(b.addedDate||"")));
-      // Build invoice items
-      const invItems=qsLines.map(line=>({
-        id:uid(),acctDesc:qsShapeToDesc(line.stockItem.shape),
-        customDesc:[line.stockItem.material,line.stockItem.shape,line.stockItem.origin,line.stockItem.size].filter(Boolean).join(" · "),hsn:qsShapeToHsn(line.stockItem.shape),qty:String(+line.qty),unit:line.stockItem.unit||"pcs",
-        rate:String(line.rate||""),igst:0,amt:(+line.qty||0)*(+line.rate||0),
-        stockId:line.stockItem.id,acctStockId:"",ready:false,readyDate:""
-      }));
-      // Find or create draft invoice
-      const curInvoices=await loadKFresh(INV_KEYS.invoices)||[];
-      let targetInv=!qsNewInv?curInvoices.find(i=>i.buyerId===qsBuyerId&&i.status==="draft"):null;
-      let newInvoices;
-      if(targetInv){
-        newInvoices=curInvoices.map(i=>i.id===targetInv.id?{...i,items:[...i.items,...invItems]}:i);
-      }else{
-        const maxNo=curInvoices.reduce((mx,inv)=>{const m=(inv.invNo||"").match(/(\d+)/);return m?Math.max(mx,+m[1]):mx;},0);
-        const newInv={
-          id:uid(),invNo:`NG-${String(maxNo+1).padStart(3,"0")}`,type:"commercial",
-          date:today(),dueDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),
-          buyerId:qsBuyerId,consigneeId:"",consigneeSameAsBuyer:true,
-          consigneeName:"",consigneeAddress:"",consigneeCountry:"",
-          currency:"USD",portLading:"Mumbai, India",portDischarge:"",
-          terms:"T/T in advance",lutArn:CO.lutArn,
-          items:invItems,shippingCost:0,notes:"",
-          status:"draft",paidAmount:0,payments:[],
-          goodsShipped:false,hawbFile:"",hawbName:"",attachments:[],
-          createdAt:new Date().toISOString()
-        };
-        newInvoices=[newInv,...curInvoices];
-      }
-      await saveK(INV_KEYS.invoices,newInvoices);
-      setStats(prev=>({...prev,invoices:newInvoices}));
-      showQsToast(targetInv?`Sale recorded · draft ${targetInv.invNo} updated`:"Sale recorded · new draft invoice created");
-      setQsLines([]);setQsBuyerId("");setQsNewInv(false);
-    }catch(e){showQsToast("Error: "+(e.message||"unknown"));}
-    setQsSaving(false);
-  };
 
   // Apple-style icon colors per module (iOS Settings palette)
 
@@ -1381,6 +1285,10 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
             </div>
           )}
 
+          {/* Etsy: the month against the $10k goal, what's left to ship and file, ad spend.
+              Everyone who works the shop sees it — Manav, and staff with Etsy or Orders. */}
+          {(isAdmin||visibleMods.some(m=>m.id==="etsy"||m.id==="orders"))&&<EtsyPulse onEnter={onEnter} rates={finRates}/>}
+
           {/* Row 1: Show countdown + stat cards */}
           {isAdmin&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:11,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .1s both":"none"}}>
             {/* Next show */}
@@ -1537,212 +1445,10 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
           </div>
           )}
 
-          {/* ── Quick Sell + Chart row ── */}
-          {!hideQuickSell&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":isAdmin?"1fr 1.6fr":"1fr",gap:10,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .19s both":"none",alignItems:"stretch"}}>
-          {/* ── Quick Sell Widget ── */}
-          <div style={{background:C.surface,borderRadius:16,padding:mob?"12px 14px":"15px 20px",boxShadow:"var(--e-1)"}}>
-            {/* Header row — click to expand/collapse */}
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",marginBottom:qsOpen?12:0}} onClick={()=>setQsOpen(o=>!o)}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <div style={{width:28,height:28,borderRadius:7,background:"rgba(48,209,88,0.15)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0,lineHeight:1}}>⚡</div>
-                <div>
-                  <div style={{fontSize:12,fontWeight:700,color:C.ink}}>Quick Sell</div>
-                  {qsLines.length>0?<div style={{fontSize:10,color:C.inkFaint}}>{qsLines.length} item{qsLines.length>1?"s":""} in cart</div>:<div style={{fontSize:10,color:C.inkFaint}}>{qsFullStock.length} items in stock</div>}
-                </div>
-                {qsLines.length>0&&<span style={{background:C.ink,color:"#FAF0DC",borderRadius:10,padding:"1px 8px",fontSize:9,fontWeight:700}}>{qsLines.length}</span>}
-              </div>
-              <span style={{color:C.inkFaint,fontSize:11,lineHeight:1}}>{qsOpen?"▲":"▼"}</span>
-            </div>
-
-            {qsOpen&&(
-              <div>
-                {/* Stock search — hidden when an item is already selected */}
-                {!qsSelStock&&(
-                  <div style={{marginBottom:10}}>
-                    <input
-                      value={qsSearch} onChange={e=>setQsSearch(e.target.value)}
-                      placeholder="Search stock — stone name, shape, location…"
-                      style={{...FI,width:"100%",boxSizing:"border-box",marginBottom:6}}
-                    />
-                    {qsSearch.trim()&&(
-                      qsFiltered.length>0
-                        ?<div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden",boxShadow:"0 4px 12px rgba(26,19,8,.08)"}}>
-                          {qsFiltered.map(s=>(
-                            <div key={s.id}
-                              onClick={()=>{setQsSelStock(s);setQsSearch("");}}
-                              style={{padding:mob?"10px 12px":"9px 14px",borderBottom:`1px solid ${C.border}`,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"background .1s"}}
-                              onMouseEnter={e=>e.currentTarget.style.background=C.card}
-                              onMouseLeave={e=>e.currentTarget.style.background=""}>
-                              <div>
-                                <div style={{fontWeight:600,fontSize:mob?14:12,color:C.ink}}>{s.material}{s.shape?` · ${s.shape}`:""}</div>
-                                <div style={{fontSize:10,color:C.inkFaint,marginTop:1,display:"flex",gap:8,flexWrap:"wrap"}}>
-                                  {s.origin&&<span>{s.origin}</span>}
-                                  {s.size&&<span>{s.size}</span>}
-                                  {s.location&&<span>📦 {s.location}</span>}
-                                </div>
-                              </div>
-                              <div style={{textAlign:"right",flexShrink:0,marginLeft:12}}>
-                                <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:15,fontWeight:600,color:C.ink}}>{s.qty} {s.unit}</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                        :<div>
-                          <div style={{fontSize:11,color:C.inkFaint,padding:"4px 2px",marginBottom:6}}>No stock matches "{qsSearch}"</div>
-                          {!qsAddMode
-                            ?<button onClick={()=>{setQsAddMode(true);setQsAddMat(qsSearch);}} style={{fontSize:11,color:C.teal,background:C.tealBg,border:`1px solid ${C.teal}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontWeight:600}}>＋ Add to stock &amp; sell</button>
-                            :<div style={{background:C.tealBg,border:`1.5px solid ${C.teal}`,borderRadius:8,padding:"11px 13px",marginTop:4}}>
-                              <div style={{fontSize:10,fontWeight:700,color:C.teal,textTransform:"uppercase",letterSpacing:.7,marginBottom:8}}>New Stock Item</div>
-                              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:7}}>
-                                <div>
-                                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:2}}>Material / Stone</div>
-                                  <input autoFocus value={qsAddMat} onChange={e=>setQsAddMat(e.target.value)} style={{...FI,width:"100%",boxSizing:"border-box"}} placeholder="Alexandrite"/>
-                                </div>
-                                <div>
-                                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:2}}>Shape</div>
-                                  <input value={qsAddShape} onChange={e=>setQsAddShape(e.target.value)} style={{...FI,width:"100%",boxSizing:"border-box"}} placeholder="e.g. Round…" list="shape-list-qs"/>
-                                  <datalist id="shape-list-qs">{SHAPES.map(s=><option key={s} value={s}/>)}</datalist>
-                                </div>
-                                <div>
-                                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:2}}>Stock Qty</div>
-                                  <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                                    <input type="number" min="0" value={qsAddQty} onChange={e=>setQsAddQty(e.target.value)} style={{...FI,flex:1,boxSizing:"border-box"}} placeholder="0"/>
-                                    <select value={qsAddUnit} onChange={e=>setQsAddUnit(e.target.value)} style={{...FI,width:54,cursor:"pointer"}}>
-                                      {["pcs","kg","g","ct","lot"].map(u=><option key={u}>{u}</option>)}
-                                    </select>
-                                  </div>
-                                </div>
-                                <div>
-                                  <div style={{fontSize:10,color:C.inkFaint,marginBottom:2}}>Location (optional)</div>
-                                  <input value={qsAddLoc} onChange={e=>setQsAddLoc(e.target.value)} style={{...FI,width:"100%",boxSizing:"border-box"}} placeholder="Bin A1"/>
-                                </div>
-                              </div>
-                              <div style={{display:"flex",gap:6}}>
-                                <button onClick={()=>{setQsAddMode(false);setQsAddMat("");setQsAddShape("");setQsAddQty("");setQsAddLoc("");}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontSize:11,color:C.inkMid}}>Cancel</button>
-                                <button onClick={addQsNewStockAndSelect} disabled={!qsAddMat.trim()} style={{background:C.teal,color:"#fff",border:"none",borderRadius:5,padding:"5px 14px",cursor:!qsAddMat.trim()?"not-allowed":"pointer",fontSize:11,fontWeight:600,opacity:!qsAddMat.trim()?.5:1}}>Save &amp; Select →</button>
-                              </div>
-                            </div>
-                          }
-                        </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Selected stock: qty + rate entry */}
-                {qsSelStock&&(
-                  <div style={{background:C.card,border:`1.5px solid ${C.teal}`,borderRadius:8,padding:"11px 14px",marginBottom:10}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                      <div>
-                        <div style={{fontWeight:600,fontSize:13,color:C.ink}}>{qsSelStock.material}{qsSelStock.shape?` · ${qsSelStock.shape}`:""}</div>
-                        <div style={{fontSize:10,color:C.inkFaint,marginTop:2,display:"flex",gap:8,flexWrap:"wrap"}}>
-                          {qsSelStock.origin&&<span>{qsSelStock.origin}</span>}
-                          {qsSelStock.size&&<span>{qsSelStock.size}</span>}
-                          {qsSelStock.location&&<span>📦 {qsSelStock.location}</span>}
-                          <span style={{fontFamily:"'Cormorant Garamond',Georgia,serif",color:C.ink,fontWeight:600}}>{qsSelStock.qty} {qsSelStock.unit} in stock</span>
-                        </div>
-                      </div>
-                      <button onClick={()=>{setQsSelStock(null);setQsQty("");setQsQty2("");setQsRate("");}} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:C.inkFaint,lineHeight:1,padding:0}}>×</button>
-                    </div>
-                    <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
-                      <div style={{flex:"1 1 80px",minWidth:70}}>
-                        <div style={{fontSize:10,color:C.inkFaint,marginBottom:3}}>Qty to sell</div>
-                        <div style={{display:"flex",alignItems:"center",gap:5}}>
-                          <input autoFocus type="number" min="0" value={qsQty} onChange={e=>setQsQty(e.target.value)}
-                            placeholder="0" style={{...FI,width:"100%",boxSizing:"border-box"}}
-                            onKeyDown={e=>{if(e.key==="Enter")addQsLine();}}/>
-                          <span style={{fontSize:11,color:C.inkFaint,flexShrink:0}}>{qsSelStock.unit}</span>
-                        </div>
-                        {qsQty&&+qsQty>0&&(
-                          <div style={{fontSize:10,marginTop:3,fontWeight:600,color:(+qsSelStock.qty||0)-(+qsQty)<0?C.red:C.green}}>
-                            → {+parseFloat(Math.max(0,(+qsSelStock.qty||0)-(+qsQty)).toFixed(4))} left{+qsQty>(+qsSelStock.qty||0)?" ⚠ exceeds stock":""}
-                          </div>
-                        )}
-                      </div>
-                      {qsSelStock.qty2!=null&&qsSelStock.qty2!==""&&(
-                        <div style={{flex:"1 1 80px",minWidth:70}}>
-                          <div style={{fontSize:10,color:C.inkFaint,marginBottom:3}}>{qsSelStock.unit2||"kg"} to deduct</div>
-                          <div style={{display:"flex",alignItems:"center",gap:5}}>
-                            <input type="number" min="0" value={qsQty2} onChange={e=>setQsQty2(e.target.value)}
-                              placeholder="0" style={{...FI,width:"100%",boxSizing:"border-box"}}
-                              onKeyDown={e=>{if(e.key==="Enter")addQsLine();}}/>
-                            <span style={{fontSize:11,color:C.inkFaint,flexShrink:0}}>{qsSelStock.unit2||"kg"}</span>
-                          </div>
-                          {qsQty2&&+qsQty2>0&&(
-                            <div style={{fontSize:10,marginTop:3,fontWeight:600,color:(+qsSelStock.qty2||0)-(+qsQty2)<0?C.red:C.green}}>
-                              → {Math.max(0,(+qsSelStock.qty2||0)-(+qsQty2)).toFixed(2)} left
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <div style={{flex:"1 1 80px",minWidth:70}}>
-                        <div style={{fontSize:10,color:C.inkFaint,marginBottom:3}}>Rate (USD, optional)</div>
-                        <input type="number" min="0" value={qsRate} onChange={e=>setQsRate(e.target.value)}
-                          placeholder="0.00" style={{...FI,width:"100%",boxSizing:"border-box"}}
-                          onKeyDown={e=>{if(e.key==="Enter")addQsLine();}}/>
-                      </div>
-                      <button onClick={addQsLine} disabled={!qsQty||+qsQty<=0}
-                        style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:6,padding:"8px 18px",cursor:(!qsQty||+qsQty<=0)?"not-allowed":"pointer",fontSize:12,fontWeight:600,opacity:(!qsQty||+qsQty<=0)?.45:1,flexShrink:0}}>
-                        + Add
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Cart lines */}
-                {qsLines.length>0&&(
-                  <div style={{marginBottom:10}}>
-                    <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:5}}>Sale Items</div>
-                    {qsLines.map((line,i)=>(
-                      <div key={line.stockItem.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",background:C.card,borderRadius:6,marginBottom:4,border:`1px solid ${C.border}`}}>
-                        <div style={{flex:1,minWidth:0}}>
-                          <span style={{fontSize:12,fontWeight:500,color:C.ink}}>{line.stockItem.material}{line.stockItem.shape?` · ${line.stockItem.shape}`:""}</span>
-                          <span style={{fontSize:11,color:C.inkFaint,marginLeft:8}}>{line.qty} {line.stockItem.unit}{line.qty2&&+line.qty2>0?` · ${line.qty2} ${line.stockItem.unit2||"kg"}`:""}</span>
-                          {line.rate&&+line.rate>0&&<span style={{fontSize:11,color:C.inkFaint,marginLeft:6}}>@ ${line.rate}</span>}
-                        </div>
-                        <button onClick={()=>setQsLines(qsLines.filter((_,j)=>j!==i))}
-                          style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:15,padding:"0 4px",lineHeight:1,flexShrink:0}}>×</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Buyer + options + record button — shown once cart has items */}
-                {qsLines.length>0&&(
-                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",paddingTop:10,borderTop:`1px solid ${C.border}`}}>
-                    <select value={qsBuyerId} onChange={e=>setQsBuyerId(e.target.value)}
-                      style={{...FI,flex:"1 1 160px",minWidth:130}}>
-                      <option value="">Select buyer…</option>
-                      {buyers.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
-                    </select>
-                    <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.inkMid,cursor:"pointer",flexShrink:0,whiteSpace:"nowrap"}}>
-                      <input type="checkbox" checked={qsNewInv} onChange={e=>setQsNewInv(e.target.checked)}/>
-                      New invoice
-                    </label>
-                    <button onClick={recordSale} disabled={!qsBuyerId||qsSaving}
-                      style={{background:C.ink,color:"#FAF0DC",border:"none",borderRadius:6,padding:"8px 18px",cursor:(!qsBuyerId||qsSaving)?"not-allowed":"pointer",fontSize:12,fontWeight:600,opacity:(!qsBuyerId||qsSaving)?.45:1,flexShrink:0}}>
-                      {qsSaving?"Saving…":"Record Sale →"}
-                    </button>
-                  </div>
-                )}
-
-                {/* Success / error toast inline */}
-                {qsToast&&(
-                  <div style={{marginTop:10,background:C.greenBg,border:`1px solid ${C.green}`,borderRadius:10,padding:"8px 14px",fontSize:11,color:C.green,fontWeight:500,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                    <span>✓ {qsToast}</span>
-                    <button onClick={()=>onEnter("invoices")} style={{background:"none",border:"none",cursor:"pointer",color:C.green,fontSize:11,fontWeight:700,flexShrink:0}}>View Invoices →</button>
-                  </div>
-                )}
-
-                {/* Empty state hint */}
-                {!qsSelStock&&qsLines.length===0&&!qsSearch&&(
-                  <div style={{fontSize:11,color:C.inkFaint,textAlign:"center",paddingTop:2}}>Search for a stock item above to get started</div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Financial position chart */}
-          {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:mob?"12px 13px":"15px 20px",boxShadow:"var(--e-1)"}}>
+          {/* Financial position chart, with upcoming events beside it (the chart scales with
+              its width, so on its own across the page it stood half a screen tall) */}
+          <div style={{display:"grid",gridTemplateColumns:mob||!isAdmin?"1fr":"minmax(0,1.6fr) minmax(0,1fr)",gap:11,marginBottom:14,alignItems:"start"}}>
+          {isAdmin&&<div style={{background:C.surface,borderRadius:16,padding:mob?"12px 13px":"15px 20px",boxShadow:"var(--e-1)",minWidth:0,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .19s both":"none"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
               <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>Financial Position — Last 6 Months</div>
               <div style={{display:"flex",gap:10,fontSize:9,color:C.inkFaint}}>
@@ -1754,10 +1460,9 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
             <FinancialChart chartData={chartData} months6={months6} nextM={nextM} openPOtotal={openPOtotal} pendingReceivables={pendingReceivables} todayStr={todayStr}/>
             <div style={{fontSize:9,color:C.inkFaint,marginTop:4,textAlign:"right"}}>All values in ₹ · Hover for values · *Next month extrapolated</div>
           </div>}
-          </div>}{/* end Quick Sell + Chart grid */}
 
           {/* Upcoming calendar events */}
-          <div style={{background:C.surface,borderRadius:16,padding:"14px 18px",marginBottom:14,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .24s both":"none",boxShadow:"var(--e-1)"}}>
+          <div style={{background:C.surface,borderRadius:16,padding:"14px 18px",minWidth:0,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .24s both":"none",boxShadow:"var(--e-1)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:1.1}}>Upcoming Events</div>
               <button onClick={()=>onEnter("calendar")} style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:C.gold,fontWeight:600,padding:0}}>View all →</button>
@@ -1784,6 +1489,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               </div>
             }
           </div>
+          </div>{/* end chart + events */}
 
           <div style={{textAlign:"center",opacity:vis?1:0,animation:vis?"fadeIn .5s ease .6s both":"none",fontSize:10,color:C.inkFaint,paddingBottom:mob?12:0}}>Nikhil Gems Business Suite · v0.7</div>
           </>}

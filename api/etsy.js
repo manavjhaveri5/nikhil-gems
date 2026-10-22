@@ -196,6 +196,141 @@ export default async function handler(req, res) {
       return res.json({ ...data, count, results });
     }
 
+    // ── pulse: the home page's Etsy numbers, in one compact call ───────────────
+    // ?from=<unix s>      paid receipts created since then (the month-by-month trend)
+    // &ads_from=<unix s>  ledger since then, for ad spend
+    // Rows come back trimmed and undated-by-calendar: the browser buckets them into
+    // its own days and months, so "today" means the same thing as on the screen.
+    // Ad spend is read from the payment-account ledger, where Etsy Ads post as
+    // `prolist` (a charge a day) and Offsite Ads as `offsite_ads_fee` (one per
+    // attributed order). Refunds of either arrive positive, so they net off.
+    if (action === "pulse") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const from = Math.max(nowS - 400 * 86400, parseInt(req.query.from, 10) || nowS - 62 * 86400);
+      const adsFrom = Math.max(nowS - 93 * 86400, parseInt(req.query.ads_from, 10) || nowS - 62 * 86400);
+      const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
+
+      // Etsy allows ~10 requests a second per app; every call here goes through
+      // one small queue — at most 4 in flight, starts spaced 125ms apart — so the
+      // parallel pages never trip it, and a 429 waits and retries.
+      let active = 0, nextStart = 0; const waiting = [];
+      const slot = () => active < 4 ? (active++, Promise.resolve()) : new Promise(r => waiting.push(r));
+      const free = () => { const next = waiting.shift(); next ? next() : active--; };
+      const spaced = async () => {
+        const at = Math.max(Date.now(), nextStart);
+        nextStart = at + 125;
+        if (at > Date.now()) await new Promise(s => setTimeout(s, at - Date.now()));
+      };
+      const getJson = async url => {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          await slot();
+          await spaced();
+          let r;
+          try { r = await fetch(url, { headers: authHeaders }); } finally { free(); }
+          if (r.status === 429) { await new Promise(s => setTimeout(s, 700 * (attempt + 1))); continue; }
+          const { data } = await readJsonish(r);
+          if (!r.ok) throw Object.assign(new Error(etsyMessage(data)), { status: r.status });
+          return data;
+        }
+        throw Object.assign(new Error("Etsy is rate-limiting — try again in a minute."), { status: 429 });
+      };
+      // The first page's count says how many more there are; fetch those together.
+      const allPages = async makeUrl => {
+        const first = await getJson(makeUrl(0));
+        const rows = [...(first.results || [])];
+        const total = Math.min(+first.count || rows.length, 3000);
+        const offsets = [];
+        for (let o = 100; o < total; o += 100) offsets.push(o);
+        (await Promise.all(offsets.map(o => getJson(makeUrl(o))))).forEach(p => rows.push(...(p.results || [])));
+        return rows;
+      };
+
+      const receiptsP = allPages(offset => {
+        const p = new URLSearchParams({ was_paid: "true", limit: "100", offset: String(offset), min_created: String(from), sort_on: "created", sort_order: "desc" });
+        return `https://openapi.etsy.com/v3/application/shops/${sid}/receipts?${p}`;
+      });
+      // The ledger answers at most 31 days per request.
+      const windows = [];
+      for (let a = adsFrom; a < nowS; a += 30 * 86400) windows.push([a, Math.min(nowS + 60, a + 30 * 86400)]);
+      const ledgerP = Promise.all(windows.map(([a, b]) => allPages(offset =>
+        `https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${a}&max_created=${b}&limit=100&offset=${offset}`
+      ))).then(chunks => chunks.flat());
+
+      const [rawReceipts, ledgerResult] = await Promise.all([receiptsP, ledgerP.then(rows => ({ rows }), e => ({ error: e.message }))]);
+
+      const VOID = ["canceled", "cancelled", "fully refunded", "fully_refunded"];
+      const unshippedListingIds = new Set();
+      const seenReceipts = new Set();
+      const receipts = [];
+      for (const r of rawReceipts) {
+        const id = String(r.receipt_id);
+        if (seenReceipts.has(id)) continue;
+        seenReceipts.add(id);
+        const txns = r.transactions || [];
+        const status = String(r.status || "").toLowerCase();
+        const voided = VOID.includes(status);
+        // Sales as Etsy counts them: items after coupons, plus shipping; the tax Etsy
+        // collects on the buyer's behalf is not ours. Partial refunds come off.
+        const refunded = (r.refunds || []).reduce((s, rf) => s + money(rf.amount), 0);
+        const sales = money(r.grandtotal) - money(r.total_tax_cost) - money(r.total_vat_cost) - refunded;
+        const row = {
+          id,
+          ts: +r.create_timestamp || +r.created_timestamp || 0,
+          status,
+          shipped: !!r.is_shipped,
+          sales: voided ? 0 : Math.max(0, Number(sales.toFixed(2))),
+          items: txns.reduce((s, t) => s + (+t.quantity || 1), 0) || 1,
+          cur: r.grandtotal?.currency_code || "",
+        };
+        if (!row.shipped && !voided) {
+          const shipBys = txns.map(t => +t.expected_ship_date || 0).filter(Boolean);
+          row.buyer = r.name || "";
+          row.country = r.country_iso || "";
+          row.ship_by = shipBys.length ? Math.min(...shipBys) : 0;
+          row.gift = !!r.is_gift;
+          row.note = r.message_from_buyer ? String(r.message_from_buyer).slice(0, 140) : "";
+          row.lines = txns.map(t => ({ title: t.title || "", qty: +t.quantity || 1, listing_id: t.listing_id ? String(t.listing_id) : "" }));
+          row.lines.forEach(l => l.listing_id && unshippedListingIds.add(l.listing_id));
+        }
+        receipts.push(row);
+      }
+
+      // Thumbnails for the orders still to ship — one batch call covers them all.
+      if (unshippedListingIds.size) {
+        try {
+          const ids = [...unshippedListingIds].slice(0, 100);
+          const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${ids.join(",")}&includes=Images`);
+          const img = {};
+          for (const l of d.results || []) {
+            const first = [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
+            if (first) img[String(l.listing_id)] = first.url_170x135 || first.url_75x75 || first.url_570xN || "";
+          }
+          receipts.forEach(r => (r.lines || []).forEach(l => { if (img[l.listing_id]) l.img = img[l.listing_id]; }));
+        } catch {}
+      }
+
+      const ads = [];
+      const seenEntries = new Set();
+      for (const e of ledgerResult.rows || []) {
+        const type = String(e.ledger_type || "").toLowerCase();
+        const kind = type.startsWith("prolist") ? "etsy" : type.startsWith("offsite_ads") ? "offsite" : "";
+        if (!kind || seenEntries.has(e.entry_id)) continue;
+        seenEntries.add(e.entry_id);
+        ads.push({ ts: +e.created_timestamp || +e.create_date || 0, kind, amt: Number((-(+e.amount || 0) / 100).toFixed(2)) });
+      }
+
+      return res.json({
+        ok: true,
+        currency: receipts.find(r => r.cur)?.cur || "",
+        from, adsFrom, at: nowS,
+        receipts,
+        ads,
+        ...(ledgerResult.error ? { adsError: ledgerResult.error } : {}),
+      });
+    }
+
     // ── receipt: single receipt by ID (requires OAuth) ─────────────────────────
     if (action === "receipt") {
       if (!receipt_id) return res.status(400).json({ error: "receipt_id required" });
@@ -768,7 +903,7 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
