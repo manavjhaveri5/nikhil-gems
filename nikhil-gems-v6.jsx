@@ -14738,7 +14738,7 @@ const BEACH_SAND=["garnet","ilmenite","rutile","zircon","monazite","sillimanite"
 const CONTROLLED=["coral","ivory","shell","bone","fossil","meteorite","amber","antique","radioactive","uranium","thorium"];
 const STONE_WORDS=["alexandrite","beryl","chrysoberyl","prehnite","tanzanite","agate","amethyst","apophyllite","aquamarine","aventurine","calcite","carnelian","chalcedony","chrysocolla","citrine","fluorite","garnet","hematite","jasper","kyanite","labradorite","lapis","malachite","moonstone","obsidian","onyx","pyrite","quartz","rhodochrosite","rose quartz","ruby","sapphire","selenite","sodalite","stilbite","sunstone","tiger","tourmaline","zircon"];
 // Misspellings seen on, or likely on, our invoices: wrong → right.
-const MISSPELT={flourite:"fluorite",flurite:"fluorite",amethist:"amethyst",amythest:"amethyst",amethest:"amethyst",rhodocrosite:"rhodochrosite",rhodochrosit:"rhodochrosite",calcide:"calcite",carnelion:"carnelian",chrysocola:"chrysocolla",malacite:"malachite",sodalight:"sodalite",apophylite:"apophyllite",appophyllite:"apophyllite",selinite:"selenite",pyrete:"pyrite",garnate:"garnet",quarts:"quartz",quatrz:"quartz",labradorit:"labradorite",chalcedoney:"chalcedony",aquamarin:"aquamarine",tourmalin:"tourmaline",specimin:"specimen",speciman:"specimen",specimans:"specimens",intergated:"integrated",integarted:"integrated",intergrated:"integrated",undertakng:"undertaking",undertacking:"undertaking",payement:"payment",recieved:"received",seperate:"separate",consignement:"consignment",shippment:"shipment",semi_precious:"semi-precious"};
+const MISSPELT={hyperthene:"hypersthene",hypersthine:"hypersthene",flourite:"fluorite",flurite:"fluorite",amethist:"amethyst",amythest:"amethyst",amethest:"amethyst",rhodocrosite:"rhodochrosite",rhodochrosit:"rhodochrosite",calcide:"calcite",carnelion:"carnelian",chrysocola:"chrysocolla",malacite:"malachite",sodalight:"sodalite",apophylite:"apophyllite",appophyllite:"apophyllite",selinite:"selenite",pyrete:"pyrite",garnate:"garnet",quarts:"quartz",quatrz:"quartz",labradorit:"labradorite",chalcedoney:"chalcedony",aquamarin:"aquamarine",tourmalin:"tourmaline",specimin:"specimen",speciman:"specimen",specimans:"specimens",intergated:"integrated",integarted:"integrated",intergrated:"integrated",undertakng:"undertaking",undertacking:"undertaking",payement:"payment",recieved:"received",seperate:"separate",consignement:"consignment",shippment:"shipment",semi_precious:"semi-precious"};
 const stonesIn=t=>{const s=String(t||"").toLowerCase();return STONE_WORDS.filter(w=>new RegExp(`\\b${w}`).test(s)).filter((w,_,a)=>!(w==="quartz"&&a.includes("rose quartz")));};
 const cap1=w=>w[0].toUpperCase()+w.slice(1);
 // GSTIN: 15 characters, state code, PAN, entity, Z, and a mod-36 check character.
@@ -14869,22 +14869,23 @@ async function invoiceAiRisks(draft,buyers,company){
   return out.risks.filter(x=>x&&x.risk).map(x=>({...x,category:CATS.includes(x.category)?x.category:"Other legal"}));
 }
 
-function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
+/* The legal check panel, for the invoice and the packing list alike: a button,
+   then the risks sorted by category with each one's fix, or "All clear". The
+   fixed rules always run; if the AI half fails, that's said and the rules stand. */
+function LegalCheck({sig,rules,ai,categories,idle}){
   const [busy,setBusy]=useState(false);
   const [res,setRes]=useState(null); // { rules, risks } | { rules, error }
   // An edit after a check makes its answer stale.
-  const sig=JSON.stringify([draft.items,draft.termsText,draft.notes,draft.lutArn,draft.buyerId,draft.consigneeName,draft.consigneeAddress]);
   const [checkedSig,setCheckedSig]=useState("");
   const fresh=res&&checkedSig===sig;
   const run=async()=>{
     setBusy(true);setRes(null);
-    const rules=invoiceRuleChecks(draft,invoices,company);
-    try{setRes({rules,risks:await invoiceAiRisks(draft,buyers,company)});}
-    catch(e){setRes({rules,error:e.message||String(e)});}
+    const fixed=rules();
+    try{setRes({rules:fixed,risks:await ai()});}
+    catch(e){setRes({rules:fixed,error:e.message||String(e)});}
     setCheckedSig(sig);setBusy(false);
   };
-  const CAT_ORDER=["Restricted export","HSN","GST","Spelling","Other legal"];
-  const risks=(fresh?[...res.rules,...(res.risks||[])]:[]).map((x,i)=>({...x,i})).sort((a,b)=>CAT_ORDER.indexOf(a.category)-CAT_ORDER.indexOf(b.category)||a.i-b.i);
+  const risks=(fresh?[...res.rules,...(res.risks||[])]:[]).map((x,i)=>({...x,i})).sort((a,b)=>categories.indexOf(a.category)-categories.indexOf(b.category)||a.i-b.i);
   const allClear=fresh&&res.risks&&risks.length===0;
   return(
     <div style={{background:C.surface,border:`1px solid ${allClear?C.green:risks.length?C.red:C.border}`,borderRadius:8,padding:"14px 17px",marginTop:13}}>
@@ -14895,7 +14896,7 @@ function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
         </button>
         {allClear?<b style={{fontSize:13,color:C.green}}>✓ All clear</b>
           :risks.length?<b style={{fontSize:13,color:C.red}}>{risks.length} legal risk{risks.length>1?"s":""}</b>
-          :<span style={{fontSize:11,color:C.inkFaint}}>{res&&!fresh?"Changed since the last check — run it again.":"Restricted export, HSN, GST, spelling and other legal risks."}</span>}
+          :<span style={{fontSize:11,color:C.inkFaint}}>{res&&!fresh?"Changed since the last check — run it again.":idle}</span>}
       </div>
       {res?.error&&fresh&&<div style={{fontSize:12,color:C.red,marginTop:10}}>⚠ The AI part couldn't run: {res.error}. Only the fixed rules were checked.</div>}
       {risks.length>0&&<div style={{marginTop:10,display:"grid",gap:8}}>
@@ -14906,6 +14907,127 @@ function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
         ))}
       </div>}
     </div>
+  );
+}
+
+function InvoiceLegalCheck({draft,buyers,company,invoices=[]}){
+  return(
+    <LegalCheck
+      sig={JSON.stringify([draft.items,draft.termsText,draft.notes,draft.lutArn,draft.buyerId,draft.consigneeName,draft.consigneeAddress])}
+      rules={()=>invoiceRuleChecks(draft,invoices,company)}
+      ai={()=>invoiceAiRisks(draft,buyers,company)}
+      categories={["Restricted export","HSN","GST","Spelling","Other legal"]}
+      idle="Restricted export, HSN, GST, spelling and other legal risks."/>
+  );
+}
+
+/* The packing list's legal check. Customs opens cartons against the packing list
+   and the packing list against the invoice, so this asks: does it declare the
+   same goods as the invoice, do the weights hold up, does any description name
+   or suggest restricted goods, is anything misspelt. Changes nothing. */
+const PACKING_LEGAL_RULES=`You are checking the PACKING LIST of an Indian export shipment (natural stones, minerals, gems, carvings) for LEGAL RISK before it goes to customs with its invoice: anything that could get the shipment questioned, held at examination or reclassified, or the exporter penalised. Think like the customs examiner opening the packages and the CHA filing the shipping bill. Check every category below and report every risk you find:
+
+1. "Invoice match": the packing list must declare the same goods as the invoice. Each packed line must be identifiable as an invoice line — the same stone and the same form (a line may use a shorter name than the invoice; "invoice_line_wording" says which invoice line it stands for, and the stone and form must agree with it). A different stone or form, goods not on the invoice, or invoice goods not packed is a misdeclaration.
+2. "Restricted export": a packing-list description that names or suggests goods whose export is prohibited, restricted, canalised or needs a permit — beach sand minerals (garnet, ilmenite, rutile, zircon, monazite, sillimanite, leucoxene) only through IREL; CITES/wildlife material (coral, shell, ivory, bone); fossils, meteorites, antiques; radioactive minerals — or wording that concedes a riskier heading than the invoice's (sand, grit, abrasive, powder, ore, industrial).
+3. "Weights": a package's net weight above its gross weight, a package without a net or gross weight, line kilos that don't add up to the package's net weight, a packing weight (gross − net) that is implausible for the packing, totals that don't add up.
+4. "Spelling": every misspelt word in a description, packing type or destination — stone names especially (e.g. Hyperthene for Hypersthene). Do not flag correct trade names (Sonora Sunrise, Tiffany Stone, Ruby Fuchsite). Quote the wrong word and give the correction.
+5. "Other legal": anything else that is a legal risk — a description too vague to identify the goods, the same goods described differently in different packages, a package with no goods in it.
+
+The printed sheet already carries the exporter's letterhead, the consignee's name and address, "DETAILED PACKING LIST FOR INV <number> DTD <date>", each package's mark and number, its lines, its net and gross weight, and the total net and gross weight. Do not report those as missing.
+Report only real risks found in the data. No style tips, no generic advice, no invented facts.
+Reply with JSON only: {"risks":[{"category":"Invoice match"|"Restricted export"|"Weights"|"Spelling"|"Other legal","where":"package mark, or the field","risk":"what is wrong and why it is a risk, one sentence","fix":"exactly what to change, one sentence"}]}. An empty list means all clear.`;
+const PACKING_LEGAL_CATS=["Invoice match","Restricted export","Weights","Spelling","Other legal"];
+
+// The fixed rules for a packing list, no AI. Each is { category, where, risk, fix }.
+function packingRuleChecks(pl,inv){
+  const out=[],add=(category,where,risk,fix)=>out.push({category,where,risk,fix});
+  const blocks=pl.blocks||[];
+  const marks=packingMarks(blocks,pl.mode,pl.startAt);
+  const mark=i=>packMarkLabel(pl.prefix||"N.G.",marks[i]);
+  const spelt=t=>String(t||"").replace(/[a-z_]+/gi,w=>MISSPELT[w.toLowerCase()]||w);
+  const lines=blocks.flatMap((b,i)=>(b.lines||[]).map(l=>({...l,at:i})));
+  // Invoice match: the table above has the detail; this says it's a legal matter.
+  const off=packingReconciliation(inv,blocks,pl.mode).filter(r=>!r.ok);
+  if(off.length)add("Invoice match","Packed against invoice",`${off.length} description${off.length>1?"s don't":" doesn't"} match the invoice (${off.slice(0,3).map(r=>r.desc).join("; ")}${off.length>3?"; …":""}) — customs reads a packing list that disagrees with its invoice as a misdeclaration.`,"Make every packed quantity and description agree with the invoice — the table above shows each difference.");
+  // A shortened name must still name the invoice line's stone.
+  const shortSeen=new Set();
+  for(const l of lines){
+    if(!l.inv||shortSeen.has(packDescKey(l.desc)))continue;
+    shortSeen.add(packDescKey(l.desc));
+    const a=stonesIn(spelt(l.desc)),b=stonesIn(spelt(l.inv));
+    if(a.length&&b.length&&!a.some(w=>b.includes(w)))add("Invoice match",mark(l.at),`"${l.desc}" names ${a.join(", ")}, but the invoice line it stands for names ${b.join(", ")}.`,"Name the same stone as the invoice line.");
+  }
+  // Weights, package by package.
+  blocks.forEach((b,i)=>{
+    const net=packNum(b.net),gross=packNum(b.gross),has=(b.lines||[]).some(l=>String(l.desc||"").trim()||packNum(l.pcs)||packNum(l.kgs));
+    if(!has&&!net&&!gross)return;
+    if(!String(b.net||"").trim())add("Weights",mark(i),"No net weight.","Weigh the goods and enter the net weight.");
+    if(!String(b.gross||"").trim())add("Weights",mark(i),"No gross weight.","Weigh the packed package and enter the gross weight.");
+    if(net&&gross&&net>gross+0.0005)add("Weights",mark(i),`Net weight ${b.net} kg is more than the gross weight ${b.gross} kg.`,"Re-check both weights; gross includes the packing, so it can't be less.");
+    if(pl.mode!=="bulk"&&net){
+      const ls=(b.lines||[]).filter(l=>String(l.desc||"").trim());
+      if(ls.length&&ls.every(l=>String(l.kgs||"").trim())){
+        const sum=ls.reduce((s,l)=>s+packNum(l.kgs),0);
+        if(Math.abs(sum-net)>Math.max(0.01,net*0.005))add("Weights",mark(i),`The lines add up to ${packWeight(sum)} kg; the net weight says ${b.net} kg.`,"Make the line weights and the net weight agree.");
+      }
+    }
+    for(const l of b.lines||[]){
+      const d=String(l.desc||"").trim();
+      if(!d&&(packNum(l.pcs)||packNum(l.kgs)))add("Other legal",mark(i),`A line of ${[l.pcs&&`${l.pcs} pcs`,l.kgs&&`${l.kgs} kg`].filter(Boolean).join(", ")} has no description.`,"Describe the goods on that line.");
+      if(d&&pl.mode!=="bulk"&&!packNum(l.pcs)&&!packNum(l.kgs))add("Other legal",mark(i),`"${d}" has no quantity.`,"Enter its pieces or kilos, or remove the line.");
+    }
+  });
+  // Restricted words and spelling: once per description, wherever it's packed.
+  const byDesc=new Map();
+  for(const l of lines){const d=String(l.desc||"").trim();if(!d)continue;const k=packDescKey(d);if(!byDesc.has(k))byDesc.set(k,{d,at:[]});byDesc.get(k).at.push(l.at);}
+  const where=at=>`${mark(at[0])}${at.length>1?` and ${at.length-1} more`:""}`;
+  for(const {d,at} of byDesc.values()){
+    const t=spelt(d).toLowerCase();
+    const sand=BEACH_SAND.find(w=>new RegExp(`\\b${w}`).test(t));
+    if(sand)add("Restricted export",where(at),`${cap1(sand)} is also a beach sand mineral; on a packing list as "${d}" an examiner can read it as the restricted Chapter 25/26 mineral, which only IREL may export.`,`Describe it as the invoice does — natural ${sand}, semi-precious stone, and its form.`);
+    const ctl=CONTROLLED.find(w=>new RegExp(`\\b${w}`).test(t));
+    if(ctl)add("Restricted export",where(at),`${cap1(ctl)} can be a controlled export (CITES, wildlife, antiquities or atomic minerals rules).`,"Confirm with the CHA whether a permit or certificate is needed before shipping.");
+    const weak=t.match(/\b(sand|grit|abrasive|powder|industrial|ore)\b/);
+    if(weak)add("Restricted export",where(at),`"${weak[1]}" in "${d}" points customs to a mineral or industrial heading.`,"Describe the actual lapidary form: rough, sawn, tumbled, polished, carved.");
+  }
+  const seen=new Set();
+  const texts=[...[...byDesc.values()].map(({d,at})=>[where(at),d]),...blocks.flatMap((b,i)=>[[mark(i),b.packing],[mark(i),b.dest]])];
+  for(const [w,t] of texts){if(!t)continue;for(const word of String(t).toLowerCase().match(/[a-z_]+/g)||[]){const right=MISSPELT[word];if(right&&!seen.has(word)){seen.add(word);add("Spelling",w,`"${word}" is misspelt.`,`Write "${right}".`);}}}
+  return out;
+}
+
+// The AI half of the packing list's check. Returns [{ category, where, risk, fix }]; throws if it can't run.
+async function packingAiRisks(pl,inv,buyers){
+  const blocks=pl.blocks||[];
+  const marks=packingMarks(blocks,pl.mode,pl.startAt);
+  const tot=packingTotals(blocks);
+  const b=(buyers||[]).find(x=>x.id===inv.buyerId)||{};
+  const facts={
+    invoice:{number:inv.invNo,date:inv.date,buyer_country:b.country||inv.consigneeCountry||"",port_of_loading:inv.portLading||"Mumbai, India",port_of_discharge:inv.portDischarge||"",
+      items:(inv.items||[]).map((it,i)=>({line:i+1,description:packItemDesc(it),detail:it.customDesc||"",hsn:it.hsn,qty:it.qty,unit:it.unit}))},
+    packing_list:{layout:pl.mode,date:pl.date,
+      packages:blocks.map((bl,i)=>({mark:packMarkLabel(pl.prefix||"N.G.",marks[i]),destination:bl.dest||"",packing:bl.packing||"",...(pl.mode==="bulk"?{packages_in_run:bl.bags}:{}),
+        lines:(bl.lines||[]).filter(l=>String(l.desc||"").trim()||l.pcs||l.kgs).map(l=>({description:l.desc,...(l.inv&&packDescKey(l.inv)!==packDescKey(l.desc)?{invoice_line_wording:l.inv}:{}),pcs:l.pcs,kgs:l.kgs})),
+        net_kg:bl.net,gross_kg:bl.gross})),
+      total_net_kg:packWeight(tot.net),total_gross_kg:packWeight(tot.gross)},
+  };
+  const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"gpt-4.1",max_tokens:1800,messages:[{role:"system",content:"You are an Indian export compliance checker (customs examination, ITC-HS export policy, Foreign Trade Policy). Precise, brief, no padding."},{role:"user",content:`${PACKING_LEGAL_RULES}\n\nData:\n${JSON.stringify(facts)}`}]})});
+  const d=await r.json();
+  if(!r.ok||d.error)throw new Error(d.error?.message||`HTTP ${r.status}`);
+  const m=String(d.content?.find(x=>x.type==="text")?.text||"").match(/\{[\s\S]*\}/);
+  const out=m?JSON.parse(m[0]):null;
+  if(!out||!Array.isArray(out.risks))throw new Error("The check's reply couldn't be read — run it again");
+  return out.risks.filter(x=>x&&x.risk).map(x=>({...x,category:PACKING_LEGAL_CATS.includes(x.category)?x.category:"Other legal"}));
+}
+
+function PackingLegalCheck({pl,inv,buyers}){
+  return(
+    <LegalCheck
+      sig={JSON.stringify([pl.blocks,pl.mode,pl.prefix,pl.startAt,inv.items])}
+      rules={()=>packingRuleChecks(pl,inv)}
+      ai={()=>packingAiRisks(pl,inv,buyers)}
+      categories={PACKING_LEGAL_CATS}
+      idle="Matches the invoice, weights, restricted goods, spelling and other legal risks."/>
   );
 }
 
@@ -15467,7 +15589,7 @@ const packSum=(a,b)=>{const x=String(a??"").trim(),y=String(b??"").trim();return
 const mergePackingLines=lines=>{
   const out=[],byKey=new Map();
   for(const l of lines||[]){
-    const k=packDescKey(l.desc);
+    const k=packDescKey(l.inv||l.desc);
     const hit=k&&byKey.get(k);
     if(!hit){const row={...l};if(k)byKey.set(k,row);out.push(row);continue;}
     hit.pcs=packSum(hit.pcs,l.pcs);hit.kgs=packSum(hit.kgs,l.kgs);
@@ -15475,6 +15597,36 @@ const mergePackingLines=lines=>{
   return out;
 };
 const packRepeats=lines=>(lines||[]).length-mergePackingLines(lines).length;
+/* The invoice's customs wording with the stone in brackets — "Natural Agate Stone,
+   Sawn and Polished Into Sphere, Roughly Shaped (Porcelain Jasper)" — is how the
+   import copies it in; on the list itself it's "Porcelain Jasper Spheres". The
+   shape is the one the wording names; failing that, the customs list's shape when
+   that wording stands for only one (hollowed and polished is a bowl); failing that
+   (cut and polished could be a palmstone or a tumble), the stone alone. The stone
+   can also come first — "Honey Calcite, Natural Mineral Stone Specimen, Roughly
+   Trimmed" is Honey Calcite Specimens. Anything else is left as it is. */
+const PACK_SHAPE_WORDS=["Sphere","Heart","Specimen","Bowl","Egg","Tower","Wand","Pyramid","Pendulum","Palmstone","Shivalingam","Bracelet","Skull","Cube","Geode","Slice","Flatstone"];
+const packPlural=w=>/s$/i.test(w)?w:/[^aeiou]y$/i.test(w)?w.slice(0,-1)+"ies":w+"s";
+const packShortDesc=(desc,pcs,customs)=>{
+  const t=String(desc||"").trim();
+  const back=t.match(/^(.+?)\s*\(([^()]+)\)$/), front=t.match(/^([^,()]+),\s*(natural\b[^()]*)$/i);
+  const [lead,stone]=back?[back[1],back[2]]:front?[front[2],front[1]]:[];
+  if(!lead||/^natural\b/i.test(stone)||(!/,/.test(lead)&&!/^natural\b/i.test(lead)))return null;
+  const said=PACK_SHAPE_WORDS.find(w=>new RegExp(`\\b${w}`,"i").test(lead));
+  const entry=(customs||[]).find(d=>packDescKey(d.desc)===packDescKey(lead));
+  const only=entry&&String(entry.shape||"").split(/[,;]/).map(x=>x.trim()).filter(Boolean);
+  const shape=said||(only?.length===1?only[0]:"");
+  if(!shape)return stone.trim();
+  return `${stone.trim()} ${packNum(pcs)===1?shape:packPlural(shape)}`;
+};
+const packRenames=(lines,customs)=>mergePackingLines(lines).filter(l=>{const t=packShortDesc(l.desc,l.pcs,customs);return t&&t!==l.desc;}).length;
+/* Simplify: repeats fold into one line, then long customs wording becomes the
+   short name. The line keeps the invoice wording it stood for (inv), so the
+   packed-against-invoice check still pairs it with its invoice line. */
+const simplifyPackingLines=(lines,customs)=>mergePackingLines(lines).map(l=>{
+  const t=packShortDesc(l.desc,l.pcs,customs);
+  return t&&t!==l.desc?{...l,desc:t,inv:l.inv||l.desc}:l;
+});
 const packItemDesc=it=>String(it?.acctDesc||it?.desc||"").trim();
 /* Our names for shapes, not the workshop's: a sabu is a palmstone and a
    lingam is a Shivalingam. Applied on import and again on print, so lists saved
@@ -15513,7 +15665,7 @@ function packingPackedTotals(blocks,mode){
     }
     (b.lines||[]).forEach(l=>{
       const desc=String(l.desc||"").trim();if(!desc)return;
-      const key=packDescKey(desc);
+      const key=packDescKey(l.inv||desc);
       const row=map.get(key)||{desc,pcs:0,kgs:0};
       row.pcs+=packNum(l.pcs);row.kgs+=packNum(l.kgs);
       map.set(key,row);
@@ -15932,6 +16084,9 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
   const recon=packingReconciliation(inv,pl.blocks,pl.mode);
   const offBy=recon.filter(r=>!r.ok);
   const descList=[...new Set((inv.items||[]).map(packItemDesc).filter(Boolean))];
+  const [customsDescs,setCustomsDescs]=useState([]);
+  useEffect(()=>{loadK("ng-customs-descs-v1").then(cd=>setCustomsDescs(Array.isArray(cd)?cd:[]));},[]);
+  const simplifiable=lines=>packRepeats(lines)+packRenames(lines,customsDescs);
 
   /* On the letterhead it goes out as an A4 PDF, the same on every printer and
      phone. The PDF is made ahead, as the list changes, so the tap on Print can
@@ -16063,16 +16218,18 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
         )}
       </div>
 
+      <PackingLegalCheck pl={pl} inv={inv} buyers={buyers}/>
+
       {/* Blocks */}
       {pl.blocks.map((b,i)=>(
         <div key={b.id} style={box}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
             <div style={{fontSize:13,fontWeight:800,color:C.ink}}>{packMarkLabel(pl.prefix,marks[i])}</div>
             <div style={{display:"flex",gap:6}}>
-              {pl.mode!=="bulk"&&packRepeats(b.lines)>0&&(
+              {pl.mode!=="bulk"&&simplifiable(b.lines)>0&&(
                 <button className="bs" style={{fontSize:10,padding:"3px 8px",color:C.gold,borderColor:C.gold}}
-                  title="Lines for the same stone become one, with pcs and kgs added up"
-                  onClick={()=>setBlock(i,{lines:mergePackingLines(b.lines)})}>⇊ Simplify · {(b.lines||[]).length} lines → {(b.lines||[]).length-packRepeats(b.lines)}</button>
+                  title="Lines for the same stone become one, with pcs and kgs added up, and long customs wording becomes the stone's short name (Porcelain Jasper Spheres)"
+                  onClick={()=>setBlock(i,{lines:simplifyPackingLines(b.lines,customsDescs)})}>⇊ Simplify · {packRepeats(b.lines)?`${(b.lines||[]).length} lines → ${(b.lines||[]).length-packRepeats(b.lines)}`:"shorter names"}</button>
               )}
               <button className="bs" style={{fontSize:10,padding:"3px 8px"}}
                 onClick={()=>setPl(p=>{const copy={...p.blocks[i],id:uid(),lines:(p.blocks[i].lines||[]).map(l=>({...l,id:uid()}))};
@@ -16102,14 +16259,22 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
                 <div style={lbl}>Description</div><div style={lbl}>Pcs</div><div style={lbl}>Kgs</div><div/>
               </div>
               {(b.lines||[]).map((l,li)=>(
-                <div key={l.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 60px 60px 26px":"1fr 110px 110px 30px",gap:8,marginBottom:6}}>
-                  <input list="pl-desc-list" value={l.desc} placeholder="RHODONITE BOWL 2”" onChange={e=>setLine(i,li,{desc:e.target.value})} style={inp}/>
+                <React.Fragment key={l.id}>
+                <div style={{display:"grid",gridTemplateColumns:mob?"1fr 60px 60px 26px":"1fr 110px 110px 30px",gap:8,marginBottom:l.inv?2:6}}>
+                  <input list="pl-desc-list" value={l.desc} placeholder="RHODONITE BOWL 2”"
+                    onChange={e=>{const v=e.target.value;setLine(i,li,{desc:v,...(l.inv&&descList.some(d=>packDescKey(d)===packDescKey(v))?{inv:""}:{})});}} style={inp}/>
                   <input value={l.pcs} placeholder="PCS" inputMode="decimal" onChange={e=>setLine(i,li,{pcs:e.target.value})} style={inp}/>
                   <input value={l.kgs} placeholder="KGS" inputMode="decimal" onChange={e=>setLine(i,li,{kgs:e.target.value})} style={inp}/>
                   <button className="bs" style={{fontSize:11,padding:0,color:C.red,borderColor:"transparent",background:"none",cursor:"pointer"}}
                     onClick={()=>setPl(p=>{const blocks=[...p.blocks];const lines=(blocks[i].lines||[]).filter((_,j)=>j!==li);
                       blocks[i]={...blocks[i],lines:lines.length?lines:[packingLine()]};return{...p,blocks};})}>✕</button>
                 </div>
+                {l.inv&&packDescKey(l.inv)!==packDescKey(l.desc)&&(
+                  <div title="Simplify gave this line a shorter name; it's still checked against this invoice line" style={{fontSize:10,color:C.inkFaint,margin:"0 0 6px 2px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    on the invoice as: {l.inv}
+                  </div>
+                )}
+                </React.Fragment>
               ))}
               <button className="bs" style={{fontSize:11,padding:"4px 9px"}}
                 onClick={()=>setPl(p=>{const blocks=[...p.blocks];blocks[i]={...blocks[i],lines:[...(blocks[i].lines||[]),packingLine()]};return{...p,blocks};})}>+ Stone</button>
@@ -16131,13 +16296,14 @@ function PackingListBuilder({inv,buyers,company="ng",onBack,onSave,showToast}){
 
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
         <button className="bs" onClick={()=>setPl(p=>({...p,blocks:[...p.blocks,packingBlock()]}))}>+ Carton</button>
-        {pl.mode!=="bulk"&&pl.blocks.some(b=>packRepeats(b.lines)>0)&&(
+        {pl.mode!=="bulk"&&pl.blocks.some(b=>simplifiable(b.lines)>0)&&(
           <button className="bs" style={{color:C.gold,borderColor:C.gold}}
-            title="In every carton, lines for the same stone become one, with pcs and kgs added up"
+            title="In every carton, lines for the same stone become one, with pcs and kgs added up, and long customs wording becomes the stone's short name"
             onClick={()=>{
               const n=pl.blocks.reduce((s,b)=>s+packRepeats(b.lines),0);
-              setPl(p=>({...p,blocks:p.blocks.map(b=>({...b,lines:mergePackingLines(b.lines)}))}));
-              showToast?.(`Simplified — ${n} repeated line${n>1?"s":""} merged`);
+              const r=pl.blocks.reduce((s,b)=>s+packRenames(b.lines,customsDescs),0);
+              setPl(p=>({...p,blocks:p.blocks.map(b=>({...b,lines:simplifyPackingLines(b.lines,customsDescs)}))}));
+              showToast?.(`Simplified — ${[n?`${n} repeated line${n>1?"s":""} merged`:"",r?`${r} name${r>1?"s":""} shortened`:""].filter(Boolean).join(", ")}`);
             }}>⇊ Simplify all cartons</button>
         )}
         <button className="bs" onClick={()=>{
