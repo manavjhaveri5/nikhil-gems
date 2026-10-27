@@ -299,9 +299,11 @@ export default async function handler(req, res) {
     }
 
     // ── listing_pulse: the shop's listings in numbers, for the home page ───────
-    // ?from=<unix s>  listings first published since then. "First" is
-    // original_creation_timestamp — a renewal moves created_timestamp, so counting
-    // by that would call every renewal a new listing.
+    // ?from=<unix s>  listings published since then, dated by their listing fee
+    // (`published`; see below). `added` is the older count by
+    // original_creation_timestamp — when the draft was made — kept as the
+    // fallback if the ledger can't be read. A renewal moves created_timestamp,
+    // so counting by that would call every renewal a new listing.
     // Never the whole catalog: a listing can't have been first created after its
     // latest renewal, so newest-first pages stop once created_timestamp passes
     // `from`; listings run four months from their last renewal, so oldest-first
@@ -312,16 +314,65 @@ export default async function handler(req, res) {
       const nowS = Math.floor(Date.now() / 1000);
       const from = Math.max(nowS - 400 * 86400, parseInt(req.query.from, 10) || nowS - 62 * 86400);
       const soon = nowS + 30 * 86400, lately = nowS - 30 * 86400;
-      const { getJson, pagesWhile } = etsyQueue(authHeaders);
+      const { getJson, allPages, pagesWhile } = etsyQueue(authHeaders);
       const url = (state, offset, order = "desc", limit = 100) =>
         `https://openapi.etsy.com/v3/application/shops/${sid}/listings?${new URLSearchParams({ state, limit: String(limit), offset: String(offset), sort_on: "created", sort_order: order })}`;
       const sinceFrom = state => pagesWhile(o => url(state, o), last => +last.created_timestamp >= from);
-      const [active, soldOut, inactive, ending, expired, draft] = await Promise.all([
+      // The ledger answers at most 31 days per request.
+      const windows = [];
+      for (let a = from; a < nowS; a += 30 * 86400) windows.push([a, Math.min(nowS + 60, a + 30 * 86400)]);
+      const ledgerP = Promise.all(windows.map(([a, b]) => allPages(o =>
+        `https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${a}&max_created=${b}&limit=100&offset=${o}`
+      ))).then(chunks => ({ rows: chunks.flat() }), e => ({ error: e.message }));
+      const [active, soldOut, inactive, ending, expired, draft, ledger] = await Promise.all([
         sinceFrom("active"), sinceFrom("sold_out"), sinceFrom("inactive"),
         pagesWhile(o => url("active", o, "asc"), last => +last.ending_timestamp <= soon),
         pagesWhile(o => url("expired", o), last => +last.ending_timestamp >= lately),
         getJson(url("draft", 0, "desc", 1)),
+        ledgerP,
       ]);
+
+      /* Published, not drafted: Etsy charges the $0.20 listing fee the moment a
+         listing goes live, against that listing, so the fee record says which
+         piece went up and when. A draft has no fee yet, and a renewal is a fee
+         of its own kind (renew_expired, renew_sold…), so neither counts.
+         feeTypes is what the ledger called its listing fees, for checking. */
+      const feeTypes = {};
+      const published = [];
+      const feeSeen = new Set(), entrySeen = new Set();
+      const fees = (ledger.rows || []).map(e => ({ e,
+        type: String(e.ledger_type || "").toLowerCase(), ref: String(e.reference_type || "").toLowerCase(),
+        ts: +e.created_timestamp || +e.create_date || 0,
+      })).filter(({ type, ref }) => (type.includes("listing") || type.includes("renew") || ref === "listing")
+        && !/^(prolist|offsite)|tax|vat|gst/.test(type))
+        .sort((a, b) => a.ts - b.ts);
+      for (const { e, type, ts } of fees) {
+        if (entrySeen.has(e.entry_id)) continue;
+        entrySeen.add(e.entry_id);
+        feeTypes[type || "?"] = (feeTypes[type || "?"] || 0) + 1;
+        const id = String(e.reference_id ?? "");
+        if (type.includes("renew") || !(+e.amount < 0) || !id || feeSeen.has(id)) continue;
+        feeSeen.add(id);
+        published.push({ id, ts });
+      }
+      const publishedFrom = !ledger.error && Object.keys(feeTypes).length ? "ledger" : "";
+
+      // The last week's new pieces with a picture and a title, for the side list.
+      let recent = [];
+      const recentIds = published.filter(p => p.ts >= nowS - 8 * 86400).slice(-100).map(p => p.id);
+      if (recentIds.length) {
+        try {
+          const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${recentIds.join(",")}&includes=Images`);
+          const byId = new Map((d.results || []).map(l => [String(l.listing_id), l]));
+          recent = published.filter(p => recentIds.includes(p.id)).map(p => {
+            const l = byId.get(p.id);
+            const img = l && [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
+            return { id: p.id, ts: p.ts, title: l ? String(l.title || "").slice(0, 120) : "", state: l?.state || "",
+              img: img ? img.url_170x135 || img.url_75x75 || img.url_570xN || "" : "",
+              price: l?.price ? (+l.price.amount || 0) / (+l.price.divisor || 100) : 0, cur: l?.price?.currency_code || "" };
+          });
+        } catch {}
+      }
 
       const seen = new Set();
       const added = [];
@@ -339,6 +390,8 @@ export default async function handler(req, res) {
         ok: true, from, at: nowS,
         counts: { active: active.count, sold_out: soldOut.count, inactive: inactive.count, expired: expired.count, draft: +draft.count || 0 },
         added, expiring, expiredLately,
+        published, publishedFrom, recent, feeTypes,
+        ...(ledger.error ? { ledgerError: ledger.error } : {}),
       });
     }
 

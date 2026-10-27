@@ -14,11 +14,12 @@ const CACHE_KEY = "ng-home-pulse-v1";
 // One refresh is ~17 Etsy calls; at this rate a home page left open all day stays
 // well inside Etsy's daily allowance, which the listing and order sync need too.
 const FRESH_MS = 15 * 60 * 1000;
-const LIST_CACHE_KEY = "ng-home-listings-v1";
+const LIST_CACHE_KEY = "ng-home-listings-v2";
 // Listings change slowly, and a read costs ~10 Etsy calls.
 const LIST_FRESH_MS = 30 * 60 * 1000;
 // What Etsy charges to list or renew a listing for four months.
 const LISTING_FEE_USD = 0.2;
+const DAILY_TARGET = 5; // new listings published a day
 const ORDERS_KEY = "ng-orders-v1";
 const RATES_KEY = "ng-fin-rates-v1"; // INR per unit of each currency, refreshed by Finance
 const PENDING_DAYS = 60;
@@ -201,33 +202,32 @@ function buildModel(data, rates, erpOrders, nowMs) {
   };
 }
 
-// Listings: new ones by the date they were first listed, and what's ending or ended.
+// Listings: new ones by the day they went live, and what's ending or ended.
 function buildListingModel(data, nowMs) {
   const cal = calendar(nowMs);
-  const { now, m0, mPrev, daysIn, daysPrev, prevCut } = cal;
-  const added = (data.added || []).map(a => a.ts * 1000);
+  const { now, m0, mPrev, prevCut } = cal;
+  // Dated by the listing fee — the day each piece was published — when the
+  // ledger could be read; otherwise by the day its draft was made.
+  const byFee = data.publishedFrom === "ledger";
+  const added = ((byFee ? data.published : data.added) || []).map(a => a.ts * 1000);
   const count = (a, b) => added.filter(t => t >= a && t < b).length;
   const today0 = dayStart(nowMs);
   const weekStart = today0 - ((now.getDay() + 6) % 7) * DAY; // weeks start on Monday
-  const running = (start, days, upTo) => {
-    const out = [0];
-    for (let d = 1; d <= days; d++) {
-      const from = +new Date(start.getFullYear(), start.getMonth(), d);
-      if (from > upTo) break;
-      out.push(out[d - 1] + count(from, Math.min(+new Date(start.getFullYear(), start.getMonth(), d + 1), upTo + 1)));
-    }
-    return out;
-  };
+  const dayAt = d => +new Date(m0.getFullYear(), m0.getMonth(), d);
+  const daily = [];
+  for (let d = 1; d <= cal.day; d++) daily.push(count(dayAt(d), Math.min(dayAt(d + 1), nowMs + 1)));
   const nowS = nowMs / 1000;
   const expiring = data.expiring || [];
   const in7 = expiring.filter(l => l.ends <= nowS + 7 * 86400);
   const expired = data.expiredLately || [];
   return {
-    ...cal,
+    ...cal, byFee, today0,
     today: count(today0, nowMs + 1), yesterday: count(today0 - DAY, today0),
     week: count(weekStart, nowMs + 1), weekPrev: count(weekStart - 7 * DAY, nowMs - 7 * DAY + 1), weekDays: Math.round((today0 - weekStart) / DAY) + 1,
     month: count(+m0, nowMs + 1), monthPrevSame: count(+mPrev, prevCut), monthPrev: count(+mPrev, +m0),
-    cumThis: running(m0, daysIn, nowMs), cumPrev: running(mPrev, daysPrev, +m0 - 1),
+    daily, hit: daily.filter(n => n >= DAILY_TARGET).length,
+    countDay: d0 => count(d0, d0 + DAY),
+    recent: byFee ? (data.recent || []).map(r => ({ ...r, ms: r.ts * 1000 })) : [],
     counts: data.counts || {},
     in7: in7.length, in7Off: in7.filter(l => !l.auto).length,
     in30: expiring.length, in30Off: expiring.filter(l => !l.auto).length,
@@ -484,11 +484,124 @@ function AdBars({ m }) {
   );
 }
 
-/* ── listings: new this month, and the ones ending ─────────────────────────── */
-const countShort = v => Number.isInteger(v) ? String(v) : v.toFixed(1);
-const countFull = v => plural(Math.round(v), "listing");
+/* ── listings: new each day against the target, and the ones ending ───────── */
+const dayName = (ms, today0) => ms === today0 ? "Today" : ms === today0 - DAY ? "Yesterday" : new Date(ms).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+const priceFmt = (v, cur) => {
+  if (!(v > 0)) return "";
+  try { return new Intl.NumberFormat(cur === "INR" ? "en-IN" : "en-US", { style: "currency", currency: cur || "INR", maximumFractionDigits: 0 }).format(v); } catch { return String(Math.round(v)); }
+};
+
+// Each day of the month as a bar, the target across them. A bar picks the
+// day the side list shows.
+function DayBars({ lm, sel, onPick }) {
+  const [ref, w] = useWidth();
+  const [hover, setHover] = useState(null);
+  const H = mob ? 150 : 172, PL = 24, PR = 8, PT = 16, PB = 20;
+  const CW = Math.max(10, w - PL - PR), CH = H - PT - PB;
+  const yMax = niceMax(Math.max(DAILY_TARGET * 1.5, ...lm.daily));
+  const y = v => PT + CH * (1 - v / yMax);
+  const band = CW / lm.daysIn;
+  const bw = Math.max(3, Math.min(16, band - 2)); // a 2px gap between bars
+  const cx = d => PL + band * (d - 1) + band / 2;
+  const dayMs = d => +new Date(lm.m0.getFullYear(), lm.m0.getMonth(), d);
+  const barPath = (x0, top, bottom, width) => {
+    const r = Math.min(4, width / 2, Math.max(0, bottom - top));
+    return `M${x0},${bottom}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x0 + width - r}Q${x0 + width},${top} ${x0 + width},${top + r}V${bottom}Z`;
+  };
+  const hv = hover != null ? lm.daily[hover - 1] : null;
+  return (
+    <div ref={ref} style={{ position: "relative", marginTop: 10 }}>
+      {w > 0 && (
+        <svg width={w} height={H} style={{ display: "block", touchAction: "pan-y" }} onPointerLeave={() => setHover(null)}>
+          {[0.5, 1].map(t => (
+            <g key={t}>
+              <line x1={PL} x2={PL + CW} y1={y(t * yMax)} y2={y(t * yMax)} stroke={C.border} strokeWidth={1} />
+              <text x={PL - 6} y={y(t * yMax) + 3.5} textAnchor="end" fontSize={10} fill={C.inkFaint}>{t * yMax}</text>
+            </g>
+          ))}
+          <line x1={PL} x2={PL + CW} y1={y(0)} y2={y(0)} stroke={C.borderHi} strokeWidth={1} />
+          {[1, 8, 15, 22, 29].filter(d => d <= lm.daysIn).map(d => (
+            <text key={d} x={cx(d)} y={H - 6} textAnchor="middle" fontSize={10} fill={C.inkFaint}>{d}</text>
+          ))}
+          {lm.daily.map((v, i) => {
+            const d = i + 1, x0 = cx(d) - bw / 2, today = d === lm.day, picked = sel === dayMs(d);
+            return (
+              <g key={d}>
+                {v > 0
+                  ? <path d={barPath(x0, y(v), y(0), bw)} fill={NOW} fillOpacity={today ? 0.55 : 1} stroke={picked ? C.ink : "none"} strokeWidth={1.5} />
+                  : <rect x={x0} y={y(0) - 2} width={bw} height={2} rx={1} fill={picked ? C.ink : C.borderHi} />}
+                {today && <text x={cx(d)} y={y(v) - 5} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={C.ink}>{v}</text>}
+                <rect x={cx(d) - band / 2} y={PT} width={band} height={CH} fill="transparent" style={{ cursor: "pointer" }}
+                  onPointerEnter={() => setHover(d)} onPointerDown={() => setHover(d)} onClick={() => onPick(dayMs(d))} />
+              </g>
+            );
+          })}
+          <line x1={PL} x2={PL + CW} y1={y(DAILY_TARGET)} y2={y(DAILY_TARGET)} stroke={C.ink} strokeOpacity={0.55} strokeWidth={1.25} strokeDasharray="5 4" pointerEvents="none" />
+          <text x={PL + CW} y={y(DAILY_TARGET) - 4} textAnchor="end" fontSize={10} fontWeight={600} fill={C.inkMid} pointerEvents="none">Target {DAILY_TARGET} a day</text>
+        </svg>
+      )}
+      {hover != null && (
+        <Tip x={cx(hover)} y={8} w={w}>
+          <div style={{ fontWeight: 700 }}>{dayName(dayMs(hover), lm.today0)}{hover === lm.day ? " (so far)" : ""}</div>
+          <TipRow color={NOW} label="Published" value={hv} />
+          <TipRow label={`Target ${DAILY_TARGET}`} value={hv >= DAILY_TARGET ? "✓ met" : `${DAILY_TARGET - hv} short`} />
+          {lm.recent.length > 0 && dayMs(hover) >= lm.today0 - 7 * DAY && <div style={{ color: C.inkFaint, marginTop: 4 }}>Click to list them</div>}
+        </Tip>
+      )}
+    </div>
+  );
+}
+
+// What went live on one day — today unless a bar or the arrows pick another.
+function PublishedList({ lm, sel, setSel }) {
+  const day0 = sel ?? lm.today0;
+  const n = lm.countDay(day0);
+  const items = lm.recent.filter(r => r.ms >= day0 && r.ms < day0 + DAY).sort((a, b) => b.ms - a.ms);
+  const oldest = lm.today0 - 7 * DAY;
+  const arrowBtn = on => ({ width: 24, height: 24, borderRadius: 12, border: `1px solid ${C.border}`, background: C.surface, color: on ? C.ink : C.inkFaint, cursor: on ? "pointer" : "default", fontSize: 14, lineHeight: "20px", padding: 0, opacity: on ? 1 : 0.5 });
+  const left = Math.max(0, DAILY_TARGET - n);
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={eyebrow}>Published · {dayName(day0, lm.today0)}</div>
+        <div style={{ flex: 1 }} />
+        <button aria-label="Day before" disabled={day0 <= oldest} onClick={() => setSel(day0 - DAY)} style={arrowBtn(day0 > oldest)}>‹</button>
+        <button aria-label="Day after" disabled={day0 >= lm.today0} onClick={() => setSel(day0 + DAY >= lm.today0 ? null : day0 + DAY)} style={arrowBtn(day0 < lm.today0)}>›</button>
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 6 }}>
+        <span style={{ fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: 30, fontWeight: 600, color: C.ink, lineHeight: 1 }}>{n}</span>
+        <span style={{ fontSize: 12, color: C.inkMid }}>of {DAILY_TARGET}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: left ? (day0 === lm.today0 ? C.amber : C.red) : C.green, marginLeft: "auto" }}>{left ? `${left} ${day0 === lm.today0 ? "to go" : "short"}` : "✓ target met"}</span>
+      </div>
+      <div style={{ height: 6, borderRadius: 3, background: C.card, marginTop: 7, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${Math.min(100, n / DAILY_TARGET * 100)}%`, background: NOW, borderRadius: 3 }} />
+      </div>
+      {!lm.byFee
+        ? <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 10 }}>Etsy's fee record couldn't be read, so the pieces can't be listed — the counts are by the day each draft was made.</div>
+        : !items.length
+          ? <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 10 }}>{n ? "Published, but Etsy didn't send the details." : `Nothing published ${day0 === lm.today0 ? "yet today" : "that day"}.`}</div>
+          : <div style={{ marginTop: 8, maxHeight: mob ? "none" : 272, overflowY: "auto", marginRight: -6, paddingRight: 6 }}>
+              {items.map(r => (
+                <a key={r.id} className="pz-row" href={`https://www.etsy.com/listing/${r.id}`} target="_blank" rel="noreferrer"
+                  style={{ display: "flex", gap: 9, alignItems: "center", padding: "6px 6px", borderRadius: 10, textDecoration: "none", color: "inherit" }}>
+                  {r.img
+                    ? <img src={r.img} alt="" loading="lazy" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0, background: C.card }} />
+                    : <span style={{ width: 40, height: 40, borderRadius: 8, background: C.card, flexShrink: 0 }} />}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.title || `Listing ${r.id}`}</div>
+                    <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>
+                      {[new Date(r.ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }), priceFmt(r.price, r.cur), r.state && r.state !== "active" ? r.state.replace("_", " ") : ""].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>}
+    </div>
+  );
+}
 
 function ListingsRow({ lm, err, loading, usdRate, onOpen, onRenew }) {
+  const [sel, setSel] = useState(null); // a day picked from the chart; null is today
   if (!lm) {
     return (
       <div style={{ ...card, marginBottom: 11 }}>
@@ -504,6 +617,8 @@ function ListingsRow({ lm, err, loading, usdRate, onOpen, onRenew }) {
   const renewUSD = lm.in30 * LISTING_FEE_USD;
   const box = { background: C.card, borderRadius: 10, padding: "9px 12px", minWidth: 0 };
   const big = { fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: mob ? 26 : 30, fontWeight: 600, color: C.ink, lineHeight: 1.1 };
+  const of = { fontSize: 12, color: C.inkMid, fontFamily: "inherit", fontWeight: 500, marginLeft: 4 };
+  const sub = { fontSize: 10.5, color: C.inkFaint, marginTop: 2 };
   const offNote = (n, off) => !n ? "nothing ending" : off === n ? `auto-renew is off on all ${n} — they'll come off the shop` : `${off} will come off the shop · ${n - off} auto-renew`;
   // The ending and expired rows open the Renew queue, where each is renewed or skipped.
   const renew = onRenew || onOpen;
@@ -513,55 +628,63 @@ function ListingsRow({ lm, err, loading, usdRate, onOpen, onRenew }) {
     ["🗓️", "Ending in 30 days", lm.in30, lm.in30 ? `${offNote(lm.in30, lm.in30Off)} · renewing all ≈ ${usd(renewUSD)} (${rs(renewUSD * usdRate)})` : "nothing ending", lm.in30Off ? C.amber : null, renew],
     ["⛔", "Expired", c.expired, `${lm.expired30} in the last 30 days · ${lm.expired7} this week · renew or skip each →`, null, renew],
   ];
+  const weekTarget = DAILY_TARGET * lm.weekDays, monthTarget = DAILY_TARGET * lm.day;
+  const pick = ms => setSel(ms === lm.today0 ? null : ms);
   return (
-    <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1.5fr) minmax(0,1fr)", gap: 11, marginBottom: 11 }}>
+    <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1.5fr) minmax(0,1fr)", gap: 11, marginBottom: 11, alignItems: "start" }}>
       <div style={card}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
           <div style={eyebrow}>New listings · {monthLong(lm.m0)}</div>
-          <span style={{ fontSize: 10.5, color: C.inkFaint }}>by the day first listed — renewals don't count</span>
+          <span style={{ fontSize: 10.5, color: C.inkFaint }}>{lm.byFee ? "published on Etsy, by the day each went live — drafts and renewals don't count" : "by the day each draft was made — Etsy's fee record couldn't be read"}</span>
           <div style={{ flex: 1 }} />
           <button onClick={onOpen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0 }}>Open listings →</button>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 10 }}>
           <div style={box}>
             <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>Today</div>
-            <div style={big}>{lm.today}</div>
-            <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2 }}>yesterday {lm.yesterday}</div>
+            <div style={big}>{lm.today}<span style={of}>/ {DAILY_TARGET}</span></div>
+            <div style={sub}>{lm.today >= DAILY_TARGET ? <span style={{ color: C.green, fontWeight: 700 }}>✓ target met</span> : `${DAILY_TARGET - lm.today} to go`} · yesterday {lm.yesterday}</div>
           </div>
           <div style={box}>
             <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This week</div>
-            <div style={big}>{lm.week}</div>
+            <div style={big}>{lm.week}<span style={of}>/ {weekTarget}</span></div>
             <div style={{ marginTop: 2 }}><Delta now={lm.week} prev={lm.weekPrev} label={lm.weekDays === 7 ? "last week" : lm.weekDays === 1 ? "last Monday" : `last Mon–${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][lm.weekDays - 1]}`} /></div>
           </div>
           <div style={box}>
             <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This month</div>
-            <div style={big}>{lm.month}</div>
+            <div style={big}>{lm.month}<span style={of}>/ {monthTarget}</span></div>
             <div style={{ marginTop: 2 }}><Delta now={lm.month} prev={lm.monthPrevSame} label={prevPeriod} /></div>
           </div>
         </div>
-        <div style={{ fontSize: 11, color: C.inkMid, marginTop: 9 }}>{monthLong(lm.mPrev)} in full: <b style={{ color: C.ink }}>{plural(lm.monthPrev, "new listing")}</b>{lm.day > 1 ? ` · this month so far ${(lm.month / Math.max(1, lm.elapsed * lm.daysIn)).toFixed(1)} a day, last month ${(lm.monthPrev / lm.daysPrev).toFixed(1)}` : ""}</div>
-        <RaceChart m={lm} cumThis={lm.cumThis} cumPrev={lm.cumPrev} short={countShort} full={countFull} />
+        <div style={{ fontSize: 11, color: C.inkMid, marginTop: 9 }}>
+          <b style={{ color: C.ink }}>{lm.hit} of {lm.day} day{lm.day === 1 ? "" : "s"}</b> at {DAILY_TARGET} or more
+          {lm.day > 1 ? ` · ${(lm.month / lm.day).toFixed(1)} a day this month` : ""} · {monthLong(lm.mPrev)} {(lm.monthPrev / lm.daysPrev).toFixed(1)} a day ({plural(lm.monthPrev, "new listing")})
+        </div>
+        <DayBars lm={lm} sel={sel ?? lm.today0} onPick={pick} />
       </div>
 
-      <div style={card}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
-          <div style={eyebrow}>Shop listings</div>
-          <div style={{ flex: 1 }} />
-          {onRenew && <button onClick={onRenew} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0, marginRight: 10 }}>Renew queue →</button>}
-          <button onClick={onOpen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0 }}>Open →</button>
-        </div>
-        {health.map(([icon, label, n, hint, tone, go]) => (
-          <div key={label} className="pz-row" onClick={go} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, cursor: "pointer" }}>
-            <span style={{ width: 30, height: 30, borderRadius: 8, background: tone === C.red ? C.redBg : tone === C.amber ? C.amberBg : C.card, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{icon}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{label}</div>
-              <div style={{ fontSize: 10.5, color: tone || C.inkFaint, lineHeight: 1.4 }}>{hint}</div>
-            </div>
-            <span style={{ fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: 24, fontWeight: 600, color: C.ink, minWidth: 34, textAlign: "right" }}>{(n ?? 0).toLocaleString("en-IN")}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 11, minWidth: 0 }}>
+        <PublishedList lm={lm} sel={sel} setSel={setSel} />
+        <div style={card}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+            <div style={eyebrow}>Shop listings</div>
+            <div style={{ flex: 1 }} />
+            {onRenew && <button onClick={onRenew} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0, marginRight: 10 }}>Renew queue →</button>}
+            <button onClick={onOpen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0 }}>Open →</button>
           </div>
-        ))}
-        <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 6, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-          Inactive {c.inactive ?? 0} · Drafts {c.draft ?? 0}{lm.in30Off ? " · An Etsy listing runs four months; with auto-renew off it then expires." : ""}
+          {health.map(([icon, label, n, hint, tone, go]) => (
+            <div key={label} className="pz-row" onClick={go} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, cursor: "pointer" }}>
+              <span style={{ width: 30, height: 30, borderRadius: 8, background: tone === C.red ? C.redBg : tone === C.amber ? C.amberBg : C.card, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{label}</div>
+                <div style={{ fontSize: 10.5, color: tone || C.inkFaint, lineHeight: 1.4 }}>{hint}</div>
+              </div>
+              <span style={{ fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: 24, fontWeight: 600, color: C.ink, minWidth: 34, textAlign: "right" }}>{(n ?? 0).toLocaleString("en-IN")}</span>
+            </div>
+          ))}
+          <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 6, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+            Inactive {c.inactive ?? 0} · Drafts {c.draft ?? 0}{lm.in30Off ? " · An Etsy listing runs four months; with auto-renew off it then expires." : ""}
+          </div>
         </div>
       </div>
     </div>
