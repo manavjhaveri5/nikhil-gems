@@ -3,6 +3,8 @@
 // month and the last two so the Ledger's Month close always has a live month to
 // show. Merged into DEMO_DATA by demoData.js. All names and amounts are fictional.
 
+import { accountBalanceAt, accountMonthFlows, monthEndDate, statementId } from "./monthClose.js";
+
 // A day in the month `offset` months from now (0 = this month, -1 = last month).
 const md = (offset, day) => {
   const now = new Date();
@@ -50,11 +52,36 @@ export const DEMO_FINANCE = {
   ],
 };
 
+// Statement month-ends, worked out from the demo ledger itself so the demo always
+// shows one month that ties out and one that is short a bank charge.
+function demoStatements(accounts, txns, plan) {
+  return plan.map(([accountId, offset, gap, fileName]) => {
+    const acc = accounts.find(a => a.id === accountId);
+    const month = md(offset, 1).slice(0, 7);
+    const closingDate = monthEndDate(month);
+    const flows = accountMonthFlows(acc, txns, month);
+    return {
+      id: statementId(accountId, month), accountId, month, closingDate, fromDate: `${month}-01`,
+      closing: accountBalanceAt(acc, txns, closingDate) - gap,
+      credits: flows.credits, debits: flows.debits + gap, rows: flows.count + (gap ? 1 : 0),
+      source: "statement", fileName, savedAt: ts(closingDate),
+    };
+  });
+}
+
 // Arrays named in APPEND are added to the base demo list; everything else replaces it.
 const APPEND = new Set(["ng-fin-txns-v1"]);
 export function mergeDemoFinance(base) {
   Object.entries(DEMO_FINANCE).forEach(([k, v]) => {
     base[k] = APPEND.has(k) && Array.isArray(base[k]) ? [...base[k], ...v] : v;
   });
+  base["ng-fin-statements-v1"] = demoStatements(base["ng-fin-accounts-v1"], base["ng-fin-txns-v1"], [
+    ["fa-boi-0451", -2, 0, "BOI-0451-statement.pdf"],
+    ["fa-boi-0451", -1, 590, "BOI-0451-statement.pdf"],
+    ["fa-eefc", -1, 0, "EEFC-statement.csv"],
+  ]);
+  base["at-fin-statements-v1"] = demoStatements(base["at-fin-accounts-v1"], base["at-fin-txns-v1"], [
+    ["at-induslnd", -1, 0, "IndusInd-statement.xlsx"],
+  ]);
   return base;
 }

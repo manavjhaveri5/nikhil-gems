@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
-import { C } from "./ui.jsx";
-import { mob, fmtDate } from "./utils.js";
-import { paymentChecks, monthLabel } from "./monthClose.js";
+import { useEffect, useMemo, useState } from "react";
+import { C, FI } from "./ui.jsx";
+import { mob, fmtDate, loadK, upsertItemK, onCacheRefresh } from "./utils.js";
+import { paymentChecks, balanceChecks, statementsKey, statementId, monthEndDate, monthLabel } from "./monthClose.js";
 
 /* Month close — one company, one month, the four checks side by side (see
    monthClose.js). Rendered inside the Ledger, so "Classify →" drops you on the
@@ -41,6 +41,75 @@ function TxnRow({ t, accountName, label, action, onAction, tone = C.amber }) {
   );
 }
 
+// One statement account: ERP balance against the statement's closing, how the
+// month's money in/out compares when the statement's rows are known, the last
+// six months at a glance, and a closing typed in by hand when no statement was
+// imported.
+function BalanceRow({ chk, onSaveClosing }) {
+  const { acc, statement: st, erp, diff, ok, asOf, partial, flows, history } = chk;
+  const cur = acc.currency || "INR";
+  const [editing, setEditing] = useState(false);
+  const [amt, setAmt] = useState("");
+  const [date, setDate] = useState(asOf);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setEditing(false); setAmt(st?.closing != null ? String(st.closing) : ""); setDate(st?.closingDate || monthEndDate(chk.month)); }, [chk.month, st?.id, st?.closing]);
+  const save = async () => {
+    if (amt === "" || !Number.isFinite(+amt)) return;
+    setBusy(true);
+    try { await onSaveClosing(acc, { closing: +amt, closingDate: date || monthEndDate(chk.month) }); setEditing(false); }
+    finally { setBusy(false); }
+  };
+  const status = !st ? { t: "No statement", c: C.amber } : ok ? { t: "✓ Agrees", c: C.green } : { t: `Off by ${money(Math.abs(diff), cur)}`, c: C.red };
+  const stFlows = st && st.credits != null && st.debits != null;
+  return (
+    <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "minmax(0,1.3fr) 1fr 1fr 1fr auto", gap: 10, alignItems: "center" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 850, color: C.ink }}>{acc.name}</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>{cur}{st?.fileName ? ` · ${st.fileName}` : st?.source === "manual" ? " · typed in" : ""}</div>
+        </div>
+        <div><div style={{ fontSize: 10, color: C.inkFaint, fontWeight: 800 }}>ERP · {fmtDate(asOf)}</div><div style={{ fontSize: 13, fontWeight: 850, color: C.ink }}>{money(erp, cur)}</div></div>
+        <div><div style={{ fontSize: 10, color: C.inkFaint, fontWeight: 800 }}>STATEMENT</div><div style={{ fontSize: 13, fontWeight: 850, color: st ? C.ink : C.inkFaint }}>{st ? money(st.closing, cur) : "—"}</div></div>
+        <div><div style={{ fontSize: 10, color: C.inkFaint, fontWeight: 800 }}>DIFFERENCE</div><div style={{ fontSize: 13, fontWeight: 900, color: diff == null ? C.inkFaint : ok ? C.green : C.red }}>{diff == null ? "—" : `${diff > 0 ? "+" : diff < 0 ? "−" : ""}${money(Math.abs(diff), cur)}`}</div></div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end", gridColumn: mob ? "1 / -1" : "auto" }}>
+          <span style={{ fontSize: 11, fontWeight: 850, color: status.c, whiteSpace: "nowrap" }}>{status.t}</span>
+          <button className="bs" style={{ fontSize: 11, padding: "4px 10px", whiteSpace: "nowrap" }} onClick={() => setEditing(e => !e)}>{st ? "Edit closing" : "Enter closing"}</button>
+        </div>
+      </div>
+      {partial && <div style={{ fontSize: 11, color: C.amber, marginTop: 6 }}>The statement stops on {fmtDate(asOf)}, before the month ends — the rest of the month is not checked yet.</div>}
+      {st && !ok && (
+        <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 6, lineHeight: 1.45 }}>
+          {diff > 0 ? "The bank shows more than the ERP" : "The ERP shows more than the bank"} at {fmtDate(asOf)}.{" "}
+          {st.fromDate && st.fromDate > `${chk.month}-01` || partial ? `ERP ${fmtDate(st.fromDate || `${chk.month}-01`)} – ${fmtDate(asOf)}` : "ERP this month"}: in {money(flows.credits, cur)} · out {money(flows.debits, cur)} ({flows.count} entr{flows.count === 1 ? "y" : "ies"}).
+          {stFlows && <> Statement: in {money(st.credits, cur)} · out {money(st.debits, cur)} ({st.rows} row{st.rows === 1 ? "" : "s"}).
+            {Math.abs(st.credits - flows.credits) >= 0.5 && <b style={{ color: C.red }}> Money in differs by {money(Math.abs(st.credits - flows.credits), cur)}.</b>}
+            {Math.abs(st.debits - flows.debits) >= 0.5 && <b style={{ color: C.red }}> Money out differs by {money(Math.abs(st.debits - flows.debits), cur)}.</b>}
+            {Math.abs(st.credits - flows.credits) < 0.5 && Math.abs(st.debits - flows.debits) < 0.5 && " This month's movements agree, so the gap was there before the month began — check earlier months or the opening balance."}</>}
+          {!stFlows && " Import the statement in Finance → Reconcile to see which rows are missing."}
+        </div>
+      )}
+      {editing && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+          <span style={{ fontSize: 11.5, color: C.inkMid }}>Statement closing {cur}</span>
+          <input type="number" step="0.01" value={amt} onChange={e => setAmt(e.target.value)} style={{ ...FI, width: 150, fontSize: 12, padding: "6px 9px" }} placeholder="As printed" />
+          <span style={{ fontSize: 11.5, color: C.inkMid }}>as of</span>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...FI, width: 150, fontSize: 12, padding: "6px 9px" }} />
+          <button className="bp" style={{ fontSize: 11, padding: "6px 12px" }} disabled={busy || amt === ""} onClick={save}>{busy ? "Saving…" : "Save"}</button>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 8 }}>
+        {history.map(h => {
+          const t = !h.statement ? "—" : h.ok ? "✓" : `${h.diff > 0 ? "+" : "−"}${money(Math.abs(h.diff), cur)}`;
+          const c = !h.statement ? C.inkFaint : h.ok ? C.green : C.red;
+          return <span key={h.month} title={h.statement ? `ERP ${money(h.erp, cur)} · statement ${money(h.statement.closing, cur)}` : "No statement for this month"}
+            style={{ fontSize: 10.5, fontWeight: 800, color: c, background: h.month === chk.month ? C.card : "transparent", border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px", whiteSpace: "nowrap" }}>
+            {monthLabel(h.month, { month: "short" })} {t}</span>;
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Block({ title, sub, children, empty }) {
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: 9, overflow: "hidden", background: C.surface }}>
@@ -60,9 +129,31 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
 
   const pay = useMemo(() => paymentChecks({ txns, month, isUnclassified }), [txns, month, isUnclassified]);
 
+  // Statement month-ends: kept by Finance → Reconcile on import, or typed in here.
+  const [statements, setStatements] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () => loadK(statementsKey(company)).then(v => { if (alive) setStatements(Array.isArray(v) ? v : []); }).catch(() => {});
+    load();
+    const off = onCacheRefresh(keys => { if (keys.includes(statementsKey(company))) load(); });
+    return () => { alive = false; off?.(); };
+  }, [company]);
+  const saveClosing = async (acc, { closing, closingDate }) => {
+    const prev = statements.find(s => s.id === statementId(acc.id, month));
+    const rec = { ...(prev || {}), id: statementId(acc.id, month), accountId: acc.id, month, closing, closingDate, source: "manual", savedAt: new Date().toISOString() };
+    if (prev && prev.closing !== closing) { delete rec.credits; delete rec.debits; delete rec.rows; delete rec.fileName; }
+    setStatements(list => [rec, ...list.filter(s => s.id !== rec.id)]);
+    const saved = await upsertItemK(statementsKey(company), rec);
+    if (Array.isArray(saved) && saved.length) setStatements(saved);
+  };
+  const bal = useMemo(() => balanceChecks({ accounts, txns, statements, month }), [accounts, txns, statements, month]);
+  const balOpen = bal.filter(b => !b.ok).length;
+
   const tiles = [
     { id: "payments", title: "Payments classified", open: pay.unclassified.length, okText: `all ${pay.payments.length}`,
       detail: pay.noBill.length ? `${pay.noBill.length} vendor payment${pay.noBill.length === 1 ? "" : "s"} with no bill linked` : `${pay.payments.length} payment${pay.payments.length === 1 ? "" : "s"} this month` },
+    { id: "balance", title: "Bank vs statement", open: balOpen, okText: `${bal.length} agree`,
+      detail: balOpen ? `${bal.filter(b => !b.statement).length} without a statement · ${bal.filter(b => b.statement && !b.ok).length} off` : "Every account ties to its statement" },
   ];
 
   return (
@@ -114,6 +205,14 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
             </Block>
           )}
         </div>
+      )}
+
+      {section === "balance" && (
+        <Block title="ERP balance against the bank statement" sub={`Closing balance on each bank account at the end of ${monthLabel(month)}. Statements imported in Finance → Reconcile keep their month-end balances; you can also type a closing in off the PDF.`}>
+          {bal.length === 0
+            ? <div style={{ padding: 10, fontSize: 12, color: C.inkFaint, borderTop: `1px solid ${C.border}` }}>No bank accounts set up for this company.</div>
+            : bal.map(chk => <BalanceRow key={chk.acc.id} chk={chk} onSaveClosing={saveClosing} />)}
+        </Block>
       )}
     </div>
   );

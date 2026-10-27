@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, createContext, useContext, Fragment } from "react";
 import { isRemittanceAdvice, parseRemittanceAdvice, linesFromTextItems } from "./remittanceAdvice.js";
-import { runningBalances } from "./monthClose.js";
+import { runningBalances, statementMonthEnds, statementsKey, statementId, keepExistingStatement } from "./monthClose.js";
 import { supabase } from "./supabase.js";
-import { loadK, loadKFresh, saveK, onCacheRefresh } from "./utils.js";
+import { loadK, loadKFresh, saveK, onCacheRefresh, upsertItemK } from "./utils.js";
 import ClassifyTransactionModal from "./ClassifyTransaction.jsx";
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
@@ -2368,7 +2368,7 @@ function PdfProgressBar({ step }) {
 }
 
 // ─── PDF Import Modal ─────────────────────────────────────────────────────────
-function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBalance = null, closingBalance = null }) {
+function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBalance = null, closingBalance = null, fileName = "" }) {
   const CUR = acc?.currency || "INR";
   const sym = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "A$" }[CUR] || CUR;
   const f2 = n => (+n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2408,6 +2408,11 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
   const [sel, setSel] = useState(() => new Set(enriched.map((t, i) => t.matched ? -1 : i).filter(i => i >= 0)));
   const [selRm, setSelRm] = useState(new Set());
   const [setOpening, setSetOpening] = useState(() => canSetOpening && !hasPriorHistory);
+  // The statement's month-end balances, kept for the Ledger's Month close so the
+  // ERP balance can be checked against the bank month by month.
+  const closings = statementMonthEnds(txns, { opening: openingBalance, closing: closingBalance });
+  const [keepClosings, setKeepClosings] = useState(true);
+  const saveClosings = keepClosings && closings.length > 0;
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const toggleRm = id => setSelRm(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -2459,7 +2464,7 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
       createdAt: new Date().toISOString(),
     }));
     const toRemove = extras.filter(x => selRm.has(x.id)).map(x => x.id);
-    await onApply({ add: toAdd, removeIds: toRemove, openingBalance: setOpening && canSetOpening ? +openingBalance : null, accountId: acc?.id });
+    await onApply({ add: toAdd, removeIds: toRemove, openingBalance: setOpening && canSetOpening ? +openingBalance : null, accountId: acc?.id, statementClosings: saveClosings ? closings : [], fileName });
     setSaving(false);
     setDone(true);
     setTimeout(onClose, 1400);
@@ -2617,6 +2622,19 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
           )}
         </div>
 
+        {/* ── Month-end balances: kept so Month close can check the ERP against the bank ── */}
+        {!done && closings.length > 0 && (
+          <div style={{ padding: "10px 20px 0", flexShrink: 0, background: "#fff" }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", background: keepClosings ? "#f0f7f2" : "#faf9f7", border: `1px solid ${keepClosings ? "#bfe0cc" : "#ede9e3"}`, borderRadius: 10, padding: "10px 12px" }}>
+              <input type="checkbox" checked={keepClosings} onChange={e => setKeepClosings(e.target.checked)} style={{ width: 14, height: 14, accentColor: "#2d7a4f", cursor: "pointer", marginTop: 1 }} />
+              <div style={{ fontSize: 12, color: "#444", lineHeight: 1.45 }}>
+                Keep the statement's month-end balance{closings.length > 1 ? "s" : ""} for Month close —{" "}
+                {closings.map(c => <span key={c.month} style={{ whiteSpace: "nowrap" }}><strong>{new Date(`${c.closingDate}T12:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong> {sym}{f2(c.closing)}{c.month !== closings[closings.length - 1].month ? " · " : ""}</span>)}
+              </div>
+            </label>
+          </div>
+        )}
+
         {/* ── Opening-balance option: makes the running balance tie out to the bank ── */}
         {!done && canSetOpening && (
           <div style={{ padding: "10px 20px 0", flexShrink: 0, background: "#fff" }}>
@@ -2638,10 +2656,10 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
                 ? <>{sel.size} selected · {matchedCount} already in ledger{selRm.size > 0 ? <> · <span style={{ color: "#c0392b", fontWeight: 700 }}>{selRm.size} to remove</span></> : null}{importDiff != null ? ` · ${Math.abs(importDiff) < 1 ? "statement closes" : `remaining ${importDiff >= 0 ? "+" : ""}${sym}${f2(importDiff)}`}` : ""}</>
                 : <>{newCount} new · {matchedCount} already matched{extras.length > 0 ? ` · ${extras.length} not on bank` : ""}</>}
             </div>
-            {(() => { const obOnly = setOpening && canSetOpening; const nothing = sel.size === 0 && selRm.size === 0 && !obOnly; return (
+            {(() => { const obOnly = setOpening && canSetOpening; const nothing = sel.size === 0 && selRm.size === 0 && !obOnly && !saveClosings; return (
             <button onClick={handleAdd} disabled={saving || nothing}
               style={{ background: "#1a1a1a", color: "#fff", border: "none", borderRadius: 10, padding: "11px 24px", fontSize: 13, fontWeight: 700, cursor: nothing ? "not-allowed" : "pointer", opacity: nothing ? .35 : 1, whiteSpace: "nowrap" }}>
-              {saving ? "Applying…" : nothing ? "Nothing to apply" : `${sel.size > 0 ? `Add ${sel.size}` : ""}${sel.size > 0 && selRm.size > 0 ? " · " : ""}${selRm.size > 0 ? `Remove ${selRm.size}` : ""}${(sel.size > 0 || selRm.size > 0) && obOnly ? " · " : ""}${obOnly ? "Set opening bal" : ""} →`}
+              {saving ? "Applying…" : nothing ? "Nothing to apply" : `${sel.size > 0 ? `Add ${sel.size}` : ""}${sel.size > 0 && selRm.size > 0 ? " · " : ""}${selRm.size > 0 ? `Remove ${selRm.size}` : ""}${(sel.size > 0 || selRm.size > 0) && obOnly ? " · " : ""}${obOnly ? "Set opening bal" : ""}${sel.size === 0 && selRm.size === 0 && !obOnly ? "Save month-end balance" : ""} →`}
             </button>
             ); })()}
           </div>
@@ -3221,7 +3239,7 @@ If nothing is missing, output <missing_json>[]</missing_json>.`;
   return (
     <div style={{ maxWidth: 700 }}>
       {pdfLoading && <PdfProgressBar step={pdfStep} />}
-      {pdfModal && <PdfImportModal txns={pdfModal.txns} acc={acc} accTxns={accTxns} onApply={onApplyTxns} openingBalance={pdfModal.openingBalance} closingBalance={pdfModal.closingBalance} onClose={() => { setPdfModal(null); setPdfName(""); }} />}
+      {pdfModal && <PdfImportModal txns={pdfModal.txns} acc={acc} accTxns={accTxns} onApply={onApplyTxns} openingBalance={pdfModal.openingBalance} closingBalance={pdfModal.closingBalance} fileName={pdfName} onClose={() => { setPdfModal(null); setPdfName(""); }} />}
       {pdfError && (
         <div style={{ background: "#fff0f0", border: "1px solid #f5c6c6", borderRadius: 10, padding: "14px 16px", marginBottom: 16, position: "relative" }}>
           <button onClick={() => setPdfError("")} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", fontSize: 16, cursor: "pointer", color: "#999" }}>×</button>
@@ -4807,7 +4825,7 @@ export default function FinanceApp({ onHome }) {
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onAdjustBalance={adjustBalance} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
           {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} vendors={vendors} purchases={purchases} invoices={invoices} buyers={buyers} rates={rates} company={company} onClassify={handleClassify} />}
-          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [], openingBalance = null, accountId = null }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); let obMsg = ""; if (openingBalance != null && accountId) { const accs = accounts.map(a => a.id === accountId ? { ...a, openingBal: +openingBalance } : a); setAccounts(accs); await saveK(companyKeys(company).accounts, accs); obMsg = ` · opening bal ₹${(+openingBalance).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`; } showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + " — ledger matches bank" + obMsg); }} />}
+          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [], openingBalance = null, accountId = null, statementClosings = [], fileName = "" }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); let obMsg = ""; if (openingBalance != null && accountId) { const accs = accounts.map(a => a.id === accountId ? { ...a, openingBal: +openingBalance } : a); setAccounts(accs); await saveK(companyKeys(company).accounts, accs); obMsg = ` · opening bal ₹${(+openingBalance).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`; } let stMsg = ""; if (accountId && statementClosings.length) { const savedAt = new Date().toISOString(); const prev = await loadKFresh(statementsKey(company)).catch(() => []); const kept = statementClosings.map(c => ({ ...c, id: statementId(accountId, c.month), accountId, source: "statement", fileName, savedAt })).filter(rec => !keepExistingStatement((Array.isArray(prev) ? prev : []).find(x => x.id === rec.id), rec)); for (const rec of kept) await upsertItemK(statementsKey(company), rec); stMsg = ` · ${kept.length} month-end balance${kept.length === 1 ? "" : "s"} kept`; } showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + (add.length || removeIds.length ? " — ledger matches bank" : "Statement saved") + obMsg + stMsg); }} />}
         </>
       }
       {/* Inline classify after manual entry */}
