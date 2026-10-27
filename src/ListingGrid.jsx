@@ -3,7 +3,7 @@
    store, Etsy ₹) editable in place, and a drawer to manage photos, platforms
    and every other price. ListingManagerApp owns the data and the platform
    calls; this file is the view. */
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { C, FI } from "./lmTheme.js";
 import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
 import { useStoriesDone, listedAt } from "./storyState.js";
@@ -130,6 +130,14 @@ function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocat
   const imgs = (l.images || []).filter(u => typeof u === "string");
   const [i, setI] = useState(0);
   const [hover, setHover] = useState(false);
+  /* The video plays over the photo once the pointer rests on it a moment —
+     only then is it loaded, so a page of cards doesn't fetch every video. The
+     photo stays until the video is actually playing; the arrows go back to it. */
+  const [vid, setVid] = useState(false);
+  const [vidShown, setVidShown] = useState(false);
+  const vidT = useRef(null);
+  useEffect(() => () => clearTimeout(vidT.current), []);
+  const stopVid = () => { clearTimeout(vidT.current); setVid(false); setVidShown(false); };
   const sold = soldOut(l, orders, facts);
   const where = locationOf(l, stock);
   const s = store?.[l.id];
@@ -139,9 +147,13 @@ function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocat
     <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       style={{ background: C.surface, border: `1px solid ${selected ? C.gold : C.border}`, borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column",
         boxShadow: hover ? "0 6px 22px rgba(40,30,15,.10)" : "0 1px 2px rgba(40,30,15,.04)", transition: "box-shadow .2s, transform .2s", transform: hover ? "translateY(-2px)" : "none" }}>
-      <div onClick={() => onOpen(l, "photos")} style={{ position: "relative", aspectRatio: "1", background: C.card, cursor: "pointer", overflow: "hidden" }}>
+      <div onClick={() => onOpen(l, "photos")} onMouseEnter={() => { if (l.video) vidT.current = setTimeout(() => setVid(true), 250); }} onMouseLeave={stopVid}
+        style={{ position: "relative", aspectRatio: "1", background: C.card, cursor: "pointer", overflow: "hidden" }}>
         {imgs[i] ? <img src={thumb(imgs[i])} alt="" loading="lazy" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: sold ? .55 : 1 }} />
           : <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34, opacity: .5 }}>💎</div>}
+        {vid && <video src={l.video} autoPlay muted loop playsInline onPlaying={() => setVidShown(true)} onError={stopVid}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none",
+            opacity: vidShown ? (sold ? .55 : 1) : 0, transition: "opacity .2s" }} />}
         <label onClick={e => e.stopPropagation()} style={{ position: "absolute", top: 8, left: 8, width: 24, height: 24, borderRadius: 6, background: "rgba(255,255,255,.9)",
           display: hover || selected ? "flex" : "none", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={selected} onChange={() => onSelect(l.id)} style={{ margin: 0, cursor: "pointer" }} />
@@ -152,10 +164,10 @@ function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocat
         </div>
         {sold && <span style={{ ...pill("#fff", C.ink), position: "absolute", bottom: 8, left: 8 }}>Sold</span>}
         {imgs.length > 1 && hover && <>
-          <button onClick={e => { e.stopPropagation(); setI(x => (x - 1 + imgs.length) % imgs.length); }} style={arrow("left")}>‹</button>
-          <button onClick={e => { e.stopPropagation(); setI(x => (x + 1) % imgs.length); }} style={arrow("right")}>›</button>
+          <button onClick={e => { e.stopPropagation(); stopVid(); setI(x => (x - 1 + imgs.length) % imgs.length); }} style={arrow("left")}>‹</button>
+          <button onClick={e => { e.stopPropagation(); stopVid(); setI(x => (x + 1) % imgs.length); }} style={arrow("right")}>›</button>
         </>}
-        {imgs.length > 1 && <span style={{ position: "absolute", bottom: 8, right: 8, ...pill("#fff", "rgba(20,15,8,.55)") }}>{i + 1}/{imgs.length}</span>}
+        {imgs.length > 1 && !vidShown && <span style={{ position: "absolute", bottom: 8, right: 8, ...pill("#fff", "rgba(20,15,8,.55)") }}>{i + 1}/{imgs.length}</span>}
       </div>
       <div style={{ padding: "10px 11px 11px", display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
         <div onClick={() => onOpen(l, "platforms")} style={{ display: "flex", gap: 3, flexWrap: "wrap", cursor: "pointer" }} title="Platforms — click to manage">
@@ -219,7 +231,7 @@ function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice,
           <button onClick={onClose} style={{ border: "none", background: "none", fontSize: 24, cursor: "pointer", color: C.inkMid }}>×</button>
         </div>
         <div style={{ display: "flex", gap: 4, padding: "8px 14px 0", borderBottom: `1px solid ${C.border}`, background: C.surface }}>
-          {[["platforms", "Platforms"], ["prices", "Prices"], ["photos", `Photos (${imgs.length})`]].map(([k, t]) => (
+          {[["platforms", "Platforms"], ["prices", "Prices"], ["photos", `Photos (${imgs.length}${l.video ? " + video" : ""})`]].map(([k, t]) => (
             <button key={k} onClick={() => setTab(k)} style={{ padding: "9px 12px", border: "none", background: "none", cursor: "pointer", fontSize: 13,
               fontWeight: tab === k ? 700 : 500, color: tab === k ? C.ink : C.inkMid, borderBottom: `2.5px solid ${tab === k ? C.gold : "transparent"}`, marginBottom: -1 }}>{t}</button>
           ))}
@@ -243,10 +255,12 @@ function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice,
           )}
           {tab === "photos" && (
             <>
-              <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 10 }}>★ makes the cover · arrows reorder · ✎ opens the photo editor · × removes. Save to update every platform it's on. Add new photos in the full editor.</div>
+              <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 10 }}>★ makes the cover · arrows reorder · ✎ opens the photo editor · × removes. Save to update every platform it's on. Add new photos, or change the video, in the full editor.</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                {!imgs.length && l.video && <VideoTile url={l.video} />}
                 {imgs.map((u, i) => (
-                  <div key={u + i} style={{ position: "relative", aspectRatio: "1", borderRadius: 9, overflow: "hidden", background: C.card, outline: i === 0 ? `2.5px solid ${C.gold}` : "none", outlineOffset: -2.5 }}>
+                  <Fragment key={u + i}>
+                  <div style={{ position: "relative", aspectRatio: "1", borderRadius: 9, overflow: "hidden", background: C.card, outline: i === 0 ? `2.5px solid ${C.gold}` : "none", outlineOffset: -2.5 }}>
                     <img src={thumb(u, 340)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     <div style={{ position: "absolute", top: 5, right: 5, display: "flex", gap: 4 }}>
                       {i > 0 && <button title="Make cover" onClick={() => setImgs(a => [a[i], ...a.filter((_, j) => j !== i)])} style={round}>★</button>}
@@ -258,6 +272,9 @@ function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice,
                       {i < imgs.length - 1 && <button title="Move right" onClick={() => move(i, 1)} style={round}>›</button>}
                     </div>
                   </div>
+                  {/* Second, after the cover — where Etsy puts it */}
+                  {i === 0 && l.video && <VideoTile url={l.video} />}
+                  </Fragment>
                 ))}
               </div>
               {editIdx != null && imgs[editIdx] && (
@@ -288,6 +305,24 @@ function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice,
         </div>
       </div>
       {story && <Suspense fallback={null}><StoryStudio listing={l} sold={sold} onShared={k => onStory?.(k, l)} onClose={() => setStory(false)} /></Suspense>}
+    </div>
+  );
+}
+/* The listing's one video among its photos: plays muted while the pointer is on
+   it, with controls for sound and scrubbing. */
+function VideoTile({ url }) {
+  const [bad, setBad] = useState(false);
+  return (
+    <div style={{ position: "relative", aspectRatio: "1", borderRadius: 9, overflow: "hidden", background: "#141210" }}>
+      {bad
+        ? <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, padding: 10, textAlign: "center", fontSize: 12, color: "#fff" }}>
+            The video didn't load
+            <a href={url} target="_blank" rel="noreferrer" style={{ color: "#fff", fontWeight: 700 }}>Open it ↗</a>
+          </div>
+        : <video src={`${url}#t=0.1`} muted loop playsInline controls preload="metadata" onError={() => setBad(true)}
+            onMouseEnter={e => e.currentTarget.play().catch(() => {})} onMouseLeave={e => e.currentTarget.pause()}
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />}
+      <span style={{ position: "absolute", top: 5, left: 5, ...pill("#fff", "rgba(20,15,8,.65)") }}>▶ Video</span>
     </div>
   );
 }
