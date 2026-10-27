@@ -23,8 +23,9 @@ const COORDS = {
     bill1:         { x: 290, y: 422 },
     bill2:         { x: 290, y: 413 },
     bill3:         { x: 290, y: 404 },
-    shipCheck_w3:  { x: 271, y: 393 },
-    shipCheck_a12: { x: 271, y: 375 },
+    expShip:       { x: 334, y: 403 },  // after "Expected date of Shipment:"
+    shipCheck_w3:  { x: 261, y: 395 },  // the small boxes, measured off the scan
+    shipCheck_a12: { x: 261, y: 378 },
     lineAct:       { x: 248, y: 362 },
     commodity:     { x: 248, y: 344 },
     po1:           { x: 248, y: 325 },
@@ -65,8 +66,9 @@ const fd = (d) => {
  * @param {string}     data.remName
  * @param {string}     [data.remAddr]
  * @param {string}     data.purpose           'a' | 'b' | 'c' | 'd' | 'e'
- * @param {Array}      data.invoices          [{no, date, pdfBytes?}]
+ * @param {Array}      data.invoices          [{no, date}] — the numbers the form names
  * @param {string}     [data.shipWin]         'w3' | 'a12'
+ * @param {string}     [data.expectedShipDate] 'YYYY-MM-DD' — advance (b) only
  * @param {string}     [data.commodity]
  * @param {string}     [data.lineAct]
  * @param {string}     [data.impDet]
@@ -78,8 +80,9 @@ const fd = (d) => {
  * @param {string}     data.iecCode
  * @param {string}     data.sigDate           'YYYY-MM-DD'
  * @param {string}     [data.sigPlace]
- * @param {Array}      [data.documents]       [{label, kind:'pdf'|'jpg'|'png', bytes}] — supporting
- *                                            documents (AWB, shipping bill…), added after the invoices
+ * @param {Array}      [data.documents]       [{label, kind:'pdf'|'jpg'|'png', bytes}] — everything
+ *                                            enclosed (shipping bill, invoice, AWB…), after the
+ *                                            form in the order given
  * @param {Uint8Array} data.boiPdfBytes
  * @param {Uint8Array} data.sigJpegBytes
  * @returns {Promise<Uint8Array>}
@@ -90,7 +93,7 @@ export async function fillBoiRemittance(data) {
     remName, remAddr = '',
     purpose,
     invoices = [],
-    shipWin = 'w3', commodity = '', lineAct = '',
+    shipWin = 'w3', expectedShipDate = '', commodity = '', lineAct = '',
     impDet = '', expBill = '', otherCl = '',
     bName, bAddr1, bAddr2, iecCode,
     sigDate, sigPlace = 'Mumbai',
@@ -130,12 +133,15 @@ export async function fillBoiRemittance(data) {
       if (billNos[i]) dt(p1, pos.x, pos.y, billNos[i].no, true);
     });
   } else if (purpose === 'b') {
+    dt(p1, COORDS.p1.expShip.x, COORDS.p1.expShip.y, fd(expectedShipDate), true);
     const shipPos = shipWin === 'a12' ? COORDS.p1.shipCheck_a12 : COORDS.p1.shipCheck_w3;
     fb(p1, shipPos.x, shipPos.y);
     dt(p1, COORDS.p1.lineAct.x,   COORDS.p1.lineAct.y,   lineAct,   false, 7);
     dt(p1, COORDS.p1.commodity.x, COORDS.p1.commodity.y, commodity, false, 7);
+    // "Invoice/PO/contract no & date"
     [COORDS.p1.po1, COORDS.p1.po2, COORDS.p1.po3].forEach((pos, i) => {
-      if (billNos[i]) dt(p1, pos.x, pos.y, billNos[i].no, true);
+      const b = billNos[i];
+      if (b) dt(p1, pos.x, pos.y, b.date ? `${b.no}  dt ${fd(b.date)}` : b.no, true);
     });
   } else if (purpose === 'c') {
     dt(p1, COORDS.p1.impDet.x,  COORDS.p1.impDet.y,  impDet,  false, 7);
@@ -164,24 +170,13 @@ export async function fillBoiRemittance(data) {
   const sigImg = await pdfDoc.embedJpg(sigJpegBytes);
   p2.drawImage(sigImg, { x: sx, y: sy, width: sw, height: sh });
 
-  // ── MERGE INVOICE PDFs, THEN THE SUPPORTING DOCUMENTS ──
-  const invPdfs = invoices.filter(i => i.pdfBytes);
+  // ── THE FORM, THEN WHAT IS ENCLOSED WITH IT, IN THE ORDER GIVEN ──
   const docs = documents.filter(d => d.bytes);
-  if (!invPdfs.length && !docs.length) return pdfDoc.save();
+  if (!docs.length) return pdfDoc.save();
 
   const merged = await PDFDocument.create();
   const formPages = await merged.copyPages(pdfDoc, pdfDoc.getPageIndices());
   formPages.forEach(p => merged.addPage(p));
-
-  for (const inv of invPdfs) {
-    try {
-      const invDoc = await PDFDocument.load(inv.pdfBytes);
-      const invPages = await merged.copyPages(invDoc, invDoc.getPageIndices());
-      invPages.forEach(p => merged.addPage(p));
-    } catch (e) {
-      console.warn(`Could not load invoice PDF for ${inv.no}:`, e.message);
-    }
-  }
 
   // A PDF goes in page for page; a photo or scan gets an A4 page of its own,
   // turned to match it and filled to within the margins.

@@ -24009,22 +24009,24 @@ ${attachSection}
 function BoiRemittanceForm({showToast}){
   const EEFC_ACC="015020410002514";
   const INR_ACC=CO.bankAcc;
-  const blankInv=()=>({id:uid(),no:"",date:today()});
+  const blankInv=()=>({id:uid(),no:"",date:""});
   const [form,setForm]=useState({
     currency:"USD",amount:"",accType:"eefc",
     remName:"",remAddr:"",
     purpose:"a",
     invoices:[blankInv()],
     shipWin:"w3",
+    expShipDate:"", // advance (b): when the goods are expected to ship
     commodity:"Natural mineral specimens",
     lineAct:"Export of natural stones and mineral specimens",
     impDet:"",expBill:"",otherCl:"",
     sigDate:today(),sigPlace:"Mumbai",
-    docs:[], // supporting documents added here: [{id,label,file,name,size}]
+    docs:[], // documents added here: [{id,label,file,name,size}]
   });
   const [generating,setGenerating]=useState(false);
   const [docPicks,setDocPicks]=useState({}); // the linked invoices' own documents: key → ticked
   const [amountTouched,setAmountTouched]=useState(false); // user typed their own figure
+  const [shipTouched,setShipTouched]=useState(false); // user picked their own shipping date
   const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
   const addInv=()=>setForm(f=>({...f,invoices:[...f.invoices,blankInv()]}));
   const removeInv=i=>setForm(f=>({...f,invoices:f.invoices.filter((_,j)=>j!==i)}));
@@ -24077,14 +24079,91 @@ function BoiRemittanceForm({showToast}){
   const boiMixedCcy=boiLinked.some(inv=>inv.currency&&inv.currency!==form.currency);
   const boiTotalStr=String(boiTotal);
 
-  /* Supporting documents. The linked invoices' own shipping bill and AWB are
-     offered first, ticked; anything else is added from the computer or phone.
-     All of it goes into the PDF after the form and invoices, in the order shown.
+  /* Advance (b): BOI wants the expected shipping date on the form. It's
+     suggested from the linked records — the date an earlier form saved on the
+     proforma or invoice, else a commercial invoice dated ahead and not yet
+     shipped — and saved back on them once the form is made, so the next
+     remittance against the same order doesn't ask again. More than 12 months
+     after the remittance ticks "Above 12 months", where RBI's rules apply. */
+  const isoPlus=(iso,{days=0,months=0})=>{const d=new Date((iso||today())+"T00:00:00Z");d.setUTCMonth(d.getUTCMonth()+months);d.setUTCDate(d.getUTCDate()+days);return d.toISOString().slice(0,10);};
+  const setShipDate=(date,touched=true)=>{
+    if(touched)setShipTouched(true);
+    setForm(f=>({...f,expShipDate:date,shipWin:date&&date>isoPlus(f.sigDate,{months:12})?"a12":"w3"}));
+  };
+  const shipSuggest=(()=>{
+    const saved=boiLinked.filter(inv=>inv.expectedShipDate).sort((a,b)=>String(b.expectedShipDate).localeCompare(String(a.expectedShipDate)))[0];
+    if(saved)return{date:saved.expectedShipDate,why:`an earlier form, kept on ${saved.invNo}`};
+    const dated=boiLinked.find(inv=>!invIsProforma(inv)&&!inv.goodsShipped&&inv.date&&inv.date>=form.sigDate);
+    if(dated)return{date:dated.date,why:`the date on ${dated.invNo}`};
+    return null;
+  })();
+  useEffect(()=>{
+    if(shipTouched)return;
+    const want=shipSuggest?.date||"";
+    if(form.expShipDate!==want)setShipDate(want,false);
+  },[shipSuggest?.date,shipTouched]);
+  const shipDays=form.expShipDate?Math.round((Date.parse(form.expShipDate)-Date.parse(form.sigDate))/86400000):null;
+
+  /* What goes to the bank, in the order it goes into the PDF. Shipped (a): what
+     BOI asks for against a shipment — this form, then the shipping bills, the
+     commercial invoices and the AWB / bill of lading — then anything else ticked
+     or added. Otherwise the invoice, proforma or PO the form names comes first,
+     as the form asks ("please also enclose the same"). A linked invoice's own
+     files are used where it has them, its commercial invoice made from the record
+     when no file is attached; files added here fill what the invoices don't
+     carry. What the bank needs and isn't here is listed as missing, and asked
+     about before the download rather than silently left out.
      (The BOI forms already saved on an invoice aren't offered: they're this.) */
-  const DOC_TICKED=/shipping|awb|hawb|hbl|lading/i;
-  const boiInvDocs=boiLinked.flatMap(inv=>(inv.attachments||[]).filter(a=>a?.url&&!/^boi\b/i.test(a.label||"")).map(a=>({...a,key:`${inv.id}:${a.id||a.url}`,invNo:inv.invNo})));
-  const docPicked=d=>docPicks[d.key]??DOC_TICKED.test(d.label||"");
-  const guessDocLabel=name=>/hawb|awb|airway/i.test(name)?"AWB":/shipping|^sb|[^a-z]sb[^a-z]/i.test(name)?"Shipping Bill":/packing/i.test(name)?"Packing List":String(name||"Document").replace(/\.[a-z0-9]+$/i,"");
+  const kindIn=s=>{
+    s=String(s||"");
+    if(/shipping\s*bill|(^|[^a-z])sb(?![a-z])/i.test(s))return"sb";
+    if(/hawb|awb|hbl|airway|air\s*way|lading|(^|[^a-z])b\/?l(?![a-z])|label/i.test(s))return"awb";
+    if(/invoice|proforma|(^|[^a-z])po(?![a-z])|purchase\s*order|contract/i.test(s))return"inv";
+    return"";
+  };
+  const docKind=(label,name)=>kindIn(label)||kindIn(name)||"other";
+  const kindName=k=>({sb:"Shipping Bill",inv:form.purpose==="a"?"Commercial Invoice":"Invoice / Proforma / PO",awb:"AWB / Bill of Lading",other:"Other document"})[k];
+  const kindLabel=k=>({sb:"Shipping Bill",inv:form.purpose==="a"?"Commercial Invoice":"Proforma / PO",awb:"AWB",other:""})[k];
+  // Keyed by file, so one AWB on two invoices is one tick and goes in once.
+  const boiInvDocs=boiLinked.flatMap(inv=>(inv.attachments||[]).filter(a=>a?.url&&!/^boi\b/i.test(a.label||"")).map(a=>({...a,key:`att:${a.url}`,invId:inv.id,invNo:inv.invNo,kind:docKind(a.label,a.fileName||a.name)})));
+  const docPicked=d=>docPicks[d.key]??d.kind!=="other";
+  const boiSet=(()=>{
+    const needs=form.purpose==="a"?["sb","inv","awb"]:form.purpose==="b"?["inv"]:[];
+    const order=form.purpose==="a"?["sb","inv","awb","other"]:["inv","sb","awb","other"];
+    // One entry per invoice the form names: its record when it's in Invoicing.
+    const named=[],seenId=new Set();
+    for(const ref of form.invoices){
+      if(!ref.no.trim())continue;
+      const rec=resolveBoiInvoice(ref,ngInvoices);
+      if(rec&&seenId.has(rec.id))continue;
+      if(rec)seenId.add(rec.id);
+      named.push({no:rec?.invNo||ref.no.trim(),rec});
+    }
+    const items=[],missing=[],shown=new Set();
+    for(const k of order){
+      const gaps=[];
+      for(const n of named){
+        const own=n.rec?boiInvDocs.filter(d=>d.invId===n.rec.id&&d.kind===k):[];
+        own.forEach(d=>{if(shown.has(d.key))return;shown.add(d.key);items.push({key:d.key,kind:k,from:"attached",att:d,invNo:n.no,on:docPicked(d)});});
+        let has=own.some(docPicked);
+        if(k==="inv"&&n.rec&&!has){items.push({key:`rec:${n.rec.id}`,kind:k,from:"record",rec:n.rec,invNo:n.no,on:true});has=true;}
+        if(!has)gaps.push(n);
+      }
+      const added=form.docs.filter(d=>docKind(d.label,d.name)===k);
+      added.forEach(d=>items.push({key:d.id,kind:k,from:"added",doc:d,on:true}));
+      if(!needs.includes(k))continue;
+      const want=named.length?gaps.slice(added.length):items.some(i=>i.kind===k&&i.on)?[]:[{no:""}];
+      want.forEach(n=>{const m={key:`miss:${k}:${n.no}`,kind:k,missing:true,invNo:n.no,onRecord:!!n.rec};items.push(m);missing.push(m);});
+    }
+    return{items,missing,count:items.filter(i=>i.on&&!i.missing).length};
+  })();
+  const missingText=m=>`${kindName(m.kind)}${m.invNo?` for ${m.invNo}`:""}`;
+  const guessDocLabel=name=>{
+    const k=kindIn(name);
+    if(/lading|(^|[^a-z])b\/?l(?![a-z])/i.test(name))return"Bill of Lading";
+    if(k==="inv")return form.purpose==="a"&&!/proforma|(^|[^a-z])po(?![a-z])/i.test(name)?"Commercial Invoice":"Proforma / PO";
+    return k?kindLabel(k):/packing/i.test(name)?"Packing List":String(name||"Document").replace(/\.[a-z0-9]+$/i,"");
+  };
   const addDocs=(files,label)=>{
     const ok=[...(files||[])].filter(f=>/^image\//.test(f.type)||f.type==="application/pdf"||/\.(pdf|jpe?g|png|heic|webp)$/i.test(f.name));
     if(files?.length&&!ok.length){showToast("Add a PDF or a photo");return;}
@@ -24124,9 +24203,25 @@ function BoiRemittanceForm({showToast}){
     if(boiTotal>0&&form.amount!==boiTotalStr)setF("amount",boiTotalStr);
   },[boiTotal,amountTouched]);
 
+  // A linked invoice that says otherwise about the case.
+  const caseHint=(()=>{
+    if(form.purpose==="a"){
+      const notShipped=boiLinked.filter(inv=>invIsProforma(inv)||!inv.goodsShipped);
+      if(!notShipped.length)return null;
+      return{text:`${notShipped.map(i=>i.invNo).join(", ")} ${notShipped.length>1?"aren't":"isn't"} marked shipped in Invoicing. If the goods haven't left yet, this is an advance.`,to:"b",btn:"It's an advance"};
+    }
+    if(form.purpose==="b"){
+      const shipped=boiLinked.filter(inv=>inv.goodsShipped);
+      if(!shipped.length)return null;
+      return{text:`${shipped.map(i=>i.invNo).join(", ")} ${shipped.length>1?"are":"is"} marked shipped. If the goods have left, the bank wants the shipping documents instead.`,to:"a",btn:"It's shipped"};
+    }
+    return null;
+  })();
+
   const generate=async()=>{
     if(!form.remName.trim()){showToast("Enter remitter name");return;}
     if(!form.amount||+form.amount<=0){showToast("Enter amount");return;}
+    if(form.purpose==="b"&&!form.expShipDate){showToast("Enter the expected shipping date — BOI asks for it on an advance");return;}
     setGenerating(true);
     try{
       let boiPdfBytes;
@@ -24153,36 +24248,34 @@ function BoiRemittanceForm({showToast}){
       const freshInvoices=(Array.isArray(freshInvoicesRaw)?freshInvoicesRaw:ngInvoices)
         .filter(inv=>(inv.status||"").toLowerCase()!=="cancelled")
         .map(inv=>({...inv,_resolvedBuyer:inv.buyerName||inv.buyer||(freshBuyers.find(b=>b.id===inv.buyerId)?.name)||""}));
-      const appendErrors=[];
-      const invoiceRefs=await Promise.all(form.invoices.filter(i=>i.no.trim()).map(async ref=>{
+      const invoiceRefs=form.invoices.filter(i=>i.no.trim()).map(ref=>{
         const src=resolveBoiInvoice(ref,freshInvoices);
-        if(!src){
-          appendErrors.push(`Could not find invoice ${ref.no}`);
-          return ref;
-        }
+        return src?{...ref,srcId:src.id,no:src.invNo||ref.no,date:src.date||ref.date}:ref;
+      });
+      // The set, in the order shown. One that can't be read is named, not dropped.
+      const documents=[],failed=[];
+      for(const it of boiSet.items){
+        if(!it.on||it.missing)continue;
+        const what=it.from==="added"?(it.doc.label||it.doc.name):it.from==="record"?(invIsProforma(it.rec)?"Proforma Invoice":"Commercial Invoice"):(it.att.label||kindName(it.kind));
+        const name=`${what}${it.invNo?` · ${it.invNo}`:""}`;
         try{
-          return {...ref,srcId:src.id,no:src.invNo||ref.no,date:src.date||ref.date,pdfBytes:await renderInvoicePacketPdf(src,freshBuyers,"ng")};
+          if(it.from==="record"){
+            const rec=freshInvoices.find(inv=>inv.id===it.rec.id)||it.rec;
+            documents.push({label:name,kind:"pdf",bytes:await renderInvoicePacketPdf(rec,freshBuyers,"ng")});
+          }else if(it.from==="attached"){
+            const r=await fetch(it.att.url);
+            if(!r.ok)throw new Error(`the stored file answered ${r.status}`);
+            documents.push(await boiDocPart(await r.blob(),name));
+          }else documents.push(await boiDocPart(it.doc.file,name));
         }catch(e){
-          console.warn("BOI invoice append failed:",src.invNo||ref.no,e?.message||e);
-          appendErrors.push(`Could not render invoice ${src.invNo||ref.no}: ${e?.message||e}`);
-          return ref;
+          console.warn("BOI document left out:",name,e?.message||e);
+          failed.push(`${name} — couldn't be read (${e?.message||e})`);
         }
-      }));
-      if(invoiceRefs.length&&!invoiceRefs.some(i=>i.pdfBytes)){
-        throw new Error(appendErrors[0]||"Invoice could not be attached");
       }
-      // Supporting documents, in the order they're listed on the form.
-      const documents=[],docErrors=[];
-      for(const d of boiInvDocs.filter(docPicked)){
-        try{
-          const r=await fetch(d.url);
-          if(!r.ok)throw new Error(`the stored file answered ${r.status}`);
-          documents.push(await boiDocPart(await r.blob(),`${d.label} · ${d.invNo}`));
-        }catch(e){docErrors.push(`${d.label} (${d.invNo}): ${e?.message||e}`);}
-      }
-      for(const d of form.docs){
-        try{documents.push(await boiDocPart(d.file,d.label||d.name));}
-        catch(e){docErrors.push(`${d.label||d.name}: ${e?.message||e}`);}
+      const gaps=[...boiSet.missing.map(m=>`${missingText(m)} — not on file`),...failed];
+      if(gaps.length&&!window.confirm(`${form.purpose==="a"?"Against a shipment BOI wants the whole set":"BOI asks for these"}, and this PDF would go without:\n\n• ${gaps.join("\n• ")}\n\nDownload it anyway?`)){
+        showToast("Not downloaded — add what's missing, then generate again");
+        return;
       }
       const pdfBytes=await fillBoiRemittance({
         currency:form.currency,amount:+form.amount,
@@ -24191,6 +24284,7 @@ function BoiRemittanceForm({showToast}){
         purpose:form.purpose,
         invoices:invoiceRefs,
         shipWin:form.shipWin,commodity:form.commodity,lineAct:form.lineAct,
+        expectedShipDate:form.purpose==="b"?form.expShipDate:"",
         impDet:form.impDet,expBill:form.expBill,otherCl:form.otherCl,
         bName:CO.name,
         bAddr1:"110, 19th Floor, Dariya Mahal A",
@@ -24205,25 +24299,25 @@ function BoiRemittanceForm({showToast}){
       const url=URL.createObjectURL(blob);
       Object.assign(document.createElement("a"),{href:url,download:fileName}).click();
       setTimeout(()=>URL.revokeObjectURL(url),3000);
-      const withInv=invoiceRefs.some(i=>i.pdfBytes);
-      showToast(docErrors.length
-        ?`⚠ Downloaded, but left out ${docErrors.length} document${docErrors.length>1?"s":""} — ${docErrors.join("; ")}`
-        :`✓ BOI form${withInv?" + invoice":""}${documents.length?` + ${documents.length} document${documents.length>1?"s":""}`:""} downloaded`);
-      // Auto-attach to linked invoices
-      const srcIds=invoiceRefs.filter(i=>i.no&&i.srcId&&i.pdfBytes).map(i=>i.srcId);
+      showToast(`✓ ${form.purpose==="a"?"The set":"BOI form"} downloaded — form${documents.length?` + ${documents.length} document${documents.length>1?"s":""}`:""}${gaps.length?`, ${gaps.length} missing`:""}`);
+      // Keep it on the linked invoices: the PDF, and on an advance the expected
+      // shipping date, so the next form for the same order starts from it.
+      const srcIds=[...new Set(invoiceRefs.map(i=>i.srcId).filter(Boolean))];
+      const shipDate=form.purpose==="b"?form.expShipDate:"";
       if(srcIds.length){
-        try{
-          const file=new File([blob],fileName,{type:"application/pdf"});
-          const freshInvs=await loadKFresh("ng-invoices-v2")||[];
-          const uploadedAtt=await uploadInvoiceShipmentAttachment("ng",srcIds[0],file,"BOI Remittance");
-          const patched=freshInvs.map(inv=>{
-            if(!srcIds.includes(inv.id))return inv;
-            const atts=Array.isArray(inv.attachments)?inv.attachments:[];
-            return{...inv,attachments:[...atts,uploadedAtt]};
-          });
-          await saveK("ng-invoices-v2",patched);
-          showToast("✓ BOI form attached to invoice");
-        }catch(e){console.error("BOI attach failed:",e);}
+        let uploadedAtt=null;
+        try{uploadedAtt=await uploadInvoiceShipmentAttachment("ng",srcIds[0],new File([blob],fileName,{type:"application/pdf"}),"BOI Remittance");}
+        catch(e){console.error("BOI attach failed:",e);}
+        if(uploadedAtt||shipDate){
+          try{
+            const patch=inv=>({...inv,...(uploadedAtt?{attachments:[...(Array.isArray(inv.attachments)?inv.attachments:[]),uploadedAtt]}:{}),...(shipDate?{expectedShipDate:shipDate}:{})});
+            const freshInvs=await loadKFresh("ng-invoices-v2")||[];
+            await saveK("ng-invoices-v2",freshInvs.map(inv=>srcIds.includes(inv.id)?patch(inv):inv));
+            setNgInvoices(list=>list.map(inv=>srcIds.includes(inv.id)?patch(inv):inv));
+            const nos=invoiceRefs.filter(i=>i.srcId).map(i=>i.no).join(", ");
+            showToast(`✓ ${uploadedAtt?"Attached to":"Saved on"} ${nos}${shipDate?` · expected shipping ${fmtDate(shipDate)} kept for next time`:""}`);
+          }catch(e){console.error("BOI save on invoice failed:",e);}
+        }
       }
     }catch(e){showToast("Error: "+e.message);}
     finally{setGenerating(false);}
@@ -24235,11 +24329,106 @@ function BoiRemittanceForm({showToast}){
     </div>
   );
 
+  // The invoice / proforma rows, searchable against Invoicing. Shipped (a) and
+  // advance (b) both use them: linking the record is what lets the form enclose
+  // it, suggest the shipping date and keep it for next time.
+  const invoiceRows=placeholder=>(
+    <>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:4,padding:"0 2px"}}>
+        {[form.purpose==="b"?"Proforma / PO / contract no":"Invoice No","Date",""].map((h,i)=><div key={i} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>{h}</div>)}
+      </div>
+      {form.invoices.map((inv,i)=>{
+        const q=(inv.no||"").toLowerCase();
+        // An invoice already sitting in another row must not be offered again —
+        // linking it twice would double it in the remittance total.
+        const takenId=new Set(),takenNo=new Set();
+        form.invoices.forEach((r,j)=>{if(j===i)return;if(r.srcId)takenId.add(r.srcId);const n=normalizeInvoiceNo(r.no);if(n)takenNo.add(n);});
+        const matches=ngInvoices.filter(ni=>
+          (!q||(ni.invNo||"").toLowerCase().includes(q)||(ni._resolvedBuyer||ni.buyerName||ni.buyer||"").toLowerCase().includes(q))
+          &&!takenId.has(ni.id)&&!takenNo.has(normalizeInvoiceNo(ni.invNo))
+        );
+        return(
+          <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"start"}}>
+            <div style={{position:"relative"}}>
+              <input
+                value={inv.no}
+                onChange={e=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],no:e.target.value,srcId:""};return{...f,invoices:invs};})}
+                onFocus={()=>setFocusedInvIdx(i)}
+                onBlur={()=>setTimeout(()=>setFocusedInvIdx(prev=>prev===i?null:prev),150)}
+                style={FI}
+                placeholder={placeholder}
+              />
+              {focusedInvIdx===i&&matches.length>0&&(
+                <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,boxShadow:"0 4px 16px #0003",maxHeight:260,overflowY:"auto"}}>
+                  {matches.map(ni=>{
+                    const st=(ni.status||"").toLowerCase();
+                    const stColor=st==="paid"?C.green:st==="unpaid"?C.amber:C.inkFaint;
+                    const stBg=st==="paid"?C.greenBg:st==="unpaid"?C.amberBg:C.card;
+                    const buyer=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";
+                    return(
+                      <div
+                        key={ni.id}
+                        onMouseDown={()=>selectBoiInvoice(i,ni)}
+                        style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:hoveredInvId===ni.id?C.goldLight:"transparent"}}
+                        onMouseEnter={()=>setHoveredInvId(ni.id)}
+                        onMouseLeave={()=>setHoveredInvId(null)}
+                      >
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
+                          <span style={{fontWeight:700,color:C.ink,fontSize:13}}>{ni.invNo}</span>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            {invIsProforma(ni)&&<span style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,padding:"2px 6px",borderRadius:4,background:C.amberBg,color:C.amber}}>proforma</span>}
+                            {ni.goodsShipped&&<span style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,padding:"2px 6px",borderRadius:4,background:C.blueBg,color:C.blue}}>shipped</span>}
+                            {st&&<span style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,padding:"2px 6px",borderRadius:4,background:stBg,color:stColor}}>{st}</span>}
+                            <span style={{fontWeight:600,color:C.ink,fontSize:12}}>{ni.currency} {(+ni.totalAmt||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                          </div>
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <span style={{color:C.inkMid,fontSize:11,fontWeight:500}}>{buyer||"—"}</span>
+                          <span style={{color:C.inkFaint,fontSize:11}}>{ni.date?fmtDate(ni.date):""}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {(()=>{
+                const hov=focusedInvIdx===i&&hoveredInvId?matches.find(ni=>ni.id===hoveredInvId):null;
+                const items=(hov?.items||[]).filter(it=>it.desc||it.catDesc);
+                if(!hov||!items.length)return null;
+                return(
+                  <div style={{position:"absolute",top:"calc(100% + 2px)",left:"calc(100% + 8px)",zIndex:102,width:230,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 6px 20px #0004",padding:"10px 12px",pointerEvents:"none"}}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6,letterSpacing:.3}}>{hov.invNo} · {hov._resolvedBuyer||hov.buyerName||hov.buyer||""}</div>
+                    {items.map((it,j)=>(
+                      <div key={j} style={{display:"flex",gap:6,marginBottom:4,alignItems:"flex-start"}}>
+                        <span style={{fontSize:10,color:C.inkFaint,flexShrink:0,minWidth:40,textAlign:"right",paddingTop:1}}>{[it.qty,it.unit].filter(Boolean).join(" ")||""}</span>
+                        <span style={{fontSize:11,color:C.ink,lineHeight:1.35}}>{it.desc||it.catDesc}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+            <input type="date" value={inv.date} onChange={e=>setInv(i,"date",e.target.value)} style={FI}/>
+            {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>:<div/>}
+          </div>
+        );
+      })}
+    </>
+  );
+  const smallBtn=(color,bg)=>({fontSize:12,color,background:bg,border:`1px solid ${color}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"});
+  const addButtons=form.purpose==="a"
+    ?[["Shipping Bill","+ Shipping Bill"],["Commercial Invoice","+ Commercial Invoice"],["AWB","+ AWB / BL"],["","+ Other document"]]
+    :form.purpose==="b"?[["Proforma / PO","+ Proforma / PO"],["","+ Other document"]]:[["","+ Document"]];
+  const ready=form.purpose==="b"
+    ?(!form.expShipDate?{ok:false,text:"Expected shipping date needed"}:boiSet.missing.length?{ok:false,text:"No proforma / PO enclosed"}:{ok:true,text:`Shipping ${fmtDate(form.expShipDate)} on the form · ${boiSet.count} enclosed`})
+    :boiSet.missing.length?{ok:false,text:`Missing: ${boiSet.missing.map(missingText).join(", ")}`}
+    :{ok:true,text:form.purpose==="a"?`Full set: form + ${boiSet.count} document${boiSet.count===1?"":"s"}`:`Form${boiSet.count?` + ${boiSet.count} document${boiSet.count===1?"":"s"}`:""}`};
+
   return(
     <div style={{maxWidth:680}}>
       <div style={{background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:8,padding:"10px 14px",marginBottom:20,fontSize:12,color:C.ink,display:"flex",gap:8,alignItems:"flex-start"}}>
         <span style={{fontSize:16,flexShrink:0}}>ℹ️</span>
-        <span>Fills and downloads the <strong>BOI A2 Remittance form</strong> using pdf-lib. Selected invoices and any supporting documents (AWB, shipping bill) are appended to the same PDF. Place <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>boi_form.pdf</code> in <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>public/boi/</code> before generating.</span>
+        <span>Fills BOI's <strong>disposal instructions for a foreign inward remittance</strong> and downloads it as one PDF with what the bank needs for the case — an <strong>advance</strong> carries the expected shipping date; <strong>goods already shipped</strong> go with the shipping bill, commercial invoice and AWB / bill of lading.</span>
       </div>
 
       {/* Remittance Details */}
@@ -24289,13 +24478,27 @@ function BoiRemittanceForm({showToast}){
         </div>
       </div>
 
-      {/* Purpose */}
+      {/* Purpose — which case this remittance is, and what BOI wants for it */}
       <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:14}}>
         {secHdr(C.green,"Purpose of Remittance")}
-        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
-          {[["a","A — Bills / Invoices"],["b","B — Advance Payment"],["c","C — Merchant Trade"],["d","D — Other Trade"],["e","E — Other"]].map(([key,label])=>(
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10,marginBottom:10}}>
+          {[["a","📦","Goods already shipped","(a) Exports other than advance payment","The whole set in one PDF: this form, shipping bill, commercial invoice, AWB / bill of lading"],
+            ["b","⏳","Advance — not shipped yet","(b) Advance payment against exports","The expected shipping date, written on the form"]].map(([key,icon,title,line,needs])=>{
+            const on=form.purpose===key;
+            return(
+              <button key={key} onClick={()=>setF("purpose",key)} style={{textAlign:"left",padding:"12px 14px",borderRadius:9,cursor:"pointer",fontFamily:"inherit",border:`1.5px solid ${on?C.green:C.border}`,background:on?C.greenBg:C.card}}>
+                <div style={{fontSize:14,fontWeight:700,color:on?C.green:C.ink}}>{icon} {title}</div>
+                <div style={{fontSize:10.5,color:C.inkFaint,marginTop:2}}>{line}</div>
+                <div style={{fontSize:11.5,color:on?C.ink:C.inkMid,marginTop:7,lineHeight:1.45}}><strong>Bank needs:</strong> {needs}</div>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",marginBottom:16}}>
+          <span style={{fontSize:11,color:C.inkFaint,marginRight:2}}>Neither:</span>
+          {[["c","C — Merchant trade"],["d","D — Capital account"],["e","E — Other"]].map(([key,label])=>(
             <button key={key} onClick={()=>setF("purpose",key)} style={{
-              padding:"7px 14px",borderRadius:7,fontFamily:"inherit",fontSize:12,cursor:"pointer",
+              padding:"4px 11px",borderRadius:6,fontFamily:"inherit",fontSize:11.5,cursor:"pointer",
               border:`1.5px solid ${form.purpose===key?C.green:C.border}`,
               background:form.purpose===key?C.greenBg:C.card,
               color:form.purpose===key?C.green:C.inkMid,
@@ -24306,91 +24509,35 @@ function BoiRemittanceForm({showToast}){
 
         {form.purpose==="a"&&(
           <>
-            <Tag>Invoice / Bill Numbers</Tag>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:4,padding:"0 2px"}}>
-              {["Invoice No","Date",""].map((h,i)=><div key={i} style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>{h}</div>)}
-            </div>
-            {form.invoices.map((inv,i)=>{
-              const q=(inv.no||"").toLowerCase();
-              // An invoice already sitting in another row must not be offered again —
-              // linking it twice would double it in the remittance total.
-              const takenId=new Set(),takenNo=new Set();
-              form.invoices.forEach((r,j)=>{if(j===i)return;if(r.srcId)takenId.add(r.srcId);const n=normalizeInvoiceNo(r.no);if(n)takenNo.add(n);});
-              const matches=ngInvoices.filter(ni=>
-                (!q||(ni.invNo||"").toLowerCase().includes(q)||(ni._resolvedBuyer||ni.buyerName||ni.buyer||"").toLowerCase().includes(q))
-                &&!takenId.has(ni.id)&&!takenNo.has(normalizeInvoiceNo(ni.invNo))
-              );
-              return(
-                <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 140px 24px",gap:8,marginBottom:8,alignItems:"start"}}>
-                  <div style={{position:"relative"}}>
-                    <input
-                      value={inv.no}
-                      onChange={e=>setForm(f=>{const invs=[...f.invoices];invs[i]={...invs[i],no:e.target.value,srcId:""};return{...f,invoices:invs};})}
-                      onFocus={()=>setFocusedInvIdx(i)}
-                      onBlur={()=>setTimeout(()=>setFocusedInvIdx(prev=>prev===i?null:prev),150)}
-                      style={FI}
-                      placeholder="Type to search invoices…"
-                    />
-                    {focusedInvIdx===i&&matches.length>0&&(
-                      <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:100,background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,boxShadow:"0 4px 16px #0003",maxHeight:260,overflowY:"auto"}}>
-                        {matches.map(ni=>{
-                          const st=(ni.status||"").toLowerCase();
-                          const stColor=st==="paid"?C.green:st==="unpaid"?C.amber:C.inkFaint;
-                          const stBg=st==="paid"?C.greenBg:st==="unpaid"?C.amberBg:C.card;
-                          const buyer=ni._resolvedBuyer||ni.buyerName||ni.buyer||"";
-                          return(
-                            <div
-                              key={ni.id}
-                              onMouseDown={()=>selectBoiInvoice(i,ni)}
-                              style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,transition:"background .1s",background:hoveredInvId===ni.id?C.goldLight:"transparent"}}
-                              onMouseEnter={()=>setHoveredInvId(ni.id)}
-                              onMouseLeave={()=>setHoveredInvId(null)}
-                            >
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
-                                <span style={{fontWeight:700,color:C.ink,fontSize:13}}>{ni.invNo}</span>
-                                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                  {st&&<span style={{fontSize:9,fontWeight:700,textTransform:"uppercase",letterSpacing:.5,padding:"2px 6px",borderRadius:4,background:stBg,color:stColor}}>{st}</span>}
-                                  <span style={{fontWeight:600,color:C.ink,fontSize:12}}>{ni.currency} {(+ni.totalAmt||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                                </div>
-                              </div>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                                <span style={{color:C.inkMid,fontSize:11,fontWeight:500}}>{buyer||"—"}</span>
-                                <span style={{color:C.inkFaint,fontSize:11}}>{ni.date?fmtDate(ni.date):""}</span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {(()=>{
-                      const hov=focusedInvIdx===i&&hoveredInvId?matches.find(ni=>ni.id===hoveredInvId):null;
-                      const items=(hov?.items||[]).filter(it=>it.desc||it.catDesc);
-                      if(!hov||!items.length)return null;
-                      return(
-                        <div style={{position:"absolute",top:"calc(100% + 2px)",left:"calc(100% + 8px)",zIndex:102,width:230,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,boxShadow:"0 6px 20px #0004",padding:"10px 12px",pointerEvents:"none"}}>
-                          <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6,letterSpacing:.3}}>{hov.invNo} · {hov._resolvedBuyer||hov.buyerName||hov.buyer||""}</div>
-                          {items.map((it,j)=>(
-                            <div key={j} style={{display:"flex",gap:6,marginBottom:4,alignItems:"flex-start"}}>
-                              <span style={{fontSize:10,color:C.inkFaint,flexShrink:0,minWidth:40,textAlign:"right",paddingTop:1}}>{[it.qty,it.unit].filter(Boolean).join(" ")||""}</span>
-                              <span style={{fontSize:11,color:C.ink,lineHeight:1.35}}>{it.desc||it.catDesc}</span>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  <input type="date" value={inv.date} onChange={e=>setInv(i,"date",e.target.value)} style={FI}/>
-                  {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>:<div/>}
-                </div>
-              );
-            })}
-            <button onClick={addInv} style={{fontSize:12,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>+ Add Invoice</button>
+            <Tag>Invoices shipped against</Tag>
+            {invoiceRows("Type to search invoices…")}
+            <button onClick={addInv} style={smallBtn(C.blue,C.blueBg)}>+ Add Invoice</button>
           </>
         )}
 
         {form.purpose==="b"&&(
           <>
-            <div style={{display:"flex",gap:10,marginBottom:14}}>
+            <div style={{background:form.expShipDate?C.amberBg:C.redBg,border:`1px solid ${form.expShipDate?C.amber:C.red}`,borderRadius:8,padding:"12px 14px",marginBottom:14}}>
+              <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
+                <Field label="Expected shipping date *">
+                  <input type="date" value={form.expShipDate} onChange={e=>setShipDate(e.target.value)} style={{...FI,width:170}}/>
+                </Field>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",paddingBottom:2}}>
+                  {[["+1 week",{days:7}],["+2 weeks",{days:14}],["+1 month",{months:1}]].map(([l,by])=>(
+                    <button key={l} type="button" onClick={()=>setShipDate(isoPlus(form.sigDate,by))} style={{...smallBtn(C.amber,C.surface),padding:"6px 10px"}}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{fontSize:11.5,color:C.inkMid,marginTop:8,lineHeight:1.5}}>
+                {form.expShipDate
+                  ?<>Printed on the form as the expected date of shipment{shipDays!=null&&shipDays>=0?` — ${shipDays} day${shipDays===1?"":"s"} after the remittance`:""}.{form.shipWin==="a12"?" More than 12 months away, so “Above 12 months” is ticked — RBI's additional provisions apply.":""}{shipSuggest&&!shipTouched?` From ${shipSuggest.why}.`:""}</>
+                  :<>BOI asks for this on every advance. {boiLinked.length?"Nothing on the linked records to go by — pick the date the goods should leave.":"Link the proforma below and it's kept on it for the next remittance."}</>}
+                {shipSuggest&&shipTouched&&form.expShipDate!==shipSuggest.date&&(
+                  <button type="button" onClick={()=>{setShipTouched(false);}} style={{marginLeft:6,border:"none",background:"none",color:C.blue,cursor:"pointer",fontSize:11.5,padding:0,fontFamily:"inherit",textDecoration:"underline"}}>Use {fmtDate(shipSuggest.date)} ({shipSuggest.why})</button>
+                )}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
               {[["w3","Within 3/6/12 months"],["a12","Above 12 months"]].map(([key,label])=>(
                 <button key={key} onClick={()=>setF("shipWin",key)} style={{
                   padding:"6px 14px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontSize:12,
@@ -24409,15 +24556,17 @@ function BoiRemittanceForm({showToast}){
                 <input value={form.commodity} onChange={e=>setF("commodity",e.target.value)} style={FI} placeholder="Natural mineral specimens"/>
               </Field>
             </div>
-            <Tag>PO / Reference Numbers</Tag>
-            {form.invoices.map((inv,i)=>(
-              <div key={inv.id} style={{display:"grid",gridTemplateColumns:"1fr 24px",gap:8,marginBottom:8,alignItems:"center"}}>
-                <input value={inv.no} onChange={e=>setInv(i,"no",e.target.value)} style={FI} placeholder="PO number"/>
-                {form.invoices.length>1?<button onClick={()=>removeInv(i)} style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0}}>×</button>:<div/>}
-              </div>
-            ))}
-            <button onClick={addInv} style={{fontSize:12,color:C.blue,background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>+ Add PO</button>
+            <Tag>Proforma / PO / contract — enclosed with the form</Tag>
+            {invoiceRows("Search proformas, or type the PO number…")}
+            <button onClick={addInv} style={smallBtn(C.blue,C.blueBg)}>+ Add PO</button>
           </>
+        )}
+
+        {caseHint&&(
+          <div style={{marginTop:12,background:C.amberBg,border:`1px solid ${C.amber}`,borderRadius:7,padding:"8px 12px",fontSize:11.5,color:C.ink,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <span style={{flex:1,minWidth:200}}>{caseHint.text}</span>
+            <button type="button" onClick={()=>setF("purpose",caseHint.to)} style={{...smallBtn(C.amber,C.surface),padding:"3px 10px",fontSize:11}}>{caseHint.btn}</button>
+          </div>
         )}
 
         {form.purpose==="c"&&(
@@ -24438,42 +24587,59 @@ function BoiRemittanceForm({showToast}){
         )}
       </div>
 
-      {/* Supporting documents */}
+      {/* What goes to the bank, in the PDF's order */}
       <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:14}}
         onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();addDocs(e.dataTransfer.files,"");}}>
-        {secHdr(C.purple,"Supporting documents")}
-        <div style={{fontSize:11.5,color:C.inkMid,marginTop:-6,marginBottom:12,lineHeight:1.5}}>AWB, shipping bill, or anything else the bank asks for — PDFs or photos. They go into the PDF after the form{boiLinked.length?" and the invoices":""}, in this order.</div>
-        {boiInvDocs.length>0&&(
-          <div style={{marginBottom:12}}>
-            <Tag>On the linked invoices</Tag>
-            {boiInvDocs.map(d=>(
-              <label key={d.key} style={{display:"flex",alignItems:"center",gap:9,padding:"6px 8px",borderRadius:7,cursor:"pointer",background:docPicked(d)?C.goldLight:"transparent",marginBottom:3}}>
-                <input type="checkbox" checked={docPicked(d)} onChange={e=>setDocPicks(p=>({...p,[d.key]:e.target.checked}))}/>
-                <span style={{fontSize:12.5,fontWeight:600,color:C.ink,flexShrink:0}}>{d.label}</span>
-                <span style={{fontSize:11,color:C.inkFaint,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.fileName||d.name||""}</span>
-                <span style={{fontSize:10.5,color:C.inkMid,flexShrink:0}}>{d.invNo}</span>
-                <a href={d.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,color:C.blue,flexShrink:0}}>View</a>
-              </label>
-            ))}
-          </div>
-        )}
-        {form.docs.length>0&&(
-          <div style={{marginBottom:12}}>
-            <Tag>Added here</Tag>
-            <datalist id="boi-doc-labels">{["AWB","Shipping Bill","Packing List","Bill of Lading","Commercial Invoice","Other"].map(l=><option key={l} value={l}/>)}</datalist>
-            {form.docs.map(d=>(
-              <div key={d.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 24px":"170px 1fr 70px 24px",gap:8,alignItems:"center",marginBottom:6}}>
-                <input list="boi-doc-labels" value={d.label} onChange={e=>setDoc(d.id,{label:e.target.value})} style={FI} placeholder="What it is"/>
-                {!mob&&<span style={{fontSize:11.5,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{/pdf$/i.test(d.name)?"📄":"🖼️"} {d.name}</span>}
-                {!mob&&<span style={{fontSize:10.5,color:C.inkFaint,textAlign:"right"}}>{d.size>=1048576?`${(d.size/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(d.size/1024))} KB`}</span>}
-                <button onClick={()=>removeDoc(d.id)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          {[["AWB","+ AWB"],["Shipping Bill","+ Shipping Bill"],["","+ Other document"]].map(([label,text])=>(
-            <button key={text} onClick={()=>pickDocs(label)} style={{fontSize:12,color:C.purple,background:C.purpleBg,border:`1px solid ${C.purple}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>{text}</button>
+        {secHdr(C.purple,"What goes to the bank")}
+        <div style={{fontSize:11.5,color:C.inkMid,marginTop:-6,marginBottom:12,lineHeight:1.5}}>
+          {form.purpose==="a"?"Against a shipment BOI wants the whole set in one PDF: this form, then the shipping bill, the commercial invoice and the AWB / bill of lading. It downloads in this order."
+            :form.purpose==="b"?"For an advance BOI wants the expected shipping date on the form, with the proforma or PO enclosed. Once the goods ship, the shipping documents go to the bank within 21 days."
+            :"This form, then anything enclosed, in this order."}
+        </div>
+        <datalist id="boi-doc-labels">{["Shipping Bill","Commercial Invoice","AWB","Bill of Lading","Proforma / PO","Packing List","Other"].map(l=><option key={l} value={l}/>)}</datalist>
+        {(()=>{
+          let n=1;
+          const row=(key,num,body,right,tone)=>(
+            <div key={key} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 8px",borderRadius:7,marginBottom:3,background:tone==="miss"?C.redBg:tone==="on"?C.goldLight:"transparent",opacity:tone==="off"?.6:1}}>
+              <span style={{width:20,flexShrink:0,textAlign:"right",fontSize:12,fontWeight:700,color:tone==="miss"?C.red:C.inkMid}}>{num}</span>
+              <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,flexWrap:mob?"wrap":"nowrap"}}>{body}</div>
+              {right}
+            </div>
+          );
+          const faint={fontSize:11,color:C.inkFaint,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0};
+          const strong={fontSize:12.5,fontWeight:600,color:C.ink,flexShrink:0};
+          return[
+            row("form","1",<><span style={strong}>BOI disposal form</span><span style={faint}>filled{form.purpose==="b"&&form.expShipDate?`, expected shipping ${fmtDate(form.expShipDate)}`:""} · signed</span></>,null,"on"),
+            ...boiSet.items.map(it=>{
+              if(it.missing)return row(it.key,"✗",
+                <><span style={{...strong,color:C.red}}>{kindName(it.kind)}</span><span style={{fontSize:11,color:C.red}}>missing{it.onRecord?` — not on ${it.invNo}`:it.invNo?` — ${it.invNo} isn't in Invoicing, add the file`:""}</span></>,
+                <button type="button" onClick={()=>pickDocs(kindLabel(it.kind))} style={{...smallBtn(C.red,C.surface),padding:"3px 10px",fontSize:11,flexShrink:0}}>+ Add</button>,"miss");
+              const num=it.on?String(++n):"–";
+              if(it.from==="attached")return(
+                <label key={it.key} style={{display:"block",cursor:"pointer"}}>
+                  {row(it.key,num,
+                    <><input type="checkbox" checked={it.on} onChange={e=>setDocPicks(p=>({...p,[it.key]:e.target.checked}))}/>
+                      <span style={strong}>{it.att.label||kindName(it.kind)}</span>
+                      <span style={{...faint,flex:1}}>{it.att.fileName||it.att.name||""}</span>
+                      <span style={{fontSize:10.5,color:C.inkMid,flexShrink:0}}>{it.invNo}</span></>,
+                    <a href={it.att.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,color:C.blue,flexShrink:0}}>View</a>,
+                    it.on?"on":"off")}
+                </label>
+              );
+              if(it.from==="record")return row(it.key,num,
+                <><span style={strong}>{invIsProforma(it.rec)?"Proforma Invoice":"Commercial Invoice"}</span><span style={{...faint,flex:1}}>made from the invoice record</span><span style={{fontSize:10.5,color:C.inkMid,flexShrink:0}}>{it.invNo}</span></>,null,"on");
+              const d=it.doc;
+              return row(it.key,num,
+                <><input list="boi-doc-labels" value={d.label} onChange={e=>setDoc(d.id,{label:e.target.value})} style={{...FI,width:mob?"100%":160,padding:"4px 8px",fontSize:12}} placeholder="What it is"/>
+                  <span style={{...faint,flex:1}}>{/pdf$/i.test(d.name)?"📄":"🖼️"} {d.name}</span>
+                  {!mob&&<span style={{fontSize:10.5,color:C.inkFaint,flexShrink:0}}>{d.size>=1048576?`${(d.size/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(d.size/1024))} KB`}</span>}</>,
+                <button onClick={()=>removeDoc(d.id)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1,flexShrink:0}}>×</button>,"on");
+            }),
+          ];
+        })()}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",marginTop:10}}>
+          {addButtons.map(([label,text])=>(
+            <button key={text} onClick={()=>pickDocs(label)} style={smallBtn(C.purple,C.purpleBg)}>{text}</button>
           ))}
           {!mob&&<span style={{fontSize:11,color:C.inkFaint}}>or drop files here</span>}
         </div>
@@ -24492,9 +24658,10 @@ function BoiRemittanceForm({showToast}){
         </div>
       </div>
 
-      <div style={{display:"flex",justifyContent:"flex-end"}}>
+      <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+        <span style={{fontSize:12,fontWeight:600,color:ready.ok?C.green:C.red,flex:1,minWidth:200,textAlign:"right"}}>{ready.ok?"✓ ":"⚠ "}{ready.text}</span>
         <button className="bp" onClick={generate} disabled={generating} style={{opacity:generating?.5:1,minWidth:200,fontFamily:"inherit"}}>
-          {generating?"Generating PDF…":"📥 Generate BOI Form"}
+          {generating?"Generating PDF…":form.purpose==="a"?"📥 Download the set":"📥 Generate BOI Form"}
         </button>
       </div>
     </div>
