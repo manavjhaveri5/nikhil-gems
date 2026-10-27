@@ -303,7 +303,7 @@ function OrdersTab({ showToast }) {
                       <div>{l.qty} × {usd(l.price, o.currency)}</div>
                     </div>
                   ))}
-                  <div style={{ fontSize: 12.5, color: C.inkMid }}>Subtotal {usd(o.subtotal, o.currency)} · Shipping {usd(o.shipping_cost, o.currency)}{o.discount ? ` · Discount −${usd(o.discount, o.currency)}` : ""} · <b>Total {usd(o.total, o.currency)}</b></div>
+                  <div style={{ fontSize: 12.5, color: C.inkMid }}>Subtotal {usd(o.subtotal, o.currency)} · Shipping {usd(o.shipping_cost, o.currency)}{o.discount ? ` · Discount${o.discount_code ? ` (${o.discount_code})` : ""} −${usd(o.discount, o.currency)}` : ""} · <b>Total {usd(o.total, o.currency)}</b></div>
                   <div style={{ fontSize: 13, whiteSpace: "pre-line", background: C.card, borderRadius: 8, padding: "10px 12px" }}>
                     <b>Ship to</b>{"\n"}{o.name}{"\n"}{[a.line1, a.line2].filter(Boolean).join(", ")}{"\n"}{[a.city, a.state, a.postal_code].filter(Boolean).join(" ")}{"\n"}{a.country}{"\n"}{[o.email, o.phone].filter(Boolean).join(" · ")}
                   </div>
