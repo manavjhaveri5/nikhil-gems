@@ -801,6 +801,54 @@ const WEEKLY_SCHEDULE={
 const WEEKDAY_NAMES=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const STANDUP_SEEN_KEY="ng-standup-seen-v1";
 
+/* The to-do list one tap away on every screen: a button that floats in the
+   corner with the count still open, and the list itself in a drawer. On the
+   home page, where the list already is, it scrolls to it instead. */
+function TodoFab({todoKey="ng-todos-v1",isAdmin,allUsers,currentUser,onHome,refreshKey}){
+  const [open,setOpen]=useState(false);
+  const [pending,setPending]=useState(0);
+  const count=useCallback(()=>{loadK(todoKey).then(d=>setPending(Array.isArray(d)?d.filter(x=>!x.done).length:0)).catch(()=>{});},[todoKey]);
+  // Counted again on every change of screen, so edits made on the home page show.
+  useEffect(()=>{count();},[count,refreshKey]);
+  useEffect(()=>onCacheRefresh(keys=>{if(keys.includes(todoKey))count();}),[todoKey,count]);
+  useEffect(()=>{
+    if(!open)return;
+    const k=e=>{if(e.key==="Escape")setOpen(false);};
+    addEventListener("keydown",k);
+    return()=>removeEventListener("keydown",k);
+  },[open]);
+  useEffect(()=>{if(!open)count();},[open,count]);
+  const tap=()=>{
+    const el=onHome&&document.getElementById("ng-todo-input");
+    if(!el){setOpen(true);return;}
+    el.scrollIntoView({behavior:"smooth",block:"center"});
+    setTimeout(()=>el.focus(),450);
+  };
+  return(
+    <>
+      <button onClick={tap} title="To-do list" aria-label={`To-do list, ${pending} open`}
+        style={{position:"fixed",right:mob?14:24,bottom:mob?"calc(78px + env(safe-area-inset-bottom))":24,zIndex:650,width:52,height:52,borderRadius:26,border:"none",background:C.ink,color:"#FAF0DC",fontSize:22,cursor:"pointer",boxShadow:"0 6px 20px rgba(26,19,8,.28)",display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
+        📝
+        {pending>0&&<span style={{position:"absolute",top:-4,right:-4,minWidth:21,height:21,padding:"0 5px",borderRadius:11,background:C.gold,color:"#fff",fontSize:11,fontWeight:700,lineHeight:"17px",textAlign:"center",border:`2px solid ${C.bg}`,boxSizing:"border-box"}}>{pending>99?"99+":pending}</span>}
+      </button>
+      {open&&(
+        <div onMouseDown={e=>{if(e.target===e.currentTarget)setOpen(false);}}
+          style={{position:"fixed",inset:0,zIndex:1250,background:"rgba(20,15,8,.35)",display:"flex",justifyContent:"flex-end",animation:"fadeIn .15s ease"}}>
+          <div style={{width:"100%",maxWidth:460,height:"100%",background:C.bg,display:"flex",flexDirection:"column",boxShadow:"-12px 0 40px rgba(0,0,0,.18)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",borderBottom:`1px solid ${C.border}`,background:C.surface,paddingTop:"calc(12px + env(safe-area-inset-top))"}}>
+              <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:21,fontWeight:600,color:C.ink,flex:1}}>To-do</div>
+              <button onClick={()=>setOpen(false)} aria-label="Close" style={{border:"none",background:"none",fontSize:24,cursor:"pointer",color:C.inkMid,padding:"0 4px",lineHeight:1}}>×</button>
+            </div>
+            <div style={{flex:1,overflowY:"auto",padding:mob?10:14,paddingBottom:"calc(14px + env(safe-area-inset-bottom))"}}>
+              <TodoWidget todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser}/>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function MorningStandup({todoKey="ng-todos-v1",onClose}){
   const now=new Date();
   const dow=now.getDay();
@@ -26119,6 +26167,7 @@ export default function Root({onSignOut}){
         </div>
       )}
       {content}
+      <TodoFab todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onHome={screen==="welcome"} refreshKey={`${screen}:${mod}`}/>
       {mob&&(
         <div className="mob-tabbar" style={{position:"fixed",bottom:0,left:0,right:0,zIndex:600,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"stretch",paddingBottom:"env(safe-area-inset-bottom)",boxShadow:"0 -2px 12px rgba(26,19,8,.07)"}}>
           {[{id:null,icon:"🏠",label:"Home"},{id:"stock",icon:"💎",label:"Stock"},{id:"purchases",icon:"📦",label:"Purchases"},{id:"shows",icon:"🌐",label:"Shows"},{id:"finance",icon:"💰",label:"Finance"}].filter(item=>!item.id||allowedMods.find(m=>m.id===item.id)).map(item=>{
