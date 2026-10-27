@@ -12,6 +12,7 @@ import { KEYS, CAL_KEY, CURRENCIES, UNITS, GSTS, DEFAULT_MARKETS, PRODUCT_TYPES,
 import { isLotCard, computeLotPrice, computeLotStatus, buildLotSync, resolveLotKg, resolveLotPcs, resolvePrimaryQty, lotQtyPairs, lotBasisFor, LOT_RATE_BASES, buildLotVariants, LOT_SPLITS, DEFAULT_LOT_TEMPLATE } from "./lib/lotPricing.js";
 import { mob, uid, today, fmtDate, daysSince, inr, pct, calcGST, lineBase, lineTotal, billTotal, billSubtotal, billGST, loadK, loadKFresh, saveK, readCache, useDark, useDebounce, onCacheRefresh, useLiveK, logActivity, subscribeActivity, syncOfflineQueue, getOfflineQueueCount, upsertItemK, deleteItemK, upsertVersionedItemK, deleteVersionedItemK, isConflictError } from "./src/utils.js";
 import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.jsx";
+import { createSheet, buildXlsx } from "./src/xlsxWriter.js";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import NameCard from "./src/NameCard.jsx";
 import EtsyPulse from "./src/HomePulse.jsx";
@@ -14020,6 +14021,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           {!invCancelled(draft)&&isSaved&&onCancelInvoice&&!cancelBox&&
             <button className="bs" style={{color:C.red,borderColor:C.red}} onClick={()=>setCancelBox({reason:"",restoreStock:true})}>⛔ Cancel Invoice</button>}
           <button className="bs" onClick={onPreview}>👁 Preview</button>
+          <InvoiceSheetMenu inv={draft} buyers={buyers} company={company} onError={showToast}/>
           {isSaved&&!invCancelled(draft)&&
             <button className="bs" disabled={printing} onClick={printDraft} title="Prints and marks this invoice as printed">{printing?"Printing…":invPrinted(draft)?"🖨 Reprint":"🖨 Print"}</button>}
           {printedLock&&<button className="bs" onClick={()=>{if(window.confirm("This invoice has already been printed. Edit it anyway?\n\nIf the printed copy is already with the buyer, cancel this invoice and raise a new one instead."))setUnlocked(true);}}>✏ Edit anyway</button>}
@@ -15183,6 +15185,230 @@ const INV_DOC_STYLES=`<style>
 </style>`;
 function wrapInvDoc(title,sections){
   return`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>${INV_DOC_STYLES}</head><body>${sections.map(s=>`<div class="inv-page">${s}</div>`).join("\n")}</body></html>`;
+}
+
+// ── The invoice as a spreadsheet: Excel laid out the way it prints, CSV as plain rows ──
+// Same parties, lines, figures and wording as buildInvBodyHTML; only the medium changes.
+function invoiceSheetFacts(inv,buyers,company="ng"){
+  const co=companyProfileFromKey(company);
+  const buyer=effectiveBuyer(buyers.find(b=>b.id===inv.buyerId),inv);
+  const buyerAddr=buyer?.billingAddress||buyer?.address||"";
+  const shipAddr=buyer?.shippingSameAsBilling!==false?(buyer?.billingAddress||buyer?.address||""):(buyer?.shippingAddress||buyer?.billingAddress||buyer?.address||"");
+  const consignee=inv.consigneeSameAsBuyer?{name:buyer?.name,address:shipAddr,country:buyer?.country}:{name:inv.consigneeName,address:inv.consigneeAddress,country:inv.consigneeCountry};
+  const items=printOrderInvItems(inv.items);
+  const subTotal=items.reduce((s,i)=>s+(+i.amt||0),0);
+  const freight=+inv.shippingCost||0;
+  const discount=+inv.discountAmt||0;
+  const total=inv.totalAmt||Math.max(0,subTotal+freight-discount);
+  const gstMode=getGSTMode(buyer);
+  const totalTax=items.reduce((s,i)=>s+(+i.amt||0)*(+i.igst||0)/100,0);
+  const cur=inv.currency||"";
+  const currWords={"USD":"United States Dollar","EUR":"Euro","JPY":"Japanese Yen","GBP":"British Pound","AUD":"Australian Dollar","INR":"Indian Rupee"};
+  return{co,buyer,buyerAddr,consignee,portDischarge:invoicePortDischarge(inv,buyer,consignee),items,cur,gstMode,
+    subTotal,freight,discount,total,totalTax,
+    title:inv.type==="proforma"?"PROFORMA INVOICE":"COMMERCIAL INVOICE",
+    words:`${currWords[cur]||cur} ${numToWords(Math.round(total*100)/100)}`,
+    notes:cleanInvoiceNotes(inv.notes),lutArn:inv.lutArn||co.lutArn};
+}
+// The lines under the items, as the printed totals show them: tax only for an
+// Indian buyer who was charged some, the discount only when it's shown.
+const invoiceSheetTotals=(f,inv)=>[
+  ["Sub Total",f.subTotal],
+  ...(f.gstMode!=="none"&&f.totalTax>0?(f.gstMode==="cgst_sgst"?[["CGST",f.totalTax/2],["SGST",f.totalTax/2]]:[["IGST",f.totalTax]]):[]),
+  ...(f.freight>0?[["Shipping & Freight",f.freight]]:[]),
+  ...(inv.showDiscount!==false&&f.discount>0?[["Discount",-f.discount]]:[]),
+  ["Total",f.total],
+];
+const invQtyValue=v=>{const raw=String(v??"").trim();const n=Number(raw.replace(/,/g,""));return raw&&Number.isFinite(n)?n:raw;};
+// 0.25 → "0.25%", 9 → "9%": as many decimals as the rate has, no trailing zeros.
+const invPctFmt=p=>{const d=Math.min(3,(String(+p).split(".")[1]||"").length);return d?`0.${"0".repeat(d)}%`:"0%";};
+const sheetTextLines=(text,width)=>String(text||"").split("\n").reduce((n,p)=>n+Math.max(1,Math.ceil(p.length/Math.max(1,width))),0);
+
+async function buildInvoiceXlsx(inv,buyers,company="ng"){
+  const f=invoiceSheetFacts(inv,buyers,company);
+  const {co,cur}=f;
+  const split=f.gstMode==="cgst_sgst";
+  const heads=["#","Item & Description","HSN","Qty","Unit",`Rate (${cur})`,...(split?["CGST %","CGST Amt","SGST %","SGST Amt"]:["IGST %","IGST Amt"]),`Amount (${cur})`];
+  const L=heads.length-1, M=3; // last column; the right-hand half of the header starts at Qty
+  const sh=createSheet(inv.invNo||"Invoice");
+  sh.cols=[5,46,11,9,7,12,...(split?[8,11,8,11]:[8,12]),15];
+  const LINE=12.75, GREY="F0F0F0", MONEY="#,##0.00";
+  const curFmt=cur?`"${cur} "#,##0.00;"- ${cur} "#,##0.00`:"#,##0.00;- #,##0.00";
+  // Excel won't grow a merged row to fit wrapped text, so each row is sized
+  // here from the longest text placed in it.
+  const chars=(c1,c2)=>sh.cols.slice(c1,c2+1).reduce((s,w)=>s+w,0)*1.2;
+  const tall=new Map();
+  const fit=(r,pt)=>tall.set(r,Math.max(tall.get(r)||0,pt));
+  const put=(r,c1,c2,v,s={})=>{
+    const style={v:"top",wrap:true,...s};
+    for(let c=c1;c<=c2;c++)sh.set(r,c,c===c1?v:null,style);
+    sh.merge(r,c1,r,c2);
+    const k=(s.sz||10)/10;
+    fit(r,sheetTextLines(Array.isArray(v)?v.map(x=>x.t).join(""):v,chars(c1,c2)/k)*LINE*k);
+  };
+  let r=0;
+
+  // Letterhead: who we are on the left, what this is on the right
+  put(r,0,M-1,co.name,{b:true,sz:16});
+  put(r,M,L,f.title,{b:true,sz:16,h:"right"});
+  const coLines=[...String(co.address||"").split("\n"),`TEL: ${co.tel}`,`E.Mail: ${co.email}`];
+  coLines.forEach((ln,i)=>put(r+1+i,0,M-1,ln,{sz:9,color:"444444"}));
+  put(r+1,M,L,`Invoice# ${inv.invNo||""}`,{h:"right"});
+  if(invCancelled(inv))put(r+2,M,L,"CANCELLED",{b:true,color:"B3261E",h:"right"});
+  r+=coLines.length+2;
+
+  // Dates, terms and ports
+  const kv=(k,v)=>[{t:k,b:true},{t:` : ${v||""}`}];
+  const infoTop=r;
+  put(r,0,M-1,kv("Invoice Date",fmtDate(inv.date)));put(r,M,L,kv("Port of Lading",inv.portLading));r++;
+  put(r,0,M-1,kv("Terms",inv.terms));put(r,M,L,kv("Port of Discharge",f.portDischarge));r++;
+  put(r,0,M-1,kv("Due Date",fmtDate(inv.dueDate)));put(r,M,L,"");r++;
+  sh.box(infoTop,0,r-1,M-1).box(infoTop,M,r-1,L);
+  r++;
+
+  // Buyer and consignee, side by side
+  const party=(name,addr,country)=>[[{t:name||"",b:true}],...String(addr||"").split("\n").map(s=>s.trim()).filter(Boolean),...(country?[country]:[])];
+  const buyerLines=party(f.buyer?.name,f.buyerAddr,f.buyer?.country);
+  const consLines=party(f.consignee?.name,f.consignee?.address,f.consignee?.country);
+  const partyTop=r;
+  put(r,0,M-1,"Buyer",{b:true,fill:GREY});put(r,M,L,"Consignee",{b:true,fill:GREY});
+  sh.box(r,0,r,M-1).box(r,M,r,L);
+  r++;
+  for(let i=0;i<Math.max(buyerLines.length,consLines.length);i++,r++){
+    put(r,0,M-1,buyerLines[i]??"");put(r,M,L,consLines[i]??"");
+  }
+  sh.box(partyTop,0,r-1,M-1).box(partyTop,M,r-1,L);
+  r++;
+
+  // The goods
+  const head=r;
+  heads.forEach((h,c)=>sh.set(r,c,h,{b:true,fill:GREY,h:c===1?"left":"center",v:"center",wrap:true}));
+  sh.height(r,18);
+  sh.repeatRows=[r,r];
+  r++;
+  f.items.forEach((it,i)=>{
+    const amt=+it.amt||0,pct=+it.igst||0,tax=amt*pct/100;
+    const main=it.acctDesc||it.desc||"—";
+    const desc=it.customDesc?[{t:main},{t:"\n"+it.customDesc,i:true,sz:9,color:"555555"}]:main;
+    const taxCells=(split?[pct/2,tax/2,pct/2,tax/2]:[pct,tax]).map((v,k)=>k%2?[v,{fmt:MONEY}]:[v/100,{fmt:invPctFmt(v),h:"center"}]);
+    [[i+1,{h:"center"}],[desc,{wrap:true}],[String(it.hsn||""),{h:"center"}],[invQtyValue(it.qty),{h:"right"}],[it.unit||"",{h:"center"}],
+      [+it.rate||0,{fmt:MONEY}],...taxCells,[amt,{fmt:MONEY,b:true}]]
+      .forEach(([v,s],c)=>sh.set(r,c,v,{v:"top",...s}));
+    fit(r,sheetTextLines(main,chars(1,1))*LINE+(it.customDesc?sheetTextLines(it.customDesc,chars(1,1)/0.9)*LINE*0.9:0));
+    r++;
+  });
+  for(let y=head;y<r;y++)for(let c=0;c<=L;c++)sh.style(y,c,{bt:"thin",bb:"thin",bl:"thin",br:"thin"});
+
+  // Totals, under the amount column
+  const totals=invoiceSheetTotals(f,inv);
+  totals.forEach(([label,val],i)=>{
+    const last=i===totals.length-1;
+    put(r,L-3,L-1,label,{h:"right",b:last});
+    sh.set(r,L,val,{fmt:curFmt,b:last,...(last?{bt:"thin",bb:"double",bc:"000000"}:{})});
+    r++;
+  });
+  r++;
+
+  put(r++,0,L,"Total In Words",{b:true});
+  put(r++,0,L,f.words,{i:true});
+  r++;
+  put(r++,0,L,co.bankNote||"Payment in advance ONLY in:",{b:true});
+  [co.bank,...String(co.bankBranch||"").split("\n"),`A/C No. - ${co.bankAcc}`,`Swift Code - ${co.swift}; IFSC Code - ${co.ifsc}`].forEach(ln=>put(r++,0,L,ln));
+  r++;
+  if(f.notes){put(r++,0,L,"Notes",{b:true});put(r++,0,L,f.notes);r++;}
+  if(inv.termsText){put(r++,0,L,"Terms & Conditions",{b:true});put(r++,0,L,inv.termsText);r++;}
+  put(r++,0,L,`IEC NO : ${co.iec}    LUT ARN - ${f.lutArn}`);
+  put(r++,0,L,`GSTIN: ${co.gstin}   STATE CODE: ${co.stateCode}`);
+  put(r++,0,L,"We declare that invoice shows the actual price of the goods described and that all particulars are true and Correct.");
+  r++;
+  put(r++,M,L,`FOR ${co.name.toUpperCase()}`,{b:true,sz:8,h:"right"});
+  r+=3; // room to sign
+  put(r++,M,L,"AUTHORIZED SIGNATORY",{b:true,sz:9,h:"right"});
+  put(r++,M,L,"Authorized Signature",{h:"right"});
+
+  for(const [row,pt] of tall)if(pt>LINE+1)sh.height(row,Math.ceil(pt+3));
+  return buildXlsx([sh],{title:`${f.title} ${inv.invNo||""}`.trim(),creator:co.name});
+}
+
+function buildInvoiceCsv(inv,buyers,company="ng"){
+  const f=invoiceSheetFacts(inv,buyers,company);
+  const {co,cur}=f;
+  const split=f.gstMode==="cgst_sgst";
+  const r2=n=>(Math.round((+n||0)*100)/100).toFixed(2);
+  const oneLine=s=>String(s||"").split("\n").map(x=>x.trim().replace(/,$/,"")).filter(Boolean).join(", ");
+  const heads=["#","Item & Description","Details","HSN","Qty","Unit",`Rate (${cur})`,...(split?["CGST %",`CGST (${cur})`,"SGST %",`SGST (${cur})`]:["IGST %",`IGST (${cur})`]),`Amount (${cur})`];
+  const rows=[
+    ["Invoice No",inv.invNo||""],
+    ["Type",inv.type==="proforma"?"Proforma Invoice":"Commercial Invoice"],
+    ...(invCancelled(inv)?[["Status","Cancelled"]]:[]),
+    ["Invoice Date",inv.date||""],
+    ["Due Date",inv.dueDate||""],
+    ["Terms",inv.terms||""],
+    ["Port of Lading",inv.portLading||""],
+    ["Port of Discharge",f.portDischarge],
+    ["Currency",cur],
+    [],
+    ["Seller",co.name],
+    ["Seller Address",oneLine(co.address)],
+    ["Seller GSTIN",co.gstin],
+    [],
+    ["Buyer",f.buyer?.name||""],
+    ["Buyer Address",oneLine(f.buyerAddr)],
+    ["Buyer Country",f.buyer?.country||""],
+    ["Consignee",f.consignee?.name||""],
+    ["Consignee Address",oneLine(f.consignee?.address)],
+    ["Consignee Country",f.consignee?.country||""],
+    [],
+    heads,
+    ...f.items.map((it,i)=>{
+      const amt=+it.amt||0,pct=+it.igst||0,tax=amt*pct/100;
+      return[i+1,it.acctDesc||it.desc||"",it.customDesc||"",it.hsn||"",invQtyValue(it.qty),it.unit||"",r2(it.rate),...(split?[pct/2,r2(tax/2),pct/2,r2(tax/2)]:[pct,r2(tax)]),r2(amt)];
+    }),
+    [],
+    ...invoiceSheetTotals(f,inv).map(([label,val])=>[...Array(heads.length-2).fill(""),label,r2(val)]),
+    [],
+    ["Total In Words",f.words],
+    ...(f.notes?[["Notes",f.notes]]:[]),
+    ...(inv.termsText?[["Terms & Conditions",inv.termsText]]:[]),
+  ];
+  const esc=v=>{const s=String(v??"");return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;};
+  return rows.map(r=>r.map(esc).join(",")).join("\r\n");
+}
+
+async function downloadInvoiceSheet(inv,buyers,company,kind){
+  const stem=(inv.invNo||"invoice").replace(/[\\/]/g,"-");
+  // UTF-8 BOM so Excel reads the CSV's accents and symbols correctly
+  const data=kind==="csv"?"﻿"+buildInvoiceCsv(inv,buyers,company):await buildInvoiceXlsx(inv,buyers,company);
+  const type=kind==="csv"?"text/csv;charset=utf-8;":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const url=URL.createObjectURL(new Blob([data],{type}));
+  const a=document.createElement("a");a.href=url;a.download=`${stem}.${kind}`;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),4000);
+}
+
+// "⬇ Excel / CSV" — one invoice as a spreadsheet, from the editor or the preview.
+// Downloading isn't printing: the invoice isn't stamped or locked by it.
+function InvoiceSheetMenu({inv,buyers,company,onError}){
+  const [open,setOpen]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const run=async kind=>{
+    setOpen(false);setBusy(true);
+    try{await downloadInvoiceSheet(inv,buyers,company,kind);}
+    catch(e){(onError||alert)("Couldn't build the file: "+(e?.message||"unknown error"));}
+    finally{setBusy(false);}
+  };
+  const item={display:"block",width:"100%",textAlign:"left",padding:"10px 16px",fontSize:13,background:"none",border:"none",cursor:"pointer",color:C.ink,fontFamily:"inherit"};
+  return(
+    <div style={{position:"relative"}}>
+      <button className="bs" disabled={busy} onClick={()=>setOpen(o=>!o)} title="Download this invoice as a spreadsheet">{busy?"Preparing…":"⬇ Excel / CSV"}</button>
+      {open&&<>
+        <div style={{position:"fixed",inset:0,zIndex:499}} onClick={()=>setOpen(false)}/>
+        <div style={{position:"absolute",top:"calc(100% + 6px)",[mob?"left":"right"]:0,background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,boxShadow:"0 6px 24px rgba(26,19,8,.12)",zIndex:500,minWidth:210,padding:"6px 0"}}>
+          <button style={item} onClick={()=>run("xlsx")}>📊 Excel (.xlsx) — as printed</button>
+          <button style={item} onClick={()=>run("csv")}>📄 CSV — plain rows</button>
+        </div>
+      </>}
+    </div>
+  );
 }
 
 let invoicePdfLibPromise=null;
@@ -16365,6 +16591,7 @@ function InvoicePreview({inv,buyers,company="ng",onBack,onSave,onEdit}){
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {onEdit&&<button className="bs" onClick={onEdit}>✏ Edit</button>}
           <button className="bs" onClick={async()=>{const html=generateHTML();const w=window.open("","_blank");w.document.write(html);w.document.close();if(onSave)try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>🔗 Open / Share</button>
+          <InvoiceSheetMenu inv={inv} buyers={buyers} company={company}/>
           {onSave&&<button className="bs" style={{color:"#1a7a4a",borderColor:"#1a7a4a",background:"#f0faf4"}} onClick={async()=>{try{await onSave(inv);}catch(e){alert(isConflictError(e)?"This invoice changed in another tab. Reload latest before saving.":"Save failed: "+(e?.message||"check connection"));}}}>💾 Save Invoice</button>}
           <button className="bp" onClick={printAndSave} title={invCancelled(inv)?"Cancelled invoices are reprinted without restamping":"Prints and marks this invoice as printed"}>🖨 Print{invCancelled(inv)?"":" & Mark Printed"}</button>
         </div>
