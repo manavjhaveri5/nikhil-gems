@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { C, FI } from "./ui.jsx";
 import { mob, fmtDate, loadK, upsertItemK, onCacheRefresh } from "./utils.js";
 import { paymentChecks, balanceChecks, statementsKey, statementId, monthEndDate, monthLabel } from "./monthClose.js";
+import { remittanceChecks, NG_REMIT_KEY, AT_META_KEY, isEefc } from "./remittances.js";
 
 /* Month close — one company, one month, the four checks side by side (see
    monthClose.js). Rendered inside the Ledger, so "Classify →" drops you on the
@@ -122,7 +123,25 @@ function Block({ title, sub, children, empty }) {
   );
 }
 
-export default function MonthClose({ company, month, accounts = [], txns = [], isUnclassified, onOpenTxn, onClose }) {
+const metaOf = raw => { const m = raw?.meta && typeof raw.meta === "object" ? raw.meta : raw; return { fircs: Array.isArray(m?.fircs) ? m.fircs : [], shippingBills: Array.isArray(m?.shippingBills) ? m.shippingBills : [], invoices: Array.isArray(m?.invoices) ? m.invoices : [] }; };
+
+// Live value of one app_data key (none when key is null), reloaded when another
+// screen or device changes it.
+function useKey(key, fallback = []) {
+  const [v, setV] = useState(fallback);
+  useEffect(() => {
+    setV(fallback);
+    if (!key) return;
+    let alive = true;
+    const load = () => loadK(key).then(x => { if (alive) setV(x ?? fallback); }).catch(() => {});
+    load();
+    const off = onCacheRefresh(keys => { if (keys.includes(key)) load(); });
+    return () => { alive = false; off?.(); };
+  }, [key]);
+  return v;
+}
+
+export default function MonthClose({ company, month, accounts = [], txns = [], isUnclassified, onOpenTxn, onOpenRecon, onClose }) {
   const [section, setSection] = useState("payments");
   const coName = company === "at" ? "Atyahara" : "Nikhil Gems";
   const accountName = t => accounts.find(a => a.id === (t.type === "credit" ? t.accountTo : t.accountFrom))?.name || "Account";
@@ -149,11 +168,25 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
   const bal = useMemo(() => balanceChecks({ accounts, txns, statements, month }), [accounts, txns, statements, month]);
   const balOpen = bal.filter(b => !b.ok).length;
 
+  // Inward remittances: NG's register + invoices, Atyahara's FIRCs + shipping bills.
+  const ngRemits = useKey(company === "at" ? null : NG_REMIT_KEY);
+  const ngInvoices = useKey(company === "at" ? null : "ng-invoices-v2");
+  const atMetaRaw = useKey(company === "at" ? AT_META_KEY : null, null);
+  const atMeta = useMemo(() => metaOf(atMetaRaw), [atMetaRaw]);
+  const rem = useMemo(() => remittanceChecks({
+    company, month, accounts, txns,
+    remittances: Array.isArray(ngRemits) ? ngRemits : [], invoices: Array.isArray(ngInvoices) ? ngInvoices : [],
+    fircs: atMeta.fircs, sbs: atMeta.shippingBills,
+  }), [company, month, accounts, txns, ngRemits, ngInvoices, atMeta]);
+  const remName = company === "at" ? "FIRC" : "remittance";
+
   const tiles = [
     { id: "payments", title: "Payments classified", open: pay.unclassified.length, okText: `all ${pay.payments.length}`,
       detail: pay.noBill.length ? `${pay.noBill.length} vendor payment${pay.noBill.length === 1 ? "" : "s"} with no bill linked` : `${pay.payments.length} payment${pay.payments.length === 1 ? "" : "s"} this month` },
     { id: "balance", title: "Bank vs statement", open: balOpen, okText: `${bal.length} agree`,
       detail: balOpen ? `${bal.filter(b => !b.statement).length} without a statement · ${bal.filter(b => b.statement && !b.ok).length} off` : "Every account ties to its statement" },
+    { id: "remit", title: "BOI remittances", open: rem.open, okText: `${rem.rows.length} entered`,
+      detail: rem.open ? `${rem.unentered.length} in the bank, not entered · ${rem.rows.filter(r => !r.ok).length} incomplete` : `${rem.rows.length} ${remName}${rem.rows.length === 1 ? "" : "s"} this month, all tied` },
   ];
 
   return (
@@ -204,6 +237,44 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
               ))}
             </Block>
           )}
+        </div>
+      )}
+
+      {section === "remit" && (
+        <div style={{ display: "grid", gap: 10 }}>
+          <Block title={`In the bank, not entered · ${rem.unentered.length}`} sub={`Foreign inward credits on the Bank of India accounts this month with no ${remName} entered against them.`}
+            empty={`Every inward credit this month has its ${remName} entered.`}>
+            {rem.unentered.length > 0 && rem.unentered.map(t => (
+              <TxnRow key={t.id} t={t} accountName={t2 => accounts.find(a => a.id === t2.accountTo)?.name || "Account"} tone={C.green}
+                action={company === "at" ? "Enter FIRC →" : "Enter →"} onAction={() => onOpenRecon?.(company === "at" ? "fircs" : "ngremit")} />
+            ))}
+          </Block>
+          <Block title={`${company === "at" ? "FIRCs" : "Remittances"} received in ${monthLabel(month, { month: "long" })} · ${rem.rows.length}`}
+            sub={company === "at" ? "Each needs its foreign amount, rate, INR credited, charges and buyer, and the shipping bills it realised — or a mark that it is an advance." : "Each needs its foreign amount, rate, INR credited, charges and buyer, and the invoices (with their shipping bills) it settles — or a mark that it is an advance."}
+            empty={`No ${remName}s dated this month.`}>
+            {rem.rows.length > 0 && rem.rows.map(({ rec, ledgerTxn, settle, problems, ok }) => {
+              const r = rec, at = company === "at";
+              const fx = at ? `${r.currency || ""} ${(+r.foreignAmount || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : money(r.amount, r.currency || "USD");
+              const inrAmt = at ? r.amount : (isEefc(r) ? null : r.inrCredited);
+              const ties = at ? settle.linked.map(sb => sb.sbNumber).join(", ") : settle.allocs.map(a => `${a.inv.invNo}${a.inv.sbNo ? ` (SB ${a.inv.sbNo})` : ""}`).join(", ");
+              return (
+                <div key={r.id} style={{ display: "grid", gridTemplateColumns: mob ? "1fr auto" : "84px minmax(0,1fr) 130px 130px 200px", gap: 10, alignItems: "center", padding: "8px 10px", borderTop: `1px solid ${C.border}` }}>
+                  {!mob && <div style={{ fontSize: 12, color: C.inkMid }}>{fmtDate(r.date)}</div>}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink }}>{(at ? r.number : r.irt) || "—"} · {(at ? r.buyerName || r.remitterName : r.buyer || r.remitter) || "buyer?"}</div>
+                    <div style={{ fontSize: 11, color: ok ? C.inkFaint : C.amber, lineHeight: 1.35 }}>{ok ? (ties || (r.advance ? "Advance" : "")) : problems.join(" · ")}</div>
+                  </div>
+                  {!mob && <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, textAlign: "right" }}>{fx}</div>}
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: C.ink, textAlign: "right" }}>{inrAmt ? money(inrAmt) : <span style={{ color: C.inkFaint }}>{!at && isEefc(r) ? "in EEFC" : "—"}</span>}</div>
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center", gridColumn: mob ? "1 / -1" : "auto" }}>
+                    <span style={{ fontSize: 10.5, fontWeight: 800, color: ledgerTxn ? C.green : C.amber, whiteSpace: "nowrap" }}>{ledgerTxn ? "✓ in bank" : "not in bank ledger"}</span>
+                    {!ok && <button className="bs" style={{ fontSize: 11, padding: "4px 10px" }} onClick={() => onOpenRecon?.(at ? "fircs" : "ngremit")}>Fix →</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </Block>
+          {rem.undated.length > 0 && <div style={{ fontSize: 11.5, color: C.amber }}>{rem.undated.length} {remName}{rem.undated.length === 1 ? " has" : "s have"} no date, so {rem.undated.length === 1 ? "it isn't" : "they aren't"} counted in any month — date {rem.undated.length === 1 ? "it" : "them"} in Export Recon.</div>}
         </div>
       )}
 

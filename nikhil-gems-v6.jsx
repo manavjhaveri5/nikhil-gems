@@ -4025,18 +4025,18 @@ async function extractPdfText(url){
    "Finance has its own module", but Finance's ledger is a bank and cash list,
    not this one, so the component has sat in the bundle rendered by nothing ever
    since. This gives it the host it lost. */
-function LedgerApp({onHome,isAdmin=false,onViewBill}){
+function LedgerApp({onHome,isAdmin=false,onViewBill,onOpenModule}){
   const [toast,setToast]=useState("");
   const showToast=m=>{setToast(m);setTimeout(()=>setToast(""),3000);};
   return(
     <Shell title="Ledger" crumb="Accounting" onHome={onHome}>
-      <AccountingFinanceLedger showToast={showToast} isAdmin={isAdmin} onViewBill={onViewBill}/>
+      <AccountingFinanceLedger showToast={showToast} isAdmin={isAdmin} onViewBill={onViewBill} onOpenModule={onOpenModule}/>
       <Toast msg={toast}/>
     </Shell>
   );
 }
 
-function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
+function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModule}){
   const [company,setCompany]=useState(()=>localStorage.getItem("ng-accounting-ledger-company")||"ng");
   const [accounts,setAccounts]=useState([]);
   const [txns,setTxns]=useState([]);
@@ -4828,6 +4828,11 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
 
       {closeOpen&&<MonthClose company={company} month={month} accounts={accounts} txns={txns} isUnclassified={isUnclassified}
         onClose={()=>setCloseOpen(false)}
+        onOpenRecon={onOpenModule?view=>{
+          // Export Recon opens on this company and on the view that fixes the item.
+          try{localStorage.setItem("ng-export-recon-company",company==="at"?"atyahara":"nikhil");sessionStorage.setItem("er-open-view",view);}catch{}
+          onOpenModule("recon");
+        }:undefined}
         onOpenTxn={t=>{
           if(isHiddenCashTxn(t)){showToast?.("That entry is on a foreign-cash account — classify it in Finance → Ledger.");return;}
           setSearch("");setAccountFilter([]);setMonth(monthOf(t.date)||month);
@@ -26042,7 +26047,7 @@ export default function Root({onSignOut}){
        bank and cash list, not this, so the component has sat in the bundle
        rendered by nothing ever since. Here it has its own module, gated like
        the other books. */
-    else if(mod==="ledger"&&(isAdmin||allowedMods.some(m=>m.id==="ledger")))content=<LedgerApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
+    else if(mod==="ledger"&&(isAdmin||allowedMods.some(m=>m.id==="ledger")))content=<LedgerApp onHome={goHome} isAdmin={isAdmin} onOpenModule={go} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
     else if(mod==="journal")content=<StockJournalApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
   }
   const handleGoToActivity=act=>{

@@ -38,6 +38,28 @@ export const DEMO_FINANCE = {
     { ...txn("mc-ng-10", md(0, 16), "credit", 4200, { accountTo: "fa-eefc", payee: "NAKAMURA MINERALS CO", category: "Inward Remittance", notes: "Inward remittance 0013IRT26001041 · USD 4,200.00 credited to EEFC account" }), currency: "USD" },
   ],
 
+  // NG's remittance register: one tied out (invoice + advance), one half-tied.
+  // The EEFC credit from Nakamura (mc-ng-10) is deliberately not entered.
+  "er-ng-remittances-v1": [
+    { id: "rem-demo-1", irt: "0013IRT26000910", date: md(-1, 4), currency: "USD", amount: 5725, settlement: "converted", rate: 95.4, inrCredited: 545020, grossInr: 546165, charges: 1145, chargeCurrency: "INR", remitter: "ELENA VASQUEZ", buyer: "Elena Vasquez", purpose: "Export of goods", advance: true, expectedShipDate: md(1, 10), advanceNote: "Balance for the January order", source: "boi-advice", createdAt: ts(md(-1, 4)) },
+    { id: "rem-demo-2", irt: "0013IRT26001022", date: md(0, 14), currency: "EUR", amount: 3200, settlement: "converted", rate: 97.1, inrCredited: 309500, charges: null, chargeCurrency: "INR", remitter: "MAISON CRISTAL", buyer: "Sophie Laurent", source: "boi-advice", createdAt: ts(md(0, 14)) },
+  ],
+
+  // Atyahara's FIRCs and courier shipping bills in Export Recon.
+  "er-meta-v5:atyahara": {
+    fircs: [
+      { id: "firc-demo-1", number: "0013IRT26001090", date: md(0, 13), amount: "118750", foreignAmount: "1250", currency: "USD", exchangeRate: "95.0", charges: "", buyerName: "Luna Crystals LLC", bankName: "Bank of India", hasPdf: false },
+      { id: "firc-demo-2", number: "CITIN26114820031", date: md(-1, 10), amount: "42000", foreignAmount: "500", currency: "USD", exchangeRate: "84", charges: "0", buyerName: "Etsy (Payoneer)", hasPdf: false },
+    ],
+    shippingBills: [
+      { id: "sb-demo-1", sbNumber: "CSBV_DEL_2026-2027_0920_31450", date: md(-1, 20), amount: "60000", fircId: "firc-demo-1", status: "prepared", sbType: "csb" },
+      { id: "sb-demo-2", sbNumber: "CSBV_DEL_2026-2027_1002_31688", date: md(0, 2), amount: "58750", fircId: "firc-demo-1", status: "pending", sbType: "csb" },
+      { id: "sb-demo-3", sbNumber: "CSBV_DEL_2026-2027_0905_30911", date: md(-1, 5), amount: "42000", fircId: "firc-demo-2", status: "cleared", sbType: "csb" },
+      { id: "sb-demo-4", sbNumber: "CSBV_DEL_2026-2027_1018_31902", date: md(0, 18), amount: "15500", fircId: null, status: "pending", sbType: "csb" },
+    ],
+    invoices: [],
+  },
+
   "at-fin-accounts-v1": [
     { id: "at-induslnd", name: "IndusInd Bank", type: "bank", currency: "INR", openingBal: 120000, active: true },
     { id: "at-boi", name: "Bank of India", type: "bank", currency: "INR", openingBal: 80000, active: true },
@@ -75,6 +97,12 @@ export function mergeDemoFinance(base) {
   Object.entries(DEMO_FINANCE).forEach(([k, v]) => {
     base[k] = APPEND.has(k) && Array.isArray(base[k]) ? [...base[k], ...v] : v;
   });
+  // Tie the demo invoices to their shipping bills and remittances.
+  base["ng-invoices-v2"] = (base["ng-invoices-v2"] || []).map(inv =>
+    inv.id === "inv-1" ? { ...inv, sbNo: "4417825", sbDate: md(-1, 2), _remittances: [{ id: "rem-demo-1", alloc: 4850, irt: "0013IRT26000910", currency: "USD" }] }
+    : inv.id === "inv-3" ? { ...inv, sbNo: "4433190", sbDate: md(0, 6), _remittances: [{ id: "rem-demo-2", alloc: 1600, irt: "0013IRT26001022", currency: "EUR" }] }
+    : inv.id === "inv-2" ? { ...inv, sbNo: "4440012", sbDate: md(0, 9) }
+    : inv);
   base["ng-fin-statements-v1"] = demoStatements(base["ng-fin-accounts-v1"], base["ng-fin-txns-v1"], [
     ["fa-boi-0451", -2, 0, "BOI-0451-statement.pdf"],
     ["fa-boi-0451", -1, 590, "BOI-0451-statement.pdf"],

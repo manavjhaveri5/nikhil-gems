@@ -4,6 +4,8 @@ import { loadK, loadKFresh, saveK, mob, onCacheRefresh, upsertVersionedItemK, de
 import { uploadToStorage } from "./storageUtils.js";
 import { fillExportBillForm } from "./fillExportBillForm.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
+import { invRemitLinks, withRemitLink, withoutRemitLink, atFircMissing } from "./remittances.js";
+import RemittanceRegister from "./RemittanceRegister.jsx";
 
 /* ══ ERP THEME TOKENS ═══════════════════════════════════════════
    Mirror src/theme.css CSS variables so this module inherits the
@@ -1068,15 +1070,17 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
 
   // ── Inward remittance pool ─────────────────────────────────────────────────
   // One remittance (an IRT credit from the bank) can be shared across several
-  // invoices: linking an invoice consumes an amount from its balance. Allocations
-  // live on the invoice record (_remittanceId/_remittanceAlloc) so they show in the
-  // Invoices module too and survive independent of the pool.
+  // invoices, and one invoice can be settled by several (an advance, then the
+  // balance): linking consumes an amount from the remittance's balance. The links
+  // live on the invoice record (_remittances, see remittances.js) so they show in
+  // the Invoices module too and survive independent of the pool.
   const saveRemittances = async next => { setRemittances(next); await saveK(NG_REMIT_KEY, next); };
-  const remitAllocated = rem => invoices.reduce((s, i) => s + (i._remittanceId === rem.id ? (+i._remittanceAlloc || 0) : 0), 0);
+  const remitAllocated = rem => invoices.reduce((s, i) => s + invRemitLinks(i).filter(l => l.id === rem.id).reduce((a, l) => a + (+l.alloc || 0), 0), 0);
   const remitRemaining = rem => Math.max(0, (+rem.amount || 0) - remitAllocated(rem));
   const remitStatus = rem => rem.closed ? "closed" : (remitRemaining(rem) <= 0.01 ? "used" : "open");
-  const linkedRemit = inv => remittances.find(r => r.id === inv._remittanceId) || null;
-  const invLinkedList = rem => invoices.filter(i => i._remittanceId === rem.id);
+  const linkedRemits = inv => invRemitLinks(inv).map(l => ({ link: l, rem: remittances.find(r => r.id === l.id) })).filter(x => x.rem);
+  const linkedRemit = inv => linkedRemits(inv)[0]?.rem || null;
+  const invLinkedList = rem => invoices.filter(i => invRemitLinks(i).some(l => l.id === rem.id));
 
   const pickRemitFile = () => remitFileRef.current?.click();
   const onRemitFile = async e => {
@@ -1111,16 +1115,16 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
     if (!alloc) { setMsg({ ok: false, text: "Enter an amount to allocate." }); return; }
     setRemitBusy(true);
     try {
-      await saveInvoicePatch(inv.id, latest => ({ ...latest, _remittanceId: rem.id, _remittanceAlloc: alloc, _remittanceIrt: rem.irt, _remittanceCurrency: rem.currency }));
+      await saveInvoicePatch(inv.id, latest => withRemitLink(latest, rem, alloc));
       setRemitModal(null);
       setMsg({ ok: true, text: `${inv.invNo} linked to IRT ${rem.irt || "remittance"} · allocated ${rem.currency} ${fmtAmt(alloc)}.` });
     } catch (err) { setMsg({ ok: false, text: `Link failed: ${err?.message || "check connection"}` }); }
     finally { setRemitBusy(false); }
   };
-  const unlinkRemit = async inv => {
+  const unlinkRemit = async (inv, remId) => {
     setRemitBusy(true);
     try {
-      await saveInvoicePatch(inv.id, latest => { const { _remittanceId, _remittanceAlloc, _remittanceIrt, _remittanceCurrency, ...rest } = latest; return rest; });
+      await saveInvoicePatch(inv.id, latest => withoutRemitLink(latest, remId));
       setMsg({ ok: true, text: `${inv.invNo} unlinked from its remittance.` });
     } catch (err) { setMsg({ ok: false, text: `Unlink failed: ${err?.message || "check connection"}` }); }
     finally { setRemitBusy(false); }
@@ -1129,7 +1133,7 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
   const deleteRemittance = async rem => {
     const linked = invLinkedList(rem);
     if (linked.length && !window.confirm(`${rem.irt || "This remittance"} is linked to ${linked.length} invoice(s). Delete it and unlink them?`)) return;
-    for (const inv of linked) await unlinkRemit(inv);
+    for (const inv of linked) await unlinkRemit(inv, rem.id);
     await saveRemittances(remittances.filter(r => r.id !== rem.id));
   };
   const updateRemitField = async (rem, patch) => saveRemittances(remittances.map(r => r.id === rem.id ? { ...r, ...patch } : r));
@@ -1366,11 +1370,11 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
           currency: inv.currency || "",
           invoiceAmount: +inv.totalAmt || 0,
           paidAmount: +inv.paidAmount || (inv.payments || []).reduce((s, p) => s + (+p.amount || 0), 0) || 0,
-          remittanceIrt: rem?.irt || inv._remittanceIrt || "",
+          remittanceIrt: invRemitLinks(inv).map(l => remittances.find(r => r.id === l.id)?.irt || l.irt).filter(Boolean).join(" + "),
           remittanceDate: rem?.date || rem?.dateRaw || "",
           remittanceAmount: rem?.amount || "",
-          remittanceCurrency: rem?.currency || inv._remittanceCurrency || "",
-          allocated: inv._remittanceAlloc || "",
+          remittanceCurrency: rem?.currency || invRemitLinks(inv)[0]?.currency || "",
+          allocated: invRemitLinks(inv).reduce((s, l) => s + (+l.alloc || 0), 0) || "",
           shippingBill: inv.sbNo || "",
           status: NG_BANK_STATUS[ngStatusOf(inv)]?.label || ngStatusOf(inv),
           packetFile,
@@ -1530,20 +1534,32 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
   // Inward-remittance cell: a chip when linked (IRT + allocated), else a Select
   // button that opens the pool picker.
   const InwardCell = ({ inv }) => {
-    const rem = linkedRemit(inv);
-    if (rem) {
+    const links = linkedRemits(inv);
+    if (links.length) {
+      const allocated = links.reduce((s, x) => s + (+x.link.alloc || 0), 0);
+      const due = Math.max(0, (+inv.totalAmt || 0) - allocated);
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 118 }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.greenBg, border: `1px solid ${C.green}`, borderRadius: 6, padding: "2px 7px", fontSize: 11, maxWidth: 190 }}>
-            {rem.attachment?.url
-              ? <a href={rem.attachment.url} target="_blank" rel="noreferrer" title={rem.attachment.fileName || rem.irt} style={{ color: C.green, fontWeight: 700, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>💵 {rem.irt || "IRT"}</a>
-              : <span style={{ color: C.green, fontWeight: 700, flex: 1 }}>💵 {rem.irt || "IRT"}</span>}
-            <button onClick={() => unlinkRemit(inv)} title="Unlink this remittance" disabled={remitBusy}
-              style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
-          </span>
-          <span style={{ fontSize: 10, color: C.inkFaint, whiteSpace: "nowrap" }}>
-            {rem.currency} {fmtAmt(inv._remittanceAlloc)} · {rem.currency} {fmtAmt(remitRemaining(rem))} left
-          </span>
+          {links.map(({ rem, link }) => (
+            <div key={rem.id} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: C.greenBg, border: `1px solid ${C.green}`, borderRadius: 6, padding: "2px 7px", fontSize: 11, maxWidth: 190 }}>
+                {rem.attachment?.url
+                  ? <a href={rem.attachment.url} target="_blank" rel="noreferrer" title={rem.attachment.fileName || rem.irt} style={{ color: C.green, fontWeight: 700, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>💵 {rem.irt || "IRT"}</a>
+                  : <span style={{ color: C.green, fontWeight: 700, flex: 1 }}>💵 {rem.irt || "IRT"}</span>}
+                <button onClick={() => unlinkRemit(inv, rem.id)} title="Unlink this remittance" disabled={remitBusy}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: C.inkFaint, fontSize: 12, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+              </span>
+              <span style={{ fontSize: 10, color: C.inkFaint, whiteSpace: "nowrap" }}>
+                {rem.currency} {fmtAmt(link.alloc)} · {rem.currency} {fmtAmt(remitRemaining(rem))} left
+              </span>
+            </div>
+          ))}
+          {due > 0.01 && (
+            <button onClick={() => setRemitModal({ inv })} disabled={remitBusy} title="Add another remittance against the balance"
+              style={{ background: "none", border: `1px dashed ${C.amber}`, borderRadius: 6, padding: "1px 7px", fontSize: 10, cursor: "pointer", color: C.amber, textAlign: "left", whiteSpace: "nowrap" }}>
+              ＋ {String(inv.currency || "").toUpperCase()} {fmtAmt(due)} still to link
+            </button>
+          )}
         </div>
       );
     }
@@ -1608,7 +1624,9 @@ function NgInvoiceSheet({ renderInvoicePdf }) {
     const row = rem => {
       const st = remitStatus(rem), rem_ = remitRemaining(rem), b = badge(st);
       const linkable = st === "open";
-      const draft = allocDraft[rem.id] != null ? allocDraft[rem.id] : String(Math.min(rem_, invAmt || rem_) || "");
+      // Default to what the invoice still needs after its other remittances.
+      const invDue = Math.max(0, invAmt - invRemitLinks(inv).filter(l => l.id !== rem.id).reduce((s, l) => s + (+l.alloc || 0), 0));
+      const draft = allocDraft[rem.id] != null ? allocDraft[rem.id] : String(+Math.min(rem_, invDue || rem_).toFixed(2) || "");
       const active = rem.id === previewId;
       return (
         <div key={rem.id} onClick={() => rem.attachment?.url && setPreviewId(rem.id)}
@@ -1993,10 +2011,16 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
   const [data, setData]         = useState({fircs:[],shippingBills:[],invoices:[]});
   const dataRef                  = useRef(data);
   const [loading, setLoading]   = useState(true);
-  const [view, setView]         = useState(company === "nikhil" ? "ngsheet" : "fircs");
+  // Month close can open this module on the view that fixes an item (one-shot hint).
+  const [view, setView]         = useState(() => {
+    let hint = null;
+    try { hint = sessionStorage.getItem("er-open-view"); } catch {}
+    return hint || (company === "nikhil" ? "ngsheet" : "fircs");
+  });
+  useEffect(() => { try { sessionStorage.removeItem("er-open-view"); } catch {} }, []);
   // NG defaults to the per-invoice sheet; Atyahara has no such tab.
   useEffect(() => {
-    setView(v => company === "nikhil" ? "ngsheet" : (v === "ngsheet" ? "fircs" : v));
+    setView(v => company === "nikhil" ? (v === "ngremit" ? v : "ngsheet") : (v === "ngsheet" || v === "ngremit" ? "fircs" : v));
   }, [company]);
   const [sheet, setSheet]       = useState(null);
   const openSheet = useCallback(s => { if (s) learner.track("sheet:open",{type:s.type}); setSheet(s); }, []);
@@ -2426,8 +2450,17 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
             )}
           </div>
         )}
-        {view!=="ngsheet"&&<HowItWorks setView={setView}/>}
+        {/* NG has no sidebar: its views switch here. */}
+        {company==="nikhil"&&(
+          <div style={{display:"flex",gap:3,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:3,width:"fit-content",marginBottom:14}}>
+            {[["ngsheet","🗂 Invoice Sets"],["ngremit","💵 Remittances"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setView(k)} style={{border:"none",borderRadius:7,padding:"6px 12px",fontSize:12.5,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:view===k?C.ink:"transparent",color:view===k?C.surface:C.inkMid}}>{l}</button>
+            ))}
+          </div>
+        )}
+        {view!=="ngsheet"&&view!=="ngremit"&&<HowItWorks setView={setView}/>}
         {view==="ngsheet"  && company==="nikhil" && <NgInvoiceSheet renderInvoicePdf={renderInvoicePdf}/>}
+        {view==="ngremit"  && company==="nikhil" && <RemittanceRegister aiExtract={aiExtract}/>}
         {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={openSheet}/>}
         {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={openSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
         {view==="invoices" && <InvoicesView data={data} onAddInvoice={addInvoice} onPatchInvoice={patchInvoice} onDeleteInvoice={deleteInvoice} onApprove={approveInvoice} showPdf={showPdf} onCreateInvoiceFromSb={onCreateInvoiceFromSb}/>}
@@ -2817,6 +2850,10 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
                     <input type="checkbox" checked={!!editVals.thirdParty} onChange={e=>setEditVals(v=>({...v,thirdParty:e.target.checked}))} style={{width:14,height:14,accentColor:C.gold,cursor:"pointer"}}/>
                     Payment sender is different from buyer
                   </label>
+                  <label style={{display:"flex",alignItems:"center",gap:7,fontSize:12,color:C.inkMid,marginTop:2,cursor:"pointer",userSelect:"none"}}>
+                    <input type="checkbox" checked={!!editVals.advance} onChange={e=>setEditVals(v=>({...v,advance:e.target.checked}))} style={{width:14,height:14,accentColor:C.gold,cursor:"pointer"}}/>
+                    Advance against a future shipment (the part not yet matched to a shipping bill)
+                  </label>
                   <div style={{display:"flex",gap:8,marginTop:12}}>
                     <button className="pr" onClick={async()=>{await onUpdate(f.id,editVals);setEditId(null);}} style={{...S.btnDark,flex:1,padding:"9px",fontSize:13}}>Save</button>
                     <button className="pr" onClick={()=>setEditId(null)} style={{...S.btnGhost,padding:"9px"}}>Cancel</button>
@@ -2829,6 +2866,8 @@ function FircsView({ data, fircUsed, onAdd, onDelete, onUpdate, showPdf, setShee
                       <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                         <div style={{fontWeight:700,fontSize:14,color:C.ink}}>{f.number||<Warn text="No number"/>}</div>
                         {!f.hasPdf&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:C.amberBg,color:C.amber,fontWeight:600}}>Manual</span>}
+                        {f.advance&&<span style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:C.blueBg,color:C.blue,fontWeight:600}}>Advance</span>}
+                        {atFircMissing(f).length>0&&<span title={`Missing: ${atFircMissing(f).join(", ")}`} style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:C.amberBg,color:C.amber,fontWeight:600}}>Missing {atFircMissing(f).length<=2?atFircMissing(f).join(", "):`${atFircMissing(f).length} details`}</span>}
                       </div>
                       <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>{fd(f.date)} · {f._cnt} SB{f._cnt!==1?"s":""} · {fc(f._used)} used</div>
                       {(f.buyerName||f.remitterName)&&<div style={{fontSize:10.5,color:C.inkFaint,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.buyerName?`Buyer: ${f.buyerName}`:""}{f.buyerName&&f.remitterName?" · ":""}{f.remitterName?`Sender: ${f.remitterName}`:""}</div>}
