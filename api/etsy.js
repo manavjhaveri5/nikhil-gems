@@ -318,59 +318,22 @@ export default async function handler(req, res) {
       const url = (state, offset, order = "desc", limit = 100) =>
         `https://openapi.etsy.com/v3/application/shops/${sid}/listings?${new URLSearchParams({ state, limit: String(limit), offset: String(offset), sort_on: "created", sort_order: order })}`;
       const sinceFrom = state => pagesWhile(o => url(state, o), last => +last.created_timestamp >= from);
-      // The ledger answers at most 31 days per request.
-      const windows = [];
-      for (let a = from; a < nowS; a += 30 * 86400) windows.push([a, Math.min(nowS + 60, a + 30 * 86400)]);
-      const ledgerP = Promise.all(windows.map(([a, b]) => allPages(o =>
-        `https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${a}&max_created=${b}&limit=100&offset=${o}`
-      ))).then(chunks => ({ rows: chunks.flat() }), e => ({ error: e.message }));
-      const [active, soldOut, inactive, ending, expired, draft, ledger] = await Promise.all([
+      const q = { getJson, allPages };
+      const [active, soldOut, inactive, ending, expired, draft, pub] = await Promise.all([
         sinceFrom("active"), sinceFrom("sold_out"), sinceFrom("inactive"),
         pagesWhile(o => url("active", o, "asc"), last => +last.ending_timestamp <= soon),
         pagesWhile(o => url("expired", o), last => +last.ending_timestamp >= lately),
         getJson(url("draft", 0, "desc", 1)),
-        ledgerP,
+        readPublished(q, sid, from, nowS + 60),
       ]);
-
-      /* Published, not drafted: Etsy charges the $0.20 listing fee the moment a
-         listing goes live, against that listing, so the fee record says which
-         piece went up and when. A draft has no fee yet, and a renewal is a fee
-         of its own kind (renew_expired, renew_sold…), so neither counts.
-         feeTypes is what the ledger called its listing fees, for checking. */
-      const feeTypes = {};
-      const published = [];
-      const feeSeen = new Set(), entrySeen = new Set();
-      const fees = (ledger.rows || []).map(e => ({ e,
-        type: String(e.ledger_type || "").toLowerCase(), ref: String(e.reference_type || "").toLowerCase(),
-        ts: +e.created_timestamp || +e.create_date || 0,
-      })).filter(({ type, ref }) => (type.includes("listing") || type.includes("renew") || ref === "listing")
-        && !/^(prolist|offsite)|tax|vat|gst/.test(type))
-        .sort((a, b) => a.ts - b.ts);
-      for (const { e, type, ts } of fees) {
-        if (entrySeen.has(e.entry_id)) continue;
-        entrySeen.add(e.entry_id);
-        feeTypes[type || "?"] = (feeTypes[type || "?"] || 0) + 1;
-        const id = String(e.reference_id ?? "");
-        if (type.includes("renew") || !(+e.amount < 0) || !id || feeSeen.has(id)) continue;
-        feeSeen.add(id);
-        published.push({ id, ts });
-      }
-      const publishedFrom = !ledger.error && Object.keys(feeTypes).length ? "ledger" : "";
 
       // The last week's new pieces with a picture and a title, for the side list.
       let recent = [];
-      const recentIds = published.filter(p => p.ts >= nowS - 8 * 86400).slice(-100).map(p => p.id);
-      if (recentIds.length) {
+      const recentPub = pub.published.filter(p => p.ts >= nowS - 8 * 86400).slice(-100);
+      if (recentPub.length) {
         try {
-          const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${recentIds.join(",")}&includes=Images`);
-          const byId = new Map((d.results || []).map(l => [String(l.listing_id), l]));
-          recent = published.filter(p => recentIds.includes(p.id)).map(p => {
-            const l = byId.get(p.id);
-            const img = l && [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
-            return { id: p.id, ts: p.ts, title: l ? String(l.title || "").slice(0, 120) : "", state: l?.state || "",
-              img: img ? img.url_170x135 || img.url_75x75 || img.url_570xN || "" : "",
-              price: l?.price ? (+l.price.amount || 0) / (+l.price.divisor || 100) : 0, cur: l?.price?.currency_code || "" };
-          });
+          const byId = new Map((await briefListings(q, recentPub.map(p => p.id))).map(b => [b.id, b]));
+          recent = recentPub.map(p => ({ ...(byId.get(p.id) || { id: p.id, title: "", state: "", img: "", price: 0, cur: "" }), ts: p.ts }));
         } catch {}
       }
 
@@ -390,9 +353,33 @@ export default async function handler(req, res) {
         ok: true, from, at: nowS,
         counts: { active: active.count, sold_out: soldOut.count, inactive: inactive.count, expired: expired.count, draft: +draft.count || 0 },
         added, expiring, expiredLately,
-        published, publishedFrom, recent, feeTypes,
-        ...(ledger.error ? { ledgerError: ledger.error } : {}),
+        ...pub, recent,
       });
+    }
+
+    // ── published: new listings between ?from and ?to (unix s), by listing fee ──
+    // The home page's month switcher reads a past month (and the one before it,
+    // for comparison) with this; see readPublished.
+    if (action === "published") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const from = Math.max(nowS - 430 * 86400, parseInt(req.query.from, 10) || nowS - 62 * 86400);
+      const to = Math.min(nowS + 60, parseInt(req.query.to, 10) || nowS + 60);
+      if (!(to > from)) return res.status(400).json({ error: "to must be after from" });
+      const { getJson, allPages } = etsyQueue(authHeaders);
+      return res.json({ ok: true, from, to, at: nowS, ...(await readPublished({ getJson, allPages }, sid, from, to)) });
+    }
+
+    // ── listing_brief: picture, title, price and state for ?ids=1,2,3 (≤100) ──
+    // For the home page's "Published" list on a day older than the week the
+    // pulse sends details for.
+    if (action === "listing_brief") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      const ids = String(req.query.ids || "").split(",").map(v => v.trim()).filter(v => /^\d+$/.test(v)).slice(0, 100);
+      if (!ids.length) return res.status(400).json({ error: "ids required" });
+      const { getJson } = etsyQueue(pubHeaders);
+      return res.json({ ok: true, items: await briefListings({ getJson }, ids) });
     }
 
     // ── renewal_queue: listings that have come off the shop, and the ones about to ─
@@ -1092,10 +1079,59 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, renewal_queue, renewal_stats, renewal_listing, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, published, listing_brief, renewal_queue, renewal_stats, renewal_listing, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
+}
+
+/* Published, not drafted: Etsy charges the $0.20 listing fee the moment a
+   listing goes live, against that listing, so the fee record says which piece
+   went up and when. A draft has no fee yet, and a renewal is a fee of its own
+   kind (renew_expired, renew_sold…), so neither counts. feeTypes is what the
+   ledger called its listing fees, for checking. The ledger answers at most 31
+   days per request, so a longer stretch is read in 30-day windows. */
+async function readPublished({ allPages }, sid, from, to) {
+  const windows = [];
+  for (let a = from; a < to; a += 30 * 86400) windows.push([a, Math.min(to, a + 30 * 86400)]);
+  const ledger = await Promise.all(windows.map(([a, b]) => allPages(o =>
+    `https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${a}&max_created=${b}&limit=100&offset=${o}`
+  ))).then(chunks => ({ rows: chunks.flat() }), e => ({ error: e.message }));
+  const feeTypes = {};
+  const published = [];
+  const feeSeen = new Set(), entrySeen = new Set();
+  const fees = (ledger.rows || []).map(e => ({ e,
+    type: String(e.ledger_type || "").toLowerCase(), ref: String(e.reference_type || "").toLowerCase(),
+    ts: +e.created_timestamp || +e.create_date || 0,
+  })).filter(({ type, ref }) => (type.includes("listing") || type.includes("renew") || ref === "listing")
+    && !/^(prolist|offsite)|tax|vat|gst/.test(type))
+    .sort((a, b) => a.ts - b.ts);
+  for (const { e, type, ts } of fees) {
+    if (entrySeen.has(e.entry_id)) continue;
+    entrySeen.add(e.entry_id);
+    feeTypes[type || "?"] = (feeTypes[type || "?"] || 0) + 1;
+    const id = String(e.reference_id ?? "");
+    if (type.includes("renew") || !(+e.amount < 0) || !id || feeSeen.has(id)) continue;
+    feeSeen.add(id);
+    published.push({ id, ts });
+  }
+  return {
+    published, feeTypes,
+    publishedFrom: !ledger.error && Object.keys(feeTypes).length ? "ledger" : "",
+    ...(ledger.error ? { ledgerError: ledger.error } : {}),
+  };
+}
+
+// Picture, title, price and state for up to 100 listings, in one call.
+async function briefListings({ getJson }, ids) {
+  if (!ids.length) return [];
+  const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${ids.slice(0, 100).join(",")}&includes=Images`);
+  return (d.results || []).map(l => {
+    const img = [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
+    return { id: String(l.listing_id), title: String(l.title || "").slice(0, 120), state: l.state || "",
+      img: img ? img.url_170x135 || img.url_75x75 || img.url_570xN || "" : "",
+      price: l.price ? (+l.price.amount || 0) / (+l.price.divisor || 100) : 0, cur: l.price?.currency_code || "" };
+  });
 }
 
 /* One small queue per request for the home page's reads: at most 4 Etsy calls in

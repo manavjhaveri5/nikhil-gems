@@ -20,6 +20,8 @@ const LIST_FRESH_MS = 30 * 60 * 1000;
 // What Etsy charges to list or renew a listing for four months.
 const LISTING_FEE_USD = 0.2;
 const DAILY_TARGET = 5; // new listings published a day
+const PUB_CACHE = "ng-home-published-v1-"; // + year-month: a past month's new listings
+const LISTING_MONTHS_BACK = 11;
 const ORDERS_KEY = "ng-orders-v1";
 const RATES_KEY = "ng-fin-rates-v1"; // INR per unit of each currency, refreshed by Finance
 const PENDING_DAYS = 60;
@@ -51,6 +53,7 @@ const usdK = v => short("$", v);
 const rs = v => "₹" + Math.round(v).toLocaleString("en-IN");
 const rsK = v => short("₹", v);
 const monthStart = (d, k = 0) => new Date(d.getFullYear(), d.getMonth() + k, 1);
+const monthEnd = (d, k = 0) => +monthStart(d, k + 1) - 1; // the month's last millisecond
 const dayStart = ms => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return +d; };
 const dayKey = ms => { const d = new Date(ms); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
 const shortDate = ms => new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
@@ -203,13 +206,14 @@ function buildModel(data, rates, erpOrders, nowMs) {
 }
 
 // Listings: new ones by the day they went live, and what's ending or ended.
-function buildListingModel(data, nowMs) {
+function buildListingModel(data, nowMs, closed = false) {
   const cal = calendar(nowMs);
   const { now, m0, mPrev, prevCut } = cal;
   // Dated by the listing fee — the day each piece was published — when the
   // ledger could be read; otherwise by the day its draft was made.
   const byFee = data.publishedFrom === "ledger";
   const added = ((byFee ? data.published : data.added) || []).map(a => a.ts * 1000);
+  const pub = byFee ? (data.published || []).map(p => ({ id: p.id, ms: p.ts * 1000 })) : [];
   const count = (a, b) => added.filter(t => t >= a && t < b).length;
   const today0 = dayStart(nowMs);
   const weekStart = today0 - ((now.getDay() + 6) % 7) * DAY; // weeks start on Monday
@@ -221,7 +225,7 @@ function buildListingModel(data, nowMs) {
   const in7 = expiring.filter(l => l.ends <= nowS + 7 * 86400);
   const expired = data.expiredLately || [];
   return {
-    ...cal, byFee, today0,
+    ...cal, byFee, today0, closed, pub, realToday0: dayStart(Date.now()),
     today: count(today0, nowMs + 1), yesterday: count(today0 - DAY, today0),
     week: count(weekStart, nowMs + 1), weekPrev: count(weekStart - 7 * DAY, nowMs - 7 * DAY + 1), weekDays: Math.round((today0 - weekStart) / DAY) + 1,
     month: count(+m0, nowMs + 1), monthPrevSame: count(+mPrev, prevCut), monthPrev: count(+mPrev, +m0),
@@ -286,7 +290,7 @@ function Stat({ label, value, sub, onClick }) {
 }
 
 /* ── a running total through the month, against last month (and a goal) ───── */
-function RaceChart({ m, cumThis, cumPrev, short, full, goal }) {
+function RaceChart({ m, cumThis, cumPrev, short, full, goal, closed }) {
   const [ref, w] = useWidth();
   const [hover, setHover] = useState(null);
   const H = mob ? 170 : 200, PL = 38, PR = 58, PT = 10, PB = 22;
@@ -304,7 +308,12 @@ function RaceChart({ m, cumThis, cumPrev, short, full, goal }) {
   const ticks = [0.25, 0.5, 0.75, 1].map(t => t * yMax);
   const prevName = monthLong(m.mPrev), thisName = monthLong(m.m0);
   const goalLabelY = goal ? y(goal) : -99, prevLabelY = y(prevLast);
-  const showPrevLabel = Math.abs(goalLabelY - prevLabelY) > 13;
+  // A month that's over ends at the right edge, so its total is labelled there
+  // too; the labels at that edge never sit on one another.
+  const thisLabelY = closed ? y(last[1]) : -99;
+  const clear = (a, ...others) => others.every(b => Math.abs(a - b) > 13);
+  const showPrevLabel = clear(prevLabelY, goalLabelY, thisLabelY);
+  const showGoalLabel = !!goal && clear(goalLabelY, thisLabelY);
   const onMove = e => {
     const r = e.currentTarget.getBoundingClientRect();
     const d = Math.round(((e.clientX - r.left - PL) / CW) * xMax);
@@ -336,15 +345,17 @@ function RaceChart({ m, cumThis, cumPrev, short, full, goal }) {
           ))}
           {/* goal pace: a straight line to the goal on the last day */}
           {goal && <line x1={x(0)} y1={y(0)} x2={x(m.daysIn)} y2={y(goal)} stroke={C.inkFaint} strokeWidth={1.25} strokeDasharray="5 4" />}
-          {goal && <text x={x(m.daysIn) + 6} y={goalLabelY + 3.5} fontSize={10} fill={C.inkMid} fontWeight={600}>{short(goal)} goal</text>}
+          {showGoalLabel && <text x={x(m.daysIn) + 6} y={goalLabelY + 3.5} fontSize={10} fill={C.inkMid} fontWeight={600}>{short(goal)} goal</text>}
           {/* last month, whole */}
           <path d={path(cumPrev.map((v, d) => [d, v]))} fill="none" stroke={PREV} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           {showPrevLabel && <text x={x(cumPrev.length - 1) + 6} y={prevLabelY + 3.5} fontSize={10} fill={C.inkMid}>{monthShort(m.mPrev)} {short(prevLast)}</text>}
           {/* this month, so far */}
           <path d={path(thisPts) + `L${x(last[0]).toFixed(1)},${y(0)}L${x(0)},${y(0)}Z`} fill={NOW} fillOpacity={0.1} stroke="none" />
           <path d={path(thisPts)} fill="none" stroke={NOW} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-          <circle cx={x(last[0])} cy={y(last[1])} r={4.5} fill={NOW} stroke={C.surface} strokeWidth={2} />
-          <text x={x(last[0])} y={y(last[1]) - 10} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={C.ink}>{short(last[1])}</text>
+          {!closed && <circle cx={x(last[0])} cy={y(last[1])} r={4.5} fill={NOW} stroke={C.surface} strokeWidth={2} />}
+          {closed
+            ? <text x={x(last[0]) + 6} y={thisLabelY + 3.5} fontSize={10} fontWeight={700} fill={C.ink}>{monthShort(m.m0)} {short(last[1])}</text>
+            : <text x={x(last[0])} y={y(last[1]) - 10} textAnchor="middle" fontSize={10.5} fontWeight={700} fill={C.ink}>{short(last[1])}</text>}
           {hover != null && (
             <g pointerEvents="none">
               <line x1={x(hover)} x2={x(hover)} y1={PT} y2={PT + CH} stroke={C.inkFaint} strokeWidth={1} />
@@ -367,7 +378,7 @@ function RaceChart({ m, cumThis, cumPrev, short, full, goal }) {
 }
 
 /* ── the last six months, with the goal across them ─────────────────────────── */
-function MonthBars({ m }) {
+function MonthBars({ m, sel, onPick }) {
   const [ref, w] = useWidth();
   const [hover, setHover] = useState(null);
   const H = 150, PL = 34, PR = 6, PT = 18, PB = 20;
@@ -400,13 +411,16 @@ function MonthBars({ m }) {
             const x0 = cx(i) - bw / 2;
             const top = y(mo.usd);
             const projTop = mo.current && proj > mo.usd ? y(proj) : null;
+            const on = sel == null ? mo.current : mo.key === sel;
+            const pickable = onPick?.(mo.key, true);
             return (
               <g key={mo.key}>
                 {projTop != null && <path d={barPath(x0, projTop, top - 2, bw)} fill={NOW} fillOpacity={0.14} />}
-                <path d={barPath(x0, top, y(0), bw)} fill={mo.current ? NOW : C.borderHi} />
-                <text x={cx(i)} y={(projTop ?? top) - 5} textAnchor="middle" fontSize={10} fontWeight={mo.current || mo.usd === best ? 700 : 500} fill={mo.current ? C.ink : C.inkMid}>{usdK(mo.usd)}</text>
-                <text x={cx(i)} y={H - 6} textAnchor="middle" fontSize={10} fill={mo.current ? C.ink : C.inkFaint} fontWeight={mo.current ? 700 : 400}>{mo.label}</text>
-                <rect x={cx(i) - band / 2} y={PT} width={band} height={CH} fill="transparent" onPointerEnter={() => setHover(i)} onPointerDown={() => setHover(i)} />
+                <path d={barPath(x0, top, y(0), bw)} fill={on ? NOW : C.borderHi} />
+                <text x={cx(i)} y={(projTop ?? top) - 5} textAnchor="middle" fontSize={10} fontWeight={on || mo.usd === best ? 700 : 500} fill={on ? C.ink : C.inkMid}>{usdK(mo.usd)}</text>
+                <text x={cx(i)} y={H - 6} textAnchor="middle" fontSize={10} fill={on ? C.ink : C.inkFaint} fontWeight={on ? 700 : 400}>{mo.label}</text>
+                <rect x={cx(i) - band / 2} y={PT} width={band} height={CH} fill="transparent" style={{ cursor: pickable ? "pointer" : "default" }}
+                  onPointerEnter={() => setHover(i)} onPointerDown={() => setHover(i)} onClick={() => pickable && onPick(mo.key)} />
               </g>
             );
           })}
@@ -490,6 +504,43 @@ const priceFmt = (v, cur) => {
   if (!(v > 0)) return "";
   try { return new Intl.NumberFormat(cur === "INR" ? "en-IN" : "en-US", { style: "currency", currency: cur || "INR", maximumFractionDigits: 0 }).format(v); } catch { return String(Math.round(v)); }
 };
+const navBtn = on => ({ width: 24, height: 24, borderRadius: 12, border: `1px solid ${C.border}`, background: C.surface, color: on ? C.ink : C.inkFaint, cursor: on ? "pointer" : "default", fontSize: 14, lineHeight: "20px", padding: 0, opacity: on ? 1 : 0.5, flexShrink: 0 });
+
+// ‹ September › — steps a card back through the months, never past this one.
+function MonthNav({ off, min, onChange, children }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <button aria-label="Month before" disabled={off <= min} onClick={() => onChange(off - 1)} style={navBtn(off > min)}>‹</button>
+      <div style={eyebrow}>{children}</div>
+      <button aria-label="Month after" disabled={off >= 0} onClick={() => onChange(off + 1)} style={navBtn(off < 0)}>›</button>
+    </div>
+  );
+}
+
+// A past month's new listings (and the month before, for comparison), read
+// once and kept for a day.
+function usePastPublished(off) {
+  const [state, setState] = useState({});
+  useEffect(() => {
+    if (!off) return;
+    const m = monthStart(new Date(), off);
+    const key = `${PUB_CACHE}${m.getFullYear()}-${m.getMonth() + 1}`;
+    const c = readCache(key);
+    setState(c ? { key, data: c.data } : { key, loading: true });
+    if (c && Date.now() - c.at < DAY) return;
+    let gone = false;
+    const from = Math.floor(+monthStart(m, -1) / 1000), to = Math.floor(+monthStart(m, 1) / 1000);
+    fetch(`/api/etsy?action=published&from=${from}&to=${to}`, { cache: "no-store" })
+      .then(r => r.json().catch(() => ({})).then(d => { if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`); return d; }))
+      .then(d => {
+        try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), data: d })); } catch {}
+        if (!gone) setState({ key, data: d });
+      })
+      .catch(e => { if (!gone) setState(s => s.data ? s : { key, err: e.message || "Couldn't reach Etsy" }); });
+    return () => { gone = true; };
+  }, [off]);
+  return state;
+}
 
 // Each day of the month as a bar, the target across them. A bar picks the
 // day the side list shows.
@@ -508,6 +559,7 @@ function DayBars({ lm, sel, onPick }) {
     const r = Math.min(4, width / 2, Math.max(0, bottom - top));
     return `M${x0},${bottom}V${top + r}Q${x0},${top} ${x0 + r},${top}H${x0 + width - r}Q${x0 + width},${top} ${x0 + width},${top + r}V${bottom}Z`;
   };
+  const isToday = d => !lm.closed && d === lm.day;
   const hv = hover != null ? lm.daily[hover - 1] : null;
   return (
     <div ref={ref} style={{ position: "relative", marginTop: 10 }}>
@@ -524,7 +576,7 @@ function DayBars({ lm, sel, onPick }) {
             <text key={d} x={cx(d)} y={H - 6} textAnchor="middle" fontSize={10} fill={C.inkFaint}>{d}</text>
           ))}
           {lm.daily.map((v, i) => {
-            const d = i + 1, x0 = cx(d) - bw / 2, today = d === lm.day, picked = sel === dayMs(d);
+            const d = i + 1, x0 = cx(d) - bw / 2, today = isToday(d), picked = sel === dayMs(d);
             return (
               <g key={d}>
                 {v > 0
@@ -542,66 +594,104 @@ function DayBars({ lm, sel, onPick }) {
       )}
       {hover != null && (
         <Tip x={cx(hover)} y={8} w={w}>
-          <div style={{ fontWeight: 700 }}>{dayName(dayMs(hover), lm.today0)}{hover === lm.day ? " (so far)" : ""}</div>
+          <div style={{ fontWeight: 700 }}>{dayName(dayMs(hover), lm.realToday0)}{isToday(hover) ? " (so far)" : ""}</div>
           <TipRow color={NOW} label="Published" value={hv} />
           <TipRow label={`Target ${DAILY_TARGET}`} value={hv >= DAILY_TARGET ? "✓ met" : `${DAILY_TARGET - hv} short`} />
-          {lm.recent.length > 0 && dayMs(hover) >= lm.today0 - 7 * DAY && <div style={{ color: C.inkFaint, marginTop: 4 }}>Click to list them</div>}
+          {lm.byFee && hv > 0 && <div style={{ color: C.inkFaint, marginTop: 4 }}>Click to list them</div>}
         </Tip>
       )}
     </div>
   );
 }
 
-// What went live on one day — today unless a bar or the arrows pick another.
-function PublishedList({ lm, sel, setSel }) {
+// What went live on one day of the month on show — today, or the month's last
+// day, unless a bar or the arrows pick another. Days older than the week the
+// pulse sends details for are asked of Etsy as they're opened.
+function PublishedList({ lm, sel, setSel, details, need, detailsErr }) {
   const day0 = sel ?? lm.today0;
-  const n = lm.countDay(day0);
-  const items = lm.recent.filter(r => r.ms >= day0 && r.ms < day0 + DAY).sort((a, b) => b.ms - a.ms);
-  const oldest = lm.today0 - 7 * DAY;
-  const arrowBtn = on => ({ width: 24, height: 24, borderRadius: 12, border: `1px solid ${C.border}`, background: C.surface, color: on ? C.ink : C.inkFaint, cursor: on ? "pointer" : "default", fontSize: 14, lineHeight: "20px", padding: 0, opacity: on ? 1 : 0.5 });
+  const dayPub = lm.pub.filter(p => p.ms >= day0 && p.ms < day0 + DAY).sort((a, b) => b.ms - a.ms);
+  const n = lm.byFee ? dayPub.length : lm.countDay(day0);
+  const missing = dayPub.filter(p => !details(p.id)).map(p => p.id);
+  useEffect(() => { if (missing.length) need(missing); }, [day0, lm, missing.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  const first = +lm.m0, last = lm.today0;
+  const isToday = day0 === lm.realToday0;
   const left = Math.max(0, DAILY_TARGET - n);
+  const go = d => setSel(d === lm.today0 ? null : d);
   return (
     <div style={card}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <div style={eyebrow}>Published · {dayName(day0, lm.today0)}</div>
+        <div style={eyebrow}>Published · {dayName(day0, lm.realToday0)}</div>
         <div style={{ flex: 1 }} />
-        <button aria-label="Day before" disabled={day0 <= oldest} onClick={() => setSel(day0 - DAY)} style={arrowBtn(day0 > oldest)}>‹</button>
-        <button aria-label="Day after" disabled={day0 >= lm.today0} onClick={() => setSel(day0 + DAY >= lm.today0 ? null : day0 + DAY)} style={arrowBtn(day0 < lm.today0)}>›</button>
+        <button aria-label="Day before" disabled={day0 <= first} onClick={() => go(day0 - DAY)} style={navBtn(day0 > first)}>‹</button>
+        <button aria-label="Day after" disabled={day0 >= last} onClick={() => go(day0 + DAY)} style={navBtn(day0 < last)}>›</button>
       </div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 6 }}>
         <span style={{ fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: 30, fontWeight: 600, color: C.ink, lineHeight: 1 }}>{n}</span>
         <span style={{ fontSize: 12, color: C.inkMid }}>of {DAILY_TARGET}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: left ? (day0 === lm.today0 ? C.amber : C.red) : C.green, marginLeft: "auto" }}>{left ? `${left} ${day0 === lm.today0 ? "to go" : "short"}` : "✓ target met"}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: left ? (isToday ? C.amber : C.red) : C.green, marginLeft: "auto" }}>{left ? `${left} ${isToday ? "to go" : "short"}` : "✓ target met"}</span>
       </div>
       <div style={{ height: 6, borderRadius: 3, background: C.card, marginTop: 7, overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${Math.min(100, n / DAILY_TARGET * 100)}%`, background: NOW, borderRadius: 3 }} />
       </div>
       {!lm.byFee
         ? <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 10 }}>Etsy's fee record couldn't be read, so the pieces can't be listed — the counts are by the day each draft was made.</div>
-        : !items.length
-          ? <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 10 }}>{n ? "Published, but Etsy didn't send the details." : `Nothing published ${day0 === lm.today0 ? "yet today" : "that day"}.`}</div>
+        : !dayPub.length
+          ? <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 10 }}>{`Nothing published ${isToday ? "yet today" : "that day"}.`}</div>
           : <div style={{ marginTop: 8, maxHeight: mob ? "none" : 272, overflowY: "auto", marginRight: -6, paddingRight: 6 }}>
-              {items.map(r => (
-                <a key={r.id} className="pz-row" href={`https://www.etsy.com/listing/${r.id}`} target="_blank" rel="noreferrer"
-                  style={{ display: "flex", gap: 9, alignItems: "center", padding: "6px 6px", borderRadius: 10, textDecoration: "none", color: "inherit" }}>
-                  {r.img
-                    ? <img src={r.img} alt="" loading="lazy" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0, background: C.card }} />
-                    : <span style={{ width: 40, height: 40, borderRadius: 8, background: C.card, flexShrink: 0 }} />}
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.title || `Listing ${r.id}`}</div>
-                    <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>
-                      {[new Date(r.ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }), priceFmt(r.price, r.cur), r.state && r.state !== "active" ? r.state.replace("_", " ") : ""].filter(Boolean).join(" · ")}
+              {missing.length > 0 && detailsErr && <div style={{ fontSize: 10.5, color: C.red, margin: "2px 6px 4px" }}>Couldn't fetch the details from Etsy — {detailsErr}</div>}
+              {dayPub.map(p => {
+                const r = details(p.id);
+                return (
+                  <a key={p.id} className="pz-row" href={`https://www.etsy.com/listing/${p.id}`} target="_blank" rel="noreferrer"
+                    style={{ display: "flex", gap: 9, alignItems: "center", padding: "6px 6px", borderRadius: 10, textDecoration: "none", color: "inherit" }}>
+                    {r?.img
+                      ? <img src={r.img} alt="" loading="lazy" style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover", flexShrink: 0, background: C.card }} />
+                      : <span style={{ width: 40, height: 40, borderRadius: 8, background: C.card, flexShrink: 0, animation: r ? "none" : "pulse 1.4s ease infinite" }} />}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: r ? C.ink : C.inkFaint, lineHeight: 1.3, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r ? r.title || `Listing ${p.id}` : "Reading from Etsy…"}</div>
+                      <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 1 }}>
+                        {[new Date(p.ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }), r && priceFmt(r.price, r.cur), r?.state && r.state !== "active" ? r.state.replace("_", " ") : ""].filter(Boolean).join(" · ")}
+                      </div>
                     </div>
-                  </div>
-                </a>
-              ))}
+                  </a>
+                );
+              })}
             </div>}
     </div>
   );
 }
 
 function ListingsRow({ lm, err, loading, usdRate, onOpen, onRenew }) {
-  const [sel, setSel] = useState(null); // a day picked from the chart; null is today
+  const [off, setOff] = useState(0);   // months back from this one
+  const [sel, setSel] = useState(null); // a day picked from the chart; null is the month's latest
+  const past = usePastPublished(off);
+  const pm = useMemo(() => off && past.data
+    ? buildListingModel({ ...past.data, publishedFrom: past.data.ledgerError ? "" : "ledger", added: [], recent: [] }, monthEnd(new Date(), off), true)
+    : null, [off, past.data]);
+  // Listing details by id: the week the pulse sent, then whatever's been asked for.
+  const [briefs, setBriefs] = useState({});
+  const [briefErr, setBriefErr] = useState("");
+  const asked = useRef(new Set());
+  const recentById = useMemo(() => new Map((lm?.recent || []).map(r => [r.id, r])), [lm]);
+  const details = id => recentById.get(id) || briefs[id];
+  const need = ids => {
+    const want = ids.filter(id => !asked.current.has(id)).slice(0, 100);
+    if (!want.length) return;
+    want.forEach(id => asked.current.add(id));
+    setBriefErr("");
+    fetch(`/api/etsy?action=listing_brief&ids=${want.join(",")}`, { cache: "no-store" })
+      .then(r => r.json().catch(() => ({})).then(d => { if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`); return d; }))
+      .then(d => setBriefs(b => {
+        const next = { ...b };
+        for (const it of d.items || []) next[it.id] = it;
+        // One Etsy no longer has still gets a row, without a picture.
+        for (const id of want) if (!next[id]) next[id] = { id, title: "", img: "", price: 0, cur: "", state: "removed" };
+        return next;
+      }))
+      .catch(e => { want.forEach(id => asked.current.delete(id)); setBriefErr(e.message || "Couldn't reach Etsy"); });
+  };
+  const switchMonth = k => { setOff(k); setSel(null); };
+
   if (!lm) {
     return (
       <div style={{ ...card, marginBottom: 11 }}>
@@ -612,7 +702,8 @@ function ListingsRow({ lm, err, loading, usdRate, onOpen, onRenew }) {
       </div>
     );
   }
-  const prevPeriod = `${monthShort(lm.mPrev)} 1–${new Date(lm.prevCut - 1).getDate()}`;
+  const v = off ? pm : lm; // the month on show; null while a past month loads
+  const shown = monthStart(new Date(), off);
   const c = lm.counts;
   const renewUSD = lm.in30 * LISTING_FEE_USD;
   const box = { background: C.card, borderRadius: 10, padding: "9px 12px", minWidth: 0 };
@@ -628,43 +719,80 @@ function ListingsRow({ lm, err, loading, usdRate, onOpen, onRenew }) {
     ["🗓️", "Ending in 30 days", lm.in30, lm.in30 ? `${offNote(lm.in30, lm.in30Off)} · renewing all ≈ ${usd(renewUSD)} (${rs(renewUSD * usdRate)})` : "nothing ending", lm.in30Off ? C.amber : null, renew],
     ["⛔", "Expired", c.expired, `${lm.expired30} in the last 30 days · ${lm.expired7} this week · renew or skip each →`, null, renew],
   ];
-  const weekTarget = DAILY_TARGET * lm.weekDays, monthTarget = DAILY_TARGET * lm.day;
-  const pick = ms => setSel(ms === lm.today0 ? null : ms);
+  const pick = ms => setSel(v && ms === v.today0 ? null : ms);
+
+  let body;
+  if (!v) {
+    body = <div style={{ fontSize: 11.5, color: past.err ? C.red : C.inkFaint, marginTop: 12, minHeight: 120 }}>{past.err ? `Couldn't read ${monthLong(shown)} from Etsy — ${past.err}` : `Reading ${monthLong(shown)} from Etsy…`}</div>;
+  } else if (v.closed) {
+    // A month that's over: how it finished, against the month before.
+    const target = DAILY_TARGET * v.daysIn;
+    const best = v.daily.reduce((b, n, i) => n > b.n ? { n, d: i + 1 } : b, { n: 0, d: 0 });
+    body = <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 10 }}>
+        <div style={box}>
+          <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>The month</div>
+          <div style={big}>{v.month}<span style={of}>/ {target}</span></div>
+          <div style={sub}>{v.month >= target ? <span style={{ color: C.green, fontWeight: 700 }}>✓ target met</span> : `${target - v.month} short of ${DAILY_TARGET} a day`}</div>
+        </div>
+        <div style={box}>
+          <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>Days at {DAILY_TARGET}+</div>
+          <div style={big}>{v.hit}<span style={of}>/ {v.daysIn}</span></div>
+          <div style={sub}>{best.n ? `best ${best.n} on ${best.d} ${monthShort(v.m0)}` : "no listings"}</div>
+        </div>
+        <div style={box}>
+          <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>A day</div>
+          <div style={big}>{(v.month / v.daysIn).toFixed(1)}</div>
+          <div style={{ marginTop: 2 }}><Delta now={v.month} prev={v.monthPrev} label={monthLong(v.mPrev)} /></div>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: C.inkMid, marginTop: 9 }}>
+        {monthLong(v.mPrev)}: <b style={{ color: C.ink }}>{plural(v.monthPrev, "new listing")}</b> · {(v.monthPrev / v.daysPrev).toFixed(1)} a day
+      </div>
+      <DayBars lm={v} sel={sel ?? v.today0} onPick={pick} />
+    </>;
+  } else {
+    const prevPeriod = `${monthShort(v.mPrev)} 1–${new Date(v.prevCut - 1).getDate()}`;
+    body = <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 10 }}>
+        <div style={box}>
+          <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>Today</div>
+          <div style={big}>{v.today}<span style={of}>/ {DAILY_TARGET}</span></div>
+          <div style={sub}>{v.today >= DAILY_TARGET ? <span style={{ color: C.green, fontWeight: 700 }}>✓ target met</span> : `${DAILY_TARGET - v.today} to go`} · yesterday {v.yesterday}</div>
+        </div>
+        <div style={box}>
+          <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This week</div>
+          <div style={big}>{v.week}<span style={of}>/ {DAILY_TARGET * v.weekDays}</span></div>
+          <div style={{ marginTop: 2 }}><Delta now={v.week} prev={v.weekPrev} label={v.weekDays === 7 ? "last week" : v.weekDays === 1 ? "last Monday" : `last Mon–${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][v.weekDays - 1]}`} /></div>
+        </div>
+        <div style={box}>
+          <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This month</div>
+          <div style={big}>{v.month}<span style={of}>/ {DAILY_TARGET * v.day}</span></div>
+          <div style={{ marginTop: 2 }}><Delta now={v.month} prev={v.monthPrevSame} label={prevPeriod} /></div>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: C.inkMid, marginTop: 9 }}>
+        <b style={{ color: C.ink }}>{v.hit} of {v.day} day{v.day === 1 ? "" : "s"}</b> at {DAILY_TARGET} or more
+        {v.day > 1 ? ` · ${(v.month / v.day).toFixed(1)} a day this month` : ""} · {monthLong(v.mPrev)} {(v.monthPrev / v.daysPrev).toFixed(1)} a day ({plural(v.monthPrev, "new listing")})
+      </div>
+      <DayBars lm={v} sel={sel ?? v.today0} onPick={pick} />
+    </>;
+  }
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1.5fr) minmax(0,1fr)", gap: 11, marginBottom: 11, alignItems: "start" }}>
       <div style={card}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-          <div style={eyebrow}>New listings · {monthLong(lm.m0)}</div>
-          <span style={{ fontSize: 10.5, color: C.inkFaint }}>{lm.byFee ? "published on Etsy, by the day each went live — drafts and renewals don't count" : "by the day each draft was made — Etsy's fee record couldn't be read"}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <MonthNav off={off} min={-LISTING_MONTHS_BACK} onChange={switchMonth}>New listings · {monthLong(shown)}{off && shown.getFullYear() !== new Date().getFullYear() ? ` ${shown.getFullYear()}` : ""}</MonthNav>
+          <span style={{ fontSize: 10.5, color: C.inkFaint }}>{!v || v.byFee ? "published on Etsy, by the day each went live — drafts and renewals don't count" : "by the day each draft was made — Etsy's fee record couldn't be read"}</span>
           <div style={{ flex: 1 }} />
           <button onClick={onOpen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0 }}>Open listings →</button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 10 }}>
-          <div style={box}>
-            <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>Today</div>
-            <div style={big}>{lm.today}<span style={of}>/ {DAILY_TARGET}</span></div>
-            <div style={sub}>{lm.today >= DAILY_TARGET ? <span style={{ color: C.green, fontWeight: 700 }}>✓ target met</span> : `${DAILY_TARGET - lm.today} to go`} · yesterday {lm.yesterday}</div>
-          </div>
-          <div style={box}>
-            <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This week</div>
-            <div style={big}>{lm.week}<span style={of}>/ {weekTarget}</span></div>
-            <div style={{ marginTop: 2 }}><Delta now={lm.week} prev={lm.weekPrev} label={lm.weekDays === 7 ? "last week" : lm.weekDays === 1 ? "last Monday" : `last Mon–${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][lm.weekDays - 1]}`} /></div>
-          </div>
-          <div style={box}>
-            <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>This month</div>
-            <div style={big}>{lm.month}<span style={of}>/ {monthTarget}</span></div>
-            <div style={{ marginTop: 2 }}><Delta now={lm.month} prev={lm.monthPrevSame} label={prevPeriod} /></div>
-          </div>
-        </div>
-        <div style={{ fontSize: 11, color: C.inkMid, marginTop: 9 }}>
-          <b style={{ color: C.ink }}>{lm.hit} of {lm.day} day{lm.day === 1 ? "" : "s"}</b> at {DAILY_TARGET} or more
-          {lm.day > 1 ? ` · ${(lm.month / lm.day).toFixed(1)} a day this month` : ""} · {monthLong(lm.mPrev)} {(lm.monthPrev / lm.daysPrev).toFixed(1)} a day ({plural(lm.monthPrev, "new listing")})
-        </div>
-        <DayBars lm={lm} sel={sel ?? lm.today0} onPick={pick} />
+        {body}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 11, minWidth: 0 }}>
-        <PublishedList lm={lm} sel={sel} setSel={setSel} />
+        {v && <PublishedList lm={v} sel={sel} setSel={setSel} details={details} need={need} detailsErr={briefErr} />}
         <div style={card}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
             <div style={eyebrow}>Shop listings</div>
@@ -702,6 +830,7 @@ export default function EtsyPulse({ onEnter, rates }) {
   const [erpOrders, setErpOrders] = useState(null);
   const [ownRates, setOwnRates] = useState(undefined);
   const [tick, setTick] = useState(Date.now());
+  const [soff, setSoff] = useState(0); // the sales card's month, back from this one
   const busy = useRef(false);
 
   const fetchInto = async (url, key, set, setBusy, setError) => {
@@ -755,6 +884,22 @@ export default function EtsyPulse({ onEnter, rates }) {
   const fx = rates?.USD ? rates : ownRates;
   const m = useMemo(() => cache?.data && fx ? buildModel(cache.data, fx, erpOrders, Date.now()) : null, [cache, fx, erpOrders, tick]);
   const lm = useMemo(() => lcache?.data ? buildListingModel(lcache.data, Date.now()) : null, [lcache, tick]);
+  /* The sales card can step back through the months the pulse already holds
+     (it reads six); a month needs the one before it too, for comparison. The
+     cards for shipping, paperwork and ads stay on today. */
+  const salesMin = useMemo(() => {
+    const from = (cache?.data?.from || 0) * 1000, now = new Date();
+    let k = 0;
+    while (k > -12 && +monthStart(now, k - 2) >= from - DAY) k--;
+    return k;
+  }, [cache]);
+  const sm = useMemo(() => soff && cache?.data && fx ? { ...buildModel(cache.data, fx, erpOrders, monthEnd(new Date(), soff)), closed: true } : m, [soff, cache, fx, erpOrders, m]);
+  const pickMonth = (key, test) => {
+    const now = new Date(), k = (new Date(key).getFullYear() - now.getFullYear()) * 12 + new Date(key).getMonth() - now.getMonth();
+    if (k > 0 || k < salesMin) return false;
+    if (!test) setSoff(k);
+    return true;
+  };
 
   const ago = cache ? Math.round((Date.now() - cache.at) / 60000) : null;
   const status = loading || lloading ? "Updating…" : ago == null ? "" : ago < 1 ? "Updated just now" : `Updated ${ago < 60 ? `${ago} min` : `${Math.round(ago / 60)} h`} ago`;
@@ -781,14 +926,31 @@ export default function EtsyPulse({ onEnter, rates }) {
     );
   }
 
-  const reached = m.usdNow >= GOAL_USD;
-  const ahead = m.usdNow - m.pace;
-  const fill = Math.min(1, m.usdNow / GOAL_USD);
-  const paceCol = reached || ahead >= 0 ? C.green : m.usdNow >= m.pace * 0.75 ? C.amber : C.red;
-  const prevPeriod = `${monthShort(m.mPrev)} 1–${new Date(m.prevCut - 1).getDate()}`;
+  const reached = sm.usdNow >= GOAL_USD;
+  const ahead = sm.usdNow - sm.pace;
+  const fill = Math.min(1, sm.usdNow / GOAL_USD);
+  const paceCol = reached || ahead >= 0 ? C.green : sm.usdNow >= sm.pace * 0.75 ? C.amber : C.red;
+  const prevPeriod = sm.closed ? monthLong(sm.mPrev) : `${monthShort(sm.mPrev)} 1–${new Date(sm.prevCut - 1).getDate()}`;
   const adsShare = m.sales > 0 ? m.adsNow.total / m.sales : null;
   const adsSharePrev = m.salesPrev > 0 ? m.adsPrev.total / m.salesPrev : null;
   const go = () => onEnter("orders");
+  const shownYear = sm.m0.getFullYear() !== new Date().getFullYear() ? ` ${sm.m0.getFullYear()}` : "";
+  // What the month needs from here — or, for one that's over, how it finished.
+  const pushBoxes = sm.closed
+    ? [
+      reached ? ["Goal reached", `${usd(sm.usdNow - GOAL_USD)} over`, C.green, "🎉"] : ["Short of goal", usd(GOAL_USD - sm.usdNow), C.red, "▼"],
+      ["Orders", String(sm.orders), C.ink, null, `${plural(sm.items, "item")} sold`],
+      ["Averaged", `${usd(sm.usdNow / sm.daysIn)}/day`, C.ink, null, `over ${plural(sm.daysIn, "day")}`],
+    ]
+    : [
+      reached
+        ? ["Goal reached", `${usd(sm.usdNow - GOAL_USD)} over`, C.green, "🎉"]
+        : [ahead >= 0 ? "Ahead of pace" : "Behind pace", `${usd(Math.abs(ahead))}`, ahead >= 0 ? C.green : C.red, ahead >= 0 ? "▲" : "▼"],
+      ["On pace for", sm.projection != null ? usd(sm.projection) : "—", sm.projection != null && sm.projection >= GOAL_USD ? C.green : C.ink, null, "if the month keeps this rate"],
+      reached
+        ? ["Averaging", `${usd(sm.avgPerDay)}/day`, C.ink, null, "so far this month"]
+        : ["To hit the goal", `${usd(sm.needPerDay)}/day`, C.ink, null, `for the last ${plural(sm.daysLeft, "day")} · now ${usd(sm.avgPerDay)}/day`],
+    ];
 
   const stepRows = [
     ["🚚", "Ship", m.unshipped.length, "live from Etsy"],
@@ -805,7 +967,7 @@ export default function EtsyPulse({ onEnter, rates }) {
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1.5fr) minmax(0,1fr)", gap: 11, marginBottom: 11 }}>
         <div style={card}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <div style={eyebrow}>Etsy · {monthLong(m.m0)} · day {m.day} of {m.daysIn}</div>
+            <MonthNav off={soff} min={salesMin} onChange={setSoff}>Etsy · {monthLong(sm.m0)}{shownYear}{sm.closed ? " · closed" : ` · day ${sm.day} of ${sm.daysIn}`}</MonthNav>
             <div style={{ flex: 1 }} />
             <span title={err ? `Last refresh failed: ${err}` : ""} style={{ fontSize: 10.5, color: err ? C.red : C.inkFaint }}>{err ? "Refresh failed · showing last numbers" : status}</span>
             <button onClick={load} disabled={loading || lloading} title="Refresh from Etsy" aria-label="Refresh from Etsy" style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, padding: "2px 7px", fontSize: 12, cursor: loading || lloading ? "default" : "pointer", color: C.inkMid, lineHeight: 1.3 }}>
@@ -814,31 +976,23 @@ export default function EtsyPulse({ onEnter, rates }) {
           </div>
 
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
-            <div style={{ fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: mob ? 42 : 54, fontWeight: 600, color: C.ink, lineHeight: 1, letterSpacing: "-.02em" }}>{usd(m.usdNow)}</div>
-            <div style={{ fontSize: 13, color: C.inkMid }}>of {usd(GOAL_USD)} goal · <span style={{ color: C.inkFaint }}>{m.shopFmt(m.sales)}</span></div>
+            <div style={{ fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: mob ? 42 : 54, fontWeight: 600, color: C.ink, lineHeight: 1, letterSpacing: "-.02em" }}>{usd(sm.usdNow)}</div>
+            <div style={{ fontSize: 13, color: C.inkMid }}>of {usd(GOAL_USD)} goal · <span style={{ color: C.inkFaint }}>{sm.shopFmt(sm.sales)}</span></div>
           </div>
 
           {/* Goal meter: the fill is where we are, the tick is where we should be by now. */}
-          <div style={{ position: "relative", height: 10, borderRadius: 5, background: C.card, marginTop: 14 }} role="meter" aria-valuemin={0} aria-valuemax={GOAL_USD} aria-valuenow={Math.round(m.usdNow)} aria-label="Sales against the monthly goal">
+          <div style={{ position: "relative", height: 10, borderRadius: 5, background: C.card, marginTop: 14 }} role="meter" aria-valuemin={0} aria-valuemax={GOAL_USD} aria-valuenow={Math.round(sm.usdNow)} aria-label="Sales against the monthly goal">
             <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${fill * 100}%`, borderRadius: 5, background: paceCol, transition: "width .6s ease" }} />
-            {!reached && <div title={`On track by now: ${usd(m.pace)}`} style={{ position: "absolute", left: `calc(${m.elapsed * 100}% - 1px)`, top: -4, bottom: -4, width: 2, borderRadius: 1, background: C.ink }} />}
+            {!reached && !sm.closed && <div title={`On track by now: ${usd(sm.pace)}`} style={{ position: "absolute", left: `calc(${sm.elapsed * 100}% - 1px)`, top: -4, bottom: -4, width: 2, borderRadius: 1, background: C.ink }} />}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: C.inkFaint, marginTop: 5, gap: 8 }}>
-            <span>{Math.round(m.usdNow / GOAL_USD * 100)}% of goal</span>
-            {!reached && <span>┃ on track would be {usd(m.pace)} by now</span>}
+            <span>{Math.round(sm.usdNow / GOAL_USD * 100)}% of goal</span>
+            {!reached && !sm.closed && <span>┃ on track would be {usd(sm.pace)} by now</span>}
           </div>
 
           {/* The push: what the month needs from here. */}
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 12 }}>
-            {[
-              reached
-                ? ["Goal reached", `${usd(m.usdNow - GOAL_USD)} over`, C.green, "🎉"]
-                : [ahead >= 0 ? "Ahead of pace" : "Behind pace", `${usd(Math.abs(ahead))}`, ahead >= 0 ? C.green : C.red, ahead >= 0 ? "▲" : "▼"],
-              ["On pace for", m.projection != null ? usd(m.projection) : "—", m.projection != null && m.projection >= GOAL_USD ? C.green : C.ink, null, "if the month keeps this rate"],
-              reached
-                ? ["Averaging", `${usd(m.avgPerDay)}/day`, C.ink, null, "so far this month"]
-                : ["To hit the goal", `${usd(m.needPerDay)}/day`, C.ink, null, `for the last ${plural(m.daysLeft, "day")} · now ${usd(m.avgPerDay)}/day`],
-            ].map(([label, value, col, icon, hint]) => (
+            {pushBoxes.map(([label, value, col, icon, hint]) => (
               <div key={label} style={{ background: C.card, borderRadius: 10, padding: "8px 11px", minWidth: 0 }}>
                 <div style={{ fontSize: 10.5, color: C.inkMid, fontWeight: 600 }}>{label}</div>
                 <div style={{ fontSize: 17, fontWeight: 750, color: col, marginTop: 1, whiteSpace: "nowrap" }}>{icon && <span style={{ fontSize: 12, marginRight: 4 }}>{icon}</span>}{value}</div>
@@ -848,19 +1002,19 @@ export default function EtsyPulse({ onEnter, rates }) {
           </div>
 
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10 }}>
-            <Delta now={m.usdNow} prev={m.usdPrevSame} label={prevPeriod} money={usd} />
-            <span style={{ fontSize: 11, color: C.inkMid }}>{monthLong(m.mPrev)} in full: <b style={{ color: C.ink }}>{usd(m.usdPrev)}</b> · {plural(m.ordersPrev, "order")}</span>
+            <Delta now={sm.usdNow} prev={sm.closed ? sm.usdPrev : sm.usdPrevSame} label={prevPeriod} money={usd} />
+            <span style={{ fontSize: 11, color: C.inkMid }}>{monthLong(sm.mPrev)} in full: <b style={{ color: C.ink }}>{usd(sm.usdPrev)}</b> · {plural(sm.ordersPrev, "order")}</span>
           </div>
 
-          <RaceChart m={m} cumThis={m.cumThis} cumPrev={m.cumPrev} short={usdK} full={usd} goal={GOAL_USD} />
+          <RaceChart m={sm} cumThis={sm.cumThis} cumPrev={sm.cumPrev} short={usdK} full={usd} goal={GOAL_USD} closed={sm.closed} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 11, minWidth: 0 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 11 }}>
-            <Stat label="Orders" value={m.orders} onClick={go}
-              sub={<><Delta now={m.orders} prev={m.ordersPrevSame} label={prevPeriod} /><div style={{ fontSize: 10.5, color: C.inkFaint }}>{plural(m.items, "item")} sold</div></>} />
-            <Stat label="Average order" value={m.orders ? usd(m.aov) : "—"}
-              sub={<><Delta now={m.aov} prev={m.aovPrev} label={monthShort(m.mPrev)} /><div style={{ fontSize: 10.5, color: C.inkFaint }}>{m.orders ? `${m.shopFmt(m.sales / m.orders)} per order` : "no orders yet"}</div></>} />
+            <Stat label={sm.closed ? `Orders · ${monthShort(sm.m0)}` : "Orders"} value={sm.orders} onClick={go}
+              sub={<><Delta now={sm.orders} prev={sm.closed ? sm.ordersPrev : sm.ordersPrevSame} label={prevPeriod} /><div style={{ fontSize: 10.5, color: C.inkFaint }}>{plural(sm.items, "item")} sold</div></>} />
+            <Stat label={sm.closed ? `Average order · ${monthShort(sm.m0)}` : "Average order"} value={sm.orders ? usd(sm.aov) : "—"}
+              sub={<><Delta now={sm.aov} prev={sm.aovPrev} label={monthShort(sm.mPrev)} /><div style={{ fontSize: 10.5, color: C.inkFaint }}>{sm.orders ? `${sm.shopFmt(sm.sales / sm.orders)} per order` : "no orders yet"}</div></>} />
           </div>
           <div style={{ ...card, flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, gap: 8 }}>
@@ -870,7 +1024,7 @@ export default function EtsyPulse({ onEnter, rates }) {
                 return best && <span style={{ fontSize: 10.5, color: C.inkFaint }}>Best: {best.name} {usd(best.usd)} · {Math.round(best.usd / GOAL_USD * 100)}% of goal</span>;
               })()}
             </div>
-            <MonthBars m={m} />
+            <MonthBars m={m} sel={+sm.m0} onPick={pickMonth} />
           </div>
         </div>
       </div>
