@@ -24,6 +24,7 @@ import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTra
 import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
+import RenewalQueue from "./RenewalQueue.jsx";
 import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
@@ -56,6 +57,37 @@ const isLocalMediaUrl = url => typeof url === "string" && (url.startsWith("data:
 const listingOrderId = () => `NG-LST-${new Date().getFullYear()}-${uid().slice(-6).toUpperCase()}`;
 const ensureListingOrderId = listing => listing.listing_order_id ? listing : { ...listing, listing_order_id: listingOrderId() };
 const listingMarketplaceSku = listing => String(listing?.sku || listing?.listing_order_id || listing?.id || "").trim();
+/* An ERP listing made from an Etsy one the ERP never had (listed by hand on
+   Etsy, or before the ERP), for renewing it through the listing steps. It
+   keeps the Etsy id, so publishing updates and renews that listing; its stock
+   card is found by the SKU Etsy holds when one matches, and asked for in the
+   steps when not. */
+const listingFromEtsy = (l, stock = []) => {
+  const cat = ETSY_CATEGORIES.find(c => c.taxonomyId === l.taxonomy_id);
+  const sku = String((l.skus || [])[0] || "").trim();
+  const card = sku ? stock.find(s => String(s.sku || "").trim().toLowerCase() === sku.toLowerCase()) : null;
+  const qty = Math.max(1, +l.quantity || 1);
+  const price = l.price?.amount != null ? (+l.price.amount || 0) / (+l.price.divisor || 100) : 0;
+  const first = l.original_creation_timestamp || l.creation_timestamp;
+  return ensureListingOrderId({
+    id: uid(), title: l.title || "", description: l.description || "",
+    material: (l.materials || [])[0] || "", shape: cat?.shape || "Mineral", productType: cat?.productType || "Lapidary",
+    origin: "", size: "", weight: +l.item_weight > 0 ? `${l.item_weight} ${l.item_weight_unit || "g"}` : "",
+    sku, type: qty > 1 ? "repeatable" : "unique", qty, linked_stock_id: card?.id || "", officeLocation: card?.location || "",
+    tags: [...(l.tags || [])],
+    images: [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0)).map(i => i.url_fullxfull || i.url_570xN).filter(Boolean),
+    video: "", videoEdit: null,
+    price_etsy: price ? String(price) : "", price_shopify_earth: "", price_shopify_aty: "", price_ebay: "",
+    platforms: { etsy: { listing_id: l.listing_id, url: l.url || `https://www.etsy.com/listing/${l.listing_id}`, status: l.state === "active" ? "active" : l.state || "expired" }, shopify_earth: {}, shopify_aty: {}, ebay: {} },
+    width: +l.item_width > 0 ? String(l.item_width) : "", height: +l.item_height > 0 ? String(l.item_height) : "", depth: +l.item_length > 0 ? String(l.item_length) : "",
+    dim_unit: ["mm", "cm", "in"].includes(l.item_dimensions_unit) ? l.item_dimensions_unit : "mm",
+    variations: [], etsy_section_id: l.shop_section_id || null, etsy_taxonomy_id: l.taxonomy_id || null,
+    etsy_shipping_profile_id: l.shipping_profile_id || null, etsy_return_policy_id: l.return_policy_id || null,
+    etsy_made_to_order: false, etsy_readiness_state_id: null,
+    etsy_auto_renew: !!l.should_auto_renew, etsy_ads: false,
+    created_at: first ? new Date(first * 1000).toISOString() : now(),
+  });
+};
 const normalizeListingIds = async rows => {
   const arr = Array.isArray(rows) ? rows : [];
   let changed = false;
@@ -1739,7 +1771,7 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING FORM
 ══════════════════════════════════════════════════════════════════════════ */
-function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onClose, who, admin = false, startTab = "overview" }) {
+function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onClose, who, admin = false, startTab = "overview", startSteps = null }) {
   const editing = !!initial?.id;
   const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
 
@@ -1931,7 +1963,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   });
 
   // Price calculator state
-  const [steps, setSteps] = useState(null);   // the listing steps: null | "where" | "price"
+  // The listing steps: null | "where" | "price". A renewal opens straight into them.
+  const [steps, setSteps] = useState(startSteps);
   const studioPrefs = useMemo(() => { try { return JSON.parse(localStorage.getItem("lm-price-prefs") || "{}") || {}; } catch { return {}; } }, []);
   const linkedCard = stock.find(s => s.id === form.linked_stock_id) || null;
   /* The stock card is where the piece's place and count live. Linked, the
@@ -2433,7 +2466,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               <div style={{ display: "flex", flexDirection: phone ? "column" : "row", gap: phone ? 12 : 24, marginTop: 12 }}>
                 {[
                   { field: "etsy_made_to_order", label: "Made to order",   sub: "Off = ready to ship from stock" },
-                  { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "₹0.20/renewal every 4 months" },
+                  { field: "etsy_auto_renew", label: "Auto-renew listing", sub: "$0.20/renewal every 4 months" },
                   { field: "etsy_ads",        label: "Run Etsy Ads",       sub: "Promotes listing in search" },
                 ].map(({ field, label, sub }) => (
                   <label key={field} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", flex: 1 }}>
@@ -9606,6 +9639,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [tab,        setTab]        = useState(startTab);
   const [showForm,   setShowForm]   = useState(false);
   const [editing,    setEditing]    = useState(null);
+  const [formSteps,  setFormSteps]  = useState(null);   // open the form on its listing steps (a renewal)
+  const [renewCount, setRenewCount] = useState(0);      // what the Renew tab has left to decide
   const [soldModal,  setSoldModal]  = useState(null);
   const [view,       setView]       = useState(() => { try { return localStorage.getItem("lm-view") || "grid"; } catch { return "grid"; } });
   useEffect(() => { try { localStorage.setItem("lm-view", view); } catch {} }, [view]);
@@ -9877,6 +9912,32 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     showToast?.(`Ready — set the ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} price, then publish`);
   };
 
+  /* Renew, from the Renew tab: the expired (or ending) Etsy listing opens on
+     the listing steps, as a piece being listed — where it goes, its stock card,
+     prices, publish — so it goes back up checked and tied to its stock rather
+     than re-listed blind. The ERP's own listing for it when there is one;
+     otherwise one made from what Etsy holds, carrying the Etsy id, so
+     publishing renews that listing instead of making a second. Nothing is
+     saved until the steps save it. */
+  const renewFromQueue = async row => {
+    const status = row.state === "expired" ? "expired" : "active";
+    let base = listings.find(l => String(l.platforms?.etsy?.listing_id || "") === row.id);
+    if (!base) {
+      const tok = await getEtsyToken();
+      const r = await fetch(`/api/etsy?action=renewal_listing&listing_id=${row.id}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
+      base = listingFromEtsy(d.listing, stock);
+    }
+    base = {
+      ...base,
+      platforms: { ...(base.platforms || {}), etsy: { ...(base.platforms?.etsy || {}), listing_id: base.platforms?.etsy?.listing_id || +row.id, url: base.platforms?.etsy?.url || row.url, status } },
+      // Still on sale: there is nothing to renew yet, so it renews itself when it ends.
+      ...(status === "active" ? { etsy_auto_renew: true } : {}),
+    };
+    setEditing(base); setFormSteps("where"); setShowForm(true);
+  };
+
   const removeListingItem = async id => {
     const next = await deleteItemK(LIST_KEY, id);
     if (Array.isArray(next)) setListings(next);
@@ -9920,7 +9981,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       showToast(`⚠️ ${e.message}`, 8000);
       return;
     }
-    setShowForm(false); setEditing(null);
+    setShowForm(false); setEditing(null); setFormSteps(null);
     showToast(exists ? "✓ Listing updated" : "✓ Listing created");
 
     // Auto-sync any platform already linked (draft or active) + any newly checked ones
@@ -10595,6 +10656,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const TABS = [
     { key: "listings", label: "All Listings", count: listings.length },
     { key: "orders",   label: "Orders",       count: orders.length,  color: C.green },
+    { key: "renew",    label: "Renew",        count: renewCount,     color: "#F56400" },
     ...PLATFORMS.filter(p => !p.coming).map(p => ({
       key: p.key, label: p.label, icon: p.icon, color: p.color,
       count: listings.filter(l => ["active", "draft"].includes(l.platforms?.[p.key]?.status)).length,
@@ -10822,6 +10884,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
 
         {/* ══ ORDERS ══ */}
+        {tab === "renew" && <RenewalQueue listings={listings} stock={stock} getToken={getEtsyToken} onRenew={renewFromQueue} showToast={showToast} who={who} onCount={setRenewCount} />}
         {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
 
         {/* ══ PLATFORM TABS ══ */}
@@ -10871,6 +10934,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           sold={!!editing && editing.type !== "repeatable" && orders.some(o => o.listing_id === editing.id) && !PLATFORMS.some(p => editing.platforms?.[p.key]?.status === "active")}
           who={who}
           admin={currentUser?.role === "admin"}
+          startSteps={formSteps}
           onSave={handleSave}
           onPublishOne={async (listing, pkey) => {
             /* Runs here, not in the steps box, so closing the box leaves it
@@ -10896,7 +10960,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               throw e;
             } finally { publishingNow.current.delete(flight); }
           }}
-          onClose={() => { setShowForm(false); setEditing(null); }}
+          onClose={() => { setShowForm(false); setEditing(null); setFormSteps(null); }}
         />
       )}
       {liveSheet && (

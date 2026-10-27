@@ -488,7 +488,7 @@ function AdBars({ m }) {
 const countShort = v => Number.isInteger(v) ? String(v) : v.toFixed(1);
 const countFull = v => plural(Math.round(v), "listing");
 
-function ListingsRow({ lm, err, loading, usdRate, onOpen }) {
+function ListingsRow({ lm, err, loading, usdRate, onOpen, onRenew }) {
   if (!lm) {
     return (
       <div style={{ ...card, marginBottom: 11 }}>
@@ -505,11 +505,13 @@ function ListingsRow({ lm, err, loading, usdRate, onOpen }) {
   const box = { background: C.card, borderRadius: 10, padding: "9px 12px", minWidth: 0 };
   const big = { fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: mob ? 26 : 30, fontWeight: 600, color: C.ink, lineHeight: 1.1 };
   const offNote = (n, off) => !n ? "nothing ending" : off === n ? `auto-renew is off on all ${n} — they'll come off the shop` : `${off} will come off the shop · ${n - off} auto-renew`;
+  // The ending and expired rows open the Renew queue, where each is renewed or skipped.
+  const renew = onRenew || onOpen;
   const health = [
-    ["🟢", "Active", c.active, `listed on Etsy now${c.sold_out ? ` · ${c.sold_out} sold out` : ""}`, null],
-    ["⏳", "Ending in 7 days", lm.in7, offNote(lm.in7, lm.in7Off), lm.in7Off ? C.red : null],
-    ["🗓️", "Ending in 30 days", lm.in30, lm.in30 ? `${offNote(lm.in30, lm.in30Off)} · renewing all ≈ ${usd(renewUSD)} (${rs(renewUSD * usdRate)})` : "nothing ending", lm.in30Off ? C.amber : null],
-    ["⛔", "Expired", c.expired, `${lm.expired30} in the last 30 days · ${lm.expired7} this week`, null],
+    ["🟢", "Active", c.active, `listed on Etsy now${c.sold_out ? ` · ${c.sold_out} sold out` : ""}`, null, onOpen],
+    ["⏳", "Ending in 7 days", lm.in7, offNote(lm.in7, lm.in7Off), lm.in7Off ? C.red : null, renew],
+    ["🗓️", "Ending in 30 days", lm.in30, lm.in30 ? `${offNote(lm.in30, lm.in30Off)} · renewing all ≈ ${usd(renewUSD)} (${rs(renewUSD * usdRate)})` : "nothing ending", lm.in30Off ? C.amber : null, renew],
+    ["⛔", "Expired", c.expired, `${lm.expired30} in the last 30 days · ${lm.expired7} this week · renew or skip each →`, null, renew],
   ];
   return (
     <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1.5fr) minmax(0,1fr)", gap: 11, marginBottom: 11 }}>
@@ -545,10 +547,11 @@ function ListingsRow({ lm, err, loading, usdRate, onOpen }) {
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
           <div style={eyebrow}>Shop listings</div>
           <div style={{ flex: 1 }} />
+          {onRenew && <button onClick={onRenew} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0, marginRight: 10 }}>Renew queue →</button>}
           <button onClick={onOpen} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.gold, fontWeight: 600, padding: 0 }}>Open →</button>
         </div>
-        {health.map(([icon, label, n, hint, tone]) => (
-          <div key={label} className="pz-row" onClick={onOpen} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, cursor: "pointer" }}>
+        {health.map(([icon, label, n, hint, tone, go]) => (
+          <div key={label} className="pz-row" onClick={go} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 8px", borderRadius: 10, cursor: "pointer" }}>
             <span style={{ width: 30, height: 30, borderRadius: 8, background: tone === C.red ? C.redBg : tone === C.amber ? C.amberBg : C.card, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>{icon}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{label}</div>
@@ -823,7 +826,7 @@ export default function EtsyPulse({ onEnter, rates }) {
       </div>
 
       {/* ── Row 3: listings — what's new, and what's about to drop off ── */}
-      <ListingsRow lm={lm} err={lerr} loading={lloading} usdRate={m.usdRate} onOpen={() => onEnter("etsy")} />
+      <ListingsRow lm={lm} err={lerr} loading={lloading} usdRate={m.usdRate} onOpen={() => onEnter("etsy")} onRenew={() => onEnter("etsy", "renew")} />
 
       {/* ── Row 4: ad spend ── */}
       <div style={{ ...card, display: "grid", gridTemplateColumns: mob ? "1fr" : "minmax(0,1fr) minmax(0,1.5fr)", gap: mob ? 12 : 24 }}>

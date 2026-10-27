@@ -342,6 +342,131 @@ export default async function handler(req, res) {
       });
     }
 
+    // ── renewal_queue: listings that have come off the shop, and the ones about to ─
+    // For Listing Manager's Renew tab. Expired listings most recently ended first
+    // (a listing ends four months after its last renewal, so newest-created is
+    // newest-ended), back to ?back=<days> (default 365); active listings ending
+    // within ?days=<n> (default 30), soonest first. Each row carries what the
+    // renew-or-skip call needs from the listing itself — age, views, favourites —
+    // and no description, so a long queue stays a small reply. Sales are a call
+    // of their own (renewal_stats): one Etsy request per listing, so they are
+    // only asked for the rows on screen.
+    if (action === "renewal_queue") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const days = Math.min(60, Math.max(1, parseInt(req.query.days, 10) || 30));
+      const back = Math.min(1500, Math.max(1, parseInt(req.query.back, 10) || 365));
+      const soon = nowS + days * 86400, since = nowS - back * 86400;
+      const { getJson, pagesWhile } = etsyQueue(authHeaders);
+      const url = (state, offset, order) =>
+        `https://openapi.etsy.com/v3/application/shops/${sid}/listings?${new URLSearchParams({ state, limit: "100", offset: String(offset), sort_on: "created", sort_order: order, includes: "Images" })}`;
+      // Expired pages are read together once the first says how many there are —
+      // one after another took twenty seconds. Twelve pages at most: a queue
+      // longer than 1,200 is worked through over weeks, newest first.
+      const expiredRows = async () => {
+        const first = await getJson(url("expired", 0, "desc"));
+        const rows = [...(first.results || [])];
+        const count = +first.count || rows.length;
+        if (rows.length === 100 && +rows[99].ending_timestamp >= since) {
+          const offsets = [];
+          for (let o = 100; o < Math.min(count, 1200); o += 100) offsets.push(o);
+          (await Promise.all(offsets.map(o => getJson(url("expired", o, "desc"))))).forEach(p => rows.push(...(p.results || [])));
+        }
+        return { rows, count };
+      };
+      const [ending, expired] = await Promise.all([
+        pagesWhile(o => url("active", o, "asc"), last => +last.ending_timestamp <= soon),
+        expiredRows(),
+      ]);
+      const row = l => {
+        const img = [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
+        return {
+          id: String(l.listing_id),
+          title: String(l.title || "").slice(0, 140),
+          state: l.state,
+          ends: +l.ending_timestamp || 0,
+          first: +l.original_creation_timestamp || +l.creation_timestamp || 0,
+          renewed: +l.created_timestamp || 0,
+          views: l.views != null ? +l.views : null,
+          favs: +l.num_favorers || 0,
+          qty: +l.quantity || 0,
+          price: l.price?.amount != null ? (+l.price.amount || 0) / (+l.price.divisor || 100) : 0,
+          cur: l.price?.currency_code || "",
+          auto: !!l.should_auto_renew,
+          sku: (l.skus || [])[0] || "",
+          variations: !!l.has_variations,
+          img: img ? img.url_170x135 || img.url_570xN || img.url_75x75 || "" : "",
+          url: l.url || `https://www.etsy.com/listing/${l.listing_id}`,
+        };
+      };
+      return res.json({
+        ok: true, at: nowS, days, back,
+        counts: { expired: expired.count, ending: ending.rows.filter(l => +l.ending_timestamp <= soon).length },
+        expired: expired.rows.filter(l => +l.ending_timestamp >= since).map(row),
+        ending: ending.rows.filter(l => +l.ending_timestamp <= soon).map(row),
+      });
+    }
+
+    // ── renewal_stats: what each listing has sold, for the renew-or-skip call ──
+    // ?ids=1,2,3 (up to 25). Etsy's transactions for one listing — every unit
+    // sold through it, whichever receipt it was on. Lifetime, the last four
+    // months (one listing term, what a renewal buys) and the last year.
+    if (action === "renewal_stats") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const ids = [...new Set(String(req.query.ids || "").split(",").map(s => s.trim()).filter(s => /^\d+$/.test(s)))].slice(0, 25);
+      if (!ids.length) return res.status(400).json({ error: "ids required" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
+      const { getJson } = etsyQueue(authHeaders);
+      const page = (id, offset) => getJson(`https://openapi.etsy.com/v3/application/shops/${sid}/listings/${id}/transactions?limit=100&offset=${offset}`);
+      const stats = {};
+      await Promise.all(ids.map(async id => {
+        try {
+          const first = await page(id, 0);
+          const txns = [...(first.results || [])];
+          const count = +first.count || txns.length;
+          // A repeatable piece can pass a hundred sales; read on (to a thousand)
+          // rather than guess which end of the list Etsy put the recent ones.
+          for (let o = 100; o < Math.min(count, 1000); o += 100) txns.push(...((await page(id, o)).results || []));
+          const s = { orders: count, units: 0, revenue: 0, last: 0, u120: 0, u365: 0, cur: "" };
+          const seen = new Set();
+          for (const t of txns) {
+            if (seen.has(t.transaction_id)) continue;
+            seen.add(t.transaction_id);
+            const ts = +t.created_timestamp || +t.create_timestamp || +t.paid_timestamp || 0;
+            const q = +t.quantity || 1;
+            s.units += q;
+            s.revenue += money(t.price) * q;
+            s.cur = s.cur || t.price?.currency_code || "";
+            if (ts > s.last) s.last = ts;
+            if (ts >= nowS - 120 * 86400) s.u120 += q;
+            if (ts >= nowS - 365 * 86400) s.u365 += q;
+          }
+          s.revenue = Number(s.revenue.toFixed(2));
+          if (count > txns.length) s.partial = true;
+          stats[id] = s;
+        } catch (e) { stats[id] = { error: e.message }; }
+      }));
+      return res.json({ ok: true, at: nowS, stats });
+    }
+
+    // ── renewal_listing: one listing whole, photos included, to pre-fill the form ─
+    // The batch endpoint answers for a listing in any state — the single-listing
+    // one only for what's on sale — so an expired listing reads back too.
+    if (action === "renewal_listing") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const id = String(req.query.listing_id || "").replace(/\D/g, "");
+      if (!id) return res.status(400).json({ error: "listing_id required" });
+      const { getJson } = etsyQueue(authHeaders);
+      const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${id}&includes=Images`);
+      const listing = (d.results || [])[0];
+      if (!listing) return res.status(404).json({ error: "Etsy has no listing with that id" });
+      return res.json({ ok: true, listing });
+    }
+
     // ── receipt: single receipt by ID (requires OAuth) ─────────────────────────
     if (action === "receipt") {
       if (!receipt_id) return res.status(400).json({ error: "receipt_id required" });
@@ -914,7 +1039,7 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, renewal_queue, renewal_stats, renewal_listing, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }

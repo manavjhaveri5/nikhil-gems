@@ -255,9 +255,12 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
   // One platform at a time from the last step: publish it, then link to it live.
   const [one, setOne] = useState({});   // key → { busy, url, error }
   /* Putting a piece live on Etsy costs a $0.20 listing fee (an update to one
-     that's already live doesn't), so it asks first. */
+     that's already live doesn't), so it asks first. An expired listing is
+     renewed by the same publish, for the same fee. */
   const etsyFeeOk = () => linkOf(form, "etsy").status === "active"
-    || window.confirm("Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.");
+    || window.confirm(linkOf(form, "etsy").status === "expired"
+      ? "Renew on Etsy?\n\nEtsy charges a $0.20 listing fee to renew it for another four months."
+      : "Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.");
   const publishOne = async key => {
     if (key === "etsy" && !etsyFeeOk()) return;
     setOne(x => ({ ...x, [key]: { busy: true } }));
@@ -393,7 +396,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                     <span style={{ display: "block", fontSize: 16, fontWeight: 700, color: C.ink }}>{c.label}</span>
                     <span style={{ display: "block", fontSize: 12, color: C.inkMid }}>{PLACE[c.key]}</span>
                   </span>
-                  {ln.linked && <span style={{ fontSize: 11, fontWeight: 800, color: ln.status === "active" ? C.green : C.amber }}>{ln.status === "active" ? "Live" : "Draft"}</span>}
+                  {ln.linked && <span style={{ fontSize: 11, fontWeight: 800, color: ln.status === "active" ? C.green : ln.status === "expired" ? C.red : C.amber }}>{ln.status === "active" ? "Live" : ln.status === "expired" ? "Expired" : "Draft"}</span>}
                 </button>
               );
             })}
@@ -629,6 +632,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                         const l = linkOf(form, c.key);
                         if (!l.linked) return null;
                         const isDraft = l.status !== "active";
+                        if (l.status === "expired") return <span style={{ marginLeft: 8, fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em", color: C.red }}>— expired there, publishing renews it</span>;
                         return <span style={{ marginLeft: 8, fontSize: 11.5, fontWeight: 800, letterSpacing: ".04em",
                           color: isDraft ? C.amber : C.green }}>{isDraft ? "— already a draft there" : "— already live"}</span>;
                       })()}
@@ -651,7 +655,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                        whether it was active, so a draft read as nothing at all —
                        the step offered to publish a piece that Etsy was already
                        holding, and said nothing about the draft sitting there. */
-                    const draft = !url && ln.linked && ln.status !== "deleted";
+                    const expired = !url && ln.linked && ln.status === "expired";
+                    const draft = !url && !expired && ln.linked && ln.status !== "deleted";
                     const draftUrl = draft ? (ln.admin || ln.live || "") : "";
                     const noPrice = /No price/.test(price);
                     return (
@@ -664,7 +669,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                         <button type="button" disabled={st.busy || noPrice || pieceMissing.length > 0} onClick={() => publishOne(c.key)}
                           style={{ fontSize: 13, fontWeight: 800, borderRadius: 8, padding: "7px 14px", cursor: st.busy ? "wait" : "pointer", border: url ? `1px solid ${C.border}` : "none",
                             background: url ? C.surface : C.ink, color: url ? C.ink : "#FAF0DC", opacity: noPrice || pieceMissing.length ? .4 : 1 }}>
-                          {st.busy ? "Publishing…" : url ? "Update" : draft ? "Update the draft" : `Publish on ${c.label}`}</button>
+                          {st.busy ? (expired ? "Renewing…" : "Publishing…") : url ? "Update" : expired ? `Renew on ${c.label}` : draft ? "Update the draft" : `Publish on ${c.label}`}</button>
                         {st.busy && <span style={{ fontSize: 12, color: C.inkMid }}>You can close this — it carries on, and a message says when it's live.</span>}
                       </div>
                     );
