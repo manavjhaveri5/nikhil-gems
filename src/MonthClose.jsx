@@ -3,6 +3,8 @@ import { C, FI } from "./ui.jsx";
 import { mob, fmtDate, loadK, upsertItemK, onCacheRefresh } from "./utils.js";
 import { paymentChecks, balanceChecks, statementsKey, statementId, monthEndDate, monthLabel } from "./monthClose.js";
 import { remittanceChecks, NG_REMIT_KEY, AT_META_KEY, isEefc } from "./remittances.js";
+import { NG_BANK_SB_KEY, reconCloseId } from "./reconMonth.js";
+import { ReconMonthView, reconMonthFor, useReconCloses } from "./ReconMonth.jsx";
 
 /* Month close — one company, one month, the four checks side by side (see
    monthClose.js). Rendered inside the Ledger, so "Classify →" drops you on the
@@ -180,6 +182,14 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
   }), [company, month, accounts, txns, ngRemits, ngInvoices, atMeta]);
   const remName = company === "at" ? "FIRC" : "remittance";
 
+  // Export Recon for the month: shipping bills ↔ invoices ↔ remittances.
+  const reconCo = company === "at" ? "atyahara" : "nikhil";
+  const bankSbs = useKey(company === "at" ? null : NG_BANK_SB_KEY, null);
+  const recon = useMemo(() => reconMonthFor(reconCo, month, { invoices: ngInvoices, remittances: ngRemits, bankSbs, atMeta }), [reconCo, month, ngInvoices, ngRemits, bankSbs, atMeta]);
+  const [closes, saveClose] = useReconCloses();
+  const reconRec = closes.find(r => r.id === reconCloseId(reconCo, month)) || null;
+  const reconSigned = !!reconRec?.reconciledAt;
+
   const tiles = [
     { id: "payments", title: "Payments classified", open: pay.unclassified.length, okText: `all ${pay.payments.length}`,
       detail: pay.noBill.length ? `${pay.noBill.length} vendor payment${pay.noBill.length === 1 ? "" : "s"} with no bill linked` : `${pay.payments.length} payment${pay.payments.length === 1 ? "" : "s"} this month` },
@@ -187,6 +197,8 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
       detail: balOpen ? `${bal.filter(b => !b.statement).length} without a statement · ${bal.filter(b => b.statement && !b.ok).length} off` : "Every account ties to its statement" },
     { id: "remit", title: "BOI remittances", open: rem.open, okText: `${rem.rows.length} entered`,
       detail: rem.open ? `${rem.unentered.length} in the bank, not entered · ${rem.rows.filter(r => !r.ok).length} incomplete` : `${rem.rows.length} ${remName}${rem.rows.length === 1 ? "" : "s"} this month, all tied` },
+    { id: "recon", title: "Export recon", open: recon.fix.length + (reconSigned ? 0 : 1), okText: "reconciled",
+      detail: `${recon.rows.length} SB${recon.rows.length === 1 ? "" : "s"} · ${recon.outstanding.length} outstanding${recon.fix.length ? ` · ${recon.fix.length} to fix` : ""} · ${reconSigned ? "signed off" : "not signed off"}` },
   ];
 
   return (
@@ -275,6 +287,18 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
             })}
           </Block>
           {rem.undated.length > 0 && <div style={{ fontSize: 11.5, color: C.amber }}>{rem.undated.length} {remName}{rem.undated.length === 1 ? " has" : "s have"} no date, so {rem.undated.length === 1 ? "it isn't" : "they aren't"} counted in any month — date {rem.undated.length === 1 ? "it" : "them"} in Export Recon.</div>}
+        </div>
+      )}
+
+      {section === "recon" && (
+        <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: C.inkMid }}>Each shipping bill of {monthLabel(month)} against its invoice and the {company === "at" ? "FIRC" : "remittance(s)"} that realised it.</div>
+            {onOpenRecon && <button className="bs" style={{ fontSize: 11.5, padding: "5px 11px" }} onClick={() => onOpenRecon(company === "at" ? "month" : "ngmonth")}>Open in Export Recon →</button>}
+          </div>
+          <ReconMonthView company={reconCo} month={month} result={recon} closeRec={reconRec} compact
+            onSignOff={() => saveClose({ id: reconCloseId(reconCo, month), company: reconCo, month, reconciledAt: new Date().toISOString(), outstanding: recon.outstanding.length, fixCount: recon.fix.length })}
+            onReopen={() => saveClose({ ...reconRec, reconciledAt: null, reopenedAt: new Date().toISOString() })} />
         </div>
       )}
 

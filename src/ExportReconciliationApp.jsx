@@ -6,6 +6,7 @@ import { fillExportBillForm } from "./fillExportBillForm.js";
 import atyaharaSeedBundle from "./exportReconAtyaharaSeed.json";
 import { invRemitLinks, withRemitLink, withoutRemitLink, atFircMissing } from "./remittances.js";
 import RemittanceRegister from "./RemittanceRegister.jsx";
+import ReconMonth from "./ReconMonth.jsx";
 
 /* ══ ERP THEME TOKENS ═══════════════════════════════════════════
    Mirror src/theme.css CSS variables so this module inherits the
@@ -2020,7 +2021,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
   useEffect(() => { try { sessionStorage.removeItem("er-open-view"); } catch {} }, []);
   // NG defaults to the per-invoice sheet; Atyahara has no such tab.
   useEffect(() => {
-    setView(v => company === "nikhil" ? (v === "ngremit" ? v : "ngsheet") : (v === "ngsheet" || v === "ngremit" ? "fircs" : v));
+    setView(v => company === "nikhil" ? (v === "ngremit" || v === "ngmonth" ? v : "ngsheet") : (v === "ngsheet" || v === "ngremit" ? "fircs" : v === "ngmonth" ? "month" : v));
   }, [company]);
   const [sheet, setSheet]       = useState(null);
   const openSheet = useCallback(s => { if (s) learner.track("sheet:open",{type:s.type}); setSheet(s); }, []);
@@ -2363,6 +2364,7 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
     {key:"sbs",      icon:"📦", label:"Shipping Bills",   badge:data.shippingBills.length},
     {key:"invoices", icon:"🧾", label:"Invoices",         badge:pendingInvoices||null, badgeAlert:!!pendingInvoices},
     {key:"match",    icon:"⇄",  label:"Match",            badge:unmatched||null, badgeAlert:true},
+    {key:"month",    icon:"📅", label:"Month"},
     {key:"stats",    icon:"📊", label:"Stats"},
     {key:"ai",       icon:"🤖", label:"AI Insights"},
     {key:"fema",     icon:"📄", label:"FEMA Declaration", badge:hasFema?null:"!", badgeAlert:true},
@@ -2453,14 +2455,16 @@ export default function App({ company = "atyahara", onCreateInvoiceFromSb, rende
         {/* NG has no sidebar: its views switch here. */}
         {company==="nikhil"&&(
           <div style={{display:"flex",gap:3,background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:3,width:"fit-content",marginBottom:14}}>
-            {[["ngsheet","🗂 Invoice Sets"],["ngremit","💵 Remittances"]].map(([k,l])=>(
+            {[["ngsheet","🗂 Invoice Sets"],["ngremit","💵 Remittances"],["ngmonth","📅 Month"]].map(([k,l])=>(
               <button key={k} onClick={()=>setView(k)} style={{border:"none",borderRadius:7,padding:"6px 12px",fontSize:12.5,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:view===k?C.ink:"transparent",color:view===k?C.surface:C.inkMid}}>{l}</button>
             ))}
           </div>
         )}
-        {view!=="ngsheet"&&view!=="ngremit"&&<HowItWorks setView={setView}/>}
+        {!["ngsheet","ngremit","ngmonth","month"].includes(view)&&<HowItWorks setView={setView}/>}
         {view==="ngsheet"  && company==="nikhil" && <NgInvoiceSheet renderInvoicePdf={renderInvoicePdf}/>}
         {view==="ngremit"  && company==="nikhil" && <RemittanceRegister aiExtract={aiExtract}/>}
+        {view==="ngmonth"  && company==="nikhil" && <ReconMonth company="nikhil"/>}
+        {view==="month"    && company!=="nikhil" && <ReconMonth company="atyahara" atMeta={data}/>}
         {view==="fircs"    && <FircsView    data={data} fircUsed={fircUsed} onAdd={addFirc} onDelete={deleteFirc} onUpdate={updateFirc} showPdf={showPdf} setSheet={openSheet}/>}
         {view==="sbs"      && <SBsView      data={data} onAdd={addSb} onDelete={deleteSb} onPatch={patchSb} onCycle={cycleStatus} setSheet={openSheet} onGen={generatePacket} genId={genId} hasFema={hasFema} pdfReady={pdfReady} pdfErr={pdfErr} showPdf={showPdf}/>}
         {view==="invoices" && <InvoicesView data={data} onAddInvoice={addInvoice} onPatchInvoice={patchInvoice} onDeleteInvoice={deleteInvoice} onApprove={approveInvoice} showPdf={showPdf} onCreateInvoiceFromSb={onCreateInvoiceFromSb}/>}
