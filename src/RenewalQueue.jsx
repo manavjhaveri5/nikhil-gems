@@ -7,15 +7,17 @@
    remembered, so a piece passed over once doesn't keep coming back.
    What each listing cost comes from Etsy's payment ledger: its listing and
    renewal fees, the fees on its sales, what the sales came to, and so what
-   each four months on the shop has been worth. */
+   each four months on the shop has been worth. Pieces like it that sold —
+   same stone and shape, near its price — say whether a listing that hasn't
+   sold yet is still worth a term. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, mob } from "./lmTheme.js";
 import { loadK, upsertItemK, deleteItemK } from "./utils.js";
 
 export const RENEWALS_KEY = "ng-etsy-renewals-v1";   // [{ id: Etsy listing id, decision: "skip" | "renewed", at, by, title }]
-const QUEUE_CACHE = "ng-renew-queue-v1";
-const STATS_CACHE = "ng-renew-stats-v1";
-const LEDGER_CACHE = "ng-renew-ledger-v1";
+// IndexedDB keys (see store below); the -v1 names were localStorage, and are cleared.
+const QUEUE_CACHE = "queue", STATS_CACHE = "stats", LEDGER_CACHE = "ledger-v2", BRIEFS_CACHE = "briefs";
+const OLD_LS_KEYS = ["ng-renew-queue-v1", "ng-renew-stats-v1", "ng-renew-ledger-v1"];
 const RATES_KEY = "ng-fin-rates-v1";   // INR per unit of each currency, kept by Finance
 /* The ledger is read in 30-day windows counted from this date (the same count
    as /api/etsy renewal_ledger), so a past window never changes and is kept.
@@ -32,8 +34,29 @@ const BATCH = 20;
 const PAGE = 30;
 const serif = "'Cormorant Garamond',Georgia,serif";
 
-const readJSON = k => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
-const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+/* The queue's caches — the listings, their sales, three years of ledger —
+   run to several hundred KB, so they live in IndexedDB. In localStorage they
+   would crowd out the app's own data snapshot, which is dropped when the quota
+   runs out, and every screen would lose its fast start. A browser that won't
+   open IndexedDB (some private windows) just reads Etsy again. */
+const store = (() => {
+  let db = null;
+  const open = () => db || (db = new Promise((res, rej) => {
+    const r = indexedDB.open("ng-renew", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }));
+  const run = (mode, fn) => open().then(d => new Promise((res, rej) => {
+    const t = d.transaction("kv", mode), q = fn(t.objectStore("kv"));
+    t.oncomplete = () => res(q.result);
+    t.onerror = () => rej(t.error);
+  }));
+  return {
+    get: k => run("readonly", s => s.get(k)).catch(() => null),
+    set: (k, v) => run("readwrite", s => s.put(v, k)).catch(() => {}),
+  };
+})();
 const inr = v => `₹${Math.round(+v || 0).toLocaleString("en-IN")}`;
 // Short rupees for a stat box: ₹840, ₹4.5k, ₹19k, ₹1.2L.
 const inrK = v => {
@@ -111,6 +134,80 @@ function economics(row, idx, coverFrom, nowS) {
   };
 }
 
+/* Stone and shape, for "similar pieces that sold". The ERP's own material and
+   shape when it has them; otherwise the title, which in this shop reads
+   "[size] Stone Shape - description": the first part that isn't only a size,
+   its shape word, and what's left once that and the filler words are out as
+   the stone — matched to a stone the stock and listings already name when one
+   fits ("Green Apophyllite with Stilbite" → apophyllite). */
+const TITLE_SHAPES = [
+  [/\b(shiva ?)?lingams?\b|\bshivalingams?\b/i, "Lingam"], [/\bmerkabas?( stars?)?\b/i, "Merkaba"], [/\bpendulums?\b/i, "Pendulum"],
+  [/\b(mini )?hearts?\b/i, "Heart"], [/\bspheres?\b|\borbs?\b/i, "Sphere"], [/\bpalm ?stones?\b|\bworry stones?\b/i, "Palmstone"],
+  [/\beggs?\b/i, "Egg"], [/\bskulls?\b/i, "Skull"], [/\bpyramids?\b/i, "Pyramid"], [/\bwands?\b/i, "Wand"], [/\bbowls?\b/i, "Bowl"],
+  [/\btowers?\b|\bpoints?\b|\bobelisks?\b|\bgenerators?\b/i, "Tower"], [/\bbracelets?\b/i, "Bracelet"], [/\bpendants?\b|\bnecklaces?\b/i, "Pendant"],
+  [/\bmalas?\b/i, "Mala"], [/\bcabochons?\b/i, "Cabochon"], [/\bslabs?\b|\bslices?\b/i, "Slab"], [/\bgeodes?\b/i, "Geode"], [/\bclusters?\b/i, "Cluster"],
+  [/\bspecimens?\b/i, "Specimen"], [/\btumbled?\b|\btumbles\b/i, "Tumbled"], [/\bfree ?forms?\b/i, "Freeform"], [/\bsets?\b|\bkits?\b/i, "Set"],
+  [/\bchips\b/i, "Chips"], [/\bbeads?\b/i, "Beads"],
+  [/\bcarvings?\b|\bfigurines?\b|\b(ganesha|buddha|idol|deity|angel|dragon|owl|elephant)s?\b/i, "Carving"], [/\brough\b|\braw\b/i, "Rough"],
+];
+const ERP_SHAPE = { Point: "Tower", Chips: "Tumbled" };   // the ERP's word → the title's
+const FILLER = /\b(natural|genuine|polished|raw|rough|a{2,3}|grade|top|quality|mini|small|large|big|huge|xl|hand|carved|handmade|crystals?|stones?|gemstones?|healing|reiki|meditation|premium|rare|unique|ooak|bulk|massive|the|and|for|in|with|pieces?|pcs|lot|of)\b/gi;
+const SIZES = /\b\d+(\.\d+)?\s*([-–x]|to)?\s*\d*(\.\d+)?\s*(g|gm|gms|grams?|kg|mm|cm|inch(es)?|in|ct|carats?)\b|#\d+/gi;
+function pieceOf(title, erp, vocab) {
+  let stone = String(erp?.material || "").trim(), shape = "";
+  const es = String(erp?.shape || "");
+  if (es && !/^(other|mineral)$/i.test(es)) shape = ERP_SHAPE[es] || es.replace(/\s*-.*$/, "");   // "Bowl - 3 inch" → Bowl
+  const main = unescape(title).split(/\s+[-–—|:]\s*|[-–—]\s+|[|:(,]/).map(p => p.replace(SIZES, " ").trim()).find(p => /[a-z]{3}/i.test(p)) || "";
+  if (!shape) shape = (TITLE_SHAPES.find(([re]) => re.test(main)) || [])[1] || "";
+  if (!stone) {
+    let rest = main;
+    for (const [re] of TITLE_SHAPES) rest = rest.replace(new RegExp(re.source, "gi"), " ");
+    rest = rest.replace(FILLER, " ").replace(/[^a-z' ]/gi, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    stone = vocab.find(v => ` ${rest} `.includes(` ${v} `)) || rest;
+  }
+  return { stone: stone.toLowerCase(), shape };
+}
+const sameStone = (a, b) => !!a && !!b && (a === b || ` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `));
+const titleCase = t => String(t).replace(/\b[a-z]/g, c => c.toUpperCase());
+const shapes = (sh, n = 2) => n === 1 || /(tumbled|rough|s)$/i.test(sh) ? sh.toLowerCase() : `${sh.toLowerCase()}s`;
+// Etsy hands titles back HTML-escaped ("Tiger&#39;s Eye").
+const unescape = t => String(t || "").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+
+/* What sold in the last year that is like this listing: the same stone and
+   shape within 40% of its price; else the same stone and shape at any price;
+   else the stone in any shape. Units, what buyers paid on average, the latest
+   sale, and the three latest of those listings to look at. */
+function similarFor(row, mine, sold) {
+  if (!mine?.stone) return null;
+  const others = sold.filter(x => x.lid !== row.id && sameStone(x.stone, mine.stone));
+  const shaped = mine.shape ? others.filter(x => x.shape === mine.shape) : [];
+  const band = row.price > 0 ? shaped.filter(x => x.unit >= row.price * 0.6 && x.unit <= row.price * 1.4) : [];
+  const [tier, set] = band.length ? ["band", band] : shaped.length ? ["shape", shaped] : others.length ? ["stone", others] : ["none", []];
+  const units = set.reduce((n, x) => n + x.qty, 0);
+  const recent = [...set].sort((a, b) => b.ts - a.ts);
+  const items = [];
+  for (const x of recent) { if (!items.some(i => i.lid === x.lid)) items.push(x); if (items.length === 3) break; }
+  const label = tier === "stone" ? `${titleCase(mine.stone)} ${units === 1 ? "piece" : "pieces"} (any shape)`
+    : `${titleCase(mine.stone)} ${shapes(mine.shape, units)}${tier === "band" ? ` at ${inrK(row.price * 0.6)}–${inrK(row.price * 1.4)}` : ""}`;
+  return { ...mine, tier, label, units, avg: units ? set.reduce((n, x) => n + x.paid * x.qty, 0) / units : 0, last: recent[0]?.ts || 0, items,
+    shapeUnits: shaped.reduce((n, x) => n + x.qty, 0), stoneUnits: others.reduce((n, x) => n + x.qty, 0) };
+}
+
+/* A listing with no sale of its own leans on what its kind does: three or
+   more of the same stone and shape sold in the year moves Maybe to Renew (and
+   Skip to Maybe); nothing of the stone sold at all moves Maybe to Skip. A
+   custom order or an empty stock card stays a Skip. */
+function nudge(base, st, sim) {
+  if (!sim || base.hard || !base.v || !st || st.error || st.units) return base;
+  const what = sim.shapeUnits ? `${sim.shapeUnits} similar ${shapes(sim.shape, sim.shapeUnits)}` : `${sim.stoneUnits} ${titleCase(sim.stone)} ${sim.stoneUnits === 1 ? "piece" : "pieces"}`;
+  const but = /\bbut\b/.test(base.why) ? "still," : "but";
+  if (sim.shapeUnits >= 3 && base.v === "maybe") return { v: "renew", why: `${base.why} — ${but} ${what} sold this year` };
+  if (sim.shapeUnits >= 3 && base.v === "skip") return { v: "maybe", why: `${base.why} — ${but} ${what} sold this year` };
+  if (!sim.stoneUnits && base.v === "maybe") return { v: "skip", why: `${base.why}, and nothing like it sold this year` };
+  if (sim.stoneUnits) return { ...base, why: `${base.why} · ${what} sold this year` };
+  return base;
+}
+
 /* The stock card's count, by whichever measure it has. Nothing left on the
    card is the one thing that makes renewing pointless outright. */
 const cardEmpty = card => card && !(+card.qty > 0) && !(+card.qty2 > 0);
@@ -122,8 +219,8 @@ const cardEmpty = card => card && !(+card.qty > 0) && !(+card.qty2 > 0);
    sale or much interest. What each term has earned after Etsy's fees is the
    clearest renew. */
 function verdict(row, st, card, nowMs, e, fee) {
-  if (customOrder(row.title)) return { v: "skip", why: "A custom order — made for one buyer" };
-  if (cardEmpty(card)) return { v: "skip", why: `Its stock card (${card.sku || card.material || "linked"}) is empty` };
+  if (customOrder(row.title)) return { v: "skip", hard: true, why: "A custom order — made for one buyer" };
+  if (cardEmpty(card)) return { v: "skip", hard: true, why: `Its stock card (${card.sku || card.material || "linked"}) is empty` };
   if (!st) return { v: "", why: "Reading its sales…" };
   if (st.error) return { v: "", why: `Couldn't read its sales — ${st.error}` };
   // A year of terms (three fees) without a sale is a skip; two is a doubt.
@@ -150,12 +247,14 @@ const TONE = {
 };
 
 export default function RenewalQueue({ listings = [], stock = [], getToken, onRenew, showToast, who = "", onCount }) {
-  const [queue, setQueue] = useState(() => readJSON(QUEUE_CACHE));     // { at, data }
+  const [ready, setReady] = useState(false);   // the caches are read back from IndexedDB
+  const [queue, setQueue] = useState(null);     // { at, data }
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [stats, setStats] = useState(() => readJSON(STATS_CACHE) || {});   // id → { …, at }
+  const [stats, setStats] = useState({});   // id → { …, at }
   const [statsErr, setStatsErr] = useState("");
-  const [ledger, setLedger] = useState(() => readJSON(LEDGER_CACHE) || {});   // window → { fees, tx, rc, sales, ads, final, at }
+  const [ledger, setLedger] = useState({});   // window → { fees, tx, rc, sales, titles, ads, final, at }
+  const [briefs, setBriefs] = useState({});   // listing id → { img, title, state } for the similar-sold pictures
   const [ledgerErr, setLedgerErr] = useState("");
   const [usdRate, setUsdRate] = useState(0);
   const [decisions, setDecisions] = useState([]);
@@ -175,18 +274,29 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
     return d;
   };
 
-  const loadQueue = async force => {
-    if (!force && queue && Date.now() - queue.at < QUEUE_FRESH_MS) return;
+  const loadQueue = async (force, cached = queue) => {
+    if (!force && cached && Date.now() - cached.at < QUEUE_FRESH_MS) return;
     setLoading(true); setErr("");
     try {
       const d = await etsyFetch(`/api/etsy?action=renewal_queue&_=${Date.now()}`);
       const next = { at: Date.now(), data: d };
       if (alive.current) setQueue(next);
-      writeJSON(QUEUE_CACHE, next);
+      store.set(QUEUE_CACHE, next);
     } catch (e) { if (alive.current) setErr(e.message || "Couldn't reach Etsy"); }
     if (alive.current) setLoading(false);
   };
-  useEffect(() => { loadQueue(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    try { OLD_LS_KEYS.forEach(k => localStorage.removeItem(k)); } catch {}
+    Promise.all([QUEUE_CACHE, STATS_CACHE, LEDGER_CACHE, BRIEFS_CACHE].map(k => store.get(k))).then(([q, st, led, br]) => {
+      if (!alive.current) return;
+      if (q?.data) setQueue(q);
+      if (st) setStats(st);
+      if (led) setLedger(led);
+      if (br) setBriefs(br);
+      setReady(true);
+      loadQueue(false, q?.data ? q : null);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadK(RENEWALS_KEY).then(v => { if (alive.current && Array.isArray(v)) setDecisions(v); }).catch(() => {}); }, []);
   useEffect(() => { loadK(RATES_KEY).then(r => { if (alive.current && +r?.USD > 0) setUsdRate(+r.USD); }).catch(() => {}); }, []);
 
@@ -278,6 +388,28 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
   const coverFrom = kLow == null ? 0 : EPOCH + kLow * WIN;
   const idx = useMemo(() => ledgerIndex(ledger), [ledger]);
 
+  /* Every sale in the last year with its stone and shape, read once from the
+     ledger windows — what "similar pieces that sold" is picked from. The
+     stones the stock and listings already name are what a title is matched to. */
+  const vocab = useMemo(() => [...new Set([...stock.map(x => x?.material), ...listings.map(l => l?.material)]
+    .map(v => String(v || "").toLowerCase().trim()).filter(v => v.length >= 4 && v !== "other"))].sort((a, b) => b.length - a.length), [stock, listings]);
+  const soldYear = useMemo(() => {
+    const titles = {}, out = [], since = Math.floor(Date.now() / 1000) - 365 * 86400;
+    for (const w of Object.values(ledger)) if (w && !w.error) Object.assign(titles, w.titles || {});
+    for (const w of Object.values(ledger)) for (const x of (w && !w.error && w.sales) || []) {
+      if (x[5] < since || !(x[3] > 0)) continue;   // the last year, and not cancelled or refunded in full
+      out.push({ lid: x[1], qty: x[4], paid: x[3] / x[4], unit: x[7] || x[3] / x[4], ts: x[5], title: unescape(titles[x[1]] || "") });
+    }
+    const piece = new Map();
+    for (const x of out) {
+      if (!piece.has(x.lid)) piece.set(x.lid, pieceOf(x.title, erpByEtsy.get(x.lid), vocab));
+      Object.assign(x, piece.get(x.lid));
+    }
+    return out;
+  }, [ledger, erpByEtsy, vocab]);
+  // "Nothing like it sold" is only said once the whole year has been read.
+  const simReady = kLow != null && kLow <= winOf(nowS - 365 * 86400);
+
   /* Sales are one Etsy request per listing, so they're read in batches, and
      the ledger a few windows at a time; one Etsy call in flight, so the two
      never share Etsy's per-second allowance. The rows on screen first, then
@@ -286,14 +418,31 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
      next visit has them. An answer is kept whatever the screen did meanwhile —
      it's filed by listing id or window. */
   const missing = work.filter(r => !fresh(r) && !customOrder(r.title));
+
+  const judged = useMemo(() => work.map(row => {
+    const st = stats[row.id], card = cardOf(row), e = economics(row, idx, coverFrom, nowS), erp = erpOf(row);
+    const sim = simReady && !customOrder(row.title) ? similarFor(row, pieceOf(row.title, erp, vocab), soldYear) : null;
+    return { row, st, card, e, erp, sim, ...nudge(verdict(row, st, card, nowMs, e, idx.fee), st, sim) };
+  }), [work, stats, stock, listings, idx, coverFrom, soldYear, simReady, vocab]); // eslint-disable-line react-hooks/exhaustive-deps
+  const counts = judged.reduce((m, j) => (m[j.v] = (m[j.v] || 0) + 1, m), {});
+  // Recent sales count most, but a listing that has sold for years isn't buried under one good month.
+  const rank = j => (j.st?.u120 || 0) * 1000 + (j.st?.u365 || 0) * 100 + (j.st?.units || 0) * 10 + (j.row.favs || 0) / 10;
+  const visible = judged
+    .filter(j => only === "all" || j.v === only)
+    .sort((a, b) => sort === "best" ? rank(b) - rank(a) || b.row.ends - a.row.ends
+      : view === "ending" ? a.row.ends - b.row.ends : b.row.ends - a.row.ends);
+
   const flight = useRef(false);
-  const [busy, setBusy] = useState("");   // "" | "stats" | "ledger"
+  const [busy, setBusy] = useState("");   // "" | "stats" | "ledger" | "briefs"
+  // Pictures of the similar pieces on screen: one listing_brief call for up to a hundred.
+  const briefIds = [...new Set(visible.slice(0, shown).flatMap(j => (j.sim?.items || []).map(x => x.lid)))].filter(id => !briefs[id]);
   useEffect(() => {
-    if (flight.current) return;
+    if (!ready || flight.current) return;
     const onScreen = new Set(work.slice(0, shown).map(r => r.id));
     const seen = missing.filter(r => onScreen.has(r.id));
     const job = !statsErr && seen.length ? { kind: "stats", rows: seen.slice(0, BATCH) }
       : !ledgerErr && missingWins.length ? { kind: "ledger", ks: missingWins.slice(0, 3) }
+      : briefIds.length ? { kind: "briefs", ids: briefIds.slice(0, 100) }
       : !statsErr && missing.length ? { kind: "stats", rows: missing.slice(0, BATCH) } : null;
     if (!job) return;
     flight.current = true;
@@ -308,11 +457,24 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
             const next = { ...prev };
             for (const [id, st] of Object.entries(d.stats || {})) next[id] = { ...st, at };
             // Only what this queue still holds is worth keeping on the device.
-            writeJSON(STATS_CACHE, Object.fromEntries(Object.entries(next).filter(([id, st]) => rowById.has(id) && !st.error)));
+            store.set(STATS_CACHE, Object.fromEntries(Object.entries(next).filter(([id, st]) => rowById.has(id) && !st.error)));
             return next;
           });
         })
         .catch(e => { if (alive.current) setStatsErr(e.message || "Couldn't read sales"); })
+        .finally(done);
+    } else if (job.kind === "briefs") {
+      // A listing Etsy no longer has comes back missing; it's noted, so it isn't asked again.
+      const keep = items => setBriefs(prev => {
+        const next = { ...prev };
+        for (const id of job.ids) next[id] = { missing: true };
+        for (const b of items) next[b.id] = { img: b.img || "", title: unescape(b.title), state: b.state || "" };
+        store.set(BRIEFS_CACHE, next);
+        return next;
+      });
+      etsyFetch(`/api/etsy?action=listing_brief&ids=${job.ids.join(",")}&_=${Date.now()}`)
+        .then(d => { if (alive.current) keep(d.items || []); })
+        .catch(() => { if (alive.current) keep([]); })
         .finally(done);
     } else {
       etsyFetch(`/api/etsy?action=renewal_ledger&k=${job.ks.join(",")}&_=${Date.now()}`)
@@ -323,26 +485,14 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
             const next = { ...prev };
             for (const w of d.windows || []) if (w && Number.isFinite(w.k)) next[w.k] = { ...w, at };
             for (const k of Object.keys(next)) if (+k < kFloor) delete next[k];
-            writeJSON(LEDGER_CACHE, Object.fromEntries(Object.entries(next).filter(([, w]) => !w.error)));
+            store.set(LEDGER_CACHE, Object.fromEntries(Object.entries(next).filter(([, w]) => !w.error)));
             return next;
           });
         })
         .catch(e => { if (alive.current) setLedgerErr(e.message || "Couldn't read Etsy's ledger"); })
         .finally(done);
     }
-  }, [missing.length, missingWins.length, busy, statsErr, ledgerErr, view, shown, data]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const judged = useMemo(() => work.map(row => {
-    const st = stats[row.id], card = cardOf(row), e = economics(row, idx, coverFrom, nowS);
-    return { row, st, card, e, erp: erpOf(row), ...verdict(row, st, card, nowMs, e, idx.fee) };
-  }), [work, stats, stock, listings, idx, coverFrom]); // eslint-disable-line react-hooks/exhaustive-deps
-  const counts = judged.reduce((m, j) => (m[j.v] = (m[j.v] || 0) + 1, m), {});
-  // Recent sales count most, but a listing that has sold for years isn't buried under one good month.
-  const rank = j => (j.st?.u120 || 0) * 1000 + (j.st?.u365 || 0) * 100 + (j.st?.units || 0) * 10 + (j.row.favs || 0) / 10;
-  const visible = judged
-    .filter(j => only === "all" || j.v === only)
-    .sort((a, b) => sort === "best" ? rank(b) - rank(a) || b.row.ends - a.row.ends
-      : view === "ending" ? a.row.ends - b.row.ends : b.row.ends - a.row.ends);
+  }, [ready, missing.length, missingWins.length, briefIds.length, busy, statsErr, ledgerErr, view, shown, data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const renew = async j => {
     setOpening(j.row.id);
@@ -432,7 +582,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
           </div>}
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {visible.slice(0, shown).map(j => <Row key={j.row.id} j={j} nowMs={nowMs} fee={idx.fee} usdRate={usdRate} opening={opening === j.row.id} onRenew={() => renew(j)} onSkip={() => skip(j.row)} />)}
+            {visible.slice(0, shown).map(j => <Row key={j.row.id} j={j} nowMs={nowMs} fee={idx.fee} usdRate={usdRate} briefs={briefs} simReady={simReady} opening={opening === j.row.id} onRenew={() => renew(j)} onSkip={() => skip(j.row)} />)}
           </div>
           {visible.length > shown && <button type="button" onClick={() => setShown(n => n + PAGE)}
             style={{ display: "block", margin: "14px auto 0", border: `1px solid ${C.border}`, background: C.surface, color: C.ink, borderRadius: 9, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
@@ -448,7 +598,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
                 <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", borderTop: i ? `1px solid ${C.border}` : "none" }}>
                   {row?.img ? <img src={row.img} alt="" style={{ width: 40, height: 40, borderRadius: 7, objectFit: "cover", flex: "none" }} /> : <div style={{ width: 40, height: 40, borderRadius: 7, background: C.card, flex: "none" }} />}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <a href={row?.url || `https://www.etsy.com/listing/${d.id}`} target="_blank" rel="noreferrer" style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, textDecoration: "none", display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.title || row?.title || d.id}</a>
+                    <a href={row?.url || `https://www.etsy.com/listing/${d.id}`} target="_blank" rel="noreferrer" style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, textDecoration: "none", display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{unescape(d.title || row?.title || d.id)}</a>
                     <div style={small}>{view === "skipped" ? "Skipped" : "Renewed"} {new Date(d.at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{d.by ? ` by ${d.by}` : ""}{row ? ` · ${row.state === "expired" ? `ended ${when(row.ends)}` : `ends ${when(row.ends)}`}` : ""}</div>
                   </div>
                   {view === "skipped" && <button type="button" onClick={() => unskip(d.id)} style={{ border: `1px solid ${C.border}`, background: C.surface, color: C.ink, borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>Back to the queue</button>}
@@ -462,8 +612,8 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
   );
 }
 
-function Row({ j, nowMs, fee, usdRate, opening, onRenew, onSkip }) {
-  const { row, st, card, erp, e, v, why } = j;
+function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onSkip }) {
+  const { row, st, card, erp, e, sim, v, why } = j;
   const phone = mob();
   const tone = TONE[v] || TONE[""];
   const expired = row.state === "expired";
@@ -496,7 +646,7 @@ function Row({ j, nowMs, fee, usdRate, opening, onRenew, onSkip }) {
             <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: ".04em", color: tone.fg, background: tone.bg, borderRadius: 6, padding: "2px 8px", flex: "none" }}>{tone.label}</span>
             <span style={{ fontSize: 12, color: v ? C.ink : C.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{why}</span>
           </div>
-          <a href={row.url} target="_blank" rel="noreferrer" style={{ display: "block", fontSize: 14, fontWeight: 700, color: C.ink, textDecoration: "none", marginTop: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.title}</a>
+          <a href={row.url} target="_blank" rel="noreferrer" style={{ display: "block", fontSize: 14, fontWeight: 700, color: C.ink, textDecoration: "none", marginTop: 5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{unescape(row.title)}</a>
           <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 3 }}>
             {expired ? `Ended ${ago(nowMs - row.ends * 1000)}` : row.ends * 1000 - nowMs < DAY ? "Ends today" : `Ends in ${span(row.ends * 1000 - nowMs)}`}
             {` · ${inr(row.price)}${row.variations ? " and up" : ""} · ${row.qty} left`}
@@ -509,6 +659,34 @@ function Row({ j, nowMs, fee, usdRate, opening, onRenew, onSkip }) {
             {card ? `📦 ${card.sku || card.material || "Stock card"} · ${card.qty || 0} ${card.unit || ""}${+card.qty2 ? ` / ${card.qty2} ${card.unit2 || ""}` : ""}${card.location ? ` · 📍 ${card.location}` : ""}`
               : erp ? "In the ERP, not tied to a stock card — the steps ask for it" : "Not in the ERP yet — the steps tie it to its stock card"}
           </div>
+          {sim ? (
+            <div style={{ marginTop: 5 }}>
+              <div title={sim.tier === "band" ? "Same stone and shape, listed within 40% of this one's price, sold in the last 12 months"
+                  : sim.tier === "shape" ? "Same stone and shape, at any price — none near this one's price sold in the last 12 months"
+                  : sim.tier === "stone" ? `Nothing ${sim.shape ? `shaped as a ${sim.shape.toLowerCase()}` : "of this shape"} sold — the same stone in any shape` : ""}
+                style={{ fontSize: 11.5, color: sim.units ? C.inkMid : C.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {sim.units ? <>🔎 Similar sold: <b style={{ color: C.ink }}>{sim.units}</b> {sim.label} in 12 months · {inr(sim.avg)} avg · last {ago(nowMs - sim.last * 1000)}</>
+                  : `🔎 Nothing like it (${titleCase(sim.stone)}${sim.shape ? ` · ${sim.shape}` : ""}) sold in the last 12 months`}
+              </div>
+              {sim.items.length > 0 && <div style={{ display: "flex", gap: 10, marginTop: 5, flexWrap: "wrap" }}>
+                {sim.items.map(x => {
+                  const b = briefs?.[x.lid];
+                  return (
+                    <a key={x.lid} href={`https://www.etsy.com/listing/${x.lid}`} target="_blank" rel="noreferrer"
+                      title={`${x.title || b?.title || ""} · listed at ${inr(x.unit)}, sold for ${inr(x.paid)} on ${when(x.ts)}`}
+                      style={{ display: "flex", gap: 6, alignItems: "center", textDecoration: "none", maxWidth: 168, minWidth: 0 }}>
+                      {b?.img ? <img src={b.img} alt="" style={{ width: 30, height: 30, borderRadius: 6, objectFit: "cover", flex: "none" }} />
+                        : <span style={{ width: 30, height: 30, borderRadius: 6, background: C.card, flex: "none" }} />}
+                      <span style={{ minWidth: 0, lineHeight: 1.25 }}>
+                        <span style={{ display: "block", fontSize: 10.5, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.title || b?.title || "Listing"}</span>
+                        <span style={{ display: "block", fontSize: 10.5, color: C.inkFaint, whiteSpace: "nowrap" }}>{inrK(x.paid)} · {ago(nowMs - x.ts * 1000)}</span>
+                      </span>
+                    </a>
+                  );
+                })}
+              </div>}
+            </div>
+          ) : !simReady && !customOrder(row.title) ? <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>🔎 Looking for similar pieces that sold…</div> : null}
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "8px 10px", width: phone ? "100%" : 372, flex: "none" }}>

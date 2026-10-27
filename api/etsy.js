@@ -1157,16 +1157,18 @@ async function readPublished({ allPages }, sid, from, to) {
             each extra unit in the order, less refunds
      rc     receipt id → [processing, shipping fee, offsite ads, other] ₹ — per
             order; the processing fee is filed by payment and mapped to its order
-     sales  [receipt, listing, transaction, ₹, qty, ts, share] for the orders
-            placed in the window: ₹ is the item's part of the order after coupons
-            and refunds (0 if cancelled), share its part of the order's items,
-            for splitting an order's own fees between its items
+     sales  [receipt, listing, transaction, ₹, qty, ts, share, unit] for the
+            orders placed in the window: ₹ is the item's part of the order after
+            coupons and refunds (0 if cancelled), share its part of the order's
+            items, for splitting an order's own fees between its items, and unit
+            its listed price each — what "similar pieces that sold" compares on
+     titles listing id → title, for each listing sold in the window
      ads    Etsy Ads (prolist) ₹ — paid for the shop, not for any one listing
    Sales tax Etsy collects from the buyer and pays on is not a cost of ours. */
 const RENEW_EPOCH = 1577836800;   // 1 Jan 2020 UTC — window 0 starts here
 async function ledgerWindow({ getJson, allPages }, sid, k, nowS) {
   const from = RENEW_EPOCH + k * 30 * 86400, to = from + 30 * 86400;
-  if (from > nowS) return { k, from, to, final: true, fees: {}, tx: {}, rc: {}, sales: [], ads: 0 };
+  if (from > nowS) return { k, from, to, final: true, fees: {}, tx: {}, rc: {}, sales: [], titles: {}, ads: 0 };
   const last = Math.min(to, nowS + 60) - 1;   // the next window starts on `to`
   const base = `https://openapi.etsy.com/v3/application/shops/${sid}`;
   const [ledger, receipts] = await Promise.all([
@@ -1207,7 +1209,7 @@ async function ledgerWindow({ getJson, allPages }, sid, k, nowS) {
   let unplaced = 0;
   for (const [pid, v] of payFees) orderOf[pid] ? addRc(orderOf[pid], 0, v) : (unplaced += v);
   const VOID = ["canceled", "cancelled", "fully refunded", "fully_refunded"];
-  const sales = [];
+  const sales = [], titles = {};
   const seenR = new Set();
   for (const r of receipts) {
     const rid = String(r.receipt_id);
@@ -1221,10 +1223,11 @@ async function ledgerWindow({ getJson, allPages }, sid, k, nowS) {
     for (const t of lines) {
       const share = listed ? money(t.price) * (+t.quantity || 1) / listed : 1 / lines.length;
       sales.push([rid, String(t.listing_id), String(t.transaction_id), r2(items * share), +t.quantity || 1,
-        +r.create_timestamp || +r.created_timestamp || 0, Math.round(share * 1e4) / 1e4]);
+        +r.create_timestamp || +r.created_timestamp || 0, Math.round(share * 1e4) / 1e4, r2(money(t.price))]);
+      if (t.title) titles[String(t.listing_id)] = String(t.title).slice(0, 80);
     }
   }
-  return { k, from, to, final: to < nowS - 7 * 86400, fees, tx, rc, sales, ads: r2(ads), ...(unplaced ? { unplaced: r2(unplaced) } : {}) };
+  return { k, from, to, final: to < nowS - 7 * 86400, fees, tx, rc, sales, titles, ads: r2(ads), ...(unplaced ? { unplaced: r2(unplaced) } : {}) };
 }
 
 // Picture, title, price and state for up to 100 listings, in one call.
