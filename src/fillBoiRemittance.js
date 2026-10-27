@@ -78,6 +78,8 @@ const fd = (d) => {
  * @param {string}     data.iecCode
  * @param {string}     data.sigDate           'YYYY-MM-DD'
  * @param {string}     [data.sigPlace]
+ * @param {Array}      [data.documents]       [{label, kind:'pdf'|'jpg'|'png', bytes}] — supporting
+ *                                            documents (AWB, shipping bill…), added after the invoices
  * @param {Uint8Array} data.boiPdfBytes
  * @param {Uint8Array} data.sigJpegBytes
  * @returns {Promise<Uint8Array>}
@@ -92,6 +94,7 @@ export async function fillBoiRemittance(data) {
     impDet = '', expBill = '', otherCl = '',
     bName, bAddr1, bAddr2, iecCode,
     sigDate, sigPlace = 'Mumbai',
+    documents = [],
     boiPdfBytes, sigJpegBytes,
   } = data;
 
@@ -161,9 +164,10 @@ export async function fillBoiRemittance(data) {
   const sigImg = await pdfDoc.embedJpg(sigJpegBytes);
   p2.drawImage(sigImg, { x: sx, y: sy, width: sw, height: sh });
 
-  // ── MERGE INVOICE PDFs ──
+  // ── MERGE INVOICE PDFs, THEN THE SUPPORTING DOCUMENTS ──
   const invPdfs = invoices.filter(i => i.pdfBytes);
-  if (!invPdfs.length) return pdfDoc.save();
+  const docs = documents.filter(d => d.bytes);
+  if (!invPdfs.length && !docs.length) return pdfDoc.save();
 
   const merged = await PDFDocument.create();
   const formPages = await merged.copyPages(pdfDoc, pdfDoc.getPageIndices());
@@ -176,6 +180,27 @@ export async function fillBoiRemittance(data) {
       invPages.forEach(p => merged.addPage(p));
     } catch (e) {
       console.warn(`Could not load invoice PDF for ${inv.no}:`, e.message);
+    }
+  }
+
+  // A PDF goes in page for page; a photo or scan gets an A4 page of its own,
+  // turned to match it and filled to within the margins.
+  for (const doc of docs) {
+    try {
+      if (doc.kind === 'pdf') {
+        const src = await PDFDocument.load(doc.bytes, { ignoreEncryption: true });
+        const pages = await merged.copyPages(src, src.getPageIndices());
+        pages.forEach(p => merged.addPage(p));
+      } else {
+        const img = doc.kind === 'png' ? await merged.embedPng(doc.bytes) : await merged.embedJpg(doc.bytes);
+        const wide = img.width > img.height;
+        const W = wide ? 841.89 : 595.28, H = wide ? 595.28 : 841.89, M = 34;
+        const s = Math.min((W - 2 * M) / img.width, (H - 2 * M) / img.height);
+        const w = img.width * s, h = img.height * s;
+        merged.addPage([W, H]).drawImage(img, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+      }
+    } catch (e) {
+      console.warn(`Could not add ${doc.label || 'a document'}:`, e.message);
     }
   }
 

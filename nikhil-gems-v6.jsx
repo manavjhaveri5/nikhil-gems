@@ -23793,8 +23793,10 @@ function BoiRemittanceForm({showToast}){
     lineAct:"Export of natural stones and mineral specimens",
     impDet:"",expBill:"",otherCl:"",
     sigDate:today(),sigPlace:"Mumbai",
+    docs:[], // supporting documents added here: [{id,label,file,name,size}]
   });
   const [generating,setGenerating]=useState(false);
+  const [docPicks,setDocPicks]=useState({}); // the linked invoices' own documents: key → ticked
   const [amountTouched,setAmountTouched]=useState(false); // user typed their own figure
   const setF=(k,v)=>setForm(f=>({...f,[k]:v}));
   const addInv=()=>setForm(f=>({...f,invoices:[...f.invoices,blankInv()]}));
@@ -23847,6 +23849,47 @@ function BoiRemittanceForm({showToast}){
   const boiTotal=+boiSameCcy.reduce((s,inv)=>s+(+inv.totalAmt||0),0).toFixed(2);
   const boiMixedCcy=boiLinked.some(inv=>inv.currency&&inv.currency!==form.currency);
   const boiTotalStr=String(boiTotal);
+
+  /* Supporting documents. The linked invoices' own shipping bill and AWB are
+     offered first, ticked; anything else is added from the computer or phone.
+     All of it goes into the PDF after the form and invoices, in the order shown.
+     (The BOI forms already saved on an invoice aren't offered: they're this.) */
+  const DOC_TICKED=/shipping|awb|hawb|hbl|lading/i;
+  const boiInvDocs=boiLinked.flatMap(inv=>(inv.attachments||[]).filter(a=>a?.url&&!/^boi\b/i.test(a.label||"")).map(a=>({...a,key:`${inv.id}:${a.id||a.url}`,invNo:inv.invNo})));
+  const docPicked=d=>docPicks[d.key]??DOC_TICKED.test(d.label||"");
+  const guessDocLabel=name=>/hawb|awb|airway/i.test(name)?"AWB":/shipping|^sb|[^a-z]sb[^a-z]/i.test(name)?"Shipping Bill":/packing/i.test(name)?"Packing List":String(name||"Document").replace(/\.[a-z0-9]+$/i,"");
+  const addDocs=(files,label)=>{
+    const ok=[...(files||[])].filter(f=>/^image\//.test(f.type)||f.type==="application/pdf"||/\.(pdf|jpe?g|png|heic|webp)$/i.test(f.name));
+    if(files?.length&&!ok.length){showToast("Add a PDF or a photo");return;}
+    setForm(f=>({...f,docs:[...f.docs,...ok.map(file=>({id:uid(),label:label||guessDocLabel(file.name),file,name:file.name,size:file.size}))]}));
+  };
+  const pickDocs=label=>{
+    const input=document.createElement("input");
+    input.type="file";input.multiple=true;input.accept="application/pdf,image/*";
+    input.onchange=e=>addDocs(e.target.files,label);
+    input.click();
+  };
+  const setDoc=(id,patch)=>setForm(f=>({...f,docs:f.docs.map(d=>d.id===id?{...d,...patch}:d)}));
+  const removeDoc=id=>setForm(f=>({...f,docs:f.docs.filter(d=>d.id!==id)}));
+  // What pdf-lib can put in: a PDF as it is, a JPG or PNG as it is, any other
+  // picture redrawn as a JPG first. Throws with a reason the toast can show.
+  const boiDocPart=async(blob,label)=>{
+    const bytes=new Uint8Array(await blob.arrayBuffer());
+    const head=String.fromCharCode(...bytes.slice(0,5));
+    if(head.startsWith("%PDF")){
+      const {PDFDocument}=await import("pdf-lib");
+      await PDFDocument.load(bytes,{ignoreEncryption:true});
+      return{label,kind:"pdf",bytes};
+    }
+    if(bytes[0]===0xFF&&bytes[1]===0xD8)return{label,kind:"jpg",bytes};
+    if(bytes[0]===0x89&&head.slice(1,4)==="PNG")return{label,kind:"png",bytes};
+    let bmp;
+    try{bmp=await createImageBitmap(blob);}catch{throw new Error("this browser can't read that picture — save it as JPG, PNG or PDF");}
+    const cv=document.createElement("canvas");cv.width=bmp.width;cv.height=bmp.height;
+    cv.getContext("2d").drawImage(bmp,0,0);
+    const jpg=await new Promise(r=>cv.toBlob(r,"image/jpeg",.9));
+    return{label,kind:"jpg",bytes:new Uint8Array(await jpg.arrayBuffer())};
+  };
   // Keep the amount in step with the linked invoices until the user types their own
   // figure (part-payments, bank charges), after which it is left alone.
   useEffect(()=>{
@@ -23901,6 +23944,19 @@ function BoiRemittanceForm({showToast}){
       if(invoiceRefs.length&&!invoiceRefs.some(i=>i.pdfBytes)){
         throw new Error(appendErrors[0]||"Invoice could not be attached");
       }
+      // Supporting documents, in the order they're listed on the form.
+      const documents=[],docErrors=[];
+      for(const d of boiInvDocs.filter(docPicked)){
+        try{
+          const r=await fetch(d.url);
+          if(!r.ok)throw new Error(`the stored file answered ${r.status}`);
+          documents.push(await boiDocPart(await r.blob(),`${d.label} · ${d.invNo}`));
+        }catch(e){docErrors.push(`${d.label} (${d.invNo}): ${e?.message||e}`);}
+      }
+      for(const d of form.docs){
+        try{documents.push(await boiDocPart(d.file,d.label||d.name));}
+        catch(e){docErrors.push(`${d.label||d.name}: ${e?.message||e}`);}
+      }
       const pdfBytes=await fillBoiRemittance({
         currency:form.currency,amount:+form.amount,
         accType:form.accType,accountNo,
@@ -23914,6 +23970,7 @@ function BoiRemittanceForm({showToast}){
         bAddr2:"Nepean Sea Road, Mumbai 400006",
         iecCode:CO.iec,
         sigDate:form.sigDate,sigPlace:form.sigPlace,
+        documents,
         boiPdfBytes,sigJpegBytes,
       });
       const fileName=`BOI_${form.remName.replace(/\s+/g,"_")}_${form.sigDate}.pdf`;
@@ -23921,7 +23978,10 @@ function BoiRemittanceForm({showToast}){
       const url=URL.createObjectURL(blob);
       Object.assign(document.createElement("a"),{href:url,download:fileName}).click();
       setTimeout(()=>URL.revokeObjectURL(url),3000);
-      showToast(invoiceRefs.some(i=>i.pdfBytes)?"✓ BOI form + invoice downloaded":"✓ BOI remittance form downloaded");
+      const withInv=invoiceRefs.some(i=>i.pdfBytes);
+      showToast(docErrors.length
+        ?`⚠ Downloaded, but left out ${docErrors.length} document${docErrors.length>1?"s":""} — ${docErrors.join("; ")}`
+        :`✓ BOI form${withInv?" + invoice":""}${documents.length?` + ${documents.length} document${documents.length>1?"s":""}`:""} downloaded`);
       // Auto-attach to linked invoices
       const srcIds=invoiceRefs.filter(i=>i.no&&i.srcId&&i.pdfBytes).map(i=>i.srcId);
       if(srcIds.length){
@@ -23952,7 +24012,7 @@ function BoiRemittanceForm({showToast}){
     <div style={{maxWidth:680}}>
       <div style={{background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:8,padding:"10px 14px",marginBottom:20,fontSize:12,color:C.ink,display:"flex",gap:8,alignItems:"flex-start"}}>
         <span style={{fontSize:16,flexShrink:0}}>ℹ️</span>
-        <span>Fills and downloads the <strong>BOI A2 Remittance form</strong> using pdf-lib. Selected invoices are appended to the same PDF. Place <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>boi_form.pdf</code> in <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>public/boi/</code> before generating.</span>
+        <span>Fills and downloads the <strong>BOI A2 Remittance form</strong> using pdf-lib. Selected invoices and any supporting documents (AWB, shipping bill) are appended to the same PDF. Place <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>boi_form.pdf</code> in <code style={{background:"rgba(0,0,0,.06)",padding:"1px 4px",borderRadius:3,fontFamily:"monospace"}}>public/boi/</code> before generating.</span>
       </div>
 
       {/* Remittance Details */}
@@ -24149,6 +24209,47 @@ function BoiRemittanceForm({showToast}){
             <input value={form.otherCl} onChange={e=>setF("otherCl",e.target.value)} style={FI} placeholder="Describe the purpose"/>
           </Field>
         )}
+      </div>
+
+      {/* Supporting documents */}
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:14}}
+        onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();addDocs(e.dataTransfer.files,"");}}>
+        {secHdr(C.purple,"Supporting documents")}
+        <div style={{fontSize:11.5,color:C.inkMid,marginTop:-6,marginBottom:12,lineHeight:1.5}}>AWB, shipping bill, or anything else the bank asks for — PDFs or photos. They go into the PDF after the form{boiLinked.length?" and the invoices":""}, in this order.</div>
+        {boiInvDocs.length>0&&(
+          <div style={{marginBottom:12}}>
+            <Tag>On the linked invoices</Tag>
+            {boiInvDocs.map(d=>(
+              <label key={d.key} style={{display:"flex",alignItems:"center",gap:9,padding:"6px 8px",borderRadius:7,cursor:"pointer",background:docPicked(d)?C.goldLight:"transparent",marginBottom:3}}>
+                <input type="checkbox" checked={docPicked(d)} onChange={e=>setDocPicks(p=>({...p,[d.key]:e.target.checked}))}/>
+                <span style={{fontSize:12.5,fontWeight:600,color:C.ink,flexShrink:0}}>{d.label}</span>
+                <span style={{fontSize:11,color:C.inkFaint,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.fileName||d.name||""}</span>
+                <span style={{fontSize:10.5,color:C.inkMid,flexShrink:0}}>{d.invNo}</span>
+                <a href={d.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,color:C.blue,flexShrink:0}}>View</a>
+              </label>
+            ))}
+          </div>
+        )}
+        {form.docs.length>0&&(
+          <div style={{marginBottom:12}}>
+            <Tag>Added here</Tag>
+            <datalist id="boi-doc-labels">{["AWB","Shipping Bill","Packing List","Bill of Lading","Commercial Invoice","Other"].map(l=><option key={l} value={l}/>)}</datalist>
+            {form.docs.map(d=>(
+              <div key={d.id} style={{display:"grid",gridTemplateColumns:mob?"1fr 24px":"170px 1fr 70px 24px",gap:8,alignItems:"center",marginBottom:6}}>
+                <input list="boi-doc-labels" value={d.label} onChange={e=>setDoc(d.id,{label:e.target.value})} style={FI} placeholder="What it is"/>
+                {!mob&&<span style={{fontSize:11.5,color:C.inkMid,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{/pdf$/i.test(d.name)?"📄":"🖼️"} {d.name}</span>}
+                {!mob&&<span style={{fontSize:10.5,color:C.inkFaint,textAlign:"right"}}>{d.size>=1048576?`${(d.size/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(d.size/1024))} KB`}</span>}
+                <button onClick={()=>removeDoc(d.id)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1}}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          {[["AWB","+ AWB"],["Shipping Bill","+ Shipping Bill"],["","+ Other document"]].map(([label,text])=>(
+            <button key={text} onClick={()=>pickDocs(label)} style={{fontSize:12,color:C.purple,background:C.purpleBg,border:`1px solid ${C.purple}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>{text}</button>
+          ))}
+          {!mob&&<span style={{fontSize:11,color:C.inkFaint}}>or drop files here</span>}
+        </div>
       </div>
 
       {/* Signature */}
