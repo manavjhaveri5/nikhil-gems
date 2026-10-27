@@ -143,8 +143,8 @@ function useKey(key, fallback = []) {
   return v;
 }
 
-export default function MonthClose({ company, month, accounts = [], txns = [], isUnclassified, onOpenTxn, onOpenRecon, onClose }) {
-  const [section, setSection] = useState("payments");
+export default function MonthClose({ company, month, accounts = [], txns = [], isUnclassified, onOpenTxn, onOpenRecon, onClose, initialSection = "payments" }) {
+  const [section, setSection] = useState(initialSection);
   const coName = company === "at" ? "Atyahara" : "Nikhil Gems";
   const accountName = t => accounts.find(a => a.id === (t.type === "credit" ? t.accountTo : t.accountFrom))?.name || "Account";
 

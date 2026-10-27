@@ -16,6 +16,7 @@ import { createSheet, buildXlsx } from "./src/xlsxWriter.js";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import NameCard from "./src/NameCard.jsx";
 import EtsyPulse from "./src/HomePulse.jsx";
+import HomeAccounts from "./src/HomeAccounts.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
 import MonthClose from "./src/MonthClose.jsx";
 import { runningBalances, monthOf } from "./src/monthClose.js";
@@ -1318,6 +1319,9 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
               </div>
             );
           })()}
+          {/* Accounts first: what was paid out, payments still to classify (one tap from
+              here), and the month-close checks. For whoever can open the Ledger. */}
+          {(isAdmin||visibleMods.some(m=>m.id==="ledger"))&&<HomeAccounts isUnclassified={accountingIsUnclassified} onEnter={onEnter}/>}
           {/* Mobile: icon grid for all modules — 4-col with colored tiles */}
           {mob&&(
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16,opacity:vis?1:0,animation:vis?"fadeIn .3s ease both":"none"}}>
@@ -3539,6 +3543,22 @@ const ACCOUNTING_LEDGER_GROUPS=[
   {label:"Other",cats:["Other"]},
 ].map(g=>({...g,cats:g.cats.filter(c=>ACCOUNTING_LEDGER_CATS.includes(c))}));
 const ACCOUNTING_METHOD_CATS=new Set(["UPI","NEFT","IMPS","ATM","Transfer","Other",""]);
+// Whether a ledger entry still needs a head. One rule, shared by the Ledger, its
+// Month close and the Home page, so their counts always agree.
+const ACCOUNTING_STRUCTURED_CLASSIFICATIONS=new Set(["vendor_bill","vendor_po","customer_receipt","cc_payment"]);
+const ACCOUNTING_VALID_CLASSIFICATIONS=new Set([...ACCOUNTING_LEDGER_CATS,"expense",...ACCOUNTING_STRUCTURED_CLASSIFICATIONS]);
+const accountingIsUnclassified=t=>{
+  if(!t||t.type==="conversion")return false;
+  const kind=t.classifiedAs||t.category||"";
+  if(t.classifiedAs&&ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(t.classifiedAs)&&t.category!==t.classifiedAs)return true;
+  if(ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(kind))return false;
+  // A deliberately-classified expense counts as classified even if its category is "Other"
+  // (the user made a decision). Only auto-imported "Other" expenses still need attention.
+  if(kind==="expense")return t.classifiedBy?false:normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)==="Other";
+  if(!t.category||ACCOUNTING_METHOD_CATS.has(t.category))return true;
+  if(ACCOUNTING_LEDGER_CATS.includes(t.category))return t.category==="Other";
+  return !ACCOUNTING_VALID_CLASSIFICATIONS.has(t.category);
+};
 const ACCOUNTING_DEFAULT_ACCOUNTS_NG=[
   {id:"fa-inr-cash",name:"INR Cash",type:"cash",currency:"INR",openingBal:0,active:true},
   {id:"fa-usd-cash",name:"USD Cash",type:"cash",currency:"USD",openingBal:0,active:true},
@@ -4122,6 +4142,11 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   const [manualOpen,setManualOpen]=useState(false);
   const [manual,setManual]=useState(blankManual);
   const [closeOpen,setCloseOpen]=useState(false); // Month close panel in place of the ledger list
+  const [closeSection,setCloseSection]=useState("payments");
+  // Home links straight in: to one entry, the unclassified list, or Month close. The
+  // hint is read once; it holds only for the company it names, until you switch away.
+  const openHint=useRef((()=>{try{return JSON.parse(sessionStorage.getItem("ledger-open")||"null");}catch{return null;}})());
+  useEffect(()=>{try{sessionStorage.removeItem("ledger-open");}catch{}},[]);
   const keys=accountingCompanyKeys(company);
   useEffect(()=>{
     localStorage.setItem("ng-accounting-ledger-company",company);
@@ -4136,6 +4161,15 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
       setTxns(arr);
       const first=[...arr].sort((x,y)=>(y.date||"").localeCompare(x.date||"")).find(x=>x.type!=="conversion"&&(x.date||"").startsWith(month));
       setSelectedId(first?.id||"");
+      const hint=openHint.current;
+      if(hint&&hint.company!==company)openHint.current=null;
+      else if(hint){
+        setAccountFilter([]);setSearch("");
+        if(hint.month)setMonth(hint.month);
+        if(hint.id){const tx=arr.find(x=>x.id===hint.id);setTab(tx&&accountingIsUnclassified(tx)?"unclassified":"all");setSelectedId(hint.id);}
+        else if(hint.unclassified)setTab("unclassified");
+        if(hint.close){setCloseSection(hint.section||"payments");setCloseOpen(true);}
+      }
       setLoaded(true);
     }).catch(e=>{setLoaded(true);showToast?.("Ledger load failed: "+e.message);});
     Promise.allSettled([loadK(keys.vendors),loadK(keys.purchases),loadK(keys.invoices),loadK(keys.buyers),loadK(keys.expenses)]).then(results=>{
@@ -4200,20 +4234,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
     if(changed.includes(ACCOUNTING_ATTACH_REQ_KEY))loadKFresh(ACCOUNTING_ATTACH_REQ_KEY).then(v=>Array.isArray(v)&&setAttachReqCats(v));
     if(changed.includes(ACCOUNTING_CUSTOM_CATS_KEY))loadKFresh(ACCOUNTING_CUSTOM_CATS_KEY).then(v=>Array.isArray(v)&&setCustomCats(v));
   }),[company]);
-  const ACCOUNTING_STRUCTURED_CLASSIFICATIONS=new Set(["vendor_bill","vendor_po","customer_receipt","cc_payment"]);
-  const ACCOUNTING_VALID_CLASSIFICATIONS=new Set([...ACCOUNTING_LEDGER_CATS,"expense",...ACCOUNTING_STRUCTURED_CLASSIFICATIONS]);
-  const isUnclassified=t=>{
-    if(!t||t.type==="conversion")return false;
-    const kind=t.classifiedAs||t.category||"";
-    if(t.classifiedAs&&ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(t.classifiedAs)&&t.category!==t.classifiedAs)return true;
-    if(ACCOUNTING_STRUCTURED_CLASSIFICATIONS.has(kind))return false;
-    // A deliberately-classified expense counts as classified even if its category is "Other"
-    // (the user made a decision). Only auto-imported "Other" expenses still need attention.
-    if(kind==="expense")return t.classifiedBy?false:normalizeAccountingExpenseCat(t.classifiedRef?.cat||t.category)==="Other";
-    if(!t.category||ACCOUNTING_METHOD_CATS.has(t.category))return true;
-    if(ACCOUNTING_LEDGER_CATS.includes(t.category))return t.category==="Other";
-    return !ACCOUNTING_VALID_CLASSIFICATIONS.has(t.category);
-  };
+  const isUnclassified=accountingIsUnclassified;
   const displayClassification=t=>{
     if(!t)return"";
     if(t.type==="conversion")return"Transfer / conversion";
@@ -4874,7 +4895,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
         </div>
       )}
 
-      {closeOpen&&<MonthClose company={company} month={month} accounts={accounts} txns={txns} isUnclassified={isUnclassified}
+      {closeOpen&&<MonthClose key={`${company}:${closeSection}`} initialSection={closeSection} company={company} month={month} accounts={accounts} txns={txns} isUnclassified={isUnclassified}
         onClose={()=>setCloseOpen(false)}
         onOpenRecon={onOpenModule?view=>{
           // Export Recon opens on this company and on the view that fixes the item.
