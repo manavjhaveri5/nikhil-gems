@@ -492,6 +492,25 @@ export default async function handler(req, res) {
       return res.json({ ok: true, at: nowS, stats });
     }
 
+    // ── renewal_ledger: what Etsy charged, per listing and per sale ──────────────
+    // ?k=<n>[,<n>,<n>] — 30-day windows counted from RENEW_EPOCH, so a past window
+    // never changes and the browser keeps it. Each window is that stretch of the
+    // payment-account ledger (it answers 31 days at most), the orders placed in it
+    // and the payments behind its processing fees — a few requests, whatever the
+    // number of listings. The browser files the costs under each listing: its own
+    // listing and renewal fees by listing id, the fees on its sales by
+    // transaction and by order. See ledgerWindow.
+    if (action === "renewal_ledger") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const ks = [...new Set(String(req.query.k || "").split(",").map(x => parseInt(x, 10)).filter(n => Number.isFinite(n) && n >= 0))].slice(0, 3);
+      if (!ks.length) return res.status(400).json({ error: "k required" });
+      const q = etsyQueue(authHeaders);
+      const windows = await Promise.all(ks.map(k => ledgerWindow(q, sid, k, nowS).catch(e => ({ k, error: e.message }))));
+      return res.json({ ok: true, at: nowS, epoch: RENEW_EPOCH, windows });
+    }
+
     // ── renewal_listing: one listing whole, photos included, to pre-fill the form ─
     // The batch endpoint answers for a listing in any state — the single-listing
     // one only for what's on sale — so an expired listing reads back too.
@@ -1079,11 +1098,17 @@ export default async function handler(req, res) {
       return res.json(putData);
     }
 
-    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, published, listing_brief, renewal_queue, renewal_stats, renewal_listing, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
+    return res.status(400).json({ error: "Unknown action. Use: ping, shop, orders, pulse, listing_pulse, published, listing_brief, renewal_queue, renewal_stats, renewal_ledger, renewal_listing, receipt, complete_order, add_tracking, listings, listings_all, listing_images, listing, upload_listing_image, upload_listing_video, delete_listing_image, update_listing, update_inventory" });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
 }
+
+/* A listing or renewal fee: what readPublished dates a new listing by, and
+   what the renewal queue counts per listing. Etsy Ads and Offsite Ads post
+   under names of their own, and tax on a fee isn't the fee. */
+const listingFee = (type, ref) => (type.includes("listing") || type.includes("renew") || ref === "listing")
+  && !/^(prolist|offsite)|tax|vat|gst/.test(type);
 
 /* Published, not drafted: Etsy charges the $0.20 listing fee the moment a
    listing goes live, against that listing, so the fee record says which piece
@@ -1103,8 +1128,7 @@ async function readPublished({ allPages }, sid, from, to) {
   const fees = (ledger.rows || []).map(e => ({ e,
     type: String(e.ledger_type || "").toLowerCase(), ref: String(e.reference_type || "").toLowerCase(),
     ts: +e.created_timestamp || +e.create_date || 0,
-  })).filter(({ type, ref }) => (type.includes("listing") || type.includes("renew") || ref === "listing")
-    && !/^(prolist|offsite)|tax|vat|gst/.test(type))
+  })).filter(({ type, ref }) => listingFee(type, ref))
     .sort((a, b) => a.ts - b.ts);
   for (const { e, type, ts } of fees) {
     if (entrySeen.has(e.entry_id)) continue;
@@ -1120,6 +1144,87 @@ async function readPublished({ allPages }, sid, from, to) {
     publishedFrom: !ledger.error && Object.keys(feeTypes).length ? "ledger" : "",
     ...(ledger.error ? { ledgerError: ledger.error } : {}),
   };
+}
+
+/* One 30-day window of what Etsy charged, filed the way the renewal queue
+   needs it. Amounts are rupees out of the shop: a fee is positive, a refund of
+   one negative.
+     fees   listing id → [[ts, kind, ₹]] — its listing and renewal fees. kind:
+            l listed, x renewed on expiry, s renewed after a sale (Etsy renews a
+            multi-quantity listing each time one sells), r another renewal,
+            p private listing, f a fee refunded
+     tx     transaction id → ₹ — the transaction fee on an item, and the fee for
+            each extra unit in the order, less refunds
+     rc     receipt id → [processing, shipping fee, offsite ads, other] ₹ — per
+            order; the processing fee is filed by payment and mapped to its order
+     sales  [receipt, listing, transaction, ₹, qty, ts, share] for the orders
+            placed in the window: ₹ is the item's part of the order after coupons
+            and refunds (0 if cancelled), share its part of the order's items,
+            for splitting an order's own fees between its items
+     ads    Etsy Ads (prolist) ₹ — paid for the shop, not for any one listing
+   Sales tax Etsy collects from the buyer and pays on is not a cost of ours. */
+const RENEW_EPOCH = 1577836800;   // 1 Jan 2020 UTC — window 0 starts here
+async function ledgerWindow({ getJson, allPages }, sid, k, nowS) {
+  const from = RENEW_EPOCH + k * 30 * 86400, to = from + 30 * 86400;
+  if (from > nowS) return { k, from, to, final: true, fees: {}, tx: {}, rc: {}, sales: [], ads: 0 };
+  const last = Math.min(to, nowS + 60) - 1;   // the next window starts on `to`
+  const base = `https://openapi.etsy.com/v3/application/shops/${sid}`;
+  const [ledger, receipts] = await Promise.all([
+    allPages(o => `${base}/payment-account/ledger-entries?min_created=${from}&max_created=${last}&limit=100&offset=${o}`),
+    allPages(o => `${base}/receipts?${new URLSearchParams({ was_paid: "true", min_created: String(from), max_created: String(last), limit: "100", offset: String(o) })}`),
+  ]);
+  const r2 = v => Math.round(v * 100) / 100;
+  const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
+  const fees = {}, tx = {}, rc = {}, payFees = [];
+  let ads = 0;
+  const addRc = (id, i, v) => { const row = rc[id] || (rc[id] = [0, 0, 0, 0]); row[i] = r2(row[i] + v); };
+  const seen = new Set();
+  for (const e of ledger) {
+    if (seen.has(e.entry_id)) continue;
+    seen.add(e.entry_id);
+    const type = String(e.ledger_type || "").toLowerCase(), ref = String(e.reference_type || "").toLowerCase();
+    const id = String(e.reference_id ?? ""), v = -(+e.amount || 0) / 100, ts = +e.created_timestamp || +e.create_date || 0;
+    if (!id || !v) continue;
+    if (type.startsWith("prolist")) { ads += v; continue; }
+    if (/tax|vat|gst/.test(type)) continue;
+    if (ref === "listing" && listingFee(type, ref)) {
+      const kind = type.includes("refund") ? "f" : type.includes("private") ? "p" : !type.includes("renew") ? "l"
+        : type.includes("sold") ? "s" : type.includes("expire") ? "x" : "r";
+      (fees[id] || (fees[id] = [])).push([ts, kind, r2(v)]);
+    } else if (ref === "transaction") tx[id] = r2((tx[id] || 0) + v);
+    else if (ref === "receipt") addRc(id, type.startsWith("offsite") ? 2 : type.startsWith("shipping") ? 1 : 3, v);
+    else if (ref === "processing_fee") payFees.push([id, v]);
+  }
+  // A processing fee names its payment; one call per hundred says whose order that was.
+  const payIds = [...new Set(payFees.map(([id]) => id))];
+  const orderOf = {};
+  for (let i = 0; i < payIds.length; i += 100) {
+    try {
+      const d = await getJson(`${base}/payments?payment_ids=${payIds.slice(i, i + 100).join(",")}`);
+      for (const p of d.results || []) orderOf[String(p.payment_id)] = String(p.receipt_id);
+    } catch {}
+  }
+  let unplaced = 0;
+  for (const [pid, v] of payFees) orderOf[pid] ? addRc(orderOf[pid], 0, v) : (unplaced += v);
+  const VOID = ["canceled", "cancelled", "fully refunded", "fully_refunded"];
+  const sales = [];
+  const seenR = new Set();
+  for (const r of receipts) {
+    const rid = String(r.receipt_id);
+    if (seenR.has(rid)) continue;
+    seenR.add(rid);
+    const lines = (r.transactions || []).filter(t => t.listing_id);
+    if (!lines.length) continue;
+    const listed = lines.reduce((s, t) => s + money(t.price) * (+t.quantity || 1), 0);
+    const refunded = (r.refunds || []).reduce((s, rf) => s + money(rf.amount), 0);
+    const items = VOID.includes(String(r.status || "").toLowerCase()) ? 0 : Math.max(0, money(r.subtotal) - refunded);
+    for (const t of lines) {
+      const share = listed ? money(t.price) * (+t.quantity || 1) / listed : 1 / lines.length;
+      sales.push([rid, String(t.listing_id), String(t.transaction_id), r2(items * share), +t.quantity || 1,
+        +r.create_timestamp || +r.created_timestamp || 0, Math.round(share * 1e4) / 1e4]);
+    }
+  }
+  return { k, from, to, final: to < nowS - 7 * 86400, fees, tx, rc, sales, ads: r2(ads), ...(unplaced ? { unplaced: r2(unplaced) } : {}) };
 }
 
 // Picture, title, price and state for up to 100 listings, in one call.
