@@ -1,5 +1,6 @@
 // ─── DEMO DATA — shown when VITE_DEMO_MODE=true ───────────────────────────
 // All names, amounts, and details are fictional.
+import { mergeDemoFinance } from "./demoFinanceData.js";
 
 const d = (daysAgo) => {
   const dt = new Date();
@@ -170,3 +171,6 @@ export const DEMO_DATA = {
   ],
 
 };
+
+// Bank ledgers, statements and remittances for the Ledger's Month close.
+mergeDemoFinance(DEMO_DATA);

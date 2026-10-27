@@ -17,6 +17,8 @@ import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from 
 import NameCard from "./src/NameCard.jsx";
 import EtsyPulse from "./src/HomePulse.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
+import MonthClose from "./src/MonthClose.jsx";
+import { runningBalances, monthOf } from "./src/monthClose.js";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
@@ -4071,6 +4073,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   const blankManual=()=>({date:today(),type:"debit",accountId:"",accountToId:"",amount:"",receivedAmount:"",rate:"",currency:"INR",payee:"",notes:""});
   const [manualOpen,setManualOpen]=useState(false);
   const [manual,setManual]=useState(blankManual);
+  const [closeOpen,setCloseOpen]=useState(false); // Month close panel in place of the ledger list
   const keys=accountingCompanyKeys(company);
   useEffect(()=>{
     localStorage.setItem("ng-accounting-ledger-company",company);
@@ -4306,20 +4309,13 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
   };
   const statementRows=(()=>{
     const asc=[...filtered].sort((a,b)=>(a.date||"").localeCompare(b.date||"")||(a.createdAt||"").localeCompare(b.createdAt||""));
-    let bal=0;
     // Running balance is only meaningful for a single account; skip it for multi-select/all.
+    // It runs over the account's whole history, so a month (or a filter) shows the real
+    // balance — not one restarted from the opening balance at the top of the list.
     const acc=accountFilter.length===1?accounts.find(a=>a.id===accountFilter[0]):null;
-    if(acc)bal=+acc.openingBal||0;
+    const run=acc?runningBalances(acc,txns):null;
     const byId={};
-    asc.forEach(t=>{
-      if(acc){
-        if(t.type==="credit"&&t.accountTo===acc.id)bal+=(+t.amount||0);
-        if(t.type==="debit"&&t.accountFrom===acc.id)bal-=(+t.amount||0);
-        if(t.type==="conversion"&&t.accountFrom===acc.id)bal-=(+t.amount||0);
-        if(t.type==="conversion"&&t.accountTo===acc.id)bal+=(+t.receivedAmount||+t.amount||0);
-      }
-      byId[t.id]=acc?bal:null;
-    });
+    asc.forEach(t=>{byId[t.id]=run?(run.get(t.id)??null):null;});
     const groups=[];
     // While searching we span every month, so list oldest → newest (May, June, July…) — the
     // ascending order reads like a statement. The normal single-month view stays newest-first.
@@ -4722,6 +4718,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <button className={closeOpen?"bp":"bs"} style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setCloseOpen(o=>!o)} title="Everything left to do before this month is closed">✓ Month close</button>
           <button className="bp" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setManualOpen(true)}>+ Manual entry</button>
           {isAdmin&&<button className="bs" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setAttachCfgOpen(true)} title="Choose which categories require an attachment">📎 Rules</button>}
           {/* Calendar-icon month picker: shows a 📅 + friendly month label, and a transparent
@@ -4829,7 +4826,14 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false}){
         </div>
       )}
 
-      <div style={{display:"grid",gridTemplateColumns:mob?"1fr":wideJournal?"320px minmax(0,1fr) 340px":"minmax(0,300px) minmax(0,1fr)",gap:10,alignItems:"start"}}>
+      {closeOpen&&<MonthClose company={company} month={month} accounts={accounts} txns={txns} isUnclassified={isUnclassified}
+        onClose={()=>setCloseOpen(false)}
+        onOpenTxn={t=>{
+          if(isHiddenCashTxn(t)){showToast?.("That entry is on a foreign-cash account — classify it in Finance → Ledger.");return;}
+          setSearch("");setAccountFilter([]);setMonth(monthOf(t.date)||month);
+          setTab(isUnclassified(t)?"unclassified":"all");setSelectedId(t.id);setCloseOpen(false);
+        }}/>}
+      <div style={{display:closeOpen?"none":"grid",gridTemplateColumns:mob?"1fr":wideJournal?"320px minmax(0,1fr) 340px":"minmax(0,300px) minmax(0,1fr)",gap:10,alignItems:"start"}}>
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
           <div style={{display:"flex",gap:10,alignItems:"center",justifyContent:"space-between",padding:"9px 12px",borderBottom:`1px solid ${C.border}`,fontSize:11,color:C.inkFaint,flexWrap:"wrap",position:"relative"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>

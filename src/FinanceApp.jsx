@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, createContext, useContext, Fragment } from "react";
 import { isRemittanceAdvice, parseRemittanceAdvice, linesFromTextItems } from "./remittanceAdvice.js";
+import { runningBalances } from "./monthClose.js";
 import { supabase } from "./supabase.js";
 import { loadK, loadKFresh, saveK, onCacheRefresh } from "./utils.js";
 import ClassifyTransactionModal from "./ClassifyTransaction.jsx";
@@ -1766,25 +1767,14 @@ function LedgerView({ transactions, accounts, rates, onDelete, onUpdate, vendors
   const accObj = accounts.find(a => a.id === filterAcc);
   const { balById, closingBal } = (() => {
     if (!filterAcc || !accObj) return { balById: null, closingBal: null };
-    const chron = [...filtered].sort((a, b) =>
-      (a.date || "").localeCompare(b.date || "") || (a.createdAt || "").localeCompare(b.createdAt || ""));
-    let bal = +(accObj.openingBal || 0);
-    const liab = isLiabilityAcc(accObj);
-    const m = new Map();
-    chron.forEach(t => {
-      // Asset-sense delta, then flipped for liability accounts (card/OD), matching
-      // computeBalances. Transfers count too — an OD draw is a transfer, and
-      // without this the running balance ignored it entirely.
-      let delta = 0;
-      if (t.type === "credit") delta = +t.amount;
-      else if (t.type === "debit") delta = -(+t.amount);
-      else if (t.type === "conversion") {
-        delta = t.accountFrom === filterAcc ? -(+t.amount) : (+t.amount) * (+t.convRate || 1);
-      }
-      bal += liab ? -delta : delta;
-      m.set(t.id, bal);
-    });
-    return { balById: m, closingBal: bal };
+    // Over the account's whole history, not just the filtered rows — a month filter
+    // would otherwise restart every balance from the opening balance. Same rules as
+    // computeBalances (cards/ODs flipped, transfers on both legs).
+    const all = runningBalances(accObj, transactions);
+    const m = new Map(filtered.filter(t => all.has(t.id)).map(t => [t.id, all.get(t.id)]));
+    const last = [...filtered].filter(t => all.has(t.id)).sort((a, b) =>
+      (a.date || "").localeCompare(b.date || "") || (a.createdAt || "").localeCompare(b.createdAt || "")).pop();
+    return { balById: m, closingBal: last ? all.get(last.id) : null };
   })();
   const runningBals = balById ? filtered.map(t => balById.get(t.id)) : null;
 
