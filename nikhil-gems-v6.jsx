@@ -25877,14 +25877,20 @@ export default function Root({onSignOut}){
       // (empty list → no staff profile → admin), so staff saw "Hi Manav".
       if(!email){setUserProfile(null);return;}
       const em=email.toLowerCase();
+      /* Both reads are given a time limit. Once finish() has started, the
+         safety net below can't rescue it, so a database that takes the request
+         and never answers left the app on "Loading…" for good. Out of time
+         counts as a failed read: a device already confirmed as admin goes on
+         offline, anyone else gets "Couldn't confirm your account" and Try again. */
+      const within=(p,ms)=>Promise.race([p,new Promise((_,no)=>setTimeout(()=>no(new Error("timed out")),ms))]);
       let fresh=null;
       try{
-        const{data,error}=await supabase.from("app_data").select("value").eq("key","ng-users-v1").maybeSingle();
+        const{data,error}=await within(supabase.from("app_data").select("value").eq("key","ng-users-v1").maybeSingle(),8000);
         // No row is what RLS returns to a request without a valid session — not "no staff".
         if(!error&&data&&Array.isArray(data.value))fresh=data.value;
       }catch{}
       let arr=fresh;
-      if(!arr){try{const users=await loadK("ng-users-v1");arr=Array.isArray(users)?users:[];}catch{arr=[];}}
+      if(!arr){try{const users=await within(loadK("ng-users-v1"),3000);arr=Array.isArray(users)?users:[];}catch{arr=[];}}
       setAllUsers(arr);
       const profile=arr.find(u=>u.email?.toLowerCase()===em);
       let verifiedAdmin=null;
