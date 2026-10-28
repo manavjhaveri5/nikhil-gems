@@ -10,6 +10,7 @@ import { requireUser } from "../lib/auth.js";
 import { getEtsyAccessToken } from "../lib/etsy-auth.js";
 import { createClient } from "@supabase/supabase-js";
 import { endEbayItem } from "./ebay.js";
+import { storeOrderRows } from "../lib/storeOrderRows.js";
 
 const MEDIA_BUCKET = "ng-media";
 
@@ -1795,34 +1796,11 @@ export default async function handler(req, res) {
     };
     const upsert = (k, item, prepend = true) => sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: prepend });
     const [orders, listings] = await Promise.all([readKey("ng-orders-v1"), readKey("ng-listings-v1")]);
-    let n = orders.reduce((m, o) => Math.max(m, parseInt(String(o.order_number || "").replace(/\D/g, ""), 10) || 0), 0);
-    const addr = order.shipping || {};
+    const rows = storeOrderRows(order, listings);
     const results = [];
-    /* A code (WELCOME10) comes off the order as a whole; it is shared across
-       the lines by value, as Etsy coupons are, so each sale_price is what was
-       really paid for that piece. */
-    const lineTotal = l => (+l.price || 0) * (l.qty || 1);
-    const goods = (order.lines || []).reduce((t, l) => t + lineTotal(l), 0);
-    const code = order.discount_code || /\bCode (\w+)/.exec(order.notes || "")?.[1] || "";
     for (const [i, line] of (order.lines || []).entries()) {
       const L = listings.find(x => x.id === line.listing_id);
-      const id = `store-${order.number}-${i + 1}`;
-      if (!orders.some(o => o.id === id)) {
-        n += 1;
-        const discount = goods > 0 ? Number(((+order.discount || 0) * lineTotal(line) / goods).toFixed(2)) : 0;
-        await upsert("ng-orders-v1", {
-          id, order_number: `ORD-${String(n).padStart(4, "0")}`,
-          listing_id: line.listing_id || "", listing_title: line.title || L?.title || "",
-          listing_material: L?.material || "", listing_shape: L?.shape || "", listing_sku: line.sku || L?.sku || "",
-          listing_order_id: L?.listing_order_id || "", listing_image: line.image || L?.images?.[0] || "",
-          platform: "store", platform_order_id: order.number, sale_price: String(Number(Math.max(0, lineTotal(line) - discount).toFixed(2))),
-          ...(discount ? { list_price: lineTotal(line), discount, discount_code: code } : {}),
-          currency: "USD", qty: line.qty || 1, buyer_name: order.name || "", buyer_email: order.email || "",
-          buyer_country: addr.country || "", ship_to: addr, status: "sold",
-          date: String(order.created_at || new Date().toISOString()).slice(0, 10),
-          notes: order.notes || "", created_at: new Date().toISOString(),
-        });
-      }
+      if (!orders.some(o => o.id === rows[i].id)) await upsert("ng-orders-v1", rows[i]);
       // Taking the piece down elsewhere is approved by hand from the order in
       // Listing Manager → Orders; here only the store's own status is recorded.
       if (line.unique && L) {

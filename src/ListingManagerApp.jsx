@@ -5310,7 +5310,8 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     const byKey = new Map(); const out = [];
     for (const o of filtered) {
       const rid = isEtsyOrder(o) ? etsyReceiptId(o) : "";
-      const key = rid ? `r:${rid}` : `o:${o.id}`;
+      // A several-piece eartheditions.co order (EE-1003) is one parcel too.
+      const key = rid ? `r:${rid}` : o.platform === "store" && o.platform_order_id ? `s:${o.platform_order_id}` : `o:${o.id}`;
       if (!byKey.has(key)) { const g = { key, orders: [] }; byKey.set(key, g); out.push(g); }
       byKey.get(key).orders.push(o);
     }
