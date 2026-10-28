@@ -13707,6 +13707,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
      and the Gmail draft opens beside it — a compose link cannot carry a file,
      so the attaching is the one step left to do by hand. */
   const [valuationBusy,setValuationBusy]=useState(false);
+  const valuationDateOff=!!draft.date&&String(draft.date).slice(0,10)!==valToday();
   /* On a phone the two files go out through the share sheet (Gmail, Mail…)
      with both attached. Downloads and a Gmail tab don't work there: an iPhone
      opens the first download in place of the ERP, drops the second, and blocks
@@ -13726,18 +13727,20 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
     if(valuationBusy)return;
     const cur=draft.currency||"USD";
     const lastRate=(()=>{try{return localStorage.getItem(VALUATION_RATE_KEY)||"";}catch{return "";}})();
-    // The certificate is dated the day it is asked for, whatever the invoice's date.
-    const on=valToday();
+    // The valuer dates the certificate the day she issues it and won't issue it
+    // against an invoice dated another day, so an invoice not dated today is
+    // stopped here, while its date can still be changed.
+    if(valuationDateOff&&!window.confirm(`This invoice is dated ${valDate(draft.date)}, not today (${valDate(valToday())}).\n\nThe valuer only issues the certificate when the invoice date and the certificate date are the same. Cancel, change the invoice date to today, then request it.\n\nOK sends it with the invoice dated ${valDate(draft.date)} anyway.`))return;
     setValuationBusy(true);
     let suggested=lastRate,note="last rate used here";
     try{
-      const got=await fxToInrOn(on,cur);
+      const got=await fxToInrOn(draft.date,cur);
       suggested=String(got.rate);
       note=`ECB rate for ${valDate(got.on)}`;
     }catch{
       note=lastRate?"rate lookup failed — last rate used here":"rate lookup failed — type it in";
     }
-    const entered=window.prompt(`${cur} → INR rate as on ${valDate(on)}\n(${note} — overwrite it if customs notified another)`,suggested);
+    const entered=window.prompt(`${cur} → INR rate as on ${valDate(draft.date)}\n(${note} — overwrite it if customs notified another)`,suggested);
     if(entered===null){setValuationBusy(false);return;}
     const fx=parseFloat(String(entered).replace(/,/g,""));
     if(!isFinite(fx)||fx<=0){showToast?.("That rate didn't read as a number");setValuationBusy(false);return;}
@@ -13754,7 +13757,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
       const file=`${stem}.pdf`;
       // The valuer works off his own form, so the working sheet goes with it.
       const xlsxName=`${stem}_valuation.xlsx`, XLSX_TYPE="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-      const xbytes=await buildValuationXlsx(draft,company,fx,on);
+      const xbytes=await buildValuationXlsx(draft,company,fx);
 
       /* Outlook junks a first-contact Gmail carrying an invoice number, three
          template lines and no signature — it is the exact shape of invoice
@@ -14454,6 +14457,7 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
             style={{cursor:valuationBusy?"default":"pointer",opacity:valuationBusy?0.6:1,display:"inline-flex",alignItems:"center",gap:6,fontSize:12,padding:"6px 14px",border:`1px solid ${C.border}`,borderRadius:5,background:C.card,color:C.ink,fontFamily:"inherit"}}>
             📧 {valuationBusy?"Preparing files…":"Request Valuation Certificate"}
           </button>
+          {valuationDateOff&&<span style={{fontSize:11,fontWeight:700,color:C.red}}>⚠ Invoice dated {valDate(draft.date)}, not today — the valuer needs the invoice and the certificate dated the same day</span>}
           {valuationShare
             ?<button type="button" onClick={shareValuation} style={{cursor:"pointer",display:"inline-flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,padding:"6px 14px",border:`1px solid ${C.green}`,borderRadius:5,background:C.greenBg,color:C.green,fontFamily:"inherit"}}>📤 Share both files</button>
             :<span style={{fontSize:11,color:C.inkFaint}}>On a computer: downloads the invoice PDF and the valuation sheet and opens a Gmail draft to {VALUER_EMAIL}. On a phone: makes both files, then Share sends them to Gmail or Mail with both attached.</span>}
@@ -15735,13 +15739,12 @@ const VALUATION_RATE_KEY="ng-valuation-usd-inr";
 // Today on this device's calendar: toISOString() is UTC, the day before until 5:30am in India.
 const valToday=(d=new Date())=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 
-/* The rate the sheet is struck at, looked up rather than typed — for the day
-   the certificate is requested, which is the date the sheet carries: a
-   certificate asked for today is dated today and valued at today's rate, even
-   against an invoice raised last month. ECB reference rates through
-   Frankfurter: no key, and it answers for a past date. A weekend or a holiday
-   resolves to the last business day, which is what a rate "as on" that date
-   means anyway. The answer is offered, not imposed: customs may have notified
+/* The rate the sheet is struck at, looked up rather than typed — and looked up
+   for the invoice's own date, which is the date the sheet carries: the valuer
+   issues the certificate only when it and the invoice are dated the same day.
+   ECB reference rates through Frankfurter: no key, and it answers for a past
+   date. A weekend or a holiday resolves to the last business day, which is
+   what a rate "as on" that date means anyway. The answer is offered, not imposed: customs may have notified
    another, and the seller can overwrite it. */
 async function fxToInrOn(date,currency="USD"){
   const cur=String(currency||"USD").toUpperCase();
@@ -15777,7 +15780,7 @@ function valuationLineDesc(it){
   return `${main} (${extra.toUpperCase()})`;
 }
 
-function valuationSheetRows(inv,company,fx,on=inv.date){
+function valuationSheetRows(inv,company,fx){
   const co=companyProfileFromKey(company);
   const cur=inv.currency||"USD";
   const items=printOrderInvItems(inv.items).filter(it=>String(it.acctDesc||it.desc||"").trim());
@@ -15789,7 +15792,7 @@ function valuationSheetRows(inv,company,fx,on=inv.date){
   blank(); push(VALUER.form); blank(2);
   push("",co.name);
   push("",String(co.address||"").replace(/\n/g," "));
-  push("",`GSTIN: ${co.gstin} | IEC: ${co.iec}`,"","",valDate(on));
+  push("",`GSTIN: ${co.gstin} | IEC: ${co.iec}`,"","",valDate(inv.date));
   push("",`PAN: ${String(co.gstin||"").slice(2,12)}`,"","",inv.invNo||"");
   blank(2);
   push("Sr.","Description","Qty",`Gross wt (grms)`,"Metal Value/grm","Total Amt",`TOTAL IN INR`);
@@ -15811,7 +15814,7 @@ function valuationSheetRows(inv,company,fx,on=inv.date){
   const weights=Object.entries(byUnit).map(([u,q])=>`${valTrim(q)} (${u})`).join(" + ");
   push("","TOTAL ",items.length,weights,"",`${cur} ${valAmt(totalAmt)}`,+(totalAmt*fx).toFixed(2));
   blank(2);
-  push(`${cur} ${valAmt(totalAmt)} * ${fx} = ${valNum(totalAmt*fx)} INR RUPEES (Rate as on ${valDate(on)})`);
+  push(`${cur} ${valAmt(totalAmt)} * ${fx} = ${valNum(totalAmt*fx)} INR RUPEES (Rate as on ${valDate(inv.date)})`);
   blank(2);
   push(VALUER.note[0]); push(VALUER.note[1]);
   blank(2);
@@ -15822,9 +15825,9 @@ function valuationSheetRows(inv,company,fx,on=inv.date){
   return rows;
 }
 
-async function buildValuationXlsx(inv,company,fx,on){
+async function buildValuationXlsx(inv,company,fx){
   const XLSX=await import("xlsx");
-  const rows=valuationSheetRows(inv,company,fx,on);
+  const rows=valuationSheetRows(inv,company,fx);
   const ws=XLSX.utils.aoa_to_sheet(rows);
   // The letterhead lines run across the sheet the way they do on his form.
   ws["!merges"]=[0,1,2,3,5].map(r=>({s:{c:0,r},e:{c:5,r}}));
