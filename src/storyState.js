@@ -3,6 +3,7 @@
    agrees). Shared by the grid's badge and the queue itself. */
 import { useEffect, useMemo, useState } from "react";
 import { loadK, upsertItemK, onCacheRefresh } from "./utils.js";
+import { sbThumb } from "./photoUrls.js";
 
 export const STORIES_KEY = "ng-stories-v1";
 export const WEEK = 7 * 86400000;
@@ -27,9 +28,8 @@ export const ago = ms => {
   return new Date(ms).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 };
 export const cover = l => (l.images || []).find(u => typeof u === "string");
-// Supabase and Etsy both serve smaller copies on request.
-export const small = u => /etsystatic\.com\/.*il_fullxfull\./.test(u || "") ? u.replace("il_fullxfull.", "il_340x270.")
-  : /\/storage\/v1\/object\/public\//.test(u || "") ? u.replace("/object/public/", "/render/image/public/") + (u.includes("?") ? "&" : "?") + "width=340&quality=70" : u;
+// Smaller copies: Etsy's own, or ours from the store's /img/sb route (see sbThumb).
+export const small = u => /etsystatic\.com\/.*il_fullxfull\./.test(u || "") ? u.replace("il_fullxfull.", "il_340x270.") : sbThumb(u, 340);
 
 /* The two lists, shared with the toolbar badge so both count the same way. */
 export function storyLists(listings, orders, isLive, done = {}) {

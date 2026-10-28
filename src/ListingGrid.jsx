@@ -7,6 +7,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, lazy, Susp
 import { C, FI } from "./lmTheme.js";
 import { locationOf, needsLocation, knownLocations, tradeRowOf } from "./listingChannels.js";
 import { useStoriesDone, listedAt } from "./storyState.js";
+import { sbThumb } from "./photoUrls.js";
 
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 const StoryStudio = lazy(() => import("./StoryStudio.jsx"));
@@ -51,12 +52,11 @@ const statusOf = (l, k, f = {}) => {
   return a === "active" || b === "active" ? "active" : a || b;
 };
 export const isLive = (l, f) => PLAT.some(p => statusOf(l, p.key, f) === "active");
-// Listing-sized images: Etsy and Supabase both resize on request.
+// Listing-sized images: Etsy serves smaller copies of its own; ours via sbThumb.
 export const thumb = (u, w = 570) => {
   if (!u || typeof u !== "string") return u;
   if (/i\.etsystatic\.com/.test(u)) return u.replace(/il_fullxfull\./, w <= 340 ? "il_340x270." : "il_570xN.");
-  if (u.includes("/storage/v1/object/public/")) return u.replace("/storage/v1/object/public/", "/storage/v1/render/image/public/") + `?width=${w}&quality=72&resize=contain`;
-  return u;
+  return sbThumb(u, w);
 };
 const soldOut = (l, orders, f) => l.type === "unique" && (orders || []).some(o => o.listing_id === l.id) && !isLive(l, f);
 
