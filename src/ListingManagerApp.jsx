@@ -3855,6 +3855,16 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
 ══════════════════════════════════════════════════════════════════════════ */
 // Etsy's ship-by date for an order line (the date the buyer was promised dispatch by).
 const etsyShipBy = txn => txn?.expected_ship_date ? new Date(txn.expected_ship_date * 1000).toISOString().slice(0, 10) : "";
+/* The same order once the sync's own clock is set aside. The Etsy refresh stamps
+   every order it looks at (etsy_status_synced_at, etsy_fee_repaired_at), so a
+   plain comparison found every one "changed" and saved it — one at a time, each
+   save rewriting the whole orders record. That was about 1,400 rewrites of a
+   2.6 MB record a day, and it ran the database out of disk throughput. Only an
+   order whose real details changed is saved now, carrying the fresh stamp. */
+const sameApartFrom = (a, b, ...stamps) => {
+  const strip = o => { const r = { ...(o || {}) }; stamps.forEach(k => delete r[k]); return JSON.stringify(r); };
+  return strip(a) === strip(b);
+};
 /* Days to an unshipped order's ship-by date: negative = overdue. null when
    there's no date, or the order has shipped or been cancelled. */
 const shipByDays = o => {
@@ -5032,7 +5042,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
           merged[k] = v;
         }
       });
-      if (JSON.stringify(merged) !== JSON.stringify(order)) {
+      if (!sameApartFrom(merged, order, "etsy_status_synced_at")) {
         changed = true;
         changedRows.push(merged);
       }
@@ -5213,7 +5223,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
           etsy_fee_version: 7,
           etsy_fee_repaired_at: new Date().toISOString(),
         };
-        if (JSON.stringify(merged) !== JSON.stringify(o)) changedRows.push(merged);
+        if (!sameApartFrom(merged, o, "etsy_fee_repaired_at")) changedRows.push(merged);
         return merged;
       });
       if (changedRows.length) {
@@ -6682,7 +6692,16 @@ function EtsyLiveView({ onCrossPost }) {
       return prev ? { ...prev, ...o } : o;
     });
     const next = [...mergedRows, ...(erpOrders || []).filter(o => !importedIds.has(o.id))];
-    for (const order of mergedRows) await upsertItemK(ORDERS_KEY, order, { prepend: true });
+    /* Every cached receipt comes through here on each Etsy load, and each save
+       rewrites the whole orders record, so only new orders and ones Etsy
+       actually changed are saved. A ship time Etsy didn't give is filled with
+       "now", so a re-stamped one on an order already marked shipped is no change. */
+    const changedRows = mergedRows.filter(o => {
+      const prev = existingById.get(o.id);
+      if (!prev) return true;
+      return !(prev.shipped_at && o.shipped_at ? sameApartFrom(o, prev, "shipped_at") : sameApartFrom(o, prev));
+    });
+    for (const order of changedRows) await upsertItemK(ORDERS_KEY, order, { prepend: true });
     window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: next }));
   };
 
