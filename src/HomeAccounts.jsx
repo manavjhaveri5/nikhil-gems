@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { C } from "./ui.jsx";
 import { mob, fmtDate, loadK, onCacheRefresh } from "./utils.js";
-import { DEFAULT_EXP_CATS } from "./constants.js";
-import { loadLearnMemory, matchLearned } from "./classifyLearner.js";
+import { loadLearnMemory } from "./classifyLearner.js";
 import { paymentHead, balanceChecks, statementsKey, monthOf, shiftMonth, monthLabel } from "./monthClose.js";
 import { remittanceChecks, NG_REMIT_KEY, AT_META_KEY } from "./remittances.js";
-import { quickClassifyExpense, undoQuickClassify } from "./quickClassify.js";
+import PaymentQueue, { needsBill } from "./PaymentQueue.jsx";
 
 /* Home → Accounts: the money side at a glance, for one company at a time.
    What was paid out this month, the payments still without a head (classified
@@ -20,10 +19,10 @@ const sumByCur = list => {
   list.forEach(t => { const c = t.currency || "INR"; m[c] = (m[c] || 0) + (+t.amount || 0); });
   return Object.entries(m).sort((a, b) => (a[0] === "INR" ? -1 : b[0] === "INR" ? 1 : b[1] - a[1])).map(([c, v]) => money(v, c)).join(" + ") || money(0);
 };
-const LEARNED_LABEL = { vendor_bill: "Vendor bill", vendor_po: "Advance to vendor", cc_payment: "Card payment", conversion: "Transfer" };
 const CUSTOM_CATS_KEY = "ng-accounting-ledger-custom-cats-v1";
 
-function useKeys(keys) {
+// Several app_data keys at once, each reloaded when another screen or device changes it.
+export function useKeys(keys) {
   const [vals, setVals] = useState({});
   const sig = keys.filter(Boolean).join("|");
   useEffect(() => {
@@ -53,9 +52,6 @@ function Tile({ label, value, sub, tone = C.ink, onClick }) {
 export default function HomeAccounts({ isUnclassified, onEnter }) {
   const [company, setCompany] = useState(() => { try { return localStorage.getItem("ng-home-accounts-company") || "ng"; } catch { return "ng"; } });
   const [tab, setTab] = useState("todo");
-  const [busyId, setBusyId] = useState("");
-  const [done, setDone] = useState(null); // { company, label, before } — the last quick classify, for Undo
-  const [err, setErr] = useState("");
   const [memory, setMemory] = useState({});
   const month = new Date().toISOString().slice(0, 7);
   const lastMonth = shiftMonth(month, -1);
@@ -67,13 +63,13 @@ export default function HomeAccounts({ isUnclassified, onEnter }) {
     ["ng", "at"].forEach(co => loadLearnMemory(co).then(m => { if (alive) setMemory(s => ({ ...s, [co]: m })); }).catch(() => {}));
     return () => { alive = false; };
   }, []);
-  useEffect(() => { if (!done) return; const t = setTimeout(() => setDone(null), 9000); return () => clearTimeout(t); }, [done]);
 
   const pick = co => { setCompany(co); try { localStorage.setItem("ng-home-accounts-company", co); } catch {} };
   const accountsOf = co => arr(data[`${co}-fin-accounts-v1`]);
   const txnsOf = co => arr(data[`${co}-fin-txns-v1`]);
   const since = new Date(Date.now() - 92 * 86400000).toISOString().slice(0, 10);
-  const todoOf = co => txnsOf(co).filter(t => t.type === "debit" && (t.date || "") >= since && isUnclassified(t))
+  // No head yet, or paid to a vendor with no bill against it.
+  const todoOf = co => txnsOf(co).filter(t => t.type === "debit" && (t.date || "") >= since && (isUnclassified(t) || needsBill(t, isUnclassified)))
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
   const accounts = accountsOf(company), txns = txnsOf(company);
@@ -92,7 +88,6 @@ export default function HomeAccounts({ isUnclassified, onEnter }) {
     return { unentered: [...b.unentered, ...a.unentered], incomplete: [...b.rows, ...a.rows].filter(r => r.missing.length) };
   }, [company, accounts, txns, data, month, lastMonth]);
 
-  const heads = [...DEFAULT_EXP_CATS, ...arr(data[CUSTOM_CATS_KEY]).filter(c => c && !DEFAULT_EXP_CATS.includes(c))];
 
   // Opens the Ledger on this company — on one entry, or on Month close.
   const openLedger = (hint = {}) => {
@@ -104,21 +99,6 @@ export default function HomeAccounts({ isUnclassified, onEnter }) {
   };
   // Show a change at once, without waiting for the store to report it back.
   const putTxn = (co, txn) => setData(v => ({ ...v, [`${co}-fin-txns-v1`]: arr(v[`${co}-fin-txns-v1`]).map(t => (t.id === txn.id ? txn : t)) }));
-  const classify = async (t, cat) => {
-    if (!cat) return;
-    setBusyId(t.id); setErr("");
-    try {
-      const { saved, before } = await quickClassifyExpense({ company, txn: t, cat });
-      putTxn(company, saved);
-      setDone({ company, label: `${t.payee || "Payment"} → ${cat}`, before });
-    } catch (e) { setErr(`Couldn't classify: ${e?.message || "check connection"}`); }
-    finally { setBusyId(""); }
-  };
-  const undo = async () => {
-    const d = done; setDone(null);
-    try { await undoQuickClassify({ company: d.company, before: d.before }); putTxn(d.company, d.before); } catch (e) { setErr(`Undo failed: ${e?.message || "check connection"}`); }
-  };
-
   const coBtn = (co, label) => {
     const n = todoOf(co).length;
     return (
@@ -137,7 +117,7 @@ export default function HomeAccounts({ isUnclassified, onEnter }) {
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button className="bs" style={{ fontSize: 11.5, padding: "5px 11px" }} onClick={() => openLedger({ close: true, month: lastMonth })}>✓ Close {monthLabel(lastMonth, { month: "long" })} →</button>
-          <button className="bs" style={{ fontSize: 11.5, padding: "5px 11px" }} onClick={() => openLedger({})}>Ledger →</button>
+          <button className="bp" style={{ fontSize: 11.5, padding: "5px 11px" }} onClick={() => { try { localStorage.setItem("ng-accounting-company", company); } catch {} onEnter?.("group:accounting"); }}>Accounting →</button>
         </div>
       </div>
 
@@ -162,47 +142,11 @@ export default function HomeAccounts({ isUnclassified, onEnter }) {
         ))}
       </div>
 
-      {done && done.company === company && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: C.greenBg, color: C.green, borderRadius: 9, padding: "7px 11px", fontSize: 12.5, fontWeight: 700 }}>
-          <span>✓ {done.label}</span>
-          <button onClick={undo} style={{ background: "none", border: "none", color: C.green, fontWeight: 800, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}>Undo</button>
-        </div>
+      {tab === "todo" && (
+        <PaymentQueue key={company} company={company} items={todo} accounts={accounts} isUnclassified={isUnclassified} memory={memory[company] || []}
+          customHeads={arr(data[CUSTOM_CATS_KEY])} limit={6} onOpenLedger={openLedger} onSaved={t => putTxn(company, t)}
+          emptyText="Every payment in the last three months has a head and its bill." />
       )}
-      {err && <div style={{ background: C.redBg, color: C.red, borderRadius: 9, padding: "7px 11px", fontSize: 12.5, fontWeight: 700 }}>{err}</div>}
-
-      {tab === "todo" && (todo.length === 0
-        ? <div style={{ fontSize: 12.5, color: C.green, fontWeight: 700 }}>✓ Every payment in the last three months is classified.</div>
-        : <div style={{ display: "grid" }}>
-          {todo.slice(0, 6).map(t => {
-            const learned = matchLearned(memory[company] || [], t);
-            const sure = learned && learned.confidence >= 0.6 && learned.count >= 1;
-            const quick = sure && learned.classifiedAs === "expense" && learned.cat ? learned.cat : "";
-            const other = sure && LEARNED_LABEL[learned.classifiedAs] ? `${LEARNED_LABEL[learned.classifiedAs]}${learned.party ? ` · ${learned.party}` : ""}` : "";
-            const busy = busyId === t.id;
-            return (
-              <div key={t.id} style={{ display: "grid", gridTemplateColumns: mob ? "1fr auto" : "70px minmax(0,1fr) 110px minmax(0,auto)", gap: 10, alignItems: "center", padding: "8px 0", borderTop: `1px solid ${C.border}`, opacity: busy ? .5 : 1 }}>
-                {!mob && <div style={{ fontSize: 11.5, color: C.inkMid }}>{fmtDate(t.date)}</div>}
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 750, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.payee || "—"}</div>
-                  <div style={{ fontSize: 11, color: C.inkFaint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{mob ? `${fmtDate(t.date)} · ` : ""}{accName(t.accountFrom)}{t.notes ? ` · ${t.notes}` : ""}</div>
-                </div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, textAlign: "right" }}>{money(t.amount, t.currency)}</div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gridColumn: mob ? "1 / -1" : "auto" }}>
-                  {quick && <button disabled={busy} onClick={() => classify(t, quick)} title="Classify under the head you used for this payee before"
-                    style={{ border: `1px solid ${C.green}`, background: C.greenBg, color: C.green, borderRadius: 7, padding: "4px 9px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>✓ {quick}</button>}
-                  {!quick && other && <span style={{ fontSize: 11, color: C.inkMid, whiteSpace: "nowrap" }}>Looks like {other}</span>}
-                  <select value="" disabled={busy} onChange={e => classify(t, e.target.value)} aria-label="Expense head"
-                    style={{ border: `1px solid ${C.border}`, background: C.surface, color: C.ink, borderRadius: 7, padding: "4px 6px", fontSize: 11.5, fontFamily: "inherit", cursor: "pointer", maxWidth: 140 }}>
-                    <option value="">{quick ? "Other head…" : "Expense head…"}</option>
-                    {heads.map(h => <option key={h} value={h}>{h}</option>)}
-                  </select>
-                  <button className="bs" style={{ fontSize: 11, padding: "4px 9px", whiteSpace: "nowrap" }} onClick={() => openLedger({ id: t.id, month: monthOf(t.date) })} title="Vendor bill, card payment or transfer — open it in the Ledger">Bill / more →</button>
-                </div>
-              </div>
-            );
-          })}
-          {todo.length > 6 && <button onClick={() => openLedger({ unclassified: true, month: monthOf(todo[6].date) })} style={{ background: "none", border: "none", borderTop: `1px solid ${C.border}`, padding: "8px 0 0", textAlign: "left", color: C.gold, fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>+ {todo.length - 6} more in the Ledger →</button>}
-        </div>)}
 
       {tab === "latest" && (
         <div style={{ display: "grid" }}>

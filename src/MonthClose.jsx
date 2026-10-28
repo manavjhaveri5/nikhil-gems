@@ -143,7 +143,7 @@ function useKey(key, fallback = []) {
   return v;
 }
 
-export default function MonthClose({ company, month, accounts = [], txns = [], isUnclassified, onOpenTxn, onOpenRecon, onClose, initialSection = "payments" }) {
+export default function MonthClose({ company, month, accounts = [], txns = [], isUnclassified, onOpenTxn, onOpenRecon, onClose, initialSection = "payments", closeLabel = "Back to ledger" }) {
   const [section, setSection] = useState(initialSection);
   const coName = company === "at" ? "Atyahara" : "Nikhil Gems";
   const accountName = t => accounts.find(a => a.id === (t.type === "credit" ? t.accountTo : t.accountFrom))?.name || "Account";
@@ -208,7 +208,7 @@ export default function MonthClose({ company, month, accounts = [], txns = [], i
           <div style={{ fontSize: 11, fontWeight: 900, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .65 }}>Month close · {coName}</div>
           <div style={{ fontSize: 16, fontWeight: 900, color: C.ink, marginTop: 2 }}>{monthLabel(month)}</div>
         </div>
-        <button className="bs" style={{ fontSize: 12, padding: "6px 11px" }} onClick={onClose}>Back to ledger</button>
+        <button className="bs" style={{ fontSize: 12, padding: "6px 11px" }} onClick={onClose}>{closeLabel}</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : `repeat(${tiles.length}, minmax(0, 1fr))`, gap: 8 }}>

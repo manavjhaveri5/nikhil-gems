@@ -307,7 +307,7 @@ const STATUS_STYLE = {
   rejected:  { bg:C.redBg,   color:C.red,    label:"Rejected ✗"       },
 };
 
-async function aiExtract(b64, docType, mime="application/pdf") {
+export async function aiExtract(b64, docType, mime="application/pdf") {
   const prompts = {
     firc: 'This is a FIRC from an Indian bank. Return ONLY valid JSON, no markdown: {"number":"FIRC reference number","dateRaw":"date exactly as printed on document e.g. 02/06/2025","amount":"total remittance amount digits only"}',
     inward: 'This is an inward remittance advice / FIRC for an export payment received into an Indian bank. Return ONLY valid JSON, no markdown: {"irt":"IRT / UTR / reference number of the remittance","dateRaw":"value/credit date exactly as printed e.g. 02/06/2025","amount":"remittance amount in foreign currency, digits only","currency":"foreign currency code e.g. USD EUR GBP JPY","buyer":"remitter / sender / ordering customer name"}',

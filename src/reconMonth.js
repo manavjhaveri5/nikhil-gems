@@ -43,6 +43,17 @@ export function realisationDue(date) {
 }
 const sbKey = v => String(v ?? "").replace(/\D/g, "").replace(/^0+/, "");
 const today = () => new Date().toISOString().slice(0, 10);
+// `month` may be "all": every shipping bill, whatever its month.
+const inMonth = (date, month) => month === "all" || monthOf(date) === month;
+
+/* Where the bank paperwork stands. NG: the Invoice Sets status (packet →
+   submitted → done) and a BRC among the invoice's documents. Atyahara: the SB's
+   own status cycle, "cleared" meaning the bank has closed it, plus its BRC file. */
+export const DOCS_LABEL = { pending: "Not sent", packet: "Packet ready", submitted: "Submitted", done: "Done", prepared: "Prepared", cleared: "Cleared", rejected: "Rejected" };
+const ngDocs = inv =>
+  (inv.reconDone || inv.bankStatus === "cleared" || inv.bankStatus === "done") ? "done"
+  : inv.bankStatus === "submitted" ? "submitted" : inv.bankStatus === "packet_downloaded" ? "packet" : "pending";
+const ngHasBrc = inv => (inv.attachments || []).some(a => /\bbrc\b|realisation|realization/i.test(`${a?.label || ""} ${a?.fileName || a?.name || ""}`));
 
 function finish(rows, extra = {}) {
   const fix = rows.filter(r => r.problems.length);
@@ -65,7 +76,7 @@ export function ngReconMonth({ month, invoices = [], remittances = [], bankSbs =
   exportInvoices.forEach(inv => {
     const bank = inv.sbNo ? bankByKey.get(sbKey(inv.sbNo)) : null;
     const sbDate = looseDate(bank?.date) || inv.sbDate || "";
-    if (monthOf(sbDate || inv.date) !== month) return;
+    if (!inMonth(sbDate || inv.date, month)) return;
     const links = invRemitLinks(inv);
     const value = +inv.totalAmt || 0;
     const realised = round2(links.reduce((s, l) => s + (+l.alloc || 0), 0));
@@ -79,6 +90,13 @@ export function ngReconMonth({ month, invoices = [], remittances = [], bankSbs =
       key: inv.id, sbNo: inv.sbNo || "", sbDate, invId: inv.id, invNo: inv.invNo || "", buyer: inv.buyerName || inv.buyer || "",
       currency: String(inv.currency || "").toUpperCase(), value, realised, status,
       remittances: links.map(l => remById.get(l.id)?.irt || l.irt).filter(Boolean),
+      credits: links.map(l => {
+        const r = remById.get(l.id) || {};
+        const share = +r.amount > 0 ? (+l.alloc || 0) / +r.amount : 0;
+        return { id: l.id, irt: r.irt || l.irt, date: r.date || "", alloc: +l.alloc || 0, currency: r.currency || l.currency,
+          inr: +r.inrCredited > 0 ? round2(+r.inrCredited * share) : null, charges: r.charges == null || r.charges === "" ? null : round2(+r.charges * share), eefc: r.settlement === "eefc" };
+      }),
+      docs: ngDocs(inv), submittedAt: String(inv.bankSubmittedAt || "").slice(0, 10), brc: ngHasBrc(inv),
       dueDate: due, overdue: status !== "realised" && !!due && due < today(),
       bankOpen: !!bank && bankList.length > 0,
       problems,
@@ -88,10 +106,10 @@ export function ngReconMonth({ month, invoices = [], remittances = [], bankSbs =
   const invKeys = new Set(exportInvoices.map(i => sbKey(i.sbNo)).filter(Boolean));
   bankList.forEach(b => {
     const k = sbKey(b.sbNo), d = looseDate(b.date);
-    if (!k || invKeys.has(k) || monthOf(d) !== month) return;
+    if (!k || invKeys.has(k) || !inMonth(d, month)) return;
     rows.push({
       key: `bank-${k}`, sbNo: b.sbNo, sbDate: d, invNo: "", buyer: "", currency: "", value: 0, realised: 0, status: "unrealised",
-      remittances: [], dueDate: looseDate(b.due) || realisationDue(d), overdue: false, bankOpen: true,
+      remittances: [], credits: [], docs: "pending", brc: false, dueDate: looseDate(b.due) || realisationDue(d), overdue: false, bankOpen: true,
       problems: ["At the bank, but no invoice in the ERP has this SB number"],
     });
   });
@@ -102,7 +120,7 @@ export function ngReconMonth({ month, invoices = [], remittances = [], bankSbs =
 export function atReconMonth({ month, meta }) {
   const fircs = meta?.fircs || [], sbs = meta?.shippingBills || [], invs = meta?.invoices || [];
   const fircById = new Map(fircs.map(f => [f.id, f]));
-  const rows = sbs.filter(sb => monthOf(sb.date) === month).map(sb => {
+  const rows = sbs.filter(sb => inMonth(sb.date, month)).map(sb => {
     const firc = sb.fircId ? fircById.get(sb.fircId) : null;
     const inv = invs.find(i => i.linkedSbId === sb.id);
     const value = +sb.amount || 0;
@@ -114,7 +132,12 @@ export function atReconMonth({ month, meta }) {
     return {
       key: sb.id, sbNo: sb.sbNumber || "", sbDate: sb.date || "", invNo: inv?.invoiceNumber || inv?.number || (sb.hasInvPdf ? "Invoice on file" : ""),
       buyer: firc?.buyerName || inv?.buyerName || "", currency: "INR", value, realised: firc ? value : 0, status,
-      remittances: firc ? [firc.number || "FIRC"] : [], dueDate: due, overdue: status !== "realised" && !!due && due < today(),
+      remittances: firc ? [firc.number || "FIRC"] : [],
+      credits: firc ? [{ id: firc.id, irt: firc.number || "FIRC", date: firc.date || "", alloc: value, currency: "INR", inr: value,
+        charges: firc.charges == null || firc.charges === "" || !(+firc.amount > 0) ? null : round2(+firc.charges * value / +firc.amount) }] : [],
+      // The bank marking the SB cleared is its realisation closed — the BRC, whether or not the file is attached yet.
+      docs: sb.status || "pending", brc: !!sb.hasBrcPdf || sb.status === "cleared",
+      dueDate: due, overdue: status !== "realised" && !!due && due < today(),
       bankStatus: sb.status || "pending", problems,
     };
   }).sort((a, b) => String(a.sbDate).localeCompare(String(b.sbDate)));

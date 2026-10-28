@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, createContext, useContext, Fragment } from "react";
 import { isRemittanceAdvice, parseRemittanceAdvice, linesFromTextItems } from "./remittanceAdvice.js";
-import { runningBalances, statementMonthEnds, statementsKey, statementId, keepExistingStatement } from "./monthClose.js";
+import { runningBalances, statementMonthEnds } from "./monthClose.js";
+import { applyStatementImport } from "./statementImport.js";
 import { supabase } from "./supabase.js";
-import { loadK, loadKFresh, saveK, onCacheRefresh, upsertItemK } from "./utils.js";
+import { loadK, loadKFresh, saveK, onCacheRefresh } from "./utils.js";
 import ClassifyTransactionModal from "./ClassifyTransaction.jsx";
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
@@ -3019,7 +3020,7 @@ function parseBankCsv(text, accName = "") {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ReconcileView({ accounts, transactions, onAddTxns, onApplyTxns, company }) {
+export function ReconcileView({ accounts, transactions, onAddTxns, onApplyTxns, company }) {
   const [selectedAcc, setSelectedAcc] = useState(accounts[0]?.id || "");
   const [statement,   setStatement]   = useState("");
   const [analysis,    setAnalysis]    = useState("");
@@ -4825,7 +4826,7 @@ export default function FinanceApp({ onHome }) {
           {view === "add"        && <AddTxnForm accounts={accounts} invoices={invoices} purchases={purchases} ledgerTxns={txns} vendors={vendors} buyers={buyers} rates={rates} expenseCats={EXP_CATS} onSave={saveTxn} onSaveClassified={saveTxnClassified} onCancel={() => setView("dashboard")} />}
           {view === "accounts"   && <AccountsSettings accounts={accounts} rates={rates} balances={balances} onUpdate={saveAccounts} onUpdateRates={saveRates} onFetchRates={()=>fetchLiveRates(rates)} fetchingRates={fetchingRates} onAdjustBalance={adjustBalance} onReassignTxns={async (fromId, toId) => { const updated = txns.map(t => ({ ...t, accountFrom: t.accountFrom===fromId ? toId : t.accountFrom, accountTo: t.accountTo===fromId ? toId : t.accountTo })); setTxns(updated); await saveK(companyKeys(company).transactions, updated); showToast("Transactions moved"); }} />}
           {view === "classify"   && <ExpenseSplitView transactions={txns} accounts={accounts} vendors={vendors} purchases={purchases} invoices={invoices} buyers={buyers} rates={rates} company={company} onClassify={handleClassify} />}
-          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async ({ add = [], removeIds = [], openingBalance = null, accountId = null, statementClosings = [], fileName = "" }) => { const rm = new Set(removeIds); const list = [...add, ...txns.filter(t => !rm.has(t.id))]; setTxns(list); await saveK(companyKeys(company).transactions, list); let obMsg = ""; if (openingBalance != null && accountId) { const accs = accounts.map(a => a.id === accountId ? { ...a, openingBal: +openingBalance } : a); setAccounts(accs); await saveK(companyKeys(company).accounts, accs); obMsg = ` · opening bal ₹${(+openingBalance).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`; } let stMsg = ""; if (accountId && statementClosings.length) { const savedAt = new Date().toISOString(); const prev = await loadKFresh(statementsKey(company)).catch(() => []); const kept = statementClosings.map(c => ({ ...c, id: statementId(accountId, c.month), accountId, source: "statement", fileName, savedAt })).filter(rec => !keepExistingStatement((Array.isArray(prev) ? prev : []).find(x => x.id === rec.id), rec)); for (const rec of kept) await upsertItemK(statementsKey(company), rec); stMsg = ` · ${kept.length} month-end balance${kept.length === 1 ? "" : "s"} kept`; } showToast([add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ") + (add.length || removeIds.length ? " — ledger matches bank" : "Statement saved") + obMsg + stMsg); }} />}
+          {view === "reconcile"  && <ReconcileView accounts={accounts} transactions={txns} company={company} onAddTxns={async (newTxns) => { const list = [...newTxns, ...txns]; setTxns(list); await saveK(companyKeys(company).transactions, list); showToast(`${newTxns.length} transaction${newTxns.length>1?"s":""} added to ledger`); }} onApplyTxns={async args => { const r = await applyStatementImport({ company, accounts, txns, ...args }); setTxns(r.txns); setAccounts(r.accounts); showToast(r.message); }} />}
         </>
       }
       {/* Inline classify after manual entry */}

@@ -22,6 +22,7 @@ import MonthClose from "./src/MonthClose.jsx";
 import { runningBalances, monthOf } from "./src/monthClose.js";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
+const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
 const DatasetsApp       = React.lazy(() => import("./src/DatasetsApp.jsx"));
 const ImageLibraryApp   = React.lazy(() => import("./src/ImageLibraryApp.jsx"));
@@ -26087,8 +26088,12 @@ export default function Root({onSignOut}){
     if(String(mod).startsWith("group:")){
       const g=GROUPS.find(x=>x.id===String(mod).slice(6));
       const mine=allowedMods.filter(m=>m.group===g?.id&&m.ready);
+      // Accounting is its own app — a dashboard and the work — for whoever keeps the books.
+      const books=g?.id==="accounting"&&(isAdmin||allowedMods.some(m=>m.id==="ledger"));
       content=g&&mine.length
-        ? <GroupHome group={g} mods={mine} onEnter={go} onHome={goHome}/>
+        ? books
+          ? <Shell title="Accounting" crumb={g.desc} onHome={goHome}><React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"50vh",color:C.inkFaint,fontSize:13}}>Loading…</div>}><AccountingApp mods={mine} onEnter={go} isUnclassified={accountingIsUnclassified} canBank={isAdmin||allowedMods.some(m=>m.id==="finance")}/></React.Suspense></Shell>
+          : <GroupHome group={g} mods={mine} onEnter={go} onHome={goHome}/>
         : null;   // no group, or none of it allowed: fall through to Home
     }
     else if(mod==="purchases")content=<PurchasesApp onHome={()=>{goHome();setStartView(null);setStartBillId(null);}} startView={startView} startBillId={startBillId} onBillIdConsumed={()=>setStartBillId(null)} onGoToVendor={name=>{setStartVendor(name);setMod("vendors");setScreen("app");}}/>;

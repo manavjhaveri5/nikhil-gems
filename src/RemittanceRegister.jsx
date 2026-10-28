@@ -8,6 +8,7 @@ import {
   isInwardCredit, matchLedgerCredit, ngKeys, remitFromAdvice, remitFromLedgerCredit, isEefc,
 } from "./remittances.js";
 import { monthOf, monthLabel } from "./monthClose.js";
+import { bookRemittanceFees, feesBooked } from "./remittanceFees.js";
 
 /* Nikhil Gems' inward remittance register (Export Recon → Remittances).
    One row per foreign payment received at Bank of India, with everything the
@@ -176,7 +177,7 @@ function Editor({ rem, invoices, buyers, ledgerTxn, onSave, onDelete, onLink, on
   );
 }
 
-export default function RemittanceRegister({ aiExtract }) {
+export default function RemittanceRegister({ aiExtract, isUnclassified = t => !t.classifiedAs, onChange }) {
   const [remits, setRemits] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [buyers, setBuyers] = useState([]);
@@ -195,6 +196,8 @@ export default function RemittanceRegister({ aiExtract }) {
     });
   }, []);
   useEffect(() => { reload(); }, [reload]);
+  // A screen hosting the register (Accounting) keeps its own counts; tell it what changed.
+  useEffect(() => { onChange?.({ remits, invoices }); }, [remits, invoices]);
   useEffect(() => onCacheRefresh(keys => { if ([NG_REMIT_KEY, INV_KEY, TXN_KEY, ACC_KEY].some(k => keys.includes(k))) reload(); }), [reload]);
   useEffect(() => { if (!msg) return; const t = setTimeout(() => setMsg(null), 6000); return () => clearTimeout(t); }, [msg]);
 
@@ -332,10 +335,17 @@ export default function RemittanceRegister({ aiExtract }) {
                   <td style={{ ...td, whiteSpace: "nowrap", fontWeight: 800 }}>{f2(r.amount, r.currency)}</td>
                   <td style={td}>{isEefc(r) ? <span style={{ color: C.inkFaint }}>EEFC</span> : (r.rate || <span style={{ color: C.amber }}>—</span>)}</td>
                   <td style={{ ...td, whiteSpace: "nowrap" }}>{isEefc(r) ? <span style={{ color: C.inkFaint }}>kept in {r.currency}</span> : inr(r.inrCredited)}</td>
-                  <td style={{ ...td, whiteSpace: "nowrap" }}>{r.charges == null || r.charges === "" ? <span style={{ color: C.amber }}>—</span> : inr(r.charges)}</td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
+                    {r.charges == null || r.charges === "" ? <span style={{ color: C.amber }}>—</span> : inr(r.charges)}
+                    {+r.charges > 0 && (feesBooked(r)
+                      ? <div style={{ fontSize: 10.5, color: C.green, fontWeight: 700 }}>✓ booked</div>
+                      : <button className="bs" disabled={busy} style={{ display: "block", fontSize: 10.5, padding: "2px 8px", marginTop: 3 }} title={isEefc(r) ? "Classify the bank's fee debit as Bank Charges" : "Book the fees as a Bank Charges expense"}
+                          onClick={() => run(async () => { const saved = await bookRemittanceFees({ rem: r, txns, accounts, isUnclassified }); setRemits(list => list.map(x => (x.id === saved.id ? saved : x))); }, `Fees on ${r.irt || "the remittance"} booked as Bank Charges.`)}>Book fees</button>)}
+                  </td>
                   <td style={td}>
                     {st.allocs.map(a => <div key={a.inv.id} style={{ fontSize: 11.5, whiteSpace: "nowrap" }}>{a.inv.invNo}{a.inv.sbNo ? ` · SB ${a.inv.sbNo}` : ""} <span style={{ color: C.inkFaint }}>{f2(a.alloc)}</span></div>)}
                     {st.unallocated > 0.01 && <div style={{ fontSize: 11.5, color: r.advance ? C.blue : C.amber, fontWeight: 700 }}>{r.currency} {f2(st.unallocated)} {r.advance ? "advance" : "not tied"}</div>}
+                    {!st.allocs.length && <div style={{ fontSize: 10.5, color: C.amber, fontWeight: 800 }}>No invoice yet{r.expectedShipDate ? ` · ships ${fmtDate(r.expectedShipDate)}` : ""}</div>}
                   </td>
                   <td style={td}>{led ? <Pill tone="green" title={`${led.payee} · ${fmtDate(led.date)}`}>✓ {fmtDate(led.date)}</Pill> : <Pill tone="amber">Not found</Pill>}</td>
                   <td style={td}>{ok ? <Pill tone="green">✓</Pill> : <Pill tone="amber" title={[miss.length ? `Missing ${miss.join(", ")}` : "", !st.settled ? "Not tied to an invoice or marked advance" : "", st.noSb.length ? `No SB on ${st.noSb.map(i => i.invNo).join(", ")}` : ""].filter(Boolean).join(" · ")}>{miss.length ? `${miss.length} missing` : !st.settled ? "Not tied" : st.noSb.length ? "No SB" : "Check"}</Pill>}</td>
