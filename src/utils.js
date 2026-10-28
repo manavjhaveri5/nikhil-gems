@@ -30,9 +30,9 @@ const _isFresh=k=>_cache.has(k)&&(Date.now()-(_keyFetchedAt.get(k)||0))<CACHE_TT
 const _invalidateKeys=keys=>{
   const wanted=[...new Set((keys||[]).filter(k=>k&&!DEPRECATED_KEYS.includes(k)))];
   if(!wanted.length)return;
-  wanted.forEach(k=>{_cache.delete(k);_keyFetchedAt.delete(k);});
+  wanted.forEach(k=>{_cache.delete(k);_keyFetchedAt.delete(k);if(!_hydrateDone)_droppedEarly.add(k);});
   _lastFetchAt=0;
-  _persistLS();
+  _persistCache();
   _notifyRefresh(wanted);
 };
 const _rememberVersionTs=ts=>{
@@ -59,22 +59,77 @@ const _safeForLocalCache=(value)=>{
   return scrub(value);
 };
 
-// Persist current in-memory cache to localStorage (called after every Supabase fetch)
-const _persistLS=()=>{
+/* ── Device cache: IndexedDB ───────────────────────────────────────────────
+   The copy of app_data this device keeps, so a screen paints at once from it
+   and refreshes behind. It lived in localStorage, which holds about 5 MB; the
+   data is 16 MB (listings alone 4 MB), so every save overflowed it, the copy
+   was wiped, and every screen waited on a full download. IndexedDB has room.
+   One entry per key ({v, ts}); a save writes only the keys that changed, a
+   little after the change, and a key invalidated by another device is deleted. */
+const IDB_NAME="ng-cache",IDB_STORE="app_data";
+let _idbOpen=null;
+const _idb=()=>_idbOpen||(_idbOpen=new Promise((res,rej)=>{
+  if(typeof indexedDB==="undefined")return rej(new Error("no IndexedDB"));
+  const r=indexedDB.open(IDB_NAME,1);
+  r.onupgradeneeded=()=>r.result.createObjectStore(IDB_STORE);
+  r.onsuccess=()=>res(r.result);
+  r.onerror=()=>rej(r.error);
+  r.onblocked=()=>rej(new Error("IndexedDB blocked"));
+}));
+const _persistedRef=new Map(); // key → the value object last written to IndexedDB
+const _droppedEarly=new Set(); // invalidated before the stored copy was read back
+let _hydrateDone=false;
+let _flushTimer=null;
+const _flushCache=async()=>{
+  _flushTimer=null;
+  const puts=[],dels=[];
+  _cache.forEach((v,k)=>{if(!DEPRECATED_KEYS.includes(k)&&_persistedRef.get(k)!==v)puts.push([k,v]);});
+  _persistedRef.forEach((_,k)=>{if(!_cache.has(k))dels.push(k);});
+  _droppedEarly.forEach(k=>{if(!_cache.has(k)&&!dels.includes(k))dels.push(k);});
+  if(!puts.length&&!dels.length)return;
   try{
-    const obj={};
-    _cache.forEach((v,k)=>{if(!DEPRECATED_KEYS.includes(k))obj[k]=_safeForLocalCache(v);});
-    localStorage.setItem(LS_CACHE_KEY,JSON.stringify(obj));
-    localStorage.setItem(LS_CACHE_TS,String(Date.now()));
-  }catch(e){
-    /* Quota exceeded. The old snapshot must not survive a failed write: the
-       next reload would paint it as current, so a saved edit would look undone. */
-    try{localStorage.removeItem(LS_CACHE_KEY);localStorage.removeItem(LS_CACHE_TS);}catch{}
+    const db=await _idb();
+    await new Promise((res,rej)=>{
+      const tx=db.transaction(IDB_STORE,"readwrite"),st=tx.objectStore(IDB_STORE);
+      puts.forEach(([k,v])=>st.put({v:_safeForLocalCache(v),ts:_keyFetchedAt.get(k)||Date.now()},k));
+      dels.forEach(k=>st.delete(k));
+      tx.oncomplete=res;tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error);
+    });
+    puts.forEach(([k,v])=>_persistedRef.set(k,v));
+    dels.forEach(k=>{_persistedRef.delete(k);_droppedEarly.delete(k);});
+  }catch{
+    // A copy that couldn't be brought up to date mustn't be painted next time.
+    try{const db=await _idb();const st=db.transaction(IDB_STORE,"readwrite").objectStore(IDB_STORE);puts.forEach(([k])=>st.delete(k));}catch{}
   }
 };
-
-// Load localStorage cache into _cache at startup (zero-latency first paint)
-const _loadLS=()=>{
+// Called after every change to the cache; the write follows shortly, batched.
+const _persistCache=()=>{
+  if(DEMO_MODE||_flushTimer)return;
+  _flushTimer=setTimeout(_flushCache,400);
+};
+/* Read the stored copy back at startup. A key this session already holds (fresh
+   from the server, or just saved) or has been told is out of date is left alone.
+   What comes back paints at once but always counts as stale, so the first loadK
+   also refreshes it from the server: a save made just before the tab closed may
+   not have reached the copy, and it must not pass for current. */
+const _hydrate=async()=>{
+  const db=await _idb();
+  const [keys,rows]=await new Promise((res,rej)=>{
+    const tx=db.transaction(IDB_STORE,"readonly"),st=tx.objectStore(IDB_STORE);
+    const k=st.getAllKeys(),v=st.getAll();
+    tx.oncomplete=()=>res([k.result||[],v.result||[]]);tx.onerror=()=>rej(tx.error);
+  });
+  keys.forEach((k,i)=>{
+    const row=rows[i];
+    if(!row||DEPRECATED_KEYS.includes(k)||_cache.has(k)||_droppedEarly.has(k))return;
+    _cache.set(k,row.v);
+    _keyFetchedAt.set(k,0);
+    _persistedRef.set(k,row.v);
+  });
+};
+/* The localStorage copy older versions kept: read once for this first paint,
+   then removed. Its keys aren't in IndexedDB yet, so the next write puts them there. */
+const _loadLegacyLS=()=>{
   try{
     const raw=localStorage.getItem(LS_CACHE_KEY);
     const ts =localStorage.getItem(LS_CACHE_TS);
@@ -88,14 +143,41 @@ const _loadLS=()=>{
       _lastFetchAt=parseInt(ts,10)||0;
     }
   }catch(e){}
+  try{localStorage.removeItem(LS_CACHE_KEY);localStorage.removeItem(LS_CACHE_TS);}catch{}
 };
-if(!DEMO_MODE)_loadLS();
+if(!DEMO_MODE)_loadLegacyLS();
+// loadK waits for the stored copy, but never more than 2s: a stuck IndexedDB
+// must not stand between a screen and the network.
+const _hydrated=DEMO_MODE?Promise.resolve():Promise.race([
+  _hydrate().catch(()=>{}).finally(()=>{_hydrateDone=true;_persistCache();}),
+  new Promise(r=>setTimeout(r,2000)),
+]);
+if(typeof window!=="undefined"&&!DEMO_MODE)window.addEventListener("pagehide",()=>{_flushCache();});
 
-const _fetchKeys=async(keys,{silent=false}={})=>{
+/* ── Loading from Supabase: a time limit, and retries ──────────────────────
+   A request the database took and never answered used to hang its screen on
+   "Loading…" until reload. Each attempt is now cut off (25s, then 40s, then
+   60s — the big keys are several MB), and a timed-out or dropped request is
+   tried again after a pause that grows to 20s. An error the server actually
+   returned (no access, a bad query) is not retried. */
+const _LOAD_LIMITS=[25000,40000,60000];
+const _LOAD_PAUSES=[2000,5000,10000,20000];
+const _transient=e=>e?.name==="AbortError"||e?.transient||e instanceof TypeError||/fetch|network|timed out|load failed/i.test(e?.message||"");
+const _fetchKeys=async(keys,{silent=false,timeoutMs=_LOAD_LIMITS[0]}={})=>{
   const wanted=[...new Set(keys.filter(k=>k&&!DEPRECATED_KEYS.includes(k)))];
   if(!wanted.length)return;
-  const {data,error}=await supabase.from("app_data").select("key,value").in("key",wanted);
-  if(error)throw new Error(error.message);
+  const ctl=new AbortController();
+  const timer=setTimeout(()=>ctl.abort(),timeoutMs);
+  let res;
+  try{res=await supabase.from("app_data").select("key,value").in("key",wanted).abortSignal(ctl.signal);}
+  finally{clearTimeout(timer);}
+  const {data,error}=res;
+  if(error){
+    const e=new Error(error.message||"Load failed");
+    // An aborted or dropped request comes back as an error object, not a throw.
+    e.transient=ctl.signal.aborted||!error.code||/abort|fetch|network/i.test(error.message||"");
+    throw e;
+  }
   const now=Date.now();
   const found=new Set();
   (data||[]).forEach(r=>{
@@ -111,10 +193,19 @@ const _fetchKeys=async(keys,{silent=false}={})=>{
     }
   });
   _lastFetchAt=now;
-  _persistLS();
+  _persistCache();
   // silent=true: internal fetch (e.g. pre-merge read in saveStockK) — don't notify
   // UI components, as the cache will be overwritten by the imminent write.
   if(!silent)_notifyRefresh(wanted);
+};
+const _fetchKeysRetrying=async(keys,opts={},attempts=Infinity)=>{
+  for(let i=0;;i++){
+    try{return await _fetchKeys(keys,{...opts,timeoutMs:_LOAD_LIMITS[Math.min(i,_LOAD_LIMITS.length-1)]});}
+    catch(e){
+      if(!_transient(e)||i+1>=attempts)throw e;
+      await new Promise(r=>setTimeout(r,_LOAD_PAUSES[Math.min(i,_LOAD_PAUSES.length-1)]));
+    }
+  }
 };
 
 const _queueKeyFetch=k=>new Promise((resolve,reject)=>{
@@ -129,7 +220,8 @@ const _queueKeyFetch=k=>new Promise((resolve,reject)=>{
     _batchResolvers=new Map();
     _batchTimer=null;
     try{
-      await _fetchKeys(keys);
+      // A screen waiting on this has nothing to show without it: keep trying.
+      await _fetchKeysRetrying(keys);
       keys.forEach(key=>(resolvers.get(key)||[]).forEach(r=>r.resolve(_cache.get(key)||[])));
     }catch(e){
       keys.forEach(key=>(resolvers.get(key)||[]).forEach(r=>r.reject(e)));
@@ -231,6 +323,7 @@ export const loadK=async k=>{
     const{DEMO_DATA}=await import("./demoData.js");
     return DEMO_DATA[k]||[];
   }
+  await _hydrated;
   if(_isFresh(k))return _cache.get(k);
   if(_cache.has(k)){
     _queueKeyFetch(k).catch(()=>{});
@@ -242,7 +335,8 @@ export const loadK=async k=>{
 
 export const loadKFresh=async k=>{
   if(DEMO_MODE)return loadK(k);
-  await _fetchKeys([k],{silent:true});
+  // Read just before a write: three tries, then the caller's fallback takes over.
+  await _fetchKeysRetrying([k],{silent:true},3);
   return _cache.has(k)?_cache.get(k):[];
 };
 
@@ -272,7 +366,7 @@ export const syncOfflineQueue=async()=>{
       const value=Array.isArray(item.v)?await _mergeArrayAgainstFresh(item.k,item.v,item.base):item.v;
       _cache.set(item.k,value);
       _keyFetchedAt.set(item.k,Date.now());
-      _persistLS();
+      _persistCache();
       await _putValueK(item.k,value);
     }catch{failed.push(item);}
   }
@@ -330,7 +424,7 @@ export const saveK=async(k,d,{merge=true}={})=>{
   const persisted=_safeForLocalCache(d);
   _cache.set(k,persisted);            // update cache immediately so UI stays snappy
   _keyFetchedAt.set(k,Date.now());
-  _persistLS();               // keep localStorage in sync so next load is fresh
+  _persistCache();            // keep the device copy in sync so next load is fresh
 
   // If offline: queue the write and return — UI already has the latest data
   if(!navigator.onLine){
@@ -341,7 +435,7 @@ export const saveK=async(k,d,{merge=true}={})=>{
   const value=merge&&Array.isArray(persisted)?await _mergeArrayAgainstFresh(k,persisted,prev):persisted;
   _cache.set(k,value);
   _keyFetchedAt.set(k,Date.now());
-  _persistLS();
+  _persistCache();
   await _putValueK(k,value);
   /* The merge can bring back rows this device never had — an invoice another
      booth phone wrote while this one was asleep. They went to the server and
@@ -364,7 +458,7 @@ const _deleteLocalItem=(arr,id)=>_arrayValue(arr).filter(x=>x?.id!==id);
 const _setCachedValue=(k,value)=>{
   _cache.set(k,_safeForLocalCache(value));
   _keyFetchedAt.set(k,Date.now());
-  _persistLS();
+  _persistCache();
   _notifyRefresh([k]);
 };
 const _versionOf=item=>Number.isFinite(+item?._version)?+item._version:0;
