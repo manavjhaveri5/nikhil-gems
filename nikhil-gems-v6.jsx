@@ -21,6 +21,7 @@ import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
 import MonthClose from "./src/MonthClose.jsx";
 import { runningBalances, monthOf } from "./src/monthClose.js";
 import { invRemitLinks, NG_REMIT_KEY } from "./src/remittances.js";
+import { nextLocation } from "./src/listingChannels.js";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
@@ -6414,20 +6415,7 @@ function VendorPickerField({value,onChange,vendors,onVendorCreated,allowFreeText
   );
 }
 
-// Storage locations run in two numbered series: box numbers ("731") and STK
-// shelves ("STK59"). The next free one is one past the top of the series, written
-// the way the top one is — a lone number far above the rest (a stray 998 while the
-// boxes run to 731) isn't the top. The stock bot numbers boxes by the same rule.
-const LOC_SERIES={box:/^(?:box\s*[-_#]?\s*|#\s*)?(\d{1,5})$/i,stk:/^stk\s*[-_#]?\s*(\d{1,5})$/i};
-const nextLocation=(stock,series)=>{
-  const byNum=new Map();
-  for(const s of stock){const l=String(s.location||"").trim();const m=l.match(LOC_SERIES[series]);if(m)byNum.set(+m[1],l);}
-  const nums=[...byNum.keys()].sort((a,b)=>a-b);
-  if(!nums.length)return series==="stk"?"STK1":"1";
-  let top=nums[nums.length-1];
-  for(let i=nums.length-1;i>0;i--)if(nums[i]-nums[i-1]<=50){top=nums[i];break;}
-  return byNum.get(top).replace(/\d+$/,d=>String(top+1).padStart(d.length,"0"));
-};
+// The next free box / STK shelf: nextLocation in src/listingChannels.js, shared with Listing Manager.
 
 function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onStockIdConsumed,startLocationFilter,onLocationConsumed}){
   const t=useT();

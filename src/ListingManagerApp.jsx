@@ -25,7 +25,7 @@ import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreS
 import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
-import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor } from "./listingChannels.js";
+import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -2724,7 +2724,17 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           <div><Label>Per</Label><select value={ns.per} onChange={e => upd({ per: e.target.value })} style={FI()}>
             <option value="unit">{ns.unit}</option>{ns.qty2 && <option value="unit2">{ns.unit2}</option>}</select></div>
           {nsTotal(ns) > 0 && <div style={{ gridColumn: "1 / -1", fontSize: 13, color: C.ink }}>Total cost <b>₹{Math.round(nsTotal(ns)).toLocaleString("en-IN")}</b>{+ns.qty > 1 ? ` · ₹${nsCostPerUnit(ns).toLocaleString("en-IN")} per ${ns.unit}` : ""}</div>}
-          <div style={{ gridColumn: "1 / -1" }}><Label>Stored at</Label><input value={ns.location || ""} onChange={e => upd({ location: e.target.value })} list="lm-loc-list" placeholder="Shelf, box, drawer…" style={FI()} /></div>
+          <div style={{ gridColumn: "1 / -1" }}><Label>Stored at</Label>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input value={ns.location || ""} onChange={e => upd({ location: e.target.value })} list="lm-loc-list" placeholder="Shelf, box, drawer…" style={FI({ flex: 1, minWidth: 0 })} />
+              {/* The next free box and STK shelf, counted over the stock cards and the places kept on listings; a tap puts it in. */}
+              {[["box", "Next free box number"], ["stk", "Next free STK shelf"]].map(([series, title]) => {
+                const next = nextLocation([...(stock || []), ...(listings || []).map(l => ({ location: l.officeLocation }))], series);
+                return <button key={series} type="button" title={title} onClick={() => upd({ location: next })}
+                  style={{ flex: "none", padding: "8px 10px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.card, color: C.inkMid, cursor: "pointer", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
+                  {series === "box" ? `Next box ${next}` : `+ ${next}`}</button>;
+              })}
+            </div></div>
           <div><Label>SKU</Label><input value={ns.sku} onChange={e => upd({ sku: e.target.value.toUpperCase() })} placeholder={autoSku} style={FI({ fontFamily: "monospace" })} /></div>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>

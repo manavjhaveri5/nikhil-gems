@@ -142,6 +142,23 @@ export function locationOf(l, stock) {
 // A one-of-a-kind piece that could still be sold has to be findable.
 export const needsLocation = (l, sold = false) => l?.type !== "repeatable" && !sold;
 
+/* Storage locations run in two numbered series: box numbers ("731") and STK
+   shelves ("STK59"). The next free one is one past the top of the series,
+   written the way the top one is; a lone number far above the rest (a stray
+   998 while the boxes run to 731) isn't the top. The stock bot numbers boxes
+   by the same rule. Takes anything with a location (stock cards, or
+   { location } for places kept on listings). */
+export const LOC_SERIES = { box: /^(?:box\s*[-_#]?\s*|#\s*)?(\d{1,5})$/i, stk: /^stk\s*[-_#]?\s*(\d{1,5})$/i };
+export function nextLocation(items, series) {
+  const byNum = new Map();
+  for (const s of items || []) { const l = String(s?.location || "").trim(); const m = l.match(LOC_SERIES[series]); if (m) byNum.set(+m[1], l); }
+  const nums = [...byNum.keys()].sort((a, b) => a - b);
+  if (!nums.length) return series === "stk" ? "STK1" : "1";
+  let top = nums[nums.length - 1];
+  for (let i = nums.length - 1; i > 0; i--) if (nums[i] - nums[i - 1] <= 50) { top = nums[i]; break; }
+  return byNum.get(top).replace(/\d+$/, d => String(top + 1).padStart(d.length, "0"));
+}
+
 // Every place in use, most used first, spelled the way most people spell it.
 export function knownLocations(listings = [], stock = []) {
   const m = new Map();
