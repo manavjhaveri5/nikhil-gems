@@ -761,6 +761,7 @@ function ProductEditor({ p, onClose, onSave }) {
             <PhotoEditor url={f.images[editIdx]} photos={f.images} index={editIdx}
               onSave={u => setImages(a => a.map((x, j) => (j === editIdx ? u : x)))}
               onSaveAll={next => setImages(() => next)}
+              onAdd={u => { setImages(a => [...a.slice(0, editIdx + 1), u, ...a.slice(editIdx + 1)]); setEditIdx(editIdx + 1); }}
               onClose={() => setEditIdx(null)} />
           </Suspense>
         )}

@@ -6,7 +6,7 @@ export const config = {
       sizeLimit: "20mb",
     },
   },
-  maxDuration: 60,
+  maxDuration: 300,   // a studio shot is a minute or two on the image model
 };
 
 const OPENAI_URL = "https://api.openai.com/v1/responses";
@@ -93,7 +93,8 @@ function outputText(data) {
 // ── Folded-in endpoints (merged to stay under Vercel's 12-function limit) ──
 //  /api/openai → /api/claude?_ai=openai   (OpenAI chat/completions passthrough)
 //  /api/embed  → /api/claude?_ai=embed     (OpenAI embeddings)
-// Both are reached via rewrites in vercel.json; the route is detected below.
+//  /api/claude?_ai=studio                  (OpenAI image edit: the photo editor's studio shot)
+// The first two are reached via rewrites in vercel.json; the route is detected below.
 function detectRoute(req) {
   if (req.query?._ai) return req.query._ai;
   const u = String(req.url || "");
@@ -134,6 +135,46 @@ async function handleEmbed(req, res, key) {
     return res.status(200).json({ embeddings });
   } catch (e) {
     return res.status(500).json({ error: e.message });
+  }
+}
+
+/* The photo editor's studio shot: one photo and the brief in, one square image
+   out. The newest image model the key can use goes first; a key or org that
+   can't use it falls through to the next. input_fidelity keeps the model close
+   to the photo's own detail, and is dropped for a model that doesn't take it. */
+const STUDIO_MODELS = [process.env.OPENAI_IMAGE_MODEL, "gpt-image-1.5", "gpt-image-1"].filter(Boolean);
+async function handleStudioShot(req, res, key) {
+  try {
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    if (!body.image || !body.prompt) return res.status(400).json({ error: { message: "image and prompt required" } });
+    const bytes = Buffer.from(String(body.image), "base64");
+    let last = { status: 500, message: "No image model answered." };
+    for (const model of [...new Set(STUDIO_MODELS)]) {
+      for (const fidelity of [true, false]) {
+        const form = new FormData();
+        form.append("model", model);
+        form.append("image", new Blob([bytes], { type: "image/jpeg" }), "photo.jpg");
+        form.append("prompt", String(body.prompt).slice(0, 30000));
+        form.append("size", "1024x1024");
+        form.append("quality", "high");
+        form.append("background", "opaque");
+        form.append("output_format", "png");
+        if (fidelity) form.append("input_fidelity", "high");
+        const r = await fetch("https://api.openai.com/v1/images/edits", {
+          method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form,
+        });
+        const data = await r.json().catch(() => ({}));
+        const b64 = data.data?.[0]?.b64_json;
+        if (r.ok && b64) return res.status(200).json({ image: b64, mime: "image/png", model, usage: data.usage });
+        last = { status: r.status, message: data.error?.message || `OpenAI image edit failed (HTTP ${r.status})` };
+        if (!(fidelity && /input_fidelity/i.test(last.message))) break;
+      }
+      // Only a model this key can't use is worth another try; anything else would fail the same way.
+      if (!/model|not found|does not exist|not supported|verif/i.test(last.message)) break;
+    }
+    return res.status(last.status >= 400 ? last.status : 500).json({ error: { message: last.message } });
+  } catch (e) {
+    return res.status(500).json({ error: { message: e.message || String(e) } });
   }
 }
 
@@ -178,6 +219,7 @@ export default async function handler(req, res) {
   const route = detectRoute(req);
   if (route === "openai") return handleOpenaiChat(req, res, key);
   if (route === "embed") return handleEmbed(req, res, key);
+  if (route === "studio") return handleStudioShot(req, res, key);
 
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};

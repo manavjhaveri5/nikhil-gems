@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/claude.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/etsy.js": {
       "maxDuration": 60

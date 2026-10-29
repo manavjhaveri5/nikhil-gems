@@ -366,6 +366,7 @@ function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice,
                   <PhotoEditor url={imgs[editIdx]} photos={imgs} index={editIdx}
                     onSave={u => setImgs(a => a.map((x, j) => (j === editIdx ? u : x)))}
                     onSaveAll={next => setImgs(() => next)}
+                    onAdd={u => { setImgs(a => [...a.slice(0, editIdx + 1), u, ...a.slice(editIdx + 1)]); setEditIdx(editIdx + 1); }}
                     onClose={() => setEditIdx(null)} />
                 </Suspense>
               )}

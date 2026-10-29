@@ -4,6 +4,7 @@ import { C, mob, FI } from "./lmTheme.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { CurveEditor, emptyCurves, curvesTouched } from "./ToneCurve.jsx";
 import { askGrade } from "./gradeAi.js";
+import { makeStudioShot } from "./studioShot.js";
 import { buildBackgroundMask, maskToRgba } from "./backgroundSweep.js";
 import {
   ADJUSTMENTS, NEUTRAL, MIXER, emptyMixer, mixerTouched, mixerBands, MAX_BANDS,
@@ -32,7 +33,7 @@ import {
 
 
 
-export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onClose, showToast }) {
+export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onAdd, onClose, showToast }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);       // { gl, program, uniforms, texture }
   const bitmapRef = useRef(null);
@@ -70,6 +71,8 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
   const [showOriginal, setShowOriginal] = useState(false);
   const [cap, setCap] = useState(NO_CAPTION);
   const [meas, setMeas] = useState(NO_MEASURE);   // a size mark: this photo only, never the batch
+  const [studio, setStudio] = useState(null);      // the AI studio shot waiting to be added: { canvas, preview, warnings }
+  const [studioNote, setStudioNote] = useState("");
   const [capFont, setCapFont] = useState("");    // the face actually loaded
   const capCanvasRef = useRef(null);
   /* The editor fills the window, and a window gets resized while it is open —
@@ -222,6 +225,38 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
         setCurves(recipe.curves);
       }
       setSummary(recipe.summary);
+    } catch (e) { setErr(e.message || String(e)); } finally { setBusy(""); }
+  };
+
+  const resetEdits = () => {
+    setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer());
+    setSweep(s => ({ ...s, on: false })); setGeo(NO_GEO); setCap(NO_CAPTION); setMeas(NO_MEASURE); setSummary("");
+  };
+
+  /* ── The studio shot ────────────────────────────────────────────────────── */
+  /* Sent from the original pixels, not the graded preview: the model redraws
+     the piece anyway, and it should start from the photo as taken. */
+  const runStudio = async () => {
+    if (!bitmapRef.current) return;
+    setBusy("studio"); setErr(""); setStudio(null);
+    try {
+      const src = fullRef.current ? await fullRef.current.catch(() => bitmapRef.current) : bitmapRef.current;
+      setStudio(await makeStudioShot(src, studioNote));
+    } catch (e) { setErr(e.message || String(e)); } finally { setBusy(""); }
+  };
+  /* Never over the original: it goes in as a new photo right after this one,
+     and the editor moves on to it, clean, for a size mark or a caption. */
+  const addStudio = async () => {
+    if (!studio) return;
+    setBusy("studio-save"); setErr("");
+    try {
+      const blob = await new Promise((resolve, reject) => studio.canvas.toBlob(
+        b => (b ? resolve(b) : reject(new Error("Couldn't read the studio shot back."))), "image/jpeg", 0.92));
+      const name = `studio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const saved = await uploadToStorage(`listing-photos/${name}`, new File([blob], name, { type: "image/jpeg" }));
+      resetEdits(); setStudio(null); setStudioNote("");
+      onAdd(saved);
+      showToast?.("✓ Studio shot added after the original — now editing it");
     } catch (e) { setErr(e.message || String(e)); } finally { setBusy(""); }
   };
 
@@ -394,7 +429,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 👁 Hold to compare
               </button>
-              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setGeo(NO_GEO); setCap(NO_CAPTION); setMeas(NO_MEASURE); setSummary(""); }}
+              <button type="button" onClick={resetEdits}
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 Reset
               </button>
@@ -422,6 +457,45 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
           {/* Controls */}
           <div style={narrow ? stack(12)
             : { display: "flex", flexDirection: "column", gap: 12, minWidth: 0, minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
+            {onAdd && (
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={lab}>Studio shot</span>
+                  <span style={{ fontSize: 9.5, color: C.inkFaint }}>AI redraw on pure white</span>
+                </div>
+                {!studio ? (
+                  <>
+                    <input value={studioNote} onChange={e => setStudioNote(e.target.value)} disabled={busy === "studio"}
+                      placeholder="anything to keep in mind — e.g. keep the stand" style={{ ...FI(), fontSize: 12 }} />
+                    <button type="button" onClick={runStudio} disabled={!ready || !!busy}
+                      style={{ ...btn(C.ink, "#FAF0DC"), opacity: !ready || busy ? .5 : 1 }}>
+                      {busy === "studio" ? "Redrawing… about a minute" : "✨ Make studio shot"}
+                    </button>
+                    <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>
+                      Takes out the hand and backdrop and redraws the piece on white with a soft shadow, square. It is a redraw, so check the pattern against this photo. It goes in as a new photo; this one stays.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <img src={studio.preview} alt="Studio shot" style={{ width: "100%", borderRadius: 8, border: `1px solid ${C.border}`, display: "block" }} />
+                    {studio.warnings.map(w => <div key={w} style={{ fontSize: 11, color: C.red }}>{w}</div>)}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button type="button" onClick={addStudio} disabled={!!busy}
+                        style={{ ...btn(C.ink, "#FAF0DC"), opacity: busy ? .5 : 1 }}>
+                        {busy === "studio-save" ? "Adding…" : "Add after this photo"}
+                      </button>
+                      <button type="button" onClick={runStudio} disabled={!!busy}
+                        style={{ ...btn("transparent", C.ink), opacity: busy ? .5 : 1 }}>
+                        {busy === "studio" ? "Redrawing…" : "Try again"}
+                      </button>
+                      <button type="button" onClick={() => setStudio(null)} disabled={!!busy}
+                        style={{ ...btn("transparent", C.ink), opacity: busy ? .5 : 1 }}>Discard</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 8 }}>
               <label style={lab}>Tell it what you want</label>
               <textarea value={ask} onChange={e => setAsk(e.target.value)} rows={2}

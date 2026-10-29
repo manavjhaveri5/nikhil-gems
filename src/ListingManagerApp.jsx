@@ -1450,6 +1450,13 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
           index={editIdx}
           onSave={newUrl => { const next = selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)); noteOriginals(selectedUrls, next); noteEdit(selectedUrls, next); onChange(next); }}
           onSaveAll={next => { noteOriginals(selectedUrls, next); noteEdit(selectedUrls, next); onChange(next); }}
+          onAdd={u => {
+            // The studio shot goes in after its photo, remembered as made from that photo's original.
+            const src = selectedUrls[editIdx];
+            onOriginalsChange?.({ ...originals, [u]: originals[src] || src });
+            onChange([...selectedUrls.slice(0, editIdx + 1), u, ...selectedUrls.slice(editIdx + 1)]);
+            setEditIdx(editIdx + 1);
+          }}
           onClose={() => setEditIdx(null)}
         />
       )}
