@@ -1606,13 +1606,16 @@ export default async function handler(req, res) {
     }
 
     /* Lightweight: map every live Etsy listing_id → its state (active|draft|...),
-       and when each was first listed (Etsy's original creation date, which a
-       renewal doesn't move). Used to reconcile local listing badges and dates
-       without re-importing full objects. */
+       when each was first listed (Etsy's original creation date, which a
+       renewal doesn't move), and in dates its latest renewal (created_timestamp,
+       which every renewal moves) and when its term ends. Used to reconcile local
+       listing badges and dates without re-importing full objects. */
     if (action === "sync_etsy_states") {
       try {
         const hdrs = await etsyHeaders(false);
-        const states = {}, firstListed = {}, info = {};
+        const states = {}, firstListed = {}, info = {}, dates = {};
+        const iso = ts => +ts > 0 ? new Date(ts * 1000).toISOString() : "";
+        const dateOf = l => { const d = { renewed: iso(l.created_timestamp || l.creation_timestamp), ends: iso(l.ending_timestamp) }; if (d.renewed || d.ends) dates[l.listing_id] = d; };
         let renewed = 0;
         for (const state of url.searchParams.get("only_check") ? [] : ["active", "draft"]) {   // only_check: just the listings named in check
           let offset = 0;
@@ -1629,6 +1632,7 @@ export default async function handler(req, res) {
               info[l.listing_id] = { title: l.title || "", sku: (l.skus || [])[0] || "" };
               const first = l.original_creation_timestamp || l.creation_timestamp;
               if (first) firstListed[l.listing_id] = new Date(first * 1000).toISOString();
+              dateOf(l);
               if (l.original_creation_timestamp && l.creation_timestamp > l.original_creation_timestamp) renewed++;
             });
             if (results.length < 100) break;
@@ -1644,10 +1648,14 @@ export default async function handler(req, res) {
           const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
           if (!r.ok) break;
           const d = await r.json().catch(() => ({}));
-          for (const l of d.results || []) states[l.listing_id] = l.state || "inactive";
+          for (const l of d.results || []) {
+            states[l.listing_id] = l.state || "inactive";
+            if (l.original_creation_timestamp) firstListed[l.listing_id] = iso(l.original_creation_timestamp);
+            dateOf(l);
+          }
           for (const id of chunk) if (!states[id]) states[id] = "removed";
         }
-        return res.json({ ok: true, states, firstListed, renewed, info });
+        return res.json({ ok: true, states, firstListed, renewed, info, dates });
       } catch (e) {
         return res.status(500).json({ ok: false, error: e.message });
       }

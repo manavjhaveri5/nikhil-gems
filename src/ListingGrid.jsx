@@ -264,13 +264,16 @@ function Stats({ l, sales, etsy, etsyAt }) {
       : { k: "sold", t: "no sales yet", tip: "No orders from this listing in Orders" },
     sales?.last && { k: "last", t: `last ${ageOf(now - sales.last)} ago`, tip: "" },
   ].filter(Boolean);
-  // Its dates: Etsy's when this device has them, else the earliest the ERP knows.
-  const created = etsy?.created || firstListed(l);
-  const renewed = etsy && etsy.renewed > etsy.created + 864e5 ? etsy.renewed : 0;
-  const ends = etsy?.state === "active" && etsy.ends > 0 ? etsy.ends : 0;
+  /* Its dates: Etsy's, from this device's copy of the shop when it's newer,
+     else as the Etsy sync keeps them on the listing; else the earliest the
+     ERP knows. */
+  const et = l.platforms?.etsy || {}, at = v => Date.parse(v || "") || 0;
+  const created = etsy?.created || at(et.first_listed_at) || firstListed(l);
+  const renewed = etsy ? (etsy.renewed > etsy.created + 864e5 ? etsy.renewed : 0) : at(et.renewed_at);
+  const ends = (etsy ? etsy.state === "active" && etsy.ends : et.status === "active" && at(et.ends_at)) || 0;
   const dates = [created && `Created ${day(created)}`, renewed && `renewed ${day(renewed)}`, ends && `${ends < now ? "ended" : "ends"} ${day(ends)}`].filter(Boolean).join(" · ");
   const tip = [...bits.map(b => b.tip).filter(Boolean),
-    created ? `Created ${day(created)}${etsy?.created ? " on Etsy" : " — the ERP's earliest date for it (Etsy's isn't on this device; open the Etsy tab to sync)"}` : "",
+    created ? `Created ${day(created)}${etsy?.created || et.first_listed_at ? " on Etsy" : " — the ERP's earliest date for it"}` : "",
     renewed ? `last renewed ${day(renewed)}` : "", ends ? `its Etsy term ${ends < now ? "ended" : "ends"} ${day(ends)}` : "",
     etsy && etsyAt ? `Etsy numbers as of ${day(etsyAt)} (the Etsy tab's last sync)` : ""].filter(Boolean).join(" · ");
   return (

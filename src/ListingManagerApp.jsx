@@ -9737,7 +9737,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${missing.join(",")}`).then(x => x.json()).catch(() => null);
         if (c?.ok && c.states) Object.assign(d.states, c.states);
       }
-      const states = d.states, firstListed = d.firstListed || {}, info = d.info || {};
+      const states = d.states, firstListed = d.firstListed || {}, info = d.info || {}, dates = d.dates || {};
       const fresh = await loadKFresh(LIST_KEY).catch(() => null);
       const base0 = Array.isArray(fresh) ? fresh : current;
       /* A piece put on Etsy by hand (a draft made there, or listed there first)
@@ -9774,10 +9774,19 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
            new. Etsy's original date puts it back where it belongs. */
         const first = firstListed[lid];
         const early = first && Date.parse(first) < (Date.parse(l.created_at || "") || Infinity);
-        if (l.platforms.etsy.status === mapped && !early) return l;
+        /* Etsy's own dates, kept on the listing so the ERP holds them itself:
+           first listed, its latest renewal (only once it has renewed: Etsy's
+           created_timestamp is the first listing until then) and when its term
+           ends. The ERP's created_at is the import day for anything brought
+           in from Etsy, so these are the ones to read. */
+        const et = l.platforms.etsy, dt = dates[lid] || {};
+        const renewedAt = dt.renewed && first && Date.parse(dt.renewed) > Date.parse(first) + 864e5 ? dt.renewed : "";
+        const want = { ...(first ? { first_listed_at: first } : {}), ...(renewedAt ? { renewed_at: renewedAt } : {}), ...(dt.ends ? { ends_at: dt.ends } : {}) };
+        const datesMoved = Object.entries(want).some(([k, v]) => et[k] !== v);
+        if (et.status === mapped && !early && !datesMoved) return l;
         if (linkedNow.includes(l)) return l;
         const updated = { ...l, ...(early ? { created_at: first } : {}),
-          platforms: { ...l.platforms, etsy: { ...l.platforms.etsy, status: mapped, ...(early ? { first_listed_at: first } : {}) } } };
+          platforms: { ...l.platforms, etsy: { ...et, status: mapped, ...want } } };
         changedRows.push(updated);
         return updated;
       });
@@ -9785,9 +9794,11 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       const redated = changedRows.filter(l => l.platforms?.etsy?.first_listed_at && l.created_at === l.platforms.etsy.first_listed_at).length;
       if (changedRows.length) {
         setListings(next);
-        // One save for a big catch-up (the first run redates every renewed listing).
-        if (changedRows.length > 20) await saveK(LIST_KEY, next);
-        else for (const listing of changedRows) await upsertItemK(LIST_KEY, listing, { prepend: false });
+        /* One save whatever the number: each upsert rewrites the whole listings
+           record (4 MB), and a renewal or a sale moves several at once. saveK
+           takes the server's copy of every listing not changed here. */
+        if (changedRows.length > 1) await saveK(LIST_KEY, next);
+        else await upsertItemK(LIST_KEY, changedRows[0], { prepend: false });
       }
       if (redate) {
         try { localStorage.setItem(ETSY_REDATE_KEY, new Date().toISOString()); } catch {}
