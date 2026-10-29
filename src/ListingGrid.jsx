@@ -389,6 +389,17 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
   // Left null when a load fails, so the pills fall back to the listing's own note.
   const refreshStore = () => loadStoreFacts().then(setStore).catch(() => {});
   useEffect(() => { refreshStore(); loadTradeFacts?.().then(setTrade).catch(() => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  /* The store's records decide its pill, and they were read once, when the
+     grid opened, so a piece put on the store after that stayed grey until a
+     reload. Putting one on (or taking it off) from here changes its note, so
+     a change in any note reads the store again. */
+  const storeNotes = useMemo(() => listings.map(l => `${l.id}:${l.platforms?.store?.status || ""}:${l.platforms?.store?.live_at || ""}`).join("|"), [listings]);
+  const notesSeen = useRef(storeNotes);
+  useEffect(() => {
+    if (notesSeen.current === storeNotes) return;
+    notesSeen.current = storeNotes;
+    refreshStore();
+  }, [storeNotes]); // eslint-disable-line react-hooks/exhaustive-deps
   const facts = useMemo(() => ({ store, trade }), [store, trade]);
   useEffect(() => { try { localStorage.setItem("lm-grid-cols", String(cols)); } catch {} }, [cols]);
 
