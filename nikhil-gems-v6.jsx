@@ -20,6 +20,7 @@ import HomeAccounts from "./src/HomeAccounts.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
 import MonthClose from "./src/MonthClose.jsx";
 import { runningBalances, monthOf } from "./src/monthClose.js";
+import { invRemitLinks, NG_REMIT_KEY } from "./src/remittances.js";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
@@ -24109,6 +24110,7 @@ function BoiRemittanceForm({showToast}){
     impDet:"",expBill:"",otherCl:"",
     sigDate:today(),sigPlace:"Mumbai",
     docs:[], // documents added here: [{id,label,file,name,size}]
+    bankRef:"",valueDate:"", // the bank's reference for the payment, for the email (from the advice)
   });
   const [generating,setGenerating]=useState(false);
   const [docPicks,setDocPicks]=useState({}); // the linked invoices' own documents: key → ticked
@@ -24166,6 +24168,18 @@ function BoiRemittanceForm({showToast}){
   const boiMixedCcy=boiLinked.some(inv=>inv.currency&&inv.currency!==form.currency);
   const boiTotalStr=String(boiTotal);
 
+  /* The remittance register (Export Recon): a linked invoice names the
+     remittance that paid it, and the register keeps that payment's bank
+     reference, value date and inward advice. */
+  const [remits,setRemits]=useState([]);
+  useEffect(()=>{loadK(NG_REMIT_KEY).then(v=>setRemits(Array.isArray(v)?v:[])).catch(()=>{});},[]);
+  const boiRemits=(()=>{const ids=new Set(boiLinked.flatMap(inv=>invRemitLinks(inv).map(l=>l.id)));return remits.filter(r=>ids.has(r.id));})();
+  const remit1=boiRemits[0];
+  useEffect(()=>{
+    if(!remit1)return;
+    setForm(f=>({...f,bankRef:f.bankRef||remit1.irt||"",valueDate:f.valueDate||String(remit1.date||"").slice(0,10)}));
+  },[remit1?.id]);
+
   /* Advance (b): BOI wants the expected shipping date on the form. It's
      suggested from the linked records — the date an earlier form saved on the
      proforma or invoice, else a commercial invoice dated ahead and not yet
@@ -24203,20 +24217,22 @@ function BoiRemittanceForm({showToast}){
      (The BOI forms already saved on an invoice aren't offered: they're this.) */
   const kindIn=s=>{
     s=String(s||"");
+    if(/inward|advice|(^|[^a-z])(irm|irt)(?![a-z])|swift|mt\s*103/i.test(s))return"adv";
     if(/shipping\s*bill|(^|[^a-z])sb(?![a-z])/i.test(s))return"sb";
     if(/hawb|awb|hbl|airway|air\s*way|lading|(^|[^a-z])b\/?l(?![a-z])|label/i.test(s))return"awb";
     if(/invoice|proforma|(^|[^a-z])po(?![a-z])|purchase\s*order|contract/i.test(s))return"inv";
     return"";
   };
   const docKind=(label,name)=>kindIn(label)||kindIn(name)||"other";
-  const kindName=k=>({sb:"Shipping Bill",inv:form.purpose==="a"?"Commercial Invoice":"Invoice / Proforma / PO",awb:"AWB / Bill of Lading",other:"Other document"})[k];
-  const kindLabel=k=>({sb:"Shipping Bill",inv:form.purpose==="a"?"Commercial Invoice":"Proforma / PO",awb:"AWB",other:""})[k];
+  const kindName=k=>({adv:"Inward Remittance Advice",sb:"Shipping Bill",inv:form.purpose==="a"?"Commercial Invoice":"Invoice / Proforma / PO",awb:"AWB / Bill of Lading",other:"Other document"})[k];
+  const kindLabel=k=>({adv:"Inward Advice",sb:"Shipping Bill",inv:form.purpose==="a"?"Commercial Invoice":"Proforma / PO",awb:"AWB",other:""})[k];
   // Keyed by file, so one AWB on two invoices is one tick and goes in once.
   const boiInvDocs=boiLinked.flatMap(inv=>(inv.attachments||[]).filter(a=>a?.url&&!/^boi\b/i.test(a.label||"")).map(a=>({...a,key:`att:${a.url}`,invId:inv.id,invNo:inv.invNo,kind:docKind(a.label,a.fileName||a.name)})));
   const docPicked=d=>docPicks[d.key]??d.kind!=="other";
   const boiSet=(()=>{
-    const needs=form.purpose==="a"?["sb","inv","awb"]:form.purpose==="b"?["inv"]:[];
-    const order=form.purpose==="a"?["sb","inv","awb","other"]:["inv","sb","awb","other"];
+    // The inward advice goes straight after the form: it is the payment the form disposes of.
+    const needs=form.purpose==="a"?["adv","sb","inv","awb"]:form.purpose==="b"?["adv","inv"]:[];
+    const order=form.purpose==="a"?["adv","sb","inv","awb","other"]:["adv","inv","sb","awb","other"];
     // One entry per invoice the form names: its record when it's in Invoicing.
     const named=[],seenId=new Set();
     for(const ref of form.invoices){
@@ -24228,6 +24244,19 @@ function BoiRemittanceForm({showToast}){
     }
     const items=[],missing=[],shown=new Set();
     for(const k of order){
+      if(k==="adv"){
+        // One advice for the payment, not one per invoice: the register's copy, one kept on an invoice, or added here.
+        for(const r of boiRemits){
+          if(!r.attachment?.url)continue;
+          const d={...r.attachment,label:"Inward Advice",key:`att:${r.attachment.url}`,kind:k};
+          if(shown.has(d.key))continue;
+          shown.add(d.key);items.push({key:d.key,kind:k,from:"attached",att:d,invNo:r.irt||"",on:docPicked(d)});
+        }
+        boiInvDocs.filter(d=>d.kind===k).forEach(d=>{if(shown.has(d.key))return;shown.add(d.key);items.push({key:d.key,kind:k,from:"attached",att:d,invNo:d.invNo,on:docPicked(d)});});
+        form.docs.filter(d=>docKind(d.label,d.name)===k).forEach(d=>items.push({key:d.id,kind:k,from:"added",doc:d,on:true}));
+        if(needs.includes(k)&&!items.some(i=>i.kind===k&&i.on)){const m={key:"miss:adv",kind:k,missing:true,invNo:""};items.push(m);missing.push(m);}
+        continue;
+      }
       const gaps=[];
       for(const n of named){
         const own=n.rec?boiInvDocs.filter(d=>d.invId===n.rec.id&&d.kind===k):[];
@@ -24274,13 +24303,16 @@ function BoiRemittanceForm({showToast}){
       await PDFDocument.load(bytes,{ignoreEncryption:true});
       return{label,kind:"pdf",bytes};
     }
-    if(bytes[0]===0xFF&&bytes[1]===0xD8)return{label,kind:"jpg",bytes};
-    if(bytes[0]===0x89&&head.slice(1,4)==="PNG")return{label,kind:"png",bytes};
+    /* A photo is redrawn: turned the way the phone held it (a JPG keeps that
+       as a flag pdf-lib ignores, so a bank's photographed advice came out
+       sideways), on white, and no bigger than 2400px, which keeps a set of
+       phone photos to a PDF the bank's mail will take. */
     let bmp;
-    try{bmp=await createImageBitmap(blob);}catch{throw new Error("this browser can't read that picture — save it as JPG, PNG or PDF");}
-    const cv=document.createElement("canvas");cv.width=bmp.width;cv.height=bmp.height;
-    cv.getContext("2d").drawImage(bmp,0,0);
-    const jpg=await new Promise(r=>cv.toBlob(r,"image/jpeg",.9));
+    try{bmp=await createImageBitmap(blob,{imageOrientation:"from-image"});}catch{throw new Error("this browser can't read that picture — save it as JPG, PNG or PDF");}
+    const fit=Math.min(1,2400/Math.max(bmp.width,bmp.height));
+    const cv=document.createElement("canvas");cv.width=Math.round(bmp.width*fit);cv.height=Math.round(bmp.height*fit);
+    const g=cv.getContext("2d");g.fillStyle="#fff";g.fillRect(0,0,cv.width,cv.height);g.drawImage(bmp,0,0,cv.width,cv.height);
+    const jpg=await new Promise(r=>cv.toBlob(r,"image/jpeg",.88));
     return{label,kind:"jpg",bytes:new Uint8Array(await jpg.arrayBuffer())};
   };
   // Keep the amount in step with the linked invoices until the user types their own
@@ -24503,11 +24535,59 @@ function BoiRemittanceForm({showToast}){
     </>
   );
   const smallBtn=(color,bg)=>({fontSize:12,color,background:bg,border:`1px solid ${color}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"});
+  /* The email that goes with the set, for the bank to find the payment and
+     match it: its reference and value date (off the advice, or the register),
+     amount, remitter, the account it's for, what it's against (each invoice,
+     shipping bill and AWB, numbers read off the records and file names), and
+     what's attached, in the PDF's order. Copied, not sent. */
+  const money2=n=>(+n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const digitsIn=(s,min)=>(String(s||"").match(new RegExp(`\\d{${min},}`))||[])[0]||"";
+  const email=(()=>{
+    const co=CO,cur=form.currency||"USD",ref=form.bankRef.trim();
+    const sbOf=inv=>inv.sbNo||digitsIn((boiInvDocs.find(d=>d.invId===inv.id&&d.kind==="sb")||{}).fileName,6);
+    const awbOf=inv=>boiInvDocs.filter(d=>d.invId===inv.id&&d.kind==="awb").map(d=>digitsIn(d.fileName||d.name,8)).filter(Boolean);
+    const against=[];
+    for(const ref2 of form.invoices){
+      if(!ref2.no.trim())continue;
+      const inv=resolveBoiInvoice(ref2,ngInvoices);
+      against.push(`• ${inv&&invIsProforma(inv)?"Proforma":"Invoice"} ${inv?.invNo||ref2.no.trim()}${(inv?.date||ref2.date)?` dated ${fmtDate(inv?.date||ref2.date)}`:""}${inv?.totalAmt?` — ${inv.currency||cur} ${money2(inv.totalAmt)}`:""}`);
+      if(inv&&form.purpose==="a"){
+        const sb=sbOf(inv);if(sb)against.push(`  Shipping bill ${sb}`);
+        awbOf(inv).forEach(a=>against.push(`  AWB ${a}`));
+      }
+    }
+    // Each document with the invoice it belongs to; the advice photographed in pages is one item.
+    const attached=["BOI disposal form",...boiSet.items.filter(i=>i.on&&!i.missing).map(i=>{
+      const what=i.from==="added"?(i.doc.label||i.doc.name):i.from==="record"?(invIsProforma(i.rec)?"Proforma invoice":"Commercial invoice"):(i.att.label||kindName(i.kind));
+      return i.kind==="adv"||!i.invNo?what:`${what} — ${i.invNo}`;
+    })].reduce((out,a)=>{const last=out[out.length-1];if(last?.a===a)last.n++;else out.push({a,n:1});return out;},[]).map(x=>x.n>1?`${x.a} (${x.n} pages)`:x.a);
+    const purpose=form.purpose==="a"?"Export of goods — already shipped"
+      :form.purpose==="b"?`Advance against export${form.expShipDate?` — goods expected to ship by ${fmtDate(form.expShipDate)}`:""}`:"As per the attached form";
+    const subject=`Inward remittance${ref?` ${ref}`:""} — ${cur} ${money2(form.amount)} from ${form.remName.trim()||"the remitter"} — ${form.purpose==="a"?"export documents":form.purpose==="b"?"advance against export":"disposal"}`;
+    const body=[
+      "Dear Sir / Madam,","",
+      `Please find attached the disposal form and documents for the inward remittance below, to be credited to our ${form.accType==="eefc"?"EEFC":"INR current"} account.`,"",
+      "Remittance",
+      `• Bank reference: ${ref||"— (see the attached advice)"}`,
+      ...(form.valueDate?[`• Value date: ${fmtDate(form.valueDate)}`]:[]),
+      `• Amount: ${cur} ${money2(form.amount)}`,
+      `• Remitter: ${form.remName.trim()||"—"}${form.remAddr.trim()?`, ${form.remAddr.trim().replace(/\n/g,", ")}`:""}`,
+      `• Credit to: ${co.name}, ${form.accType==="eefc"?"EEFC":"INR current"} account ${accountNo}`,
+      `• Purpose: ${purpose}`,
+      ...(against.length?["","Against",...against]:[]),
+      "","Attached, in this order (one PDF)",...attached.map((a,i)=>`${i+1}. ${a}`),
+      "",`IEC: ${co.iec}`,"","Thank you,","",
+      co.name,String(co.address||"").replace(/\n/g," "),`Tel: ${co.tel}`,`GST: ${co.gstin}`,co.email,
+    ].join("\n");
+    return{subject,body};
+  })();
+  const copy=(text,what)=>navigator.clipboard?.writeText(text).then(()=>showToast(`✓ ${what} copied`)).catch(()=>showToast("Couldn't copy — select the text and copy it by hand"));
+
   const addButtons=form.purpose==="a"
-    ?[["Shipping Bill","+ Shipping Bill"],["Commercial Invoice","+ Commercial Invoice"],["AWB","+ AWB / BL"],["","+ Other document"]]
-    :form.purpose==="b"?[["Proforma / PO","+ Proforma / PO"],["","+ Other document"]]:[["","+ Document"]];
+    ?[["Inward Advice","+ Inward Advice"],["Shipping Bill","+ Shipping Bill"],["Commercial Invoice","+ Commercial Invoice"],["AWB","+ AWB / BL"],["","+ Other document"]]
+    :form.purpose==="b"?[["Inward Advice","+ Inward Advice"],["Proforma / PO","+ Proforma / PO"],["","+ Other document"]]:[["","+ Document"]];
   const ready=form.purpose==="b"
-    ?(!form.expShipDate?{ok:false,text:"Expected shipping date needed"}:boiSet.missing.length?{ok:false,text:"No proforma / PO enclosed"}:{ok:true,text:`Shipping ${fmtDate(form.expShipDate)} on the form · ${boiSet.count} enclosed`})
+    ?(!form.expShipDate?{ok:false,text:"Expected shipping date needed"}:boiSet.missing.length?{ok:false,text:`Missing: ${boiSet.missing.map(missingText).join(", ")}`}:{ok:true,text:`Shipping ${fmtDate(form.expShipDate)} on the form · ${boiSet.count} enclosed`})
     :boiSet.missing.length?{ok:false,text:`Missing: ${boiSet.missing.map(missingText).join(", ")}`}
     :{ok:true,text:form.purpose==="a"?`Full set: form + ${boiSet.count} document${boiSet.count===1?"":"s"}`:`Form${boiSet.count?` + ${boiSet.count} document${boiSet.count===1?"":"s"}`:""}`};
 
@@ -24683,11 +24763,13 @@ function BoiRemittanceForm({showToast}){
             :form.purpose==="b"?"For an advance BOI wants the expected shipping date on the form, with the proforma or PO enclosed. Once the goods ship, the shipping documents go to the bank within 21 days."
             :"This form, then anything enclosed, in this order."}
         </div>
-        <datalist id="boi-doc-labels">{["Shipping Bill","Commercial Invoice","AWB","Bill of Lading","Proforma / PO","Packing List","Other"].map(l=><option key={l} value={l}/>)}</datalist>
+        <datalist id="boi-doc-labels">{["Inward Advice","Shipping Bill","Commercial Invoice","AWB","Bill of Lading","Proforma / PO","Packing List","Other"].map(l=><option key={l} value={l}/>)}</datalist>
         {(()=>{
           let n=1;
-          const row=(key,num,body,right,tone)=>(
-            <div key={key} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 8px",borderRadius:7,marginBottom:3,background:tone==="miss"?C.redBg:tone==="on"?C.goldLight:"transparent",opacity:tone==="off"?.6:1}}>
+          // A row can take files dropped on it, filed as that row's document (the advice row: photos and all).
+          const dropAs=label=>label==null?{}:{onDragOver:e=>e.preventDefault(),onDrop:e=>{e.preventDefault();e.stopPropagation();addDocs(e.dataTransfer.files,label);}};
+          const row=(key,num,body,right,tone,dropLabel)=>(
+            <div key={key} {...dropAs(dropLabel)} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 8px",borderRadius:7,marginBottom:3,background:tone==="miss"?C.redBg:tone==="on"?C.goldLight:"transparent",opacity:tone==="off"?.6:1}}>
               <span style={{width:20,flexShrink:0,textAlign:"right",fontSize:12,fontWeight:700,color:tone==="miss"?C.red:C.inkMid}}>{num}</span>
               <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,flexWrap:mob?"wrap":"nowrap"}}>{body}</div>
               {right}
@@ -24699,8 +24781,8 @@ function BoiRemittanceForm({showToast}){
             row("form","1",<><span style={strong}>BOI disposal form</span><span style={faint}>filled{form.purpose==="b"&&form.expShipDate?`, expected shipping ${fmtDate(form.expShipDate)}`:""} · signed</span></>,null,"on"),
             ...boiSet.items.map(it=>{
               if(it.missing)return row(it.key,"✗",
-                <><span style={{...strong,color:C.red}}>{kindName(it.kind)}</span><span style={{fontSize:11,color:C.red}}>missing{it.onRecord?` — not on ${it.invNo}`:it.invNo?` — ${it.invNo} isn't in Invoicing, add the file`:""}</span></>,
-                <button type="button" onClick={()=>pickDocs(kindLabel(it.kind))} style={{...smallBtn(C.red,C.surface),padding:"3px 10px",fontSize:11,flexShrink:0}}>+ Add</button>,"miss");
+                <><span style={{...strong,color:C.red}}>{kindName(it.kind)}</span><span style={{fontSize:11,color:C.red}}>missing{it.kind==="adv"?" — drop it here, a PDF or the photos the bank sent":it.onRecord?` — not on ${it.invNo}`:it.invNo?` — ${it.invNo} isn't in Invoicing, add the file`:""}</span></>,
+                <button type="button" onClick={()=>pickDocs(kindLabel(it.kind))} style={{...smallBtn(C.red,C.surface),padding:"3px 10px",fontSize:11,flexShrink:0}}>+ Add</button>,"miss",kindLabel(it.kind));
               const num=it.on?String(++n):"–";
               if(it.from==="attached")return(
                 <label key={it.key} style={{display:"block",cursor:"pointer"}}>
@@ -24710,7 +24792,7 @@ function BoiRemittanceForm({showToast}){
                       <span style={{...faint,flex:1}}>{it.att.fileName||it.att.name||""}</span>
                       <span style={{fontSize:10.5,color:C.inkMid,flexShrink:0}}>{it.invNo}</span></>,
                     <a href={it.att.url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{fontSize:11,color:C.blue,flexShrink:0}}>View</a>,
-                    it.on?"on":"off")}
+                    it.on?"on":"off",it.kind==="adv"?"Inward Advice":undefined)}
                 </label>
               );
               if(it.from==="record")return row(it.key,num,
@@ -24720,7 +24802,7 @@ function BoiRemittanceForm({showToast}){
                 <><input list="boi-doc-labels" value={d.label} onChange={e=>setDoc(d.id,{label:e.target.value})} style={{...FI,width:mob?"100%":160,padding:"4px 8px",fontSize:12}} placeholder="What it is"/>
                   <span style={{...faint,flex:1}}>{/pdf$/i.test(d.name)?"📄":"🖼️"} {d.name}</span>
                   {!mob&&<span style={{fontSize:10.5,color:C.inkFaint,flexShrink:0}}>{d.size>=1048576?`${(d.size/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(d.size/1024))} KB`}</span>}</>,
-                <button onClick={()=>removeDoc(d.id)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1,flexShrink:0}}>×</button>,"on");
+                <button onClick={()=>removeDoc(d.id)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1,flexShrink:0}}>×</button>,"on",it.kind==="adv"?"Inward Advice":undefined);
             }),
           ];
         })()}
@@ -24729,6 +24811,30 @@ function BoiRemittanceForm({showToast}){
             <button key={text} onClick={()=>pickDocs(label)} style={smallBtn(C.purple,C.purpleBg)}>{text}</button>
           ))}
           {!mob&&<span style={{fontSize:11,color:C.inkFaint}}>or drop files here</span>}
+        </div>
+      </div>
+
+      {/* The email to go with it */}
+      <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"18px 20px",marginBottom:14}}>
+        {secHdr(C.blue,"Email to the bank")}
+        <div style={{fontSize:11.5,color:C.inkMid,marginTop:-6,marginBottom:12,lineHeight:1.5}}>
+          Everything the bank needs to find this payment and match it to the documents. Copy it into the mail that carries the PDF.
+          {remit1?` The reference and value date are from the remittance register (${remit1.irt||"entry"}).`:" The reference is on the advice: field 20, the transaction reference."}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:12,marginBottom:12}}>
+          <Field label="Bank reference (advice field 20 / IRT)">
+            <input value={form.bankRef} onChange={e=>setF("bankRef",e.target.value)} placeholder="e.g. S0662991801101" style={FI}/>
+          </Field>
+          <Field label="Value date">
+            <input type="date" value={form.valueDate} onChange={e=>setF("valueDate",e.target.value)} style={FI}/>
+          </Field>
+        </div>
+        <div style={{fontSize:12,fontWeight:600,color:C.ink,marginBottom:6}}>{email.subject}</div>
+        <textarea readOnly value={email.body} rows={Math.min(24,email.body.split("\n").length+1)}
+          style={{...FI,width:"100%",fontSize:12,lineHeight:1.5,fontFamily:"inherit",resize:"vertical",background:C.bg}}/>
+        <div style={{display:"flex",gap:8,marginTop:10,flexWrap:"wrap"}}>
+          <button type="button" onClick={()=>copy(email.body,"Message")} style={smallBtn(C.blue,C.blueBg)}>📋 Copy message</button>
+          <button type="button" onClick={()=>copy(email.subject,"Subject")} style={smallBtn(C.inkMid,C.surface)}>Copy subject</button>
         </div>
       </div>
 
