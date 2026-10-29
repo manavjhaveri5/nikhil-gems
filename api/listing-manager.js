@@ -204,6 +204,23 @@ function normDimUnit(u) {
 }
 
 /* "969g", "1.2 kg", "12.5" (bare number = grams, the unit the shop weighs in). */
+/* Etsy takes materials as a list, each only letters, numbers and spaces (a
+   comma, hyphen or apostrophe is "contains invalid characters"), at most 13,
+   each up to 45 characters. The ERP's material can name several stones
+   ("Scolecite, Stilbite", "Ruby in Zoisite / Kyanite"), so it is split on
+   those, and what else Etsy refuses is taken out ("Tiger's Eye" → "Tigers Eye"). */
+function etsyMaterials(material) {
+  const out = [], seen = new Set();
+  for (const part of String(material || "").split(/\s*(?:[,;/&+|]|\band\b)\s*/i)) {
+    const m = part.replace(/['’`]/g, "").replace(/[^\p{L}\p{Nd}\s]+/gu, " ").replace(/\s+/g, " ").trim().slice(0, 45).trim();
+    if (!m || seen.has(m.toLowerCase())) continue;
+    seen.add(m.toLowerCase());
+    out.push(m);
+    if (out.length === 13) break;
+  }
+  return out;
+}
+
 function parseWeight(raw) {
   const m = String(raw ?? "").match(/([\d.]+)\s*(kgs?|kilograms?|g|gm|grams?|oz|ounces?|lbs?|pounds?)?/i);
   if (!m || !m[1] || !isFinite(+m[1]) || +m[1] <= 0) return null;
@@ -753,7 +770,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
     shipping_profile_id: shippingId,
     return_policy_id:    returnPolicyId,
     tags:      etsyTags,
-    materials: material ? [material] : [],
+    materials: etsyMaterials(material),
     is_supply: false,
     is_digital: false,
     // Shipping-side dimensions; the Width/Height/Depth boxes buyers see are
@@ -979,7 +996,7 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
     tags:        etsyTags,
     taxonomy_id: taxonomyId,
     ...(readinessId ? { readiness_state_id: readinessId } : {}),
-    ...(listing.material ? { materials: [listing.material] } : {}),
+    ...(etsyMaterials(listing.material).length ? { materials: etsyMaterials(listing.material) } : {}),
     should_auto_renew: listing.etsy_auto_renew ?? false,
     /* The only place a size goes. Etsy's Width / Height / Depth attributes were
        written to as well until they were deprecated — "Property id 512 is
