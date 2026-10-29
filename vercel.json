@@ -42,6 +42,10 @@
     {
       "source": "/api/etsy-auth",
       "destination": "/api/etsy?_oauth=1"
+    },
+    {
+      "source": "/api/ebay-auth",
+      "destination": "/api/ebay?_oauth=1"
     }
   ],
   "headers": [

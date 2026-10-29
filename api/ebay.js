@@ -115,6 +115,45 @@ async function getEbayAccessToken() {
   return null;
 }
 
+/* Connecting eBay for video (/api/ebay-auth, rewritten to /api/ebay?_oauth=1).
+   The old api/ebay-auth.js went to api-disabled/ to stay under Vercel's
+   12-function limit, and with it the only way to give the Media API a token,
+   so a listing video always failed with "No eBay OAuth token". It lives here
+   now, the way Etsy's and Canva's connects do. eBay's redirect_uri is the
+   RuName (EBAY_RUNAME), whose "Auth accepted URL" in the developer portal is
+   this address; the refresh token saved from it lasts about 18 months. */
+const RUNAME = process.env.EBAY_RUNAME || "";
+const ORIGIN = "https://project-nine-tan-22.vercel.app";
+const page = (icon, title, body) => `<!DOCTYPE html><html><head><title>${title}</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:system-ui,sans-serif;background:#faf8f4;display:flex;align-items:center;justify-content:center;min-height:80vh;text-align:center;color:#1a1a1a;padding:16px}.w{max-width:440px}.i{font-size:44px}button,a.b{margin-top:14px;padding:9px 18px;border-radius:8px;border:none;background:#1a1a1a;color:#fff;font-size:14px;cursor:pointer;text-decoration:none;display:inline-block}</style>
+</head><body><div class="w"><div class="i">${icon}</div><h2>${title}</h2>${body}</div></body></html>`;
+async function ebayOAuth(req, res) {
+  const { action, code, error, error_description } = req.query;
+  if (action === "status") {
+    const token = await getEbayAccessToken();
+    return res.json({ ok: true, has_token: !!token, runame_set: !!RUNAME, start_url: `${ORIGIN}/api/ebay-auth?action=start` });
+  }
+  if (action === "start") {
+    if (!APP_ID) return res.status(500).send(page("⚠️", "eBay app id missing", "<p>EBAY_APP_ID isn't set in Vercel.</p>"));
+    if (!RUNAME) return res.status(500).send(page("⚠️", "eBay RuName missing", "<p>Add EBAY_RUNAME in Vercel: the RuName from the eBay developer portal (User Tokens → your redirect), whose “Auth accepted URL” is <code>" + ORIGIN + "/api/ebay-auth</code>. Then open this link again.</p>"));
+    const params = new URLSearchParams({ client_id: APP_ID, response_type: "code", redirect_uri: RUNAME, scope: EBAY_SCOPES, prompt: "login" });
+    return res.redirect(`https://auth.ebay.com/oauth2/authorize?${params}`);
+  }
+  if (error) return res.status(400).send(page("⚠️", "eBay didn't connect", `<p>${String(error).replace(/[<>&]/g, "")}${error_description ? ` — ${String(error_description).replace(/[<>&]/g, "")}` : ""}</p><a class="b" href="/api/ebay-auth?action=start">Try again</a>`));
+  if (code) {
+    const r = await fetch(EBAY_TOKEN_URL, {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: ebayBasicAuth() },
+      body: new URLSearchParams({ grant_type: "authorization_code", code: String(code), redirect_uri: RUNAME }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!d.access_token) return res.status(r.status || 400).send(page("⚠️", `eBay token exchange failed (${r.status})`, `<p>${String(d.error_description || d.error || "No token came back").replace(/[<>&]/g, "")}</p><p>Check that EBAY_RUNAME matches the portal's RuName and its Auth accepted URL is ${ORIGIN}/api/ebay-auth.</p><a class="b" href="/api/ebay-auth?action=start">Start again</a>`));
+    await saveEbayTokens({ access_token: d.access_token, refresh_token: d.refresh_token || "", expires_in: d.expires_in || 7200,
+      refresh_token_expires_in: d.refresh_token_expires_in || 0, updated_at: Date.now() });
+    return res.send(page("✅", "eBay connected", "<p>Listing videos can go to eBay now. You can close this window and publish again.</p><button onclick=\"window.close()\">Close</button>"));
+  }
+  return res.json({ ok: true, start: `${ORIGIN}/api/ebay-auth?action=start`, status: `${ORIGIN}/api/ebay-auth?action=status`, runame_set: !!RUNAME });
+}
+
 const ENDPOINT   = "https://api.ebay.com/ws/api.dll";
 const COMPAT     = "967";
 const SITE_ID    = "0"; // eBay US
@@ -242,7 +281,7 @@ const MEDIA_BASE = "https://apim.ebay.com/commerce/media/v1_beta/video";
 
 async function uploadEbayVideo(videoUrl) {
   const accessToken = await getEbayAccessToken();
-  if (!accessToken) return { ok: false, error: "No eBay OAuth token — connect via /api/ebay-auth?action=start" };
+  if (!accessToken) return { ok: false, error: "eBay isn't connected for videos yet — open https://project-nine-tan-22.vercel.app/api/ebay-auth?action=start once, sign in to eBay and agree, then publish again" };
 
   // Fetch the source video so we know its byte size (createVideo requires it).
   const vResp = await fetch(videoUrl);
@@ -495,6 +534,11 @@ export default async function handler(req, res) {
 }
 
 async function handleEbay(req, res) {
+  // The eBay connect: its start and eBay's callback come straight from the browser, without the ERP's session.
+  if (req.query?._oauth !== undefined) {
+    if (req.query.action && req.query.action !== "start" && !(await requireUser(req, res))) return;
+    return ebayOAuth(req, res);
+  }
   const url    = new URL(req.url, `https://${req.headers.host}`);
   const action = url.searchParams.get("action");
   // sync_orders is the Vercel cron and has its own check below.
