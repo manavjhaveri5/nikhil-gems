@@ -14,6 +14,7 @@ import { lab, Slider } from "./EditorControls.jsx";
 import {
   CAPTION_FONTS, CAPTION_PRESETS, NO_CAPTION, captionOn,
   loadCaptionFont, drawCaption, compositeCaption,
+  NO_MEASURE, measureOn, drawMeasure,
 } from "./photoCaption.js";
 
 /* Native photo editor for listing shots.
@@ -68,6 +69,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
   const [err, setErr] = useState("");
   const [showOriginal, setShowOriginal] = useState(false);
   const [cap, setCap] = useState(NO_CAPTION);
+  const [meas, setMeas] = useState(NO_MEASURE);   // a size mark: this photo only, never the batch
   const [capFont, setCapFont] = useState("");    // the face actually loaded
   const capCanvasRef = useRef(null);
   /* The editor fills the window, and a window gets resized while it is open —
@@ -84,7 +86,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
      sole edit was a line of type read as untouched and Save stayed greyed out. */
   const touched = ADJUSTMENTS.some(a => adjust[a.key] !== 0) || bands.length > 0
     || curvesTouched(curves) || mixerTouched(mixer) || (sweep.on && !!mask) || geoTouched(geo)
-    || captionOn(cap);
+    || captionOn(cap) || measureOn(meas);
   /* The mixer's ranges and the model's measured targets are the same mechanism,
      so they go to the shader as one list — mixer first, since those are the
      ranges the hand is on. */
@@ -163,7 +165,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
 
   /* The face has to be in the document before anything is drawn with it:
      canvas does not wait for a webfont, it silently writes in a fallback. */
-  const capWanted = captionOn(cap) ? cap.font : "";
+  const capWanted = captionOn(cap) || measureOn(meas) ? cap.font : "";
   useEffect(() => {
     if (!capWanted) return undefined;
     let dead = false;
@@ -184,8 +186,11 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     if (cv.width !== gl.width || cv.height !== gl.height) { cv.width = gl.width; cv.height = gl.height; }
     const ctx = cv.getContext("2d");
     ctx.clearRect(0, 0, cv.width, cv.height);
-    if (!showOriginal && captionOn(cap) && capFont === cap.font) drawCaption(ctx, cap, cv.width, cv.height);
-  }, [ready, cap, capFont, showOriginal, adjust, allBands, curves, sweep, mask, geo]);
+    if (!showOriginal && capFont === cap.font) {
+      if (captionOn(cap)) drawCaption(ctx, cap, cv.width, cv.height);
+      if (measureOn(meas)) drawMeasure(ctx, meas, cv.width, cv.height, cap.font);
+    }
+  }, [ready, cap, meas, capFont, showOriginal, adjust, allBands, curves, sweep, mask, geo]);
 
   /* Growing the mask is the only heavy thing here, so it runs when its own
      settings change and not on every render. */
@@ -225,12 +230,14 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
      photo to the texture, run the same shader at full resolution, read it back.
      Only the backdrop mask is per-photo — it is measured off the pixels, so each
      photo in the batch gets its own rather than the current one's. */
-  const writeOne = async (bitmap, maskFor) => {
+  const writeOne = async (bitmap, maskFor, own = true) => {
     setSource(bitmap);
     draw({ full: true, bitmap, mask: maskFor });
     /* The caption goes on a copy of the rendered frame, and the blob is read
-       from that copy — the WebGL canvas itself holds only the graded pixels. */
-    const src = captionOn(cap) ? compositeCaption(canvasRef.current, cap) : canvasRef.current;
+       from that copy — the WebGL canvas itself holds only the graded pixels.
+       A size mark measures this piece in this shot, so only this photo gets it. */
+    const m = own ? meas : null;
+    const src = captionOn(cap) || measureOn(m) ? compositeCaption(canvasRef.current, cap, m) : canvasRef.current;
     const read = c => new Promise((resolve, reject) =>
       c.toBlob(b => (b ? resolve(b) : reject(new Error("Couldn't read the edited photo back."))), "image/jpeg", 0.92));
     const name = `edited-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
@@ -249,7 +256,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
     setBusy("save"); setErr(""); setProg("");
     try {
       // Never bake a caption in whatever face the canvas falls back to.
-      if (captionOn(cap)) await loadCaptionFont(cap.font);
+      if (captionOn(cap) || measureOn(meas)) await loadCaptionFont(cap.font);
       /* Save from the original, not the lighter copy the preview runs on. */
       let full = bitmapRef.current;
       if (fullRef.current) {
@@ -266,7 +273,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
           setProg(`${i + 1}/${all.length}`);
           const own = i === index;
           const bitmap = own ? full : await loadBitmap(all[i]);
-          out[i] = await writeOne(bitmap, own ? ownMask : maskFrom(bitmap));
+          out[i] = await writeOne(bitmap, own ? ownMask : maskFrom(bitmap), own);
           if (!own) bitmap.close?.();
         }
         onSaveAll(out);
@@ -387,7 +394,7 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 👁 Hold to compare
               </button>
-              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setGeo(NO_GEO); setCap(NO_CAPTION); setSummary(""); }}
+              <button type="button" onClick={() => { setAdjust(NEUTRAL); setBands([]); setCurves(emptyCurves()); setMixer(emptyMixer()); setSweep(s => ({ ...s, on: false })); setGeo(NO_GEO); setCap(NO_CAPTION); setMeas(NO_MEASURE); setSummary(""); }}
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 Reset
               </button>
@@ -583,6 +590,42 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onC
                       Apply to all is on, so this line goes on every photo of the listing — usually it belongs on the cover alone.
                     </div>
                   )}
+                </>
+              )}
+            </div>
+
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={lab}>Size mark</span>
+                <span style={{ fontSize: 9.5, color: C.inkFaint }}>a measuring line, burnt in</span>
+              </div>
+              <input value={meas.text} onChange={e => setMeas(m => ({ ...m, text: e.target.value }))}
+                placeholder="e.g. 45 mm" style={{ ...FI(), fontSize: 12 }} />
+              {!measureOn(meas) ? (
+                <div style={{ fontSize: 11, color: C.inkFaint, lineHeight: 1.5 }}>
+                  Type the size to draw a line with an arrow at each end and the size under it, like the marks on a product shot. Set where it starts and ends to match the piece.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {[["h", "↔ Width"], ["v", "↕ Height"]].map(([k, l]) => (
+                      <button key={k} type="button" onClick={() => setMeas(m => ({ ...m, dir: k, ...(k === m.dir ? {} : k === "v" ? { at: 88, from: 12, to: 88 } : { at: 88, from: 15, to: 85 }) }))}
+                        style={{ ...btn(meas.dir === k ? C.ink : "transparent", meas.dir === k ? "#fff" : C.ink), padding: "6px 10px", fontSize: 11 }}>{l}</button>
+                    ))}
+                    {[[true, "Dark"], [false, "Light"]].map(([k, l]) => (
+                      <button key={String(k)} type="button" onClick={() => setMeas(m => ({ ...m, dark: k }))}
+                        style={{ ...btn(meas.dark === k ? C.ink : "transparent", meas.dark === k ? "#fff" : C.ink), padding: "6px 10px", fontSize: 11 }}>{l}</button>
+                    ))}
+                  </div>
+                  <Slider label="Starts" hint={meas.dir === "v" ? "from the top" : "from the left"} min={0} max={100} step={0.5} signed={false}
+                    value={meas.from} onChange={v => setMeas(m => ({ ...m, from: v }))} onReset={() => setMeas(m => ({ ...m, from: NO_MEASURE.from }))} />
+                  <Slider label="Ends" min={0} max={100} step={0.5} signed={false}
+                    value={meas.to} onChange={v => setMeas(m => ({ ...m, to: v }))} onReset={() => setMeas(m => ({ ...m, to: NO_MEASURE.to }))} />
+                  <Slider label={meas.dir === "v" ? "Across" : "Height"} hint={meas.dir === "v" ? "from the left" : "from the top"} min={2} max={98} step={0.5} signed={false}
+                    value={meas.at} onChange={v => setMeas(m => ({ ...m, at: v }))} onReset={() => setMeas(m => ({ ...m, at: NO_MEASURE.at }))} />
+                  <Slider label="Size" min={1.5} max={7} step={0.1} signed={false}
+                    value={meas.size} onChange={v => setMeas(m => ({ ...m, size: v }))} onReset={() => setMeas(m => ({ ...m, size: NO_MEASURE.size }))} />
+                  {capFont !== cap.font && <div style={{ fontSize: 11, color: C.inkFaint }}>Loading the typeface…</div>}
                 </>
               )}
             </div>

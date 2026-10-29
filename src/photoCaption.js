@@ -85,14 +85,58 @@ export function drawCaption(ctx, cap, W, H) {
   ctx.restore();
 }
 
+/* A size mark, the way product shots show one: a rule with an arrowhead at
+   each end and the length written beside it ("45 mm"). Laid along the width
+   or up the height, placed and sized as shares of the photo like the caption,
+   and drawn in the caption's typeface, which has to be loaded first. */
+export const NO_MEASURE = { text: "", dir: "h", from: 15, to: 85, at: 88, size: 3.2, dark: true };
+export const measureOn = m => !!String(m?.text || "").trim();
+export function drawMeasure(ctx, m, W, H, fontKey) {
+  const text = String(m?.text || "").trim();
+  if (!text) return;
+  const f = CAPTION_FONTS.find(x => x.key === fontKey) || CAPTION_FONTS[0];
+  const edge = Math.min(W, H);
+  const lw = Math.max(1, edge * 0.0035), head = edge * 0.024, half = head * 0.42;
+  const size = Math.round(edge * (+m.size || 3.2) / 100);
+  const up = m.dir === "v";
+  const along = up ? H : W, across = up ? W : H;
+  const a = along * Math.min(+m.from, +m.to) / 100, b = along * Math.max(+m.from, +m.to) / 100;
+  if (b - a < head * 2.5) return;
+  const c = across * (+m.at) / 100;
+  const pt = (s, t) => (up ? [t, s] : [s, t]);   // along, across → x, y
+  ctx.save();
+  ctx.strokeStyle = ctx.fillStyle = m.dark === false ? "#FFFFFF" : "#1A1A1A";
+  ctx.lineWidth = lw;
+  ctx.beginPath(); ctx.moveTo(...pt(a + head * 0.9, c)); ctx.lineTo(...pt(b - head * 0.9, c)); ctx.stroke();
+  for (const [tip, dir] of [[a, 1], [b, -1]]) {
+    ctx.beginPath();
+    ctx.moveTo(...pt(tip, c)); ctx.lineTo(...pt(tip + dir * head, c - half)); ctx.lineTo(...pt(tip + dir * head, c + half));
+    ctx.closePath(); ctx.fill();
+  }
+  // The length sits under a level line (over it near the bottom edge), beside an upright one.
+  ctx.font = `${f.key === "jost" ? 400 : f.weight} ${size}px "${f.family}", sans-serif`;
+  const mid = (a + b) / 2, gap = half + size * 0.75;
+  if (!up) {
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(text, mid, c + gap + size * 0.1 > H - size * 0.6 ? c - gap : c + gap);
+  } else {
+    const w = ctx.measureText(text).width, right = c + half + size * 0.5 + w < W - size * 0.3;
+    ctx.textAlign = right ? "left" : "right"; ctx.textBaseline = "middle";
+    ctx.fillText(text, right ? c + half + size * 0.5 : c - half - size * 0.5, mid);
+  }
+  ctx.restore();
+}
+
 /* The WebGL canvas holds the graded pixels and cannot take a 2D context, so the
-   caption is drawn on a copy. Returns a 2D canvas to read the blob from. */
-export function compositeCaption(glCanvas, cap) {
+   caption (and a size mark) is drawn on a copy. Returns a 2D canvas to read the
+   blob from. */
+export function compositeCaption(glCanvas, cap, meas) {
   const out = document.createElement("canvas");
   out.width = glCanvas.width;
   out.height = glCanvas.height;
   const ctx = out.getContext("2d");
   ctx.drawImage(glCanvas, 0, 0);
   drawCaption(ctx, cap, out.width, out.height);
+  if (measureOn(meas)) drawMeasure(ctx, meas, out.width, out.height, cap?.font);
   return out;
 }
