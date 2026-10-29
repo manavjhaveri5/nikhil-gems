@@ -60,6 +60,52 @@ export const thumb = (u, w = 570) => {
 };
 const soldOut = (l, orders, f) => l.type === "unique" && (orders || []).some(o => o.listing_id === l.id) && !isLive(l, f);
 
+/* What each piece has done, for its card. Sales are the Orders record's, by
+   the listing they came from, cancelled and fully refunded ones out. Views and
+   favourites are Etsy's, from the copy of the shop the Etsy tab keeps on this
+   device (ng-etsy-v4), so they're as of that tab's last sync, and so are its
+   dates. Etsy's are the ones to trust: the ERP's created_at is the day a piece
+   was imported for anything brought in from Etsy, and the ERP keeps no
+   renewal dates at all. Etsy moves created_timestamp on every renewal and
+   keeps the first in original_creation_timestamp. */
+const cancelled = o => !!o?.cancelled || !!o?.refunded || !!o?.cancelled_at || /cancel|refund/i.test(String(o?.status || ""));
+// The first time it went up anywhere (listedAt is the latest, for "newest").
+const firstListed = l => {
+  const ts = [l.created_at, ...Object.values(l.platforms || {}).flatMap(p => [p?.first_listed_at, p?.live_at])].map(v => Date.parse(v || "") || 0).filter(v => v > 0);
+  return ts.length ? Math.min(...ts) : 0;
+};
+const salesByListing = orders => {
+  const m = new Map();
+  for (const o of orders || []) {
+    if (!o?.listing_id || cancelled(o)) continue;
+    const s = m.get(o.listing_id) || { units: 0, money: {}, last: 0, where: new Set() };
+    s.units += +o.qty || 1;
+    const cur = String(o.currency || "INR").toUpperCase();
+    s.money[cur] = (s.money[cur] || 0) + (+o.sale_price || 0);
+    s.last = Math.max(s.last, Date.parse(o.created_at || o.date) || 0);
+    if (o.platform) s.where.add(o.platform);
+    m.set(o.listing_id, s);
+  }
+  return m;
+};
+const etsyOnDevice = () => {
+  const m = new Map();
+  try {
+    const c = JSON.parse(localStorage.getItem("ng-etsy-v4") || "null");
+    for (const x of c?.listings || []) if (x?.listing_id) m.set(String(x.listing_id), { views: +x.views || 0, favs: +x.num_favorers || 0, state: x.state || "",
+      created: (+x.original_creation_timestamp || 0) * 1000, renewed: (+x.created_timestamp || 0) * 1000, ends: (+x.ending_timestamp || 0) * 1000 });
+    return { m, at: +c?.syncedAt || 0 };
+  } catch { return { m, at: 0 }; }
+};
+const etsyOf = (l, etsy) => etsy?.m.get(String(l.platforms?.etsy?.listing_id || "")) || null;
+const shortMoney = (v, cur) => {
+  const sym = cur === "INR" ? "₹" : cur === "USD" ? "$" : cur === "EUR" ? "€" : cur === "GBP" ? "£" : `${cur} `;
+  const a = Math.abs(v), t = a >= 1e5 && cur === "INR" ? `${(a / 1e5).toFixed(1)}L` : a >= 1e4 ? `${Math.round(a / 1e3)}k` : a >= 1e3 ? `${(a / 1e3).toFixed(1)}k` : `${Math.round(a)}`;
+  return `${sym}${t}`;
+};
+const ageOf = ms => { const d = ms / 864e5; return d < 1 ? "today" : d < 14 ? `${Math.round(d)}d` : d < 60 ? `${Math.round(d / 7)}wk` : d < 365 ? `${Math.round(d / 30.4)}mo` : `${(d / 365).toFixed(1).replace(/\.0$/, "")}yr`; };
+const PLATFORM_NAME = { etsy: "Etsy", store: "Earth Editions", shopify_earth: "Earth Ed. (Shopify)", shopify_aty: "Atyahara", ebay: "eBay", trade: "Trade site", manual: "by hand" };
+
 /* ── a price you can click and type over ───────────────────────────────── */
 function PriceCell({ flag, cur, value: live, hint, onSave, big = false, title }) {
   const [edit, setEdit] = useState(false);
@@ -126,7 +172,7 @@ function LocationCell({ value, missing, onSave }) {
 }
 
 /* ── one listing ───────────────────────────────────────────────────────── */
-function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocation, selected, onSelect }) {
+function Tile({ l, store, facts, orders, stock, sales, etsy, etsyAt, onOpen, onEdit, onPrice, onLocation, selected, onSelect }) {
   const imgs = (l.images || []).filter(u => typeof u === "string");
   const [i, setI] = useState(0);
   const [hover, setHover] = useState(false);
@@ -187,6 +233,7 @@ function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocat
             {[l.material, l.shape, l.sku || l.listing_order_id].filter(Boolean).join(" · ")}
           </div>
         </div>
+        <Stats l={l} sales={sales} etsy={etsy} etsyAt={etsyAt} />
         {onLocation && <LocationCell value={where} missing={!where && needsLocation(l, sold)} onSave={v => onLocation(l, v)} />}
         <div style={{ display: "flex", gap: 5, marginTop: "auto" }}>
           <PriceCell flag="🇺🇸 USA" cur="$" value={usd} title="USA price on eartheditions.co — click to change" onSave={v => onPrice(l, "price_store", v)} />
@@ -198,6 +245,40 @@ function Tile({ l, store, facts, orders, stock, onOpen, onEdit, onPrice, onLocat
           <button onClick={() => onOpen(l, "platforms")} style={btn(true)}>Manage</button>
         </div>
       </div>
+    </div>
+  );
+}
+/* The card's numbers: Etsy views and favourites, what it has sold and for
+   how much, when it last sold; then its dates: created, last renewed and when
+   it ends on Etsy. The details, and where each date comes from, are in the
+   tooltip. */
+const day = ms => new Date(ms).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "2-digit" });
+function Stats({ l, sales, etsy, etsyAt }) {
+  const now = Date.now();
+  const money = sales ? Object.entries(sales.money).filter(([, v]) => v > 0).map(([c, v]) => shortMoney(v, c)).join(" + ") : "";
+  const bits = [
+    etsy && { k: "views", t: `👁 ${etsy.views.toLocaleString("en-IN")}`, tip: `${etsy.views.toLocaleString("en-IN")} views on Etsy` },
+    etsy && { k: "favs", t: `♥ ${etsy.favs}`, tip: `${etsy.favs} favourite${etsy.favs === 1 ? "" : "s"} on Etsy` },
+    sales ? { k: "sold", t: `${sales.units} sold${money ? ` · ${money}` : ""}`, strong: true,
+        tip: `${sales.units} sold (${[...sales.where].map(w => PLATFORM_NAME[w] || w).join(", ") || "orders"})${money ? `, ${money}` : ""}${sales.last ? `, last on ${day(sales.last)}` : ""}` }
+      : { k: "sold", t: "no sales yet", tip: "No orders from this listing in Orders" },
+    sales?.last && { k: "last", t: `last ${ageOf(now - sales.last)} ago`, tip: "" },
+  ].filter(Boolean);
+  // Its dates: Etsy's when this device has them, else the earliest the ERP knows.
+  const created = etsy?.created || firstListed(l);
+  const renewed = etsy && etsy.renewed > etsy.created + 864e5 ? etsy.renewed : 0;
+  const ends = etsy?.state === "active" && etsy.ends > 0 ? etsy.ends : 0;
+  const dates = [created && `Created ${day(created)}`, renewed && `renewed ${day(renewed)}`, ends && `${ends < now ? "ended" : "ends"} ${day(ends)}`].filter(Boolean).join(" · ");
+  const tip = [...bits.map(b => b.tip).filter(Boolean),
+    created ? `Created ${day(created)}${etsy?.created ? " on Etsy" : " — the ERP's earliest date for it (Etsy's isn't on this device; open the Etsy tab to sync)"}` : "",
+    renewed ? `last renewed ${day(renewed)}` : "", ends ? `its Etsy term ${ends < now ? "ended" : "ends"} ${day(ends)}` : "",
+    etsy && etsyAt ? `Etsy numbers as of ${day(etsyAt)} (the Etsy tab's last sync)` : ""].filter(Boolean).join(" · ");
+  return (
+    <div title={tip} style={{ display: "grid", gap: 2, fontSize: 11, lineHeight: 1.35 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px", color: C.inkMid }}>
+        {bits.map(b => <span key={b.k} style={{ whiteSpace: "nowrap", fontWeight: b.strong ? 700 : 500, color: b.strong ? C.green : b.k === "sold" ? C.inkFaint : C.inkMid }}>{b.t}</span>)}
+      </div>
+      {dates && <div style={{ color: C.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{dates}</div>}
     </div>
   );
 }
@@ -336,6 +417,8 @@ const SORTS = {
   etsyHigh: ["Etsy price ↓", (a, b) => (+b.price_etsy || 0) - (+a.price_etsy || 0)],
   etsyLow: ["Etsy price ↑", (a, b) => (+a.price_etsy || 1e12) - (+b.price_etsy || 1e12)],
   az: ["A–Z", (a, b) => String(a.title || "").localeCompare(String(b.title || ""))],
+  sold: ["Most sold", (a, b, c) => (c.sales.get(b.id)?.units || 0) - (c.sales.get(a.id)?.units || 0) || listedAt(b) - listedAt(a)],
+  views: ["Most viewed on Etsy", (a, b, c) => (etsyOf(b, c.etsy)?.views || 0) - (etsyOf(a, c.etsy)?.views || 0)],
 };
 
 // Checkbox filters: within a group, any ticked option matches; groups combine.
@@ -401,6 +484,8 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
     refreshStore();
   }, [storeNotes]); // eslint-disable-line react-hooks/exhaustive-deps
   const facts = useMemo(() => ({ store, trade }), [store, trade]);
+  const sales = useMemo(() => salesByListing(orders), [orders]);
+  const etsy = useMemo(etsyOnDevice, []);
   useEffect(() => { try { localStorage.setItem("lm-grid-cols", String(cols)); } catch {} }, [cols]);
 
   const materials = useMemo(() => {
@@ -457,8 +542,8 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
         if (!terms.every(t => hay.includes(t))) return false;
       }
       return true;
-    }).sort(SORTS[sort][1]);
-  }, [listings, orders, q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs, whereOf, facts]); // eslint-disable-line react-hooks/exhaustive-deps
+    }).sort((a, b) => SORTS[sort][1](a, b, { sales, etsy }));
+  }, [listings, orders, q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs, whereOf, facts, sales, etsy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { setShown(60); }, [q, status, liveOn, notOn, types, stones, erpOnly, issues, sort, locs]);
   // Load more as the bottom comes into view.
@@ -563,7 +648,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "grid", gap: 14, gridTemplateColumns: cols ? `repeat(${cols}, minmax(0, 1fr))` : "repeat(auto-fill, minmax(230px, 1fr))" }}>
             {list.slice(0, shown).map(l => (
-              <Tile key={l.id} l={l} store={store} facts={facts} orders={orders} stock={stock} selected={sel.has(l.id)} onSelect={toggleSel}
+              <Tile key={l.id} l={l} store={store} facts={facts} orders={orders} stock={stock} sales={sales.get(l.id)} etsy={etsyOf(l, etsy)} etsyAt={etsy.at} selected={sel.has(l.id)} onSelect={toggleSel}
                 onOpen={(x, tab) => setOpen({ id: x.id, tab })} onEdit={onEdit} onPrice={price} onLocation={onLocation} />
             ))}
           </div>
