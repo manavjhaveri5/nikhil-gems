@@ -134,6 +134,46 @@ function economics(row, idx, coverFrom, nowS) {
   };
 }
 
+/* The term each listing sold in: how many terms (listing and renewal fees)
+   it had paid for by its first sale. Only for a listing the ledger saw being
+   listed; one listed before its reach would count short. An unsold one is
+   kept too, with what it paid for without a sale; that is what the odds
+   below are made of. A renewal Etsy makes after a sale (s) isn't a term
+   bought to find a buyer, so it isn't counted. */
+const TERM_S = 120 * 86400;
+function termHistory(idx) {
+  const out = new Map();
+  for (const [id, list] of idx.fees) {
+    if (!list.some(f => f[1] === "l")) continue;
+    const starts = list.filter(f => "lxr".includes(f[1])).map(f => f[0]).sort((a, b) => a - b);
+    const sale = (idx.sales.get(id) || []).filter(x => x[3] > 0).reduce((m, x) => Math.min(m, x[5]), Infinity);
+    const soldIn = sale < Infinity ? starts.filter(ts => ts <= sale).length : 0;
+    if (sale < Infinity && !soldIn) continue;   // sold before its first fee in reach: its start is out of it
+    out.set(id, { starts, soldIn });
+  }
+  return out;
+}
+/* Of the listings renewed after t terms without a sale, how many sold in that
+   next term. One still running and unsold isn't counted either way. The last
+   bucket (4) takes every renewal after four or more unsold terms. */
+function renewOdds(hist, nowS) {
+  const odds = [1, 2, 3, 4].map(t => ({ t, tried: 0, sold: 0 }));
+  for (const h of hist.values()) {
+    for (let t = 1; t < h.starts.length; t++) {
+      if (h.soldIn && h.soldIn <= t) break;
+      const o = odds[Math.min(t, 4) - 1];
+      if (h.soldIn === t + 1) { o.tried++; o.sold++; break; }
+      if ((h.starts[t + 1] ?? h.starts[t] + TERM_S) <= nowS) o.tried++;
+    }
+  }
+  return odds;
+}
+// How many of the pieces that sold did so in their 1st, 2nd, 3rd, or a later term.
+const soldInCounts = hist => { const n = [0, 0, 0, 0]; for (const h of hist.values()) if (h.soldIn) n[Math.min(h.soldIn, 4) - 1]++; return n; };
+const ord = n => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"}`;
+const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : "—";
+const oddsSaid = o => `${pct(o.sold, o.tried)} of pieces renewed after ${o.t}${o.t === 4 ? "+" : ""} unsold term${o.t === 1 ? "" : "s"} sold in the next`;
+
 /* Stone and shape, for "similar pieces that sold". The ERP's own material and
    shape when it has them; otherwise the title, which in this shop reads
    "[size] Stone Shape - description": the first part that isn't only a size,
@@ -190,6 +230,7 @@ function similarFor(row, mine, sold) {
   const label = tier === "stone" ? `${titleCase(mine.stone)} ${units === 1 ? "piece" : "pieces"} (any shape)`
     : `${titleCase(mine.stone)} ${shapes(mine.shape, units)}${tier === "band" ? ` at ${inrK(row.price * 0.6)}–${inrK(row.price * 1.4)}` : ""}`;
   return { ...mine, tier, label, units, avg: units ? set.reduce((n, x) => n + x.paid * x.qty, 0) / units : 0, last: recent[0]?.ts || 0, items,
+    lids: [...new Set(set.map(x => x.lid))],
     shapeUnits: shaped.reduce((n, x) => n + x.qty, 0), stoneUnits: others.reduce((n, x) => n + x.qty, 0) };
 }
 
@@ -205,6 +246,19 @@ function nudge(base, st, sim) {
   if (sim.shapeUnits >= 3 && base.v === "skip") return { v: "maybe", why: `${base.why} — ${but} ${what} sold this year` };
   if (!sim.stoneUnits && base.v === "maybe") return { v: "skip", why: `${base.why}, and nothing like it sold this year` };
   if (sim.stoneUnits) return { ...base, why: `${base.why} · ${what} sold this year` };
+  return base;
+}
+
+/* What renewing after as many unsold terms has done for the shop's other
+   pieces. A fair chance of a sale, for a fee of a few rupees, leans to
+   renewing; next to none leans to skipping. Only once there are 20 such
+   renewals to go by, and never over a hard skip (a custom order, an empty card). */
+function oddsNudge(base, st, o) {
+  if (!o || o.tried < 20 || base.hard || !base.v || !st || st.error || st.units) return base;
+  const r = o.sold / o.tried;
+  if (r >= 0.12 && base.v === "maybe") return { v: "renew", why: `${base.why} — ${oddsSaid(o)}` };
+  if (r >= 0.06 && base.v === "skip") return { v: "maybe", why: `${base.why} — ${oddsSaid(o)}` };
+  if (r < 0.03 && base.v === "maybe") return { v: "skip", why: `${base.why} — only ${oddsSaid(o)}` };
   return base;
 }
 
@@ -387,6 +441,9 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
   for (let k = kNow; k >= kFloor && ledger[k] && !ledger[k].error; k--) kLow = k;
   const coverFrom = kLow == null ? 0 : EPOCH + kLow * WIN;
   const idx = useMemo(() => ledgerIndex(ledger), [ledger]);
+  const hist = useMemo(() => termHistory(idx), [idx]);
+  const odds = useMemo(() => renewOdds(hist, Math.floor(Date.now() / 1000)), [hist]);
+  const soldIn = useMemo(() => soldInCounts(hist), [hist]);
 
   /* Every sale in the last year with its stone and shape, read once from the
      ledger windows — what "similar pieces that sold" is picked from. The
@@ -422,8 +479,13 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
   const judged = useMemo(() => work.map(row => {
     const st = stats[row.id], card = cardOf(row), e = economics(row, idx, coverFrom, nowS), erp = erpOf(row);
     const sim = simReady && !customOrder(row.title) ? similarFor(row, pieceOf(row.title, erp, vocab), soldYear) : null;
-    return { row, st, card, e, erp, sim, ...nudge(verdict(row, st, card, nowMs, e, idx.fee), st, sim) };
-  }), [work, stats, stock, listings, idx, coverFrom, soldYear, simReady, vocab]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Its unsold terms so far, and how renewing after as many has gone for the rest of the shop.
+    const terms = hist.get(row.id)?.starts.length || (e?.covered ? e.terms : 0);
+    const o = terms ? odds[Math.min(terms, 4) - 1] : null;
+    const simIn = (sim?.lids || []).map(l => hist.get(l)?.soldIn).filter(Boolean);
+    const itemIn = Object.fromEntries((sim?.items || []).map(x => [x.lid, hist.get(x.lid)?.soldIn || 0]));
+    return { row, st, card, e, erp, sim, o, simIn, itemIn, ...oddsNudge(nudge(verdict(row, st, card, nowMs, e, idx.fee), st, sim), st, o) };
+  }), [work, stats, stock, listings, idx, coverFrom, soldYear, simReady, vocab, hist, odds]); // eslint-disable-line react-hooks/exhaustive-deps
   const counts = judged.reduce((m, j) => (m[j.v] = (m[j.v] || 0) + 1, m), {});
   // Recent sales count most, but a listing that has sold for years isn't buried under one good month.
   const rank = j => (j.st?.u120 || 0) * 1000 + (j.st?.u365 || 0) * 100 + (j.st?.units || 0) * 10 + (j.row.favs || 0) / 10;
@@ -570,6 +632,15 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
             {" · a term is one listing or renewal fee, four months on the shop"}
             {adsLast != null ? ` · Etsy Ads (${inr(adsLast)} the last 30 days) are bought for the whole shop, so no listing's fees include them` : ""}
           </div>
+          {soldIn[0] + soldIn[1] + soldIn[2] + soldIn[3] >= 20 && (() => {
+            const all = soldIn[0] + soldIn[1] + soldIn[2] + soldIn[3];
+            return <div style={{ ...small, marginTop: -8, marginBottom: 12 }}
+              title="From the ledger: for each listing it saw being listed, the term (four months, one listing or renewal fee) it first sold in, and for each renewal after unsold terms, whether it sold before the next fee">
+              {`📈 Of ${all} pieces that sold, ${pct(soldIn[0], all)} sold in their 1st term, ${pct(soldIn[1], all)} in the 2nd, ${pct(soldIn[2], all)} in the 3rd, ${pct(soldIn[3], all)} later`}
+              {` · renewed after unsold terms, the next one sold: `}
+              {odds.filter(o => o.tried).map(o => `after ${o.t}${o.t === 4 ? "+" : ""} ${pct(o.sold, o.tried)} (${o.sold} of ${o.tried})`).join(", ")}
+            </div>;
+          })()}
           {statsErr && <div style={{ background: C.amberBg, color: C.amber, borderRadius: 10, padding: "8px 12px", fontSize: 12.5, marginBottom: 10 }}>
             ⚠ Sales stopped loading — {statsErr} <button type="button" onClick={() => setStatsErr("")} style={{ marginLeft: 6, border: "none", background: "none", color: C.ink, fontWeight: 800, cursor: "pointer", textDecoration: "underline" }}>Try again</button>
           </div>}
@@ -613,7 +684,7 @@ export default function RenewalQueue({ listings = [], stock = [], getToken, onRe
 }
 
 function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onSkip }) {
-  const { row, st, card, erp, e, sim, v, why } = j;
+  const { row, st, card, erp, e, sim, o, simIn, itemIn, v, why } = j;
   const phone = mob();
   const tone = TONE[v] || TONE[""];
   const expired = row.state === "expired";
@@ -665,7 +736,8 @@ function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onSki
                   : sim.tier === "shape" ? "Same stone and shape, at any price — none near this one's price sold in the last 12 months"
                   : sim.tier === "stone" ? `Nothing ${sim.shape ? `shaped as a ${sim.shape.toLowerCase()}` : "of this shape"} sold — the same stone in any shape` : ""}
                 style={{ fontSize: 11.5, color: sim.units ? C.inkMid : C.inkFaint, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {sim.units ? <>🔎 Similar sold: <b style={{ color: C.ink }}>{sim.units}</b> {sim.label} in 12 months · {inr(sim.avg)} avg · last {ago(nowMs - sim.last * 1000)}</>
+                {sim.units ? <>🔎 Similar sold: <b style={{ color: C.ink }}>{sim.units}</b> {sim.label} in 12 months · {inr(sim.avg)} avg · last {ago(nowMs - sim.last * 1000)}
+                  {simIn.length ? ` · sold in their ${Math.min(...simIn) === Math.max(...simIn) ? ord(simIn[0]) : `${ord(Math.min(...simIn))}–${ord(Math.max(...simIn))}`} term` : ""}</>
                   : `🔎 Nothing like it (${titleCase(sim.stone)}${sim.shape ? ` · ${sim.shape}` : ""}) sold in the last 12 months`}
               </div>
               {sim.items.length > 0 && <div style={{ display: "flex", gap: 10, marginTop: 5, flexWrap: "wrap" }}>
@@ -679,7 +751,7 @@ function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onSki
                         : <span style={{ width: 30, height: 30, borderRadius: 6, background: C.card, flex: "none" }} />}
                       <span style={{ minWidth: 0, lineHeight: 1.25 }}>
                         <span style={{ display: "block", fontSize: 10.5, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{x.title || b?.title || "Listing"}</span>
-                        <span style={{ display: "block", fontSize: 10.5, color: C.inkFaint, whiteSpace: "nowrap" }}>{inrK(x.paid)} · {ago(nowMs - x.ts * 1000)}</span>
+                        <span style={{ display: "block", fontSize: 10.5, color: C.inkFaint, whiteSpace: "nowrap" }}>{inrK(x.paid)} · {ago(nowMs - x.ts * 1000)}{itemIn[x.lid] ? ` · ${ord(itemIn[x.lid])} term` : ""}</span>
                       </span>
                     </a>
                   );
@@ -687,6 +759,12 @@ function Row({ j, nowMs, fee, usdRate, briefs, simReady, opening, onRenew, onSki
               </div>}
             </div>
           ) : !simReady && !customOrder(row.title) ? <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>🔎 Looking for similar pieces that sold…</div> : null}
+          {o?.tried > 0 && st && !st.error && !st.units && (
+            <div title={`Across the shop, every renewal made after ${o.t}${o.t === 4 ? " or more" : ""} terms without a sale, and whether the piece sold in the term it bought`}
+              style={{ fontSize: 11.5, color: C.inkMid, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              📈 {oddsSaid(o)}: {o.sold} of {o.tried}{o.tried < 20 ? " — too few to go by yet" : ""}
+            </div>
+          )}
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "8px 10px", width: phone ? "100%" : 372, flex: "none" }}>
