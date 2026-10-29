@@ -20,7 +20,7 @@ import HomeAccounts from "./src/HomeAccounts.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
 import MonthClose from "./src/MonthClose.jsx";
 import { runningBalances, monthOf } from "./src/monthClose.js";
-import { invRemitLinks, NG_REMIT_KEY } from "./src/remittances.js";
+import { invRemitLinks, withRemitLink, NG_REMIT_KEY } from "./src/remittances.js";
 import { nextLocation } from "./src/listingChannels.js";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
@@ -24268,15 +24268,108 @@ function BoiRemittanceForm({showToast}){
     if(k==="inv")return form.purpose==="a"&&!/proforma|(^|[^a-z])po(?![a-z])/i.test(name)?"Commercial Invoice":"Proforma / PO";
     return k?kindLabel(k):/packing/i.test(name)?"Packing List":String(name||"Document").replace(/\.[a-z0-9]+$/i,"");
   };
-  const addDocs=(files,label)=>{
+  /* A shipping bill, AWB or invoice added here for a linked invoice is kept
+     on that invoice too, so it's in Invoicing's shipment documents and in
+     Export Recon's Invoice Sets (in the column its label names) without being
+     uploaded twice: on the invoice the missing row named, else the only one,
+     else the first still without one. Once kept, it shows here as that
+     invoice's file. An unlinked invoice, or a file of no known kind, stays in
+     this PDF only. The inward advice goes to the remittance register instead
+     (keepAdvice). */
+  const keepOnInvoices=async(doc,invNo)=>{
+    const kind=docKind(doc.label,doc.name);
+    if(kind==="other"||kind==="adv"||!boiLinked.length)return;
+    const named=invNo&&boiLinked.find(i=>i.invNo===invNo);
+    const recs=named?[named]:boiLinked.length===1?boiLinked:[boiLinked.find(inv=>!boiInvDocs.some(d=>d.invId===inv.id&&d.kind===kind))||boiLinked[0]];
+    setDoc(doc.id,{saving:true});
+    try{
+      const att=await uploadInvoiceShipmentAttachment("ng",recs[0].id,doc.file,doc.label||kindLabel(kind));
+      const ids=new Set(recs.map(r=>r.id));
+      const withAtt=inv=>ids.has(inv.id)?{...inv,attachments:[...(Array.isArray(inv.attachments)?inv.attachments:[]),att]}:inv;
+      const fresh=await loadKFresh("ng-invoices-v2");
+      await saveK("ng-invoices-v2",(Array.isArray(fresh)?fresh:[]).map(withAtt));
+      setNgInvoices(list=>list.map(withAtt));
+      removeDoc(doc.id);
+      showToast(`✓ ${att.label} kept on ${recs.map(r=>r.invNo).join(", ")} — in Invoicing and Invoice Sets too`);
+    }catch(e){
+      setDoc(doc.id,{saving:false});
+      showToast(`Couldn't keep it on the invoice (${e?.message||"try again"}) — it still goes in this PDF`);
+    }
+  };
+  /* The inward advice is the payment itself, so it goes to the remittance
+     register, which is Export Recon's Inward Remittance column, rather than
+     onto one invoice. The remittance these invoices are already tied to gets
+     it if it has none; with none, a register entry is made from this form
+     (bank reference, value date, amount, currency, remitter, account; what's
+     blank is read off the advice) and each linked invoice in the payment's
+     currency is tied to it, up to what the payment covers. The pages of one
+     advice, photos and all, become one PDF. One already in the register stays;
+     a second goes in this PDF only. */
+  const blobB64=f=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]||"");r.onerror=()=>rej(r.error);r.readAsDataURL(f);});
+  const keepAdvice=async docs=>{
+    if(!boiLinked.length||!docs.length)return;
+    if(boiRemits.length&&boiRemits.every(r=>r.attachment?.url)){showToast(`This payment's advice is already in the register (${boiRemits.map(r=>r.irt||"remittance").join(", ")}) — this one goes in the PDF only`);return;}
+    docs.forEach(d=>setDoc(d.id,{saving:true}));
+    try{
+      let file=docs[0].file;
+      if(docs.length>1||!/pdf/i.test(file.type||file.name)){
+        const {PDFDocument}=await import("pdf-lib");
+        const out=await PDFDocument.create();
+        for(const d of docs){
+          const part=await boiDocPart(d.file,d.label);
+          if(part.kind==="pdf"){const src=await PDFDocument.load(part.bytes,{ignoreEncryption:true});(await out.copyPages(src,src.getPageIndices())).forEach(pg=>out.addPage(pg));continue;}
+          const img=part.kind==="png"?await out.embedPng(part.bytes):await out.embedJpg(part.bytes);
+          const wide=img.width>img.height,W=wide?841.89:595.28,H=wide?595.28:841.89,sc=Math.min((W-48)/img.width,(H-48)/img.height);
+          out.addPage([W,H]).drawImage(img,{x:(W-img.width*sc)/2,y:(H-img.height*sc)/2,width:img.width*sc,height:img.height*sc});
+        }
+        file=new File([await out.save()],`Inward-Advice-${String(form.bankRef||form.remName||"remittance").replace(/[^a-zA-Z0-9]+/g,"-")}.pdf`,{type:"application/pdf"});
+      }
+      const url=await supabaseUpload(`invoice-shipment-docs/ng/remittances/${Date.now()}-${uid()}-${safeInvoiceDocName(file.name)}`,file);
+      const attachment={url,fileName:file.name,name:file.name,type:file.type||"application/pdf",size:file.size||0};
+      const freshReg=await loadKFresh(NG_REMIT_KEY).catch(()=>remits);
+      const reg=Array.isArray(freshReg)?freshReg:[];
+      let rem=boiRemits.find(r=>!r.attachment?.url);
+      let next;
+      if(rem){rem={...rem,attachment};next=reg.map(r=>r.id===rem.id?rem:r);}
+      else{
+        let ex={};
+        if(!form.bankRef.trim()||!form.valueDate){try{const {aiExtract}=await import("./src/ExportReconciliationApp.jsx");ex=await aiExtract(await blobB64(file),"inward",file.type||"application/pdf")||{};}catch{}}
+        const who=form.remName.trim()||String(ex.buyer||"").trim();
+        rem={id:uid(),irt:form.bankRef.trim()||String(ex.irt||"").trim(),date:form.valueDate||ex.date||"",dateRaw:ex.dateRaw||"",
+          currency:form.currency||String(ex.currency||"").toUpperCase(),amount:+form.amount||+String(ex.amount||"").replace(/[^\d.]/g,"")||0,
+          remitter:who,buyer:who,settlement:form.accType==="eefc"?"eefc":"converted",closed:false,attachment,source:"boi-form",createdAt:new Date().toISOString()};
+        next=[rem,...reg];
+        setForm(f=>({...f,bankRef:f.bankRef||rem.irt,valueDate:f.valueDate||rem.date}));
+        let left=+rem.amount||Infinity;
+        const allocs=new Map();
+        for(const inv of boiSameCcy){const a=Math.min(+inv.totalAmt||0,left);if(a>0){allocs.set(inv.id,+a.toFixed(2));left-=a;}}
+        const tie=inv=>allocs.has(inv.id)?withRemitLink(inv,rem,allocs.get(inv.id)):inv;
+        const freshInv=await loadKFresh("ng-invoices-v2");
+        await saveK("ng-invoices-v2",(Array.isArray(freshInv)?freshInv:[]).map(tie));
+        setNgInvoices(list=>list.map(tie));
+      }
+      await saveK(NG_REMIT_KEY,next);
+      setRemits(next);
+      docs.forEach(d=>removeDoc(d.id));
+      showToast(`✓ Inward advice${rem.irt?` ${rem.irt}`:""} in the remittance register, tied to ${boiSameCcy.map(i=>i.invNo).join(", ")} — under Inward Remittance in Invoice Sets`,7000);
+    }catch(e){
+      docs.forEach(d=>setDoc(d.id,{saving:false}));
+      showToast(`Couldn't put the advice in the register (${e?.message||"try again"}) — it still goes in this PDF`);
+    }
+  };
+  const addDocs=(files,label,invNo)=>{
     const ok=[...(files||[])].filter(f=>/^image\//.test(f.type)||f.type==="application/pdf"||/\.(pdf|jpe?g|png|heic|webp)$/i.test(f.name));
     if(files?.length&&!ok.length){showToast("Add a PDF or a photo");return;}
-    setForm(f=>({...f,docs:[...f.docs,...ok.map(file=>({id:uid(),label:label||guessDocLabel(file.name),file,name:file.name,size:file.size}))]}));
+    const added=ok.map(file=>({id:uid(),label:label||guessDocLabel(file.name),file,name:file.name,size:file.size}));
+    setForm(f=>({...f,docs:[...f.docs,...added]}));
+    const adv=added.filter(d=>docKind(d.label,d.name)==="adv");
+    if(adv.length)keepAdvice(adv);
+    added.filter(d=>!adv.includes(d)).forEach(d=>keepOnInvoices(d,invNo));
   };
-  const pickDocs=label=>{
+  const pickDocs=(label,invNo)=>{
     const input=document.createElement("input");
     input.type="file";input.multiple=true;input.accept="application/pdf,image/*";
-    input.onchange=e=>addDocs(e.target.files,label);
+    input.onchange=e=>addDocs(e.target.files,label,invNo);
     input.click();
   };
   const setDoc=(id,patch)=>setForm(f=>({...f,docs:f.docs.map(d=>d.id===id?{...d,...patch}:d)}));
@@ -24758,9 +24851,9 @@ function BoiRemittanceForm({showToast}){
         {(()=>{
           let n=1;
           // A row can take files dropped on it, filed as that row's document (the advice row: photos and all).
-          const dropAs=label=>label==null?{}:{onDragOver:e=>e.preventDefault(),onDrop:e=>{e.preventDefault();e.stopPropagation();addDocs(e.dataTransfer.files,label);}};
-          const row=(key,num,body,right,tone,dropLabel)=>(
-            <div key={key} {...dropAs(dropLabel)} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 8px",borderRadius:7,marginBottom:3,background:tone==="miss"?C.redBg:tone==="on"?C.goldLight:"transparent",opacity:tone==="off"?.6:1}}>
+          const dropAs=(label,invNo)=>label==null?{}:{onDragOver:e=>e.preventDefault(),onDrop:e=>{e.preventDefault();e.stopPropagation();addDocs(e.dataTransfer.files,label,invNo);}};
+          const row=(key,num,body,right,tone,dropLabel,dropInv)=>(
+            <div key={key} {...dropAs(dropLabel,dropInv)} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 8px",borderRadius:7,marginBottom:3,background:tone==="miss"?C.redBg:tone==="on"?C.goldLight:"transparent",opacity:tone==="off"?.6:1}}>
               <span style={{width:20,flexShrink:0,textAlign:"right",fontSize:12,fontWeight:700,color:tone==="miss"?C.red:C.inkMid}}>{num}</span>
               <div style={{flex:1,minWidth:0,display:"flex",alignItems:"center",gap:8,flexWrap:mob?"wrap":"nowrap"}}>{body}</div>
               {right}
@@ -24773,7 +24866,7 @@ function BoiRemittanceForm({showToast}){
             ...boiSet.items.map(it=>{
               if(it.missing)return row(it.key,"✗",
                 <><span style={{...strong,color:C.red}}>{kindName(it.kind)}</span><span style={{fontSize:11,color:C.red}}>missing{it.kind==="adv"?" — drop it here, a PDF or the photos the bank sent":it.onRecord?` — not on ${it.invNo}`:it.invNo?` — ${it.invNo} isn't in Invoicing, add the file`:""}</span></>,
-                <button type="button" onClick={()=>pickDocs(kindLabel(it.kind))} style={{...smallBtn(C.red,C.surface),padding:"3px 10px",fontSize:11,flexShrink:0}}>+ Add</button>,"miss",kindLabel(it.kind));
+                <button type="button" onClick={()=>pickDocs(kindLabel(it.kind),it.invNo)} style={{...smallBtn(C.red,C.surface),padding:"3px 10px",fontSize:11,flexShrink:0}}>+ Add</button>,"miss",kindLabel(it.kind),it.invNo);
               const num=it.on?String(++n):"–";
               if(it.from==="attached")return(
                 <label key={it.key} style={{display:"block",cursor:"pointer"}}>
@@ -24791,7 +24884,7 @@ function BoiRemittanceForm({showToast}){
               const d=it.doc;
               return row(it.key,num,
                 <><input list="boi-doc-labels" value={d.label} onChange={e=>setDoc(d.id,{label:e.target.value})} style={{...FI,width:mob?"100%":160,padding:"4px 8px",fontSize:12}} placeholder="What it is"/>
-                  <span style={{...faint,flex:1}}>{/pdf$/i.test(d.name)?"📄":"🖼️"} {d.name}</span>
+                  <span style={{...faint,flex:1}}>{/pdf$/i.test(d.name)?"📄":"🖼️"} {d.name}{d.saving?(docKind(d.label,d.name)==="adv"?" · putting it in the remittance register…":" · keeping it on the invoice…"):""}</span>
                   {!mob&&<span style={{fontSize:10.5,color:C.inkFaint,flexShrink:0}}>{d.size>=1048576?`${(d.size/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(d.size/1024))} KB`}</span>}</>,
                 <button onClick={()=>removeDoc(d.id)} title="Remove" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:17,padding:0,lineHeight:1,flexShrink:0}}>×</button>,"on",it.kind==="adv"?"Inward Advice":undefined);
             }),
