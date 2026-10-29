@@ -3,7 +3,21 @@
  * Core utility — framework-agnostic, works in browser with pdf-lib.
  */
 
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, degrees } from 'pdf-lib';
+
+/* The bank wants every page of the set signed and stamped ("Bill of Lading
+   also to be acknowledged/signed by you"). The form's page 2 has the stamp in
+   its signature box; every other page gets it in its bottom-right corner,
+   upright however the page is turned. The stamp image is a square with clear
+   space round the stamp and a see-through background, so what's under it
+   still reads. */
+function stampCorner(page, img) {
+  const { x: x0, y: y0, width: W, height: H } = page.getMediaBox();
+  const rot = (((page.getRotation().angle || 0) % 360) + 360) % 360;
+  const s = Math.min(130, (rot % 180 ? H : W) * 0.24), m = 6;
+  const at = rot === 90 ? [W - m, H - m - s] : rot === 180 ? [m + s, H - m] : rot === 270 ? [m, m + s] : [W - m - s, m];
+  page.drawImage(img, { x: x0 + at[0], y: y0 + at[1], width: s, height: s, rotate: degrees(rot) });
+}
 
 // ─────────────────────────────────────────────
 //  COORDINATES  (all in PDF points, y from bottom)
@@ -85,6 +99,8 @@ const fd = (d) => {
  *                                            form in the order given
  * @param {Uint8Array} data.boiPdfBytes
  * @param {Uint8Array} data.sigJpegBytes
+ * @param {Uint8Array} [data.stampPngBytes]   the sign-and-stamp for every other page; a document
+ *                                            marked stamped (an invoice made from the record) has its own
  * @returns {Promise<Uint8Array>}
  */
 export async function fillBoiRemittance(data) {
@@ -98,7 +114,7 @@ export async function fillBoiRemittance(data) {
     bName, bAddr1, bAddr2, iecCode,
     sigDate, sigPlace = 'Mumbai',
     documents = [],
-    boiPdfBytes, sigJpegBytes,
+    boiPdfBytes, sigJpegBytes, stampPngBytes,
   } = data;
 
   const pdfDoc = await PDFDocument.load(boiPdfBytes);
@@ -172,11 +188,15 @@ export async function fillBoiRemittance(data) {
 
   // ── THE FORM, THEN WHAT IS ENCLOSED WITH IT, IN THE ORDER GIVEN ──
   const docs = documents.filter(d => d.bytes);
-  if (!docs.length) return pdfDoc.save();
+  if (!docs.length) {
+    if (stampPngBytes) stampCorner(p1, await pdfDoc.embedPng(stampPngBytes));
+    return pdfDoc.save();
+  }
 
   const merged = await PDFDocument.create();
   const formPages = await merged.copyPages(pdfDoc, pdfDoc.getPageIndices());
   formPages.forEach(p => merged.addPage(p));
+  const toStamp = [formPages[0]];   // page 2 is signed in its box
 
   // A PDF goes in page for page; a photo or scan gets an A4 page of its own,
   // turned to match it and filled to within the margins.
@@ -186,18 +206,25 @@ export async function fillBoiRemittance(data) {
         const src = await PDFDocument.load(doc.bytes, { ignoreEncryption: true });
         const pages = await merged.copyPages(src, src.getPageIndices());
         pages.forEach(p => merged.addPage(p));
+        if (!doc.stamped) toStamp.push(...pages);
       } else {
         const img = doc.kind === 'png' ? await merged.embedPng(doc.bytes) : await merged.embedJpg(doc.bytes);
         const wide = img.width > img.height;
         const W = wide ? 841.89 : 595.28, H = wide ? 595.28 : 841.89, M = 34;
         const s = Math.min((W - 2 * M) / img.width, (H - 2 * M) / img.height);
         const w = img.width * s, h = img.height * s;
-        merged.addPage([W, H]).drawImage(img, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+        const page = merged.addPage([W, H]);
+        page.drawImage(img, { x: (W - w) / 2, y: (H - h) / 2, width: w, height: h });
+        if (!doc.stamped) toStamp.push(page);
       }
     } catch (e) {
       console.warn(`Could not add ${doc.label || 'a document'}:`, e.message);
     }
   }
 
+  if (stampPngBytes) {
+    const stamp = await merged.embedPng(stampPngBytes);
+    toStamp.forEach(p => stampCorner(p, stamp));
+  }
   return merged.save();
 }

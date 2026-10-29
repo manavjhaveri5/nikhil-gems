@@ -24347,6 +24347,8 @@ function BoiRemittanceForm({showToast}){
       for(let i=0;i<bin.length;i++)sigJpegBytes[i]=bin.charCodeAt(i);
 
       const {fillBoiRemittance}=await import("./src/fillBoiRemittance.js");
+      // Signed and stamped on every page of the set, the bank's rule; the stamp with a see-through background.
+      const stampPngBytes=await fetch(stampForCompany("ng")).then(r=>r.ok?r.arrayBuffer():null).then(b=>b&&new Uint8Array(b)).catch(()=>null);
       const [freshInvoicesRaw,freshBuyersRaw]=await Promise.all([
         loadKFresh("ng-invoices-v2").catch(()=>ngInvoices),
         loadKFresh("ng-buyers-v2").catch(()=>ngBuyers),
@@ -24368,7 +24370,8 @@ function BoiRemittanceForm({showToast}){
         try{
           if(it.from==="record"){
             const rec=freshInvoices.find(inv=>inv.id===it.rec.id)||it.rec;
-            documents.push({label:name,kind:"pdf",bytes:await renderInvoicePacketPdf(rec,freshBuyers,"ng")});
+            // Made on the stationery, which already carries the stamp on every page.
+            documents.push({label:name,kind:"pdf",stamped:true,bytes:await renderInvoicePacketPdf(rec,freshBuyers,"ng")});
           }else if(it.from==="attached"){
             const r=await fetch(it.att.url);
             if(!r.ok)throw new Error(`the stored file answered ${r.status}`);
@@ -24399,7 +24402,7 @@ function BoiRemittanceForm({showToast}){
         iecCode:CO.iec,
         sigDate:form.sigDate,sigPlace:form.sigPlace,
         documents,
-        boiPdfBytes,sigJpegBytes,
+        boiPdfBytes,sigJpegBytes,stampPngBytes,
       });
       const fileName=`BOI_${form.remName.replace(/\s+/g,"_")}_${form.sigDate}.pdf`;
       const blob=new Blob([pdfBytes],{type:"application/pdf"});
