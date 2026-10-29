@@ -24082,11 +24082,13 @@ ${attachSection}
   setTimeout(()=>w.print(),700);
 }
 
+// The sets made on the BOI form, kept to look at, change and download again.
+const BOI_SETS_KEY="ng-boi-sets-v1";
 function BoiRemittanceForm({showToast}){
   const EEFC_ACC="015020410002514";
   const INR_ACC=CO.bankAcc;
   const blankInv=()=>({id:uid(),no:"",date:""});
-  const [form,setForm]=useState({
+  const freshForm=()=>({
     currency:"USD",amount:"",accType:"eefc",
     remName:"",remAddr:"",
     purpose:"a",
@@ -24099,7 +24101,9 @@ function BoiRemittanceForm({showToast}){
     sigDate:today(),sigPlace:"Mumbai",
     docs:[], // documents added here: [{id,label,file,name,size}]
     bankRef:"",valueDate:"", // the bank's reference for the payment, for the email (from the advice)
+    setId:"", // the saved set this is, once downloaded (or opened)
   });
+  const [form,setForm]=useState(freshForm);
   const [generating,setGenerating]=useState(false);
   const [docPicks,setDocPicks]=useState({}); // the linked invoices' own documents: key → ticked
   const [amountTouched,setAmountTouched]=useState(false); // user typed their own figure
@@ -24167,6 +24171,29 @@ function BoiRemittanceForm({showToast}){
     if(!remit1)return;
     setForm(f=>({...f,bankRef:f.bankRef||remit1.irt||"",valueDate:f.valueDate||String(remit1.date||"").slice(0,10)}));
   },[remit1?.id]);
+
+  /* Every set downloaded from here is kept: the PDF, the form as it was
+     filled, which files were ticked and the files added here (uploaded once,
+     so an opened set still has them). Open one to check it, change it and
+     download it again; that download updates the same set and replaces its
+     PDF on the invoices rather than adding another. */
+  const [sets,setSets]=useState([]);
+  useEffect(()=>{loadK(BOI_SETS_KEY).then(v=>setSets(Array.isArray(v)?v:[])).catch(()=>{});},[]);
+  const openSet=x=>{
+    setForm({...freshForm(),...x.form,docs:(x.form?.docs||[]).map(d=>({...d}))});
+    setDocPicks(x.picks||{});
+    setAmountTouched(true);setShipTouched(true);
+    window.scrollTo({top:0,behavior:"smooth"});
+    showToast(`Opened the set for ${x.form?.remName||"the remitter"} — change what you need, then download it again`);
+  };
+  const newSet=()=>{setForm(freshForm());setDocPicks({});setAmountTouched(false);setShipTouched(false);};
+  const deleteSet=async x=>{
+    if(!window.confirm(`Delete the saved set for ${x.form?.remName||"this remitter"} (${fmtDate(String(x.at||"").slice(0,10))})? Its PDF stays on the invoices.`))return;
+    const fresh=await loadKFresh(BOI_SETS_KEY).catch(()=>sets);
+    const next=(Array.isArray(fresh)?fresh:[]).filter(y=>y.id!==x.id);
+    await saveK(BOI_SETS_KEY,next);setSets(next);
+    if(form.setId===x.id)setF("setId","");
+  };
 
   /* Advance (b): BOI wants the expected shipping date on the form. It's
      suggested from the linked records — the date an earlier form saved on the
@@ -24469,7 +24496,7 @@ function BoiRemittanceForm({showToast}){
             const r=await fetch(it.att.url);
             if(!r.ok)throw new Error(`the stored file answered ${r.status}`);
             documents.push(await boiDocPart(await r.blob(),name));
-          }else documents.push(await boiDocPart(it.doc.file,name));
+          }else documents.push(await boiDocPart(it.doc.file||await (await fetch(it.doc.url)).blob(),name));
         }catch(e){
           console.warn("BOI document left out:",name,e?.message||e);
           failed.push(`${name} — couldn't be read (${e?.message||e})`);
@@ -24507,13 +24534,33 @@ function BoiRemittanceForm({showToast}){
       // shipping date, so the next form for the same order starts from it.
       const srcIds=[...new Set(invoiceRefs.map(i=>i.srcId).filter(Boolean))];
       const shipDate=form.purpose==="b"?form.expShipDate:"";
+      const setId=form.setId||uid();
+      const prevSet=sets.find(x=>x.id===setId);
+      let uploadedAtt=null;
+      try{uploadedAtt=await uploadInvoiceShipmentAttachment("ng",srcIds[0]||`boi-set-${setId}`,new File([blob],fileName,{type:"application/pdf"}),"BOI Remittance");}
+      catch(e){console.error("BOI attach failed:",e);}
+      // The set kept, with the files added here uploaded once.
+      try{
+        const kept=[];
+        for(const d of form.docs){
+          if(d.url){kept.push({id:d.id,label:d.label,name:d.name,size:d.size,url:d.url});continue;}
+          try{kept.push({id:d.id,label:d.label,name:d.name,size:d.size,url:await supabaseUpload(`boi-sets/${setId}/${Date.now()}-${uid()}-${safeInvoiceDocName(d.name)}`,d.file)});}catch(e){console.error("BOI set file not kept:",d.name,e);}
+        }
+        const now=new Date().toISOString();
+        const entry={id:setId,at:now,createdAt:prevSet?.createdAt||now,form:{...form,setId,docs:kept},picks:docPicks,
+          pdf:uploadedAtt?{url:uploadedAtt.url,fileName}:prevSet?.pdf||null,invoices:invoiceRefs.map(i=>i.no)};
+        const freshSets=await loadKFresh(BOI_SETS_KEY).catch(()=>sets);
+        const nextSets=[entry,...(Array.isArray(freshSets)?freshSets:[]).filter(x=>x.id!==setId)];
+        await saveK(BOI_SETS_KEY,nextSets);
+        setSets(nextSets);
+        setForm(f=>({...f,setId,docs:f.docs.map(d=>({...d,url:d.url||kept.find(k=>k.id===d.id)?.url||""}))}));
+      }catch(e){console.error("BOI set not kept:",e);showToast("Downloaded, but the set couldn't be kept: "+(e?.message||"check connection"));}
       if(srcIds.length){
-        let uploadedAtt=null;
-        try{uploadedAtt=await uploadInvoiceShipmentAttachment("ng",srcIds[0],new File([blob],fileName,{type:"application/pdf"}),"BOI Remittance");}
-        catch(e){console.error("BOI attach failed:",e);}
+        const oldPdf=prevSet?.pdf?.url;
         if(uploadedAtt||shipDate){
           try{
-            const patch=inv=>({...inv,...(uploadedAtt?{attachments:[...(Array.isArray(inv.attachments)?inv.attachments:[]),uploadedAtt]}:{}),...(shipDate?{expectedShipDate:shipDate}:{})});
+            // Downloading an opened set again replaces its PDF on the invoices.
+            const patch=inv=>({...inv,...(uploadedAtt?{attachments:[...(Array.isArray(inv.attachments)?inv.attachments:[]).filter(a=>!oldPdf||a?.url!==oldPdf),uploadedAtt]}:{}),...(shipDate?{expectedShipDate:shipDate}:{})});
             const freshInvs=await loadKFresh("ng-invoices-v2")||[];
             await saveK("ng-invoices-v2",freshInvs.map(inv=>srcIds.includes(inv.id)?patch(inv):inv));
             setNgInvoices(list=>list.map(inv=>srcIds.includes(inv.id)?patch(inv):inv));
@@ -24675,8 +24722,31 @@ function BoiRemittanceForm({showToast}){
     :boiSet.missing.length?{ok:false,text:`Missing: ${boiSet.missing.map(missingText).join(", ")}`}
     :{ok:true,text:form.purpose==="a"?`Full set: form + ${boiSet.count} document${boiSet.count===1?"":"s"}`:`Form${boiSet.count?` + ${boiSet.count} document${boiSet.count===1?"":"s"}`:""}`};
 
+  const openNow=sets.find(x=>x.id===form.setId);
   return(
     <div style={{maxWidth:680}}>
+      {(sets.length>0||form.setId)&&(
+        <div style={{background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"14px 18px",marginBottom:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:sets.length?8:0}}>
+            <span style={{fontSize:12,fontWeight:700,color:C.ink,flex:1}}>{openNow?`Editing the set for ${openNow.form?.remName||"—"} from ${fmtDate(String(openNow.createdAt||"").slice(0,10))}`:`Saved sets · ${sets.length}`}</span>
+            {form.setId&&<button type="button" onClick={newSet} style={{fontSize:12,color:C.ink,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit"}}>+ Start a new set</button>}
+          </div>
+          <div style={{display:"grid",gap:4,maxHeight:220,overflowY:"auto"}}>
+            {sets.slice(0,30).map(x=>{
+              const f=x.form||{},on=x.id===form.setId;
+              return(
+                <div key={x.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:7,background:on?C.goldLight:C.bg,fontSize:12}}>
+                  <span style={{color:C.inkFaint,width:70,flexShrink:0}}>{fmtDate(String(x.at||"").slice(0,10))}</span>
+                  <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:C.ink}}><b>{f.remName||"—"}</b> · {f.currency} {Number(f.amount||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}{(x.invoices||[]).length?` · ${x.invoices.join(", ")}`:""}{f.bankRef?` · ${f.bankRef}`:""}</span>
+                  {x.pdf?.url&&<a href={x.pdf.url} target="_blank" rel="noopener noreferrer" style={{fontSize:11.5,color:C.blue,flexShrink:0}}>PDF</a>}
+                  {!on&&<button type="button" onClick={()=>openSet(x)} style={{fontSize:11.5,color:C.ink,background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>Open</button>}
+                  <button type="button" onClick={()=>deleteSet(x)} title="Delete this saved set" style={{background:"none",border:"none",cursor:"pointer",color:C.red,fontSize:15,padding:0,lineHeight:1,flexShrink:0}}>×</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{background:C.blueBg,border:`1px solid ${C.blue}`,borderRadius:8,padding:"10px 14px",marginBottom:20,fontSize:12,color:C.ink,display:"flex",gap:8,alignItems:"flex-start"}}>
         <span style={{fontSize:16,flexShrink:0}}>ℹ️</span>
         <span>Fills BOI's <strong>disposal instructions for a foreign inward remittance</strong> and downloads it as one PDF with what the bank needs for the case — an <strong>advance</strong> carries the expected shipping date; <strong>goods already shipped</strong> go with the shipping bill, commercial invoice and AWB / bill of lading.</span>
