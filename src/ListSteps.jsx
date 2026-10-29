@@ -143,6 +143,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
      out here instead, line by line — materials, making, packaging — and kept
      on the listing. A variant can carry its own cost over the top of it. */
   const cardCost = +form._stockCost || 0;
+  const card = form.linked_stock_id ? stock.find(x => x.id === form.linked_stock_id) : null;
   const [costLines, setCostLines] = useState(() => {
     const saved = form.price_calc?.cost_lines;
     if (Array.isArray(saved) && saved.length) return saved.map(l => ({ ...l }));
@@ -309,8 +310,51 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
       {sub && <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>{sub}</div>}
     </div>
   );
+  /* Before a price is typed there is nothing to take fees from, but the cost
+     and the postage are already known — and they are what a price is set
+     against. So the sheet shows them, and the least a customer has to pay for
+     this sale not to lose money: the first price, in steps of ₹10 or $1, whose
+     profit is not below zero. Scanned rather than solved, because a price over
+     the free-shipping line drops the postage the buyer pays. */
+  const breakEven = (pkey, cur, pieceCost) => {
+    const shipping = pkey === "trade" ? 0 : pkey === "store_in" ? shipIn : ship;
+    const need = pieceCost + shipping;
+    if (!need) return 0;
+    const step = cur === "$" ? 1 : 10, top = (4 * need) / (cur === "$" ? rate || 1 : 1);
+    for (let paid = step; paid <= top + step; paid += step) {
+      if (money4(pkey, paid, cur, pieceCost).profit >= 0) return paid;
+    }
+    return 0;
+  };
+  const owed = (pkey, label, cur, pieceCost) => {
+    const shipping = pkey === "trade" ? 0 : pkey === "store_in" ? shipIn : ship;
+    if (!pieceCost && !shipping) return null;
+    const even = breakEven(pkey, cur, pieceCost);
+    const money = v => (cur === "$" ? usd(v) : inr(v));
+    return (
+      <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
+        {label && <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>{label}</div>}
+        {[
+          ...(pkey === "trade" ? [] : [[pkey === "store_in" ? "Shipping in India" : "Shipping", -shipping]]),
+          [pkey === "trade" ? `Cost of ${tradeBasis}` : "Cost of the piece", -pieceCost],
+        ].map(([k, v]) => (
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: C.inkMid, padding: "2px 0" }}>
+            <span>{k}</span><span>{v ? `− ${inr(Math.abs(v))}` : "—"}</span>
+          </div>
+        ))}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", borderTop: `1px solid ${C.border}`, marginTop: 4, paddingTop: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>To break even{!pieceCost ? " · no cost entered" : ""}</span>
+          <span style={{ fontFamily: serif, fontSize: 22, color: C.ink }}>
+            {even ? money(even) : "—"}
+            {pkey === "etsy" && sale > 0 && even > 0 && <span style={{ fontFamily: "inherit", fontSize: 12, color: C.inkMid }}> · listed {inr(+listedFor(even))}</span>}
+          </span>
+        </div>
+        <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>The least the customer pays to cover {FEES[pkey] ? "the fees, " : ""}{pkey === "trade" ? "" : "shipping and "}the piece. Type a price to see the profit.</div>
+      </div>
+    );
+  };
   // The money under each platform: what's paid, what goes where, what's left.
-  const sheet = (pkey, m, label) => !m ? null : (
+  const sheet = (pkey, m, label, cur = "₹", pieceCost = cost) => !m ? owed(pkey, label, cur, pieceCost) : (
     <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 8 }}>
       {label && <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>{label}</div>}
       {[
@@ -470,6 +514,20 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 </div>
               </div>
             </Box>}
+            {cardCost > 0 && chosen.length > 0 && <Box>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>What it costs us</div>
+                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>
+                    From its stock card{card?.sku ? <> <b>{card.sku}</b></> : ""}
+                    {card && +card.costPrice && !["pcs", "pc", "piece", "pieces", "nos", "no", "lot"].includes(String(card.unit || "pcs").toLowerCase())
+                      ? ` · ${inr(+card.costPrice)} a ${String(card.unit).toLowerCase() === "kg" ? "kilo" : card.unit}` : " · cost price"}
+                    {ship > 0 && <> · with shipping to the US, {inr(cardCost + ship)} before fees</>}
+                  </div>
+                </div>
+                <div style={{ fontFamily: serif, fontSize: 26, color: C.ink }}>{inr(cardCost)}</div>
+              </div>
+            </Box>}
             {!cardCost && chosen.length > 0 && <Box>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                 <div style={{ flex: 1 }}>
@@ -558,7 +616,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_ebay", "$", ebayUsd ? String(ebayUsd) : "")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>{p.price_ebay ? "Your price" : "Same as an Etsy buyer pays, in dollars"}</div></div>
                 {pays(ebayUsd ? usd(ebayUsd) : "—", ebayUsd ? `≈ ${inr(ebayUsd * rate)}` : "")}
               </div>
-              {sheet("ebay", money4("ebay", ebayUsd, "$"))}
+              {sheet("ebay", money4("ebay", ebayUsd, "$"), "", "$")}
               {now.tax > 0 && ebayUsd > 0 && <div style={{ fontSize: 12, color: C.inkMid, marginTop: 8, lineHeight: 1.55 }}>US buyers also pay about {Math.round(now.tax * 100)}% sales tax on top — eBay collects and pays it over. All in, with the shipping they pay: about <b>{usd(Math.round((ebayUsd + (money4("ebay", ebayUsd, "$")?.shipPaid || 0) / rate) * (1 + now.tax)))}</b>. eBay's fee is charged on that total, tax included.</div>}
             </Box>}
             {pick.store && <Box>
@@ -570,7 +628,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
               <div style={{ fontSize: 12, color: C.inkMid, marginTop: 10 }}>
                 {p.price_store || p.price_store_inr ? "Customer pays these." : "Leave empty and it follows what an Etsy buyer pays in the sale."}
               </div>
-              {sheet("store", money4("store", storeUsd, "$"), "A US sale")}
+              {sheet("store", money4("store", storeUsd, "$"), "A US sale", "$")}
               {storeUsd > 0 && (() => { const shipB = money4("store", storeUsd, "$")?.shipPaid || 0;
                 return <div style={{ fontSize: 12, color: C.ink, marginTop: 8 }}>All in for a US buyer: about <b>{usd(Math.round(storeUsd + shipB / rate))}</b>
                   <span style={{ color: C.inkMid }}> — {usd(storeUsd)} piece + {shipB ? `${usd(Math.round(shipB / rate))} shipping` : "free shipping"}</span></div>; })()}
@@ -602,7 +660,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
                 <div style={{ flex: 1, minWidth: 0 }}>{money("price_trade", "$")}<div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 5 }}>Per piece, lot or kilo — as set on the Wholesale tab</div></div>
                 {pays(+p.price_trade ? usd(+p.price_trade) : "—", +p.price_trade ? `≈ ${inr(+p.price_trade * rate)}` : "trade buyers")}
               </div>
-              {sheet("trade", money4("trade", +p.price_trade, "$", tradeCost))}
+              {sheet("trade", money4("trade", +p.price_trade, "$", tradeCost), "", "$", tradeCost)}
             </Box>}
           </>}
 
