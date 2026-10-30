@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { C } from "./ui.jsx";
 import { mob, loadK, saveK } from "./utils.js";
-import { loadHistory, compare, Kpi, Section, Thumb, Tag, eyebrow, usd, usd2, dayKey, DAY, ADS_URL } from "./EtsyInsights.jsx";
+import { loadHistory, compare, Section, Thumb, Tag, card, eyebrow, usd, usd2, dayKey, DAY, ADS_URL, SERIF, ETSYADS, SALES } from "./EtsyInsights.jsx";
 
 /* Ads tracker: the Etsy Ads plan (which listings to advertise, which to keep
    off) and how it's going, day by day. What Etsy's API gives, it reads by
@@ -105,11 +105,121 @@ async function readScreenshots(files) {
   return { range, rows };
 }
 
+const pct = (v, max) => `${Math.max(0, Math.min(100, max ? v / max * 100 : 0))}%`;
+// A chart's top, as four round steps.
+const niceMax = v => { const q = Math.max(v, 1e-9) / 4, p = 10 ** Math.floor(Math.log10(q)); return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(m => m * p >= q) * p * 4; };
+const big = { fontFamily: SERIF, fontVariantNumeric: "lining-nums", fontSize: 30, fontWeight: 600, color: C.ink, lineHeight: 1.05, marginTop: 4 };
+const small = { fontSize: 11.5, color: C.inkMid, marginTop: 3, lineHeight: 1.4 };
+const Dot = ({ color, size = 8 }) => <i style={{ display: "inline-block", width: size, height: size, borderRadius: size, background: color, flexShrink: 0 }} />;
+
+// How much of something is done, as a ring.
+function Ring({ value, max, color, size = 54 }) {
+  const r = (size - 8) / 2, c = 2 * Math.PI * r, f = max ? Math.min(1, value / max) : 0, m = size / 2;
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0 }}>
+      <circle cx={m} cy={m} r={r} fill="none" stroke={C.card} strokeWidth={7} />
+      {f > 0 && <circle cx={m} cy={m} r={r} fill="none" stroke={color} strokeWidth={7} strokeLinecap="round" strokeDasharray={`${f * c} ${c}`} transform={`rotate(-90 ${m} ${m})`} />}
+      <text x={m} y={m} dy=".35em" textAnchor="middle" fontSize={12} fontWeight={800} fill={C.ink}>{Math.round(f * 100)}%</text>
+    </svg>
+  );
+}
+
+// Sales back per $1 of ads on a scale: under 1× loses outright, under break-even loses after costs, past it pays.
+function RoasMeter({ value }) {
+  const max = Math.max(5, Math.ceil((value || 0) * 1.15));
+  return (
+    <div style={{ position: "relative", height: 28, marginTop: 10 }}>
+      <div style={{ display: "flex", height: 8, borderRadius: 4, overflow: "hidden" }}>
+        <div style={{ width: pct(1, max), background: C.redBg }} />
+        <div style={{ width: pct(BREAK_EVEN - 1, max), background: C.amberBg }} />
+        <div style={{ flex: 1, background: C.greenBg }} />
+      </div>
+      <div style={{ position: "absolute", left: pct(BREAK_EVEN, max), top: -3, height: 14, borderLeft: `2px solid ${C.ink}` }} />
+      <div style={{ position: "absolute", left: pct(BREAK_EVEN, max), top: 13, transform: "translateX(-50%)", fontSize: 10, color: C.inkFaint, whiteSpace: "nowrap" }}>{BREAK_EVEN}× pays</div>
+      {value != null && <div style={{ position: "absolute", left: pct(value, max), top: -4, width: 16, height: 16, marginLeft: -8, borderRadius: 8, background: value >= BREAK_EVEN ? C.green : value >= 1 ? C.amber : C.red, border: `2.5px solid ${C.surface}`, boxShadow: "0 1px 4px rgba(0,0,0,.25)" }} />}
+    </div>
+  );
+}
+
+// The last two weeks of ad spend, one bar a day.
+function Spark({ rows }) {
+  const max = Math.max(1, ...rows.map(r => r.spend));
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 26, marginTop: 10 }}>
+      {rows.map(r => <div key={r.k} title={`${fmt(r.k)}: ${usd2(r.spend)}`} style={{ flex: 1, height: r.spend > 0 ? `${Math.max(12, r.spend / max * 100)}%` : 3, background: r.spend > 0 ? ETSYADS : C.border, borderRadius: 2 }} />)}
+    </div>
+  );
+}
+
+/* Day by day: ad spend as bars against Etsy's budget (step line) and the plan's,
+   with whole-shop sales (7-day average) on the right scale, and the restart marked. */
+function DailyChart({ rows, start, planBudget }) {
+  const [hover, setHover] = useState(null);
+  const W = 1000, H = 230, PL = 42, PR = 50, PT = 18, PB = 24, CW = W - PL - PR, CH = H - PT - PB, n = rows.length;
+  const aMax = niceMax(Math.max(planBudget, ...rows.map(r => Math.max(r.spend, r.budget || 0))) * 1.08);
+  const avg = rows.map((_, i) => { const w = rows.slice(Math.max(0, i - 6), i + 1); return w.reduce((s, d) => s + d.sales, 0) / w.length; });
+  const sMax = niceMax(Math.max(1, ...avg) * 1.1);
+  const slot = CW / Math.max(1, n), bw = Math.max(2, slot * 0.58);
+  const x = i => PL + i * slot + slot / 2, yA = v => PT + CH * (1 - v / aMax), yS = v => PT + CH * (1 - v / sMax);
+  const sales = avg.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${yS(v).toFixed(1)}`).join("");
+  let bud = "", run = false;
+  rows.forEach((r, i) => {
+    if (r.budget == null) { run = false; return; }
+    const y = yA(r.budget).toFixed(1), x1 = (PL + (i + 1) * slot).toFixed(1);
+    bud += run ? `V${y}H${x1}` : `M${(PL + i * slot).toFixed(1)},${y}H${x1}`; run = true;
+  });
+  const si = start ? rows.findIndex(r => r.k >= start) : -1, every = Math.max(1, Math.ceil(n / 8));
+  const h = hover != null ? rows[hover] : null;
+  const key = (el, label) => <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>{el}{label}</span>;
+  return (
+    <div style={{ position: "relative" }}>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5, color: C.inkMid, marginBottom: 6 }}>
+        {key(<i style={{ width: 10, height: 10, borderRadius: 2, background: ETSYADS }} />, "Ad spend a day")}
+        {key(<i style={{ width: 14, borderTop: `2px dashed ${C.ink}` }} />, "Etsy's daily budget")}
+        {key(<i style={{ width: 14, borderTop: `2px dotted ${C.gold}` }} />, `Plan ${usd(planBudget)}/day`)}
+        {key(<i style={{ width: 14, height: 2.5, background: SALES }} />, "Shop sales a day, 7-day average (right)")}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", touchAction: "pan-y" }}
+        onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); const i = Math.floor(((e.clientX - r.left) / r.width * W - PL) / slot); setHover(i >= 0 && i < n ? i : null); }}
+        onPointerLeave={() => setHover(null)}>
+        {[0.25, 0.5, 0.75, 1].map(f => (
+          <g key={f}>
+            <line x1={PL} x2={W - PR} y1={yA(f * aMax)} y2={yA(f * aMax)} stroke={C.border} />
+            <text x={PL - 6} y={yA(f * aMax) + 4} textAnchor="end" fontSize={11} fill={ETSYADS}>${Math.round(f * aMax)}</text>
+            <text x={W - PR + 6} y={yS(f * sMax) + 4} fontSize={11} fill={SALES}>${Math.round(f * sMax)}</text>
+          </g>
+        ))}
+        {si > 0 && <rect x={PL + si * slot} y={PT} width={CW - si * slot} height={CH} fill={C.greenBg} opacity={.45} />}
+        {hover != null && <rect x={PL + hover * slot} y={PT} width={slot} height={CH} fill={C.card} />}
+        {rows.map((r, i) => r.spend > 0 && <rect key={r.k} x={x(i) - bw / 2} y={yA(r.spend)} width={bw} height={yA(0) - yA(r.spend)} fill={ETSYADS} opacity={hover === i ? 1 : .8} rx={1.5} />)}
+        <line x1={PL} x2={W - PR} y1={yA(planBudget)} y2={yA(planBudget)} stroke={C.gold} strokeWidth={2} strokeDasharray="2 4" />
+        {bud && <path d={bud} fill="none" stroke={C.ink} strokeWidth={1.6} strokeDasharray="6 4" />}
+        <path d={sales} fill="none" stroke={SALES} strokeWidth={2.5} strokeLinejoin="round" />
+        {si > 0 && <g><line x1={PL + si * slot} x2={PL + si * slot} y1={PT - 4} y2={PT + CH} stroke={C.green} strokeWidth={1.5} /><text x={PL + si * slot + 5} y={PT + 6} fontSize={11} fontWeight={800} fill={C.green}>Restart · {fmt(rows[si].k)}</text></g>}
+        {rows.map((r, i) => i % every === 0 && <text key={r.k} x={x(i)} y={H - 7} textAnchor="middle" fontSize={11} fill={C.inkFaint}>{fmt(r.k)}</text>)}
+      </svg>
+      {h && (
+        <div style={{ position: "absolute", top: 30, left: `${Math.min(68, Math.max(2, (x(hover) / W) * 100 - 12))}%`, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, padding: "8px 10px", fontSize: 12, boxShadow: "0 4px 14px rgba(0,0,0,.08)", pointerEvents: "none", minWidth: 180 }}>
+          <div style={{ fontWeight: 800, color: C.ink, marginBottom: 3 }}>{new Date(h.k + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</div>
+          <div style={{ color: ETSYADS }}>Ad spend <b>{usd2(h.spend)}</b>{h.budget != null ? ` of ${usd2(h.budget)}` : ""}</div>
+          {h.clicks != null && <div style={{ color: C.inkMid }}>{h.clicks} clicks · {h.adOrders} ad orders · {usd(h.adRev)}</div>}
+          <div style={{ color: SALES }}>Shop <b>{usd(h.sales)}</b> · {h.orders} order{h.orders === 1 ? "" : "s"}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A labelled horizontal bar on a shared scale.
+function Bar({ value, max, color, height = 8 }) {
+  return <div style={{ height, background: C.card, borderRadius: height / 2, overflow: "hidden" }}><div style={{ width: pct(value, max), height: "100%", background: color, borderRadius: height / 2 }} /></div>;
+}
+
 export default function AdsTracker({ listings = [] }) {
   const [plan, setPlan] = useState(null), [table, setTable] = useState(null), [daily, setDaily] = useState(null), [hist, setHist] = useState(null);
   const [busy, setBusy] = useState(""), [msg, setMsg] = useState(null);
-  const [show, setShow] = useState("on"), [page, setPage] = useState(0);
-  const shotRef = useRef(null), csvRef = useRef(null);
+  const [show, setShow] = useState("on"), [page, setPage] = useState(0), [diagF, setDiagF] = useState(null), [how, setHow] = useState(false);
+  const shotRef = useRef(null), csvRef = useRef(null), tableRef = useRef(null), feedRef = useRef(null);
 
   useEffect(() => {
     loadK(PLAN_KEY).then(v => setPlan(v && v.items ? v : { items: [], history: [] })).catch(() => setPlan({ items: [], history: [] }));
@@ -142,8 +252,9 @@ export default function AdsTracker({ listings = [] }) {
         if (quiet) { restart = keys[i + 1]; break; }
       }
     }
-    const start = plan.startDate || restart;
     const off = !lastOn || daysAgo(Date.parse(lastOn + "T12:00:00")) > 2;
+    // While the ads are off, the last run is over: "since the restart" waits for the next one.
+    const start = plan.startDate || (off ? null : restart);
     const budget = [...keys].reverse().map(k => daily[k]?.budget).find(b => b > 0) || null;
     const planBudget = plan.budget || 25;
     const want = Math.round(planBudget * 2.5);
@@ -155,6 +266,9 @@ export default function AdsTracker({ listings = [] }) {
     const sum = (a, f) => a.reduce((s, d) => s + (f(d) || 0), 0);
     const cmp = since.length >= 4 && before.length >= 7 ? compare(before.map(d => d.sales), since.map(d => d.sales)) : null;
     const hasEtsy = since.some(d => d.clicks != null);
+    // The chart: four weeks before the restart through yesterday (or the last eight weeks).
+    const chartFrom = start ? dayKey(Date.parse(start + "T12:00:00") - 28 * DAY) : dayKey(Date.now() - 56 * DAY);
+    const chart = keys.filter(k => k >= chartFrom).map(rowOf);
 
     // The listings table from the screenshots, matched to the plan.
     const cands = [...plan.items.map(i => ({ id: i.id, n: norm(i.title) })), ...Object.entries(erp).map(([id, e]) => ({ id, n: norm(e.title) }))];
@@ -179,13 +293,13 @@ export default function AdsTracker({ listings = [] }) {
       if (on && s && s.orders > 0 && roas != null) note = roas >= BREAK_EVEN ? `Working: ${roas.toFixed(1)}× back` : `${roas.toFixed(1)}× back, under ${BREAK_EVEN}×`;
       else if (on && s) note = `Learning: ${s.clicks} clicks`;
       const promote = i.group === "test" && s && s.orders >= 1 && roas >= BREAK_EVEN;
-      return { ...i, img: i.img || erp[i.id]?.img, state: erp[i.id]?.state, s, on, sold, roas, act, tone, note, promote, demote: i.group === "test" && act?.startsWith("Turn off:") && s?.clicks >= CUT_CLICKS, should: shouldOn.has(i.id) };
+      return { ...i, img: i.img || erp[i.id]?.img, state: erp[i.id]?.state, sale: forSale(i.id), s, on, sold, roas, act, tone, note, promote, demote: i.group === "test" && act?.startsWith("Turn off:") && s?.clicks >= CUT_CLICKS, should: shouldOn.has(i.id) };
     });
     // Listings with ads on that aren't in the plan at all.
     const planIds = new Set(plan.items.map(i => i.id));
     const strays = Object.entries(shot).filter(([id, r]) => r.on && !planIds.has(id)).map(([id, r]) => ({ id, ...r, state: erp[id]?.state }));
     const onCount = items.filter(i => i.on).length, followed = items.filter(i => i.should && i.on).length;
-    return { start, restart, off, lastOn, budget, planBudget, want, since, before, cmp, hasEtsy, items, strays, onCount, followed,
+    return { start, restart, off, lastOn, budget, planBudget, want, since, before, chart, cmp, hasEtsy, items, strays, onCount, followed,
       spend: sum(since, d => d.spend), adRev: sum(since, d => d.adRev), adOrders: sum(since, d => d.adOrders), clicks: sum(since, d => d.clicks),
       salesDay: since.length ? sum(since, d => d.sales) / since.length : 0, salesDayBefore: before.length ? sum(before, d => d.sales) / before.length : 0,
       tableAge: table.at ? daysAgo(table.at) : null, csvAge: Object.keys(daily).length ? daysAgo(Date.parse(Object.keys(daily).sort().pop() + "T12:00:00")) : null };
@@ -234,181 +348,323 @@ export default function AdsTracker({ listings = [] }) {
     work: t.items.filter(i => i.diag?.length).sort((a, b) => (b.past?.spend || 0) - (a.past?.spend || 0)),
     all: t.items,
   };
-  const list = lists[show], per = 15, pages = Math.max(1, Math.ceil(list.length / per)), pg = Math.min(page, pages - 1);
+  const sum = (a, f) => a.reduce((s, x) => s + (f(x) || 0), 0);
+  const list = show === "work" && diagF ? lists.work.filter(i => i.diag.some(d => d.k === diagF)) : lists[show];
+  const per = 15, pages = Math.max(1, Math.ceil(list.length / per)), pg = Math.min(page, pages - 1);
+  const go = k => { setShow(k); setPage(0); setDiagF(null); tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); };
   const pill = (k, label) => (
-    <button key={k} onClick={() => { setShow(k); setPage(0); }} style={{ border: `1.5px solid ${show === k ? C.ink : C.border}`, background: show === k ? C.ink : C.surface, color: show === k ? C.surface : C.inkMid, borderRadius: 10, padding: "6px 12px", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{label} · {lists[k].length}</button>
+    <button key={k} onClick={() => { setShow(k); setPage(0); setDiagF(null); }} style={{ border: `1.5px solid ${show === k ? C.ink : C.border}`, background: show === k ? C.ink : C.surface, color: show === k ? C.surface : C.inkMid, borderRadius: 10, padding: "6px 12px", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{label} · {lists[k].length}</button>
   );
-  const btn = { border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: "5px 10px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", color: C.ink };
+  const btn = { border: `1px solid ${C.border}`, background: C.surface, borderRadius: 8, padding: "5px 10px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", color: C.ink, textDecoration: "none", whiteSpace: "nowrap" };
+  const dark = { ...btn, background: C.ink, color: C.surface, border: "none", padding: "7px 12px" };
   const th = { color: C.inkFaint, fontSize: 10.5, textTransform: "uppercase", letterSpacing: .6, textAlign: "right", fontWeight: 800, padding: "0 0 6px 8px", whiteSpace: "nowrap" };
   const td = { padding: "7px 0 7px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", borderTop: `1px solid ${C.border}`, verticalAlign: "middle" };
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  // A title's name part: "Clear Quartz Sphere: …" → "Clear Quartz Sphere", skipping a leading size like "35–40mm".
+  const short = s => { const parts = s.split(/: | \| | [–—-] |, /).map(x => x.trim()); return (parts.find(x => /[a-z]{4,}/i.test(x.replace(/\d+\s*(mm|cm|g|kg|in|inch)\b/gi, ""))) || parts[0]).slice(0, 48); };
 
-  // Today's update, in plain words.
-  const upd = [];
-  if (t.off) upd.push({ tone: C.red, text: `Etsy Ads aren't spending${t.lastOn ? `: nothing charged since ${fmt(t.lastOn)}` : ""}. Check Etsy Ads: the budget is set and the listings below marked "Turn on" are switched on.` });
-  else if (t.start) upd.push({ tone: C.green, text: `Ads back on since ${fmt(t.start)} (${t.since.length} day${t.since.length === 1 ? "" : "s"}): ${usd2(t.spend)} spent, ${usd2(t.spend / Math.max(1, t.since.length))}/day${t.budget ? ` against a ${usd2(t.budget)}/day budget` : ""}.` });
-  if (t.hasEtsy && t.spend > 0) upd.push({ tone: t.adRev / t.spend >= BREAK_EVEN ? C.green : C.amber, text: `Etsy counts ${t.adOrders} order${t.adOrders === 1 ? "" : "s"} and ${usd(t.adRev)} from ${t.clicks} ad clicks: ${(t.adRev / t.spend).toFixed(1)}× the spend (break-even is ${BREAK_EVEN}×).` });
-  if (t.since.length) upd.push({ tone: t.salesDay >= t.salesDayBefore ? C.green : C.amber, text: `Whole-shop sales ${usd(t.salesDay)}/day since the restart, against ${usd(t.salesDayBefore)}/day in the four weeks before${t.cmp ? ` (the gap could really be ${usd(t.cmp.lo)} to ${usd(t.cmp.hi)} a day${t.since.length < 14 ? "; firmer after two weeks" : ""})` : ""}.` });
+  // What to change in Etsy Ads now, most costly first.
+  const turnOn = t.items.filter(i => /^(Turn on|Switch on)/.test(i.act || "")).length;
+  const turnOff = t.items.filter(i => i.act?.startsWith("Turn off")).length;
+  const decided = t.items.filter(i => i.promote || i.demote).length;
+  const doNow = [];
+  if (t.budget && Math.abs(t.budget - t.planBudget) >= 1) doNow.push({ tone: C.red, head: `Set the daily budget to ${usd2(t.planBudget)}`, sub: `Etsy Ads has it at ${usd2(t.budget)}. Etsy Ads → Settings → Daily budget.`, href: ADS_URL });
+  if (turnOn) doNow.push({ tone: C.green, head: `Switch on ${plural(turnOn, "listing")}`, sub: t.tableAge == null ? "Tick each one in the list as you go, or add a screenshot and it ticks them itself." : "In the plan, but off in Etsy Ads.", go: "todo" });
+  if (turnOff) doNow.push({ tone: C.red, head: `Switch off ${plural(turnOff, "listing")}`, sub: "Sold out, expired, on the keep-off list, or failed its test.", go: "todo" });
+  if (t.strays.length) doNow.push({ tone: C.red, head: `Switch off ${plural(t.strays.length, "listing")} outside the plan`, sub: t.strays.slice(0, 3).map(s => short(s.title)).join(" · ") + (t.strays.length > 3 ? " …" : "") });
+  if (decided) doNow.push({ tone: C.ink, head: `${plural(decided, "test")} decided`, sub: "Move each to winners or keep-off.", go: "todo" });
+  if (t.tableAge == null || t.tableAge >= 4) doNow.push({ tone: C.amber, head: t.tableAge == null ? "Add a screenshot of Etsy Ads → Listings" : `Refresh the listings screenshot (${t.tableAge} days old)`, sub: "So it knows which listings are on and how each one is doing.", feed: true });
+  if (t.csvAge == null || t.csvAge >= 3) doNow.push({ tone: C.amber, head: "Download a fresh Etsy Ads stats file", sub: t.csvAge == null ? "For the budget, clicks and Etsy's own ad sales." : `The one here stops ${t.csvAge} days ago.`, feed: true });
+
+  // How it's going, in a few lines.
+  const news = [];
+  const roasNow = t.hasEtsy && t.spend > 0 ? t.adRev / t.spend : null;
+  if (t.off) news.push({ tone: C.red, text: <>Ads <b>aren't spending</b>{t.lastOn ? `: nothing charged since ${fmt(t.lastOn)}` : ""}.</> });
+  else if (t.start) news.push({ tone: C.green, text: <>Back on since <b>{fmt(t.start)}</b>: {usd2(t.spend)} over {plural(t.since.length, "day")}, {usd2(t.spend / Math.max(1, t.since.length))}/day.</> });
+  if (roasNow != null) news.push({ tone: roasNow >= BREAK_EVEN ? C.green : C.amber, text: <>Etsy counts <b>{plural(t.adOrders, "ad order")}</b>, {usd(t.adRev)} from {t.clicks} clicks: <b>{roasNow.toFixed(1)}×</b>.</> });
+  if (t.since.length) news.push({ tone: t.salesDay >= t.salesDayBefore ? C.green : C.amber, text: <>Shop sales <b>{usd(t.salesDay)}/day</b>, against {usd(t.salesDayBefore)}/day before{t.cmp && t.since.length < 14 ? " (firmer after two weeks)" : ""}.</> });
   const sold = t.items.filter(i => i.sold && i.group !== "off");
-  if (sold.length) upd.push({ tone: C.green, text: `Sold since the restart from the plan: ${sold.slice(0, 5).map(i => `${i.title.split(/[:|–—-]/)[0].trim()} (${usd(i.sold.v)})`).join(", ")}${sold.length > 5 ? ` and ${sold.length - 5} more` : ""}.` });
-  if (t.tableAge != null) upd.push({ tone: C.inkMid, text: `${t.followed} of the ${t.want} listings the plan wants on are on; ${t.onCount} plan listings on in all.${t.strays.length ? ` ${t.strays.length} listing${t.strays.length > 1 ? "s" : ""} outside the plan ${t.strays.length > 1 ? "have" : "has"} ads on.` : ""}` });
-  if (t.budget && Math.abs(t.budget - t.planBudget) >= 1) upd.push({ tone: C.red, text: `Etsy Ads' daily budget is ${usd2(t.budget)}; the plan is ${usd2(t.planBudget)}. Set it in Etsy Ads → Settings.` });
-  const todo = lists.todo.length;
-  if (todo) upd.push({ tone: C.ink, text: `${todo} thing${todo > 1 ? "s" : ""} to do in Etsy Ads: see "To do" below.` });
-  if (t.tableAge == null) upd.push({ tone: C.amber, text: "No screenshot of the Etsy Ads listings table yet, so which listings are on, and how each is doing, isn't known. Add one below." });
-  else if (t.tableAge >= 4) upd.push({ tone: C.amber, text: `The listings screenshot is ${t.tableAge} days old. A fresh one keeps the calls right.` });
-  if (t.csvAge == null || t.csvAge >= 3) upd.push({ tone: C.amber, text: t.csvAge == null ? "Add the Etsy Ads stats file for the budget, clicks and Etsy's own ad sales." : `The Etsy Ads stats file stops ${t.csvAge} days ago. Download a fresh one.` });
+  if (sold.length) news.push({ tone: C.green, text: <>Sold from the plan: {sold.slice(0, 3).map(i => `${short(i.title)} (${usd(i.sold.v)})`).join(", ")}{sold.length > 3 ? ` +${sold.length - 3}` : ""}.</> });
+  if (!news.length) news.push({ tone: C.inkMid, text: "Nothing new yet." });
+
+  // The plan's shape, each group's two-year ad record, and why listings don't sell.
+  const comp = [
+    ["Winners, on", C.green, t.items.filter(i => i.should && i.group === "winner").length],
+    ["Tests, on", C.blue, t.items.filter(i => i.should && i.group === "test").length],
+    ["Tests, waiting", C.blueBg, t.items.filter(i => i.group === "test" && !i.should && i.sale).length],
+    ["Not for sale", C.amber, t.items.filter(i => i.group !== "off" && !i.sale).length],
+    ["Keep off", C.red, t.items.filter(i => i.group === "off").length],
+  ].filter(c => c[2]);
+  const compN = sum(comp, c => c[2]);
+  const rec = ["winner", "off"].map(g => { const a = plan.items.filter(i => i.group === g); return { g, n: a.length, sp: sum(a, i => i.past?.spend), rv: sum(a, i => i.past?.rev) }; });
+  const recMax = Math.max(1, ...rec.map(r => Math.max(r.sp, r.rv)));
+  const reasons = Object.keys(FIX).map(k => { const a = lists.work.filter(i => i.diag.some(d => d.k === k)); return { k, n: a.length, sp: sum(a, i => i.past?.spend), rv: sum(a, i => i.past?.rev) }; }).filter(r => r.n);
+  const rMax = Math.max(1, ...reasons.map(r => r.n));
+  const best = t.items.filter(i => i.group === "winner" && i.past?.spend > 0).sort((a, b) => b.past.rev - a.past.rev).slice(0, 8);
+  const bestMax = Math.max(1, ...best.map(i => i.past.rev));
+  const win = rec[0], winRoas = win.sp ? win.rv / win.sp : null;
+
+  const tile = (i) => ({ padding: mob ? "14px" : "16px 18px", borderLeft: !mob && i ? `1px solid ${C.border}` : "none", borderTop: mob && i > 1 ? `1px solid ${C.border}` : "none", minWidth: 0 });
+  const bMax = Math.max(t.budget || 0, t.planBudget) * 1.15;
+  const fresh = (label, age, none) => {
+    const tone = age == null ? C.red : age >= 4 ? C.amber : C.green;
+    return <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: C.ink, background: C.card, borderRadius: 999, padding: "4px 10px", whiteSpace: "nowrap" }}><Dot color={tone} />{label} · <span style={{ color: C.inkMid }}>{age == null ? none : age === 0 ? "today" : `${age} d ago`}</span></span>;
+  };
+  const two = { display: "grid", gridTemplateColumns: mob ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))", gap: 16, alignItems: "start" };
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
-        <Kpi label="Ads" value={t.off ? "Off" : "Running"} sub={t.lastOn ? `last charge ${fmt(t.lastOn)}` : "no charges found"} tone={t.off ? C.redBg : C.greenBg} />
-        <Kpi label="Budget" value={t.budget ? `${usd2(t.budget)}/day` : "—"} sub={t.budget ? `from Etsy's stats · plan ${usd2(t.planBudget)}` : `plan ${usd2(t.planBudget)}/day · add the stats file`} />
-        <Kpi label="Since the restart" value={t.start ? usd(t.spend) : "—"} sub={t.start ? `spent · ${t.hasEtsy ? `${usd(t.adRev)} back by Etsy's count` : "Etsy's ad sales come from the stats file"}` : "waiting for ads to restart"} />
-        <Kpi label="Plan followed" value={t.tableAge != null ? `${t.followed}/${t.want}` : "—"} sub={t.tableAge != null ? `of the listings it wants on are on` : "needs a screenshot of Etsy Ads"} />
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
+      {/* The four numbers that matter, each with its picture. */}
+      <div style={{ ...card, padding: 0, display: "grid", gridTemplateColumns: mob ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", overflow: "hidden" }}>
+        <div style={{ ...tile(0), background: t.off ? C.redBg : C.greenBg }}>
+          <div style={eyebrow}>Etsy Ads</div>
+          <div style={{ ...big, color: t.off ? C.red : C.green, display: "flex", alignItems: "center", gap: 8 }}><Dot color={t.off ? C.red : C.green} size={11} />{t.off ? "Off" : "Running"}</div>
+          <div style={small}>{t.off ? (t.lastOn ? `last charge ${fmt(t.lastOn)}` : "no charges found") : t.start ? `since ${fmt(t.start)} · ${usd(t.spend)} spent` : `last charge ${fmt(t.lastOn)}`}</div>
+          <Spark rows={t.chart.slice(-14)} />
+        </div>
+        <div style={tile(1)}>
+          <div style={eyebrow}>Daily budget</div>
+          <div style={big}>{t.budget ? usd2(t.budget) : "—"}<span style={{ fontSize: 15, color: C.inkFaint }}> / {usd(t.planBudget)}</span></div>
+          <div style={small}>{t.budget ? (Math.abs(t.budget - t.planBudget) < 1 ? "set to the plan" : "in Etsy Ads, against the plan") : "add the stats file to see it"}</div>
+          <div style={{ position: "relative", height: 8, background: C.card, borderRadius: 4, marginTop: 14 }}>
+            <div style={{ width: pct(t.budget || 0, bMax), height: "100%", background: t.budget && Math.abs(t.budget - t.planBudget) < 1 ? C.green : C.red, borderRadius: 4 }} />
+            <div title={`Plan ${usd2(t.planBudget)}`} style={{ position: "absolute", left: pct(t.planBudget, bMax), top: -4, height: 16, borderLeft: `2px solid ${C.ink}` }} />
+          </div>
+        </div>
+        <div style={tile(2)}>
+          <div style={eyebrow}>Plan listings on</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
+            <Ring value={t.followed} max={t.want} color={t.followed >= t.want * .9 ? C.green : t.followed ? C.amber : C.red} />
+            <div><div style={{ ...big, marginTop: 0 }}>{t.followed}<span style={{ fontSize: 15, color: C.inkFaint }}> / {t.want}</span></div><div style={small}>{t.tableAge != null ? `from your screenshot${t.tableAge ? `, ${t.tableAge} d old` : ""}` : "ticked by hand"}</div></div>
+          </div>
+        </div>
+        <div style={tile(3)}>
+          <div style={eyebrow}>{roasNow != null ? "Back per $1, since restart" : "Winners' record, per $1"}</div>
+          <div style={{ ...big, color: (roasNow ?? winRoas) >= BREAK_EVEN ? C.green : C.amber }}>{(roasNow ?? winRoas) != null ? `${(roasNow ?? winRoas).toFixed(1)}×` : "—"}</div>
+          <div style={small}>{roasNow != null ? `${usd(t.adRev)} from ${usd(t.spend)}` : `${usd(win.rv)} from ${usd(win.sp)} over two years`}</div>
+          <RoasMeter value={roasNow ?? winRoas} />
+        </div>
       </div>
 
-      <Section title="Today's update" sub={`Read by itself from Etsy's charges and orders${t.tableAge != null ? `, plus your Etsy Ads screenshot from ${t.tableAge === 0 ? "today" : `${t.tableAge} day${t.tableAge > 1 ? "s" : ""} ago`}` : ""}.`}
-        right={<a href={ADS_URL} target="_blank" rel="noreferrer" style={{ ...btn, textDecoration: "none" }}>Open Etsy Ads ↗</a>}>
-        <div style={{ display: "grid", gap: 7 }}>
-          {upd.map((u, i) => <div key={i} style={{ fontSize: 13, color: C.ink, lineHeight: 1.5, borderLeft: `3px solid ${u.tone}`, paddingLeft: 10 }}>{u.text}</div>)}
-        </div>
-      </Section>
+      {/* What to do, and how it's going. */}
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "minmax(0, 1fr)" : "minmax(0, 1.25fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+        <Section title="Do now" sub={doNow.length ? `${plural(doNow.length, "thing")} to change, most costly first.` : null} right={<a href={ADS_URL} target="_blank" rel="noreferrer" style={btn}>Open Etsy Ads ↗</a>}>
+          {!doNow.length ? <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 13.5, fontWeight: 700, color: C.green }}><span style={{ fontSize: 22 }}>✓</span>All set. Nothing to change in Etsy Ads today.</div> : (
+            <div style={{ display: "grid", gap: 2 }}>
+              {doNow.map((d, n) => (
+                <div key={n} style={{ display: "flex", gap: 12, alignItems: "center", padding: "9px 0", borderTop: n ? `1px solid ${C.border}` : "none" }}>
+                  <span style={{ width: 26, height: 26, borderRadius: 13, background: d.tone, color: C.surface, fontSize: 12.5, fontWeight: 800, display: "grid", placeItems: "center", flexShrink: 0 }}>{n + 1}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>{d.head}</div>
+                    <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 1 }}>{d.sub}</div>
+                  </div>
+                  {d.go && <button onClick={() => go(d.go)} style={btn}>Show →</button>}
+                  {d.feed && <button onClick={() => feedRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })} style={btn}>Add ↓</button>}
+                  {d.href && <a href={d.href} target="_blank" rel="noreferrer" style={btn}>Etsy Ads ↗</a>}
+                </div>))}
+            </div>
+          )}
+        </Section>
+        <Section title="How it's going">
+          <div style={{ display: "grid", gap: 10 }}>
+            {news.map((u, i) => <div key={i} style={{ display: "flex", gap: 9, alignItems: "baseline", fontSize: 13, color: C.ink, lineHeight: 1.45 }}><Dot color={u.tone} /><span>{u.text}</span></div>)}
+          </div>
+        </Section>
+      </div>
 
-      <Section title="Update from Etsy Ads" sub="What Etsy's API can't give: the budget, clicks, which listings have ads on, and each listing's ad results. Two minutes, every few days.">
-        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12 }}>
-          <div style={{ background: C.card, borderRadius: 12, padding: 14 }}>
-            <div style={eyebrow}>1 · Listings table (screenshots)</div>
-            <div style={{ fontSize: 12.5, color: C.inkMid, margin: "6px 0 10px", lineHeight: 1.5 }}>In Etsy Ads, set the dates to start on the restart day{t.start ? ` (${fmt(t.start)})` : ""}, sort by <b>Spend</b>, and screenshot the first few pages. Paste them here (⌘V) or choose the files.</div>
-            <input ref={shotRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => { onShots(e.target.files); e.target.value = ""; }} />
-            <button onClick={() => shotRef.current?.click()} disabled={!!busy} style={{ ...btn, background: C.ink, color: C.surface, border: "none", padding: "8px 14px" }}>Add screenshots</button>
-            {t.tableAge != null && <span style={{ fontSize: 11.5, color: C.inkFaint, marginLeft: 10 }}>{Object.keys(table.rows).length} listings read · {t.tableAge === 0 ? "today" : `${t.tableAge} d ago`}{table.range ? ` · ${table.range}` : ""}</span>}
+      {/* Data from Etsy Ads that the API can't give. */}
+      <div ref={feedRef} style={{ ...card, padding: mob ? 14 : "12px 18px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ ...eyebrow, marginRight: 4 }}>Data</div>
+        {fresh("Charges & orders", 0)}
+        {fresh("Stats file", t.csvAge, "none")}
+        {fresh(`Listings screenshot${t.tableAge != null ? ` (${Object.keys(table.rows).length})` : ""}`, t.tableAge, "none")}
+        <span style={{ flex: 1 }} />
+        <input ref={shotRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={e => { onShots(e.target.files); e.target.value = ""; }} />
+        <input ref={csvRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={e => { onCsv(e.target.files?.[0]); e.target.value = ""; }} />
+        <button onClick={() => shotRef.current?.click()} disabled={!!busy} style={dark} title="Or paste them anywhere on this page (⌘V)">+ Screenshots</button>
+        <button onClick={() => csvRef.current?.click()} disabled={!!busy} style={dark}>+ Stats file</button>
+        <button onClick={() => setHow(!how)} style={btn}>{how ? "Close" : "How?"}</button>
+        {(busy || msg) && <div style={{ width: "100%", fontSize: 12.5, fontWeight: 700, color: busy ? C.inkMid : msg.ok ? C.green : C.red }}>{busy || msg.text}</div>}
+        {how && (
+          <div style={{ width: "100%", display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 12, fontSize: 12.5, color: C.inkMid, lineHeight: 1.5, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+            <div><b style={{ color: C.ink }}>Screenshots.</b> In Etsy Ads → Listings, set the dates to start on the restart day{t.start ? ` (${fmt(t.start)})` : ""}, sort by Spend, and screenshot the first few pages. Paste here with ⌘V.</div>
+            <div><b style={{ color: C.ink }}>Stats file.</b> In Etsy Ads, pick the last few weeks and press the download icon (top right). Add the .csv it saves.</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <label>Plan budget $<input value={plan.budget ?? 25} onChange={e => savePlan({ ...plan, budget: +e.target.value.replace(/[^\d.]/g, "") || 0 })} style={{ width: 54, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 7px", fontSize: 12.5, background: C.surface, color: C.ink }} />/day → {t.want} listings</label>
+              <label>Restart day <input type="date" value={plan.startDate || t.restart || ""} onChange={e => savePlan({ ...plan, startDate: e.target.value || null })} style={{ border: `1px solid ${C.border}`, borderRadius: 7, padding: "3px 6px", fontSize: 12.5, background: C.surface, color: C.ink }} />{plan.startDate && <button onClick={() => savePlan({ ...plan, startDate: null })} style={{ ...btn, marginLeft: 6 }}>Auto</button>}</label>
+            </div>
           </div>
-          <div style={{ background: C.card, borderRadius: 12, padding: 14 }}>
-            <div style={eyebrow}>2 · Daily stats (file)</div>
-            <div style={{ fontSize: 12.5, color: C.inkMid, margin: "6px 0 10px", lineHeight: 1.5 }}>In Etsy Ads, pick a range that covers the last few weeks and press the download icon (top right). Choose the .csv it saves.</div>
-            <input ref={csvRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={e => { onCsv(e.target.files?.[0]); e.target.value = ""; }} />
-            <button onClick={() => csvRef.current?.click()} disabled={!!busy} style={{ ...btn, background: C.ink, color: C.surface, border: "none", padding: "8px 14px" }}>Add stats file</button>
-            {t.csvAge != null && <span style={{ fontSize: 11.5, color: C.inkFaint, marginLeft: 10 }}>up to {t.csvAge === 0 ? "today" : `${t.csvAge} d ago`}</span>}
-          </div>
-        </div>
-        {busy && <div style={{ marginTop: 10, fontSize: 12.5, color: C.inkMid }}>{busy}</div>}
-        {msg && <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: msg.ok ? C.green : C.red }}>{msg.text}</div>}
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginTop: 12, fontSize: 12, color: C.inkMid }}>
-          <label>Planned budget $<input value={plan.budget ?? 25} onChange={e => savePlan({ ...plan, budget: +e.target.value.replace(/[^\d.]/g, "") || 0 })} style={{ width: 54, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 7px", fontSize: 12.5, background: C.surface, color: C.ink }} />/day → about {t.want} listings on</label>
-          <label>Restart day <input type="date" value={plan.startDate || t.restart || ""} onChange={e => savePlan({ ...plan, startDate: e.target.value || null })} style={{ border: `1px solid ${C.border}`, borderRadius: 7, padding: "3px 6px", fontSize: 12.5, background: C.surface, color: C.ink }} /></label>
-          {plan.startDate && <button onClick={() => savePlan({ ...plan, startDate: null })} style={btn}>Find it by itself</button>}
-        </div>
-      </Section>
+        )}
+      </div>
 
-      <Section title="The plan, listing by listing" sub={`Which listings to advertise, and how each is doing. Grey numbers are the last two years of ads; black ones are since the restart. A test with ${CUT_CLICKS} clicks and no sale gets switched off; one that earns ${BREAK_EVEN}× or more moves up to winners.`}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-          {pill("on", "Should be on")}{pill("todo", "To do")}{pill("work", "Needs work")}{pill("off", "Keep off")}{pill("all", "All")}
-        </div>
-        {show === "on" && (
-          <div style={{ fontSize: 12.5, color: C.ink, background: C.card, borderRadius: 10, padding: "10px 12px", marginBottom: 12, lineHeight: 1.5 }}>
-            At {usd2(t.planBudget)}/day, these <b>{t.want} listings</b> are the ones to advertise: the {t.items.filter(i => i.should && i.group === "winner").length} ad winners first, then the best untested pieces. In <a href={ADS_URL} target="_blank" rel="noreferrer" style={{ color: C.ink }}>Etsy Ads</a> → Listings, switch these on and everything else off, then tick each one here (☐ → ✓). A screenshot of Etsy Ads later fills the ticks in by itself.
-          </div>
-        )}
-        {show === "work" && (
-          <div style={{ display: "grid", gap: 6, marginBottom: 12, background: C.card, borderRadius: 10, padding: "10px 12px" }}>
-            {Object.entries(FIX).map(([k, f]) => {
-              const n = lists.work.filter(i => i.diag.some(d => d.k === k)).length;
-              return n ? <div key={k} style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}><Tag color={DIAG[k]} bg={C.surface}>{k} · {n}</Tag> {f}</div> : null;
-            })}
-          </div>
-        )}
-        {!list.length ? <div style={{ fontSize: 13, color: C.inkMid }}>{show === "todo" ? "Nothing to do right now." : "None."}</div> : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead><tr>{show === "on" && <th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>#</th>}<th style={{ ...th, textAlign: "left", paddingLeft: show === "on" ? 8 : 0 }}>Listing</th><th style={th}>On in Etsy?</th><th style={th} title="Since the restart (from a screenshot), else the last two years in grey">Ad clicks</th><th style={th}>Ad spend</th><th style={th}>Ad orders</th><th style={th}>Sold since restart</th><th style={{ ...th, textAlign: "left" }}>Call</th></tr></thead>
-              <tbody>{list.slice(pg * per, pg * per + per).map((i, n) => {
-                const [gl, gc, gb] = GROUPS[i.group];
-                return (
-                  <tr key={i.id}>
-                    {show === "on" && <td style={{ ...td, textAlign: "left", paddingLeft: 0, color: C.inkFaint, fontWeight: 800 }}>{pg * per + n + 1}</td>}
-                    <td style={{ ...td, textAlign: "left", paddingLeft: show === "on" ? 8 : 0 }}>
-                      <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
-                        <Thumb src={i.img} />
-                        <div style={{ minWidth: 0 }}>
-                          <a href={`https://www.etsy.com/listing/${i.id}`} target="_blank" rel="noreferrer" style={{ color: C.ink, fontWeight: 700, textDecoration: "none", display: "block", maxWidth: 330, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{i.title}</a>
-                          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 3, alignItems: "center" }}>
-                            <Tag color={gc} bg={gb}>{gl}</Tag>
-                            {i.state && i.state !== "active" && <Tag color={C.red} bg={C.redBg}>{i.state}</Tag>}
-                            {i.diag?.map(d => <Tag key={d.k} color={DIAG[d.k] || C.inkMid} bg={C.card}>{d.k}</Tag>)}
-                            <span style={{ fontSize: 11, color: C.inkFaint }}>{i.why}</span>
-                          </div>
-                          {show === "work" && i.diag?.map(d => <div key={d.k} style={{ fontSize: 11.5, color: C.ink, lineHeight: 1.45, marginTop: 4, maxWidth: 520, whiteSpace: "normal" }}><b style={{ color: DIAG[d.k] || C.inkMid }}>{d.k}:</b> {d.text}</div>)}
-                        </div>
-                      </div>
-                    </td>
-                    <td style={td}>
-                      {/* Ticked by hand, or read from the latest Etsy Ads screenshot (then fixed). */}
-                      <button onClick={() => !i.s && markOn(i.id, !i.on)} title={i.s ? "Read from your Etsy Ads screenshot" : i.on ? "Marked on: click to undo" : "Tick once you've switched it on in Etsy Ads"}
-                        style={{ ...btn, padding: "3px 9px", cursor: i.s ? "default" : "pointer", color: i.on ? C.surface : C.inkFaint, background: i.on ? C.green : C.surface, borderColor: i.on ? C.green : C.border }}>{i.on ? "✓ On" : i.on === false ? "Off" : "☐"}</button>
-                    </td>
-                    {/* Since the restart where a screenshot covers it, else the two-year record in grey. */}
-                    <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? i.s.clicks : i.past ? i.past.clicks : "—"}</td>
-                    <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? usd2(i.s.spend) : i.past ? usd(i.past.spend) : "—"}</td>
-                    <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? `${i.s.orders}${i.s.revenue ? ` · ${usd(i.s.revenue)}` : ""}` : i.past ? `${i.past.orders}${i.past.rev ? ` · ${usd(i.past.rev)}` : ""}` : "—"}</td>
-                    <td style={td}>{i.sold ? `${i.sold.n} · ${usd(i.sold.v)}` : "—"}</td>
-                    <td style={{ ...td, textAlign: "left" }}>
-                      <div style={{ fontWeight: 800, color: i.act ? i.tone : C.inkMid }}>{i.act || i.note || (i.should ? "On the list" : "")}</div>
-                      {i.act && i.note && <div style={{ fontSize: 11, color: C.inkFaint }}>{i.note}</div>}
-                      <div style={{ display: "flex", gap: 5, marginTop: 4 }}>
-                        {i.promote && <button onClick={() => move(i.id, "winner", `Won its test: ${i.roas.toFixed(1)}× back`)} style={{ ...btn, color: C.green }}>Move to winners</button>}
-                        {i.demote && <button onClick={() => move(i.id, "off", `Failed its test: ${i.s.clicks} clicks, no sale`)} style={{ ...btn, color: C.red }}>Move to keep-off</button>}
-                      </div>
-                    </td>
-                  </tr>);
-              })}</tbody>
-            </table>
-          </div>
-        )}
-        {pages > 1 && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end", marginTop: 8, fontSize: 12, color: C.inkMid }}>
-            <button onClick={() => setPage(pg - 1)} disabled={pg === 0} style={{ ...btn, width: 30 }}>‹</button>
-            <span>Page {pg + 1} of {pages}</span>
-            <button onClick={() => setPage(pg + 1)} disabled={pg >= pages - 1} style={{ ...btn, width: 30 }}>›</button>
-          </div>
-        )}
-        {t.strays.length > 0 && (
-          <div style={{ marginTop: 14, background: C.redBg, borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.ink }}>
-            <b style={{ color: C.red }}>Ads on, but not in the plan:</b> {t.strays.slice(0, 12).map(s => `${s.title.slice(0, 50)}${s.state && s.state !== "active" ? ` (${s.state})` : ""}`).join(" · ")}{t.strays.length > 12 ? ` and ${t.strays.length - 12} more` : ""}. Switch these off unless you mean them.
-          </div>
-        )}
-      </Section>
-
-      {t.since.length > 0 && (
-        <Section title="Day by day since the restart" sub="Spend is Etsy's own figure where the stats file covers the day, else the charge on the payment ledger. Shop sales are every order, ads or not.">
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead><tr><th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>Day</th><th style={th}>Budget</th><th style={th}>Ad spend</th><th style={th}>Clicks</th><th style={th}>Etsy: ad orders · sales</th><th style={th}>Shop orders · sales</th></tr></thead>
-              <tbody>{[...t.since].reverse().map(d => (
-                <tr key={d.k}>
-                  <td style={{ ...td, textAlign: "left", paddingLeft: 0, fontWeight: 700 }}>{fmt(d.k)}</td>
-                  <td style={td}>{d.budget != null ? usd2(d.budget) : "—"}</td>
-                  <td style={{ ...td, fontWeight: 800 }}>{usd2(d.spend)}</td>
-                  <td style={td}>{d.clicks ?? "—"}</td>
-                  <td style={td}>{d.adOrders != null ? `${d.adOrders} · ${usd(d.adRev)}` : "—"}</td>
-                  <td style={td}>{d.orders} · {usd(d.sales)}</td>
-                </tr>))}</tbody>
-            </table>
-          </div>
+      {t.chart.length > 0 && (
+        <Section title={t.start ? "Spend and sales around the restart" : "Spend and sales, last eight weeks"} sub="Spend is Etsy's own figure where the stats file covers the day, else the charge on the payment ledger. Shop sales are every order, ads or not. Hover for a day.">
+          <DailyChart rows={t.chart} start={t.start} planBudget={t.planBudget} />
+          {t.since.length > 0 && (
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ fontSize: 12, fontWeight: 800, color: C.inkMid, cursor: "pointer" }}>Day-by-day numbers since the restart</summary>
+              <div style={{ overflowX: "auto", marginTop: 8 }}>
+                <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead><tr><th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>Day</th><th style={th}>Budget</th><th style={th}>Ad spend</th><th style={th}>Clicks</th><th style={th}>Etsy: ad orders · sales</th><th style={th}>Shop orders · sales</th></tr></thead>
+                  <tbody>{[...t.since].reverse().map(d => (
+                    <tr key={d.k}>
+                      <td style={{ ...td, textAlign: "left", paddingLeft: 0, fontWeight: 700 }}>{fmt(d.k)}</td>
+                      <td style={td}>{d.budget != null ? usd2(d.budget) : "—"}</td>
+                      <td style={{ ...td, fontWeight: 800 }}>{usd2(d.spend)}</td>
+                      <td style={td}>{d.clicks ?? "—"}</td>
+                      <td style={td}>{d.adOrders != null ? `${d.adOrders} · ${usd(d.adRev)}` : "—"}</td>
+                      <td style={td}>{d.orders} · {usd(d.sales)}</td>
+                    </tr>))}</tbody>
+                </table>
+              </div>
+            </details>
+          )}
         </Section>
       )}
 
-      {plan.restock?.length > 0 && (
-        <Section title="Past ad winners no longer for sale" sub="Renew the expired ones if the stock is still there; list pieces like the sold ones.">
-          <div style={{ display: "grid", gap: 6 }}>
-            {plan.restock.map((r, i) => (
-              <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 12.5, borderTop: i ? `1px solid ${C.border}` : "none", paddingTop: i ? 6 : 0 }}>
-                <Tag color={r.state === "Sold out" ? C.inkMid : C.amber} bg={r.state === "Sold out" ? C.card : C.amberBg}>{r.state}</Tag>
-                <span style={{ flex: 1, color: C.ink, fontWeight: 700 }}>{r.title}</span>
-                <span style={{ color: C.green, fontWeight: 800, whiteSpace: "nowrap" }}>{usd(r.past.rev)} from {usd(r.past.spend)}</span>
+      <div style={two}>
+        <Section title="The plan at a glance" sub={`${plan.items.length} listings sorted by two years of ad results. At ${usd(t.planBudget)}/day, the top ${t.want} get ads.`}>
+          <div style={{ display: "flex", height: 26, borderRadius: 8, overflow: "hidden", gap: 2 }}>
+            {comp.map(([l, c, n]) => <div key={l} title={`${l}: ${n}`} style={{ width: pct(n, compN), background: c, display: "grid", placeItems: "center", fontSize: 11, fontWeight: 800, color: c === C.blueBg ? C.blue : C.surface, minWidth: 0, overflow: "hidden" }}>{n / compN > .06 ? n : ""}</div>)}
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8, fontSize: 11.5, color: C.inkMid }}>
+            {comp.map(([l, c, n]) => <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Dot color={c} />{l} <b style={{ color: C.ink }}>{n}</b></span>)}
+          </div>
+          <div style={{ ...eyebrow, marginTop: 18 }}>Why it's shaped like this: two years of ads</div>
+          <div style={{ display: "grid", gap: 12, marginTop: 10 }}>
+            {rec.map(r => (
+              <div key={r.g}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12.5, marginBottom: 5 }}>
+                  <b style={{ color: C.ink }}>{r.g === "winner" ? `The ${r.n} winners` : `The ${r.n} kept off`}</b>
+                  <span style={{ fontWeight: 800, color: r.sp && r.rv / r.sp >= BREAK_EVEN ? C.green : C.red }}>{r.sp ? `${(r.rv / r.sp).toFixed(1)}× back` : ""}</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "52px 1fr 58px", gap: 8, alignItems: "center", fontSize: 11, color: C.inkMid }}>
+                  <span>spent</span><Bar value={r.sp} max={recMax} color={ETSYADS} /><span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{usd(r.sp)}</span>
+                  <span>sold</span><Bar value={r.rv} max={recMax} color={r.rv / Math.max(1, r.sp) >= BREAK_EVEN ? C.green : C.red} /><span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{usd(r.rv)}</span>
+                </div>
               </div>))}
           </div>
         </Section>
-      )}
+
+        <Section title="Why listings don't sell" sub={`${lists.work.length} listings have a reason found from their ad clicks, favourites and price. Click one to see them.`}>
+          <div style={{ display: "grid", gap: 4 }}>
+            {reasons.map(r => (
+              <button key={r.k} onClick={() => { setShow("work"); setPage(0); setDiagF(r.k); tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }}
+                style={{ textAlign: "left", background: "none", border: "none", padding: "8px 6px", margin: "0 -6px", borderRadius: 10, cursor: "pointer", color: C.ink }}
+                onMouseEnter={e => e.currentTarget.style.background = C.card} onMouseLeave={e => e.currentTarget.style.background = "none"}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", fontSize: 13 }}>
+                  <b>{r.k}</b><span style={{ fontSize: 11.5, color: C.inkMid, whiteSpace: "nowrap" }}><b style={{ color: C.ink }}>{r.n}</b> · {usd(r.sp)} ads → {usd(r.rv)}</span>
+                </div>
+                <div style={{ margin: "5px 0" }}><Bar value={r.n} max={rMax} color={DIAG[r.k] || C.inkMid} height={7} /></div>
+                <div style={{ fontSize: 11.5, color: C.inkMid, lineHeight: 1.4 }}>{FIX[r.k]}</div>
+              </button>))}
+          </div>
+        </Section>
+      </div>
+
+      <div style={two}>
+        <Section title="The winners" sub="Ad sales over two years, and what each $1 of ads brought back.">
+          <div style={{ display: "grid", gap: 9 }}>
+            {best.map(i => {
+              const r = i.past.rev / i.past.spend;
+              return (
+                <a key={i.id} href={`https://www.etsy.com/listing/${i.id}`} target="_blank" rel="noreferrer" style={{ display: "flex", gap: 10, alignItems: "center", textDecoration: "none", color: C.ink }}>
+                  <Thumb src={i.img} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12.5 }}>
+                      <span style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{short(i.title)}</span>
+                      <span style={{ fontWeight: 800, color: r >= BREAK_EVEN ? C.green : C.amber, whiteSpace: "nowrap" }}>{r.toFixed(1)}×</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                      <div style={{ flex: 1, minWidth: 30 }}><Bar value={i.past.rev} max={bestMax} color={C.green} height={6} /></div>
+                      <span style={{ fontSize: 11, color: C.inkMid, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{usd(i.past.rev)} from {usd(i.past.spend)}</span>
+                      {i.on ? <Dot color={C.green} /> : <Dot color={C.border} />}
+                    </div>
+                  </div>
+                </a>);
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 10, fontSize: 11, color: C.inkFaint }}><Dot color={C.green} />ads on <Dot color={C.border} />not on yet</div>
+        </Section>
+
+        {plan.restock?.length > 0 && (
+          <Section title="Winners to bring back" sub="Past ad winners no longer for sale. Renew the expired ones if the stock is there; list pieces like the sold ones.">
+            <div style={{ display: "grid", gap: 8 }}>
+              {plan.restock.map((r, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12.5, background: C.card, borderRadius: 10, padding: "8px 10px" }}>
+                  <Tag color={r.state === "Sold out" ? C.inkMid : C.amber} bg={r.state === "Sold out" ? C.surface : C.amberBg}>{r.state}</Tag>
+                  <span style={{ flex: 1, minWidth: 0, color: C.ink, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{short(r.title)}</span>
+                  <span style={{ color: C.green, fontWeight: 800, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{usd(r.past.rev)} <span style={{ color: C.inkFaint, fontWeight: 600 }}>from {usd(r.past.spend)}</span></span>
+                </div>))}
+            </div>
+          </Section>
+        )}
+      </div>
+
+      <div ref={tableRef} style={{ scrollMarginTop: 12 }}>
+        <Section title="Every listing in the plan" sub={`Grey numbers are the last two years of ads; black ones are since the restart. A test with ${CUT_CLICKS} clicks and no sale gets switched off; one that earns ${BREAK_EVEN}× or more moves up to winners.`}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
+            {pill("on", "Should be on")}{pill("todo", "To do")}{pill("work", "Needs work")}{pill("off", "Keep off")}{pill("all", "All")}
+            {diagF && <button onClick={() => setDiagF(null)} style={{ ...btn, color: DIAG[diagF] }}>{diagF} · {list.length} ✕</button>}
+          </div>
+          {show === "on" && <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 10 }}>In <a href={ADS_URL} target="_blank" rel="noreferrer" style={{ color: C.ink }}>Etsy Ads</a> → Listings, switch these on and everything else off, then tick each here. A screenshot fills the ticks in by itself.</div>}
+          {show === "work" && diagF && <div style={{ fontSize: 12, color: C.ink, background: C.card, borderRadius: 10, padding: "8px 12px", marginBottom: 10 }}><b style={{ color: DIAG[diagF] }}>Fix:</b> {FIX[diagF]}</div>}
+          {!list.length ? <div style={{ fontSize: 13, color: C.inkMid }}>{show === "todo" ? "Nothing to do right now." : "None."}</div> : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead><tr>{show === "on" && <th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>#</th>}<th style={{ ...th, textAlign: "left", paddingLeft: show === "on" ? 8 : 0 }}>Listing</th><th style={th}>On?</th><th style={th}>Ad clicks</th><th style={th}>Ad spend</th><th style={th}>Ad orders</th><th style={th}>Sold since</th><th style={{ ...th, textAlign: "left" }}>Call</th></tr></thead>
+                <tbody>{list.slice(pg * per, pg * per + per).map((i, n) => {
+                  const [gl, gc, gb] = GROUPS[i.group];
+                  return (
+                    <tr key={i.id}>
+                      {show === "on" && <td style={{ ...td, textAlign: "left", paddingLeft: 0, color: C.inkFaint, fontWeight: 800 }}>{pg * per + n + 1}</td>}
+                      <td style={{ ...td, textAlign: "left", paddingLeft: show === "on" ? 8 : 0 }}>
+                        <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
+                          <Thumb src={i.img} />
+                          <div style={{ minWidth: 0 }}>
+                            <a href={`https://www.etsy.com/listing/${i.id}`} target="_blank" rel="noreferrer" style={{ color: C.ink, fontWeight: 700, textDecoration: "none", display: "block", maxWidth: 330, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{i.title}</a>
+                            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 3, alignItems: "center" }}>
+                              <Tag color={gc} bg={gb}>{gl}</Tag>
+                              {i.state && i.state !== "active" && <Tag color={C.red} bg={C.redBg}>{i.state}</Tag>}
+                              {show !== "work" && i.diag?.map(d => <Tag key={d.k} color={DIAG[d.k] || C.inkMid} bg={C.card}>{d.k}</Tag>)}
+                              <span style={{ fontSize: 11, color: C.inkFaint }}>{i.why}</span>
+                            </div>
+                            {show === "work" && i.diag?.map(d => <div key={d.k} style={{ fontSize: 11.5, color: C.ink, lineHeight: 1.45, marginTop: 4, maxWidth: 520, whiteSpace: "normal" }}><b style={{ color: DIAG[d.k] || C.inkMid }}>{d.k}:</b> {d.text}</div>)}
+                          </div>
+                        </div>
+                      </td>
+                      <td style={td}>
+                        {/* Ticked by hand, or read from the latest Etsy Ads screenshot (then fixed). */}
+                        <button onClick={() => !i.s && markOn(i.id, !i.on)} title={i.s ? "Read from your Etsy Ads screenshot" : i.on ? "Marked on: click to undo" : "Tick once you've switched it on in Etsy Ads"}
+                          style={{ ...btn, padding: "3px 9px", cursor: i.s ? "default" : "pointer", color: i.on ? C.surface : C.inkFaint, background: i.on ? C.green : C.surface, borderColor: i.on ? C.green : C.border }}>{i.on ? "✓ On" : i.on === false ? "Off" : "☐"}</button>
+                      </td>
+                      {/* Since the restart where a screenshot covers it, else the two-year record in grey. */}
+                      <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? i.s.clicks : i.past ? i.past.clicks : "—"}</td>
+                      <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? usd2(i.s.spend) : i.past ? usd(i.past.spend) : "—"}</td>
+                      <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? `${i.s.orders}${i.s.revenue ? ` · ${usd(i.s.revenue)}` : ""}` : i.past ? `${i.past.orders}${i.past.rev ? ` · ${usd(i.past.rev)}` : ""}` : "—"}</td>
+                      <td style={td}>{i.sold ? `${i.sold.n} · ${usd(i.sold.v)}` : "—"}</td>
+                      <td style={{ ...td, textAlign: "left" }}>
+                        <div style={{ fontWeight: 800, color: i.act ? i.tone : C.inkMid }}>{i.act || i.note || (i.should ? "On the list" : "")}</div>
+                        {i.act && i.note && <div style={{ fontSize: 11, color: C.inkFaint }}>{i.note}</div>}
+                        <div style={{ display: "flex", gap: 5, marginTop: 4 }}>
+                          {i.promote && <button onClick={() => move(i.id, "winner", `Won its test: ${i.roas.toFixed(1)}× back`)} style={{ ...btn, color: C.green }}>Move to winners</button>}
+                          {i.demote && <button onClick={() => move(i.id, "off", `Failed its test: ${i.s.clicks} clicks, no sale`)} style={{ ...btn, color: C.red }}>Move to keep-off</button>}
+                        </div>
+                      </td>
+                    </tr>);
+                })}</tbody>
+              </table>
+            </div>
+          )}
+          {pages > 1 && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end", marginTop: 8, fontSize: 12, color: C.inkMid }}>
+              <button onClick={() => setPage(pg - 1)} disabled={pg === 0} style={{ ...btn, width: 30 }}>‹</button>
+              <span>Page {pg + 1} of {pages}</span>
+              <button onClick={() => setPage(pg + 1)} disabled={pg >= pages - 1} style={{ ...btn, width: 30 }}>›</button>
+            </div>
+          )}
+        </Section>
+      </div>
     </div>
   );
 }
