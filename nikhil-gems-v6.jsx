@@ -1048,6 +1048,7 @@ const USER_HIDE_OPTIONS=[
   {id:"pulse",label:"Etsy sales panel on the home screen"},
   {id:"orderMoney",label:"Order amounts and revenue in Listing Manager"},
   {id:"boi",label:"BOI Remittance in Bills"},
+  {id:"billTotals",label:"Totals strip in Bills (value, paid, outstanding)"},
 ];
 const userHides=(user,id)=>!!user&&user.role!=="admin"&&Array.isArray(user.hide)&&user.hide.includes(id);
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
@@ -25091,7 +25092,7 @@ function BoiRemittanceForm({showToast}){
   );
 }
 
-function MiscApp({onHome,hideBoi=false}){
+function MiscApp({onHome,hideBoi=false,hideTotals=false}){
   const t=useT();
   const [tab,setTab]=useState("dashboard");
   const [editBill,setEditBill]=useState(null);
@@ -25125,14 +25126,14 @@ function MiscApp({onHome,hideBoi=false}){
           </button>
         ))}
       </div>
-      {tab==="dashboard"&&<MiscBillsDashboard showToast={showToast} company={company} onNewBill={()=>setTab("billmaker")} onEdit={handleEdit}/>}
+      {tab==="dashboard"&&<MiscBillsDashboard hideTotals={hideTotals} showToast={showToast} company={company} onNewBill={()=>setTab("billmaker")} onEdit={handleEdit}/>}
       {tab==="billmaker"&&<PurchaseBillMaker showToast={showToast} onSaved={handleSaved} editBill={editBill} defaultCompany={company}/>}
       {tab==="boi"&&!hideBoi&&<BoiRemittanceForm showToast={showToast}/>}
     </Shell>
   );
 }
 
-function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil"}){
+function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil",hideTotals=false}){
   const [bills,setBills]=useState(null);
   const [payModal,setPayModal]=useState(null); // {bill, amount, note}
   const [downloading,setDownloading]=useState(null);
@@ -25223,7 +25224,7 @@ function MiscBillsDashboard({showToast,onNewBill,onEdit,company="nikhil"}){
   return(
     <div style={{maxWidth:900}}>
       {/* Summary row */}
-      {(()=>{
+      {!hideTotals&&(()=>{
         const total=bills.reduce((s,b)=>s+(b.totalAmount||0),0);
         const paid=bills.reduce((s,b)=>s+(b.paidAmount||0),0);
         const outstanding=total-paid;
@@ -26475,7 +26476,7 @@ export default function Root({onSignOut}){
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;
     else if(mod==="images")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ImageLibraryApp onHome={goHome}/></React.Suspense>;
     else if(mod==="bgremove")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><BgRemoveSandbox onHome={goHome}/></React.Suspense>;
-    else if(mod==="misc")content=<MiscApp onHome={goHome} hideBoi={userHides(currentUser,"boi")}/>;
+    else if(mod==="misc")content=<MiscApp onHome={goHome} hideBoi={userHides(currentUser,"boi")} hideTotals={userHides(currentUser,"billTotals")}/>;
     else if(mod==="documents"&&(isAdmin||allowedMods.some(m=>m.id==="documents")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DocumentsApp onHome={goHome} currentUser={currentUser}/></React.Suspense>;
     /* The accountant's ledger. It was dropped from Stock Journal in 26b8ffe on the
        grounds that "Finance has its own module" — but Finance's ledger is a
