@@ -348,7 +348,7 @@ function Drawer({ l, where, sold, onStory, tab, setTab, store, onClose, onPrice,
                 {imgs.map((u, i) => (
                   <Fragment key={u + i}>
                   <div style={{ position: "relative", aspectRatio: "1", borderRadius: 9, overflow: "hidden", background: C.card, outline: i === 0 ? `2.5px solid ${C.gold}` : "none", outlineOffset: -2.5 }}>
-                    <img src={thumb(u, 340)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <img src={thumb(u, 340)} alt="" onError={e => { if (e.currentTarget.src !== u) e.currentTarget.src = u; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                     <div style={{ position: "absolute", top: 5, right: 5, display: "flex", gap: 4 }}>
                       {i > 0 && <button title="Make cover" onClick={() => setImgs(a => [a[i], ...a.filter((_, j) => j !== i)])} style={round}>★</button>}
                       <button title="Edit photo" onClick={() => setEditIdx(i)} style={round}>✎</button>
