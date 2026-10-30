@@ -3922,7 +3922,7 @@ function ShipByBadge({ o }) {
   return <span title={`Etsy ship-by date: ${o.ship_by}`} style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: bg, color: fg, border: bg === "transparent" ? "1px solid #e4ddd2" : "none", whiteSpace: "nowrap" }}>{text}</span>;
 }
 
-function OrdersView({ orders, listings = [], stock = [], showToast, onOpenInvoice, onViewInvoicePdf, onDelist }) {
+function OrdersView({ hideMoney = false, orders, listings = [], stock = [], showToast, onOpenInvoice, onViewInvoicePdf, onDelist }) {
   const [pFilter,  setPFilter]  = useState("all");
   const [shipFilter, setShipFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("this_month");
@@ -5614,12 +5614,12 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
         );
       })()}
       {/* stats */}
-      <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : `repeat(${hideMoney ? 3 : 4},1fr)`, gap: 10, marginBottom: 14 }}>
         {[
           { label: dateFilter === "all" ? "Total Orders" : "Orders",  val: dateFilteredOrders.length,     color: C.ink, bg: C.surface },
           { label: "Unshipped",     val: unshippedCount,    color: C.amber, bg: C.amberBg },
           { label: "Shipped",       val: shippedCount,      color: C.green, bg: C.greenBg },
-          { label: "Revenue",       val: revenueLabel,      color: C.blue, bg: C.blueBg },
+          ...(hideMoney ? [] : [{ label: "Revenue",       val: revenueLabel,      color: C.blue, bg: C.blueBg }]),
         ].map(s => (
           <div key={s.label} style={{ background: s.bg, border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "13px 15px", minHeight: 74 }}>
             <div style={{ fontSize: 9, color: s.color, textTransform: "uppercase", letterSpacing: .7, fontWeight: 800, marginBottom: 6 }}>{s.label}</div>
@@ -5755,9 +5755,9 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                     {s.cancelled
                       ? <span style={{ fontSize: 10.5, fontWeight: 800, color: C.inkFaint }}>CANCELLED</span>
                       : s.allShipped && <span style={{ fontSize: 10.5, fontWeight: 800, color: C.green }}>SHIPPED</span>}
-                    <div style={{ fontSize: 15, fontWeight: 850, color: s.cancelled ? C.inkFaint : C.green, textDecoration: s.cancelled ? "line-through" : "none" }}>
+                    {!hideMoney && <div style={{ fontSize: 15, fontWeight: 850, color: s.cancelled ? C.inkFaint : C.green, textDecoration: s.cancelled ? "line-through" : "none" }}>
                       {money(s.total, s.currency)}
-                    </div>
+                    </div>}
                   </div>
                   <div style={{ width: "100%", fontSize: 11, color: C.inkFaint }}>
                     {open ? (allEtsy ? "Fulfil the whole order once below — or open an item to work it individually." : "Tap to collapse — items below are worked individually.") : "Tap to open the individual items."}
@@ -5919,7 +5919,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                     <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{orderDateTimeLabel(order)}</div>
                   </div>
                   <div style={{ textAlign: mob() ? "left" : "right", gridColumn: mob() ? "2 / 3" : "auto" }}>
-                    <div style={{ fontSize: 16, fontWeight: 850, color: cancelled ? C.inkFaint : C.green, textDecoration: cancelled ? "line-through" : "none" }}>{money(order.sale_price, order.currency)}</div>
+                    {!hideMoney && <div style={{ fontSize: 16, fontWeight: 850, color: cancelled ? C.inkFaint : C.green, textDecoration: cancelled ? "line-through" : "none" }}>{money(order.sale_price, order.currency)}</div>}
                     <div style={{ marginTop: 3, display: "flex", gap: 6, justifyContent: mob() ? "flex-start" : "flex-end", alignItems: "center", flexWrap: "wrap" }}><ShipByBadge o={order} /><StatusPill status={status} /></div>
                   </div>
                 </div>
@@ -6458,7 +6458,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         ["Sale Price",    money(order.sale_price, order.currency)],
                         ...(order.order_shipping != null ? [["Shipping", money(order.order_shipping, order.currency)]] : []),
                         ...(order.order_tax > 0 ? [["Tax (Etsy)", money(order.order_tax, order.currency)]] : []),
-                        ...(order.order_total != null ? [["Buyer Paid", money(order.order_total, order.currency)]] : []),
+                        ...(order.order_total != null && !hideMoney ? [["Buyer Paid", money(order.order_total, order.currency)]] : []),
                         ...(earnings.fees > 0 ? [["Etsy fees", `-${money(earnings.fees, order.fees_currency || order.currency)}`]] : []),
                         ...(earnings.net > 0 ? [["Earned", money(earnings.net, order.fees_currency || order.currency)]] : []),
                         ["SKU",           order.listing_sku || "—"],
@@ -10961,7 +10961,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
         {/* ══ ORDERS ══ */}
         {tab === "renew" && <RenewalQueue listings={listings} stock={stock} getToken={getEtsyToken} onRenew={renewFromQueue} showToast={showToast} who={who} onCount={setRenewCount} />}
-        {tab === "orders" && <OrdersView orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
+        {tab === "orders" && <OrdersView hideMoney={currentUser?.role !== "admin" && Array.isArray(currentUser?.hide) && currentUser.hide.includes("orderMoney")} orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
 
         {/* ══ PLATFORM TABS ══ */}
         {tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}

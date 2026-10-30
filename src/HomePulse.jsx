@@ -377,6 +377,94 @@ function RaceChart({ m, cumThis, cumPrev, short, full, goal, closed }) {
   );
 }
 
+/* Sales day by day: each day's takings as a bar, this month beside last
+   month's same day, with each month's 7-day average drawn over them so the
+   trend reads through the spiky days. Built from the running totals. */
+const dailyOf = cum => cum.slice(1).map((v, i) => v - cum[i]);
+const avg7 = arr => arr.map((_, i) => { const w = arr.slice(Math.max(0, i - 6), i + 1); return w.reduce((a, b) => a + b, 0) / w.length; });
+function DayChart({ m, cumThis, cumPrev, short, full }) {
+  const [ref, w] = useWidth();
+  const [hover, setHover] = useState(null);
+  const now = dailyOf(cumThis), prev = dailyOf(cumPrev);
+  const aNow = avg7(now), aPrev = avg7(prev);
+  const H = mob ? 170 : 200, PL = 38, PR = 14, PT = 10, PB = 22;
+  const CW = Math.max(10, w - PL - PR), CH = H - PT - PB;
+  const n = Math.max(m.daysIn, m.daysPrev);
+  const yMax = niceMax(Math.max(...now, ...prev, 1) * 1.08);
+  const slot = CW / n, bw = Math.max(1.5, slot * 0.36);
+  const xs = d => PL + (d - 1) * slot; // left edge of day d's slot
+  const y = v => PT + CH * (1 - v / yMax);
+  const line = arr => arr.map((v, i) => `${i ? "L" : "M"}${(xs(i + 1) + slot / 2).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const ticks = [0.25, 0.5, 0.75, 1].map(t => t * yMax);
+  const onMove = e => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setHover(Math.max(1, Math.min(n, Math.floor((e.clientX - r.left - PL) / slot) + 1)));
+  };
+  const days = now.length, perNow = days ? cumThis[days] / days : 0;
+  const perPrevSame = days && prev.length ? (cumPrev[Math.min(days, prev.length)] || 0) / Math.min(days, prev.length) : 0;
+  const best = now.reduce((b, v, i) => v > b.v ? { v, d: i + 1 } : b, { v: 0, d: 0 });
+  // The trend: the last 7 days against the 7 before them.
+  const last7 = now.slice(-7).reduce((a, b) => a + b, 0), before7 = now.slice(-14, -7).reduce((a, b) => a + b, 0);
+  const trend = days >= 10 && before7 > 0 ? (last7 - before7) / before7 : null;
+  return (
+    <div ref={ref} style={{ position: "relative", marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 6, fontSize: 11, color: C.inkMid }}>
+        <span>Per day {monthShort(m.m0)}: <b style={{ color: C.ink }}>{full(perNow)}</b> vs {monthShort(m.mPrev)} same days <b style={{ color: C.ink }}>{full(perPrevSame)}</b></span>
+        {trend != null && <span>Last 7 days <b style={{ color: trend >= 0 ? C.green : C.red }}>{trend >= 0 ? "▲" : "▼"} {Math.abs(Math.round(trend * 100))}%</b> on the 7 before</span>}
+        {best.d > 0 && <span>Best day: <b style={{ color: C.ink }}>{best.d} {monthShort(m.m0)} · {full(best.v)}</b></span>}
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 4 }}>
+        <Key color={NOW}>{monthLong(m.m0)}</Key>
+        <Key color={PREV}>{monthLong(m.mPrev)}</Key>
+        <Key color={C.ink} dash>7-day average</Key>
+      </div>
+      {w > 0 && (
+        <svg width={w} height={H} style={{ display: "block", touchAction: "pan-y" }} onPointerMove={onMove} onPointerDown={onMove} onPointerLeave={() => setHover(null)}>
+          {ticks.map(t => (
+            <g key={t}>
+              <line x1={PL} x2={PL + CW} y1={y(t)} y2={y(t)} stroke={C.border} strokeWidth={1} />
+              <text x={PL - 6} y={y(t) + 3.5} textAnchor="end" fontSize={10} fill={C.inkFaint} style={{ fontVariantNumeric: "tabular-nums" }}>{short(t)}</text>
+            </g>
+          ))}
+          {hover != null && <rect x={xs(hover)} y={PT} width={slot} height={CH} fill={C.card} />}
+          <line x1={PL} x2={PL + CW} y1={y(0)} y2={y(0)} stroke={C.borderHi} strokeWidth={1} />
+          {prev.map((v, i) => v > 0 && <rect key={"p" + i} x={xs(i + 1) + slot / 2 - bw} y={y(v)} width={bw} height={y(0) - y(v)} rx={1.5} fill={PREV} opacity={0.45} />)}
+          {now.map((v, i) => v > 0 && <rect key={"n" + i} x={xs(i + 1) + slot / 2} y={y(v)} width={bw} height={y(0) - y(v)} rx={1.5} fill={NOW} />)}
+          {aPrev.length > 1 && <path d={line(aPrev)} fill="none" stroke={PREV} strokeWidth={1.75} strokeDasharray="4 3" />}
+          {aNow.length > 1 && <path d={line(aNow)} fill="none" stroke={NOW} strokeWidth={2.25} strokeDasharray="4 3" />}
+          {[1, 8, 15, 22, 29].filter(d => d <= n).map(d => (
+            <text key={d} x={xs(d) + slot / 2} y={H - 6} textAnchor="middle" fontSize={10} fill={C.inkFaint}>{d}</text>
+          ))}
+        </svg>
+      )}
+      {hover != null && (
+        <Tip x={xs(hover) + slot / 2} y={18} w={w}>
+          <div style={{ fontWeight: 700 }}>Day {hover}</div>
+          {hover <= now.length && <TipRow color={NOW} label={`${hover} ${monthShort(m.m0)}`} value={full(now[hover - 1])} />}
+          {hover <= prev.length && <TipRow color={PREV} label={`${hover} ${monthShort(m.mPrev)}`} value={full(prev[hover - 1])} />}
+          {hover <= aNow.length && <TipRow color={NOW} dash label="7-day avg" value={full(aNow[hover - 1])} />}
+        </Tip>
+      )}
+    </div>
+  );
+}
+/* The month chart with its two views: running total against the goal, or day by day. */
+function SalesChart(props) {
+  const [view, setView] = useState(() => { try { return localStorage.getItem("pz-chart-view") || "total"; } catch { return "total"; } });
+  const pick = v => { setView(v); try { localStorage.setItem("pz-chart-view", v); } catch { /* fine */ } };
+  return (
+    <div>
+      <div style={{ display: "inline-flex", gap: 2, marginTop: 12, padding: 2, background: C.card, borderRadius: 8 }}>
+        {[["total", "Running total"], ["day", "Per day"]].map(([k, l]) => (
+          <button key={k} onClick={() => pick(k)} style={{ border: "none", cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: "4px 10px", borderRadius: 6,
+            background: view === k ? C.surface : "transparent", color: view === k ? C.ink : C.inkMid, boxShadow: view === k ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>{l}</button>
+        ))}
+      </div>
+      {view === "day" ? <DayChart {...props} /> : <RaceChart {...props} />}
+    </div>
+  );
+}
+
 /* ── the last six months, with the goal across them ─────────────────────────── */
 function MonthBars({ m, sel, onPick }) {
   const [ref, w] = useWidth();
@@ -1006,7 +1094,7 @@ export default function EtsyPulse({ onEnter, rates }) {
             <span style={{ fontSize: 11, color: C.inkMid }}>{monthLong(sm.mPrev)} in full: <b style={{ color: C.ink }}>{usd(sm.usdPrev)}</b> · {plural(sm.ordersPrev, "order")}</span>
           </div>
 
-          <RaceChart m={sm} cumThis={sm.cumThis} cumPrev={sm.cumPrev} short={usdK} full={usd} goal={GOAL_USD} closed={sm.closed} />
+          <SalesChart m={sm} cumThis={sm.cumThis} cumPrev={sm.cumPrev} short={usdK} full={usd} goal={GOAL_USD} closed={sm.closed} />
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 11, minWidth: 0 }}>

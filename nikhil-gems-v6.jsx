@@ -1042,8 +1042,14 @@ function StockAttention({isAdmin=false}){
   );
 }
 
-/* Logins that don't see the Etsy sales panel on the home screen (Bapu's). */
-const PULSE_HIDDEN_FOR=["finance.nikhilgems@gmail.com"];
+/* What a staff login can be kept from, beyond its modules: set per user on
+   the Users screen (user.hide). Admin sees everything. */
+const USER_HIDE_OPTIONS=[
+  {id:"pulse",label:"Etsy sales panel on the home screen"},
+  {id:"orderMoney",label:"Order amounts and revenue in Listing Manager"},
+  {id:"boi",label:"BOI Remittance in Bills"},
+];
+const userHides=(user,id)=>!!user&&user.role!=="admin"&&Array.isArray(user.hide)&&user.hide.includes(id);
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
   /* Which groups are open. Remembered, because a sidebar that folds itself shut
      on every visit is a sidebar you stop trusting; Accounting is open the first
@@ -1347,7 +1353,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
           {/* Etsy: the month against the $10k goal, what's left to ship and file, ad spend.
               Everyone who works the shop sees it — Manav, and staff with Etsy or Orders. */}
-          {(isAdmin||visibleMods.some(m=>m.id==="etsy"||m.id==="orders"))&&!PULSE_HIDDEN_FOR.includes(String(currentUser?.email||"").toLowerCase())&&<EtsyPulse onEnter={onEnter} rates={finRates}/>}
+          {(isAdmin||visibleMods.some(m=>m.id==="etsy"||m.id==="orders"))&&!userHides(currentUser,"pulse")&&<EtsyPulse onEnter={onEnter} rates={finRates}/>}
 
           {/* Row 1: Show countdown + stat cards */}
           {isAdmin&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:11,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .1s both":"none"}}>
@@ -25085,7 +25091,7 @@ function BoiRemittanceForm({showToast}){
   );
 }
 
-function MiscApp({onHome}){
+function MiscApp({onHome,hideBoi=false}){
   const t=useT();
   const [tab,setTab]=useState("dashboard");
   const [editBill,setEditBill]=useState(null);
@@ -25113,7 +25119,7 @@ function MiscApp({onHome}){
         </div>
       )}
       <div style={{display:"flex",gap:6,marginBottom:20,borderBottom:`1px solid ${C.border}`,paddingBottom:0}}>
-        {[["dashboard","📋 Bills"],["billmaker",editBill?"✏️ Edit Bill":"🧾 New Bill"],["boi","🏦 BOI Remittance"]].map(([id,label])=>(
+        {[["dashboard","📋 Bills"],["billmaker",editBill?"✏️ Edit Bill":"🧾 New Bill"],...(hideBoi?[]:[["boi","🏦 BOI Remittance"]])].map(([id,label])=>(
           <button key={id} onClick={()=>{setTab(id);if(id==="dashboard")setEditBill(null);}} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?C.gold:"transparent"}`,padding:"8px 16px",fontSize:13,fontWeight:tab===id?600:400,color:tab===id?C.gold:C.inkMid,cursor:"pointer",transition:"all .15s",fontFamily:"inherit",whiteSpace:"nowrap"}}>
             {label}
           </button>
@@ -25121,7 +25127,7 @@ function MiscApp({onHome}){
       </div>
       {tab==="dashboard"&&<MiscBillsDashboard showToast={showToast} company={company} onNewBill={()=>setTab("billmaker")} onEdit={handleEdit}/>}
       {tab==="billmaker"&&<PurchaseBillMaker showToast={showToast} onSaved={handleSaved} editBill={editBill} defaultCompany={company}/>}
-      {tab==="boi"&&<BoiRemittanceForm showToast={showToast}/>}
+      {tab==="boi"&&!hideBoi&&<BoiRemittanceForm showToast={showToast}/>}
     </Shell>
   );
 }
@@ -25882,7 +25888,7 @@ function UsersApp({onHome}){
         if(!r.ok)throw new Error(d.error||"Failed to update password");
       }catch(e){setSaving(false);return alert("Error changing password: "+e.message);}
     }
-    const entry={id:form.id||uid(),name:form.name.trim(),email:form.email.trim().toLowerCase(),role:"staff",allowedModules:form.allowedModules,language:form.language||"",supabaseId,createdAt:form.createdAt||new Date().toISOString()};
+    const entry={id:form.id||uid(),name:form.name.trim(),email:form.email.trim().toLowerCase(),role:"staff",allowedModules:form.allowedModules,hide:form.hide||[],language:form.language||"",supabaseId,createdAt:form.createdAt||new Date().toISOString()};
     const next=form.id?users.map(u=>u.id===form.id?entry:u):[...users,entry];
     await saveUsers(next);
     setSaving(false);setForm(null);showToast(form.id?"User updated":"User created");
@@ -26014,6 +26020,16 @@ function UsersApp({onHome}){
                 </div>
                 <div style={{marginTop:6,fontSize:10,color:C.inkFaint}}>Finance and Users are always admin-only.</div>
               </div>
+              <div>
+                <div style={{fontSize:9,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.8,marginBottom:8}}>Hidden from this user</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {USER_HIDE_OPTIONS.map(o=>{const on=(form.hide||[]).includes(o.id);return(
+                    <label key={o.id} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:6,border:`1px solid ${on?C.red+"60":C.border}`,background:on?C.redBg||"#FDECEC":"transparent",cursor:"pointer",fontSize:12}}>
+                      <input type="checkbox" checked={on} onChange={()=>setForm(f=>({...f,hide:on?(f.hide||[]).filter(x=>x!==o.id):[...(f.hide||[]),o.id]}))} style={{accentColor:C.red,width:14,height:14}}/>
+                      {o.label}
+                    </label>);})}
+                </div>
+              </div>
               <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:4}}>
                 <button className="bs" onClick={()=>setForm(null)}>Cancel</button>
                 <button className="bp" onClick={saveForm} disabled={saving}>{saving?"Saving…":"Save User"}</button>
@@ -26048,6 +26064,7 @@ function UsersApp({onHome}){
               <div style={{fontSize:11,color:C.inkFaint}}>{u.email}</div>
               <div style={{marginTop:5,display:"flex",flexWrap:"wrap",gap:4}}>
                 {u.allowedModules?.map(m=>{const mod=ALL_STAFF_MODS.find(x=>x.id===m);return mod?<span key={m} style={{fontSize:9,background:C.card,border:`1px solid ${C.border}`,borderRadius:3,padding:"1px 6px",color:C.inkMid,fontWeight:600}}>{mod.label}</span>:null;})}
+                {(u.hide||[]).map(h=>{const o=USER_HIDE_OPTIONS.find(x=>x.id===h);return o?<span key={h} style={{fontSize:9,background:"#FDECEC",border:`1px solid ${C.red}40`,borderRadius:3,padding:"1px 6px",color:C.red,fontWeight:600}}>Hidden: {o.label}</span>:null;})}
               </div>
             </div>
             <div style={{display:"flex",gap:6,flexShrink:0}}>
@@ -26458,7 +26475,7 @@ export default function Root({onSignOut}){
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;
     else if(mod==="images")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><ImageLibraryApp onHome={goHome}/></React.Suspense>;
     else if(mod==="bgremove")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><BgRemoveSandbox onHome={goHome}/></React.Suspense>;
-    else if(mod==="misc")content=<MiscApp onHome={goHome}/>;
+    else if(mod==="misc")content=<MiscApp onHome={goHome} hideBoi={userHides(currentUser,"boi")}/>;
     else if(mod==="documents"&&(isAdmin||allowedMods.some(m=>m.id==="documents")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DocumentsApp onHome={goHome} currentUser={currentUser}/></React.Suspense>;
     /* The accountant's ledger. It was dropped from Stock Journal in 26b8ffe on the
        grounds that "Finance has its own module" — but Finance's ledger is a
