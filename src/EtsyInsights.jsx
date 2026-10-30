@@ -752,13 +752,13 @@ async function fetchRetry(url) {
    goes back to the shop's first day (a minute or so); after that only the
    last few days are asked for again and laid over what's kept. */
 const HIST_KEY = "ng-ads-history-v1";
-async function loadHistory(set) {
+async function loadHistory(set, force = false) {
   let kept = null;
   try { kept = await loadK(HIST_KEY); } catch { /* read it fresh */ }
   if (kept?.days?.length) set({ ...kept, busy: true });
   // A copy kept before order lines were added is read again whole, once.
   if (kept && !kept.lines) kept = { ...kept, at: 0, days: [] };
-  if (kept?.at && Date.now() - kept.at < 6 * 3600000) return set({ ...kept, busy: false });
+  if (!force && kept?.at && Date.now() - kept.at < 6 * 3600000) return set({ ...kept, busy: false });
   const lastK = kept?.days?.length ? kept.days[kept.days.length - 1].k : null;
   const from = lastK ? Math.floor(Date.parse(lastK + "T00:00:00+05:30") / 1000) - 3 * 86400 : 0;
   try {

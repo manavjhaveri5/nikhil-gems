@@ -435,7 +435,28 @@ export default async function handler(req, res) {
       }
       const out = Object.values(days).sort((a, b) => a.k.localeCompare(b.k))
         .map(d => ({ ...d, etsy: +d.etsy.toFixed(2), offsite: +d.offsite.toFixed(2), sales: +d.sales.toFixed(2) }));
-      return res.json({ ok: true, from, through: nowS, firstDay: dayOf(from), days: out, lines: lines.sort((a, b) => a.k.localeCompare(b.k)) });
+      lines.sort((a, b) => a.k.localeCompare(b.k));
+      // The server keeps the copy too (a browser save of ~650 KB could be lost), merged
+      // into what's stored: a partial read only replaces the days it covers.
+      let saved = false;
+      try {
+        const SB = process.env.VITE_SUPABASE_URL, KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        if (SB && KEY) {
+          const hdr = { apikey: KEY, Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" };
+          const full = !parseInt(req.query.from, 10), cut = dayOf(from);
+          const kept = full ? null : (await (await fetch(`${SB}/rest/v1/app_data?key=eq.ng-ads-history-v1&select=value`, { headers: hdr })).json())?.[0]?.value;
+          if (full || kept?.days?.length) {
+            const value = {
+              at: Date.now(), firstDay: kept?.firstDay || dayOf(from),
+              days: [...(kept?.days || []).filter(x => x.k < cut), ...out],
+              lines: [...(kept?.lines || []).filter(x => x.k < cut), ...lines],
+            };
+            const w = await fetch(`${SB}/rest/v1/app_data?on_conflict=key`, { method: "POST", headers: { ...hdr, Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ key: "ng-ads-history-v1", value }) });
+            saved = w.ok;
+          }
+        }
+      } catch { /* the browser still saves its own copy */ }
+      return res.json({ ok: true, from, through: nowS, firstDay: dayOf(from), days: out, lines, saved });
     }
 
     // ── insights: what the Insights tab works from, in one call ──────────────────

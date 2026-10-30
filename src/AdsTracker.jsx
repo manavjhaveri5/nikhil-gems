@@ -219,7 +219,8 @@ export default function AdsTracker({ listings = [] }) {
   const [plan, setPlan] = useState(null), [table, setTable] = useState(null), [daily, setDaily] = useState(null), [hist, setHist] = useState(null);
   const [busy, setBusy] = useState(""), [msg, setMsg] = useState(null);
   const [show, setShow] = useState("on"), [page, setPage] = useState(0), [diagF, setDiagF] = useState(null), [how, setHow] = useState(false);
-  const shotRef = useRef(null), csvRef = useRef(null), tableRef = useRef(null), feedRef = useRef(null);
+  const shotRef = useRef(null), csvRef = useRef(null), tableRef = useRef(null), feedRef = useRef(null), startWith = useRef(null);
+  const [setup, setSetup] = useState(null), [refreshing, setRefreshing] = useState(false), [refreshedAt, setRefreshedAt] = useState(null);
 
   useEffect(() => {
     loadK(PLAN_KEY).then(v => setPlan(v && v.items ? v : { items: [], history: [] })).catch(() => setPlan({ items: [], history: [] }));
@@ -255,7 +256,11 @@ export default function AdsTracker({ listings = [] }) {
     const off = !lastOn || daysAgo(Date.parse(lastOn + "T12:00:00")) > 2;
     // While the ads are off, the last run is over: "since the restart" waits for the next one.
     const start = plan.startDate || (off ? null : restart);
-    const budget = [...keys].reverse().map(k => daily[k]?.budget).find(b => b > 0) || null;
+    // Etsy's budget from the stats file; once a run is noted, only a day inside it counts.
+    const run = (plan.runs || []).at(-1);
+    const tracking = !!(run && plan.startDate === run.start);
+    const waiting = tracking && (!lastOn || lastOn < run.start);    // noted, but no charge in yet
+    const budget = [...keys].reverse().filter(k => !tracking || k >= run.start).map(k => daily[k]?.budget).find(b => b > 0) || null;
     const planBudget = plan.budget || 25;
     const want = Math.round(planBudget * 2.5);
 
@@ -298,8 +303,9 @@ export default function AdsTracker({ listings = [] }) {
     // Listings with ads on that aren't in the plan at all.
     const planIds = new Set(plan.items.map(i => i.id));
     const strays = Object.entries(shot).filter(([id, r]) => r.on && !planIds.has(id)).map(([id, r]) => ({ id, ...r, state: erp[id]?.state }));
+    const shotOn = Object.entries(shot).filter(([, r]) => r.on).map(([id]) => id);
     const onCount = items.filter(i => i.on).length, followed = items.filter(i => i.should && i.on).length;
-    return { start, restart, off, lastOn, budget, planBudget, want, since, before, chart, cmp, hasEtsy, items, strays, onCount, followed,
+    return { start, restart, off, lastOn, run, tracking, waiting, shotOn, budget, planBudget, want, since, before, chart, cmp, hasEtsy, items, strays, onCount, followed,
       spend: sum(since, d => d.spend), adRev: sum(since, d => d.adRev), adOrders: sum(since, d => d.adOrders), clicks: sum(since, d => d.clicks),
       salesDay: since.length ? sum(since, d => d.sales) / since.length : 0, salesDayBefore: before.length ? sum(before, d => d.sales) / before.length : 0,
       tableAge: table.at ? daysAgo(table.at) : null, csvAge: Object.keys(daily).length ? daysAgo(Date.parse(Object.keys(daily).sort().pop() + "T12:00:00")) : null };
@@ -314,8 +320,9 @@ export default function AdsTracker({ listings = [] }) {
       const next = { at: Date.now(), range: range || table?.range || "", rows: { ...(table?.rows || {}) } };
       for (const r of rows) if (r.title) next.rows[norm(r.title).slice(0, 60)] = { ...r, seen: Date.now() };
       setTable(next); await saveK(TABLE_KEY, next, { merge: false });
+      if (startWith.current === "shot") startWith.current = "shot-read";
       setMsg({ ok: true, text: `Read ${rows.length} listings${range ? ` (${range})` : ""}.` });
-    } catch (e) { setMsg({ ok: false, text: e.message || "Couldn't read those screenshots." }); }
+    } catch (e) { startWith.current = null; setMsg({ ok: false, text: e.message || "Couldn't read those screenshots." }); }
     setBusy("");
   };
   const onCsv = async file => {
@@ -336,6 +343,28 @@ export default function AdsTracker({ listings = [] }) {
   });
 
   const move = (id, group, why) => savePlan({ ...plan, items: plan.items.map(i => i.id === id ? { ...i, group, why: why || i.why } : i), history: [...(plan.history || []), { at: new Date().toISOString(), id, group }] });
+  // "I've finished setting up Etsy Ads": note the budget and which listings have ads on, and track from today.
+  const startRun = (how, ids) => {
+    const today = dayKey(Date.now()), on = new Set(ids), budget = +setup.budget || plan.budget || 25;
+    savePlan({ ...plan, budget, startDate: today,
+      items: how === "list" ? plan.items.map(i => ({ ...i, on: on.has(i.id) })) : plan.items,
+      runs: [...(plan.runs || []).filter(r => r.start !== today), { start: today, at: new Date().toISOString(), budget, how, ids }] });
+    setSetup(null); refresh();
+  };
+  const begin = () => {
+    if (setup.how === "shot") { startWith.current = "shot"; shotRef.current?.click(); return; }
+    if (setup.how === "shot-now") return startRun("screenshot", t.shotOn);
+    startRun(setup.how, setup.how === "list" ? t.items.filter(i => i.should).map(i => i.id) : t.items.filter(i => i.on).map(i => i.id));
+  };
+  // A screenshot asked for by "Start tracking": once read, its switched-on listings start the run.
+  useEffect(() => {
+    if (startWith.current === "shot-read" && t) { startWith.current = null; startRun("screenshot", t.shotOn); }
+  });
+  const refresh = async () => {
+    setRefreshing(true);
+    await loadHistory(h => setHist(h), true);
+    setRefreshing(false); setRefreshedAt(Date.now());
+  };
   const markOn = (id, on) => savePlan({ ...plan, items: plan.items.map(i => i.id === id ? { ...i, on } : i) });
 
   if (!plan || !t) return <div style={{ padding: 40, color: C.inkFaint }}>Loading the ads plan…</div>;
@@ -373,13 +402,15 @@ export default function AdsTracker({ listings = [] }) {
   if (turnOff) doNow.push({ tone: C.red, head: `Switch off ${plural(turnOff, "listing")}`, sub: "Sold out, expired, on the keep-off list, or failed its test.", go: "todo" });
   if (t.strays.length) doNow.push({ tone: C.red, head: `Switch off ${plural(t.strays.length, "listing")} outside the plan`, sub: t.strays.slice(0, 3).map(s => short(s.title)).join(" · ") + (t.strays.length > 3 ? " …" : "") });
   if (decided) doNow.push({ tone: C.ink, head: `${plural(decided, "test")} decided`, sub: "Move each to winners or keep-off.", go: "todo" });
-  if (t.tableAge == null || t.tableAge >= 4) doNow.push({ tone: C.amber, head: t.tableAge == null ? "Add a screenshot of Etsy Ads → Listings" : `Refresh the listings screenshot (${t.tableAge} days old)`, sub: "So it knows which listings are on and how each one is doing.", feed: true });
+  // A fresh run needs a screenshot only once it has a few days of results to show.
+  if ((t.tableAge == null || t.tableAge >= 4) && !(t.tracking && daysAgo(Date.parse(t.run.start + "T00:00:00")) < 3)) doNow.push({ tone: C.amber, head: t.tableAge == null ? "Add a screenshot of Etsy Ads → Listings" : `Refresh the listings screenshot (${t.tableAge} days old)`, sub: "So it knows which listings are on and how each one is doing.", feed: true });
   if (t.csvAge == null || t.csvAge >= 3) doNow.push({ tone: C.amber, head: "Download a fresh Etsy Ads stats file", sub: t.csvAge == null ? "For the budget, clicks and Etsy's own ad sales." : `The one here stops ${t.csvAge} days ago.`, feed: true });
 
   // How it's going, in a few lines.
   const news = [];
   const roasNow = t.hasEtsy && t.spend > 0 ? t.adRev / t.spend : null;
-  if (t.off) news.push({ tone: C.red, text: <>Ads <b>aren't spending</b>{t.lastOn ? `: nothing charged since ${fmt(t.lastOn)}` : ""}.</> });
+  if (t.waiting) news.push({ tone: C.amber, text: <>Tracking from <b>{fmt(t.run.start)}</b>: {plural(t.run.ids.length, "listing")} noted at {usd2(t.run.budget)}/day. Etsy's charges show up about a day later.</> });
+  else if (t.off) news.push({ tone: C.red, text: <>Ads <b>aren't spending</b>{t.lastOn ? `: nothing charged since ${fmt(t.lastOn)}` : ""}.</> });
   else if (t.start) news.push({ tone: C.green, text: <>Back on since <b>{fmt(t.start)}</b>: {usd2(t.spend)} over {plural(t.since.length, "day")}, {usd2(t.spend / Math.max(1, t.since.length))}/day.</> });
   if (roasNow != null) news.push({ tone: roasNow >= BREAK_EVEN ? C.green : C.amber, text: <>Etsy counts <b>{plural(t.adOrders, "ad order")}</b>, {usd(t.adRev)} from {t.clicks} clicks: <b>{roasNow.toFixed(1)}×</b>.</> });
   if (t.since.length) news.push({ tone: t.salesDay >= t.salesDayBefore ? C.green : C.amber, text: <>Shop sales <b>{usd(t.salesDay)}/day</b>, against {usd(t.salesDayBefore)}/day before{t.cmp && t.since.length < 14 ? " (firmer after two weeks)" : ""}.</> });
@@ -414,20 +445,55 @@ export default function AdsTracker({ listings = [] }) {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
+      {/* Start a run once Etsy Ads is set up; refresh it after. */}
+      <div style={{ ...card, padding: mob ? 14 : "12px 18px", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", background: t.tracking ? C.surface : C.ink, color: t.tracking ? C.ink : C.surface }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          {t.tracking ? <>
+            <div style={{ fontSize: 13.5, fontWeight: 800 }}>Tracking since {fmt(t.run.start)} · {plural(t.run.ids.length, "listing")} · {usd2(t.run.budget)}/day</div>
+            <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>Charges and orders are read from Etsy by themselves. {refreshing || hist?.busy ? "Refreshing…" : hist?.error ? `Couldn't reach Etsy (${hist.error}); showing the last copy.` : refreshedAt ? `Refreshed ${new Date(refreshedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}.` : ""}</div>
+          </> : <>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>Finished setting up Etsy Ads?</div>
+            <div style={{ fontSize: 12, opacity: .75, marginTop: 2 }}>Note the budget and which listings have ads on, and tracking starts from today.</div>
+          </>}
+        </div>
+        {t.tracking && <button onClick={refresh} disabled={refreshing} style={{ ...dark }}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>}
+        <button onClick={() => setSetup(setup ? null : { how: t.tableAge === 0 && t.shotOn.length ? "shot-now" : "list", budget: plan.budget || 25 })}
+          style={t.tracking ? btn : { ...btn, background: C.gold, color: C.ink, border: "none", padding: "8px 14px", fontSize: 12.5 }}>{t.tracking ? "New run" : "Start tracking"}</button>
+        {setup && (
+          <div style={{ width: "100%", background: C.surface, color: C.ink, borderRadius: 12, padding: 14, display: "grid", gap: 10, border: `1px solid ${C.border}` }}>
+            <label style={{ fontSize: 12.5, fontWeight: 700 }}>Daily budget you set in Etsy Ads: $<input value={setup.budget} onChange={e => { const v = e.target.value.replace(/[^\d.]/g, ""); setSetup({ ...setup, budget: v }); if (+v > 0) savePlan({ ...plan, budget: +v }); }} style={{ width: 60, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 7px", fontSize: 13, background: C.surface, color: C.ink }} /></label>
+            <div style={{ fontSize: 12.5, fontWeight: 700 }}>Which listings have ads on?</div>
+            {[
+              ["list", `The ${t.want} on the plan's list`, "Everything else switched off."],
+              ["ticks", `The ones ticked here (${t.items.filter(i => i.on).length})`, "If you switched on a different set, tick them in the list below first."],
+              t.tableAge === 0 && t.shotOn.length ? ["shot-now", `The ${t.shotOn.length} on in today's screenshot`, "Read from the Etsy Ads listings table you added."] : ["shot", "Read them from a screenshot", "Etsy Ads → Listings, ad switches showing. Choose the screenshots next."],
+            ].map(([k, l, d]) => (
+              <label key={k} style={{ display: "flex", gap: 9, alignItems: "flex-start", cursor: "pointer", fontSize: 12.5 }}>
+                <input type="radio" checked={setup.how === k} onChange={() => setSetup({ ...setup, how: k })} style={{ marginTop: 3 }} />
+                <span><b>{l}</b><br /><span style={{ color: C.inkMid, fontSize: 11.5 }}>{d}</span></span>
+              </label>))}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={begin} disabled={!!busy} style={dark}>{setup.how === "shot" ? "Choose screenshots →" : `Start tracking from ${fmt(dayKey(Date.now()))}`}</button>
+              <button onClick={() => { setSetup(null); startWith.current = null; }} style={btn}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* The four numbers that matter, each with its picture. */}
       <div style={{ ...card, padding: 0, display: "grid", gridTemplateColumns: mob ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", overflow: "hidden" }}>
-        <div style={{ ...tile(0), background: t.off ? C.redBg : C.greenBg }}>
+        <div style={{ ...tile(0), background: t.waiting ? C.amberBg : t.off ? C.redBg : C.greenBg }}>
           <div style={eyebrow}>Etsy Ads</div>
-          <div style={{ ...big, color: t.off ? C.red : C.green, display: "flex", alignItems: "center", gap: 8 }}><Dot color={t.off ? C.red : C.green} size={11} />{t.off ? "Off" : "Running"}</div>
-          <div style={small}>{t.off ? (t.lastOn ? `last charge ${fmt(t.lastOn)}` : "no charges found") : t.start ? `since ${fmt(t.start)} · ${usd(t.spend)} spent` : `last charge ${fmt(t.lastOn)}`}</div>
+          <div style={{ ...big, color: t.waiting ? C.amber : t.off ? C.red : C.green, display: "flex", alignItems: "center", gap: 8 }}><Dot color={t.waiting ? C.amber : t.off ? C.red : C.green} size={11} />{t.waiting ? "Starting" : t.off ? "Off" : "Running"}</div>
+          <div style={small}>{t.waiting ? "first charge shows in about a day" : t.off ? (t.lastOn ? `last charge ${fmt(t.lastOn)}` : "no charges found") : t.start ? `since ${fmt(t.start)} · ${usd(t.spend)} spent` : `last charge ${fmt(t.lastOn)}`}</div>
           <Spark rows={t.chart.slice(-14)} />
         </div>
         <div style={tile(1)}>
           <div style={eyebrow}>Daily budget</div>
-          <div style={big}>{t.budget ? usd2(t.budget) : "—"}<span style={{ fontSize: 15, color: C.inkFaint }}> / {usd(t.planBudget)}</span></div>
-          <div style={small}>{t.budget ? (Math.abs(t.budget - t.planBudget) < 1 ? "set to the plan" : "in Etsy Ads, against the plan") : "add the stats file to see it"}</div>
+          <div style={big}>{t.budget ? usd2(t.budget) : t.tracking ? usd2(t.run.budget) : "—"}<span style={{ fontSize: 15, color: C.inkFaint }}> / {usd(t.planBudget)}</span></div>
+          <div style={small}>{t.budget ? (Math.abs(t.budget - t.planBudget) < 1 ? "set to the plan" : "in Etsy Ads, against the plan") : t.tracking ? "as you noted it; the stats file confirms it" : "add the stats file to see it"}</div>
           <div style={{ position: "relative", height: 8, background: C.card, borderRadius: 4, marginTop: 14 }}>
-            <div style={{ width: pct(t.budget || 0, bMax), height: "100%", background: t.budget && Math.abs(t.budget - t.planBudget) < 1 ? C.green : C.red, borderRadius: 4 }} />
+            <div style={{ width: pct(t.budget || (t.tracking ? t.run.budget : 0), bMax), height: "100%", background: Math.abs((t.budget || (t.tracking ? t.run.budget : 0)) - t.planBudget) < 1 ? C.green : C.red, borderRadius: 4 }} />
             <div title={`Plan ${usd2(t.planBudget)}`} style={{ position: "absolute", left: pct(t.planBudget, bMax), top: -4, height: 16, borderLeft: `2px solid ${C.ink}` }} />
           </div>
         </div>
@@ -435,7 +501,7 @@ export default function AdsTracker({ listings = [] }) {
           <div style={eyebrow}>Plan listings on</div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
             <Ring value={t.followed} max={t.want} color={t.followed >= t.want * .9 ? C.green : t.followed ? C.amber : C.red} />
-            <div><div style={{ ...big, marginTop: 0 }}>{t.followed}<span style={{ fontSize: 15, color: C.inkFaint }}> / {t.want}</span></div><div style={small}>{t.tableAge != null ? `from your screenshot${t.tableAge ? `, ${t.tableAge} d old` : ""}` : "ticked by hand"}</div></div>
+            <div><div style={{ ...big, marginTop: 0 }}>{t.followed}<span style={{ fontSize: 15, color: C.inkFaint }}> / {t.want}</span></div><div style={small}>{t.tracking ? `noted ${fmt(t.run.start)}${t.run.how === "screenshot" ? " from a screenshot" : ""}` : t.tableAge != null ? `from your screenshot${t.tableAge ? `, ${t.tableAge} d old` : ""}` : "ticked by hand"}</div></div>
           </div>
         </div>
         <div style={tile(3)}>
