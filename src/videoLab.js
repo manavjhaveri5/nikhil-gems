@@ -48,7 +48,15 @@ const codecKey = cfg => cfg
 export async function openClip(src, label = "") {
   const blob = typeof src === "string"
     ? await (async () => {
-        const res = await fetch(src, { mode: "cors" });
+        /* The listing card has usually played this file already, and the
+           browser can hand back that copy — fetched without CORS — and fail
+           the read ("Failed to fetch"). A fresh copy, past the cache, is fine. */
+        let res;
+        try { res = await fetch(src, { mode: "cors" }); }
+        catch {
+          try { res = await fetch(src + (src.includes("?") ? "&" : "?") + "_v=" + Date.now(), { mode: "cors", cache: "no-store" }); }
+          catch { throw new Error("Couldn't download the video — check the connection and try again."); }
+        }
         if (!res.ok) throw new Error(`Couldn't load the video (${res.status})`);
         return res.blob();
       })()

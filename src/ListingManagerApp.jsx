@@ -9704,6 +9704,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [editing,    setEditing]    = useState(null);
   const [formSteps,  setFormSteps]  = useState(null);   // open the form on its listing steps (a renewal)
   const [renewCount, setRenewCount] = useState(0);      // what the Renew tab has left to decide
+  const [etsyView, setEtsyView] = useState(() => { try { return localStorage.getItem("lm-etsy-view") || "listings"; } catch { return "listings"; } });
+  useEffect(() => { try { localStorage.setItem("lm-etsy-view", etsyView); } catch { /* fine */ } }, [etsyView]);
   const [soldModal,  setSoldModal]  = useState(null);
   const [view,       setView]       = useState(() => { try { return localStorage.getItem("lm-view") || "grid"; } catch { return "grid"; } });
   useEffect(() => { try { localStorage.setItem("lm-view", view); } catch {} }, [view]);
@@ -10735,7 +10737,6 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     { key: "listings", label: "All Listings", count: listings.length },
     { key: "orders",   label: "Orders",       count: orders.length,  color: C.green },
     { key: "renew",    label: "Renew",        count: renewCount,     color: "#F56400" },
-    ...(currentUser?.role === "admin" ? [{ key: "insights", label: "📈 Insights" }] : []),
     ...PLATFORMS.filter(p => !p.coming).map(p => ({
       key: p.key, label: p.label, icon: p.icon, color: p.color,
       count: listings.filter(l => ["active", "draft"].includes(l.platforms?.[p.key]?.status)).length,
@@ -10963,12 +10964,22 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
 
         {/* ══ ORDERS ══ */}
-        {tab === "insights" && currentUser?.role === "admin" && <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights listings={listings} onOpenRenew={() => setTab("renew")} /></Suspense>}
         {tab === "renew" && <RenewalQueue listings={listings} stock={stock} getToken={getEtsyToken} onRenew={renewFromQueue} showToast={showToast} who={who} onCount={setRenewCount} />}
         {tab === "orders" && <OrdersView hideMoney={currentUser?.role !== "admin" && Array.isArray(currentUser?.hide) && currentUser.hide.includes("orderMoney")} orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
 
         {/* ══ PLATFORM TABS ══ */}
-        {tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}
+        {/* Etsy: the shop's listings, and (for admin) how it's selling and where the ad money goes. */}
+        {tab === "etsy" && currentUser?.role === "admin" && (
+          <div style={{ display: "inline-flex", gap: 2, padding: 3, background: C.card, borderRadius: 10, marginBottom: 14 }}>
+            {[["listings", "Etsy listings"], ["insights", "📈 Insights & ads"]].map(([k, l]) => (
+              <button key={k} onClick={() => setEtsyView(k)} style={{ border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 800, padding: "7px 14px", borderRadius: 8,
+                background: etsyView === k ? C.surface : "transparent", color: etsyView === k ? C.ink : C.inkMid, boxShadow: etsyView === k ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>{l}</button>
+            ))}
+          </div>
+        )}
+        {tab === "etsy" && currentUser?.role === "admin" && etsyView === "insights"
+          ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights listings={listings} onOpenRenew={() => setTab("renew")} /></Suspense>
+          : tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
           <ShopifyStoreView
