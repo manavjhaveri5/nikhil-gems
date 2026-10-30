@@ -726,12 +726,20 @@ async function activateEtsyListing(listingId, readinessStateId = null) {
   const body = { state: "active", ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}) };
   let r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`,
     { method: "PATCH", headers: hdrs, body: JSON.stringify(body) });
+  const first = r.ok ? null : await r.clone().json().catch(() => ({}));
   if (!r.ok) {
     r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`,
       { method: "PATCH", headers: hdrs, body: JSON.stringify(body) });
   }
   if (r.ok) return { ok: true };
-  const d = await r.json().catch(() => ({}));
+  /* What Etsy says the listing is now settles it: renewing an expired listing
+     can come back as an error and still go through, and the fallback route's
+     "Resource not found" said nothing about why the first one failed. */
+  try {
+    const now = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, { headers: hdrs });
+    if (now.ok && (await now.json())?.state === "active") return { ok: true };
+  } catch { /* fall through to the error */ }
+  const d = r.status === 404 && first ? first : await r.json().catch(() => ({}));
   const why = String(d.error || d.error_description || d.message || `HTTP ${r.status}`).slice(0, 180);
   console.error("Etsy activate failed:", r.status, JSON.stringify(d));
   return { ok: false, error: why };
