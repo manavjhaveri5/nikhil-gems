@@ -408,7 +408,7 @@ function AdHistory({ h, be, busy, error }) {
           <b>Listing and renewing have nearly stopped:</b> {h.fresh14} listings put up or renewed in the last two weeks, against about {Math.round(h.fresh90)} in a usual two weeks before that. A renewed or new listing gets a fresh start in Etsy search, and your record months (Mar–Apr 2026) were the months you listed and renewed most.
         </div>
       )}
-      <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
         <Kpi label="Each extra $1 of ads brought" value={est ? usd2(est.b) : "—"} sub={est ? `in sales · 80% range ${usd2(est.lo)}–${usd2(est.hi)} · ${estLabel}` : "not enough budget changes yet"} tone={verdict?.bg} />
         <Kpi label="Break-even" value={usd2(be)} sub="sales a $1 of ads must bring back" />
         <Kpi label="Etsy Ads, last 12 months" value={usd(h.year.etsy)} sub={`${usd(h.year.sales)} sales · ads ${h.year.sales ? (h.year.etsy / h.year.sales * 100).toFixed(1) : 0}% of sales`} />
@@ -445,6 +445,152 @@ function AdHistory({ h, be, busy, error }) {
           <button onClick={() => setPg(p + 1)} disabled={p >= pages - 1} style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer" }}>›</button>
         </div>
       )}
+    </Section>
+  );
+}
+
+/* What sells: every order line since the shop opened, put against what's on
+   sale now. Price bands, kinds of piece (read from the title), exact against
+   similar (the ERP's type, else the title), the big statement sales, and the
+   buyers who come back. */
+const KINDS = [["Cluster / specimen", /cluster|druse|geode|cathedral|specimen|mineral|matrix|formation/i], ["Sphere", /sphere|\bball\b|\borb\b/i],
+  ["Jewellery", /pendant|necklace|\bring\b|earring|bracelet|bead|mala|jewel/i], ["Point / tower", /point|tower|obelisk|wand|generator|pyramid|vogel/i],
+  ["Bowl / carving", /bowl|dish|carving|carved|skull|buddha|ganesh|lingam|shivling|bottle|sculpture/i], ["Palm / heart / tumble", /palm|heart|tumble|worry|egg|pocket/i],
+  ["Slab / slice", /slab|slice|plate/i], ["Raw / rough", /\braw\b|rough/i]];
+const kindOf = t => (KINDS.find(([, re]) => re.test(t)) || ["Other"])[0];
+const SIMILAR = /similar|you will receive|you'll receive|choose|set of|\blot\b|bulk|wholesale|random|intuitively|assorted/i;
+const BANDS = [["Under $25", 0, 25], ["$25–75", 25, 75], ["$75–150", 75, 150], ["$150–300", 150, 300], ["$300 and up", 300, Infinity]];
+const bandOf = p => BANDS.findIndex(([, a, b]) => p >= a && p < b);
+
+function WhatSells({ hist, live, erpListings }) {
+  const [span, setSpan] = useState(365), [bigPg, setBigPg] = useState(0);
+  const r = useMemo(() => {
+    const lines = hist?.lines;
+    if (!lines?.length) return null;
+    const erp = {};
+    for (const l of erpListings || []) { const id = l.platforms?.etsy?.listing_id; if (id) erp[String(id)] = l; }
+    const since = span ? dayKey(Date.now() - span * DAY) : "";
+    const typeOf = x => erp[x.lid]?.type || live.find(l => l.id === x.lid)?.type || (SIMILAR.test(x.title) ? "repeatable" : "unique");
+    const rows = lines.filter(x => x.k >= since).map(x => ({ ...x, rev: x.price * x.qty, band: bandOf(x.price), kind: kindOf(x.title), type: typeOf(x) === "repeatable" ? "similar" : "exact" }));
+    const total = rows.reduce((s2, x) => s2 + x.rev, 0) || 1;
+    const yrs = Math.max(1 / 12, Math.min(span || 9999, (Date.now() - Date.parse(lines[0].k)) / DAY) / 365);
+    const group = (key, inv) => {
+      const g = {};
+      for (const x of rows) { const k = key(x); (g[k] ||= { k, rev: 0, units: 0 }); g[k].rev += x.rev; g[k].units += x.qty; }
+      for (const l of live) { const k = inv(l); if (k == null) continue; (g[k] ||= { k, rev: 0, units: 0 }); g[k].live = (g[k].live || 0) + 1; }
+      return Object.values(g).map(v => ({ ...v, share: v.rev / total, perListing: v.live ? v.rev / v.live / yrs : null }));
+    };
+    const bands = group(x => x.band, l => bandOf(l.priceUSD)).sort((a, b) => a.k - b.k);
+    const kinds = group(x => x.kind, l => kindOf(l.title)).sort((a, b) => b.rev - a.rev);
+    const types = group(x => x.type, l => (l.type === "repeatable" ? "similar" : "exact")).sort((a, b) => b.rev - a.rev);
+    // Orders: their value, and the share the big ones bring.
+    const orders = {};
+    for (const x of rows) { const o = (orders[x.rid] ||= { rid: x.rid, k: x.k, v: 0, buyer: x.buyer, name: x.name, country: x.country }); o.v += x.rev; }
+    const ov = Object.values(orders).sort((a, b) => a.v - b.v);
+    const median = ov.length ? ov[Math.floor(ov.length / 2)].v : 0;
+    const bigOrders = ov.filter(o => o.v >= 300);
+    // Average order a quarter, whole history, to show the drift.
+    const q = {};
+    for (const x of lines) { const k = `${x.k.slice(0, 4)} Q${Math.floor((+x.k.slice(5, 7) - 1) / 3) + 1}`; const e = (q[k] ||= { k, v: 0, ids: new Set(), big: 0 }); e.v += x.price * x.qty; e.ids.add(x.rid); if (x.price >= 300) e.big += x.price * x.qty; }
+    const quarters = Object.values(q).map(e => ({ k: e.k, v: e.v, n: e.ids.size, aov: e.v / e.ids.size, bigShare: e.big / (e.v || 1) })).slice(-10);
+    // Buyers who came back.
+    const by = {};
+    for (const o of Object.values(orders)) { if (!o.buyer) continue; const b = (by[o.buyer] ||= { name: o.name, country: o.country, n: 0, v: 0, last: "" }); b.n++; b.v += o.v; if (o.k > b.last) b.last = o.k; }
+    const buyers = Object.values(by), repeat = buyers.filter(b => b.n > 1);
+    const repeatRev = repeat.reduce((s2, b) => s2 + b.v, 0);
+    const big = rows.filter(x => x.price >= 300).sort((a, b) => b.price - a.price);
+    return { rows, total, bands, kinds, types, median, nOrders: ov.length, bigOrders, bigRev: bigOrders.reduce((s2, o) => s2 + o.v, 0), quarters, buyers, repeat: repeat.sort((a, b) => b.v - a.v), repeatRev, big };
+  }, [hist, live, erpListings, span]);
+
+  if (!r) return null;
+  const pct = v => `${Math.round(v * 100)}%`;
+  const top = r.bands[r.bands.length - 1], low = r.bands[0];
+  const bestKind = [...r.kinds].filter(k => k.live >= 5 && k.perListing != null).sort((a, b) => b.perListing - a.perListing)[0];
+  const exact = r.types.find(t => t.k === "exact"), similar = r.types.find(t => t.k === "similar");
+  const qa = r.quarters, q0 = qa[Math.max(0, qa.length - 6)], q1 = qa[qa.length - 1];
+  const takeaways = [
+    top && `Pieces of $300 and up are ${pct(top.share)} of sales from ${top.units} sales. A listing in that band earns about ${usd(top.perListing)} a year, against ${usd(low?.perListing)} for one under $25.`,
+    exact && similar && `Exact pieces bring ${pct(exact.share)} of the money at about ${usd(exact.rev / Math.max(1, exact.units))} each; similar pieces bring ${pct(similar.share)} at about ${usd(similar.rev / Math.max(1, similar.units))}, but ${pct(similar.units / (exact.units + similar.units))} of the units.`,
+    bestKind && `${bestKind.k} earns the most per listing: about ${usd(bestKind.perListing)} a year each, with ${bestKind.live} live now.`,
+    q0 && q1 && q0 !== q1 && `Average order: ${usd(q0.aov)} in ${q0.k}, ${usd(q1.aov)} in ${q1.k}, while orders went from ${q0.n} to ${q1.n} a quarter.`,
+    r.repeat.length > 0 && `${r.repeat.length} buyers came back for more; together they're ${pct(r.repeatRev / r.total)} of sales.`,
+  ].filter(Boolean);
+  const th = { color: C.inkFaint, fontSize: 10.5, textTransform: "uppercase", letterSpacing: .6, textAlign: "right", fontWeight: 800, padding: "0 0 6px 8px" };
+  const td = { padding: "6px 0 6px 8px", textAlign: "right", fontVariantNumeric: "tabular-nums", borderTop: `1px solid ${C.border}` };
+  const Bar = ({ v, col = SALES }) => <div style={{ height: 6, borderRadius: 3, background: C.card, minWidth: 60 }}><div style={{ width: `${Math.min(100, v * 100)}%`, height: 6, borderRadius: 3, background: col }} /></div>;
+  const Table = ({ head, rows: rs, label }) => (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse", fontSize: 12.5 }}>
+        <thead><tr><th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>{head}</th><th style={th}>Sales</th><th style={{ ...th, width: "18%" }}>Share</th><th style={th}>Sold</th><th style={th}>Avg</th><th style={th}>Live now</th><th style={th}>A listing earns/yr</th></tr></thead>
+        <tbody>{rs.map(b => (
+          <tr key={b.k}>
+            <td style={{ ...td, textAlign: "left", paddingLeft: 0, fontWeight: 700 }}>{label(b)}</td>
+            <td style={{ ...td, fontWeight: 800 }}>{usd(b.rev)}</td>
+            <td style={td}><div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "flex-end" }}><Bar v={b.share} /><span style={{ width: 32 }}>{pct(b.share)}</span></div></td>
+            <td style={td}>{b.units}</td><td style={td}>{b.units ? usd(b.rev / b.units) : "—"}</td><td style={td}>{b.live || 0}</td>
+            <td style={{ ...td, fontWeight: 800, color: C.ink }}>{b.perListing != null ? usd(b.perListing) : "—"}</td>
+          </tr>))}</tbody>
+      </table>
+    </div>
+  );
+  const per = 8, bigPages = Math.max(1, Math.ceil(r.big.length / per)), bp = Math.min(bigPg, bigPages - 1);
+  const fmt = k => new Date(k + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const sub = { fontSize: 15, fontWeight: 800, color: C.ink, margin: "20px 0 6px" };
+  return (
+    <Section title="What sells" sub="Every order since the shop opened, against what's on sale now. “A listing earns” is that group's sales over the period, per listing live now, per year."
+      right={<div style={{ display: "flex", gap: 4 }}>{[[365, "12 months"], [730, "2 years"], [0, "All years"]].map(([v, l]) => (
+        <button key={v} onClick={() => setSpan(v)} style={{ border: `1px solid ${span === v ? C.ink : C.border}`, background: span === v ? C.ink : C.surface, color: span === v ? C.surface : C.inkMid, borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{l}</button>))}</div>}>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+        <Kpi label="From $300+ orders" value={pct(r.bigRev / r.total)} sub={`${r.bigOrders.length} of ${r.nOrders} orders`} />
+        <Kpi label="Middle order" value={usd(r.median)} sub={`half of orders are under this · ${usd(r.total)} in all`} />
+        <Kpi label="Exact pieces" value={exact ? pct(exact.share) : "—"} sub={`of sales · similar pieces ${similar ? pct(similar.share) : "—"}`} />
+        <Kpi label="Buyers who came back" value={pct(r.repeatRev / r.total)} sub={`of sales · ${r.repeat.length} of ${r.buyers.length} buyers`} />
+      </div>
+      <div style={{ background: C.card, borderRadius: 10, padding: "10px 14px", fontSize: 13, color: C.ink, lineHeight: 1.6 }}>
+        {takeaways.map((t, i) => <div key={i}>• {t}</div>)}
+      </div>
+
+      <div style={sub}>By price</div>
+      <Table head="Price of the piece" rows={r.bands} label={b => BANDS[b.k]?.[0] || "?"} />
+      <div style={sub}>By kind of piece</div>
+      <Table head="Kind (from the title)" rows={r.kinds} label={b => b.k} />
+      <div style={sub}>Exact piece or similar piece</div>
+      <Table head="Listing" rows={r.types} label={b => b.k === "exact" ? "Exact piece (you get this one)" : "Similar piece (one like it)"} />
+
+      <div style={sub}>Order size, quarter by quarter</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", minWidth: 480, borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead><tr><th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>Quarter</th><th style={th}>Orders</th><th style={th}>Sales</th><th style={th}>Average order</th><th style={th}>From $300+ pieces</th></tr></thead>
+          <tbody>{[...r.quarters].reverse().map(e => (
+            <tr key={e.k}><td style={{ ...td, textAlign: "left", paddingLeft: 0, fontWeight: 700 }}>{e.k}</td><td style={td}>{e.n}</td><td style={td}>{usd(e.v)}</td><td style={{ ...td, fontWeight: 800 }}>{usd(e.aov)}</td><td style={td}>{pct(e.bigShare)}</td></tr>))}</tbody>
+        </table>
+      </div>
+
+      <div style={sub}>The statement pieces that sold</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", minWidth: 480, borderCollapse: "collapse", fontSize: 12.5 }}>
+          <tbody>{r.big.slice(bp * per, bp * per + per).map((x, i) => (
+            <tr key={x.rid + x.lid + i}><td style={{ ...td, textAlign: "left", paddingLeft: 0, color: C.inkMid, whiteSpace: "nowrap" }}>{fmt(x.k)}</td><td style={{ ...td, textAlign: "left" }}>{x.title}</td><td style={{ ...td, color: C.inkMid }}>{x.kind}</td><td style={{ ...td, fontWeight: 800 }}>{usd(x.price)}</td></tr>))}</tbody>
+        </table>
+      </div>
+      {bigPages > 1 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end", marginTop: 8, fontSize: 12, color: C.inkMid }}>
+          <button onClick={() => setBigPg(bp - 1)} disabled={bp === 0} style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer" }}>‹</button>
+          <span>Page {bp + 1} of {bigPages}</span>
+          <button onClick={() => setBigPg(bp + 1)} disabled={bp >= bigPages - 1} style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer" }}>›</button>
+        </div>
+      )}
+
+      {r.repeat.length > 0 && <>
+        <div style={sub}>Your best returning buyers</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 420, borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead><tr><th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>Buyer</th><th style={th}>Orders</th><th style={th}>Spent</th><th style={th}>Last order</th></tr></thead>
+            <tbody>{r.repeat.slice(0, 10).map((b, i) => (
+              <tr key={i}><td style={{ ...td, textAlign: "left", paddingLeft: 0, fontWeight: 700 }}>{b.name || "—"} <span style={{ color: C.inkFaint, fontWeight: 400 }}>{b.country}</span></td><td style={td}>{b.n}</td><td style={{ ...td, fontWeight: 800 }}>{usd(b.v)}</td><td style={td}>{fmt(b.last)}</td></tr>))}</tbody>
+          </table>
+        </div>
+      </>}
     </Section>
   );
 }
@@ -610,6 +756,8 @@ async function loadHistory(set) {
   let kept = null;
   try { kept = await loadK(HIST_KEY); } catch { /* read it fresh */ }
   if (kept?.days?.length) set({ ...kept, busy: true });
+  // A copy kept before order lines were added is read again whole, once.
+  if (kept && !kept.lines) kept = { ...kept, at: 0, days: [] };
   if (kept?.at && Date.now() - kept.at < 6 * 3600000) return set({ ...kept, busy: false });
   const lastK = kept?.days?.length ? kept.days[kept.days.length - 1].k : null;
   const from = lastK ? Math.floor(Date.parse(lastK + "T00:00:00+05:30") / 1000) - 3 * 86400 : 0;
@@ -619,7 +767,8 @@ async function loadHistory(set) {
     if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
     const cut = from ? new Date((from + 19800) * 1000).toISOString().slice(0, 10) : "";
     const days = [...(kept?.days || []).filter(x => cut && x.k < cut), ...d.days];
-    const next = { at: Date.now(), firstDay: kept?.firstDay || d.firstDay, days };
+    const lines = [...(kept?.lines || []).filter(x => cut && x.k < cut), ...(d.lines || [])];
+    const next = { at: Date.now(), firstDay: kept?.firstDay || d.firstDay, days, lines };
     set(next);
     saveK(HIST_KEY, next, { merge: false }).catch(() => {});
   } catch (e) { set(kept ? { ...kept, busy: false, error: e.message } : { error: e.message || "Couldn't reach Etsy", days: [] }); }
@@ -890,6 +1039,8 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
           </div>
         )}
       </div>
+
+      <WhatSells hist={hist} live={m.live} erpListings={listings} />
 
       <AdStrategy m={m} onPrice={onPrice} hist={hist} />
 

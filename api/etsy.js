@@ -416,15 +416,26 @@ export default async function handler(req, res) {
         else if (type.startsWith("offsite_ads_fee")) row(dayOf(ts)).offsite += amt;
         else if (["listing", "renew", "renew_expired", "auto_renew_expired"].includes(type)) row(dayOf(ts)).fresh += 1;
       }
+      // And each order's lines, for what sells: the listing, its price in $, who bought.
+      const lines = [];
       for (const r of receipts) {
         const ts = +r.created_timestamp || 0, m = r.subtotal?.amount != null ? r.subtotal : r.grandtotal;
         const d = row(dayOf(ts));
         d.sales += toUSD((+m?.amount || 0) / (+m?.divisor || 100), m?.currency_code, ts);
         d.orders += 1;
+        // Line prices are list prices; the order's subtotal is after any sale or coupon, so lines are scaled to it.
+        const listed = (r.transactions || []).reduce((a, t) => a + (+t.price?.amount || 0) / (+t.price?.divisor || 100) * (+t.quantity || 1), 0);
+        const paid = (+m?.amount || 0) / (+m?.divisor || 100), f = listed > 0 && paid > 0 ? Math.min(1, paid / listed) : 1;
+        for (const t of r.transactions || []) lines.push({
+          k: dayOf(ts), rid: String(r.receipt_id), lid: String(t.listing_id || ""), qty: +t.quantity || 1,
+          price: +(f * toUSD((+t.price?.amount || 0) / (+t.price?.divisor || 100), t.price?.currency_code || m?.currency_code, ts)).toFixed(2),
+          title: String(t.title || "").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&").slice(0, 110),
+          buyer: String(r.buyer_user_id || ""), name: String(r.name || "").slice(0, 40), country: r.country_iso || "",
+        });
       }
       const out = Object.values(days).sort((a, b) => a.k.localeCompare(b.k))
         .map(d => ({ ...d, etsy: +d.etsy.toFixed(2), offsite: +d.offsite.toFixed(2), sales: +d.sales.toFixed(2) }));
-      return res.json({ ok: true, from, through: nowS, firstDay: dayOf(from), days: out });
+      return res.json({ ok: true, from, through: nowS, firstDay: dayOf(from), days: out, lines: lines.sort((a, b) => a.k.localeCompare(b.k)) });
     }
 
     // ── insights: what the Insights tab works from, in one call ──────────────────
