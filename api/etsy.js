@@ -395,7 +395,7 @@ export default async function handler(req, res) {
       const days = Math.min(400, Math.max(30, parseInt(req.query.days, 10) || 180));
       const from = nowS - days * 86400, adsFrom = nowS - 90 * 86400;
       const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
-      const { allPages } = etsyQueue(authHeaders);
+      const { allPages, getJson } = etsyQueue(authHeaders);
       const listingsP = allPages(offset => `https://openapi.etsy.com/v3/application/shops/${sid}/listings?${new URLSearchParams({ state: "active", limit: "100", offset: String(offset), includes: "Images,Videos" })}`);
       const receiptsP = allPages(offset => `https://openapi.etsy.com/v3/application/shops/${sid}/receipts?${new URLSearchParams({ was_paid: "true", limit: "100", offset: String(offset), min_created: String(from), sort_on: "created", sort_order: "desc" })}`);
       const windows = [];
@@ -405,7 +405,7 @@ export default async function handler(req, res) {
       ))).then(c => ({ rows: c.flat() }), e => ({ error: e.message }));
       const [rawListings, rawReceipts, ledger] = await Promise.all([listingsP, receiptsP, ledgerP]);
 
-      const listings = rawListings.map(l => {
+      const shape = l => {
         const img = [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
         return {
           id: String(l.listing_id), title: String(l.title || "").slice(0, 140),
@@ -415,9 +415,10 @@ export default async function handler(req, res) {
           tags: (l.tags || []).length, sku: (l.skus || [])[0] || "",
           first: +l.original_creation_timestamp || +l.creation_timestamp || 0,
           ends: +l.ending_timestamp || 0, auto: !!l.should_auto_renew,
-          img: img ? img.url_170x135 || img.url_570xN || "" : "",
+          img: img ? img.url_170x135 || img.url_570xN || "" : "", state: l.state || "active",
         };
-      });
+      };
+      const listings = rawListings.map(shape);
       const VOID = ["canceled", "cancelled", "fully refunded", "fully_refunded"];
       const seen = new Set(), receipts = [];
       for (const r of rawReceipts) {
@@ -435,6 +436,18 @@ export default async function handler(req, res) {
           lines: (r.transactions || []).map(t => ({ lid: String(t.listing_id || ""), qty: +t.quantity || 1, amt: Number((money(t.price) * (+t.quantity || 1)).toFixed(2)), title: String(t.title || "").slice(0, 90) })),
         });
       }
+      /* The listings behind those orders that aren't on sale any more — a one
+         of a kind piece leaves the active list the moment it sells — read in
+         batches, so their sales still count against their views. */
+      const activeIds = new Set(listings.map(l => l.id));
+      const goneIds = [...new Set(receipts.flatMap(r => r.lines.map(l => l.lid)).filter(id => id && !activeIds.has(id)))];
+      const others = [];
+      for (let i = 0; i < goneIds.length && i < 1500; i += 100) {
+        try {
+          const d = await getJson(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${goneIds.slice(i, i + 100).join(",")}&includes=Images,Videos`);
+          for (const l of d.results || []) others.push(shape(l));
+        } catch { /* a batch that fails leaves those rows without views */ }
+      }
       const ads = [], seenE = new Set();
       for (const e of ledger.rows || []) {
         const type = String(e.ledger_type || "").toLowerCase();
@@ -443,7 +456,7 @@ export default async function handler(req, res) {
         seenE.add(e.entry_id);
         ads.push({ ts: +e.created_timestamp || +e.create_date || 0, kind, amt: Number((-(+e.amount || 0) / 100).toFixed(2)), ref: String(e.reference_id || ""), rtype: String(e.reference_type || "") });
       }
-      return res.json({ ok: true, at: nowS, days, currency: receipts.find(() => true) ? (rawReceipts[0]?.grandtotal?.currency_code || "") : "", listings, receipts, ads, ...(ledger.error ? { adsError: ledger.error } : {}) });
+      return res.json({ ok: true, at: nowS, days, currency: receipts.find(() => true) ? (rawReceipts[0]?.grandtotal?.currency_code || "") : "", listings, others, receipts, ads, ...(ledger.error ? { adsError: ledger.error } : {}) });
     }
 
     // ── renewal_queue: listings that have come off the shop, and the ones about to ─
