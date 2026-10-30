@@ -11,6 +11,14 @@ import PhotoEditor from "./PhotoEditor.jsx";
    for. */
 const VideoEditor = lazy(() => import("./VideoEditor.jsx"));
 const EtsyInsights = lazy(() => import("./EtsyInsights.jsx"));
+/* The listing server's reply. When it runs out of time or falls over, Vercel
+   answers with a plain-text page ("An error occurred…"), which read as
+   "Unexpected token 'A'… is not valid JSON". Say what happened instead. */
+const lmJson = async r => {
+  const text = await r.text();
+  try { return JSON.parse(text); }
+  catch { return { ok: false, error: r.status === 504 || /timed out|timeout/i.test(text) ? "The server ran out of time talking to the platform — it may have gone through; check the listing there, then try again." : `The server didn't answer properly (${r.status}). Try again in a minute.` }; }
+};
 import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 /* Etsy category / section / shape tables — shared with the Telegram listing bot,
    which files its drafts under exactly the same taxonomy. */
@@ -1925,7 +1933,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "ai_generate", listing: { ...form, tags } }),
       });
-      const d = await r.json().catch(() => ({}));
+      const d = await lmJson(r).catch(() => ({}));
       if (!d.ai) throw new Error(d.error || `AI failed (${r.status})`);
       if (d.ai) {
         // Merged through the same rules a typed tag goes through, so the chips
@@ -10432,7 +10440,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate, force_photos: forcePhotos }),
       });
-      const d = await r.json();
+      const d = await lmJson(r);
       /* A failure can come after the listing was made (Etsy kept it a draft):
          its id is kept even so, so pressing Publish again finishes that one
          instead of making another. */
@@ -10516,7 +10524,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         store_key: storeKey,
       }),
     });
-    const d = await r.json();
+    const d = await lmJson(r);
     if (!d.ok) throw new Error(d.error || "Could not check Shopify video");
     const result = d.result || {};
     await patchListingItem(listing, current => ({
@@ -10633,7 +10641,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey }),
     });
-    const d = await r.json();
+    const d = await lmJson(r);
     if (!d.ok) throw new Error(d.error || "Failed");
 
     await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { status: "deleted" } }, updated_at: now() }));
@@ -10690,7 +10698,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey }),
         });
-        const d = await r.json();
+        const d = await lmJson(r);
         if (!d.ok) console.warn(`Auto-unpublish failed for ${p.key}:`, d.error);
       }));
 

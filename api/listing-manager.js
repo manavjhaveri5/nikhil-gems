@@ -69,6 +69,17 @@ const ETSY_SHOP_ID   = process.env.ETSY_SHOP_ID   || "21113006";
 // x-api-key must be just the keystring (API key), NOT "keystring:sharedsecret"
 const ETSY_API_KEY   = process.env.ETSY_API_KEY    || process.env.ETSY_KEYSTRING || "";
 
+/* Etsy allows a few calls a second; a publish (fields, photos, video, then
+   going live) can burst past that and get "Exceeded per second rate limit",
+   which used to fail the publish outright. Wait and try again instead. */
+async function etsyFetch(url, opts) {
+  for (let i = 0; ; i++) {
+    const r = await fetch(url, opts);
+    if (r.status !== 429 && !(r.status === 404 && i < 3 && /rate limit/i.test(await r.clone().text().catch(() => "")))) return r;
+    if (i >= 4) return r;
+    await new Promise(s => setTimeout(s, 600 * (i + 1)));
+  }
+}
 async function etsyHeaders(json = true) {
   const token = await getEtsyAccessToken();
   return {
@@ -96,7 +107,7 @@ async function etsyShippingProfiles(hdrs) {
   if (etsyShippingCache) return etsyShippingCache;
   try {
     const { "Content-Type": _drop, ...bare } = hdrs;
-    const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/shipping-profiles`, { headers: bare });
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/shipping-profiles`, { headers: bare });
     if (!r.ok) return [];
     etsyShippingCache = ((await r.json())?.results || []).map(p => ({ id: p.shipping_profile_id, label: p.title || "" }));
     return etsyShippingCache;
@@ -125,7 +136,7 @@ async function resolveSectionId(listing, hdrs) {
   try {
     if (!etsySectionCache) {
       const { "Content-Type": _drop, ...bare } = hdrs;
-      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/sections`, { headers: bare });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/sections`, { headers: bare });
       if (!r.ok) return null;
       etsySectionCache = ((await r.json())?.results || []).map(x => ({ id: x.shop_section_id, title: decodeHtmlish(x.title || "") }));
     }
@@ -394,7 +405,7 @@ async function researchEtsy(listing) {
   // One batch call for their photos.
   if (scored.length) {
     try {
-      const b = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${scored.map(x => x.id).join(",")}&includes=Images`, { headers: await etsyHeaders(false) });
+      const b = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${scored.map(x => x.id).join(",")}&includes=Images`, { headers: await etsyHeaders(false) });
       const bd = await b.json();
       const img = Object.fromEntries((bd.results || []).map(x => [String(x.listing_id), x.images?.[0]?.url_170x135 || x.images?.[0]?.url_570xN || ""]));
       scored.forEach(x => { x.image = img[x.id] || ""; });
@@ -599,7 +610,7 @@ async function etsyListingImages(listingId, authHdrs) {
   const { "Content-Type": _ct, ...bare } = authHdrs;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: bare });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: bare });
       if (r.ok) {
         const d = await r.json().catch(() => ({}));
         return Array.isArray(d?.results) ? d.results : [];
@@ -623,7 +634,7 @@ async function deleteEtsyImage(listingId, imageId, authHdrs) {
   const { "Content-Type": _ct, ...bare } = authHdrs;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
       if (r.ok || r.status === 404) return { ok: true };   // gone is gone
       if (r.status !== 429 && r.status < 500) {
         const d = await r.json().catch(() => ({}));
@@ -640,7 +651,7 @@ async function deleteEtsyImage(listingId, imageId, authHdrs) {
 async function etsyListingVideos(listingId, authHdrs) {
   try {
     const { "Content-Type": _ct, ...bare } = authHdrs;
-    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/videos`, { headers: bare });
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/videos`, { headers: bare });
     if (!r.ok) return [];
     const d = await r.json().catch(() => ({}));
     return Array.isArray(d?.results) ? d.results : [];
@@ -700,7 +711,7 @@ function curatedTags(own, suggested, maxLen = 20) {
 async function verifyEtsyTags(listingId, expected, hdrs) {
   if (!expected.length) return null;
   try {
-    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, { headers: hdrs });
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, { headers: hdrs });
     if (!r.ok) return null;
     const live = ((await r.json())?.tags || []).map(t => String(t).toLowerCase());
     const missing = expected.filter(t => !live.includes(t.toLowerCase()));
@@ -724,11 +735,11 @@ export const stripWarehouseNote = t => String(t || "").replace(/\n*\s*Please not
 async function activateEtsyListing(listingId, readinessStateId = null) {
   const hdrs = await etsyHeaders();
   const body = { state: "active", ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}) };
-  let r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`,
+  let r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`,
     { method: "PATCH", headers: hdrs, body: JSON.stringify(body) });
   const first = r.ok ? null : await r.clone().json().catch(() => ({}));
   if (!r.ok) {
-    r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`,
+    r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`,
       { method: "PATCH", headers: hdrs, body: JSON.stringify(body) });
   }
   if (r.ok) return { ok: true };
@@ -736,7 +747,7 @@ async function activateEtsyListing(listingId, readinessStateId = null) {
      can come back as an error and still go through, and the fallback route's
      "Resource not found" said nothing about why the first one failed. */
   try {
-    const now = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, { headers: hdrs });
+    const now = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, { headers: hdrs });
     if (now.ok && (await now.json())?.state === "active") return { ok: true };
   } catch { /* fall through to the error */ }
   const d = r.status === 404 && first ? first : await r.json().catch(() => ({}));
@@ -804,7 +815,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   const readinessId = await pickReadinessState(listing, hdrs);
   if (readinessId) payload.readiness_state_id = readinessId;
 
-  const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings`, {
+  const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings`, {
     method: "POST", headers: hdrs, body: JSON.stringify(payload),
   });
 
@@ -821,7 +832,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
      from applyEtsyVariations below.) */
   if (listingSku(listing) && !etsyVariationAxes(listing).length) {
     try {
-      const inv = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, {
+      const inv = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, {
         method: "PUT", headers: hdrs, body: JSON.stringify({
           products: [{ sku: listingSku(listing).slice(0, 32), property_values: [],
             offerings: [{ price: payload.price, quantity, is_enabled: true, ...(readinessId ? { readiness_state_id: readinessId } : {}) }] }],
@@ -867,7 +878,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
       { method: "PATCH", headers: hdrs, body: JSON.stringify(activateBody) }
     );
     if (!activateR.ok) {
-      activateR = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, {
+      activateR = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, {
         method: "PATCH", headers: hdrs, body: JSON.stringify(activateBody),
       });
     }
@@ -942,7 +953,7 @@ async function applyEtsyVariations(listingId, listing, hdrs, readinessId) {
     ...(readinessId ? { readiness_state_on_property: [] } : {}),
   };
   try {
-    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { method: "PUT", headers: hdrs, body: JSON.stringify(body) });
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { method: "PUT", headers: hdrs, body: JSON.stringify(body) });
     if (r.ok) return "";
     const d = await r.json().catch(() => ({}));
     console.error("Etsy inventory update failed:", JSON.stringify(d));
@@ -961,12 +972,12 @@ async function applyEtsyPlainInventory(listingId, listing, hdrs, readinessId, qu
   const price = parseFloat((+listing.price_etsy || 0).toFixed(2));
   if (!(price > 0)) return "";
   try {
-    const cur = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { headers: hdrs });
+    const cur = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { headers: hdrs });
     const inv = cur.ok ? await cur.json() : null;
     const products = inv?.products || [];
     if (products.length > 1) return "Etsy has options on this listing that the ERP doesn't — price left as it is there";
     const sku = (listingSku(listing) || products[0]?.sku || "").slice(0, 32);
-    const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, {
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, {
       method: "PUT", headers: hdrs, body: JSON.stringify({
         products: [{ ...(sku ? { sku } : {}), property_values: [],
           offerings: [{ price, quantity, is_enabled: true, ...(readinessId ? { readiness_state_id: readinessId } : {}) }] }],
@@ -1024,13 +1035,13 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
   const existingStatus = listing.platforms?.etsy?.status || "draft";
 
   // Try shop-scoped endpoint first (works for both draft + active listings)
-  let r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`, {
+  let r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`, {
     method: "PATCH", headers: hdrs, body: JSON.stringify(patchBody),
   });
 
   // Fall back to global endpoint
   if (!r.ok) {
-    const fallback = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, {
+    const fallback = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, {
       method: "PATCH", headers: hdrs, body: JSON.stringify(patchBody),
     });
     // If both fail, log and return existing data — NEVER create a new listing from an update path
@@ -1189,7 +1200,7 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
 
 /* ── Etsy: delete/end listing ──────────────────────────────────────────────── */
 async function unpublishEtsy(listingId) {
-  const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, {
+  const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}`, {
     method: "DELETE",
     headers: await etsyHeaders(false),
   });
@@ -1575,7 +1586,7 @@ export default async function handler(req, res) {
       const id = String(url.searchParams.get("id") || "").replace(/\D/g, "");
       if (!id) return res.status(400).json({ ok: false, error: "id required" });
       try {
-        const r = await fetch(`https://openapi.etsy.com/v3/application/listings/${id}`, { headers: await etsyHeaders(false) });
+        const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${id}`, { headers: await etsyHeaders(false) });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) return res.status(r.status === 404 ? 404 : 502).json({ ok: false, error: d?.error || `Etsy ${r.status}` });
         return res.json({ ok: true, state: d.state, url: d.url || `https://www.etsy.com/listing/${id}` });
@@ -1674,7 +1685,7 @@ export default async function handler(req, res) {
         const check = String(url.searchParams.get("check") || "").split(",").filter(x => /^\d+$/.test(x) && !states[x]).slice(0, 500);
         for (let i = 0; i < check.length; i += 100) {
           const chunk = check.slice(i, i + 100);
-          const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
+          const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
           if (!r.ok) break;
           const d = await r.json().catch(() => ({}));
           for (const l of d.results || []) {
@@ -1790,7 +1801,7 @@ export default async function handler(req, res) {
     const hdrs = await etsyHeaders(false);
     const ids = [];
     for (let offset = 0; ; offset += 100) {
-      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=100&offset=${offset}`, { headers: hdrs });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=100&offset=${offset}`, { headers: hdrs });
       const d = await r.json();
       if (!r.ok) return res.status(502).json({ error: d?.error || `Etsy ${r.status}` });
       ids.push(...(d.results || []).map(l => String(l.listing_id)));
@@ -1812,7 +1823,7 @@ export default async function handler(req, res) {
     const states = {};
     for (let i = 0; i < want.length; i += 100) {
       const chunk = want.slice(i, i + 100);
-      const r = await fetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/batch?listing_ids=${chunk.join(",")}`, { headers: hdrs });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) return res.status(502).json({ error: d?.error || `Etsy ${r.status}` });
       for (const l of d.results || []) states[String(l.listing_id)] = l.state || "unknown";
@@ -1890,7 +1901,7 @@ export default async function handler(req, res) {
         const hdrs = await etsyHeaders(false);
         search: for (const state of ["active", "draft", "inactive"]) {
           for (let offset = 0; offset < 300; offset += 100) {
-            const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}&sort_on=created&sort_order=desc`, { headers: hdrs });
+            const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}&sort_on=created&sort_order=desc`, { headers: hdrs });
             if (!r.ok) break;
             const d = await r.json().catch(() => ({}));
             /* A SKU the ERP made from this listing's own id belongs to this piece

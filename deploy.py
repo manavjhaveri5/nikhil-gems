@@ -125,11 +125,19 @@ max_durations = {
     "blob-upload.js": 30, "admin-create-user.js": 30,
     "ebay.js": 30, "mail.js": 15,
 }
+# vercel.json's "functions" is where each function's limit is meant to live;
+# the table above is only the fallback. (It used to win, and cut the Listing
+# Manager's Etsy publishes off at 30s while vercel.json asked for 300.)
+try:
+    with open(os.path.join(ROOT_DIR, "vercel.json")) as f:
+        _vj_functions = json.load(f).get("functions", {}) or {}
+except Exception:
+    _vj_functions = {}
 for fi in api_files:
     if fi["kind"] == "function":
         fn_name = os.path.basename(fi["file"])
         functions_config[fi["file"]] = {
-            "maxDuration": max_durations.get(fn_name, 30)
+            "maxDuration": (_vj_functions.get(fi["file"]) or {}).get("maxDuration") or max_durations.get(fn_name, 30)
         }
 
 # Create deployment with static files + serverless functions
