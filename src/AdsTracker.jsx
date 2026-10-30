@@ -18,6 +18,16 @@ const BREAK_EVEN = 2.1;            // sales a $1 of ads must bring back (60% mar
 const CUT_CLICKS = 60;             // clicks with no sale before a test listing is called
 const GROUPS = { winner: ["✅ Ad winner", C.green, C.greenBg], test: ["🧪 Test", C.blue || C.inkMid, C.card], off: ["❌ Keep off", C.red, C.redBg] };
 
+// Why a listing isn't selling, as worked out from its ad results, favourites and price (see the plan's diag).
+const DIAG = { "Price too high": C.red, "Listing page": C.amber, "Search photo/title": C.amber, "Low demand": C.inkMid, "Too cheap for ads": C.inkMid };
+const FIX = {
+  "Price too high": "Lower the price 15–20%, or send an offer to the people who favourited it.",
+  "Listing page": "Add a size/scale photo and a video, tighten the first lines of the description, and check the shipping cost and delivery time buyers see.",
+  "Search photo/title": "Change the first photo (bright, close, clean background) and start the title with what it is and its size.",
+  "Low demand": "Rewrite the title and 13 tags with the words buyers search for, or accept it's a niche piece and keep it out of ads.",
+  "Too cheap for ads": "It sells on its own; keep ads off it.",
+};
+
 const norm = s => String(s || "").toLowerCase().replace(/&quot;|&#39;|&amp;/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
 const fmt = k => new Date(k + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 const daysAgo = ms => Math.floor((Date.now() - ms) / DAY);
@@ -221,6 +231,7 @@ export default function AdsTracker({ listings = [] }) {
     todo: t.items.filter(i => i.act || i.promote),
     on: t.items.filter(i => i.should),
     off: t.items.filter(i => i.group === "off"),
+    work: t.items.filter(i => i.diag?.length).sort((a, b) => (b.past?.spend || 0) - (a.past?.spend || 0)),
     all: t.items,
   };
   const list = lists[show], per = 15, pages = Math.max(1, Math.ceil(list.length / per)), pg = Math.min(page, pages - 1);
@@ -290,8 +301,16 @@ export default function AdsTracker({ listings = [] }) {
 
       <Section title="The plan, listing by listing" sub={`Ad winners first, then untested pieces in the price band that pays for ads; enough of them for the budget (about 2.5 listings per $1 a day, so each gets 20–30 clicks a month to prove itself). A test listing with ${CUT_CLICKS} clicks and no sale is called; one that sells at ${BREAK_EVEN}× or better moves up to winners.`}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-          {pill("todo", "To do")}{pill("on", "Should be on")}{pill("off", "Keep off")}{pill("all", "All")}
+          {pill("todo", "To do")}{pill("on", "Should be on")}{pill("off", "Keep off")}{pill("work", "Needs work")}{pill("all", "All")}
         </div>
+        {show === "work" && (
+          <div style={{ display: "grid", gap: 6, marginBottom: 12, background: C.card, borderRadius: 10, padding: "10px 12px" }}>
+            {Object.entries(FIX).map(([k, f]) => {
+              const n = lists.work.filter(i => i.diag.some(d => d.k === k)).length;
+              return n ? <div key={k} style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.45 }}><Tag color={DIAG[k]} bg={C.surface}>{k} · {n}</Tag> {f}</div> : null;
+            })}
+          </div>
+        )}
         {!list.length ? <div style={{ fontSize: 13, color: C.inkMid }}>{show === "todo" ? "Nothing to do right now." : "None."}</div> : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -308,8 +327,10 @@ export default function AdsTracker({ listings = [] }) {
                           <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 3, alignItems: "center" }}>
                             <Tag color={gc} bg={gb}>{gl}</Tag>
                             {i.state && i.state !== "active" && <Tag color={C.red} bg={C.redBg}>{i.state}</Tag>}
+                            {i.diag?.map(d => <Tag key={d.k} color={DIAG[d.k] || C.inkMid} bg={C.card}>{d.k}</Tag>)}
                             <span style={{ fontSize: 11, color: C.inkFaint }}>{i.why}</span>
                           </div>
+                          {show === "work" && i.diag?.map(d => <div key={d.k} style={{ fontSize: 11.5, color: C.ink, lineHeight: 1.45, marginTop: 4, maxWidth: 520, whiteSpace: "normal" }}><b style={{ color: DIAG[d.k] || C.inkMid }}>{d.k}:</b> {d.text}</div>)}
                         </div>
                       </div>
                     </td>
@@ -317,9 +338,10 @@ export default function AdsTracker({ listings = [] }) {
                       {i.on == null ? <button onClick={() => markOn(i.id, true)} title="Mark as switched on" style={{ ...btn, padding: "3px 7px", color: C.inkFaint }}>?</button>
                         : <button onClick={() => !i.s && markOn(i.id, !i.on)} title={i.s ? "From your Etsy Ads screenshot" : "Marked by hand: click to change"} style={{ ...btn, padding: "3px 8px", cursor: i.s ? "default" : "pointer", color: i.on ? C.green : C.inkFaint, borderColor: i.on ? C.green : C.border }}>{i.on ? "On" : "Off"}</button>}
                     </td>
-                    <td style={td}>{i.s ? i.s.clicks : "—"}</td>
-                    <td style={td}>{i.s ? usd2(i.s.spend) : "—"}</td>
-                    <td style={td}>{i.s ? `${i.s.orders}${i.s.revenue ? ` · ${usd(i.s.revenue)}` : ""}` : "—"}</td>
+                    {/* Since the restart where a screenshot covers it, else the two-year record in grey. */}
+                    <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? i.s.clicks : i.past ? i.past.clicks : "—"}</td>
+                    <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? usd2(i.s.spend) : i.past ? usd(i.past.spend) : "—"}</td>
+                    <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? `${i.s.orders}${i.s.revenue ? ` · ${usd(i.s.revenue)}` : ""}` : i.past ? `${i.past.orders}${i.past.rev ? ` · ${usd(i.past.rev)}` : ""}` : "—"}</td>
                     <td style={td}>{i.sold ? `${i.sold.n} · ${usd(i.sold.v)}` : "—"}</td>
                     <td style={{ ...td, textAlign: "left" }}>
                       <div style={{ fontWeight: 800, color: i.act ? i.tone : C.inkMid }}>{i.act || i.note || (i.should ? "On the list" : "")}</div>
