@@ -2018,6 +2018,28 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const pcs = cardMeasure(linkedCard, "pcs");
     return pcs > 0 ? kg / pcs : kg;
   })();
+  /* Pieces of the same stone already priced in the shop, for pricing this one
+     by the kilo: same stone and shape first, then the same stone in any shape.
+     Only pieces with a written weight (the field, or in the title), so the per-kilo figure is real. */
+  const comparables = useMemo(() => {
+    // Its weight field, else a weight in its title ("183g Ruby Fuchsite Skull", "1.557kg Apophyllite").
+    const kgOf = l => { const w = String(l.weight || "").match(/([\d.]+)\s*(kg|kgs|g|gm|gms|grams?)\b/i) || String(l.title || "").match(/(\d+(?:\.\d+)?)\s*(kg|kgs|g|gm|gms|grams?)\b/i); return w && +w[1] > 0 ? (/^k/i.test(w[2]) ? +w[1] : +w[1] / 1000) : 0; };
+    const norm = v => String(v || "").trim().toLowerCase();
+    const mat = norm(form.material), shp = norm(form.shape);
+    if (!mat) return [];
+    const priced = l => +l.price_etsy > 0 || +l.price_store > 0 || +l.price_trade > 0;
+    const pool = (listings || []).filter(l => l.id !== form.id && norm(l.material) === mat && kgOf(l) > 0 && priced(l));
+    const same = pool.filter(l => norm(l.shape) === shp);
+    // The same stone and shape with no weight still compare by the piece.
+    const byPiece = shp ? (listings || []).filter(l => l.id !== form.id && norm(l.material) === mat && norm(l.shape) === shp && !kgOf(l) && priced(l)).slice(0, 6) : [];
+    const rows = [...(same.length >= 3 ? same : [...same, ...pool.filter(l => norm(l.shape) !== shp)]), ...byPiece]
+      .map(l => ({ id: l.id, title: l.title, image: (l.images || []).find(u => typeof u === "string") || "", kg: kgOf(l), shape: l.shape || "", sameShape: norm(l.shape) === shp,
+        price_etsy: +l.price_etsy || 0, price_store: +l.price_store || 0, price_trade: +l.price_trade || 0,
+        sold: l.status === "sold" || +l.qty === 0, live: Object.values(l.platforms || {}).some(p => p?.status === "active") }))
+      .sort((a, b) => (!!b.kg - !!a.kg) || (b.sameShape - a.sameShape) || Math.abs(a.kg - pieceKg) - Math.abs(b.kg - pieceKg));
+    return [...rows.filter(r => r.kg).slice(0, 12), ...rows.filter(r => !r.kg)];
+  }, [listings, form.id, form.material, form.shape, pieceKg]);
+
   /* What this piece cost, from its stock card. The card's cost price is per
      its first unit (stock is valued qty × cost price), so: per piece, it's
      that; by weight, it's that × this piece's own weight — not the card's
@@ -3290,7 +3312,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
+        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onClose={() => setSteps(null)}
           onDone={() => { setSteps(null); onClose(); }}
           onApply={(patch, to, opts) => { setForm(f => ({ ...f, ...patch })); setPublishTo(p => ({ ...p, ...to })); setSteps(null); handleSave(patch, { ...publishTo, ...to }, opts); }} />

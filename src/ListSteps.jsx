@@ -76,7 +76,7 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
   );
 }
 
-export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, onDone, research = false }) {
+export default function ListSteps({ form, orders, stock = [], weightKg = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, onDone, research = false }) {
   const [step, setStep] = useState(start);
   // An exception to the stock-card rule: a piece with no stock card (a sample,
   // consignment, a one-off bought in), kept on the listing with its reason.
@@ -496,6 +496,69 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, rate
           {step === "price" && <>
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Prices</div>
             {!chosen.length && <div style={{ color: C.inkMid, fontSize: 14 }}>Pick where it goes first.</div>}
+            {/* Priced by the kilo against the same stone already in the shop: each
+                similar piece's price over its own weight, the middle of those, and
+                what that rate makes this piece — one tap to use it. */}
+            {comparables.length > 0 && chosen.length > 0 && (() => {
+              const storeOf = c => c.price_store || (c.price_etsy ? storePriceFor({ price_etsy: c.price_etsy }, fx, s?.price_rounding, sale) : 0) || 0;
+              const weighed = comparables.filter(c => c.kg > 0), pieces = comparables.filter(c => !c.kg);
+              const median = a => { const v = a.filter(x => x > 0).sort((x, y) => x - y); if (!v.length) return 0; const m = Math.floor(v.length / 2); return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2; };
+              // Per gram for pieces under a kilo (₹34/g reads; ₹34,000/kg doesn't), per kilo for lots.
+              const perG = (weightKg || median(weighed.map(c => c.kg))) < 1;
+              const unitKg = perG ? .001 : 1, unitName = perG ? "g" : "kg";
+              const rate = (price, kg) => price && kg ? price / (kg / unitKg) : 0;
+              const rows = weighed.map(c => ({ ...c, etsyR: rate(c.price_etsy, c.kg), storeR: rate(storeOf(c), c.kg) }));
+              const mEtsy = median(rows.map(r => r.etsyR)), mStore = median(rows.map(r => r.storeR));
+              const pEtsy = median(pieces.map(c => c.price_etsy)), pStore = median(pieces.map(c => storeOf(c)));
+              const units = weightKg / unitKg;
+              const fmtR = (v, cur) => cur === "₹" ? `₹${v >= 100 ? Math.round(v).toLocaleString("en-IN") : (+v.toFixed(1)).toLocaleString("en-IN")}` : `$${v >= 100 ? Math.round(v) : +v.toFixed(2)}`;
+              const nowEtsyR = weightKg && +p.price_etsy ? +p.price_etsy / units : 0, nowStoreR = weightKg && +p.price_store ? +p.price_store / units : 0;
+              const vs = (now, m) => now && m ? (Math.abs(now / m - 1) < .05 ? "in line with" : `${Math.round(Math.abs(now / m - 1) * 100)}% ${now > m ? "above" : "below"}`) : "";
+              const kgText = k => k < 1 ? `${Math.round(k * 1000)} g` : `${+k.toFixed(2)} kg`;
+              const sameN = rows.filter(r => r.sameShape).length;
+              const cell = { fontSize: 12, color: C.inkMid, textAlign: "right", whiteSpace: "nowrap" };
+              const useBtn = { fontSize: 12, fontWeight: 800, borderRadius: 8, padding: "6px 11px", cursor: "pointer", border: `1px solid ${C.border}`, background: C.surface, color: C.ink };
+              const row = (r, a, b) => (
+                <div key={r.id} style={{ display: "grid", gridTemplateColumns: "34px 1fr 64px 84px 76px", gap: 8, alignItems: "center" }}>
+                  <div style={{ width: 34, height: 34, borderRadius: 6, overflow: "hidden", background: C.card }}>{r.image && <img src={r.image} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</div>
+                  <div style={{ fontSize: 12, color: C.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.title}>
+                    {r.title}{!r.sameShape && r.shape ? <span style={{ color: C.inkFaint }}> · {r.shape}</span> : ""}{r.sold ? <span style={{ color: C.inkFaint }}> · sold</span> : ""}
+                  </div>
+                  <div style={cell}>{r.kg ? kgText(r.kg) : "a piece"}</div><div style={cell}>{a}</div><div style={cell}>{b}</div>
+                </div>
+              );
+              return <Box>
+                <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>Similar pieces in the shop</div>
+                <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2, marginBottom: 8 }}>
+                  {form.material}{sameN || pieces.length ? ` ${String(form.shape || "").toLowerCase()}s` : ""} already priced · Etsy listed price and store price, per {unitName === "g" ? "gram" : "kilo"} of each piece's own weight{pieces.length ? ", or per piece where there's no weight" : ""}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "34px 1fr 64px 84px 76px", gap: 8, fontSize: 10, fontWeight: 800, color: C.inkFaint, letterSpacing: .4, marginBottom: 4 }}>
+                  <span /><span /><span style={{ textAlign: "right" }}>WEIGHT</span><span style={{ textAlign: "right" }}>ETSY</span><span style={{ textAlign: "right" }}>STORE</span>
+                </div>
+                <div style={{ display: "grid", gap: 4, maxHeight: 240, overflowY: "auto" }}>
+                  {rows.map(r => row(r, r.etsyR ? <>{fmtR(r.etsyR, "₹")}<span style={{ color: C.inkFaint }}>/{unitName}</span></> : "—", r.storeR ? <>{fmtR(r.storeR, "$")}<span style={{ color: C.inkFaint }}>/{unitName}</span></> : "—"))}
+                  {pieces.map(r => row(r, r.price_etsy ? inr(r.price_etsy) : "—", storeOf(r) ? usd(storeOf(r)) : "—"))}
+                </div>
+                <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 8, paddingTop: 8, fontSize: 12.5, color: C.ink, display: "grid", gap: 6 }}>
+                  {(mEtsy > 0 || mStore > 0) && <div>Middle of these: <b>{mEtsy ? `${fmtR(mEtsy, "₹")}/${unitName} on Etsy` : ""}</b>{mEtsy && mStore ? " · " : ""}{mStore ? <b>{fmtR(mStore, "$")}/{unitName} on the store</b> : null}</div>}
+                  {weightKg > 0 && (mEtsy > 0 || mStore > 0) && vi < 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span>At that rate, this piece ({kgText(weightKg)}) is</span>
+                    {mEtsy > 0 && pick.etsy && <button type="button" style={useBtn} onClick={() => setP(v => ({ ...v, price_etsy: String(Math.round(mEtsy * units / 10) * 10) }))}>Use {inr(Math.round(mEtsy * units / 10) * 10)} on Etsy</button>}
+                    {mStore > 0 && pick.store && <button type="button" style={useBtn} onClick={() => setP(v => ({ ...v, price_store: String(Math.round(mStore * units)) }))}>Use {usd(Math.round(mStore * units))} on the store</button>}
+                  </div>}
+                  {!weightKg && rows.length > 0 && <div style={{ color: C.inkMid }}>Add this piece's weight (or its stock card's kilos) to price it from these.</div>}
+                  {pieces.length > 0 && (pEtsy > 0 || pStore > 0) && vi < 0 && <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span>By the piece, the middle is</span>
+                    {pEtsy > 0 && pick.etsy && <button type="button" style={useBtn} onClick={() => setP(v => ({ ...v, price_etsy: String(Math.round(pEtsy)) }))}>Use {inr(Math.round(pEtsy))} on Etsy</button>}
+                    {pStore > 0 && pick.store && <button type="button" style={useBtn} onClick={() => setP(v => ({ ...v, price_store: String(Math.round(pStore)) }))}>Use {usd(Math.round(pStore))} on the store</button>}
+                  </div>}
+                  {(nowEtsyR > 0 || nowStoreR > 0) && <div style={{ color: C.inkMid }}>
+                    As priced now: {nowEtsyR ? <>{fmtR(nowEtsyR, "₹")}/{unitName} on Etsy{mEtsy ? `, ${vs(nowEtsyR, mEtsy)} the middle` : ""}</> : null}
+                    {nowEtsyR && nowStoreR ? " · " : ""}{nowStoreR ? <>{fmtR(nowStoreR, "$")}/{unitName} on the store{mStore ? `, ${vs(nowStoreR, mStore)} the middle` : ""}</> : null}
+                  </div>}
+                </div>
+              </Box>;
+            })()}
             {chosen.some(c => c.key !== "trade") && <Box>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{ flex: 1 }}>
