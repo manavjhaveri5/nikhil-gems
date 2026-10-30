@@ -382,6 +382,51 @@ export default async function handler(req, res) {
       return res.json({ ok: true, items: await briefListings({ getJson }, ids) });
     }
 
+    // ── ads_history: the shop's whole life, a row a day ─────────────────────────
+    // Etsy Ads charges (prolist, and advector before it), Offsite Ads fees, sales
+    // and orders, and how many listings went up or were renewed that day, from
+    // ?from (unix s; default the shop's first day) to now. Days are India time.
+    // The Insights tab keeps the rows and asks only for the last few days again.
+    // Money is in $; rupee rows are turned at that year's average rate.
+    if (action === "ads_history") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const { allPages, getJson } = etsyQueue(authHeaders);
+      let from = parseInt(req.query.from, 10) || 0;
+      if (!from) { const shop = await getJson(`https://openapi.etsy.com/v3/application/shops/${sid}`); from = +shop.create_date || +shop.created_timestamp || nowS - 365 * 86400; }
+      const INR = { 2019: 71, 2020: 74, 2021: 74, 2022: 79, 2023: 82, 2024: 83.5, 2025: 86, 2026: 92 };
+      const toUSD = (v, cur, ts) => cur === "INR" ? v / (INR[new Date(ts * 1000).getUTCFullYear()] || 92) : v;
+      const dayOf = ts => new Date((ts + 19800) * 1000).toISOString().slice(0, 10);
+      const windows = [];
+      for (let a = from; a < nowS; a += 31 * 86400) windows.push([a, Math.min(nowS + 60, a + 31 * 86400 - 1)]);
+      const [ledger, receipts] = await Promise.all([
+        Promise.all(windows.map(([a, b]) => allPages(o => `https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${a}&max_created=${b}&limit=100&offset=${o}`))).then(c => c.flat()),
+        allPages(o => `https://openapi.etsy.com/v3/application/shops/${sid}/receipts?${new URLSearchParams({ was_paid: "true", limit: "100", offset: String(o), min_created: String(from), sort_on: "created", sort_order: "desc" })}`),
+      ]);
+      const days = {};
+      const row = k => (days[k] ||= { k, etsy: 0, offsite: 0, sales: 0, orders: 0, fresh: 0 });
+      const seen = new Set();
+      for (const e of ledger) {
+        if (seen.has(e.entry_id)) continue;
+        seen.add(e.entry_id);
+        const ts = +e.created_timestamp || +e.create_date || 0, type = String(e.ledger_type || "").toLowerCase();
+        const amt = -toUSD((+e.amount || 0) / 100, e.currency, ts);
+        if (type === "prolist" || type === "advector") row(dayOf(ts)).etsy += amt;
+        else if (type.startsWith("offsite_ads_fee")) row(dayOf(ts)).offsite += amt;
+        else if (["listing", "renew", "renew_expired", "auto_renew_expired"].includes(type)) row(dayOf(ts)).fresh += 1;
+      }
+      for (const r of receipts) {
+        const ts = +r.created_timestamp || 0, m = r.subtotal?.amount != null ? r.subtotal : r.grandtotal;
+        const d = row(dayOf(ts));
+        d.sales += toUSD((+m?.amount || 0) / (+m?.divisor || 100), m?.currency_code, ts);
+        d.orders += 1;
+      }
+      const out = Object.values(days).sort((a, b) => a.k.localeCompare(b.k))
+        .map(d => ({ ...d, etsy: +d.etsy.toFixed(2), offsite: +d.offsite.toFixed(2), sales: +d.sales.toFixed(2) }));
+      return res.json({ ok: true, from, through: nowS, firstDay: dayOf(from), days: out });
+    }
+
     // ── insights: what the Insights tab works from, in one call ──────────────────
     // Every active listing with its lifetime views and favourites and what it
     // shows (photo and video counts); paid receipts for ?days (default 180) with

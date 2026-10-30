@@ -276,10 +276,183 @@ function budgetRuns(days, minLen = 7) {
   });
 }
 
+
+/* Every budget change in the shop's life, and what sales did around it. The
+   daily Etsy Ads charges are split into runs of steady spend (budgetRuns); at
+   each change the four weeks before are set against the four weeks after.
+   Pooled, with bigger changes counting more (a slope through the origin), that
+   reads what an extra $1 a day of ads has brought in sales a day. Sales the
+   Offsite Ads were charged on are taken out first (fee ÷ 15%), since those
+   are paid per sale, not by the budget. */
+function readHistory(hist) {
+  if (!hist?.days?.length) return null;
+  const today = dayKey(Date.now());
+  const by = Object.fromEntries(hist.days.map(d => [d.k, d]));
+  const first = hist.days.find(d => d.orders > 0 || d.etsy > 0)?.k || hist.days[0].k;
+  const series = [];
+  for (let t = Date.parse(first + "T12:00:00"); ; t += DAY) {
+    const k = dayKey(t);
+    if (k >= today) break;
+    const d = by[k] || { etsy: 0, offsite: 0, sales: 0, orders: 0, fresh: 0 };
+    series.push({ k, ms: dayStart(t), etsy: d.etsy, offsite: d.offsite, sales: d.sales, orders: d.orders, fresh: d.fresh, own: Math.max(0, d.sales - d.offsite / 0.15) });
+  }
+  if (series.length < 60) return null;
+  const firstAds = series.findIndex(d => d.etsy > 0);
+  const runs = firstAds < 0 ? [] : budgetRuns(series.slice(firstAds), 10);
+  const mean = (a, f) => a.reduce((s2, d) => s2 + f(d), 0) / Math.max(1, a.length);
+  const events = [];
+  for (let i = 1; i < runs.length; i++) {
+    const before = runs[i - 1].days.slice(-28), after = runs[i].days.slice(0, 28);
+    if (before.length < 7 || after.length < 7) continue;
+    const a0 = mean(before, d => d.etsy), a1 = mean(after, d => d.etsy), s0 = mean(before, d => d.own), s1 = mean(after, d => d.own);
+    events.push({ k: runs[i].from, a0, a1, s0, s1, da: a1 - a0, ds: s1 - s0 });
+  }
+  const pool = ev => {
+    if (ev.length < 3) return null;
+    const sxx = ev.reduce((s2, e) => s2 + e.da * e.da, 0), b = ev.reduce((s2, e) => s2 + e.da * e.ds, 0) / sxx;
+    const rss = ev.reduce((s2, e) => s2 + (e.ds - b * e.da) ** 2, 0), se = Math.sqrt(rss / (ev.length - 1) / sxx);
+    return { b, lo: b - Z80 * se, hi: b + Z80 * se, n: ev.length };
+  };
+  const yearAgo = dayKey(Date.now() - 365 * DAY);
+  const recentEv = events.filter(e => e.k >= yearAgo);
+  // Month by month, for the picture.
+  const months = [];
+  for (const d of series) {
+    const k = d.k.slice(0, 7);
+    let mo = months[months.length - 1];
+    if (!mo || mo.k !== k) months.push(mo = { k, etsy: 0, offsite: 0, sales: 0, orders: 0, fresh: 0, n: 0 });
+    mo.etsy += d.etsy; mo.offsite += d.offsite; mo.sales += d.sales; mo.orders += d.orders; mo.fresh += d.fresh; mo.n++;
+  }
+  // Are the ads running? The last day with a charge, against the month before it.
+  let lastCharge = null;
+  for (let i = series.length - 1; i >= 0; i--) if (series[i].etsy > 0) { lastCharge = series[i]; break; }
+  const quietDays = lastCharge ? series.length - 1 - series.indexOf(lastCharge) : series.length;
+  const before30 = lastCharge ? mean(series.slice(Math.max(0, series.indexOf(lastCharge) - 29), series.indexOf(lastCharge) + 1), d => d.etsy) : 0;
+  const yr = series.filter(d => d.k >= yearAgo), onDays = yr.filter(d => d.etsy > 0);
+  const fresh14 = series.slice(-14).reduce((s2, d) => s2 + d.fresh, 0), fresh90 = series.slice(-104, -14).reduce((s2, d) => s2 + d.fresh, 0) / 90 * 14;
+  return {
+    series, runs, events, months, all: pool(events), recent: pool(recentEv), recentN: recentEv.length,
+    lastCharge, quietDays, before30, onPerDay: mean(onDays, d => d.etsy),
+    total: { etsy: series.reduce((s2, d) => s2 + d.etsy, 0), offsite: series.reduce((s2, d) => s2 + d.offsite, 0), sales: series.reduce((s2, d) => s2 + d.sales, 0) },
+    year: { etsy: yr.reduce((s2, d) => s2 + d.etsy, 0), sales: yr.reduce((s2, d) => s2 + d.sales, 0), offsite: yr.reduce((s2, d) => s2 + d.offsite, 0) },
+    fresh14, fresh90,
+  };
+}
+
+function MonthChart({ months }) {
+  const [hover, setHover] = useState(null);
+  const W = 1000, H = 250, PL = 46, PR = 46, PT = 12, PB = 26, CW = W - PL - PR, CH = H - PT - PB, n = months.length;
+  const sMax = niceMax(Math.max(1, ...months.map(m => m.sales)) * 1.05), aMax = niceMax(Math.max(1, ...months.map(m => m.etsy)) * 1.05);
+  const slot = CW / Math.max(1, n), bw = Math.max(2, slot * 0.66);
+  const x = i => PL + i * slot + slot / 2, yS = v => PT + CH * (1 - v / sMax), yA = v => PT + CH * (1 - v / aMax);
+  const line = months.map((m, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${yA(m.etsy).toFixed(1)}`).join("");
+  const h = hover != null ? months[hover] : null;
+  return (
+    <div style={{ position: "relative" }}>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5, color: C.inkMid, marginBottom: 6 }}>
+        <span><i style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: SALES, opacity: .8, marginRight: 5 }} />Sales a month (left scale)</span>
+        <span><i style={{ display: "inline-block", width: 14, height: 2.5, background: ETSYADS, marginRight: 5, verticalAlign: "middle" }} />Etsy Ads spend a month (right scale)</span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", touchAction: "pan-y" }}
+        onPointerMove={e => { const r = e.currentTarget.getBoundingClientRect(); const i = Math.floor(((e.clientX - r.left) / r.width * W - PL) / slot); setHover(i >= 0 && i < n ? i : null); }}
+        onPointerLeave={() => setHover(null)}>
+        {[0.25, 0.5, 0.75, 1].map(t => (
+          <g key={t}>
+            <line x1={PL} x2={W - PR} y1={yS(t * sMax)} y2={yS(t * sMax)} stroke={C.border} />
+            <text x={PL - 6} y={yS(t * sMax) + 4} textAnchor="end" fontSize={11} fill={C.inkFaint}>{usdK(t * sMax)}</text>
+            <text x={W - PR + 6} y={yA(t * aMax) + 4} fontSize={11} fill={ETSYADS}>{usdK(t * aMax)}</text>
+          </g>
+        ))}
+        {hover != null && <rect x={PL + hover * slot} y={PT} width={slot} height={CH} fill={C.card} />}
+        {months.map((m, i) => <rect key={m.k} x={x(i) - bw / 2} y={yS(m.sales)} width={bw} height={yS(0) - yS(m.sales)} fill={SALES} opacity={hover === i ? 1 : .72} rx={1.5} />)}
+        <path d={line} fill="none" stroke={ETSYADS} strokeWidth={2.5} strokeLinejoin="round" />
+        {months.map((m, i) => m.k.endsWith("-01") && <text key={m.k} x={x(i)} y={H - 8} textAnchor="middle" fontSize={11} fill={C.inkFaint}>{m.k.slice(0, 4)}</text>)}
+      </svg>
+      {h && (
+        <div style={{ position: "absolute", top: 26, left: `${Math.min(70, Math.max(2, (x(hover) / W) * 100 - 10))}%`, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, padding: "8px 10px", fontSize: 12, boxShadow: "0 4px 14px rgba(0,0,0,.08)", pointerEvents: "none", minWidth: 170 }}>
+          <div style={{ fontWeight: 800, color: C.ink, marginBottom: 3 }}>{new Date(h.k + "-01T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" })}</div>
+          <div>Sales <b>{usd(h.sales)}</b> · {h.orders} orders</div>
+          <div style={{ color: ETSYADS }}>Etsy Ads <b>{usd(h.etsy)}</b> ({usd2(h.etsy / h.n)}/day)</div>
+          <div style={{ color: OFFSITE }}>Offsite fees {usd(h.offsite)}</div>
+          <div style={{ color: C.inkMid }}>Listed or renewed: {h.fresh}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdHistory({ h, be, busy, error }) {
+  const [pg, setPg] = useState(0);
+  if (!h) return (
+    <Section title="Six years of ads: what actually worked" sub="Every Etsy Ads charge and every order since the shop opened.">
+      <div style={{ fontSize: 13, color: error ? C.red : C.inkMid }}>{error ? `Couldn't read the history: ${error}` : "Reading the shop's whole history from Etsy, which takes about a minute the first time…"}</div>
+    </Section>
+  );
+  const est = h.recent && h.recentN >= 4 ? h.recent : h.all, estLabel = est === h.recent ? "the last 12 months" : "all years";
+  const verdict = !est ? null
+    : est.lo > be ? { tone: C.green, bg: C.greenBg, head: `Ads pay. Each extra $1 has brought about ${usd2(est.b)} in sales`, body: `Over ${estLabel}, every time the budget went up sales rose with it, and every time it came down they fell: ${usd2(est.b)} a dollar (80% range ${usd2(est.lo)}–${usd2(est.hi)}), above the ${usd2(be)} a dollar has to bring back to break even. Keep them on, at about ${usd2(Math.max(5, h.onPerDay))}/day (your average this year on days they ran) or more.` }
+    : est.hi < be ? { tone: C.red, bg: C.redBg, head: `Ads haven't paid: about ${usd2(est.b)} back per $1`, body: `Over ${estLabel}, budget changes moved sales by about ${usd2(est.b)} per extra $1 (80% range ${usd2(est.lo)}–${usd2(est.hi)}), under the ${usd2(be)} break-even. Keep a small budget on the "Advertise" listings only.` }
+    : { tone: C.amber, bg: C.amberBg, head: `Ads about break even: ${usd2(est.b)} back per $1`, body: `Over ${estLabel}, budget changes moved sales by about ${usd2(est.b)} per extra $1 (80% range ${usd2(est.lo)}–${usd2(est.hi)}), with ${usd2(be)} needed to break even. They're not losing money, but more budget won't pay much more. Point them at the "Advertise" listings below.` };
+  const off = h.lastCharge && h.quietDays >= 3 && h.before30 > 1;
+  const ev = [...h.events].reverse(), per = 8, pages = Math.max(1, Math.ceil(ev.length / per)), p = Math.min(pg, pages - 1);
+  const fmtDay = k => new Date(k + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return (
+    <Section title="Six years of ads: what actually worked" sub={`Every Etsy Ads charge, Offsite Ads fee and order since ${fmtDay(h.series[0].k)}, read straight from Etsy and kept up to date by itself.${busy ? " Updating…" : ""}`}>
+      {off && (
+        <div style={{ background: C.redBg, color: C.red, borderRadius: 10, padding: "10px 12px", fontSize: 13, fontWeight: 700, marginBottom: 12, lineHeight: 1.5 }}>
+          ⚠️ Etsy Ads haven't charged anything since {fmtDay(h.lastCharge.k)} ({h.quietDays} days), after about {usd2(h.before30)}/day the month before. They're switched off or the budget is used up. Check Etsy → Marketing → Etsy Ads.
+        </div>
+      )}
+      {h.fresh90 > 20 && h.fresh14 < h.fresh90 * 0.35 && (
+        <div style={{ background: C.amberBg, color: C.ink, borderRadius: 10, padding: "10px 12px", fontSize: 13, marginBottom: 12, lineHeight: 1.5 }}>
+          <b>Listing and renewing have nearly stopped:</b> {h.fresh14} listings put up or renewed in the last two weeks, against about {Math.round(h.fresh90)} in a usual two weeks before that. A renewed or new listing gets a fresh start in Etsy search, and your record months (Mar–Apr 2026) were the months you listed and renewed most.
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+        <Kpi label="Each extra $1 of ads brought" value={est ? usd2(est.b) : "—"} sub={est ? `in sales · 80% range ${usd2(est.lo)}–${usd2(est.hi)} · ${estLabel}` : "not enough budget changes yet"} tone={verdict?.bg} />
+        <Kpi label="Break-even" value={usd2(be)} sub="sales a $1 of ads must bring back" />
+        <Kpi label="Etsy Ads, last 12 months" value={usd(h.year.etsy)} sub={`${usd(h.year.sales)} sales · ads ${h.year.sales ? (h.year.etsy / h.year.sales * 100).toFixed(1) : 0}% of sales`} />
+        <Kpi label="Since the shop opened" value={usd(h.total.etsy + h.total.offsite)} sub={`on ads (${usd(h.total.etsy)} Etsy Ads, ${usd(h.total.offsite)} Offsite) · ${usd(h.total.sales)} sales`} />
+      </div>
+      {verdict && (
+        <div style={{ borderLeft: `4px solid ${verdict.tone}`, background: C.card, borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}>
+          <div style={{ fontWeight: 800, color: verdict.tone, fontSize: 14.5 }}>{verdict.head}</div>
+          <div style={{ fontSize: 12.5, color: C.ink, marginTop: 4, lineHeight: 1.55, maxWidth: 900 }}>{verdict.body}{h.all && est !== h.all && <> Across all years together it's {usd2(h.all.b)} per $1 ({h.all.n} changes); the shop is a lot bigger now, so the recent figure is the one to go by.</>}</div>
+        </div>
+      )}
+      <MonthChart months={h.months} />
+      <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, margin: "18px 0 4px" }}>Every budget change, and what sales did</div>
+      <div style={{ fontSize: 12, color: C.inkMid, marginBottom: 8, lineHeight: 1.5, maxWidth: 860 }}>Found in the daily charges: each time the spend shifted for good, the four weeks before are compared with the four weeks after. One change on its own can be thrown by anything (a big order, the season), so the figure above pools all of them, with bigger changes counting more.</div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead><tr style={{ color: C.inkFaint, fontSize: 10.5, textTransform: "uppercase", letterSpacing: .6, textAlign: "right" }}><th style={{ textAlign: "left" }}>Changed on</th><th>Ads/day</th><th>Sales/day</th><th>Sales per extra $1</th></tr></thead>
+          <tbody>{ev.slice(p * per, p * per + per).map(e => {
+            const r = Math.abs(e.da) >= 2 ? e.ds / e.da : null;
+            return (
+              <tr key={e.k} style={{ borderTop: `1px solid ${C.border}`, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                <td style={{ textAlign: "left", padding: "6px 0" }}>{fmtDay(e.k)} <span style={{ color: e.da > 0 ? C.green : C.red, fontWeight: 800 }}>{e.da > 0 ? "▲ up" : "▼ down"}</span></td>
+                <td>{usd2(e.a0)} → <b>{usd2(e.a1)}</b></td>
+                <td>{usd(e.s0)} → <b>{usd(e.s1)}</b></td>
+                <td style={{ fontWeight: 800, color: r == null ? C.inkFaint : r >= be ? C.green : r > 0 ? C.amber : C.red }}>{r == null ? "too small to read" : usd2(r)}</td>
+              </tr>);
+          })}</tbody>
+        </table>
+      </div>
+      {pages > 1 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "flex-end", marginTop: 8, fontSize: 12, color: C.inkMid }}>
+          <button onClick={() => setPg(p - 1)} disabled={p === 0} style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer" }}>‹</button>
+          <span>Page {p + 1} of {pages}</span>
+          <button onClick={() => setPg(p + 1)} disabled={p >= pages - 1} style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer" }}>›</button>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 const ASSUME_KEY = "ng-insights-assume-v1";
 const readAssume = () => { try { return { margin: 0.6, cpc: 0.25, ...JSON.parse(localStorage.getItem(ASSUME_KEY) || "{}") }; } catch { return { margin: 0.6, cpc: 0.25 }; } };
 
-function AdStrategy({ m, onPrice }) {
+function AdStrategy({ m, onPrice, hist }) {
   const [as, setAs] = useState(readAssume);
   const [show, setShow] = useState("advertise"), [page, setPage] = useState(0);
   const setA = (k, v) => { const next = { ...as, [k]: v }; setAs(next); try { localStorage.setItem(ASSUME_KEY, JSON.stringify(next)); } catch { /* fine */ } };
@@ -293,16 +466,22 @@ function AdStrategy({ m, onPrice }) {
 
   // Weeks with ads known (the ledger reaches back 90 days), oldest first.
   const pts = m.weeks.filter(w => w.etsy != null).map(w => ({ x: w.etsy, y: w.sales - w.offsiteSales }));
-  const fit = slope(pts);
   const be = plan.breakEvenRoas;
-  const perDay = m.etsyAds28 / 28;
+  const h = useMemo(() => readHistory(hist), [hist]);
+  // The whole history's budget changes when there are enough; else the last 90 days' weeks.
+  const fit = h?.recent && h.recentN >= 4 ? h.recent : slope(pts);
+  const perDay = Math.max(m.etsyAds28 / 28, m.etsyAds28 < 7 && h ? h.onPerDay : 0);
   const call = !fit ? { tone: C.inkMid, head: "Not enough weeks of ad data yet", body: "Keep the budget steady for now; the call firms up as weeks build." }
-    : fit.lo > be ? { tone: C.green, head: `Raise the budget — to about ${usd2(perDay * 1.3)}/day`, body: `Weeks with more Etsy Ads went with more sales: about ${usd2(fit.b)} per extra $1 (80% range ${usd2(fit.lo)}–${usd2(fit.hi)}), above the ${usd2(be)} a dollar has to bring back to break even. Raise it 30%, keep it there two weeks, and the budget test below reads whether the gain holds.` }
+    : fit.lo > be ? { tone: C.green, head: `Raise the budget — to about ${usd2(perDay * 1.3)}/day`, body: `More Etsy Ads has gone with more sales: about ${usd2(fit.b)} per extra $1 (80% range ${usd2(fit.lo)}–${usd2(fit.hi)}), above the ${usd2(be)} a dollar has to bring back to break even. Raise it 30%, keep it there two weeks, and the budget test below reads whether the gain holds.` }
     : fit.hi < be ? { tone: C.red, head: `Cut the budget — to about ${usd2(Math.max(1, perDay * 0.6))}/day, on the "Advertise" listings only`, body: `Extra ad money hasn't been bringing enough back: about ${usd2(fit.b)} in sales per extra $1 (80% range ${usd2(fit.lo)}–${usd2(fit.hi)}), below the ${usd2(be)} break-even. Turn ads off the "Stop" listings in Etsy Ads, and lower the budget.` }
-    : { tone: C.amber, head: `Too close to call from the history — run a budget test`, body: `Weeks with more ads went with about ${usd2(fit.b)} more sales per $1, but the 80% range (${usd2(fit.lo)}–${usd2(fit.hi)}) straddles the ${usd2(be)} break-even, so the past can't settle it. Point the ads at the "Advertise" listings, then alternate two budgets — ${usd2(Math.max(1, perDay * 0.6))}/day and ${usd2(perDay * 1.4)}/day — two weeks each. The budget test below spots each change in the ad charges by itself and reads the answer from your own sales.` };
+    : { tone: C.amber, head: `Too close to call from the history — run a budget test`, body: `More ads has gone with about ${usd2(fit.b)} more sales per $1, but the 80% range (${usd2(fit.lo)}–${usd2(fit.hi)}) straddles the ${usd2(be)} break-even, so the past can't settle it. Point the ads at the "Advertise" listings, then alternate two budgets — ${usd2(Math.max(1, perDay * 0.6))}/day and ${usd2(perDay * 1.4)}/day — two weeks each. The budget test below spots each change in the ad charges by itself and reads the answer from your own sales.` };
 
   // Budget test: runs of steady spend found in the daily charges (today's still filling, so left out), the last two compared.
-  const periods = useMemo(() => { const today = dayStart(Date.now()); const ds = m.daily90.filter(d => d.ms < today); return ds.length >= 14 ? budgetRuns(ds) : []; }, [m]);
+  const periods = useMemo(() => {
+    const today = dayStart(Date.now());
+    const ds = h ? h.series.slice(-180) : m.daily90.filter(d => d.ms < today);
+    return ds.length >= 14 ? budgetRuns(ds) : [];
+  }, [m, h]);
   const lastTwo = periods.slice(-2);
   const test = lastTwo.length === 2 ? compare(lastTwo[0].days.map(d => d.sales), lastTwo[1].days.map(d => d.sales)) : null;
   const dAds = lastTwo.length === 2 ? lastTwo[1].ads - lastTwo[0].ads : 0;
@@ -311,6 +490,7 @@ function AdStrategy({ m, onPrice }) {
     const held = cur.days.length;
     const wasHigher = lastTwo.length === 2 && cur.ads > lastTwo[0].ads;
     const to = wasHigher ? Math.max(1, cur.ads * 0.6) : Math.max(1, cur.ads * 1.4);
+    if (cur.ads < 0.5) return `Etsy Ads are off: nothing has been charged for ${held} days. ${h?.recent?.lo > be ? `They've been paying (about ${usd2(h.recent.b)} back per $1), so turn them back on at about ${usd2(Math.max(5, h.onPerDay))}/day.` : "Turn them back on at a small budget on the \"Advertise\" listings, and this test will read what they add."}`;
     return held < 14
       ? `The current budget (about ${usd2(cur.ads)}/day) has run ${held} days. Leave it alone until it has two full weeks, then change it.`
       : `The budget has held at about ${usd2(cur.ads)}/day for ${held} days, long enough to read. Next step: set it to ${usd2(to)}/day in Etsy Ads and leave it two weeks. This test will spot the change in the charges by itself.`;
@@ -323,7 +503,8 @@ function AdStrategy({ m, onPrice }) {
   );
   const copyTitles = rows => { try { navigator.clipboard.writeText(rows.map(r => r.title).join("\n")); } catch { /* fine */ } };
 
-  return (
+  return (<>
+    <AdHistory h={h} be={be} busy={hist?.busy} error={hist?.error} />
     <Section title="Ad plan — where the money should go" sub="Worked out from what each listing actually converts, its price and your margin. Etsy Ads bids for you; what you control is the daily budget and which listings are in ads (Etsy Ads → Listings).">
       {/* assumptions */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.inkMid, background: C.card, borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
@@ -410,7 +591,38 @@ function AdStrategy({ m, onPrice }) {
         )}
       </div>
     </Section>
-  );
+  </>);
+}
+
+// A dropped connection gets two more tries before the page says so.
+async function fetchRetry(url) {
+  for (let i = 0; ; i++) {
+    try { return await fetch(url, { cache: "no-store" }); }
+    catch (e) { if (i >= 2) throw e; await new Promise(r => setTimeout(r, 1500 * (i + 1))); }
+  }
+}
+
+/* The shop's whole history, a row a day, kept in app_data. The first read
+   goes back to the shop's first day (a minute or so); after that only the
+   last few days are asked for again and laid over what's kept. */
+const HIST_KEY = "ng-ads-history-v1";
+async function loadHistory(set) {
+  let kept = null;
+  try { kept = await loadK(HIST_KEY); } catch { /* read it fresh */ }
+  if (kept?.days?.length) set({ ...kept, busy: true });
+  if (kept?.at && Date.now() - kept.at < 6 * 3600000) return set({ ...kept, busy: false });
+  const lastK = kept?.days?.length ? kept.days[kept.days.length - 1].k : null;
+  const from = lastK ? Math.floor(Date.parse(lastK + "T00:00:00+05:30") / 1000) - 3 * 86400 : 0;
+  try {
+    const r = await fetchRetry(`/api/etsy?action=ads_history${from ? `&from=${from}` : ""}&_=${Date.now()}`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
+    const cut = from ? new Date((from + 19800) * 1000).toISOString().slice(0, 10) : "";
+    const days = [...(kept?.days || []).filter(x => cut && x.k < cut), ...d.days];
+    const next = { at: Date.now(), firstDay: kept?.firstDay || d.firstDay, days };
+    set(next);
+    saveK(HIST_KEY, next, { merge: false }).catch(() => {});
+  } catch (e) { set(kept ? { ...kept, busy: false, error: e.message } : { error: e.message || "Couldn't reach Etsy", days: [] }); }
 }
 
 export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
@@ -421,10 +633,11 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
   const [viewsHist, setViewsHist] = useState(null);
   const [sort, setSort] = useState("rev");
 
+  const [hist, setHist] = useState(null);
   const load = async () => {
     setBusy(true); setErr("");
     try {
-      const r = await fetch(`/api/etsy?action=insights&days=180&_=${Date.now()}`, { cache: "no-store" });
+      const r = await fetchRetry(`/api/etsy?action=insights&days=180&_=${Date.now()}`);
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
       const next = { at: Date.now(), data: d };
@@ -437,6 +650,7 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
     loadK("ng-fin-rates-v1").then(r => { if (+r?.USD > 0) setRate(+r.USD); }).catch(() => {});
     loadK(VIEWS_KEY).then(v => setViewsHist(v && typeof v === "object" && !Array.isArray(v) ? v : {})).catch(() => setViewsHist({}));
     if (!cache || Date.now() - cache.at > 3 * 3600000) load();
+    loadHistory(setHist);
   }, []);
 
   // Today's lifetime views, kept once a day, so views over a week or a month can be worked out.
@@ -677,7 +891,7 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
         )}
       </div>
 
-      <AdStrategy m={m} onPrice={onPrice} />
+      <AdStrategy m={m} onPrice={onPrice} hist={hist} />
 
       {/* exact piece vs repeatable */}
       <Section title="Exact piece or similar-piece listing?" sub={`One-of-a-kind listings ("you get this stone") against repeatable ones ("you get one like it"): every listing live on Etsy now, plus the ones that sold out and left the shop. Units and revenue are the last ${range} days; conversion is six months.`}>
