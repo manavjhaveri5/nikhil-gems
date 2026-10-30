@@ -14458,6 +14458,8 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
           {draft.valuationSentAt?`✓ Valuation email sent · ${valDate(draft.valuationSentAt)}`:"Valuation email sent"}
         </label>
 
+        <InvoiceRemittances draft={draft}/>
+
         {/* Shipped toggle */}
         {draft.goodsShipped
           ?<div style={{fontSize:11,color:C.green}}>✓ Goods marked as shipped</div>
@@ -14791,6 +14793,50 @@ function InvoiceForm({draft,setDraft,buyers,company="ng",accStock=[],stock,purch
       })()}
       </fieldset>
       <InvoiceLegalCheck draft={draft} buyers={buyers} company={company} invoices={invoices}/>
+    </div>
+  );
+}
+
+/* The money side of an export, on the invoice: the BOI remittance forms made
+   for it (Bills → BOI Remittance, which keeps each set with the invoices it
+   covers) with their PDFs, and the inward remittances in the register that
+   settle it (invoice._remittances), so a credit entered there shows here. */
+function InvoiceRemittances({draft}){
+  const [sets,setSets]=useState(null),[reg,setReg]=useState(null);
+  useEffect(()=>{
+    loadK(BOI_SETS_KEY).then(v=>setSets(Array.isArray(v)?v:[])).catch(()=>setSets([]));
+    loadK(NG_REMIT_KEY).then(v=>setReg(Array.isArray(v)?v:[])).catch(()=>setReg([]));
+  },[]);
+  const no=String(draft.invNo||"").trim().toLowerCase();
+  const forms=(sets||[]).filter(x=>no&&[...(x.invoices||[]),...(x.form?.invoices||[]).map(i=>i?.no)].some(n=>String(n||"").trim().toLowerCase()===no))
+    .sort((a,b)=>String(b.at||"").localeCompare(String(a.at||"")));
+  const links=invRemitLinks(draft);
+  const credits=links.map(l=>({l,r:(reg||[]).find(r=>r.id===l.id)}));
+  const money=(c,v)=>v||v===0?`${c||""} ${(+v).toLocaleString("en-US",{maximumFractionDigits:2})}`.trim():"";
+  const row={display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",fontSize:12,color:C.ink,padding:"5px 0"};
+  const view=href=>typeof href==="string"&&href?<a href={href} target="_blank" rel="noreferrer" style={{fontSize:11.5,fontWeight:700,color:C.blue||C.ink}}>View ↗</a>:null;
+  if(sets===null||reg===null)return null;
+  return(
+    <div style={{borderTop:`1px solid ${C.border}`,marginTop:4,paddingTop:10,marginBottom:10}}>
+      <div style={{fontSize:10,fontWeight:700,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6,marginBottom:4}}>BOI remittance</div>
+      {!forms.length&&!credits.length&&<div style={{fontSize:11.5,color:C.inkFaint}}>No remittance yet. Make the BOI form in Bills → 🏦 BOI Remittance, and enter the credit in Export Recon's remittance register — both show here.</div>}
+      {forms.map(x=>(
+        <div key={x.id} style={row}>
+          <span>📄 BOI form · {x.form?.sigDate?fmtDate(x.form.sigDate):fmtDate(String(x.at||"").slice(0,10))}</span>
+          {x.form?.amount&&<span style={{color:C.inkMid}}>{money(x.form.currency,x.form.amount)}</span>}
+          <span style={{color:C.inkMid}}>{x.form?.purpose==="b"?"advance":"against invoice"}{x.form?.remName?` · from ${x.form.remName}`:""}</span>
+          {view(x.pdf?.url)}
+        </div>
+      ))}
+      {credits.map(({l,r})=>(
+        <div key={l.id} style={row}>
+          <span style={{color:C.green}}>✓ Credit{r?.date?` · ${fmtDate(r.date)}`:""}</span>
+          <span style={{color:C.inkMid}}>{r?.irt||l.irt?`IRT ${r?.irt||l.irt}`:""}{r?.amount?` · ${money(r.currency,r.amount)}`:""}{r?.inrCredited?` · ₹${(+r.inrCredited).toLocaleString("en-IN")} credited`:""}{r?.settlement==="eefc"?" · to EEFC":""}</span>
+          {+l.alloc>0&&<span style={{fontWeight:700}}>{money(l.currency||r?.currency,l.alloc)} against this invoice</span>}
+          {!r&&<span style={{color:C.red}}>not found in the register</span>}
+          {view(r?.attachment?.url||r?.attachment)}
+        </div>
+      ))}
     </div>
   );
 }
