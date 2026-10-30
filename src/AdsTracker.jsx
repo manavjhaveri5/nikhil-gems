@@ -108,7 +108,7 @@ async function readScreenshots(files) {
 export default function AdsTracker({ listings = [] }) {
   const [plan, setPlan] = useState(null), [table, setTable] = useState(null), [daily, setDaily] = useState(null), [hist, setHist] = useState(null);
   const [busy, setBusy] = useState(""), [msg, setMsg] = useState(null);
-  const [show, setShow] = useState("todo"), [page, setPage] = useState(0);
+  const [show, setShow] = useState("on"), [page, setPage] = useState(0);
   const shotRef = useRef(null), csvRef = useRef(null);
 
   useEffect(() => {
@@ -146,7 +146,7 @@ export default function AdsTracker({ listings = [] }) {
     const off = !lastOn || daysAgo(Date.parse(lastOn + "T12:00:00")) > 2;
     const budget = [...keys].reverse().map(k => daily[k]?.budget).find(b => b > 0) || null;
     const planBudget = plan.budget || 25;
-    const want = Math.round((budget || planBudget) * 2.5);
+    const want = Math.round(planBudget * 2.5);
 
     // Every day since the restart, and the four weeks before it to compare against.
     const rowOf = k => ({ k, spend: spendOf(k), budget: daily[k]?.budget ?? null, clicks: daily[k]?.clicks ?? null, adOrders: daily[k]?.orders ?? null, adRev: daily[k]?.rev ?? null, sales: ledger[k]?.sales || 0, orders: ledger[k]?.orders || 0 });
@@ -175,7 +175,7 @@ export default function AdsTracker({ listings = [] }) {
       else if (on && s && i.group === "test" && s.clicks >= CUT_CLICKS && !s.orders) { act = `Turn off: ${s.clicks} clicks, no sale`; tone = C.red; }
       else if (on && s && i.group === "winner" && s.clicks >= 100 && roas != null && roas < 1) { act = `Watch: ${s.clicks} clicks, ${roas.toFixed(1)}× back`; tone = C.amber; }
       else if (on === false && shouldOn.has(i.id)) { act = "Turn on"; tone = C.green; }
-      else if (on === null && shouldOn.has(i.id)) { act = "Switch on (not seen yet)"; tone = C.inkMid; }
+      else if (on === null && shouldOn.has(i.id)) { act = "Switch on in Etsy Ads"; tone = C.green; }
       if (on && s && s.orders > 0 && roas != null) note = roas >= BREAK_EVEN ? `Working: ${roas.toFixed(1)}× back` : `${roas.toFixed(1)}× back, under ${BREAK_EVEN}×`;
       else if (on && s) note = `Learning: ${s.clicks} clicks`;
       const promote = i.group === "test" && s && s.orders >= 1 && roas >= BREAK_EVEN;
@@ -251,6 +251,7 @@ export default function AdsTracker({ listings = [] }) {
   const sold = t.items.filter(i => i.sold && i.group !== "off");
   if (sold.length) upd.push({ tone: C.green, text: `Sold since the restart from the plan: ${sold.slice(0, 5).map(i => `${i.title.split(/[:|–—-]/)[0].trim()} (${usd(i.sold.v)})`).join(", ")}${sold.length > 5 ? ` and ${sold.length - 5} more` : ""}.` });
   if (t.tableAge != null) upd.push({ tone: C.inkMid, text: `${t.followed} of the ${t.want} listings the plan wants on are on; ${t.onCount} plan listings on in all.${t.strays.length ? ` ${t.strays.length} listing${t.strays.length > 1 ? "s" : ""} outside the plan ${t.strays.length > 1 ? "have" : "has"} ads on.` : ""}` });
+  if (t.budget && Math.abs(t.budget - t.planBudget) >= 1) upd.push({ tone: C.red, text: `Etsy Ads' daily budget is ${usd2(t.budget)}; the plan is ${usd2(t.planBudget)}. Set it in Etsy Ads → Settings.` });
   const todo = lists.todo.length;
   if (todo) upd.push({ tone: C.ink, text: `${todo} thing${todo > 1 ? "s" : ""} to do in Etsy Ads: see "To do" below.` });
   if (t.tableAge == null) upd.push({ tone: C.amber, text: "No screenshot of the Etsy Ads listings table yet, so which listings are on, and how each is doing, isn't known. Add one below." });
@@ -299,10 +300,15 @@ export default function AdsTracker({ listings = [] }) {
         </div>
       </Section>
 
-      <Section title="The plan, listing by listing" sub={`Ad winners first, then untested pieces in the price band that pays for ads; enough of them for the budget (about 2.5 listings per $1 a day, so each gets 20–30 clicks a month to prove itself). A test listing with ${CUT_CLICKS} clicks and no sale is called; one that sells at ${BREAK_EVEN}× or better moves up to winners.`}>
+      <Section title="The plan, listing by listing" sub={`Which listings to advertise, and how each is doing. Grey numbers are the last two years of ads; black ones are since the restart. A test with ${CUT_CLICKS} clicks and no sale gets switched off; one that earns ${BREAK_EVEN}× or more moves up to winners.`}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-          {pill("todo", "To do")}{pill("on", "Should be on")}{pill("off", "Keep off")}{pill("work", "Needs work")}{pill("all", "All")}
+          {pill("on", "Should be on")}{pill("todo", "To do")}{pill("work", "Needs work")}{pill("off", "Keep off")}{pill("all", "All")}
         </div>
+        {show === "on" && (
+          <div style={{ fontSize: 12.5, color: C.ink, background: C.card, borderRadius: 10, padding: "10px 12px", marginBottom: 12, lineHeight: 1.5 }}>
+            At {usd2(t.planBudget)}/day, these <b>{t.want} listings</b> are the ones to advertise: the {t.items.filter(i => i.should && i.group === "winner").length} ad winners first, then the best untested pieces. In <a href={ADS_URL} target="_blank" rel="noreferrer" style={{ color: C.ink }}>Etsy Ads</a> → Listings, switch these on and everything else off, then tick each one here (☐ → ✓). A screenshot of Etsy Ads later fills the ticks in by itself.
+          </div>
+        )}
         {show === "work" && (
           <div style={{ display: "grid", gap: 6, marginBottom: 12, background: C.card, borderRadius: 10, padding: "10px 12px" }}>
             {Object.entries(FIX).map(([k, f]) => {
@@ -314,12 +320,13 @@ export default function AdsTracker({ listings = [] }) {
         {!list.length ? <div style={{ fontSize: 13, color: C.inkMid }}>{show === "todo" ? "Nothing to do right now." : "None."}</div> : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead><tr><th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>Listing</th><th style={th}>Ad</th><th style={th}>Clicks</th><th style={th}>Spend</th><th style={th}>Ad orders</th><th style={th}>Sold since</th><th style={{ ...th, textAlign: "left" }}>Call</th></tr></thead>
-              <tbody>{list.slice(pg * per, pg * per + per).map(i => {
+              <thead><tr>{show === "on" && <th style={{ ...th, textAlign: "left", paddingLeft: 0 }}>#</th>}<th style={{ ...th, textAlign: "left", paddingLeft: show === "on" ? 8 : 0 }}>Listing</th><th style={th}>On in Etsy?</th><th style={th} title="Since the restart (from a screenshot), else the last two years in grey">Ad clicks</th><th style={th}>Ad spend</th><th style={th}>Ad orders</th><th style={th}>Sold since restart</th><th style={{ ...th, textAlign: "left" }}>Call</th></tr></thead>
+              <tbody>{list.slice(pg * per, pg * per + per).map((i, n) => {
                 const [gl, gc, gb] = GROUPS[i.group];
                 return (
                   <tr key={i.id}>
-                    <td style={{ ...td, textAlign: "left", paddingLeft: 0 }}>
+                    {show === "on" && <td style={{ ...td, textAlign: "left", paddingLeft: 0, color: C.inkFaint, fontWeight: 800 }}>{pg * per + n + 1}</td>}
+                    <td style={{ ...td, textAlign: "left", paddingLeft: show === "on" ? 8 : 0 }}>
                       <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
                         <Thumb src={i.img} />
                         <div style={{ minWidth: 0 }}>
@@ -335,8 +342,9 @@ export default function AdsTracker({ listings = [] }) {
                       </div>
                     </td>
                     <td style={td}>
-                      {i.on == null ? <button onClick={() => markOn(i.id, true)} title="Mark as switched on" style={{ ...btn, padding: "3px 7px", color: C.inkFaint }}>?</button>
-                        : <button onClick={() => !i.s && markOn(i.id, !i.on)} title={i.s ? "From your Etsy Ads screenshot" : "Marked by hand: click to change"} style={{ ...btn, padding: "3px 8px", cursor: i.s ? "default" : "pointer", color: i.on ? C.green : C.inkFaint, borderColor: i.on ? C.green : C.border }}>{i.on ? "On" : "Off"}</button>}
+                      {/* Ticked by hand, or read from the latest Etsy Ads screenshot (then fixed). */}
+                      <button onClick={() => !i.s && markOn(i.id, !i.on)} title={i.s ? "Read from your Etsy Ads screenshot" : i.on ? "Marked on: click to undo" : "Tick once you've switched it on in Etsy Ads"}
+                        style={{ ...btn, padding: "3px 9px", cursor: i.s ? "default" : "pointer", color: i.on ? C.surface : C.inkFaint, background: i.on ? C.green : C.surface, borderColor: i.on ? C.green : C.border }}>{i.on ? "✓ On" : i.on === false ? "Off" : "☐"}</button>
                     </td>
                     {/* Since the restart where a screenshot covers it, else the two-year record in grey. */}
                     <td style={{ ...td, color: i.s ? C.ink : C.inkFaint }}>{i.s ? i.s.clicks : i.past ? i.past.clicks : "—"}</td>
