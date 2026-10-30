@@ -1175,3 +1175,6 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
     </div>
   );
 }
+
+// Shared with the Ads tracker (AdsTracker.jsx).
+export { loadHistory, compare, Kpi, Section, Thumb, Tag, card, eyebrow, usd, usd2, dayKey, dayStart, DAY, ADS_URL, SERIF, ETSYADS, SALES };

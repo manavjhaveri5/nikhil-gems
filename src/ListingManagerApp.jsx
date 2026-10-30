@@ -11,6 +11,7 @@ import PhotoEditor from "./PhotoEditor.jsx";
    for. */
 const VideoEditor = lazy(() => import("./VideoEditor.jsx"));
 const EtsyInsights = lazy(() => import("./EtsyInsights.jsx"));
+const AdsTracker = lazy(() => import("./AdsTracker.jsx"));
 /* The listing server's reply. When it runs out of time or falls over, Vercel
    answers with a plain-text page ("An error occurred…"), which read as
    "Unexpected token 'A'… is not valid JSON". Say what happened instead. */
@@ -10985,7 +10986,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         {/* Etsy: the shop's listings, and (for admin) how it's selling and where the ad money goes. */}
         {tab === "etsy" && currentUser?.role === "admin" && (
           <div style={{ display: "inline-flex", gap: 2, padding: 3, background: C.card, borderRadius: 10, marginBottom: 14 }}>
-            {[["listings", "Etsy listings"], ["insights", "📈 Insights & ads"]].map(([k, l]) => (
+            {[["listings", "Etsy listings"], ["insights", "📈 Insights & ads"], ["tracker", "🎯 Ads tracker"]].map(([k, l]) => (
               <button key={k} onClick={() => setEtsyView(k)} style={{ border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 800, padding: "7px 14px", borderRadius: 8,
                 background: etsyView === k ? C.surface : "transparent", color: etsyView === k ? C.ink : C.inkMid, boxShadow: etsyView === k ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>{l}</button>
             ))}
@@ -10993,6 +10994,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
         {tab === "etsy" && currentUser?.role === "admin" && etsyView === "insights"
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights listings={listings} onOpenRenew={() => setTab("renew")} onPrice={(l, v) => quickPrice(l, "price_etsy", v)} /></Suspense>
+          : tab === "etsy" && currentUser?.role === "admin" && etsyView === "tracker"
+          ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><AdsTracker listings={listings} /></Suspense>
           : tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
