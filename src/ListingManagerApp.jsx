@@ -1137,7 +1137,12 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
      the kilo, so it takes these originals: no "Exact piece shown", no grade. */
   const noteOriginals = (urls, next) => {
     const map = { ...originals };
-    next.forEach((u, i) => { if (u !== urls[i] && urls[i]) map[u] = originals[urls[i]] || urls[i]; });
+    next.forEach((u, i) => {
+      if (u === urls[i] || !urls[i]) return;
+      // Put back to its original: it's the original again, not an edit of one.
+      if (originals[urls[i]] === u) { delete map[urls[i]]; return; }
+      map[u] = originals[urls[i]] || urls[i];
+    });
     onOriginalsChange?.(map);
   };
   const noteEdit = (urls, next) => {
@@ -1455,6 +1460,7 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
       {editIdx != null && selectedUrls[editIdx] && (
         <PhotoEditor
           url={selectedUrls[editIdx]}
+          original={originals[selectedUrls[editIdx]] || ""}
           photos={selectedUrls}
           index={editIdx}
           onSave={newUrl => { const next = selectedUrls.map((u, j) => (j === editIdx ? newUrl : u)); noteOriginals(selectedUrls, next); noteEdit(selectedUrls, next); onChange(next); }}

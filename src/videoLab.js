@@ -49,16 +49,21 @@ export async function openClip(src, label = "") {
   const blob = typeof src === "string"
     ? await (async () => {
         /* The listing card has usually played this file already, and the
-           browser can hand back that copy — fetched without CORS — and fail
-           the read ("Failed to fetch"). A fresh copy, past the cache, is fine. */
-        let res;
-        try { res = await fetch(src, { mode: "cors" }); }
-        catch {
-          try { res = await fetch(src + (src.includes("?") ? "&" : "?") + "_v=" + Date.now(), { mode: "cors", cache: "no-store" }); }
-          catch { throw new Error("Couldn't download the video — check the connection and try again."); }
+           browser can hand back that copy — or a long download can drop part
+           way — and either surfaces as a bare "Failed to fetch". The whole
+           download is retried, past the cache, before giving up, and the
+           error then says which file and what happened. */
+        let last = null;
+        for (let i = 0; i < 3; i++) {
+          try {
+            const u = i ? src + (src.includes("?") ? "&" : "?") + "_v=" + Date.now() : src;
+            const res = await fetch(u, { mode: "cors", ...(i ? { cache: "no-store" } : {}) });
+            if (!res.ok) throw new Error(`the server answered ${res.status}`);
+            return await res.blob();
+          } catch (e) { last = e; console.error("[video] load attempt", i + 1, src, e); if (i < 2) await new Promise(r => setTimeout(r, 800 * (i + 1))); }
         }
-        if (!res.ok) throw new Error(`Couldn't load the video (${res.status})`);
-        return res.blob();
+        const file = src.split("/").pop().split("?")[0];
+        throw new Error(`Couldn't download the video (${file}): ${last?.message || last}. Reload the page and try again.`);
       })()
     : src;
   const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(blob) });

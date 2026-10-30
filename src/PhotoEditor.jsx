@@ -33,7 +33,7 @@ import {
 
 
 
-export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onAdd, onClose, showToast }) {
+export default function PhotoEditor({ url, original, photos, index, onSave, onSaveAll, onAdd, onClose, showToast }) {
   const canvasRef = useRef(null);
   const glRef = useRef(null);       // { gl, program, uniforms, texture }
   const bitmapRef = useRef(null);
@@ -433,6 +433,16 @@ export default function PhotoEditor({ url, photos, index, onSave, onSaveAll, onA
                 disabled={!touched} style={{ ...btn("transparent", C.ink), opacity: touched ? 1 : .45 }}>
                 Reset
               </button>
+              {/* Reset undoes this session's sliders; a photo edited and saved
+                  before keeps its first version (the listing's original_images),
+                  and this puts that one back. */}
+              {original && original !== url && (
+                <button type="button" title="Put back the photo as it was first uploaded"
+                  onClick={() => { if (confirm("Put this photo back to the original, as first uploaded? The edited version stays in the Image Library.")) { onSave(original); showToast?.("✓ Original photo put back"); onClose(); } }}
+                  style={{ ...btn("transparent", C.ink) }}>
+                  ↺ Original photo
+                </button>
+              )}
               <span style={{ flex: 1 }} />
               {all && (
                 <label title="These were shot in one sitting under one light — the same correction usually fits all of them."
