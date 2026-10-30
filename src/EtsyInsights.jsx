@@ -116,36 +116,287 @@ function SpendChart({ days }) {
   );
 }
 
-function ListingRow({ r, right, note }) {
+/* A listing in an action list: its Etsy page from the title, and what can be
+   done about it right here — a new Etsy price (saved to the ERP listing and
+   pushed to Etsy and the store, as on the grid), or set aside as dealt with. */
+function ListingRow({ r, right, note, onPrice, onDone }) {
+  const [edit, setEdit] = useState(false), [val, setVal] = useState(""), [saving, setSaving] = useState(false);
+  const base = +r.erp?.price_etsy || r.price || 0; // the Etsy price, in the shop's rupees
+  const save = async v => {
+    const n = Math.round(+v);
+    if (!(n > 0) || !r.erp) return;
+    if (!confirm(`Change the Etsy price of "${r.title.slice(0, 60)}" from ₹${Math.round(base).toLocaleString("en-IN")} to ₹${n.toLocaleString("en-IN")}? It updates on Etsy (and the store) now.`)) return;
+    setSaving(true);
+    try { await onPrice(r.erp, n); setEdit(false); } finally { setSaving(false); }
+  };
+  const btn = { border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, padding: "3px 8px", fontSize: 11, fontWeight: 800, cursor: "pointer", color: C.ink };
   return (
-    <a href={`https://www.etsy.com/listing/${r.id}`} target="_blank" rel="noreferrer" style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 0", borderTop: `1px solid ${C.border}`, color: C.ink, textDecoration: "none" }}>
-      <Thumb src={r.img} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title}</div>
-        <div style={{ fontSize: 11, color: C.inkMid, marginTop: 2 }}>{note}</div>
+    <div style={{ borderTop: `1px solid ${C.border}`, padding: "8px 0" }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <Thumb src={r.img} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <a href={`https://www.etsy.com/listing/${r.id}`} target="_blank" rel="noreferrer" style={{ display: "block", fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: C.ink, textDecoration: "none" }}>{r.title}</a>
+          <div style={{ fontSize: 11, color: C.inkMid, marginTop: 2 }}>{note}</div>
+        </div>
+        <div style={{ flexShrink: 0, textAlign: "right", fontSize: 12 }}>{right}</div>
       </div>
-      <div style={{ flexShrink: 0, textAlign: "right", fontSize: 12 }}>{right}</div>
-    </a>
+      {(onPrice || onDone) && (
+        <div style={{ display: "flex", gap: 6, marginTop: 6, paddingLeft: 50, flexWrap: "wrap", alignItems: "center" }}>
+          {onPrice && r.erp && !edit && <button style={btn} onClick={() => { setVal(String(Math.round(base * 0.9))); setEdit(true); }}>₹ Change price</button>}
+          {onPrice && !r.erp && <a href={`https://www.etsy.com/your/shops/me/listing-editor/edit/${r.id}`} target="_blank" rel="noreferrer" style={{ ...btn, textDecoration: "none" }}>Edit on Etsy ↗</a>}
+          {edit && <>
+            <span style={{ fontSize: 11, color: C.inkMid }}>now ₹{Math.round(base).toLocaleString("en-IN")}</span>
+            {[10, 15, 20].map(p => <button key={p} style={btn} disabled={saving} onClick={() => setVal(String(Math.round(base * (1 - p / 100))))}>−{p}%</button>)}
+            <input value={val} onChange={e => setVal(e.target.value.replace(/[^\d]/g, ""))} style={{ width: 80, border: `1px solid ${C.border}`, borderRadius: 7, padding: "3px 7px", fontSize: 12, background: C.surface, color: C.ink }} />
+            <button style={{ ...btn, background: C.ink, color: C.surface, borderColor: C.ink }} disabled={saving} onClick={() => save(val)}>{saving ? "Saving…" : "Save"}</button>
+            <button style={{ ...btn, border: "none", background: "none", color: C.inkMid }} onClick={() => setEdit(false)}>Cancel</button>
+          </>}
+          {onDone && !edit && <button style={{ ...btn, color: C.inkMid }} onClick={() => onDone(r.id)} title="Hide for 30 days">✓ Done</button>}
+        </div>
+      )}
+    </div>
   );
 }
-function ActionCard({ icon, title, why, rows, render, empty, accent }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? rows : rows.slice(0, 5);
+/* One list of things to do. Five to a page; "Done" sets one aside for 30 days
+   (on this device), so the list shrinks as the work gets done. */
+const DONE_KEY = "ng-insights-done-v1";
+const readDone = () => { try { return JSON.parse(localStorage.getItem(DONE_KEY) || "{}"); } catch { return {}; } };
+function ActionCard({ id, icon, title, why, rows, render, empty, accent }) {
+  const [done, setDone] = useState(readDone), [page, setPage] = useState(0);
+  const fresh = rows.filter(r => !(done[`${id}:${r.id}`] > Date.now() - 30 * DAY));
+  const pages = Math.max(1, Math.ceil(fresh.length / 5)), pg = Math.min(page, pages - 1);
+  const markDone = rid => { const next = { ...readDone(), [`${id}:${rid}`]: Date.now() }; setDone(next); try { localStorage.setItem(DONE_KEY, JSON.stringify(next)); } catch { /* fine */ } };
+  const nav = { border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer", fontWeight: 800, color: C.ink };
   return (
-    <div style={{ ...card, borderTop: `3px solid ${accent}` }}>
+    <div style={{ ...card, borderTop: `3px solid ${accent}`, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ fontSize: 18 }}>{icon}</span>
         <div style={{ fontSize: 14.5, fontWeight: 800, color: C.ink, flex: 1 }}>{title}</div>
-        <span style={{ fontSize: 12, fontWeight: 800, color: rows.length ? accent : C.inkFaint }}>{rows.length}</span>
+        <span style={{ fontSize: 12, fontWeight: 800, color: fresh.length ? accent : C.inkFaint }}>{fresh.length}</span>
       </div>
       <div style={{ fontSize: 11.5, color: C.inkMid, margin: "4px 0 6px", lineHeight: 1.45 }}>{why}</div>
-      {rows.length ? shown.map(render) : <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>{empty}</div>}
-      {rows.length > 5 && <button onClick={() => setAll(a => !a)} style={{ marginTop: 6, background: "none", border: "none", color: C.gold, fontWeight: 800, fontSize: 12, cursor: "pointer", padding: 0 }}>{all ? "Show fewer" : `Show all ${rows.length}`}</button>}
+      <div style={{ flex: 1 }}>{fresh.length ? fresh.slice(pg * 5, pg * 5 + 5).map(r => render(r, markDone)) : <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>{empty}</div>}</div>
+      {pages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, justifyContent: "flex-end", fontSize: 12, color: C.inkMid }}>
+          <button style={nav} disabled={pg === 0} onClick={() => setPage(pg - 1)}>‹</button>
+          <span style={{ fontVariantNumeric: "tabular-nums" }}>Page {pg + 1} of {pages}</span>
+          <button style={nav} disabled={pg >= pages - 1} onClick={() => setPage(pg + 1)}>›</button>
+        </div>
+      )}
     </div>
   );
 }
 
-export default function EtsyInsights({ listings = [], onOpenRenew }) {
+/* ── The ad plan: what a click is worth, listing by listing ─────────────────
+   Etsy Ads charges per click, and a click is a visit to the listing, so a
+   listing pays for its ads when
+       conversion × price × contribution  >  cost per click
+   where contribution is what's left of a sale after the stone itself and
+   Etsy's fees. Conversion is sales over views. Views are lifetime on Etsy, so
+   the last six months' share is taken as views × 180 / age (to six months);
+   sales are the last six months'. A listing's own rate is noisy on few views —
+   0 sales from 200 views says little — so it's pulled toward the shop's
+   average in proportion to how little it has to go on (a beta prior worth K
+   views: shrunk = (sales + m·K) / (views + K)), and judged on an 80% range
+   rather than the point: advertise when even the low end pays, stop when even
+   the high end doesn't, test the rest. */
+const PRIOR_VIEWS = 300, Z80 = 1.2816;
+function adPlan(live, { margin, cpc, offsiteShare }) {
+  const fees = 0.11 + offsiteShare; // Etsy's 6.5% + payment processing ~4% + the listing fee, and offsite fees spread over sales
+  const contrib = Math.max(0.05, margin - fees);
+  const rows = live.map(l => ({ ...l, v180: Math.max(l.units180, Math.round(l.views * Math.min(1, 180 / Math.max(1, l.age)))) }));
+  const V = rows.reduce((a, r) => a + r.v180, 0), U = rows.reduce((a, r) => a + r.units180, 0);
+  const m = V ? U / V : 0.005;
+  const a0 = m * PRIOR_VIEWS;
+  const out = rows.map(r => {
+    const n = r.v180 + PRIOR_VIEWS, p = (r.units180 + a0) / n;
+    const sd = Math.sqrt(p * (1 - p) / n);
+    const lo = Math.max(0, p - Z80 * sd), hi = p + Z80 * sd;
+    const per = r.priceUSD * contrib; // profit from one sale
+    const worth = p * per, worthLo = lo * per, worthHi = hi * per; // value of one click
+    const plan = worthLo > cpc ? "advertise" : worthHi < cpc && r.v180 >= 150 ? "stop" : per * m * 2 < cpc ? "stop" : "test";
+    return { ...r, conv: p, convLo: lo, convHi: hi, worth, worthLo, worthHi, plan, perSale: per };
+  });
+  // Below this price a listing converting at twice the shop's rate still can't pay for a click.
+  const floor = m > 0 ? cpc / (contrib * m * 2) : null;
+  return { rows: out, m, contrib, floor, breakEvenRoas: 1 / contrib };
+}
+
+/* Weekly sales against weekly Etsy Ads spend: the slope is what an extra
+   dollar of ads went with, in sales. Ordinary least squares with an 80% range
+   from the t distribution. It reads association, not cause — busy weeks spend
+   more because more shoppers click — so it errs high; a range that still
+   straddles break-even means the data can't tell, and the budget test can. */
+function slope(points) {
+  const n = points.length;
+  if (n < 5) return null;
+  const mx = points.reduce((a, p) => a + p.x, 0) / n, my = points.reduce((a, p) => a + p.y, 0) / n;
+  const sxx = points.reduce((a, p) => a + (p.x - mx) ** 2, 0);
+  if (!(sxx > 0)) return null;
+  const b = points.reduce((a, p) => a + (p.x - mx) * (p.y - my), 0) / sxx;
+  const resid = points.reduce((a, p) => a + (p.y - (my + b * (p.x - mx))) ** 2, 0);
+  const se = Math.sqrt(resid / (n - 2) / sxx);
+  const t = [0, 0, 0, 1.638, 1.533, 1.476, 1.440, 1.415, 1.397, 1.383, 1.372, 1.363, 1.356, 1.350, 1.345][n - 2] || 1.31;
+  const r = b * Math.sqrt(sxx / points.reduce((a, p) => a + (p.y - my) ** 2, 0));
+  return { b, lo: b - t * se, hi: b + t * se, n, r };
+}
+// Welch's comparison of two runs of days: the gap in mean daily sales and its 80% range.
+function compare(a, b) {
+  const st = x => { const n = x.length, mu = x.reduce((s, v) => s + v, 0) / n; return { n, mu, v: x.reduce((s, v) => s + (v - mu) ** 2, 0) / Math.max(1, n - 1) }; };
+  if (a.length < 4 || b.length < 4) return null;
+  const A = st(a), B = st(b), se = Math.sqrt(A.v / A.n + B.v / B.n);
+  return { diff: B.mu - A.mu, lo: B.mu - A.mu - Z80 * se, hi: B.mu - A.mu + Z80 * se, A, B };
+}
+
+const ASSUME_KEY = "ng-insights-assume-v1", LOG_KEY = "ng-ads-budget-log-v1";
+const readAssume = () => { try { return { margin: 0.6, cpc: 0.25, ...JSON.parse(localStorage.getItem(ASSUME_KEY) || "{}") }; } catch { return { margin: 0.6, cpc: 0.25 }; } };
+
+function AdStrategy({ m, onPrice }) {
+  const [as, setAs] = useState(readAssume);
+  const [log, setLog] = useState(null);
+  const [newBudget, setNewBudget] = useState(""), [newFrom, setNewFrom] = useState(dayKey(Date.now()));
+  const [show, setShow] = useState("advertise"), [page, setPage] = useState(0);
+  useEffect(() => { loadK(LOG_KEY).then(v => setLog(Array.isArray(v) ? v : [])).catch(() => setLog([])); }, []);
+  const setA = (k, v) => { const next = { ...as, [k]: v }; setAs(next); try { localStorage.setItem(ASSUME_KEY, JSON.stringify(next)); } catch { /* fine */ } };
+
+  const plan = useMemo(() => adPlan(m.live, { margin: as.margin, cpc: as.cpc, offsiteShare: m.offsiteShare }), [m, as]);
+  const groups = { advertise: [], test: [], stop: [] };
+  plan.rows.forEach(r => groups[r.plan].push(r));
+  groups.advertise.sort((a, b) => (b.worth - as.cpc) - (a.worth - as.cpc));
+  groups.stop.sort((a, b) => b.v180 - a.v180);
+  groups.test.sort((a, b) => b.worth - a.worth);
+
+  // Weeks with ads known (the ledger reaches back 90 days), oldest first.
+  const pts = m.weeks.filter(w => w.etsy != null).map(w => ({ x: w.etsy, y: w.sales - w.offsiteSales }));
+  const fit = slope(pts);
+  const be = plan.breakEvenRoas;
+  const perDay = m.etsyAds28 / 28;
+  const call = !fit ? { tone: C.inkMid, head: "Not enough weeks of ad data yet", body: "Keep the budget steady for now; the call firms up as weeks build." }
+    : fit.lo > be ? { tone: C.green, head: `Raise the budget — to about ${usd2(perDay * 1.3)}/day`, body: `Weeks with more Etsy Ads went with more sales: about ${usd2(fit.b)} per extra $1 (80% range ${usd2(fit.lo)}–${usd2(fit.hi)}), above the ${usd2(be)} a dollar has to bring back to break even. Raise it 30%, keep it there two weeks, log it below, and see if the gain holds.` }
+    : fit.hi < be ? { tone: C.red, head: `Cut the budget — to about ${usd2(Math.max(1, perDay * 0.6))}/day, on the "Advertise" listings only`, body: `Extra ad money hasn't been bringing enough back: about ${usd2(fit.b)} in sales per extra $1 (80% range ${usd2(fit.lo)}–${usd2(fit.hi)}), below the ${usd2(be)} break-even. Turn ads off the "Stop" listings in Etsy Ads, and lower the budget.` }
+    : { tone: C.amber, head: `Too close to call from the history — run a budget test`, body: `Weeks with more ads went with about ${usd2(fit.b)} more sales per $1, but the 80% range (${usd2(fit.lo)}–${usd2(fit.hi)}) straddles the ${usd2(be)} break-even, so the past can't settle it. Point the ads at the "Advertise" listings, then alternate two budgets — ${usd2(Math.max(1, perDay * 0.6))}/day and ${usd2(perDay * 1.4)}/day — two weeks each, logging each change below. The test reads the answer from your own sales.` };
+
+  // Budget test: the days under each logged budget, the last two compared.
+  const sortedLog = [...(log || [])].sort((a, b) => a.from.localeCompare(b.from));
+  const periods = sortedLog.map((e, i) => {
+    const to = sortedLog[i + 1]?.from || "9999";
+    const days = m.daily90.filter(d => d.k >= e.from && d.k < to && d.ms < dayStart(Date.now()));
+    return { ...e, days, sales: days.reduce((a, d) => a + d.sales, 0) / Math.max(1, days.length), ads: days.reduce((a, d) => a + d.etsy, 0) / Math.max(1, days.length) };
+  });
+  const lastTwo = periods.slice(-2);
+  const test = lastTwo.length === 2 ? compare(lastTwo[0].days.map(d => d.sales), lastTwo[1].days.map(d => d.sales)) : null;
+  const dAds = lastTwo.length === 2 ? lastTwo[1].ads - lastTwo[0].ads : 0;
+  const addLog = async () => {
+    const v = +newBudget;
+    if (!(v >= 0) || !newFrom) return;
+    const next = [...(log || []).filter(e => e.from !== newFrom), { from: newFrom, perDay: v, at: new Date().toISOString() }];
+    setLog(next); setNewBudget("");
+    await saveK(LOG_KEY, next, { merge: false }).catch(() => {});
+  };
+  const delLog = async from => { const next = (log || []).filter(e => e.from !== from); setLog(next); await saveK(LOG_KEY, next, { merge: false }).catch(() => {}); };
+
+  const list = groups[show], pages = Math.max(1, Math.ceil(list.length / 10)), pg = Math.min(page, pages - 1);
+  const inp = { width: 70, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 7px", fontSize: 12.5, background: C.surface, color: C.ink };
+  const pill = (k, label, n, col) => (
+    <button key={k} onClick={() => { setShow(k); setPage(0); }} style={{ border: `1.5px solid ${show === k ? col : C.border}`, background: show === k ? col + "18" : C.surface, color: show === k ? col : C.inkMid, borderRadius: 10, padding: "7px 12px", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{label} · {n}</button>
+  );
+  const copyTitles = rows => { try { navigator.clipboard.writeText(rows.map(r => r.title).join("\n")); } catch { /* fine */ } };
+
+  return (
+    <Section title="Ad plan — where the money should go" sub="Worked out from what each listing actually converts, its price and your margin. Etsy Ads bids for you; what you control is the daily budget and which listings are in ads (Etsy Ads → Listings).">
+      {/* assumptions */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.inkMid, background: C.card, borderRadius: 10, padding: "10px 12px", marginBottom: 14 }}>
+        <label>Margin on the stone <input style={inp} value={Math.round(as.margin * 100)} onChange={e => setA("margin", Math.min(95, +e.target.value || 0) / 100)} />%</label>
+        <label>Cost per click $<input style={inp} value={as.cpc} onChange={e => setA("cpc", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+        <span>→ each $1 of sales leaves <b style={{ color: C.ink }}>{usd2(plan.contrib)}</b> · break-even <b style={{ color: C.ink }}>{usd2(plan.breakEvenRoas)}</b> sales per $1 of ads · shop converts <b style={{ color: C.ink }}>{(plan.m * 100).toFixed(2)}%</b> of views</span>
+        <span style={{ fontSize: 11, color: C.inkFaint, flexBasis: "100%" }}>Cost per click: Etsy Ads shows spend and clicks — divide one by the other. Margin: what's left after what the stone cost you. Fees (Etsy ~11%, plus offsite fees at {pct(m.offsiteShare)} of sales) are taken off already.</span>
+      </div>
+
+      {/* the budget call */}
+      <div style={{ borderLeft: `5px solid ${call.tone}`, padding: "4px 0 4px 14px", marginBottom: 16 }}>
+        <div style={eyebrow}>Budget · now {usd2(perDay)}/day on Etsy Ads</div>
+        <div style={{ fontSize: 16.5, fontWeight: 800, color: C.ink, marginTop: 4 }}>{call.head}</div>
+        <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 4, lineHeight: 1.55, maxWidth: 820 }}>{call.body}</div>
+        {plan.floor && <div style={{ fontSize: 12.5, color: C.ink, marginTop: 8 }}>💡 Below about <b>{usd(plan.floor)}</b>, a listing can't pay for a {usd2(+as.cpc)} click even converting at twice the shop's rate. Cheap pieces sell through search and bundles, not ads — keep ads for the dearer ones.</div>}
+      </div>
+
+      {/* listings by plan */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+        {pill("advertise", "✅ Advertise", groups.advertise.length, C.green)}
+        {pill("test", "🧪 Test", groups.test.length, C.amber)}
+        {pill("stop", "⛔ Stop advertising", groups.stop.length, C.red)}
+        <button onClick={() => copyTitles(list)} style={{ marginLeft: "auto", border: `1px solid ${C.border}`, background: C.surface, borderRadius: 9, padding: "6px 11px", fontSize: 12, fontWeight: 800, cursor: "pointer", color: C.ink }}>Copy these titles</button>
+      </div>
+      <div style={{ fontSize: 11.5, color: C.inkMid, marginBottom: 8 }}>
+        {show === "advertise" ? "Even at the low end of what they convert, a click on these earns more than it costs. Keep them on Etsy Ads — these are where the budget should go."
+          : show === "stop" ? "Even at the high end of what they convert, a click on these costs more than it brings back — or they're too cheap for a click ever to pay. Switch them off in Etsy Ads → Listings (paste the copied titles into its search)."
+          : "Not enough sales or views to tell yet. Leave them in ads for a month on a modest budget; they'll move to Advertise or Stop as numbers build."}
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 640 }}>
+          <thead><tr style={{ color: C.inkFaint, fontSize: 10.5, textTransform: "uppercase", letterSpacing: .6, textAlign: "right" }}>
+            <th style={{ textAlign: "left", padding: "5px 0" }}>Listing</th><th>Price</th><th>Sold 6m</th><th>Views 6m≈</th><th>Converts</th><th>A click is worth</th><th>vs cost</th>
+          </tr></thead>
+          <tbody>
+            {list.slice(pg * 10, pg * 10 + 10).map(r => (
+              <tr key={r.id} style={{ borderTop: `1px solid ${C.border}`, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                <td style={{ textAlign: "left", padding: "6px 0" }}>
+                  <a href={`https://www.etsy.com/listing/${r.id}`} target="_blank" rel="noreferrer" style={{ display: "flex", gap: 8, alignItems: "center", color: C.ink, textDecoration: "none" }}>
+                    <Thumb src={r.img} /><span style={{ maxWidth: 300, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 700 }}>{r.title}</span>
+                  </a>
+                </td>
+                <td>{usd(r.priceUSD)}</td><td>{r.units180}</td><td>{r.v180.toLocaleString()}</td>
+                <td title={`80% range ${(r.convLo * 100).toFixed(2)}–${(r.convHi * 100).toFixed(2)}%`}>{(r.conv * 100).toFixed(2)}%</td>
+                <td title={`80% range ${usd2(r.worthLo)}–${usd2(r.worthHi)}`}>{usd2(r.worth)}</td>
+                <td style={{ fontWeight: 800, color: r.worth > +as.cpc ? C.green : C.red }}>{r.worth > +as.cpc ? "+" : "−"}{usd2(Math.abs(r.worth - +as.cpc))}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {pages > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, justifyContent: "flex-end", fontSize: 12, color: C.inkMid }}>
+          <button onClick={() => setPage(pg - 1)} disabled={pg === 0} style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer" }}>‹</button>
+          <span>Page {pg + 1} of {pages}</span>
+          <button onClick={() => setPage(pg + 1)} disabled={pg >= pages - 1} style={{ border: `1px solid ${C.border}`, background: C.surface, borderRadius: 7, width: 28, height: 26, cursor: "pointer" }}>›</button>
+        </div>
+      )}
+
+      {/* budget test */}
+      <div style={{ marginTop: 18, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>🧪 Budget test</div>
+        <div style={{ fontSize: 12, color: C.inkMid, margin: "4px 0 10px", lineHeight: 1.5, maxWidth: 820 }}>The only clean way to know what the ads add: change the daily budget, hold it two weeks, then change it again. Log each change here (the day and the new $/day) — the last two are compared on daily sales, with the range the difference could really be.</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12.5, marginBottom: 10 }}>
+          <span>Budget changed to $</span><input style={inp} value={newBudget} onChange={e => setNewBudget(e.target.value.replace(/[^\d.]/g, ""))} placeholder="5" />
+          <span>/day from</span><input type="date" value={newFrom} onChange={e => setNewFrom(e.target.value)} style={{ ...inp, width: 140 }} />
+          <button onClick={addLog} style={{ background: C.ink, color: C.surface, border: "none", borderRadius: 8, padding: "6px 12px", fontWeight: 800, fontSize: 12, cursor: "pointer" }}>Log it</button>
+        </div>
+        {periods.length > 0 && (
+          <table style={{ width: "100%", maxWidth: 640, borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead><tr style={{ color: C.inkFaint, fontSize: 10.5, textTransform: "uppercase", letterSpacing: .6, textAlign: "right" }}><th style={{ textAlign: "left" }}>From</th><th>Budget</th><th>Days</th><th>Spent/day</th><th>Sales/day</th><th></th></tr></thead>
+            <tbody>{periods.map(p => (
+              <tr key={p.from} style={{ borderTop: `1px solid ${C.border}`, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                <td style={{ textAlign: "left", padding: "5px 0" }}>{new Date(p.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
+                <td>{usd2(p.perDay)}</td><td>{p.days.length}</td><td>{usd2(p.ads)}</td><td style={{ fontWeight: 800 }}>{usd(p.sales)}</td>
+                <td><button onClick={() => delLog(p.from)} style={{ border: "none", background: "none", color: C.inkFaint, cursor: "pointer" }}>×</button></td>
+              </tr>))}</tbody>
+          </table>
+        )}
+        {test && (
+          <div style={{ marginTop: 10, fontSize: 12.5, color: C.ink, lineHeight: 1.55 }}>
+            Moving from {usd2(lastTwo[0].ads)} to {usd2(lastTwo[1].ads)}/day of ads, sales went {test.diff >= 0 ? "up" : "down"} <b>{usd(Math.abs(test.diff))}/day</b> (80% range {usd(test.lo)} to {usd(test.hi)}).{" "}
+            {Math.abs(dAds) > 0.1 && <>That's <b>{usd2(test.diff / dAds)}</b> in sales per extra $1 of ads, against the {usd2(be)} needed to break even. </>}
+            {test.lo > 0 && dAds > 0 ? <b style={{ color: C.green }}>The higher budget is bringing real extra sales.</b>
+              : test.hi < 0 && dAds > 0 ? <b style={{ color: C.red }}>The higher budget isn't helping — go back down.</b>
+              : <span style={{ color: C.inkMid }}>Not clear yet — {Math.min(test.A.n, test.B.n) < 14 ? "give it the full two weeks" : "the difference is inside the day-to-day noise; the smaller budget is the safer one"}.</span>}
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
   const [cache, setCache] = useState(readCache);
   const [busy, setBusy] = useState(false), [err, setErr] = useState("");
   const [range, setRange] = useState(30);
@@ -212,9 +463,18 @@ export default function EtsyInsights({ listings = [], onOpenRenew }) {
     for (let e = today0 + DAY, i = 0; i < 12 && e - 7 * DAY >= nowMs - 180 * DAY; e -= 7 * DAY, i++) {
       const s = e - 7 * DAY, rows = rec.filter(r => r.ms >= s && r.ms < e);
       const known = s >= adsFrom - DAY;
-      weeks.push({ s, sales: sum(rows, r => r.usd), orders: rows.length, etsy: known ? adIn(s, e, "etsy") : null, offsite: known ? adIn(s, e, "offsite") : null });
+      const offRefs = new Set(ads.filter(x => x.kind === "offsite" && x.ms >= s && x.ms < e + 3 * DAY).map(x => x.ref).filter(Boolean));
+      weeks.push({ s, sales: sum(rows, r => r.usd), orders: rows.length, etsy: known ? adIn(s, e, "etsy") : null, offsite: known ? adIn(s, e, "offsite") : null, offsiteSales: sum(rows.filter(r => offRefs.has(r.id)), r => r.usd) });
     }
 
+    const daily90 = [];
+    for (let t = today0 - 89 * DAY; t <= today0; t += DAY) {
+      const e = t + DAY, rows = rec.filter(r => r.ms >= t && r.ms < e);
+      daily90.push({ k: dayKey(t), ms: t, sales: sum(rows, r => r.usd), etsy: adIn(t, e, "etsy") });
+    }
+    const etsyAds28 = adIn(today0 + DAY - 28 * DAY, Infinity, "etsy");
+    const sales90 = sum(rec.filter(r => r.ms >= nowMs - 90 * DAY), r => r.usd);
+    const offsiteShare = sales90 ? adIn(nowMs - 90 * DAY, Infinity, "offsite") / sales90 : 0;
     // Offsite Ads: the orders they were charged on.
     const offsiteRefs = new Set(ads.filter(x => x.kind === "offsite" && x.ms >= a).map(x => x.ref).filter(Boolean));
     const offsiteOrders = inP.filter(r => offsiteRefs.has(r.id));
@@ -270,13 +530,25 @@ export default function EtsyInsights({ listings = [], onOpenRenew }) {
     const buyers = {}; for (const r of rec) if (r.buyer) buyers[r.buyer] = (buyers[r.buyer] || 0) + 1;
     const repeatShare = inP.length ? inP.filter(r => buyers[r.buyer] > 1).length / inP.length : 0;
     const neverSold = live.filter(l => l.units180 === 0).length;
+    /* Exact piece (one of a kind: the buyer gets the stone in the photos) against
+       a repeatable listing (one listing, many similar stones). A unique listing
+       can only ever sell once; a repeatable one keeps its reviews, ranking and
+       ad history across every sale — that difference is the point of the table. */
+    const kinds = ["unique", "repeatable"].map(t => {
+      const g = live.filter(l => (l.type === "repeatable" ? "repeatable" : "unique") === t);
+      const v180 = g.reduce((s2, l) => s2 + Math.max(l.units180, l.views * Math.min(1, 180 / Math.max(1, l.age))), 0);
+      const u180 = g.reduce((s2, l) => s2 + l.units180, 0);
+      return { t, n: g.length, units: g.reduce((s2, l) => s2 + l.units, 0), rev: g.reduce((s2, l) => s2 + l.rev, 0), u180,
+        sold: g.filter(l => l.units180 > 0).length, avgPrice: g.length ? g.reduce((s2, l) => s2 + l.priceUSD, 0) / g.length : 0,
+        conv: v180 ? u180 / v180 : 0, favRate: g.reduce((s2, l) => s2 + l.views, 0) ? g.reduce((s2, l) => s2 + l.favs, 0) / g.reduce((s2, l) => s2 + l.views, 0) : 0 };
+    });
 
     return {
       cur, sales, salesPrev, orders: inP.length, ordersPrev: inPrev.length, aov: inP.length ? sales / inP.length : 0, aovPrev: inPrev.length ? salesPrev / inPrev.length : 0,
       etsyAds, offsite, etsyAdsPrev, offsitePrev, days, weeks, offsiteOrders, offsiteSales,
       live, liveIds, sellers, quiet, push, wasted, loved, restock, polish, erpExpiredSold, shapes,
       countries: Object.values(countries).sort((x, y) => y.usd - x.usd).slice(0, 8), repeatShare, neverSold,
-      viewsSince: v7?.k || null, adsError: d.adsError, at: cache.at,
+      viewsSince: v7?.k || null, daily90, etsyAds28, offsiteShare, kinds, adsError: d.adsError, at: cache.at,
     };
   }, [cache, range, rate, listings, viewsHist]);
 
@@ -348,30 +620,30 @@ export default function EtsyInsights({ listings = [], onOpenRenew }) {
       <div>
         <div style={{ ...eyebrow, margin: "4px 2px 10px" }}>Do these to sell more — from your own numbers</div>
         <div style={grid(330)}>
-          <ActionCard icon="📉" accent={C.red} title="Bestsellers gone quiet" rows={m.quiet}
+          <ActionCard id="quiet" icon="📉" accent={C.red} title="Bestsellers gone quiet" rows={m.quiet}
             why="Sold 3+ times in six months, nothing in the last 3 weeks — yet still live. Check the price, photos and title against when it sold, and put Etsy Ads behind it."
             empty="None — every regular seller has sold in the last 3 weeks."
-            render={r => <ListingRow key={r.id} r={r} note={`${r.units180} sold in 6 months · last ${Math.round((Date.now() - r.last) / DAY)} days ago · ${r.qty} in stock`} right={<b>{usd(r.priceUSD)}</b>} />} />
-          <ActionCard icon="🚀" accent={C.green} title="Put ads behind these" rows={m.push}
+            render={(r, done) => <ListingRow key={r.id} r={r} onDone={done} onPrice={onPrice} note={`${r.units180} sold in 6 months · last ${Math.round((Date.now() - r.last) / DAY)} days ago · ${r.qty} in stock`} right={<b>{usd(r.priceUSD)}</b>} />} />
+          <ActionCard id="push" icon="🚀" accent={C.green} title="Put ads behind these" rows={m.push}
             why="They sell well for the few people who see them (a high share of views turn into sales) but get few views. Ads bring views — these turn them into orders."
             empty="Nothing stands out yet."
-            render={r => <ListingRow key={r.id} r={r} note={`${r.units180} sold · ${r.views.toLocaleString()} views · ${r.conv.toFixed(1)} sales per 1k views`} right={<b>{usd(r.priceUSD)}</b>} />} />
-          <ActionCard icon="🕳️" accent={C.amber} title="Views, no sales" rows={m.wasted}
+            render={(r, done) => <ListingRow key={r.id} r={r} onDone={done} onPrice={onPrice} note={`${r.units180} sold · ${r.views.toLocaleString()} views · ${r.conv.toFixed(1)} sales per 1k views`} right={<b>{usd(r.priceUSD)}</b>} />} />
+          <ActionCard id="wasted" icon="🕳️" accent={C.amber} title="Views, no sales" rows={m.wasted}
             why="Among the most-viewed in the shop, not one sale in six months. Take these off Etsy Ads — the clicks cost money — and fix the price or the first photo."
             empty="No high-traffic listing is going without sales."
-            render={r => <ListingRow key={r.id} r={r} note={`${r.views.toLocaleString()} views · ${r.favs} favourites · 0 sold`} right={<b>{usd(r.priceUSD)}</b>} />} />
-          <ActionCard icon="❤️" accent="#C2417A" title="Loved, not bought" rows={m.loved}
+            render={(r, done) => <ListingRow key={r.id} r={r} onDone={done} onPrice={onPrice} note={`${r.views.toLocaleString()} views · ${r.favs} favourites · 0 sold`} right={<b>{usd(r.priceUSD)}</b>} />} />
+          <ActionCard id="loved" icon="❤️" accent="#C2417A" title="Loved, not bought" rows={m.loved}
             why="People keep favouriting these but don't buy — usually the price. Send a sale to favouriters (Etsy → Marketing → Sales and discounts → targeted offer) or lower it a little."
             empty="Nothing here."
-            render={r => <ListingRow key={r.id} r={r} note={`${r.favs} favourites from ${r.views.toLocaleString()} views`} right={<b>{usd(r.priceUSD)}</b>} />} />
-          <ActionCard icon="📦" accent={C.blue} title="Restock before it runs out" rows={m.restock}
+            render={(r, done) => <ListingRow key={r.id} r={r} onDone={done} onPrice={onPrice} note={`${r.favs} favourites from ${r.views.toLocaleString()} views`} right={<b>{usd(r.priceUSD)}</b>} />} />
+          <ActionCard id="restock" icon="📦" accent={C.blue} title="Restock before it runs out" rows={m.restock}
             why="Repeatable listings that sell, down to 3 or fewer on Etsy. A sold-out listing drops out of search and loses its ranking."
             empty="Every selling repeatable has stock."
-            render={r => <ListingRow key={r.id} r={r} note={`${r.units180} sold in 6 months`} right={<b style={{ color: r.qty ? C.amber : C.red }}>{r.qty} left</b>} />} />
-          <ActionCard icon="🎬" accent={C.purple || "#7A5AC8"} title="Sellers missing a video or photos" rows={m.polish}
+            render={(r, done) => <ListingRow key={r.id} r={r} onDone={done} onPrice={onPrice} note={`${r.units180} sold in 6 months`} right={<b style={{ color: r.qty ? C.amber : C.red }}>{r.qty} left</b>} />} />
+          <ActionCard id="polish" icon="🎬" accent={C.purple || "#7A5AC8"} title="Sellers missing a video or photos" rows={m.polish}
             why="Proven sellers without a video or with fewer than 5 photos. Etsy shows listings with video more, and more photos convert better — the cheapest boost there is."
             empty="Every seller has a video and 5+ photos."
-            render={r => <ListingRow key={r.id} r={r} note={`${r.units180} sold · ${r.photos} photos${r.video ? "" : " · no video"}`} right={<span style={{ display: "flex", gap: 4 }}>{!r.video && <Tag color={C.red} bg={C.redBg}>video</Tag>}{r.photos < 5 && <Tag color={C.amber} bg={C.amberBg}>photos</Tag>}</span>} />} />
+            render={(r, done) => <ListingRow key={r.id} r={r} onDone={done} onPrice={onPrice} note={`${r.units180} sold · ${r.photos} photos${r.video ? "" : " · no video"}`} right={<span style={{ display: "flex", gap: 4 }}>{!r.video && <Tag color={C.red} bg={C.redBg}>video</Tag>}{r.photos < 5 && <Tag color={C.amber} bg={C.amberBg}>photos</Tag>}</span>} />} />
         </div>
         {m.erpExpiredSold.length > 0 && (
           <div style={{ ...card, marginTop: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderLeft: `5px solid ${C.amber}` }}>
@@ -381,6 +653,35 @@ export default function EtsyInsights({ listings = [], onOpenRenew }) {
           </div>
         )}
       </div>
+
+      <AdStrategy m={m} onPrice={onPrice} />
+
+      {/* exact piece vs repeatable */}
+      <Section title="Exact piece or similar-piece listing?" sub={`One-of-a-kind listings ("you get this stone") against repeatable ones ("you get one like it"), live on Etsy now. Units and revenue are the last ${range} days; conversion is six months.`}>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12 }}>
+          {m.kinds.map(k => (
+            <div key={k.t} style={{ background: C.card, borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{k.t === "unique" ? "💎 Exact piece (1 of 1)" : "🔁 Repeatable (similar piece)"}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+                {[["Live listings", k.n.toLocaleString()], ["Revenue", usd(k.rev)], ["Per listing", usd(k.n ? k.rev / k.n : 0)],
+                  ["Units", k.units], ["Avg price", usd(k.avgPrice)], ["Ever sold (6m)", `${k.n ? Math.round(k.sold / k.n * 100) : 0}%`],
+                  ["Converts", `${(k.conv * 100).toFixed(2)}%`], ["Favourited", `${(k.favRate * 100).toFixed(1)}%`], ["Units / listing", (k.n ? k.u180 / k.n : 0).toFixed(2)]].map(([l, v]) => (
+                  <div key={l}><div style={{ fontSize: 10, fontWeight: 800, color: C.inkFaint, textTransform: "uppercase", letterSpacing: .5 }}>{l}</div><div style={{ fontSize: 16, fontWeight: 800, color: C.ink, marginTop: 2 }}>{v}</div></div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {(() => {
+          const [u, r] = m.kinds; if (!u.n || !r.n) return null;
+          const perU = u.rev / u.n, perR = r.rev / r.n, x = perU ? perR / perU : 0;
+          return <div style={{ fontSize: 12.5, color: C.ink, marginTop: 12, lineHeight: 1.55 }}>
+            A repeatable listing earns <b>{x >= 1 ? `${x.toFixed(1)}×` : `${Math.round(x * 100)}% of`}</b> what an exact-piece listing does, and converts at {(r.conv * 100).toFixed(2)}% against {(u.conv * 100).toFixed(2)}%.{" "}
+            {x >= 1.5 ? "Where you hold several similar stones, one repeatable listing beats a listing per stone: it keeps its sales history, reviews and ranking from sale to sale, and every ad click goes to a listing that's proven." : x < 0.8 ? "Exact pieces are pulling more per listing — buyers here pay for the specific stone. Keep those as one-offs, with strong photos and video." : "They're close per listing — use repeatable for stock that is truly alike, exact pieces for stones that sell on their looks."}
+            {" "}Exact pieces also pay $0.20 per new listing each time, and can't build a sales history; repeatable listings are the better home for ad money.
+          </div>;
+        })()}
+      </Section>
 
       {/* top sellers */}
       <Section title={`Top sellers · last ${range} days`} sub="What brings the money in, against the period before. Sales per 1,000 views is how well a listing turns lookers into buyers (six months of sales over lifetime views)."
@@ -467,17 +768,19 @@ export default function EtsyInsights({ listings = [], onOpenRenew }) {
           </Section>
           {/* weeks */}
           <Section title="Week by week" sub="Ad charges against sales. Ads % rising week on week means the budget is outrunning what it brings.">
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead><tr style={{ color: C.inkFaint, fontSize: 10, textTransform: "uppercase", letterSpacing: .5, textAlign: "right" }}><th style={{ textAlign: "left" }}>Week of</th><th>Sales</th><th>Orders</th><th>Ads</th><th>Ads %</th></tr></thead>
+            <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 420 }}>
+              <thead><tr style={{ color: C.inkFaint, fontSize: 10, textTransform: "uppercase", letterSpacing: .5, textAlign: "right" }}><th style={{ textAlign: "left" }}>Week of</th><th>Sales</th><th>Orders</th><th style={{ color: ETSYADS }}>Etsy Ads</th><th style={{ color: OFFSITE }}>Offsite</th><th>Ads %</th><th title="Sales not from Offsite Ads, per $1 of Etsy Ads">Per $1</th></tr></thead>
               <tbody>
-                {m.weeks.map(w => { const ad = w.etsy == null ? null : w.etsy + w.offsite, sh = ad != null && w.sales ? ad / w.sales : null; return (
+                {m.weeks.map(w => { const ad = w.etsy == null ? null : w.etsy + w.offsite, sh = ad != null && w.sales ? ad / w.sales : null, per = w.etsy ? (w.sales - w.offsiteSales) / w.etsy : null; return (
                   <tr key={w.s} style={{ borderTop: `1px solid ${C.border}`, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                     <td style={{ textAlign: "left", padding: "5px 0" }}>{new Date(w.s).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</td>
-                    <td style={{ fontWeight: 800 }}>{usd(w.sales)}</td><td>{w.orders}</td><td>{ad == null ? "—" : usd(ad)}</td>
+                    <td style={{ fontWeight: 800 }}>{usd(w.sales)}</td><td>{w.orders}</td>
+                    <td>{w.etsy == null ? "—" : usd(w.etsy)}</td><td>{w.offsite == null ? "—" : usd(w.offsite)}</td>
                     <td style={{ fontWeight: 800, color: sh == null ? C.inkFaint : sh < 0.1 ? C.green : sh < 0.18 ? C.amber : C.red }}>{pct(sh)}</td>
+                    <td>{per == null ? "—" : usd(per)}</td>
                   </tr>); })}
               </tbody>
-            </table>
+            </table></div>
           </Section>
         </div>
       </div>

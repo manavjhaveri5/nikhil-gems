@@ -10978,7 +10978,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </div>
         )}
         {tab === "etsy" && currentUser?.role === "admin" && etsyView === "insights"
-          ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights listings={listings} onOpenRenew={() => setTab("renew")} /></Suspense>
+          ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights listings={listings} onOpenRenew={() => setTab("renew")} onPrice={(l, v) => quickPrice(l, "price_etsy", v)} /></Suspense>
           : tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
