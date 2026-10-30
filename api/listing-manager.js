@@ -1635,7 +1635,10 @@ export default async function handler(req, res) {
         const iso = ts => +ts > 0 ? new Date(ts * 1000).toISOString() : "";
         const dateOf = l => { const d = { renewed: iso(l.created_timestamp || l.creation_timestamp), ends: iso(l.ending_timestamp) }; if (d.renewed || d.ends) dates[l.listing_id] = d; };
         let renewed = 0;
-        for (const state of url.searchParams.get("only_check") ? [] : ["active", "draft"]) {   // only_check: just the listings named in check
+        /* Expired and paused listings too: a piece put on Etsy by hand that has
+           since expired is only matched to its ERP listing if Etsy lists it here,
+           and only then can the ERP say "expired" rather than not listed. */
+        for (const state of url.searchParams.get("only_check") ? [] : ["active", "draft", "expired", "inactive"]) {   // only_check: just the listings named in check
           let offset = 0;
           while (true) {
             const r = await fetch(
