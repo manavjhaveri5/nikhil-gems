@@ -9753,7 +9753,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
     } catch (e) { console.warn("warehouse note:", e); }
   };
   const ETSY_STATE_SYNC_TS = "ng-etsy-state-sync-ts";
-  const ETSY_REDATE_KEY = "ng-etsy-redated-v1";
+  const ETSY_REDATE_KEY = "ng-etsy-redated-v2"; // v2: once more after expired listings joined the sync
   const reconcileEtsyStates = async (current) => {
     // Runs when anything is on Etsy, or when something here isn't linked yet —
     // it may have been put on Etsy by hand.
@@ -9845,9 +9845,10 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         if (changedRows.length > 1) await saveK(LIST_KEY, next);
         else await upsertItemK(LIST_KEY, changedRows[0], { prepend: false });
       }
+      if (linkedNow.length) showToast(`✓ Linked ${linkedNow.length} piece${linkedNow.length === 1 ? "" : "s"} to ${linkedNow.length === 1 ? "its" : "their"} Etsy listing${linkedNow.length === 1 ? "" : "s"}`, 6000);
       if (redate) {
         try { localStorage.setItem(ETSY_REDATE_KEY, new Date().toISOString()); } catch {}
-        showToast(redated ? `✓ Put ${redated} renewed Etsy listing${redated === 1 ? "" : "s"} back at their first-listed date` : `Etsy dates checked · ${d.renewed ?? 0} renewed on Etsy, none needed moving`, 6000);
+        if (!linkedNow.length) showToast(redated ? `✓ Put ${redated} renewed Etsy listing${redated === 1 ? "" : "s"} back at their first-listed date` : `Etsy dates checked · ${d.renewed ?? 0} renewed on Etsy, none needed moving`, 6000);
       }
     } catch {}
   };

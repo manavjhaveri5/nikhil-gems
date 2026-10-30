@@ -382,6 +382,70 @@ export default async function handler(req, res) {
       return res.json({ ok: true, items: await briefListings({ getJson }, ids) });
     }
 
+    // ── insights: what the Insights tab works from, in one call ──────────────────
+    // Every active listing with its lifetime views and favourites and what it
+    // shows (photo and video counts); paid receipts for ?days (default 180) with
+    // each line's listing, so sales can be put against listings; and the
+    // ledger's ad charges for the last 90 days — Etsy Ads (prolist, a charge a
+    // day) and Offsite Ads (a fee per attributed order, with its receipt).
+    if (action === "insights") {
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const nowS = Math.floor(Date.now() / 1000);
+      const days = Math.min(400, Math.max(30, parseInt(req.query.days, 10) || 180));
+      const from = nowS - days * 86400, adsFrom = nowS - 90 * 86400;
+      const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
+      const { allPages } = etsyQueue(authHeaders);
+      const listingsP = allPages(offset => `https://openapi.etsy.com/v3/application/shops/${sid}/listings?${new URLSearchParams({ state: "active", limit: "100", offset: String(offset), includes: "Images,Videos" })}`);
+      const receiptsP = allPages(offset => `https://openapi.etsy.com/v3/application/shops/${sid}/receipts?${new URLSearchParams({ was_paid: "true", limit: "100", offset: String(offset), min_created: String(from), sort_on: "created", sort_order: "desc" })}`);
+      const windows = [];
+      for (let a = adsFrom; a < nowS; a += 30 * 86400) windows.push([a, Math.min(nowS + 60, a + 30 * 86400)]);
+      const ledgerP = Promise.all(windows.map(([a, b]) => allPages(offset =>
+        `https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${a}&max_created=${b}&limit=100&offset=${offset}`
+      ))).then(c => ({ rows: c.flat() }), e => ({ error: e.message }));
+      const [rawListings, rawReceipts, ledger] = await Promise.all([listingsP, receiptsP, ledgerP]);
+
+      const listings = rawListings.map(l => {
+        const img = [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
+        return {
+          id: String(l.listing_id), title: String(l.title || "").slice(0, 140),
+          views: +l.views || 0, favs: +l.num_favorers || 0,
+          price: money(l.price), cur: l.price?.currency_code || "", qty: +l.quantity || 0,
+          photos: (l.images || []).length, video: (l.videos || []).length > 0,
+          tags: (l.tags || []).length, sku: (l.skus || [])[0] || "",
+          first: +l.original_creation_timestamp || +l.creation_timestamp || 0,
+          ends: +l.ending_timestamp || 0, auto: !!l.should_auto_renew,
+          img: img ? img.url_170x135 || img.url_570xN || "" : "",
+        };
+      });
+      const VOID = ["canceled", "cancelled", "fully refunded", "fully_refunded"];
+      const seen = new Set(), receipts = [];
+      for (const r of rawReceipts) {
+        const id = String(r.receipt_id);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const status = String(r.status || "").toLowerCase();
+        if (VOID.includes(status)) continue;
+        const refunded = (r.refunds || []).reduce((t, rf) => t + money(rf.amount), 0);
+        receipts.push({
+          id, ts: +r.create_timestamp || +r.created_timestamp || 0,
+          sales: Math.max(0, Number((money(r.grandtotal) - money(r.total_tax_cost) - money(r.total_vat_cost) - refunded).toFixed(2))),
+          country: r.country_iso || "",
+          buyer: String(r.buyer_user_id || ""),
+          lines: (r.transactions || []).map(t => ({ lid: String(t.listing_id || ""), qty: +t.quantity || 1, amt: Number((money(t.price) * (+t.quantity || 1)).toFixed(2)), title: String(t.title || "").slice(0, 90) })),
+        });
+      }
+      const ads = [], seenE = new Set();
+      for (const e of ledger.rows || []) {
+        const type = String(e.ledger_type || "").toLowerCase();
+        const kind = type.startsWith("prolist") ? "etsy" : type.startsWith("offsite_ads") ? "offsite" : "";
+        if (!kind || seenE.has(e.entry_id)) continue;
+        seenE.add(e.entry_id);
+        ads.push({ ts: +e.created_timestamp || +e.create_date || 0, kind, amt: Number((-(+e.amount || 0) / 100).toFixed(2)), ref: String(e.reference_id || ""), rtype: String(e.reference_type || "") });
+      }
+      return res.json({ ok: true, at: nowS, days, currency: receipts.find(() => true) ? (rawReceipts[0]?.grandtotal?.currency_code || "") : "", listings, receipts, ads, ...(ledger.error ? { adsError: ledger.error } : {}) });
+    }
+
     // ── renewal_queue: listings that have come off the shop, and the ones about to ─
     // For Listing Manager's Renew tab. Expired listings most recently ended first
     // (a listing ends four months after its last renewal, so newest-created is
