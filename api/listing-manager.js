@@ -11,6 +11,7 @@ import { getEtsyAccessToken } from "../lib/etsy-auth.js";
 import { createClient } from "@supabase/supabase-js";
 import { endEbayItem } from "./ebay.js";
 import { storeOrderRows } from "../lib/storeOrderRows.js";
+import { withStandLine } from "../lib/standLine.js";
 
 const MEDIA_BUCKET = "ng-media";
 
@@ -743,7 +744,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   } = listing;
 
   const etsyTitle = ai?.etsy_title || title;
-  const etsyDesc  = stripWarehouseNote(ai?.etsy_description || listing.description || title);
+  const etsyDesc  = withStandLine(stripWarehouseNote(ai?.etsy_description || listing.description || title), "etsy", title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
 
   const sectionId      = listing.etsy_section_id   || ETSY_SECTIONS[shape] || ETSY_SECTIONS[productType] || null;
@@ -974,7 +975,7 @@ async function applyEtsyPlainInventory(listingId, listing, hdrs, readinessId, qu
 
 async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false } = {}) {
   const etsyTitle = ai?.etsy_title || listing.title;
-  const etsyDesc  = stripWarehouseNote(ai?.etsy_description || listing.description || listing.title);
+  const etsyDesc  = withStandLine(stripWarehouseNote(ai?.etsy_description || listing.description || listing.title), "etsy", listing.title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
   const quantity  = listing.type === "unique" ? 1 : Math.max(1, +listing.qty || 1);
   const dims      = listingDimensions(listing);

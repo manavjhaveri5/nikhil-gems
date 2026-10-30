@@ -12,6 +12,7 @@ import { C, mob, FI } from "./lmTheme.js";
 import { loadK, uid } from "./utils.js";
 import { uploadToStorage } from "./storageUtils.js";
 import { ETSY_SHOP_SECTIONS } from "../lib/listingCategories.js";
+import { withStandLine } from "../lib/standLine.js";
 import { retailTitle } from "../lib/retailTitle.js";
 const PhotoEditor = lazy(() => import("./PhotoEditor.jsx"));
 const VisitorsTab = lazy(() => import("./StoreVisitors.jsx"));
@@ -110,7 +111,7 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
        source.manual is for. */
     title: own || derived,
     subtitle: size,
-    description: String(l.store_description || l.shopify_description || l.description || "").replace(/<[^>]+>/g, "").trim(),
+    description: withStandLine(String(l.store_description || l.shopify_description || l.description || "").replace(/<[^>]+>/g, "").trim(), "store", l.title),
     images, videos: l.video && /^https?:/.test(l.video) ? [l.video] : (existing?.videos || []),
     material: l.material || "", shape: l.shape || "", product_type: l.productType || "",
     tags: Array.isArray(l.tags) ? l.tags : [],
