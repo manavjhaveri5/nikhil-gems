@@ -208,7 +208,9 @@ function Tile({ l, store, facts, orders, stock, sales, etsy, etsyAt, onOpen, onE
           {l.video && <span style={pill("#fff", "rgba(20,15,8,.65)")}>▶</span>}
           {l.type === "unique" ? <span style={pill(C.blue, "rgba(255,255,255,.92)")}>1 of 1</span> : <span style={pill(C.amber, "rgba(255,255,255,.92)")}>Qty {l.qty || "—"}</span>}
         </div>
-        {sold && <span style={{ ...pill("#fff", C.ink), position: "absolute", bottom: 8, left: 8 }}>Sold</span>}
+        {/* Sold reads at a glance across the grid: a red stamp, not another dark chip. */}
+        {sold && <span style={{ position: "absolute", bottom: 10, left: 10, fontSize: 12.5, fontWeight: 900, letterSpacing: 1.4, color: "#fff", background: "#E0362C",
+          padding: "4px 11px", borderRadius: 6, boxShadow: "0 2px 8px rgba(224,54,44,.45)", textTransform: "uppercase" }}>✓ Sold</span>}
         {imgs.length > 1 && hover && <>
           <button onClick={e => { e.stopPropagation(); stopVid(); setI(x => (x - 1 + imgs.length) % imgs.length); }} style={arrow("left")}>‹</button>
           <button onClick={e => { e.stopPropagation(); stopVid(); setI(x => (x + 1) % imgs.length); }} style={arrow("right")}>›</button>
