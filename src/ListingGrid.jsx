@@ -516,6 +516,8 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
   const allPlaces = useMemo(() => knownLocations(listings, stock), [listings, stock]);
   const lost = l => !whereOf.get(l.id) && needsLocation(l, soldOut(l, orders, facts));
   const counts = useMemo(() => ({
+    // Not live leaves out what's sold: those have their own filter.
+    notlive: listings.filter(l => !isLive(l, facts) && !soldOut(l, orders, facts)).length,
     live: listings.filter(l => isLive(l, facts)).length,
     sold: listings.filter(l => soldOut(l, orders, facts)).length,
     unique: listings.filter(l => l.type === "unique").length,
@@ -532,7 +534,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
     return listings.filter(l => {
       if (status.size) {
         const live = isLive(l, facts), sold = soldOut(l, orders, facts);
-        if (!((status.has("live") && live) || (status.has("notlive") && !live) || (status.has("sold") && sold))) return false;
+        if (!((status.has("live") && live) || (status.has("notlive") && !live && !sold) || (status.has("sold") && sold))) return false;
       }
       if (liveOn.size && ![...liveOn].some(k => statusOf(l, k, facts) === "active")) return false;
       if (notOn.size && [...notOn].some(k => statusOf(l, k, facts) === "active")) return false;
@@ -618,7 +620,7 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
           <aside style={{ width: 230, flex: "none", position: "sticky", top: 70, maxHeight: "calc(100vh - 90px)", overflowY: "auto", paddingRight: 4 }}>
             <Group title="Show">
               <Check checked={status.has("live")} onChange={() => setStatus(s => toggle(s, "live"))} label="Live" count={counts.live} color={C.green} />
-              <Check checked={status.has("notlive")} onChange={() => setStatus(s => toggle(s, "notlive"))} label="Not live" count={listings.length - counts.live} />
+              <Check checked={status.has("notlive")} onChange={() => setStatus(s => toggle(s, "notlive"))} label="Not live" count={counts.notlive} />
               <Check checked={status.has("sold")} onChange={() => setStatus(s => toggle(s, "sold"))} label="Sold" count={counts.sold} />
               <Check checked={erpOnly} onChange={() => setErpOnly(v => !v)} label="Posted from ERP" count={counts.erp} color={C.gold} />
             </Group>
