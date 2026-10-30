@@ -10,6 +10,7 @@ import PhotoEditor from "./PhotoEditor.jsx";
    visits to the listing manager never open one. It arrives when it is asked
    for. */
 const VideoEditor = lazy(() => import("./VideoEditor.jsx"));
+const EtsyInsights = lazy(() => import("./EtsyInsights.jsx"));
 import { recommendCarriers, costVerdict, normalizeCarrier } from "./shipping.js";
 /* Etsy category / section / shape tables — shared with the Telegram listing bot,
    which files its drafts under exactly the same taxonomy. */
@@ -10734,6 +10735,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     { key: "listings", label: "All Listings", count: listings.length },
     { key: "orders",   label: "Orders",       count: orders.length,  color: C.green },
     { key: "renew",    label: "Renew",        count: renewCount,     color: "#F56400" },
+    ...(currentUser?.role === "admin" ? [{ key: "insights", label: "📈 Insights" }] : []),
     ...PLATFORMS.filter(p => !p.coming).map(p => ({
       key: p.key, label: p.label, icon: p.icon, color: p.color,
       count: listings.filter(l => ["active", "draft"].includes(l.platforms?.[p.key]?.status)).length,
@@ -10961,6 +10963,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
 
         {/* ══ ORDERS ══ */}
+        {tab === "insights" && currentUser?.role === "admin" && <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights listings={listings} onOpenRenew={() => setTab("renew")} /></Suspense>}
         {tab === "renew" && <RenewalQueue listings={listings} stock={stock} getToken={getEtsyToken} onRenew={renewFromQueue} showToast={showToast} who={who} onCount={setRenewCount} />}
         {tab === "orders" && <OrdersView hideMoney={currentUser?.role !== "admin" && Array.isArray(currentUser?.hide) && currentUser.hide.includes("orderMoney")} orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
 
