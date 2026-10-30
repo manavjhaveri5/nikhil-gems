@@ -76,6 +76,84 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
   );
 }
 
+
+/* Price by weight, your way: a rate per gram (or per kilo for lots) set by
+   hand, or what the stone cost a gram times a multiplier, and the piece's
+   prices worked out from its weight in one tap. The rate is the Etsy listed
+   price, the same as the similar pieces' rates below, so the two read alike;
+   India follows it after the Etsy sale (as the store does), the USA store via
+   the store's own conversion. The last rate used for a stone and shape is
+   remembered on this device, so the next piece of it starts there. */
+const RATE_MEMO = "ng-rate-memo-v1";
+const memoKey = f => `${String(f.material || "").toLowerCase().trim()}|${String(f.shape || "").toLowerCase().trim()}`;
+const readMemo = () => { try { return JSON.parse(localStorage.getItem(RATE_MEMO) || "{}"); } catch { return {}; } };
+function PriceByWeight({ form, weightKg, costPerKg, sale, fx, settings, pick, onFill }) {
+  const perG = weightKg < 1, unitKg = perG ? .001 : 1, unit = perG ? "g" : "kg";
+  const units = weightKg / unitKg;
+  const memo = readMemo()[memoKey(form)] || null;
+  const costUnit = costPerKg ? costPerKg * unitKg : 0;
+  const [mode, setMode] = useState(memo?.mode || (costUnit ? "cost" : "rate"));
+  const [rate, setRate] = useState(memo?.rate ? String(memo.rate) : "");
+  const [cost, setCost] = useState(costUnit ? String(+costUnit.toFixed(2)) : memo?.cost ? String(memo.cost) : "");
+  const [mult, setMult] = useState(memo?.mult ? String(memo.mult) : "4");
+  const [india, setIndia] = useState(memo?.india != null ? String(memo.india) : ""); // % off Etsy for India; blank = the Etsy sale
+  const r = mode === "rate" ? +rate || 0 : (+cost || 0) * (+mult || 0);
+  const etsy = Math.round(r * units / 10) * 10;
+  const pays = Math.round(etsy * (1 - sale / 100));
+  const indiaOff = india === "" ? sale : +india || 0;
+  const inrIndia = Math.round(etsy * (1 - indiaOff / 100) / 10) * 10;
+  const usa = etsy ? storePriceFor({ price_etsy: etsy }, fx, settings?.price_rounding, sale) || Math.round(pays / fx) : 0;
+  const fmtRate = v => `₹${v >= 100 ? Math.round(v).toLocaleString("en-IN") : +(+v).toFixed(2)}/${unit}`;
+  const fill = () => {
+    if (!etsy) return;
+    const out = {};
+    if (pick.etsy) out.price_etsy = String(etsy);
+    if (pick.store) { out.price_store = String(usa); out.price_store_inr = String(inrIndia); }
+    onFill(out);
+    try { localStorage.setItem(RATE_MEMO, JSON.stringify({ ...readMemo(), [memoKey(form)]: { mode, rate: +rate || undefined, cost: +cost || undefined, mult: +mult || undefined, india: india === "" ? undefined : +india, used: r } })); } catch { /* fine */ }
+  };
+  const inp = { width: 74, border: 0, borderBottom: `1.5px solid ${C.ink}`, outline: "none", background: "transparent", fontFamily: serif, fontSize: 20, color: C.ink, padding: "2px 0" };
+  const tab = on => ({ border: "none", cursor: "pointer", fontSize: 12, fontWeight: 800, padding: "5px 11px", borderRadius: 7, background: on ? C.surface : "transparent", color: on ? C.ink : C.inkMid, boxShadow: on ? "0 1px 2px rgba(0,0,0,.08)" : "none", fontFamily: "inherit" });
+  const label = t => <div style={{ fontSize: 10, fontWeight: 800, color: C.inkFaint, letterSpacing: .4, textTransform: "uppercase" }}>{t}</div>;
+  return (
+    <Box>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>Price by weight</div>
+          <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>
+            {weightKg ? <>This piece is {perG ? `${Math.round(weightKg * 1000)} g` : `${+weightKg.toFixed(2)} kg`}.</> : "Add the piece's weight to price by it."}
+            {memo?.used ? <> Last time for this stone: <b>{fmtRate(memo.used)}</b>.</> : ""}
+          </div>
+        </div>
+        <div style={{ display: "inline-flex", gap: 2, padding: 3, background: C.card, borderRadius: 9 }}>
+          <button type="button" style={tab(mode === "rate")} onClick={() => setMode("rate")}>My rate</button>
+          <button type="button" style={tab(mode === "cost")} onClick={() => setMode("cost")}>Cost × multiplier</button>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 18, alignItems: "flex-end", flexWrap: "wrap", marginTop: 12 }}>
+        {mode === "rate" ? (
+          <div>{label(`Etsy price per ${unit}`)}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>₹</span><input inputMode="decimal" value={rate} onChange={e => setRate(e.target.value.replace(/[^\d.]/g, ""))} placeholder="90" style={inp} /></div></div>
+        ) : <>
+          <div>{label(`Cost per ${unit}`)}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>₹</span><input inputMode="decimal" value={cost} onChange={e => setCost(e.target.value.replace(/[^\d.]/g, ""))} placeholder="20" style={inp} /></div>
+            {costUnit > 0 && <div style={{ fontSize: 10.5, color: C.inkFaint, marginTop: 2 }}>from the stock card</div>}</div>
+          <div>{label("Multiplier")}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>×</span><input inputMode="decimal" value={mult} onChange={e => setMult(e.target.value.replace(/[^\d.]/g, ""))} style={{ ...inp, width: 50 }} /></div></div>
+          {r > 0 && <div style={{ fontSize: 12, color: C.inkMid, paddingBottom: 6 }}>= {fmtRate(r)}</div>}
+        </>}
+        {pick.store && <div>{label("India, % off Etsy")}<div style={{ display: "flex", alignItems: "baseline", gap: 3 }}><input inputMode="decimal" value={india} onChange={e => setIndia(e.target.value.replace(/[^\d.]/g, ""))} placeholder={String(Math.round(sale))} style={{ ...inp, width: 44 }} /><span style={{ fontFamily: serif, fontSize: 18, color: C.inkMid }}>%</span></div></div>}
+      </div>
+      {etsy > 0 && weightKg > 0 && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
+          {pick.etsy && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>Etsy <b>{inr(etsy)}</b>{sale ? <span style={{ color: C.inkMid }}> · buyer pays {inr(pays)}</span> : ""}</span>}
+          {pick.store && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>USA <b>{usd(usa)}</b></span>}
+          {pick.store && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>India <b>{inr(inrIndia)}</b></span>}
+          {mode === "cost" && +cost > 0 && <span style={{ fontSize: 11.5, color: C.inkMid }}>cost {inr(+cost * units)}</span>}
+          <button type="button" onClick={fill} style={{ marginLeft: "auto", background: C.ink, color: C.surface, border: "none", borderRadius: 9, padding: "8px 14px", fontWeight: 800, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit" }}>Use these prices</button>
+        </div>
+      )}
+    </Box>
+  );
+}
+
 export default function ListSteps({ form, orders, stock = [], weightKg = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onClose, onDone, research = false }) {
   const [step, setStep] = useState(start);
   // An exception to the stock-card rule: a piece with no stock card (a sample,
@@ -496,6 +574,11 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
           {step === "price" && <>
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Prices</div>
             {!chosen.length && <div style={{ color: C.inkMid, fontSize: 14 }}>Pick where it goes first.</div>}
+            {chosen.length > 0 && vi < 0 && (pick.etsy || pick.store) && (
+              <PriceByWeight form={form} weightKg={weightKg} sale={sale} fx={fx} settings={s} pick={pick}
+                costPerKg={card && +card.costPrice && String(card.unit || "").toLowerCase() === "kg" ? +card.costPrice : card && +card.costPrice && ["g", "gm", "gram", "grams"].includes(String(card.unit || "").toLowerCase()) ? +card.costPrice * 1000 : 0}
+                onFill={out => setP(v => ({ ...v, ...out }))} />
+            )}
             {/* Priced by the kilo against the same stone already in the shop: each
                 similar piece's price over its own weight, the middle of those, and
                 what that rate makes this piece — one tap to use it. */}
