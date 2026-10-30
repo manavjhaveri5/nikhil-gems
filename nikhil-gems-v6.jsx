@@ -14914,6 +14914,28 @@ function invoiceRuleChecks(draft,invoices=[],company){
   else if(co.stateCode&&co.gstin.slice(0,2)!==String(co.stateCode).padStart(2,"0"))add("GST","Seller GSTIN",`GSTIN state ${co.gstin.slice(0,2)} doesn't match state code ${co.stateCode}.`,"Correct the state code or the GSTIN.");
   if(!/^[0-9A-Z]{10}$/i.test(String(co.iec||"")))add("Other legal","Seller IEC",`IEC ${co.iec||"(missing)"} isn't a 10-character IEC.`,"Correct the IEC on the company profile.");
   if(String(draft.invNo||"").length>16)add("GST","Invoice No.",`"${draft.invNo}" is over 16 characters (CGST Rule 46).`,"Shorten the invoice number.");
+  /* The series: unique and consecutive within the financial year, dates in
+     number order, one format (NG-54-2026/27 beside NG-54/26-27 is how a
+     number got used twice). Cancelled invoices keep their numbers. */
+  {
+    const no=String(draft.invNo||"").trim(), m=no.match(/^([A-Z]+)-(\d+)/i);
+    const fyOf=d=>{const x=new Date(d||"");if(isNaN(x))return"";const y=x.getMonth()>=3?x.getFullYear():x.getFullYear()-1;return y;};
+    if(m&&draft.type!=="proforma"){
+      const pre=m[1].toUpperCase(),n=+m[2],fy=fyOf(draft.date);
+      const same=(invoices||[]).filter(i=>i.id!==draft.id&&i.type!=="proforma"&&String(i.invNo||"").toUpperCase().startsWith(pre+"-")&&fyOf(i.date)===fy)
+        .map(i=>({no:i.invNo,n:+(String(i.invNo).match(/^[A-Z]+-(\d+)/i)||[])[1],date:i.date})).filter(i=>i.n);
+      const twin=same.find(i=>i.n===n);
+      if(twin)add("GST","Invoice No.",`Number ${n} is already used this financial year (${twin.no}, ${twin.date}).`,"Use the next free number in the series.");
+      const before=same.filter(i=>i.n<n).sort((a,b)=>b.n-a.n)[0], after=same.filter(i=>i.n>n).sort((a,b)=>a.n-b.n)[0];
+      if(before&&draft.date&&draft.date<before.date)add("GST","Invoice date",`Dated ${draft.date}, earlier than ${before.no} (${before.date}): numbers and dates must run in the same order.`,"Date it on or after the previous invoice, or give it the number that fits its date.");
+      if(after&&draft.date&&draft.date>after.date)add("GST","Invoice date",`Dated ${draft.date}, later than ${after.no} (${after.date}), which has a higher number.`,"Check the number and date.");
+      const top=same.filter(i=>i.n<n).reduce((a,i)=>Math.max(a,i.n),0);
+      if(top&&n>top+1&&!same.some(i=>i.n>n))add("GST","Invoice No.",`Number ${n} skips ${top+1}${n>top+2?`–${n-1}`:""}: the series must be consecutive.`,`Use ${pre}-${String(top+1).padStart(2,"0")}, or record the skipped number as cancelled.`);
+      const fmt=x=>String(x).replace(/\d+/g,"#");
+      const usual=same.map(i=>fmt(i.no)).sort((a,b)=>same.filter(i=>fmt(i.no)===b).length-same.filter(i=>fmt(i.no)===a).length)[0];
+      if(usual&&fmt(no)!==usual)add("GST","Invoice No.",`"${no}" isn't in the series' format (${usual.replace(/#+/g,"…")}).`,"Write it the same way as the rest of the series.");
+    }
+  }
   // Spelling: words we know get misspelt, anywhere on the invoice.
   const texts=[...items.flatMap((it,i)=>[[`Line ${i+1}`,it.desc],[`Line ${i+1}`,it.customDesc],[`Line ${i+1}`,it.acctDesc]]),["Terms",draft.termsText],["Notes",draft.notes],["Port of Discharge",draft.portDischarge],["Port of Lading",draft.portLading]];
   const seen=new Set();
