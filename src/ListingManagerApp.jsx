@@ -2028,17 +2028,20 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const mat = norm(form.material), shp = norm(form.shape);
     if (!mat) return [];
     const priced = l => +l.price_etsy > 0 || +l.price_store > 0 || +l.price_trade > 0;
-    const pool = (listings || []).filter(l => l.id !== form.id && norm(l.material) === mat && kgOf(l) > 0 && priced(l));
+    // Never the piece itself: by id, Etsy id or exact title.
+    const selfEtsy = String(form.platforms?.etsy?.listing_id || ""), selfTitle = norm(form.title);
+    const notSelf = l => l.id !== form.id && l.id !== initial?.id && !(selfEtsy && String(l.platforms?.etsy?.listing_id || "") === selfEtsy) && norm(l.title) !== selfTitle;
+    const pool = (listings || []).filter(l => notSelf(l) && norm(l.material) === mat && kgOf(l) > 0 && priced(l));
     const same = pool.filter(l => norm(l.shape) === shp);
     // The same stone and shape with no weight still compare by the piece.
-    const byPiece = shp ? (listings || []).filter(l => l.id !== form.id && norm(l.material) === mat && norm(l.shape) === shp && !kgOf(l) && priced(l)).slice(0, 6) : [];
+    const byPiece = shp ? (listings || []).filter(l => notSelf(l) && norm(l.material) === mat && norm(l.shape) === shp && !kgOf(l) && priced(l)).slice(0, 6) : [];
     const rows = [...(same.length >= 3 ? same : [...same, ...pool.filter(l => norm(l.shape) !== shp)]), ...byPiece]
       .map(l => ({ id: l.id, title: l.title, image: (l.images || []).find(u => typeof u === "string") || "", kg: kgOf(l), shape: l.shape || "", sameShape: norm(l.shape) === shp,
-        price_etsy: +l.price_etsy || 0, price_store: +l.price_store || 0, price_trade: +l.price_trade || 0,
+        price_etsy: +l.price_etsy || 0, price_store: +l.price_store || 0, price_store_inr: +l.price_store_inr || 0, price_trade: +l.price_trade || 0,
         sold: l.status === "sold" || +l.qty === 0, live: Object.values(l.platforms || {}).some(p => p?.status === "active") }))
       .sort((a, b) => (!!b.kg - !!a.kg) || (b.sameShape - a.sameShape) || Math.abs(a.kg - pieceKg) - Math.abs(b.kg - pieceKg));
     return [...rows.filter(r => r.kg).slice(0, 12), ...rows.filter(r => !r.kg)];
-  }, [listings, form.id, form.material, form.shape, pieceKg]);
+  }, [listings, form.id, form.title, form.platforms?.etsy?.listing_id, form.material, form.shape, pieceKg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* What this piece cost, from its stock card. The card's cost price is per
      its first unit (stock is valued qty × cost price), so: per piece, it's
@@ -9771,7 +9774,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       /* Shown live here but neither active nor a draft on Etsy: ask Etsy what
          became of them (sold out, paused, expired, gone) — without this they
          stayed "live" here for good, View link and all. */
-      const missing = current.filter(l => l.platforms?.etsy?.listing_id && l.platforms.etsy.status === "active" && !d.states[l.platforms.etsy.listing_id]).map(l => l.platforms.etsy.listing_id).slice(0, 300);
+      // Drafts here that aren't Etsy drafts either are asked about too: that's how an expired listing is told apart.
+      const missing = current.filter(l => l.platforms?.etsy?.listing_id && ["active", "draft"].includes(l.platforms.etsy.status) && !d.states[l.platforms.etsy.listing_id]).map(l => l.platforms.etsy.listing_id).slice(0, 300);
       if (missing.length) {
         const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${missing.join(",")}`).then(x => x.json()).catch(() => null);
         if (c?.ok && c.states) Object.assign(d.states, c.states);
@@ -9821,7 +9825,9 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         const et = l.platforms.etsy, dt = dates[lid] || {};
         const renewedAt = dt.renewed && first && Date.parse(dt.renewed) > Date.parse(first) + 864e5 ? dt.renewed : "";
         const want = { ...(first ? { first_listed_at: first } : {}), ...(renewedAt ? { renewed_at: renewedAt } : {}), ...(dt.ends ? { ends_at: dt.ends } : {}) };
-        const datesMoved = Object.entries(want).some(([k, v]) => et[k] !== v);
+        // Expired is kept as "draft" (not live) but marked, so the card can say expired: it needs renewing, not publishing.
+        want.expired = live === "expired";
+        const datesMoved = Object.entries(want).some(([k, v]) => (et[k] ?? false) !== v);
         if (et.status === mapped && !early && !datesMoved) return l;
         if (linkedNow.includes(l)) return l;
         const updated = { ...l, ...(early ? { created_at: first } : {}),
