@@ -1042,6 +1042,8 @@ function StockAttention({isAdmin=false}){
   );
 }
 
+/* Logins that don't see the Etsy sales panel on the home screen (Bapu's). */
+const PULSE_HIDDEN_FOR=["finance.nikhilgems@gmail.com"];
 function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=true,allUsers=[],currentUser=null,onGoToActivity}){
   /* Which groups are open. Remembered, because a sidebar that folds itself shut
      on every visit is a sidebar you stop trusting; Accounting is open the first
@@ -1345,7 +1347,7 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
           {/* Etsy: the month against the $10k goal, what's left to ship and file, ad spend.
               Everyone who works the shop sees it — Manav, and staff with Etsy or Orders. */}
-          {(isAdmin||visibleMods.some(m=>m.id==="etsy"||m.id==="orders"))&&<EtsyPulse onEnter={onEnter} rates={finRates}/>}
+          {(isAdmin||visibleMods.some(m=>m.id==="etsy"||m.id==="orders"))&&!PULSE_HIDDEN_FOR.includes(String(currentUser?.email||"").toLowerCase())&&<EtsyPulse onEnter={onEnter} rates={finRates}/>}
 
           {/* Row 1: Show countdown + stat cards */}
           {isAdmin&&<div style={{display:"grid",gridTemplateColumns:mob?"1fr":"200px 1fr",gap:11,marginBottom:11,opacity:vis?1:0,animation:vis?"fadeUp .4s ease .1s both":"none"}}>
