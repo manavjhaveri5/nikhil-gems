@@ -452,7 +452,7 @@ function Check({ checked, onChange, label, count, color }) {
   );
 }
 
-export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, loadTradeFacts, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice, onBulkPricePost }) {
+export default function ListingGrid({ listings, orders, stock = [], loadStoreFacts, tradeFacts: trade = null, onEdit, onPrice, onLocation, onBulkMove, onSavePhotos, onMarkSold, onDelete, onBulkDelete, renderManage, onBulkPrice, onBulkPricePost }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState(new Set());   // live | notlive | sold
   const [liveOn, setLiveOn] = useState(new Set());   // platform keys: live on any of these
@@ -475,10 +475,10 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
   const [pricePost, setPricePost] = useState(false);
   const more = useRef(null);
 
-  const [trade, setTrade] = useState(null);
-  // Left null when a load fails, so the pills fall back to the listing's own note.
+  // Left null when a load fails, so the pills fall back to the listing's own note. The trade
+  // site's records come in as a prop: Listing Manager's shared copy, re-read after every post.
   const refreshStore = () => loadStoreFacts().then(setStore).catch(() => {});
-  useEffect(() => { refreshStore(); loadTradeFacts?.().then(setTrade).catch(() => {}); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { refreshStore(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   /* The store's records decide its pill, and they were read once, when the
      grid opened, so a piece put on the store after that stayed grey until a
      reload. Putting one on (or taking it off) from here changes its note, so

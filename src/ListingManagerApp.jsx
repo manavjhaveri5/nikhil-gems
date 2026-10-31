@@ -3359,15 +3359,17 @@ function refreshTradeFacts() {
     .finally(() => { tradeFacts.busy = null; });
   return tradeFacts.busy;
 }
-function useTradeFacts() {
+// null until the first read lands, for callers that fall back to the listing's own note meanwhile.
+function useTradeFactsMap() {
   const [m, setM] = useState(tradeFacts.map);
   useEffect(() => {
     tradeFacts.subs.add(setM);
     if (!tradeFacts.map) refreshTradeFacts();
     return () => { tradeFacts.subs.delete(setM); };
   }, []);
-  return m || {};
+  return m;
 }
+function useTradeFacts() { return useTradeFactsMap() || {}; }
 /* The store's live $ and ₹ per listing, one shared copy like the trade facts:
    with no store price typed, the site charges the Etsy price less its discount. */
 const storeFacts = { map: null, subs: new Set(), busy: null };
@@ -9727,6 +9729,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [tradeAsk,   setTradeAsk]   = useState(null);   // { listing, initial, res } while the trade form is open
   const [liveSheet,  setLiveSheet]  = useState(null);   // after "Publish live": { title, rows: [{ key, ok, url, error }] }
   const askTrade = (listing, initial) => new Promise(res => setTradeAsk({ listing, initial, res }));
+  // The grid's Trade pills read the same shared copy, so a post (or delete) shows on the card at once.
+  const tradeMap = useTradeFactsMap();
   // Trade details change on the site too: re-read them when coming back to the tab.
   useEffect(() => {
     const on = () => { if (document.visibilityState === "visible" && Date.now() - tradeFacts.at > 60000) refreshTradeFacts(); };
@@ -10866,7 +10870,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             </div>
 
             {view === "grid" && loaded && listings.length > 0 ? (
-              <ListingGrid listings={listings} orders={orders} stock={stock} loadStoreFacts={loadStoreFacts} loadTradeFacts={loadTradeFacts}
+              <ListingGrid listings={listings} orders={orders} stock={stock} loadStoreFacts={loadStoreFacts} tradeFacts={tradeMap}
                 onLocation={setListingLocation}
                 onBulkMove={bulkMove}
                 onEdit={l => { setEditing(l); setShowForm(true); }}
