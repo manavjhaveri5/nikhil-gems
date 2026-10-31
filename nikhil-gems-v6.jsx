@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "./src/supabase.js";
 import { upload as blobUpload } from "@vercel/blob/client";
 import { uploadToStorage as supabaseUpload } from "./src/storageUtils.js";
@@ -15,6 +15,7 @@ import { LanguageProvider, useT, useTFmt, useLang } from "./src/languageContext.
 import { createSheet, buildXlsx } from "./src/xlsxWriter.js";
 import { C, FI, CI, Tag, Field, Toast, TypeBadge, StatusBadge, MarketTag } from "./src/ui.jsx";
 import NameCard from "./src/NameCard.jsx";
+import { TabStrip, TabPane, TAB_H, MAX_TABS } from "./src/ErpTabs.jsx";
 import EtsyPulse from "./src/HomePulse.jsx";
 import HomeAccounts from "./src/HomeAccounts.jsx";
 import ClassifyTransactionModal from "./src/ClassifyTransaction.jsx";
@@ -65,6 +66,10 @@ function forgetMod(){
   try{sessionStorage.removeItem("ng-last-mod");localStorage.removeItem("ng-last-mod");}catch{}
   try{const u=new URL(window.location.href);if(u.searchParams.has("m")){u.searchParams.delete("m");window.history.replaceState(window.history.state,"",u);}}catch{}
 }
+/* What the page scrolls in: with tabs (desktop) each tab is its own scrolling
+   page, so "back to the top" has to scroll that, not the window. */
+const pageScroller=()=>document.querySelector("[data-ng-tab-on]")||window;
+const pageScrollY=()=>{const s=pageScroller();return s===window?window.scrollY:s.scrollTop;};
 /* One stone, however it was typed: "Sonora sunrise", "Sonora Sunrise " and
    "sonora sunrise" are the same. The key compares them; the name shown is the
    best-capitalised spelling on file. */
@@ -7255,13 +7260,13 @@ Pick productType from: ${PRODUCT_TYPES.join(", ")}. Reply ONLY: {"productType":"
      which would yank you back to page 1 mid-browse. Out-of-range pages are
      handled by the curPage clamp below instead. */
   useEffect(()=>{setPage(1);},[search,fsStones,fsShapes,fsMarkets,fsTypes,fsUnits,fPhoto,fVideo,fsPlats,fsVendors,sortBy,qtyFilter,stockRegion]);
-  const changePageSize=n=>{setPageSize(n);setPage(1);try{localStorage.setItem("ng.stock.pageSize",String(n));}catch{}window.scrollTo({top:0,behavior:"smooth"});};
+  const changePageSize=n=>{setPageSize(n);setPage(1);try{localStorage.setItem("ng.stock.pageSize",String(n));}catch{}pageScroller().scrollTo({top:0,behavior:"smooth"});};
   const pageCount=Math.max(1,Math.ceil(filtered.length/pageSize));
   const curPage=Math.min(page,pageCount);
   const pageStart=(curPage-1)*pageSize;
   const visibleStock=filtered.slice(pageStart,pageStart+pageSize);
   // Jumping pages should put you at the top of the new page, not mid-grid.
-  const goPage=n=>{const t=Math.min(Math.max(1,n),pageCount);setPage(t);window.scrollTo({top:0,behavior:"smooth"});};
+  const goPage=n=>{const t=Math.min(Math.max(1,n),pageCount);setPage(t);pageScroller().scrollTo({top:0,behavior:"smooth"});};
   const stoneCanon=useMemo(()=>stoneNames(stock),[stock]);
   const stones=useMemo(()=>[...stoneCanon.values()].sort((a,b)=>a.localeCompare(b)),[stoneCanon]);
   const shapes=useMemo(()=>[...new Set(stock.map(s=>s.shape).filter(Boolean))].sort(),[stock]);
@@ -19603,10 +19608,11 @@ function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},on
     if(!isDetail)return;
     const key=`ng-show-${show.id}-scroll`;
     let y=0;try{y=+sessionStorage.getItem(key)||0;}catch{}
-    const t=y>0?setTimeout(()=>window.scrollTo(0,y),700):null;
-    let raf=0;const onScroll=()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(()=>{try{sessionStorage.setItem(key,String(Math.round(window.scrollY)));}catch{}});};
-    window.addEventListener("scroll",onScroll,{passive:true});
-    return()=>{clearTimeout(t);window.removeEventListener("scroll",onScroll);};
+    const sc=pageScroller();
+    const t=y>0?setTimeout(()=>sc.scrollTo(0,y),700):null;
+    let raf=0;const onScroll=()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(()=>{try{sessionStorage.setItem(key,String(Math.round(sc===window?window.scrollY:sc.scrollTop)));}catch{}});};
+    sc.addEventListener("scroll",onScroll,{passive:true});
+    return()=>{clearTimeout(t);sc.removeEventListener("scroll",onScroll);};
   },[]);// eslint-disable-line react-hooks/exhaustive-deps
   const [saleDate,setSaleDate]=useState(todayStr);
   const [saleAmt,setSaleAmt]=useState("");
@@ -24260,7 +24266,7 @@ function BoiRemittanceForm({showToast}){
     setForm({...freshForm(),...x.form,docs:(x.form?.docs||[]).map(d=>({...d}))});
     setDocPicks(x.picks||{});
     setAmountTouched(true);setShipTouched(true);
-    window.scrollTo({top:0,behavior:"smooth"});
+    pageScroller().scrollTo({top:0,behavior:"smooth"});
     showToast(`Opened the set for ${x.form?.remName||"the remitter"} — change what you need, then download it again`);
   };
   const newSet=()=>{setForm(freshForm());setDocPicks({});setAmountTouched(false);setShipTouched(false);};
@@ -26085,7 +26091,7 @@ function UsersApp({onHome}){
 
 async function reloadForUpdatePreservingScreen(){
   try{
-    sessionStorage.setItem("ng-update-scroll",JSON.stringify({x:window.scrollX||0,y:window.scrollY||0}));
+    sessionStorage.setItem("ng-update-scroll",JSON.stringify({x:window.scrollX||0,y:pageScrollY()||0}));
     try{
       const r=await fetch("/version.json",{cache:"no-store"});
       if(r.ok){
@@ -26112,14 +26118,14 @@ async function reloadForUpdatePreservingScreen(){
   window.location.assign(url.toString());
 }
 
-function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssignedTasks,dismissNewTasks}){
+function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssignedTasks,dismissNewTasks,top=0}){
   const tFmt=useTFmt();
   const t=useT();
   return<>
     {updateReady&&(
       // z-index sits below the app's modal layer (900+): this is a passive nudge, and at
       // 10000 it painted over open dialogs and hid their titles and Close buttons.
-      <div style={{position:"fixed",top:0,left:0,right:0,zIndex:800,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
+      <div style={{position:"fixed",top,left:0,right:0,zIndex:800,background:"#1C4A2E",padding:"10px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 14px rgba(0,0,0,.25)",animation:"fadeDown .3s ease both"}}>
         <span style={{fontSize:15,flexShrink:0}}>🚀</span>
         <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff",lineHeight:1.3}}>{t("A new version is available")}</span>
         <button onClick={reloadForUpdatePreservingScreen} style={{background:"#fff",border:"none",color:"#1C4A2E",borderRadius:6,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0,fontFamily:"inherit"}}>{t("Update now")}</button>
@@ -26127,7 +26133,7 @@ function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssign
       </div>
     )}
     {(!isOnline||syncingCount>0)&&(
-      <div style={{position:"fixed",top:updateReady?44:0,left:0,right:0,zIndex:9998,background:syncingCount>0?"#1A4A8A":"#4A3800",padding:"9px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.22)",animation:"fadeDown .25s ease both",transition:"top .2s ease"}}>
+      <div style={{position:"fixed",top:top+(updateReady?44:0),left:0,right:0,zIndex:9998,background:syncingCount>0?"#1A4A8A":"#4A3800",padding:"9px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.22)",animation:"fadeDown .25s ease both",transition:"top .2s ease"}}>
         <span style={{fontSize:14,flexShrink:0}}>{syncingCount>0?"🔄":"📴"}</span>
         <span style={{flex:1,fontSize:12,fontWeight:600,color:"#fff",lineHeight:1.3}}>
           {syncingCount>0
@@ -26137,7 +26143,7 @@ function RootBanners({updateReady,setUpdateReady,isOnline,syncingCount,newAssign
       </div>
     )}
     {newAssignedTasks.length>0&&(
-      <div style={{position:"fixed",top:(updateReady?44:0)+(!isOnline||syncingCount>0?38:0),left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)",transition:"top .2s ease"}}>
+      <div style={{position:"fixed",top:top+(updateReady?44:0)+(!isOnline||syncingCount>0?38:0),left:0,right:0,zIndex:9999,background:C.amber,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,boxShadow:"0 2px 12px rgba(0,0,0,.2)",transition:"top .2s ease"}}>
         <span style={{fontSize:14,marginRight:4}}>📋</span>
         <span style={{flex:1,fontSize:13,fontWeight:600,color:"#fff"}}>
           {newAssignedTasks.length===1
@@ -26171,7 +26177,7 @@ export default function Root({onSignOut}){
       if(!raw)return;
       sessionStorage.removeItem("ng-update-scroll");
       const pos=JSON.parse(raw);
-      setTimeout(()=>window.scrollTo(pos.x||0,pos.y||0),120);
+      setTimeout(()=>pageScroller().scrollTo(pos.x||0,pos.y||0),120);
     }catch{}
   },[]);
   useEffect(()=>{
@@ -26347,18 +26353,68 @@ export default function Root({onSignOut}){
   const [screen,setScreen]=useState((_savedMod||_stockParam||_locationParam)?"app":"welcome");const [mod,setMod]=useState((_stockParam||_locationParam)?"stock":_savedMod||null);const [startView,setStartView]=useState(null);const [startVendor,setStartVendor]=useState(null);const [startInvoiceDraft,setStartInvoiceDraft]=useState(null);const [startInvoiceId,setStartInvoiceId]=useState(null);const [startStockId,setStartStockId]=useState(_stockParam||null);const [startLocationFilter,setStartLocationFilter]=useState(_locationParam||null);const [startBillId,setStartBillId]=useState(null);
   // Whatever opens a module (a button, a link from another module), this tab remembers it.
   useEffect(()=>{if(screen==="app"&&mod)rememberMod(mod);},[mod,screen]);
+  /* Tabs (desktop): the list and which is on show, kept for this browser tab
+     and, for a new window, the last set used. The one on show is always the
+     module above (mod/screen); the others keep the module they were left on.
+     A tab with no module is Home. */
+  const tabsOn=!mob;
+  const [tabs,setTabs]=useState(()=>{
+    const here={key:`t${Date.now().toString(36)}`,mod:(_stockParam||_locationParam)?"stock":_savedMod||null};
+    try{
+      const s=JSON.parse(sessionStorage.getItem("ng-tabs-v1")||localStorage.getItem("ng-tabs-v1")||"null");
+      if(s&&Array.isArray(s.list)&&s.list.length){
+        const list=s.list.slice(0,MAX_TABS).map(t=>({key:String(t.key),mod:t.mod||null}));
+        const on=list.find(t=>t.key===s.active)||list[0];
+        on.mod=here.mod;   // the address wins for the tab on show: a link to ?m=… opens there
+        return{list,active:on.key};
+      }
+    }catch{}
+    return{list:[here],active:here.key};
+  });
+  useEffect(()=>{const m=screen==="app"?mod:null;setTabs(s=>s.list.find(t=>t.key===s.active)?.mod===m?s:{...s,list:s.list.map(t=>t.key===s.active?{...t,mod:m}:t)});},[mod,screen]);
+  useEffect(()=>{try{const v=JSON.stringify(tabs);sessionStorage.setItem("ng-tabs-v1",v);localStorage.setItem("ng-tabs-v1",v);}catch{}},[tabs]);
+  const showTab=t=>{if(t.mod){setMod(t.mod);setStartView(null);setScreen("app");rememberMod(t.mod);}else{setScreen("welcome");forgetMod();}};
+  // Each tab's place on its page, put back when it's on show again.
+  const tabScroll=useRef({});
+  const keepScroll=()=>{const el=document.querySelector(`[data-ng-tab="${tabs.active}"]`);if(el)tabScroll.current[tabs.active]=el.scrollTop;};
+  useLayoutEffect(()=>{const el=document.querySelector(`[data-ng-tab="${tabs.active}"]`);if(el)el.scrollTop=tabScroll.current[tabs.active]||0;},[tabs.active]);
+  const switchTab=key=>{if(key===tabs.active)return;const t=tabs.list.find(x=>x.key===key);if(!t)return;keepScroll();setTabs(s=>({...s,active:key}));showTab(t);};
+  const newTab=(m=null)=>{
+    if(tabs.list.length>=MAX_TABS)return false;
+    const t={key:`t${Date.now().toString(36)}`,mod:m};
+    keepScroll();setTabs(s=>({list:[...s.list,t],active:t.key}));showTab(t);
+    return true;
+  };
+  const closeTab=key=>{
+    const i=tabs.list.findIndex(t=>t.key===key);if(i<0)return;
+    if(tabs.list.length===1){setScreen("welcome");forgetMod();return;}   // the last tab stays, as Home
+    const list=tabs.list.filter(t=>t.key!==key);delete tabScroll.current[key];
+    if(key!==tabs.active){setTabs(s=>({...s,list}));return;}
+    const next=list[Math.min(i,list.length-1)];
+    setTabs({list,active:next.key});showTab(next);
+  };
+  // ⌘/Ctrl held on the click that opens a module: it opens in a new tab.
+  const newTabClick=useRef(false);
+  useEffect(()=>{
+    if(!tabsOn)return;
+    const h=e=>{newTabClick.current=!!(e.metaKey||e.ctrlKey);setTimeout(()=>{newTabClick.current=false;},0);};
+    window.addEventListener("click",h,true);return()=>window.removeEventListener("click",h,true);
+  },[tabsOn]);
   // Another module can hand over to one by name (a show's cards → Make Labels).
   useEffect(()=>{const h=e=>{if(!e.detail)return;setMod(e.detail);setScreen("app");rememberMod(e.detail);};window.addEventListener("ng-open-module",h);return()=>window.removeEventListener("ng-open-module",h);},[]);
   const go=(id,sv=null)=>{
     /* A group's landing page is not a module and is not in allowedMods, so it
        is let through here and gated where it is rendered — on the modules the
        person actually has, which is the only gate that means anything. */
+    const inNewTab=tabsOn&&newTabClick.current;newTabClick.current=false;
     if(String(id).startsWith("group:")){
+      if(inNewTab&&newTab(id))return;
       setMod(id);setStartView(null);setScreen("app");
       return;
     }
     // Block access to modules not in allowedMods
     if(userProfile&&userProfile!==false&&!allowedMods.find(m=>m.id===id))return;
+    if(inNewTab&&newTab(id)){logModuleOpen(id);return;}
     setMod(id);setStartView(sv);setScreen("app");rememberMod(id);
     logModuleOpen(id);
   };
@@ -26393,7 +26449,6 @@ export default function Root({onSignOut}){
       </div>
     </div>
   );
-  let content;
   const goHome=()=>{setScreen("welcome");forgetMod();};
   const openInvoiceModuleTarget=target=>{
     const company=target?.company==="at"?"at":"ng";
@@ -26432,7 +26487,10 @@ export default function Root({onSignOut}){
       else alert(e?.message||"Could not render invoice PDF");
     }
   };
-  if(screen==="app"){
+  // What a tab shows: its module, or Home when it has none (or one this person can't open).
+  const contentFor=mod=>{
+  let content;
+  if(mod){
     if(String(mod).startsWith("group:")){
       const g=GROUPS.find(x=>x.id===String(mod).slice(6));
       const mine=allowedMods.filter(m=>m.group===g?.id&&m.ready);
@@ -26486,6 +26544,9 @@ export default function Root({onSignOut}){
     else if(mod==="ledger"&&(isAdmin||allowedMods.some(m=>m.id==="ledger")))content=<LedgerApp onHome={goHome} isAdmin={isAdmin} onOpenModule={go} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
     else if(mod==="journal")content=<StockJournalApp onHome={goHome} isAdmin={isAdmin} onViewBill={billId=>{setStartBillId(billId);setMod("purchases");setScreen("app");}}/>;
   }
+  if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
+  return content;
+  };
   const handleGoToActivity=act=>{
     if(!act?.targetMod)return;
     if(act.targetMod==="purchases"){if(act.targetId)setStartBillId(act.targetId);setMod("purchases");setScreen("app");}
@@ -26495,7 +26556,20 @@ export default function Root({onSignOut}){
     else if(act.targetMod==="images"){setMod("images");setScreen("app");}
     else{go(act.targetMod);}
   };
-  if(!content)content=<Welcome onEnter={go} onSignOut={onSignOut} allowedMods={allowedMods} todoKey={todoKey} isAdmin={isAdmin} allUsers={allUsers} currentUser={currentUser} onGoToActivity={handleGoToActivity}/>;
+  const shownMod=screen==="app"?mod:null;
+  // A tab's name in the strip: the module's own icon and title.
+  const tabLabel=m=>{
+    if(!m)return{icon:"🏠",title:"Home"};
+    if(String(m).startsWith("group:")){const g=GROUPS.find(x=>x.id===String(m).slice(6));return{icon:g?.icon||"📁",title:g?.title||"Group"};}
+    const x=allowedMods.find(a=>a.id===m)||MODS.find(a=>a.id===m);
+    return{icon:x?.icon||"▫️",title:x?.title||m};
+  };
+  const content=tabsOn
+    ?<>
+        <TabStrip tabs={tabs.list} active={tabs.active} labelOf={tabLabel} onSwitch={switchTab} onClose={closeTab} onNew={()=>newTab(null)}/>
+        {tabs.list.map(t=>{const on=t.key===tabs.active;return<TabPane key={t.key} id={t.key} on={on}>{contentFor(on?shownMod:t.mod)}</TabPane>;})}
+      </>
+    :contentFor(shownMod);
   const userLang=activeLang;
   const canSwitchLang=!!(userProfile&&userProfile!==false&&userProfile.language==="mr");
   const toggleLang=async()=>{
@@ -26507,7 +26581,7 @@ export default function Root({onSignOut}){
   return(
     <LanguageProvider language={canSwitchLang?userLang:"en"} setLang={toggleLang} canSwitchLang={canSwitchLang}>
     <>
-      <RootBanners updateReady={updateReady} setUpdateReady={setUpdateReady} isOnline={isOnline} syncingCount={syncingCount} newAssignedTasks={newAssignedTasks} dismissNewTasks={dismissNewTasks}/>
+      <RootBanners updateReady={updateReady} setUpdateReady={setUpdateReady} isOnline={isOnline} syncingCount={syncingCount} newAssignedTasks={newAssignedTasks} dismissNewTasks={dismissNewTasks} top={tabsOn?TAB_H:0}/>
       {showInstall&&(
         <div className="install-banner" style={{
           position:"fixed",

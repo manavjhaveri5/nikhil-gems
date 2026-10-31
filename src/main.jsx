@@ -11,7 +11,9 @@ import { watchModals } from "./modalWatch.js";
 
 const clearAppShellAndReload = async () => {
   try {
-    sessionStorage.setItem("ng-update-scroll", JSON.stringify({ x: window.scrollX || 0, y: window.scrollY || 0 }));
+    // With tabs the page scrolls inside the tab on show, not the window.
+    const tab = document.querySelector("[data-ng-tab-on]");
+    sessionStorage.setItem("ng-update-scroll", JSON.stringify({ x: window.scrollX || 0, y: (tab ? tab.scrollTop : window.scrollY) || 0 }));
     if ("caches" in window) {
       const keys = await caches.keys();
       await Promise.all(keys.filter(k => k.startsWith("ng-shell-")).map(k => caches.delete(k)));
