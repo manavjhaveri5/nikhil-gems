@@ -1836,6 +1836,7 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
   const [generating,  setGenerating]  = useState(false);
   const [errors,      setErrors]      = useState({});
   const [publishTo,   setPublishTo]   = useState({});
+  const [tradeHow,    setTradeHow]    = useState(null); // Wholesale "How it's sold", once changed here
   const [dealOpt,     setDealOpt]     = useState(() => initial?._dealOnPublish ? { enabled: true, days: initial._dealOnPublish.days || 7, customDate: initial._dealOnPublish.customDate || "" } : { enabled: false, days: 7, customDate: "" });
   const [etsyShippingProfiles, setEtsyShippingProfiles] = useState([]);
   const [etsyReturnPolicies,   setEtsyReturnPolicies]   = useState([]);
@@ -2160,7 +2161,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const handleSave = (patch = null, to = null, opts = {}) => {
     const f = patch && !patch.nativeEvent ? { ...form, ...patch } : form;
     if (!validate(f)) return;
-    onSave(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, _dealOnPublish: dealOpt.enabled ? { days: dealOpt.days, customDate: dealOpt.customDate } : null, updated_at: now() }), to || publishTo, opts);
+    onSave(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, _dealOnPublish: dealOpt.enabled ? { days: dealOpt.days, customDate: dealOpt.customDate } : null, _tradeHow: tradeHow, updated_at: now() }), to || publishTo, opts);
   };
 
 
@@ -3215,14 +3216,33 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </> : <>
             {channelHeader(c)}
             {checklist(c)}
-            {priceCard({ ...P("trade"), priceLabel: "Wholesale price", hint: t?.unit === "piece" ? "US dollars, per piece" : t?.unit === "lot" ? "US dollars, per lot" : "US dollars, per kilo unless sold per piece" })}
+            {(u => priceCard({ ...P("trade"), priceLabel: "Wholesale price", hint: u === "piece" ? "US dollars, per piece" : u === "lot" ? "US dollars, per lot" : "US dollars, per kilo unless sold per piece" }))(tradeHow?.unit || t?.unit)}
             <Section title="How it's sold" accent="#1F8F4E">
+              {/* On the site and synced by a save: changed here, sent with the save. Not there yet: asked the first time it goes up. */}
+              {(() => { const edit = !!t && plan("trade").action === "update";
+                const how = tradeHow || { unit: t?.unit || "kg", pieces: t?.pieces ?? "", pieces_max: t?.pieces_max ?? "" };
+                const setHow = patch => setTradeHow({ ...how, ...patch });
+                return <>
               <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "1fr 1fr 1fr", gap: 12 }}>
-                <div><Label>Priced per</Label><div style={factBox}>{t?.unit === "piece" ? "Piece" : t?.unit === "lot" ? "Lot" : t ? "Kilo" : "Asked when first posted"}</div></div>
-                <div><Label>Pieces per kilo</Label><div style={factBox}>{pcsRange(t) || (defaultPieces(form) ? `${defaultPieces(form).pieces}–${defaultPieces(form).pieces_max} (usual)` : "—")}</div></div>
+                {edit ? <>
+                  <div><Label>Priced per</Label>
+                    <select value={how.unit} onChange={e => setHow({ unit: e.target.value })} style={FI()}>
+                      <option value="kg">Kilo</option><option value="piece">Piece</option><option value="lot">Lot</option>
+                    </select></div>
+                  {how.unit !== "piece" && <div><Label>Pieces per {how.unit === "lot" ? "lot" : "kilo"}</Label>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <input inputMode="numeric" value={how.pieces ?? ""} onChange={e => setHow({ pieces: e.target.value.replace(/\D/g, "") })} placeholder="15" style={FI({ flex: 1, minWidth: 0, padding: "8px 4px", textAlign: "center" })} />
+                      <span style={{ color: C.inkFaint }}>–</span>
+                      <input inputMode="numeric" value={how.pieces_max ?? ""} onChange={e => setHow({ pieces_max: e.target.value.replace(/\D/g, "") })} placeholder="25" style={FI({ flex: 1, minWidth: 0, padding: "8px 4px", textAlign: "center" })} />
+                    </div></div>}
+                </> : <>
+                  <div><Label>Priced per</Label><div style={factBox}>{t?.unit === "piece" ? "Piece" : t?.unit === "lot" ? "Lot" : t ? "Kilo" : "Asked when first posted"}</div></div>
+                  <div><Label>Pieces per kilo</Label><div style={factBox}>{pcsRange(t) || (defaultPieces(form) ? `${defaultPieces(form).pieces}–${defaultPieces(form).pieces_max} (usual)` : "—")}</div></div>
+                </>}
                 <div><Label>Origin</Label><input value={form.origin} onChange={e => set("origin", e.target.value)} placeholder={t?.origin || "Country"} style={FI()} /></div>
               </div>
-              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>Priced per and pieces per kilo are set on the trade site's editor, and asked the first time this goes up there.</div>
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 8 }}>{edit ? "Saving sends these to the trade site." : "Priced per and pieces per kilo are asked the first time this goes up on the trade site."}</div>
+              </>; })()}
             </Section>
             {overrides(c, { rows: 5, extra: (
               <button type="button" onClick={aiFillShopify} disabled={aiFillingShopify}
@@ -10067,6 +10087,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   /* save */
   const handleSave = async (listing, publishTo = {}, { live = false, etsyNow = false } = {}) => {
+    /* "How it's sold" changed on the Wholesale tab goes to the trade site with
+       this save. It isn't kept on the listing, so a later sync can't undo an
+       edit made in the trade site's own editor. */
+    const { _tradeHow: tradeHow = null, ...rest } = listing;
+    listing = rest;
     let savedListing = ensureListingOrderId(listing);
     if ((listing.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(listing.video)) {
       showToast("Uploading listing media...");
@@ -10117,7 +10142,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const results = await Promise.allSettled(targets.map(pkey =>
       live && newTargets.includes(pkey)
         ? handlePublish(savedListing, pkey, { syncOnly: false, allowCreate: true, goLiveNow: etsyNow })
-        : handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey) })
+        : handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey), tradeHow })
     ));
     const failed = results.filter(r => r.status === "rejected");
     // Published from the listing steps: show where it went, with a link to each.
@@ -10359,7 +10384,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     run.finally(() => { if (publishChain.current.get(k) === run) publishChain.current.delete(k); }).catch(() => {});
     return run;
   };
-  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false, goLiveNow = false } = {}) => {
+  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false, goLiveNow = false, tradeHow = null } = {}) => {
     /* What says "this already exists over there" is the platform's own id, and
        it is written onto the stored listing at the END of this function. Anything
        holding an older copy of the listing — a form opened before the last
@@ -10443,6 +10468,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           });
           if (!ask) throw new Error("Not posted — cancelled");
         }
+      } else if (tradeHow) {
+        // Changed on the Wholesale tab: a save carries it, as a first post's answers would.
+        const n = v => Math.round(+v) > 0 ? Math.round(+v) : null;
+        const pieces = tradeHow.unit === "piece" ? null : n(tradeHow.pieces);
+        const max = tradeHow.unit === "piece" ? null : n(tradeHow.pieces_max);
+        ask = { unit: tradeHow.unit || "kg", origin: String(listing.origin || "").trim(), pieces, pieces_max: max && max !== pieces ? max : null };
       }
       result = await publishListingToTrade(listing, { syncOnly, ask });
       refreshTradeFacts();

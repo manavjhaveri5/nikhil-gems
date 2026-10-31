@@ -1015,7 +1015,8 @@ export async function publishListingToTrade(listing, { syncOnly = false, ask = n
     price,
     stock: listing.qty !== "" && listing.qty != null ? +listing.qty || 0 : null,
     unit,
-    origin: ask ? String(ask.origin || "").trim().slice(0, 60) : existing?.origin || "",
+    // The listing's origin is the one shown on its Wholesale tab, so a save sends it; a blank keeps the site's.
+    origin: String((ask ? ask.origin : listing.origin) || "").trim().slice(0, 60) || existing?.origin || "",
     live,
     is_new: existing ? existing.is_new : true,
     new_at: existing?.new_at || new Date().toISOString(),
