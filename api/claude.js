@@ -1,5 +1,5 @@
 import { requireUser } from "../lib/auth.js";
-import { JOURNAL_WRITER_MODEL } from "../lib/instagramVoice.js";
+import { writeWithBest, outputText } from "../lib/captionWriter.js";
 export const config = {
   api: {
     bodyParser: {
@@ -76,18 +76,6 @@ function convertMessages(messages = []) {
   }
 
   return { instructions: instructions.filter(Boolean).join("\n\n"), input };
-}
-
-function outputText(data) {
-  if (data.output_text) return data.output_text;
-  const chunks = [];
-  for (const item of data.output || []) {
-    for (const content of item.content || []) {
-      if (content.type === "output_text" && content.text) chunks.push(content.text);
-      if (content.type === "text" && content.text) chunks.push(content.text);
-    }
-  }
-  return chunks.join("");
 }
 
 // ── Folded-in endpoints (merged to stay under Vercel's 12-function limit) ──
@@ -178,30 +166,16 @@ async function handleStudioShot(req, res, key) {
   }
 }
 
-// The model behind the eartheditions.co journal, called on Anthropic directly. Text only.
-// When Anthropic refuses (no credit, say) it says so: a caption asked of the journal's
-// writer isn't quietly written by another model instead.
-async function handleJournalWriter(req, res) {
-  const refuse = why => res.status(424).json({ error: { message: /credit balance/i.test(why)
-    ? "The journal's writer can't write right now: the Anthropic account is out of credit. Add credit at console.anthropic.com → Plans & Billing, then write it again."
-    : `The journal's writer can't write right now (Anthropic: ${why}). Try again in a minute.` } });
-  if (!process.env.ANTHROPIC_KEY) return refuse("ANTHROPIC_KEY isn't set in Vercel");
+// Social captions: OpenAI's best writer, in the journal's voice (lib/captionWriter.js).
+async function handleCaptionWriter(req, res, key) {
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-    const msgs = body.messages || [];
-    const system = msgs.filter(m => m?.role === "system").map(m => asText(m.content)).join("\n\n");
-    const messages = msgs.filter(m => m && m.role !== "system").map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: asText(m.content) }));
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({ model: JOURNAL_WRITER_MODEL, max_tokens: body.max_tokens || 1000, ...(system ? { system } : {}), messages }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) { console.warn(`journal writer unavailable: ${data.error?.message || r.status}`); return refuse(data.error?.message || `HTTP ${r.status}`); }
-    return res.status(200).json({ id: data.id, model: data.model, content: (data.content || []).filter(b => b.type === "text"), usage: data.usage, provider: "anthropic" });
+    const { instructions, input } = convertMessages(body.messages || []);
+    if (!input.length) return res.status(400).json({ error: { message: "messages required" } });
+    const out = await writeWithBest(key, { instructions, input, maxTokens: body.max_tokens || 1000 });
+    return res.status(200).json({ id: out.id, model: out.model, content: [{ type: "text", text: out.text }], usage: out.usage, provider: "openai" });
   } catch (err) {
-    console.warn(`journal writer unavailable: ${err.message}`);
-    return refuse(err.message);
+    return res.status(err.status || 500).json({ error: { message: `The caption writer couldn't write it: ${err.message || err}` } });
   }
 }
 
@@ -212,13 +186,13 @@ export default async function handler(req, res) {
   // The daily ops-check workflow (no user session) presents the store secret.
   if (!(await requireUser(req, res, { allowStoreSecret: true }))) return;
 
-  // Social captions ask for the journal's writer by name; everything else stays on OpenAI.
-  let writer;
-  try { writer = (typeof req.body === "string" ? JSON.parse(req.body) : req.body || {}).writer; } catch { /* handled below */ }
-  if (writer === "journal") return handleJournalWriter(req, res);
-
   const key = process.env.OPENAI_KEY || process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: { message: "OPENAI_KEY not set" } });
+
+  // Social captions ask for the journal's writer by name: the best model, not the everyday one.
+  let writer;
+  try { writer = (typeof req.body === "string" ? JSON.parse(req.body) : req.body || {}).writer; } catch { /* handled below */ }
+  if (writer === "journal") return handleCaptionWriter(req, res, key);
 
   const route = detectRoute(req);
   if (route === "openai") return handleOpenaiChat(req, res, key);

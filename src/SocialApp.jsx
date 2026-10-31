@@ -64,7 +64,7 @@ const api = async (action, { p, body } = {}) => {
 };
 async function ask(prompt, maxTokens = 1800, system = VOICE, writer) {
   const res = await fetchWithRetry("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ writer, max_tokens: maxTokens, temperature: 0.7, messages: [{ role: "system", content: system }, { role: "user", content: prompt }] }) }, { tries: 2, timeoutMs: 90000 });
+    body: JSON.stringify({ writer, max_tokens: maxTokens, temperature: 0.7, messages: [{ role: "system", content: system }, { role: "user", content: prompt }] }) }, { tries: 2, timeoutMs: writer ? 120000 : 90000 });
   const d = await res.json();
   if (d.error) throw new Error(d.error?.message || d.error);
   return (d.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();

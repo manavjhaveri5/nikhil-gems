@@ -1,8 +1,8 @@
 /* Store → Social: an Instagram caption ready to post for every piece on
    eartheditions.co, and reply drafts for comments and threads.
 
-   Each caption is written by the journal's writer (lib/instagramVoice.js),
-   in the shape Earth Editions posts: the piece and where
+   Each caption is written by OpenAI's best model in the journal's voice
+   (lib/instagramVoice.js, lib/captionWriter.js), in the shape Earth Editions posts: the piece and where
    it's from, a couple of short paragraphs on what makes this one interesting,
    then weight and size, and whether it's available. The locality, weight and
    size come from the listing in Listing Manager and are never made up. The
@@ -36,15 +36,19 @@ Rules:
 - Never invent facts: no locality, weight, size or treatment that isn't in the details given. If a locality isn't given, don't name one.
 - Reddit and Mindat texts are for collectors: no prices, no "buy now", no links in the body, no sales language — show the piece and share what's interesting about the stone.`;
 
-async function ask(prompt, maxTokens = 1400, system = VOICE, writer) {
+// The reply's text and the model that wrote it. The caption writer thinks before it writes, so it gets longer.
+async function askFull(prompt, maxTokens = 1400, system = VOICE, writer) {
   const res = await fetchWithRetry("/api/claude", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "claude-sonnet-4-20250514", writer, max_tokens: maxTokens, temperature: 0.7, messages: [{ role: "system", content: system }, { role: "user", content: prompt }] }),
-  }, { tries: 2, timeoutMs: 60000 });
+  }, { tries: 2, timeoutMs: writer ? 120000 : 60000 });
   const d = await res.json();
   if (d.error) throw new Error(d.error?.message || d.error);
-  return (d.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+  return { text: (d.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim(), model: d.model || "" };
 }
+const ask = async (...a) => (await askFull(...a)).text;
+// "gpt-5.5-2026-04-23" → "GPT-5.5"
+const writerName = m => String(m).replace(/-\d{4}-\d{2}-\d{2}$/, "").replace(/^gpt/i, "GPT");
 
 // The piece as the caption writer sees it: the store product, plus the listing's own locality, weight and size.
 const details = (p, l = {}) => [
@@ -77,7 +81,7 @@ Pyrite is a relatively uncommon mineral from the Deccan Traps, making this assoc
 Available with a custom lucite display base — shop now at eartheditions.co`;
 
 export async function makeCaption(p, l) {
-  const caption = await ask(`Write the Instagram caption for this piece. Keep the shape of these captions we've posted, in the journal's voice:
+  const { text: caption, model } = await askFull(`Write the Instagram caption for this piece. Keep the shape of these captions we've posted, in the journal's voice:
 
 ${EXAMPLES}
 
@@ -87,8 +91,7 @@ ${details(p, l)}
 ${instagramShape(SHOP_ENDING)}
 
 Reply with the caption text only.`, 600, INSTAGRAM_VOICE, "journal");
-  // Only the journal's writer answers a "journal" ask now (no stand-in model), so this says who wrote it.
-  return { caption: caption.replace(/^["']|["']$/g, "").trim(), made_at: new Date().toISOString(), by: "journal" };
+  return { caption: caption.replace(/^["']|["']$/g, "").trim(), made_at: new Date().toISOString(), by: "journal", model };
 }
 
 function Copy({ text, label = "Copy" }) {
@@ -206,7 +209,7 @@ export default function SocialTab({ showToast, site }) {
               {p.images?.[0] ? <img src={p.images[0]} alt="" loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6 }} /> : <div style={{ width: 44, height: 44, background: C.card, borderRadius: 6 }} />}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
-                <div style={{ fontSize: 11.5, color: C.inkFaint }}>on the store {new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{p.social?.caption ? p.social.by === "journal" ? " · caption by the journal's writer" : " · older caption, not by the journal's writer — ↻ to rewrite" : ""}</div>
+                <div style={{ fontSize: 11.5, color: C.inkFaint }}>on the store {new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{p.social?.caption ? p.social.model ? ` · caption by ${writerName(p.social.model)}` : " · older caption, by the everyday model — ↻ to rewrite it" : ""}</div>
               </div>
               {busy[p.id] ? <span style={{ fontSize: 12, color: C.inkFaint }}>Writing…</span>
                 : p.social?.caption ? <><button onClick={e => { e.stopPropagation(); make(p); }} style={btn()} title="Write it again">↻</button><button style={btn(open === p.id ? C.ink : C.surface, open === p.id ? "#fff" : C.ink)}>{open === p.id ? "Hide" : "Show caption"}</button></>
