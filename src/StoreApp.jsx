@@ -254,6 +254,8 @@ export default function StoreApp({ onHome }) {
 
 /* ── Orders ─────────────────────────────────────────────────────────────── */
 const STATUS = ["paid", "packed", "shipped", "delivered", "refunded", "cancelled"];
+// WhatsApp wants the country code; the store keeps Indian numbers as 10 digits.
+const waTo = (phone, country) => { const d = String(phone || "").replace(/\D/g, ""); return d.length === 10 && country === "IN" ? "91" + d : d; };
 function OrdersTab({ showToast }) {
   const [rows, setRows] = useState(null);
   const [open, setOpen] = useState(null);
@@ -265,34 +267,38 @@ function OrdersTab({ showToast }) {
     try { await q(supabase.from("store_orders").update({ ...p, updated_at: new Date().toISOString() }).eq("id", id)); setRows(r => r.map(x => x.id === id ? { ...x, ...p } : x)); }
     catch (e) { showToast("⚠ " + e.message); }
   };
-  // "pending" = a Razorpay payment window opened but never paid; kept out of the way.
+  // "pending" = a Razorpay payment window opened but never paid: only under Unpaid, to follow up.
   const shown = (rows || []).filter(o => filter === "all" ? o.status !== "pending" : filter === "open" ? ["paid", "packed"].includes(o.status) : o.status === filter);
   const count = f => (rows || []).filter(o => f === "open" ? ["paid", "packed"].includes(o.status) : o.status === f).length;
   return (
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-        {[["open", "To ship"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["refunded", "Refunded"], ["all", "All"]].map(([k, l]) => (
+        {[["open", "To ship"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["refunded", "Refunded"], ["pending", "Unpaid"], ["all", "All"]].map(([k, l]) => (
           <button key={k} onClick={() => setFilter(k)} style={{ ...btn(filter === k ? C.ink : C.surface, filter === k ? "#fff" : C.ink), borderRadius: 999 }}>{l}{k !== "all" ? ` · ${count(k)}` : ""}</button>
         ))}
         <div style={{ flex: 1 }} /><button onClick={load} style={btn()}>↻ Refresh</button>
       </div>
+      {filter === "pending" && rows && shown.length > 0 && <div style={{ fontSize: 12.5, color: C.inkMid, marginBottom: 10, lineHeight: 1.5 }}>Buyers who filled in their address and opened the Razorpay payment window, but no payment came through. Check the Razorpay order first (a paid one there means the confirmation went missing), then message them.</div>}
       {!rows && <div style={{ color: C.inkFaint, fontSize: 13 }}>Loading…</div>}
-      {rows && !shown.length && <div style={{ ...card, padding: 24, textAlign: "center", color: C.inkFaint, fontSize: 13 }}>No orders here. Paid orders from the store land here and in Listing Manager → Orders.</div>}
+      {rows && !shown.length && <div style={{ ...card, padding: 24, textAlign: "center", color: C.inkFaint, fontSize: 13 }}>{filter === "pending" ? "No unpaid checkouts." : "No orders here. Paid orders from the store land here and in Listing Manager → Orders."}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {shown.map(o => {
           const a = o.shipping || {};
           const isOpen = open === o.id;
+          const unpaid = o.status === "pending";
+          const wa = unpaid && waTo(o.phone, a.country);
+          const ask = `Hi ${(o.name || "").split(" ")[0] || "there"}, this is Earth Editions. Your order ${o.number} for the ${o.lines.map(l => l.title).join(", ")} didn't go through at payment. Can we help you complete it?`;
           return (
             <div key={o.id} style={{ ...card, padding: mob() ? 12 : "14px 18px", borderColor: o.notes?.startsWith("⚠") ? C.red : C.border }}>
               <div onClick={() => setOpen(isOpen ? null : o.id)} style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", cursor: "pointer" }}>
                 <b style={{ fontFamily: "ui-monospace,monospace", fontSize: 13 }}>{o.number}</b>
                 <div style={{ flex: 1, minWidth: 160 }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{o.name || o.email}</div>
-                  <div style={{ fontSize: 11.5, color: C.inkFaint }}>{fmtDate(o.created_at)} · {o.lines.length} piece{o.lines.length === 1 ? "" : "s"} · {[a.city, a.country].filter(Boolean).join(", ")}{o.erp_synced ? "" : " · not yet in Orders"}</div>
+                  <div style={{ fontSize: 11.5, color: C.inkFaint }}>{fmtDate(o.created_at)} · {o.lines.length} piece{o.lines.length === 1 ? "" : "s"} · {[a.city, a.country].filter(Boolean).join(", ")}{o.erp_synced || unpaid ? "" : " · not yet in Orders"}</div>
                 </div>
                 <div style={{ fontFamily: SERIF, fontSize: 18, fontWeight: 700 }}>{usd(o.total, o.currency)}</div>
                 <span style={{ fontSize: 10, color: C.inkFaint }}>{o.gateway === "razorpay" ? "Razorpay" : "Stripe"}</span>
-                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, padding: "2px 8px", borderRadius: 4, background: o.status === "paid" ? C.amberBg : o.status === "shipped" || o.status === "delivered" ? C.greenBg : C.card, color: o.status === "paid" ? C.amber : o.status === "shipped" || o.status === "delivered" ? C.green : C.inkMid }}>{o.status}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, padding: "2px 8px", borderRadius: 4, background: o.status === "paid" ? C.amberBg : o.status === "shipped" || o.status === "delivered" ? C.greenBg : C.card, color: o.status === "paid" ? C.amber : o.status === "shipped" || o.status === "delivered" ? C.green : unpaid ? C.red : C.inkMid }}>{unpaid ? "unpaid" : o.status}</span>
               </div>
               {isOpen && (
                 <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 12, display: "grid", gap: 10 }}>
@@ -308,6 +314,15 @@ function OrdersTab({ showToast }) {
                   <div style={{ fontSize: 13, whiteSpace: "pre-line", background: C.card, borderRadius: 8, padding: "10px 12px" }}>
                     <b>Ship to</b>{"\n"}{o.name}{"\n"}{[a.line1, a.line2].filter(Boolean).join(", ")}{"\n"}{[a.city, a.state, a.postal_code].filter(Boolean).join(" ")}{"\n"}{a.country}{"\n"}{[o.email, o.phone].filter(Boolean).join(" · ")}
                   </div>
+                  {/* Unpaid: no status to set, only ways to reach the buyer. Marking it paid here wouldn't take the piece off Etsy,
+                      and anything but "pending" makes the store ignore a late Razorpay payment (UPI can confirm hours later). */}
+                  {unpaid ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      {o.gateway_order && <a href={`https://dashboard.razorpay.com/app/orders/${o.gateway_order}`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Razorpay order ↗</a>}
+                      {wa && <a href={`https://wa.me/${wa}?text=${encodeURIComponent(ask)}`} target="_blank" rel="noreferrer" style={{ ...btn("#1f8f4e", "#fff"), textDecoration: "none" }}>💬 WhatsApp</a>}
+                      {o.email && <a href={`mailto:${o.email}?subject=${encodeURIComponent(`Your Earth Editions order ${o.number}`)}&body=${encodeURIComponent(ask)}`} style={{ ...btn(), textDecoration: "none" }}>✉ Email</a>}
+                    </div>
+                  ) : (
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <select value={o.status} onChange={e => patch(o.id, { status: e.target.value })} style={FI({ width: "auto", padding: "6px 10px" })}>{STATUS.map(s => <option key={s}>{s}</option>)}</select>
                     <input defaultValue={o.tracking} placeholder="Tracking number" onBlur={e => e.target.value !== o.tracking && patch(o.id, { tracking: e.target.value.trim() })} style={FI({ width: 220 })} />
@@ -316,6 +331,7 @@ function OrdersTab({ showToast }) {
                       : <a href={`https://dashboard.stripe.com/payments/${o.stripe_payment}`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Stripe ↗</a>)}
                     {o.email && <a href={`mailto:${o.email}?subject=${encodeURIComponent(`Your Earth Editions order ${o.number}`)}`} style={{ ...btn(), textDecoration: "none" }}>✉ Email</a>}
                   </div>
+                  )}
                 </div>
               )}
             </div>
