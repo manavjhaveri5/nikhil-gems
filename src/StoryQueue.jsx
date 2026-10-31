@@ -14,7 +14,11 @@ const tab = on => ({ padding: "10px 14px", border: "none", background: "none", c
   fontWeight: on ? 700 : 500, color: on ? C.ink : C.inkMid, borderBottom: `2.5px solid ${on ? C.gold : "transparent"}`, marginBottom: -1 });
 const head = { fontSize: 11, fontWeight: 800, letterSpacing: .8, textTransform: "uppercase", color: C.inkMid, margin: "4px 0 10px" };
 
-function Tile({ r, kind, state, onOpen, onSkip }) {
+const round = { position: "absolute", top: 6, width: 26, height: 26, borderRadius: 13, border: "none", fontSize: 14, cursor: "pointer", padding: 0, lineHeight: "26px" };
+
+/* ✓ marks a story posted by hand (posted from the phone, not from here);
+   tapping the Posted / Skipped tag takes the mark off again. */
+function Tile({ r, kind, state, onOpen, onSkip, onPosted, onUndo }) {
   const img = cover(r.l);
   return (
     <div style={{ position: "relative", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", cursor: "pointer" }} onClick={onOpen}>
@@ -25,17 +29,20 @@ function Tile({ r, kind, state, onOpen, onSkip }) {
         <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.l.title}</div>
         <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{r.verb || (kind === "sold" ? "Sold" : "Listed")} {r.at ? ago(r.at) : ""}</div>
       </div>
-      {state && <span style={{ position: "absolute", top: 7, left: 7, fontSize: 10.5, fontWeight: 800, padding: "3px 8px", borderRadius: 20,
-        background: state.how === "posted" ? C.greenBg : C.card, color: state.how === "posted" ? C.green : C.inkMid, border: `1px solid ${C.border}` }}>{state.how === "posted" ? "✓ Posted" : "Skipped"}</span>}
+      {state && <button title={`${state.how === "posted" ? "Story posted" : "Skipped"} ${ago(Date.parse(state.at))}${onUndo ? " — tap to undo" : ""}`} onClick={e => { e.stopPropagation(); onUndo?.(); }}
+        style={{ position: "absolute", top: 7, left: 7, fontSize: 10.5, fontWeight: 800, padding: "3px 8px", borderRadius: 20, cursor: onUndo ? "pointer" : "default", fontFamily: "inherit",
+          background: state.how === "posted" ? C.greenBg : C.card, color: state.how === "posted" ? C.green : C.inkMid, border: `1px solid ${C.border}` }}>{state.how === "posted" ? "✓ Posted" : "Skipped"}</button>}
+      {onPosted && !state && <button title="I've posted this story — mark it" onClick={e => { e.stopPropagation(); onPosted(); }}
+        style={{ ...round, left: 6, background: C.green, color: "#fff", fontWeight: 800 }}>✓</button>}
       {onSkip && !state && <button title="Skip — don't post a story for this one" onClick={e => { e.stopPropagation(); onSkip(); }}
-        style={{ position: "absolute", top: 6, right: 6, width: 26, height: 26, borderRadius: 13, border: "none", background: "rgba(20,15,8,.7)", color: "#fff", fontSize: 14, cursor: "pointer", padding: 0, lineHeight: "26px" }}>×</button>}
+        style={{ ...round, right: 6, background: "rgba(20,15,8,.7)", color: "#fff" }}>×</button>}
     </div>
   );
 }
 
 // inline: shown as a page (Social → Stories) rather than a panel over Listing Manager.
 export default function StoryQueue({ listings, orders, isLive, stories, onClose, inline = false }) {
-  const { done, mark } = stories;
+  const { done, mark, unmark } = stories;
   const lists = useMemo(() => storyLists(listings, orders, isLive, done), [listings, orders, isLive, done]);
   const [kind, setKind] = useState(() => lists.due.listed.length || !lists.due.sold.length ? "listed" : "sold");
   const [open, setOpen] = useState(null);
@@ -76,15 +83,16 @@ export default function StoryQueue({ listings, orders, isLive, stories, onClose,
 
         <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
           <div style={head}>To post</div>
+          {due.length > 0 && <div style={{ fontSize: 12, color: C.inkMid, margin: "-4px 0 10px" }}>Posted one already? Tap <b style={{ color: C.green }}>✓</b> on it. <b>×</b> skips it. Both move it to Done this week.</div>}
           {due.length
-            ? <div style={grid}>{due.map(r => <Tile key={r.l.id} r={r} kind={kind} onOpen={() => openIt(r)} onSkip={() => mark(kind, r.l, "skipped")} />)}</div>
+            ? <div style={grid}>{due.map(r => <Tile key={r.l.id} r={r} kind={kind} onOpen={() => openIt(r)} onPosted={() => mark(kind, r.l, "posted")} onSkip={() => mark(kind, r.l, "skipped")} />)}</div>
             : <div style={{ fontSize: 13, color: C.inkMid, padding: "14px 0 6px" }}>{kind === "listed" ? "Nothing new went live in the last 7 days that still needs a story." : "No sales in the last 7 days that still need a story."}</div>}
           {kind === "listed" && due.length > 4 && <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 8 }}>Tip: 3–4 Just listed stories a day is plenty — post the best, skip the rest with ×.</div>}
 
           {recentDone.length > 0 && (
             <>
               <div style={{ ...head, marginTop: 22 }}>Done this week</div>
-              <div style={grid}>{recentDone.map(r => <Tile key={r.l.id} r={r} kind={kind} state={done[`${kind}:${r.l.id}`]} onOpen={() => openIt(r)} />)}</div>
+              <div style={grid}>{recentDone.map(r => <Tile key={r.l.id} r={r} kind={kind} state={done[`${kind}:${r.l.id}`]} onOpen={() => openIt(r)} onUndo={() => unmark(kind, r.l)} />)}</div>
             </>
           )}
 
@@ -99,7 +107,7 @@ export default function StoryQueue({ listings, orders, isLive, stories, onClose,
           <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 10 }}>
             {anyListing ? `Every listing with a photo · ${past.length}` : kind === "listed" ? `Live now, newest first · ${past.length}` : `Sold, most recent first · ${past.length}`}
           </div>
-          <div style={grid}>{past.slice(0, shown).map(r => <Tile key={r.l.id} r={r} kind={kind} state={done[`${kind}:${r.l.id}`]} onOpen={() => openIt(r)} />)}</div>
+          <div style={grid}>{past.slice(0, shown).map(r => <Tile key={r.l.id} r={r} kind={kind} state={done[`${kind}:${r.l.id}`]} onOpen={() => openIt(r)} onPosted={() => mark(kind, r.l, "posted")} onUndo={() => unmark(kind, r.l)} />)}</div>
           {shown < past.length && <div style={{ textAlign: "center", marginTop: 14 }}>
             <button onClick={() => setShown(n => n + PAGE)} style={{ padding: "9px 18px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.ink, fontWeight: 700, cursor: "pointer" }}>Show more</button>
           </div>}

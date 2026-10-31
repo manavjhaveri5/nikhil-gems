@@ -2,7 +2,7 @@
    stories have been posted or skipped (kept in app data, so every device
    agrees). Shared by the grid's badge and the queue itself. */
 import { useEffect, useMemo, useState } from "react";
-import { loadK, upsertItemK, onCacheRefresh } from "./utils.js";
+import { loadK, loadKFresh, upsertItemK, deleteItemK, onCacheRefresh } from "./utils.js";
 import { sbThumb } from "./photoUrls.js";
 
 export const STORIES_KEY = "ng-stories-v1";
@@ -70,11 +70,22 @@ export function useStoriesDone() {
     return () => { off = true; typeof stop === "function" && stop(); };
   }, []);
   const done = useMemo(() => Object.fromEntries(rows.map(r => [r.id, r])), [rows]);
+  /* A mark that didn't save must not look saved: it would be gone on the
+     next device, or the next reload, and the story posted twice. */
+  const failed = e => {
+    alert(`Couldn't save that — ${e.message}`);
+    loadKFresh(STORIES_KEY).then(r => setRows(Array.isArray(r) ? r : [])).catch(() => {});
+  };
   const mark = async (kind, l, how) => {
     const row = { id: `${kind}:${l.id}`, kind, listing_id: l.id, how, at: new Date().toISOString() };
     setRows(rs => [row, ...rs.filter(r => r.id !== row.id)]);
-    await upsertItemK(STORIES_KEY, row).catch(() => {});
+    await upsertItemK(STORIES_KEY, row).catch(failed);
   };
-  return { done, mark };
+  const unmark = async (kind, l) => {
+    const id = `${kind}:${l.id}`;
+    setRows(rs => rs.filter(r => r.id !== id));
+    await deleteItemK(STORIES_KEY, id).catch(failed);
+  };
+  return { done, mark, unmark };
 }
 
