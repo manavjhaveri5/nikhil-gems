@@ -1,4 +1,4 @@
-import { requireUser } from "../lib/auth.js";
+import { requireUser, hasStoreSecret, adminClient } from "../lib/auth.js";
 /**
  * Listing Manager API — cross-platform publishing hub
  * Supports: Etsy, Shopify (Earth Editions), Shopify (Atyahara), eBay (future)
@@ -754,6 +754,101 @@ async function activateEtsyListing(listingId, readinessStateId = null) {
   const why = String(d.error || d.error_description || d.message || `HTTP ${r.status}`).slice(0, 180);
   console.error("Etsy activate failed:", r.status, JSON.stringify(d));
   return { ok: false, error: why };
+}
+
+/* ── Etsy queue: new pieces go live a few a day ─────────────────────────────
+   Publishing to Etsy from the ERP uploads the piece as a draft (free) and
+   queues it; this puts the drafts live at fixed times through the US day,
+   when most buyers shop (orders since 2024 peak 11:00–19:00 Eastern; the
+   weekday makes no difference). Etsy gives a new listing a short search
+   boost, so a few every day keeps the shop in that window. Run hourly by
+   Postgres (supabase/migrations/…_etsy_queue_cron.sql), which presents the
+   key it holds in cron_keys. The ERP's Queue tab (src/etsyQueue.jsx) shares
+   the timetable. */
+const QUEUE_KEY = "ng-etsy-queue-v1";
+const QUEUE_SETTINGS_KEY = "ng-etsy-queue-settings-v1";
+// When the clock last knocked and what it did, so the Queue tab can tell a quiet hour from a stopped clock.
+const QUEUE_TICK_KEY = "ng-etsy-queue-tick-v1";
+const QUEUE_SLOTS_ET = [9, 11, 13, 15, 17];
+// A short queue is stretched to last: four a day once fewer than this are waiting.
+const QUEUE_TAPER_BELOW = 8;
+const etNow = (d = new Date()) => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", hourCycle: "h23" })
+    .formatToParts(d).map(x => [x.type, x.value]));
+  return { day: `${p.year}-${p.month}-${p.day}`, hour: +p.hour };
+};
+const shapeOf = it => String(it.shape || "").trim().toLowerCase();
+
+async function cronKeyOk(req, name) {
+  const key = req.headers["x-cron-key"];
+  if (!key) return false;
+  const { data } = await adminClient().from("cron_keys").select("key").eq("name", name).maybeSingle();
+  return !!data?.key && data.key === key;
+}
+
+// The clock, database and Etsy call can be handed in, so the timetable can be tried without touching either.
+export async function etsyQueueTick({ dry = false, sb = adminClient(), at = new Date(), activate = activateEtsyListing } = {}) {
+  const read = async k => { const { data } = await sb.from("app_data").select("value").eq("key", k).maybeSingle(); return typeof data?.value === "string" ? JSON.parse(data.value) : data?.value; };
+  const upsert = async (k, item) => { const { error } = await sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: false }); if (error) throw new Error(error.message); };
+  const settings = { perDay: 5, paused: false, ...((await read(QUEUE_SETTINGS_KEY)) || {}) };
+  const items = (await read(QUEUE_KEY)) || [];
+  const { day, hour } = etNow(at);
+  const waiting = items.filter(i => i.status === "queued").sort((a, b) => (a.order || 0) - (b.order || 0));
+  const perDay = Math.max(1, Math.min(QUEUE_SLOTS_ET.length, waiting.length < QUEUE_TAPER_BELOW ? Math.min(4, +settings.perDay || 5) : +settings.perDay || 5));
+  const due = QUEUE_SLOTS_ET.slice(0, perDay).filter(h => h <= hour).length;
+  const liveToday = items.filter(i => i.status === "live" && i.live_day === day && i.by === "queue");
+  // A missed hour is made up, but never more than two at once.
+  const want = Math.min(2, due - liveToday.length);
+  const out = { day, hour, perDay, due, liveToday: liveToday.length, waiting: waiting.length, wanted: Math.max(0, want), done: [], skipped: [], failed: [] };
+  const beat = async r => {
+    if (!dry) await sb.from("app_data").upsert({ key: QUEUE_TICK_KEY, value: { at: at.toISOString(), day, hour, paused: !!r.paused, done: r.done.length, skipped: r.skipped.length, failed: r.failed.length } });
+    return r;
+  };
+  if (settings.paused) return beat({ ...out, paused: true });
+  if (want <= 0 || !waiting.length) return beat(out);
+
+  const listings = (await read("ng-listings-v1")) || [];
+  const byId = new Map(listings.map(l => [String(l.id), l]));
+  // Five spheres in one day reads as a clearance: a shape already up today waits while something else can go.
+  const shapesToday = new Set(liveToday.map(shapeOf).filter(Boolean));
+  const pool = [...waiting];
+  const next = () => { const i = Math.max(0, pool.findIndex(x => !shapesToday.has(shapeOf(x)))); return pool.splice(i, 1)[0]; };
+  // A refusal moves on to the next piece, but one bad hour doesn't burn through the whole queue.
+  let left = want, tries = want + 1;
+  while (left > 0 && tries > 0 && pool.length) {
+    const it = next();
+    const L = byId.get(String(it.id));
+    const etsyId = L?.platforms?.etsy?.listing_id || it.etsy_id;
+    const now = new Date().toISOString();
+    // Gone, sold, or already put live by hand: it leaves the queue without using a slot.
+    const why = !L ? "the listing was deleted" : L.status === "sold" || (L.qty !== "" && L.qty != null && +L.qty === 0) ? "it sold"
+      : L.platforms?.etsy?.status === "active" ? "it's already live" : !etsyId ? "it has no Etsy draft" : "";
+    if (why) {
+      out.skipped.push({ id: it.id, title: it.title, why });
+      if (!dry) await upsert(QUEUE_KEY, { ...it, status: why === "it's already live" ? "live" : "dropped", by: "elsewhere", note: why, live_day: day, updated_at: now });
+      continue;
+    }
+    tries--;
+    if (dry) { out.done.push({ id: it.id, title: it.title, etsy_id: etsyId, dry: true }); left--; shapesToday.add(shapeOf(it)); continue; }
+    const act = await activate(etsyId);
+    if (act.ok) {
+      await upsert(QUEUE_KEY, { ...it, etsy_id: etsyId, status: "live", by: "queue", live_at: now, live_day: day, error: "", updated_at: now });
+      const ep = L.platforms?.etsy || {};
+      await upsert("ng-listings-v1", { ...L, platforms: { ...L.platforms, etsy: { ...ep, listing_id: etsyId, status: "active", url: ep.url || `https://www.etsy.com/listing/${etsyId}`, ...(ep.live_at ? {} : { live_at: now }), queued_at: undefined } }, updated_at: now });
+      out.done.push({ id: it.id, title: it.title, etsy_id: etsyId });
+      shapesToday.add(shapeOf(it)); left--;
+    } else if (/HTTP (429|5\d\d)|rate limit|timed? ?out|fetch failed|ECONN/i.test(act.error || "")) {
+      // Etsy itself is down or busy: nobody's piece is at fault, so the next hour simply tries again.
+      out.failed.push({ id: it.id, title: it.title, error: act.error, tries: it.tries || 0, etsy_down: true });
+      break;
+    } else {
+      // Tried again at the next slot; after three refusals it waits for a person.
+      const n = (it.tries || 0) + 1;
+      await upsert(QUEUE_KEY, { ...it, tries: n, error: act.error, status: n >= 3 ? "stuck" : "queued", updated_at: now });
+      out.failed.push({ id: it.id, title: it.title, error: act.error, tries: n });
+    }
+  }
+  return beat(out);
 }
 
 export async function publishEtsy(listing, ai, { activate = true } = {}) {
@@ -1543,7 +1638,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
-  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states");
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states" || bodyAction === "etsy_queue_tick");
   const user = storeAction ? null : await requireUser(req, res);
   if (!storeAction && !user) return;
 
@@ -1795,6 +1890,14 @@ export default async function handler(req, res) {
      call this: it must present the shared secret. */
   /* The store's daily check: which Etsy listings are still live. A piece that
      sold (or was taken down) on Etsy must not stay for sale on the store. */
+  /* The Etsy queue's hourly run, from Postgres (or the store secret). `dry`
+     says what it would put live without touching Etsy. */
+  if (action === "etsy_queue_tick") {
+    if (!hasStoreSecret(req) && !(await cronKeyOk(req, "etsy_queue"))) return res.status(401).json({ error: "Unauthorized" });
+    try { return res.json({ ok: true, ...(await etsyQueueTick({ dry: body.dry === true })) }); }
+    catch (e) { console.error("etsy queue:", e); return res.status(500).json({ error: e.message || String(e) }); }
+  }
+
   if (action === "etsy_active_ids") {
     const secret = process.env.STORE_SYNC_SECRET;
     if (!secret || req.headers["x-store-secret"] !== secret) return res.status(401).json({ error: "Unauthorized" });

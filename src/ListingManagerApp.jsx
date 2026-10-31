@@ -35,6 +35,7 @@ import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreS
 import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
+import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
 import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
@@ -2149,12 +2150,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   /* Publish one platform from the listing steps without leaving them: the
      listing is saved, put up there, and the form takes back what the platform
      returned (its ids) so the next save updates rather than duplicates. */
-  const publishOneFromSteps = async (patch, key) => {
+  const publishOneFromSteps = async (patch, key, opts = {}) => {
     const f = { ...form, ...patch };
     if (!validate(f)) throw new Error("Fix the listing first");
-    const r = await onPublishOne(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, updated_at: now() }), key);
+    const r = await onPublishOne(ensureListingOrderId({ ...withLocationLog(f, initial?.officeLocation, who), tags, _ai: f._ai || null, updated_at: now() }), key, opts);
     setForm(x => ({ ...x, ...patch, id: r.listing.id, listing_order_id: r.listing.listing_order_id, images: r.listing.images, video: r.listing.video, platforms: r.listing.platforms }));
-    return { url: r.url, warning: r.warning || "" };
+    return { url: r.url, warning: r.warning || "", queued: r.queued || "" };
   };
   const handleSave = (patch = null, to = null, opts = {}) => {
     const f = patch && !patch.nativeEvent ? { ...form, ...patch } : form;
@@ -3514,13 +3515,14 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
   const storageLocation = listing.officeLocation || linkedStock?.location || "";
 
   const handlePublish = async pkey => {
-    // Going live on Etsy costs a $0.20 listing fee — ask first (not for one already live).
-    if (pkey === "etsy" && listing.platforms?.etsy?.status !== "active"
-      && !window.confirm("Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.")) return;
+    // Going live on Etsy costs a $0.20 listing fee — ask first (not for one already live):
+    // into the queue or live now, or for a renewal, just whether to.
+    let pick = null;
+    if (pkey === "etsy" && listing.platforms?.etsy?.status !== "active" && !(pick = await chooseEtsyPublish(listing))) return;
     setPublishing(p => ({ ...p, [pkey]: "publishing" }));
     try {
-      await onPublish(listing, pkey);
-      showToast(`✓ Published to ${PLATFORMS.find(p => p.key === pkey)?.label}`);
+      const r = await onPublish(listing, pkey, { goLiveNow: pick === "now" });
+      showToast(r?.queued ? `✓ Uploaded to Etsy as a draft — live ${r.goes_live ? whenLabel(r.goes_live) : "from the queue"}` : `✓ Published to ${PLATFORMS.find(p => p.key === pkey)?.label}`);
     } catch (e) { showToast(`⚠ ${e.message}`); }
     finally { setPublishing(p => ({ ...p, [pkey]: false })); }
   };
@@ -9721,6 +9723,8 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [editing,    setEditing]    = useState(null);
   const [formSteps,  setFormSteps]  = useState(null);   // open the form on its listing steps (a renewal)
   const [renewCount, setRenewCount] = useState(0);      // what the Renew tab has left to decide
+  const [queueCount, setQueueCount] = useState(0);      // Etsy drafts waiting to go live
+  useEffect(() => { loadK(ETSY_QUEUE_KEY).then(q => setQueueCount((q || []).filter(i => i.status === "queued" || i.status === "stuck").length)).catch(() => {}); }, []);
   const [etsyView, setEtsyView] = useState(() => { try { return localStorage.getItem("lm-etsy-view") || "listings"; } catch { return "listings"; } });
   useEffect(() => { try { localStorage.setItem("lm-etsy-view", etsyView); } catch { /* fine */ } }, [etsyView]);
   const [soldModal,  setSoldModal]  = useState(null);
@@ -10062,7 +10066,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   };
 
   /* save */
-  const handleSave = async (listing, publishTo = {}, { live = false } = {}) => {
+  const handleSave = async (listing, publishTo = {}, { live = false, etsyNow = false } = {}) => {
     let savedListing = ensureListingOrderId(listing);
     if ((listing.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(listing.video)) {
       showToast("Uploading listing media...");
@@ -10112,7 +10116,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     // steps, which publishes on the platforms picked there.
     const results = await Promise.allSettled(targets.map(pkey =>
       live && newTargets.includes(pkey)
-        ? handlePublish(savedListing, pkey, { syncOnly: false, allowCreate: true })
+        ? handlePublish(savedListing, pkey, { syncOnly: false, allowCreate: true, goLiveNow: etsyNow })
         : handlePublish(savedListing, pkey, { syncOnly: true, allowCreate: newTargets.includes(pkey) })
     ));
     const failed = results.filter(r => r.status === "rejected");
@@ -10120,7 +10124,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (live) {
       const fresh = (await loadKFresh(LIST_KEY).catch(() => null) || []).find(x => x.id === savedListing.id) || savedListing;
       setLiveSheet({ title: savedListing.title, image: (savedListing.images || [])[0],
-        rows: targets.map((k, i) => ({ key: k, ok: results[i].status === "fulfilled", error: results[i].reason?.message || "", url: linkOf(fresh, k).live || "" })) });
+        rows: targets.map((k, i) => {
+          const q = results[i].status === "fulfilled" && results[i].value?.queued;
+          return { key: k, ok: results[i].status === "fulfilled", error: results[i].reason?.message || "", url: q ? "" : linkOf(fresh, k).live || "",
+            queued: q ? (results[i].value.goes_live ? whenLabel(results[i].value.goes_live) : "from the queue") : "" };
+        }) });
     }
     if (failed.length === 0) {
       showToast(`✓ ${live ? "Live on" : "Synced to"} ${targets.map(k => PLATFORMS.find(p => p.key === k)?.label).join(", ")}`);
@@ -10183,7 +10191,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      other, so two of those questions never open at once. */
   const bulkPricePost = async (rows, post, onStep) => {
     const newOnEtsy = post.includes("etsy") ? rows.filter(r => r.l.platforms?.etsy?.status !== "active").length : 0;
-    if (newOnEtsy && !confirm(`Put ${newOnEtsy} listing${newOnEtsy === 1 ? "" : "s"} live on Etsy?\n\nEtsy charges $0.20 each.`)) return null;
+    const queueOn = newOnEtsy > 0 && (await loadQueueSettings()).on;
+    if (newOnEtsy && !confirm(queueOn
+      ? `Put ${newOnEtsy} listing${newOnEtsy === 1 ? "" : "s"} on Etsy?\n\nNew ones upload as drafts now and go live a few a day from the Etsy queue. Etsy charges $0.20 each when they go live.`
+      : `Put ${newOnEtsy} listing${newOnEtsy === 1 ? "" : "s"} live on Etsy?\n\nEtsy charges $0.20 each.`)) return null;
     const isLive = (l, k) => linkedTo(l, k) && (k === "trade" ? !!tradeMap?.[l.id]?.live : l.platforms?.[k]?.status === "active");
     const plan = rows.map(({ l, prices }) => {
       const current = listings.find(x => x.id === l.id) || l;
@@ -10348,7 +10359,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     run.finally(() => { if (publishChain.current.get(k) === run) publishChain.current.delete(k); }).catch(() => {});
     return run;
   };
-  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false } = {}) => {
+  const handlePublishNow = async (listing, pkey, { syncOnly = false, allowCreate = !syncOnly, storeOverride = [], forcePhotos = false, goLiveNow = false } = {}) => {
     /* What says "this already exists over there" is the platform's own id, and
        it is written onto the stored listing at the END of this function. Anything
        holding an older copy of the listing — a form opened before the last
@@ -10397,6 +10408,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       }
     }
     listing = ensureListingOrderId({ ...listing, _ai: ai });
+
+    /* A new piece for Etsy goes up as a draft and waits in the Etsy queue
+       (src/etsyQueue.jsx), which puts it live at the next free slot — unless
+       it's asked for now, or the queue is switched off. A renewal, or one
+       that's live already, never waits. */
+    const queueIt = pkey === "etsy" && !syncOnly && !goLiveNow && queuesOnEtsy(listing) && (await loadQueueSettings()).on;
 
     let result;
 
@@ -10470,7 +10487,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       const r = await fetch("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly, allow_create: allowCreate, force_photos: forcePhotos }),
+        body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly || queueIt, allow_create: allowCreate || queueIt, force_photos: forcePhotos }),
       });
       const d = await lmJson(r);
       /* A failure can come after the listing was made (Etsy kept it a draft):
@@ -10481,7 +10498,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         if (made) await patchListingItem(listing, current => ({ ...current, platforms: { ...current.platforms, [pkey]: { ...current.platforms?.[pkey], ...d.result, status: d.result.status || "draft" } }, updated_at: now() }));
         throw new Error(d.error || "Publishing failed");
       }
-      result = d.result;
+      result = queueIt ? { ...d.result, status: "draft", queued_at: now() } : d.result;
       if (listing.video && result?.videoErr) showToast(`⚠ ${storeKey === "atyahara" ? "Atyahara" : "Earth Ed."} video: ${result.videoErr}`);
       // Etsy takes the listing and then keeps whichever tags it liked. The API
       // reads them back, so say so rather than showing a plain ✓.
@@ -10539,6 +10556,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       } },
       updated_at: now(),
     }));
+    if (pkey === "etsy" && !syncOnly) {
+      if (queueIt) {
+        const id = result.listing_id || listing.platforms?.etsy?.listing_id;
+        try { result = { ...result, queued: true, goes_live: await enqueueEtsy(listing, id) }; }
+        catch (e) { throw new Error(`It's on Etsy as a draft, but didn't join the queue: ${e.message}`); }
+      } else if ((result.status || "active") === "active") markQueueLive(listing.id).catch(e => console.warn("etsy queue:", e));
+    }
     return result;
   };
 
@@ -10777,6 +10801,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     { key: "listings", label: "All Listings", count: listings.length },
     { key: "orders",   label: "Orders",       count: orders.length,  color: C.green },
     { key: "renew",    label: "Renew",        count: renewCount,     color: "#F56400" },
+    { key: "queue",    label: "Etsy queue",   count: queueCount,     color: "#F56400" },
     ...PLATFORMS.filter(p => !p.coming).map(p => ({
       key: p.key, label: p.label, icon: p.icon, color: p.color,
       count: listings.filter(l => ["active", "draft"].includes(l.platforms?.[p.key]?.status)).length,
@@ -11004,6 +11029,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
 
         {/* ══ ORDERS ══ */}
+        {tab === "queue" && <EtsyQueuePanel listings={listings} onPublishNow={l => handlePublish(l, "etsy", { goLiveNow: true })} showToast={showToast} onCount={setQueueCount} />}
         {tab === "renew" && <RenewalQueue listings={listings} stock={stock} getToken={getEtsyToken} onRenew={renewFromQueue} showToast={showToast} who={who} onCount={setRenewCount} />}
         {tab === "orders" && <OrdersView hideMoney={currentUser?.role !== "admin" && Array.isArray(currentUser?.hide) && currentUser.hide.includes("orderMoney")} orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
 
@@ -11069,7 +11095,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           admin={currentUser?.role === "admin"}
           startSteps={formSteps}
           onSave={handleSave}
-          onPublishOne={async (listing, pkey) => {
+          onPublishOne={async (listing, pkey, opts = {}) => {
             /* Runs here, not in the steps box, so closing the box leaves it
                going; the toast says how it ended either way. One publish per
                listing and platform at a time — a second, started after
@@ -11082,12 +11108,13 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               let saved = ensureListingOrderId(listing);
               if ((saved.images || []).some(isLocalMediaUrl) || isLocalMediaUrl(saved.video)) saved = await persistListingMedia(saved);
               await saveListingItem(saved, { prepend: !listings.some(l => l.id === saved.id) });
-              const res = await handlePublish(saved, pkey, { syncOnly: false, allowCreate: true });
+              const res = await handlePublish(saved, pkey, { syncOnly: false, allowCreate: true, goLiveNow: !!opts.goLiveNow });
               const fresh = ((await loadKFresh(LIST_KEY).catch(() => null)) || []).find(x => x.id === saved.id) || saved;
               // A problem the platform reported stays on screen — not swapped out by the ✓.
               const warning = res?.variationsWarning || res?.fieldsWarning || res?.warning || "";
-              showToast(warning ? `⚠ ${label}: ${warning}` : `✓ Live on ${label} — ${String(fresh.title || "").slice(0, 40)}`, warning ? 12000 : 5000);
-              return { listing: fresh, url: linkOf(fresh, pkey).live || "", warning };
+              const queued = res?.queued ? (res.goes_live ? whenLabel(res.goes_live) : "from the queue") : "";
+              showToast(warning ? `⚠ ${label}: ${warning}` : queued ? `✓ On Etsy as a draft — live ${queued} — ${String(fresh.title || "").slice(0, 40)}` : `✓ Live on ${label} — ${String(fresh.title || "").slice(0, 40)}`, warning ? 12000 : 5000);
+              return { listing: fresh, url: queued ? "" : linkOf(fresh, pkey).live || "", warning, queued };
             } catch (e) {
               showToast(`⚠ ${label} didn't publish: ${e.message}`, 8000);
               throw e;
@@ -11102,7 +11129,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
             <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 14 }}>
               {typeof liveSheet.image === "string" && <img src={liveSheet.image} alt="" style={{ width: 52, height: 52, borderRadius: 9, objectFit: "cover" }} />}
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 26, color: C.ink, lineHeight: 1.1 }}>{liveSheet.rows.every(r => r.ok) ? "It's live" : "Published, with a problem"}</div>
+                <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: 26, color: C.ink, lineHeight: 1.1 }}>{!liveSheet.rows.every(r => r.ok) ? "Published, with a problem" : liveSheet.rows.every(r => r.queued) ? "It's queued" : "It's live"}</div>
                 <div style={{ fontSize: 12.5, color: C.inkMid, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{liveSheet.title}</div>
               </div>
             </div>
@@ -11115,6 +11142,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ display: "block", fontSize: 14, fontWeight: 700, color: C.ink }}>{pl?.label || r.key}</span>
                       {!r.ok && <span style={{ display: "block", fontSize: 11.5, color: C.red }}>{r.error}</span>}
+                      {r.queued && <span style={{ display: "block", fontSize: 11.5, color: C.inkMid }}>Uploaded as a draft · goes live {r.queued} from the Etsy queue</span>}
                     </span>
                     {r.ok && r.url && <a href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 12px", textDecoration: "none", whiteSpace: "nowrap" }}>View live ↗</a>}
                   </div>

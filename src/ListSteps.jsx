@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { C } from "./lmTheme.js";
 import { CHANNELS, linkOf, tradeRefOnly } from "./listingChannels.js";
 import { storeSettings, storePriceFor } from "./StoreApp.jsx";
+import { chooseEtsyPublish } from "./etsyQueue.jsx";
 import { recommendCarriers, carrierLabel } from "./shipping.js";
 
 const serif = "'Cormorant Garamond',Georgia,serif";
@@ -333,20 +334,21 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
 
   // One platform at a time from the last step: publish it, then link to it live.
   const [one, setOne] = useState({});   // key → { busy, url, error }
-  /* Putting a piece live on Etsy costs a $0.20 listing fee (an update to one
-     that's already live doesn't), so it asks first. An expired listing is
-     renewed by the same publish, for the same fee. */
-  const etsyFeeOk = () => linkOf(form, "etsy").status === "active"
-    || window.confirm(linkOf(form, "etsy").status === "expired"
-      ? "Renew on Etsy?\n\nEtsy charges a $0.20 listing fee to renew it for another four months."
-      : "Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.");
+  /* A piece not yet on sale asks instead: into the Etsy queue, or live now
+     (a renewal just asks whether to). Resolves { now } to go ahead, null to stop. */
+  const etsyGo = async () => {
+    if (linkOf(form, "etsy").status === "active") return { now: true };
+    const pick = await chooseEtsyPublish(form);
+    return pick ? { now: pick === "now" } : null;
+  };
   const publishOne = async key => {
-    if (key === "etsy" && !etsyFeeOk()) return;
+    let go = null;
+    if (key === "etsy" && !(go = await etsyGo())) return;
     setOne(x => ({ ...x, [key]: { busy: true } }));
     try {
-      const out = await onPublishOne(pricesPatch(), key);
+      const out = await onPublishOne(pricesPatch(), key, { goLiveNow: !!go?.now });
       const url = typeof out === "string" ? out : out?.url;
-      setOne(x => ({ ...x, [key]: { url: url || "", done: true, warning: out?.warning || "" } }));
+      setOne(x => ({ ...x, [key]: { url: url || "", done: true, warning: out?.warning || "", queued: out?.queued || "" } }));
     } catch (e) { setOne(x => ({ ...x, [key]: { error: e.message || "Didn't publish" } })); }
   };
   // Every platform picked is live (published here, or already live) → the step is
@@ -360,8 +362,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
       stock_exception: stockException(),
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
   });
-  const apply = live => {
-    if (live && pick.etsy && !etsyFeeOk()) return;
+  const apply = async live => {
+    let go = null;
+    if (live && pick.etsy && !(go = await etsyGo())) return;
     const patch = {
       stock_exception: stockException(),
       price_etsy: p.price_etsy,
@@ -370,7 +373,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
       price_trade: p.price_trade,
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
     };
-    onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live });
+    onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live, etsyNow: !!go?.now });
   };
 
   const money = (field, cur, placeholder) => (
@@ -861,7 +864,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
                         {st.warning && <span style={{ flex: "1 1 100%", fontSize: 12, color: C.amber, fontWeight: 600 }}>⚠ {st.warning}</span>}
                         {url && <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.green, border: `1.5px solid ${C.green}60`, borderRadius: 8, padding: "7px 12px", textDecoration: "none" }}>✓ View live ↗</a>}
                         {draftUrl && <a href={draftUrl} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 800, color: C.amber, border: `1.5px solid ${C.amber}60`, borderRadius: 8, padding: "7px 12px", textDecoration: "none" }}>View the draft ↗</a>}
-                        {st.done && !url && <span style={{ fontSize: 12.5, color: C.green, fontWeight: 700 }}>✓ Published — link appears once the platform confirms</span>}
+                        {st.done && !url && <span style={{ fontSize: 12.5, color: C.green, fontWeight: 700 }}>{st.queued ? `✓ Uploaded as a draft — goes live ${st.queued} from the Etsy queue` : "✓ Published — link appears once the platform confirms"}</span>}
                         <button type="button" disabled={st.busy || noPrice || pieceMissing.length > 0} onClick={() => publishOne(c.key)}
                           style={{ fontSize: 13, fontWeight: 800, borderRadius: 8, padding: "7px 14px", cursor: st.busy ? "wait" : "pointer", border: url ? `1px solid ${C.border}` : "none",
                             background: url ? C.surface : C.ink, color: url ? C.ink : "#FAF0DC", opacity: noPrice || pieceMissing.length ? .4 : 1 }}>
