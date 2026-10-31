@@ -215,7 +215,7 @@ function Bar({ value, max, color, height = 8 }) {
   return <div style={{ height, background: C.card, borderRadius: height / 2, overflow: "hidden" }}><div style={{ width: pct(value, max), height: "100%", background: color, borderRadius: height / 2 }} /></div>;
 }
 
-export default function AdsTracker({ listings = [] }) {
+export default function AdsTracker({ listings = [], onEdit }) {
   const [plan, setPlan] = useState(null), [table, setTable] = useState(null), [daily, setDaily] = useState(null), [hist, setHist] = useState(null);
   const [busy, setBusy] = useState(""), [msg, setMsg] = useState(null);
   const [show, setShow] = useState("on"), [page, setPage] = useState(0), [diagF, setDiagF] = useState(null), [how, setHow] = useState(false);
@@ -230,10 +230,10 @@ export default function AdsTracker({ listings = [] }) {
   }, []);
   const savePlan = next => { setPlan(next); saveK(PLAN_KEY, next, { merge: false }).catch(() => {}); };
 
-  // ERP listings by Etsy id: title, photo, and whether it's still for sale.
+  // ERP listings by Etsy id: title, photo, whether it's still for sale, and the listing itself to edit.
   const erp = useMemo(() => {
     const m = {};
-    for (const l of listings) { const e = l.platforms?.etsy; if (e?.listing_id) m[String(e.listing_id)] = { title: l.title, img: (l.images || [])[0], state: e.expired ? "expired" : (e.status || "") }; }
+    for (const l of listings) { const e = l.platforms?.etsy; if (e?.listing_id) m[String(e.listing_id)] = { title: l.title, img: (l.images || [])[0], state: e.expired ? "expired" : (e.status || ""), l }; }
     return m;
   }, [listings]);
 
@@ -714,7 +714,11 @@ export default function AdsTracker({ listings = [] }) {
                       <td style={{ ...td, textAlign: "left" }}>
                         <div style={{ fontWeight: 800, color: i.act ? i.tone : C.inkMid }}>{i.act || i.note || (i.should ? "On the list" : "")}</div>
                         {i.act && i.note && <div style={{ fontSize: 11, color: C.inkFaint }}>{i.note}</div>}
-                        <div style={{ display: "flex", gap: 5, marginTop: 4 }}>
+                        <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
+                          {/* The ERP's own listing form where it has one (price, photos, title sync out from there), else Etsy's editor. */}
+                          {onEdit && erp[i.id]?.l
+                            ? <button onClick={() => onEdit(erp[i.id].l)} style={btn}>✎ Edit listing</button>
+                            : <a href={`https://www.etsy.com/your/shops/me/listing-editor/edit/${i.id}`} target="_blank" rel="noreferrer" style={btn}>Edit on Etsy ↗</a>}
                           {i.promote && <button onClick={() => move(i.id, "winner", `Won its test: ${i.roas.toFixed(1)}× back`)} style={{ ...btn, color: C.green }}>Move to winners</button>}
                           {i.demote && <button onClick={() => move(i.id, "off", `Failed its test: ${i.s.clicks} clicks, no sale`)} style={{ ...btn, color: C.red }}>Move to keep-off</button>}
                         </div>
