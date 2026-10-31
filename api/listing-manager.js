@@ -1,4 +1,4 @@
-import { requireUser, hasStoreSecret, adminClient } from "../lib/auth.js";
+import { requireUser, hasStoreSecret, adminClient, cronKeyOk } from "../lib/auth.js";
 /**
  * Listing Manager API — cross-platform publishing hub
  * Supports: Etsy, Shopify (Earth Editions), Shopify (Atyahara), eBay (future)
@@ -778,13 +778,6 @@ const etNow = (d = new Date()) => {
   return { day: `${p.year}-${p.month}-${p.day}`, hour: +p.hour };
 };
 const shapeOf = it => String(it.shape || "").trim().toLowerCase();
-
-async function cronKeyOk(req, name) {
-  const key = req.headers["x-cron-key"];
-  if (!key) return false;
-  const { data } = await adminClient().from("cron_keys").select("key").eq("name", name).maybeSingle();
-  return !!data?.key && data.key === key;
-}
 
 // The clock, database and Etsy call can be handed in, so the timetable can be tried without touching either.
 export async function etsyQueueTick({ dry = false, sb = adminClient(), at = new Date(), activate = activateEtsyListing } = {}) {

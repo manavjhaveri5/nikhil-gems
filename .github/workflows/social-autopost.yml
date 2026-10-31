@@ -1,12 +1,11 @@
 name: Social autopilot
 
-# Every hour: scheduled posts, new listings and new Instagram posts go
-# out as set in the ERP's Social → Autopilot (api/social.js?action=cron).
-# Nothing posts unless a job is switched on there.
+# Scheduled posts, new listings and new Instagram posts go out as set in the
+# ERP's Social → Autopilot (api/social.js?action=cron). The hourly knock now
+# comes from Postgres (supabase/migrations/20261031180000_social_autopilot_cron.sql);
+# this is only for running it by hand, and needs STORE_SYNC_SECRET set here.
 
 on:
-  schedule:
-    - cron: '7 * * * *'   # hourly — each run is server time on Vercel's plan
   workflow_dispatch:
 
 jobs:

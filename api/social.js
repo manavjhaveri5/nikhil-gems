@@ -21,7 +21,7 @@
    for a person to post. */
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { requireUser, hasStoreSecret } from "../lib/auth.js";
+import { requireUser, hasStoreSecret, cronKeyOk } from "../lib/auth.js";
 import { INSTAGRAM_VOICE, instagramShape, HASHTAG_ENDING } from "../lib/instagramVoice.js";
 import { writeWithBest } from "../lib/captionWriter.js";
 
@@ -725,9 +725,9 @@ export default async function handler(req, res) {
       } catch (e) { return back(`${p}: ${e.message}`); }
     }
 
-    // The scheduled run (GitHub Actions, every 15 minutes) comes with the store secret.
+    // The scheduled run: Postgres's hourly knock (cron key), or anything holding the store secret.
     if (action === "cron") {
-      if (!hasStoreSecret(req) && !(await requireUser(req, res))) return;
+      if (!hasStoreSecret(req) && !(await cronKeyOk(req, "social")) && !(await requireUser(req, res))) return;
       return res.json({ ok: true, done: await runAutopilot() });
     }
 
