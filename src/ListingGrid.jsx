@@ -593,28 +593,32 @@ export default function ListingGrid({ listings, orders, stock = [], loadStoreFac
             {[[0, "Auto"], [4, "4"], [5, "5"]].map(([n, t]) => <button key={n} onClick={() => setCols(n)} style={{ padding: "5px 10px", border: "none", fontSize: 12, cursor: "pointer", background: cols === n ? C.ink : C.surface, color: cols === n ? "#FAF0DC" : C.inkMid }}>{t}</button>)}
           </div>
         </div>
-        {selected.length > 0 && (
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, padding: "8px 12px", background: C.amberBg, borderRadius: 10, fontSize: 12.5, flexWrap: "wrap" }}>
+      </div>
+      {/* What to do with the ticked cards: pinned to the bottom of the screen, since
+          Listing Manager's own header covers the toolbar above once the page scrolls. */}
+      {selected.length > 0 && (
+          <div style={{ position: "fixed", bottom: 18, left: "50%", transform: "translateX(-50%)", zIndex: 60, width: "max-content", maxWidth: "calc(100vw - 190px)",   // clear of the notes button, bottom right
+            display: "flex", gap: 10, alignItems: "center", padding: "9px 14px", background: C.amberBg, border: `1px solid ${C.amber}55`, borderRadius: 14,
+            boxShadow: "0 8px 28px rgba(0,0,0,.18)", fontSize: 12.5, flexWrap: "wrap" }}>
             <b>{selected.length} selected</b>
-            {onBulkPricePost && <button onClick={() => setPricePost(true)} style={{ ...chip(true) }}>💲 Price &amp; post…</button>}
+            {onBulkPricePost && <button onClick={() => setPricePost(true)} style={{ ...chip(true) }}>💲 Edit prices &amp; post…</button>}
             <button onClick={() => onBulkPrice(selected).then(refreshStore)} style={chip(false)}>Change prices by %…</button>
             {onBulkMove && <button onClick={() => onBulkMove(selected)} style={chip(false)}>📍 Move to…</button>}
             <button onClick={() => setSel(new Set(list.map(l => l.id)))} style={chip(false)}>Select all {list.length}</button>
-            <button onClick={() => setSel(new Set())} style={chip(false)}>Clear selection</button>
+            <button onClick={() => setSel(new Set())} style={chip(false)} title="Untick them all">Clear</button>
             {onBulkDelete && (
               /* Last, apart from the others, and in red: the one button here
                  that cannot be undone should not sit under the thumb next to
                  "Move to…". The selection clears only once they are gone. */
               <button onClick={async () => { await onBulkDelete(selected); setSel(new Set()); }}
-                style={{ ...chip(false), marginLeft: "auto", color: C.red, border: `1px solid ${C.red}55` }}>
+                style={{ ...chip(false), marginLeft: 8, color: C.red, border: `1px solid ${C.red}55` }}>
                 Delete {selected.length}…
               </button>
             )}
           </div>
-        )}
-      </div>
+      )}
 
-      <div style={{ display: "flex", gap: 22, alignItems: "flex-start" }}>
+      <div style={{ display: "flex", gap: 22, alignItems: "flex-start", paddingBottom: selected.length ? 90 : 0 }}>
         {/* checkbox filters */}
         {panel && (
           <aside style={{ width: 230, flex: "none", position: "sticky", top: 70, maxHeight: "calc(100vh - 90px)", overflowY: "auto", paddingRight: 4 }}>
@@ -719,7 +723,7 @@ function PricePost({ rows, facts, onClose, onRun }) {
     <div onClick={() => !busy && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", zIndex: 80, display: "grid", placeItems: "center", padding: 16 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 14, width: "min(980px, 100%)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
         <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-          <b style={{ fontSize: 16, flex: 1 }}>Price &amp; post · {rows.length} piece{rows.length === 1 ? "" : "s"}</b>
+          <b style={{ fontSize: 16, flex: 1 }}>Edit prices &amp; post · {rows.length} piece{rows.length === 1 ? "" : "s"}</b>
           <button disabled={!!busy} onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 18, cursor: "pointer", color: C.inkMid }}>×</button>
         </div>
         <div style={{ overflow: "auto", padding: "8px 18px" }}>
