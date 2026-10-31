@@ -337,7 +337,7 @@ export default function AdsTracker({ listings = [] }) {
     setBusy("");
   };
   useEffect(() => {
-    const paste = e => { const f = [...(e.clipboardData?.files || [])]; if (f.length) { e.preventDefault(); onShots(f); } };
+    const paste = e => { const f = [...(e.clipboardData?.files || [])]; if (f.length) { e.preventDefault(); if (setup?.how === "shot") startWith.current = "shot"; onShots(f); } };
     window.addEventListener("paste", paste);
     return () => window.removeEventListener("paste", paste);
   });
@@ -457,7 +457,7 @@ export default function AdsTracker({ listings = [] }) {
           </>}
         </div>
         {t.tracking && <button onClick={refresh} disabled={refreshing} style={{ ...dark }}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>}
-        <button onClick={() => setSetup(setup ? null : { how: t.tableAge === 0 && t.shotOn.length ? "shot-now" : "list", budget: plan.budget || 25 })}
+        <button onClick={() => { setMsg(null); setSetup(setup ? null : { how: t.tableAge === 0 && t.shotOn.length ? "shot-now" : "list", budget: plan.budget || 25 }); }}
           style={t.tracking ? btn : { ...btn, background: C.gold, color: C.ink, border: "none", padding: "8px 14px", fontSize: 12.5 }}>{t.tracking ? "New run" : "Start tracking"}</button>
         {setup && (
           <div style={{ width: "100%", background: C.surface, color: C.ink, borderRadius: 12, padding: 14, display: "grid", gap: 10, border: `1px solid ${C.border}` }}>
@@ -472,9 +472,11 @@ export default function AdsTracker({ listings = [] }) {
                 <input type="radio" checked={setup.how === k} onChange={() => setSetup({ ...setup, how: k })} style={{ marginTop: 3 }} />
                 <span><b>{l}</b><br /><span style={{ color: C.inkMid, fontSize: 11.5 }}>{d}</span></span>
               </label>))}
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={begin} disabled={!!busy} style={dark}>{setup.how === "shot" ? "Choose screenshots →" : `Start tracking from ${fmt(dayKey(Date.now()))}`}</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={begin} disabled={!!busy} style={{ ...dark, opacity: busy ? .55 : 1, cursor: busy ? "wait" : "pointer" }}>{busy ? "Reading…" : setup.how === "shot" ? "Choose screenshots →" : `Start tracking from ${fmt(dayKey(Date.now()))}`}</button>
               <button onClick={() => { setSetup(null); startWith.current = null; }} style={btn}>Cancel</button>
+              {/* The screenshots are read here, so say how it's going here rather than in the Data card further down. */}
+              {(busy || msg) && <span style={{ fontSize: 12.5, fontWeight: 700, color: busy ? C.inkMid : msg.ok ? C.green : C.red }}>{busy || msg.text}</span>}
             </div>
           </div>
         )}
@@ -550,7 +552,7 @@ export default function AdsTracker({ listings = [] }) {
         <button onClick={() => shotRef.current?.click()} disabled={!!busy} style={dark} title="Or paste them anywhere on this page (⌘V)">+ Screenshots</button>
         <button onClick={() => csvRef.current?.click()} disabled={!!busy} style={dark}>+ Stats file</button>
         <button onClick={() => setHow(!how)} style={btn}>{how ? "Close" : "How?"}</button>
-        {(busy || msg) && <div style={{ width: "100%", fontSize: 12.5, fontWeight: 700, color: busy ? C.inkMid : msg.ok ? C.green : C.red }}>{busy || msg.text}</div>}
+        {!setup && (busy || msg) && <div style={{ width: "100%", fontSize: 12.5, fontWeight: 700, color: busy ? C.inkMid : msg.ok ? C.green : C.red }}>{busy || msg.text}</div>}
         {how && (
           <div style={{ width: "100%", display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 12, fontSize: 12.5, color: C.inkMid, lineHeight: 1.5, borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
             <div><b style={{ color: C.ink }}>Screenshots.</b> In Etsy Ads → Listings, set the dates to start on the restart day{t.start ? ` (${fmt(t.start)})` : ""}, sort by Spend, and screenshot the first few pages. Paste here with ⌘V.</div>
