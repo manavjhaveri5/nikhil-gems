@@ -87,7 +87,8 @@ ${details(p, l)}
 ${instagramShape(SHOP_ENDING)}
 
 Reply with the caption text only.`, 600, INSTAGRAM_VOICE, "journal");
-  return { caption: caption.replace(/^["']|["']$/g, "").trim(), made_at: new Date().toISOString() };
+  // Only the journal's writer answers a "journal" ask now (no stand-in model), so this says who wrote it.
+  return { caption: caption.replace(/^["']|["']$/g, "").trim(), made_at: new Date().toISOString(), by: "journal" };
 }
 
 function Copy({ text, label = "Copy" }) {
@@ -205,7 +206,7 @@ export default function SocialTab({ showToast, site }) {
               {p.images?.[0] ? <img src={p.images[0]} alt="" loading="lazy" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6 }} /> : <div style={{ width: 44, height: 44, background: C.card, borderRadius: 6 }} />}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
-                <div style={{ fontSize: 11.5, color: C.inkFaint }}>on the store {new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{p.social?.caption ? " · caption ready" : ""}</div>
+                <div style={{ fontSize: 11.5, color: C.inkFaint }}>on the store {new Date(p.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}{p.social?.caption ? p.social.by === "journal" ? " · caption by the journal's writer" : " · older caption, not by the journal's writer — ↻ to rewrite" : ""}</div>
               </div>
               {busy[p.id] ? <span style={{ fontSize: 12, color: C.inkFaint }}>Writing…</span>
                 : p.social?.caption ? <><button onClick={e => { e.stopPropagation(); make(p); }} style={btn()} title="Write it again">↻</button><button style={btn(open === p.id ? C.ink : C.surface, open === p.id ? "#fff" : C.ink)}>{open === p.id ? "Hide" : "Show caption"}</button></>

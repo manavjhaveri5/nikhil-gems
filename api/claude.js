@@ -179,8 +179,13 @@ async function handleStudioShot(req, res, key) {
 }
 
 // The model behind the eartheditions.co journal, called on Anthropic directly. Text only.
-// Returns false when Anthropic refuses (e.g. no credit), so the request falls through to OpenAI.
+// When Anthropic refuses (no credit, say) it says so: a caption asked of the journal's
+// writer isn't quietly written by another model instead.
 async function handleJournalWriter(req, res) {
+  const refuse = why => res.status(424).json({ error: { message: /credit balance/i.test(why)
+    ? "The journal's writer can't write right now: the Anthropic account is out of credit. Add credit at console.anthropic.com → Plans & Billing, then write it again."
+    : `The journal's writer can't write right now (Anthropic: ${why}). Try again in a minute.` } });
+  if (!process.env.ANTHROPIC_KEY) return refuse("ANTHROPIC_KEY isn't set in Vercel");
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
     const msgs = body.messages || [];
@@ -192,12 +197,11 @@ async function handleJournalWriter(req, res) {
       body: JSON.stringify({ model: JOURNAL_WRITER_MODEL, max_tokens: body.max_tokens || 1000, ...(system ? { system } : {}), messages }),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) { console.warn(`journal writer unavailable, using OpenAI: ${data.error?.message || r.status}`); return false; }
-    res.status(200).json({ id: data.id, model: data.model, content: (data.content || []).filter(b => b.type === "text"), usage: data.usage, provider: "anthropic" });
-    return true;
+    if (!r.ok) { console.warn(`journal writer unavailable: ${data.error?.message || r.status}`); return refuse(data.error?.message || `HTTP ${r.status}`); }
+    return res.status(200).json({ id: data.id, model: data.model, content: (data.content || []).filter(b => b.type === "text"), usage: data.usage, provider: "anthropic" });
   } catch (err) {
-    console.warn(`journal writer unavailable, using OpenAI: ${err.message}`);
-    return false;
+    console.warn(`journal writer unavailable: ${err.message}`);
+    return refuse(err.message);
   }
 }
 
@@ -211,7 +215,7 @@ export default async function handler(req, res) {
   // Social captions ask for the journal's writer by name; everything else stays on OpenAI.
   let writer;
   try { writer = (typeof req.body === "string" ? JSON.parse(req.body) : req.body || {}).writer; } catch { /* handled below */ }
-  if (writer === "journal" && process.env.ANTHROPIC_KEY && (await handleJournalWriter(req, res))) return;
+  if (writer === "journal") return handleJournalWriter(req, res);
 
   const key = process.env.OPENAI_KEY || process.env.OPENAI_API_KEY;
   if (!key) return res.status(500).json({ error: { message: "OPENAI_KEY not set" } });
