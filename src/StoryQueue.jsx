@@ -23,8 +23,9 @@ function Tile({ r, kind, state, onOpen, onSkip, onPosted, onUndo }) {
   const img = cover(r.l);
   return (
     <div style={{ position: "relative", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", cursor: "pointer" }} onClick={onOpen}>
-      <div style={{ aspectRatio: "1", background: C.card }}>
+      <div style={{ aspectRatio: "1", background: C.card, position: "relative" }}>
         <img src={small(img)} onError={e => { if (e.currentTarget.src !== img) e.currentTarget.src = img; }} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: state ? .55 : 1 }} />
+        {/^https?:/.test(r.l.video || "") && <span title="Has a video — it can go up as the story" style={{ position: "absolute", left: 7, bottom: 7, fontSize: 10.5, fontWeight: 800, padding: "2px 7px", borderRadius: 20, background: "rgba(20,15,8,.72)", color: "#fff" }}>▶ video</span>}
       </div>
       <div style={{ padding: "7px 9px 8px" }}>
         <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.l.title}</div>

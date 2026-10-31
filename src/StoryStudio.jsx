@@ -3,7 +3,9 @@
    name, or the name alone. No logo: Instagram already puts the profile photo
    and @eartheditions_ on every story. The image goes to the phone's share
    sheet, so it lands straight in Instagram; the link sticker is added there,
-   on the plainest patch of the photo, with the link copied from here. */
+   on the plainest patch of the photo, with the link copied from here.
+   A piece with a video can go up as that video instead, as it is: it goes to
+   the share sheet the same way, and any text is added in Instagram. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { C, FI } from "./lmTheme.js";
 import { loadBitmap } from "./glPipeline.js";
@@ -214,6 +216,12 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
   const [sticker, setSticker] = useState(null);
   const [note, setNote] = useState("");
   const cv = useRef(null), drag = useRef(null), named = useRef(false), linkEdited = useRef(false), fileRef = useRef(null);
+  const video = typeof l.video === "string" && /^https?:/.test(l.video) ? l.video : "";
+  // Photo or video: the last one picked, on this device.
+  const [media, setMediaState] = useState(() => { try { return video && localStorage.getItem("ee-story-media") === "video" ? "video" : "photo"; } catch { return "photo"; } });
+  const setMedia = m => { setMediaState(m); try { localStorage.setItem("ee-story-media", m); } catch {} };
+  const [clip, setClip] = useState(null);   // the video as a file, fetched when Video is picked
+  const [clipErr, setClipErr] = useState("");
 
   // The store's short name and its public page, when the piece is on the store.
   useEffect(() => {
@@ -289,9 +297,43 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
     return () => clearTimeout(t);
   }, [bmp, kind, name, place, tone, frame]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* The video is fetched whole before Share is offered, for the same reason
+     the image is made ahead: the share sheet only opens straight off the tap.
+     It comes in 4 MB parts, so the button can say how far along it is on a
+     phone's data, and no single download is big enough for a browser to
+     refuse it. */
+  const [clipPct, setClipPct] = useState(0);
+  // The preview plays the copy just fetched, not a second download.
+  const clipUrl = useMemo(() => clip && URL.createObjectURL(clip), [clip]);
+  useEffect(() => () => clipUrl && URL.revokeObjectURL(clipUrl), [clipUrl]);
+  useEffect(() => {
+    if (media !== "video" || !video || clip) return undefined;
+    let off = false;
+    setClipErr(""); setClipPct(0);
+    (async () => {
+      const CH = 4 * 1024 * 1024, parts = [];
+      let at = 0, total = 0, type = "";
+      for (;;) {
+        const r = await fetch(video, { headers: { Range: `bytes=${at}-${at + CH - 1}` } });
+        if (r.status === 416) break;   // the last part ended exactly on the size
+        if (!r.ok) throw new Error(`the video didn't load (${r.status})`);
+        const b = await r.blob();
+        if (off) return;
+        type ||= (r.headers.get("content-type") || b.type || "").split(";")[0];
+        total ||= +(r.headers.get("content-range") || "").split("/")[1] || 0;
+        parts.push(b); at += b.size;
+        if (total) setClipPct(Math.min(99, Math.round(at / total * 100)));
+        // A server that ignores Range sends the whole file at once.
+        if (r.status === 200 || b.size < CH || (total && at >= total)) break;
+      }
+      setClip(new File(parts, fileName.replace(/\.jpg$/, ".mp4"), { type: type || "video/mp4" }));
+    })().catch(e => !off && setClipErr(e.message || "the video didn't load"));
+    return () => { off = true; };
+  }, [media, video]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const share = async () => {
     try {
-      const file = fileRef.current;
+      const file = media === "video" ? clip : fileRef.current;
       if (!file) return;
       if (navigator.canShare?.({ files: [file] })) {
         if (kind === "listed" && link) navigator.clipboard?.writeText(link).catch(() => {});
@@ -303,7 +345,8 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
     } catch (e) { if (e?.name !== "AbortError") flash("⚠ " + e.message); }
   };
   const save = async file => {
-    file ||= await toFile();
+    file ||= media === "video" ? clip : await toFile();
+    if (!file) return;
     const a = document.createElement("a");
     a.href = URL.createObjectURL(file); a.download = file.name; a.click();
     onShared?.(kind);
@@ -329,9 +372,14 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
         <div style={{ display: "flex", gap: 20, padding: 18, flexWrap: phone ? "wrap" : "nowrap", alignItems: "flex-start" }}>
           <div style={{ position: "relative", width: phone ? "min(64%, 34vh)" : 300, aspectRatio: "9 / 16", margin: phone ? "0 auto" : 0, flex: "none", borderRadius: 14, overflow: "hidden", background: C.card, boxShadow: "0 8px 24px rgba(0,0,0,.18)" }}>
             <canvas ref={cv} width={W} height={H} onPointerDown={down} onPointerMove={moveP} onPointerUp={up} onPointerCancel={up}
-              style={{ width: "100%", height: "100%", display: "block", touchAction: "none", cursor: bmp ? "grab" : "default", opacity: bmp ? 1 : 0 }} />
-            {!bmp && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.inkMid, fontSize: 13, padding: 20, textAlign: "center" }}>{err || "Loading the photo…"}</div>}
-            {bmp && sticker && (
+              style={{ width: "100%", height: "100%", display: media === "video" ? "none" : "block", touchAction: "none", cursor: bmp ? "grab" : "default", opacity: bmp ? 1 : 0 }} />
+            {media === "video" && (clipUrl
+              ? <video src={clipUrl} muted autoPlay loop playsInline style={{ width: "100%", height: "100%", display: "block", objectFit: "cover", background: "#141210" }} />
+              : <div style={{ position: "absolute", inset: 0, background: `#141210 url("${photos[0] || ""}") center / cover`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ background: "rgba(20,15,8,.75)", color: "#fff", fontSize: 12.5, fontWeight: 700, padding: "6px 12px", borderRadius: 20 }}>{clipErr ? "Video unavailable" : `▶ Getting the video…${clipPct ? ` ${clipPct}%` : ""}`}</span>
+                </div>)}
+            {media === "photo" && !bmp && <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: C.inkMid, fontSize: 13, padding: 20, textAlign: "center" }}>{err || "Loading the photo…"}</div>}
+            {media === "photo" && bmp && sticker && (
               <div title="Add Instagram's link sticker here" style={{ position: "absolute", left: pct(sticker.x, W), top: pct(sticker.y, H), width: pct(sticker.w, W), height: pct(sticker.h, H),
                 border: `1.5px dashed ${tone === "light" ? "rgba(255,255,255,.85)" : "rgba(20,18,16,.6)"}`, borderRadius: 6, color: tone === "light" ? "#fff" : "#141210",
                 fontSize: 10, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>🔗 link sticker</div>
@@ -339,11 +387,18 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
           </div>
 
           <div style={{ flex: phone ? "1 1 100%" : 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+            {video && (
+              <div style={{ display: "flex", gap: 6, padding: 4, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 24, alignSelf: "flex-start" }}>
+                <button onClick={() => setMedia("photo")} style={{ ...pill(media === "photo"), border: "none" }}>📷 Photo story</button>
+                <button onClick={() => setMedia("video")} style={{ ...pill(media === "video"), border: "none" }}>▶ Its video</button>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={() => setKind("listed")} style={pill(kind === "listed")}>Just listed</button>
               <button onClick={() => setKind("sold")} style={pill(kind === "sold")}>Sold 🔥</button>
             </div>
 
+            {media === "photo" && <>
             <label style={{ display: "block" }}>
               <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: .6, textTransform: "uppercase", color: C.inkMid, marginBottom: 6 }}>Name on the story</div>
               <input value={name} onChange={e => { named.current = true; setName(e.target.value); }} style={FI({ fontSize: 16 })} />
@@ -382,6 +437,7 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
               <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: .6, textTransform: "uppercase", color: C.inkMid, marginBottom: 6 }}>Zoom · drag the photo to move it</div>
               <input type="range" min={bmp ? minZoom(bmp).toFixed(3) : 1} max="2.5" step="0.01" value={frame.zoom} onChange={e => setFrame(f => ({ ...f, zoom: +e.target.value }))} style={{ width: "100%" }} />
             </label>
+            </>}
 
             {kind === "listed" && (
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 }}>
@@ -394,12 +450,20 @@ export default function StoryStudio({ listing: l, sold = false, kind: startKind,
             )}
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button disabled={!ready} onClick={share} style={{ ...pill(true), padding: "11px 22px", fontSize: 14, opacity: ready ? 1 : .5 }}>{bmp && !ready ? "Updating…" : "Share to Instagram"}</button>
-              <button disabled={!bmp} onClick={() => save().catch(e => flash("⚠ " + e.message))} style={{ ...pill(false), padding: "11px 18px", fontSize: 14, opacity: bmp ? 1 : .5 }}>Download</button>
+              {media === "video" ? <>
+                <button disabled={!clip} onClick={share} style={{ ...pill(true), padding: "11px 22px", fontSize: 14, opacity: clip ? 1 : .5 }}>{clip ? "Share video to Instagram" : clipErr ? "Video unavailable" : `Getting the video…${clipPct ? ` ${clipPct}%` : ""}`}</button>
+                <button disabled={!clip} onClick={() => save().catch(e => flash("⚠ " + e.message))} style={{ ...pill(false), padding: "11px 18px", fontSize: 14, opacity: clip ? 1 : .5 }}>Download</button>
+              </> : <>
+                <button disabled={!ready} onClick={share} style={{ ...pill(true), padding: "11px 22px", fontSize: 14, opacity: ready ? 1 : .5 }}>{bmp && !ready ? "Updating…" : "Share to Instagram"}</button>
+                <button disabled={!bmp} onClick={() => save().catch(e => flash("⚠ " + e.message))} style={{ ...pill(false), padding: "11px 18px", fontSize: 14, opacity: bmp ? 1 : .5 }}>Download</button>
+              </>}
               {note && <span style={{ fontSize: 12.5, color: C.inkMid }}>{note}</span>}
             </div>
+            {media === "video" && clipErr && <div style={{ fontSize: 12.5, color: C.red }}>⚠ Couldn't get the video: {clipErr}. <a href={video} target="_blank" rel="noreferrer" style={{ color: C.red }}>Open it</a> to save it by hand.</div>}
             <div style={{ fontSize: 12, color: C.inkFaint, lineHeight: 1.5 }}>
-              {kind === "listed"
+              {media === "video"
+                ? `The piece's own video, as it is. Share opens your phone's share sheet: pick Instagram → Story, then add "Just listed" or the name with Instagram's text tool${kind === "listed" ? ", and the link sticker (the link is copied as you share)" : ""}.`
+                : kind === "listed"
                 ? "Share opens your phone's share sheet: pick Instagram → Story. The link is copied as you share, so add the link sticker, paste, and set it on the dashed box."
                 : "Share opens your phone's share sheet: pick Instagram → Story, and post."}
             </div>
