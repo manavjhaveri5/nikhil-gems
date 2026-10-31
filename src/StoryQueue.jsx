@@ -16,8 +16,9 @@ const head = { fontSize: 11, fontWeight: 800, letterSpacing: .8, textTransform: 
 
 const round = { position: "absolute", top: 6, width: 26, height: 26, borderRadius: 13, border: "none", fontSize: 14, cursor: "pointer", padding: 0, lineHeight: "26px" };
 
-/* ✓ marks a story posted by hand (posted from the phone, not from here);
-   tapping the Posted / Skipped tag takes the mark off again. */
+/* The empty circle is a checkbox: ticking it says this piece's Instagram
+   story is up (posted from the phone, not from here), and only then does a
+   green tick show. Tapping the Story posted / Skipped tag takes it off. */
 function Tile({ r, kind, state, onOpen, onSkip, onPosted, onUndo }) {
   const img = cover(r.l);
   return (
@@ -31,9 +32,9 @@ function Tile({ r, kind, state, onOpen, onSkip, onPosted, onUndo }) {
       </div>
       {state && <button title={`${state.how === "posted" ? "Story posted" : "Skipped"} ${ago(Date.parse(state.at))}${onUndo ? " — tap to undo" : ""}`} onClick={e => { e.stopPropagation(); onUndo?.(); }}
         style={{ position: "absolute", top: 7, left: 7, fontSize: 10.5, fontWeight: 800, padding: "3px 8px", borderRadius: 20, cursor: onUndo ? "pointer" : "default", fontFamily: "inherit",
-          background: state.how === "posted" ? C.greenBg : C.card, color: state.how === "posted" ? C.green : C.inkMid, border: `1px solid ${C.border}` }}>{state.how === "posted" ? "✓ Posted" : "Skipped"}</button>}
-      {onPosted && !state && <button title="I've posted this story — mark it" onClick={e => { e.stopPropagation(); onPosted(); }}
-        style={{ ...round, left: 6, background: C.green, color: "#fff", fontWeight: 800 }}>✓</button>}
+          background: state.how === "posted" ? C.green : C.card, color: state.how === "posted" ? "#fff" : C.inkMid, border: `1px solid ${state.how === "posted" ? C.green : C.border}` }}>{state.how === "posted" ? "✓ Story posted" : "Skipped"}</button>}
+      {onPosted && !state && <button title="Tick when this piece's story is up" aria-label="Story posted" onClick={e => { e.stopPropagation(); onPosted(); }}
+        style={{ ...round, left: 6, width: 24, height: 24, background: "rgba(255,255,255,.92)", border: "2px solid rgba(20,15,8,.5)" }} />}
       {onSkip && !state && <button title="Skip — don't post a story for this one" onClick={e => { e.stopPropagation(); onSkip(); }}
         style={{ ...round, right: 6, background: "rgba(20,15,8,.7)", color: "#fff" }}>×</button>}
     </div>
@@ -83,7 +84,7 @@ export default function StoryQueue({ listings, orders, isLive, stories, onClose,
 
         <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
           <div style={head}>To post</div>
-          {due.length > 0 && <div style={{ fontSize: 12, color: C.inkMid, margin: "-4px 0 10px" }}>Posted one already? Tap <b style={{ color: C.green }}>✓</b> on it. <b>×</b> skips it. Both move it to Done this week.</div>}
+          {due.length > 0 && <div style={{ fontSize: 12, color: C.inkMid, margin: "-4px 0 10px" }}>Put up a piece's story? Tick the circle on it and it moves to Done this week with <b style={{ color: C.green }}>✓ Story posted</b>. <b>×</b> skips it.</div>}
           {due.length
             ? <div style={grid}>{due.map(r => <Tile key={r.l.id} r={r} kind={kind} onOpen={() => openIt(r)} onPosted={() => mark(kind, r.l, "posted")} onSkip={() => mark(kind, r.l, "skipped")} />)}</div>
             : <div style={{ fontSize: 13, color: C.inkMid, padding: "14px 0 6px" }}>{kind === "listed" ? "Nothing new went live in the last 7 days that still needs a story." : "No sales in the last 7 days that still need a story."}</div>}
