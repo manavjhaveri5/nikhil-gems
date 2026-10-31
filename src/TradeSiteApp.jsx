@@ -951,6 +951,28 @@ export async function loadTradeFacts() {
   return out;
 }
 
+/* Every product on show on the trade site, newest first, for pickers outside
+   it (the email campaign). Most of the catalogue was made on the site itself
+   and has no listing behind it. */
+export const TRADE_SITE = "https://trade.eartheditions.co";
+export async function loadLiveTrade() {
+  const rows = await loadAll("trade_products", "id,title,description,material,shape,images,price,unit,variants,source,live,created_at", "created_at");
+  return rows.filter(r => r.live);
+}
+/* One price for a product sold one way: its only option and the product
+   both, as the site's own editor saves them (the site shows the option's).
+   A product with several options is priced on the site, option by option. */
+export async function setTradePrice(id, price) {
+  const cur = await q(supabase.from("trade_products").select("variants").eq("id", id).maybeSingle());
+  if (!cur) throw new Error("That product is no longer on the trade site");
+  const vs = cur.variants || [];
+  if (vs.length > 1) throw new Error("It has several options: price them on the trade site");
+  const v = Math.max(0, Math.round((+price || 0) * 100) / 100);
+  const saved = await q(supabase.from("trade_products").update({ price: v, variants: vs.map(x => ({ ...x, price: v })), updated_at: new Date().toISOString() }).eq("id", id).select("id"));
+  if (!saved?.length) throw new Error("The trade site didn't take the change: try again from the Trade site module");
+  return v;
+}
+
 /* The trade site gets every photo as shot: an edited photo (graded, with
    "EXACT PIECE SHOWN" written in) is swapped for the original it was made
    from, which the listing remembers in original_images. */
