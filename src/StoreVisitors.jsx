@@ -24,8 +24,13 @@ const time = t => new Date(t).toLocaleTimeString("en-GB", { hour: "2-digit", min
 const day = t => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 const pageName = e => e.handle ? (e.title || e.handle).replace(/ \| Earth Editions$/, "") : e.path === "/" ? "Home" : (e.title || e.path).replace(/ \| Earth Editions$/, "");
 const ACTION = { add_to_cart: "🛒 Added to cart", checkout: "💳 Went to checkout", purchase: "✅ Bought", signup: "✉️ Joined the list", option: "Picked an option", search: "🔍 Searched" };
-const RANGES = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"]];
-const since = r => { const d = new Date(); if (r === "today") d.setHours(0, 0, 0, 0); else d.setDate(d.getDate() - (r === "7d" ? 7 : 30)); return d.toISOString(); };
+const RANGES = [["today", "Today"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"]];
+const since = r => { const d = new Date(); if (r === "today") d.setHours(0, 0, 0, 0); else d.setDate(d.getDate() - ({ "7d": 7, "90d": 90 }[r] || 30)); return d.toISOString(); };
+/* Likely bots: since October 2026 hundreds of visits a day from China (Taiyuan) and
+   Singapore, each one page and nothing else, all "direct" on desktop. They're left
+   out of the numbers unless asked for. */
+const botLike = v => ["CN", "SG"].includes(v.country) && v.events.length === 1 && v.events[0].type === "view";
+const usd = n => `$${Math.round(n).toLocaleString("en-US")}`;
 
 async function pages(build, max = 20000) {
   const out = [];
@@ -41,6 +46,8 @@ async function pages(build, max = 20000) {
 export default function VisitorsTab({ showToast, site }) {
   const [range, setRange] = useState("today");
   const [staff, setStaff] = useState(false);
+  const [bots, setBots] = useState(false);
+  const [unpaid, setUnpaid] = useState([]);
   const [events, setEvents] = useState(null);
   const [live, setLive] = useState([]);
   const [who, setWho] = useState({});
@@ -64,6 +71,9 @@ export default function VisitorsTab({ showToast, site }) {
       const w = {};
       for (const r of ids) if (!w[r.vid] && (r.data?.email || r.data?.name)) w[r.vid] = { email: r.data.email || "", name: r.data.name || "" };
       setWho(w); setEvents(ev); setMissing(false);
+      // Unpaid checkouts (Razorpay, India) carry the buyer's name: matched to their visit below.
+      const { data: up } = await supabase.from("store_orders").select("number,name,email,total,currency,created_at").eq("status", "pending").gte("created_at", since(range));
+      setUnpaid(up || []);
     } catch (e) {
       if (/site_events|does not exist|schema cache/i.test(e.message)) { setMissing(true); setEvents([]); }
       else { showToast("⚠ " + e.message); setEvents([]); }
@@ -82,16 +92,26 @@ export default function VisitorsTab({ showToast, site }) {
       if (!v) visits.set(e.sid, v = { sid: e.sid, vid: e.vid, start: e.at, end: e.at, source: e.source || "direct", campaign: e.campaign, referrer: e.referrer, country: e.country, city: e.city, region: e.region, device: e.device, browser: e.browser, os: e.os, lang: e.lang, events: [] });
       v.end = e.at; v.events.push(e);
     }
-    const all = [...visits.values()];
+    const every = [...visits.values()];
+    const all = bots ? every : every.filter(v => !botLike(v));
     for (const v of all) { const l = live.find(x => x.sid === v.sid); if (l && l.last_seen > v.end) v.end = l.last_seen; }
     const did = (v, t) => v.events.some(e => e.type === t);
+    // Carts left behind: what went in, how far they got, and who, where an unpaid order (made a moment after the checkout) names them.
+    const left = all.filter(v => did(v, "add_to_cart") && !did(v, "purchase")).map(v => {
+      const items = [...new Map(v.events.filter(e => e.type === "add_to_cart").map(e => [e.handle || e.data?.title, { title: e.data?.title || e.handle, price: +e.data?.price || 0, handle: e.handle }])).values()];
+      const co = v.events.find(e => e.type === "checkout");
+      const order = co && unpaid.find(o => Math.abs(new Date(o.created_at) - new Date(co.at)) < 3 * 60e3);
+      return { v, items, value: items.reduce((t, i) => t + i.price, 0), checkout: !!co, order, at: (co || v.events.find(e => e.type === "add_to_cart")).at };
+    }).sort((a, b) => b.at.localeCompare(a.at));
+    const viewedPiece = all.filter(v => v.events.some(e => e.type === "view" && e.handle)).length;
+    const kept = all.flatMap(v => v.events);
     const tally = (key, extra = () => ({})) => {
       const m = new Map();
       for (const v of all) { const k = key(v); const r = m.get(k) || { k, visits: 0, carts: 0, buys: 0, ...extra(v) }; r.visits++; if (did(v, "add_to_cart")) r.carts++; if (did(v, "purchase")) r.buys++; m.set(k, r); }
       return [...m.values()].sort((a, b) => b.visits - a.visits);
     };
     const prod = new Map();
-    for (const e of ev) if (e.handle && (e.type === "view" || e.type === "add_to_cart")) {
+    for (const e of kept) if (e.handle && (e.type === "view" || e.type === "add_to_cart")) {
       const r = prod.get(e.handle) || { handle: e.handle, title: "", views: 0, carts: 0 };
       if (e.type === "view") { r.views++; r.title = r.title || pageName(e); } else r.carts++;
       prod.set(e.handle, r);
@@ -99,10 +119,12 @@ export default function VisitorsTab({ showToast, site }) {
     return {
       visits: all.sort((a, b) => b.end.localeCompare(a.end)),
       people: new Set(all.map(v => v.vid)).size,
-      views: ev.filter(e => e.type === "view").length,
+      views: kept.filter(e => e.type === "view").length,
       carts: all.filter(v => did(v, "add_to_cart")).length,
       checkouts: all.filter(v => did(v, "checkout")).length,
       buys: all.filter(v => did(v, "purchase")).length,
+      viewedPiece, left,
+      hiddenBots: every.length - all.length,
       sources: tally(v => v.source),
       places: tally(v => `${v.country}|${v.city}`, v => ({ country: v.country, city: v.city })),
       devices: tally(v => v.device || "unknown"),
@@ -113,7 +135,7 @@ export default function VisitorsTab({ showToast, site }) {
       blockedIps: [...blockedEv.filter(e => e.data?.ip).reduce((m, e) => { const r = m.get(e.data.ip) || { ip: e.data.ip, city: e.city || "Unknown", country: e.country, sites: new Set(), why: new Set(), n: 0, last: e.at }; r.n++; r.sites.add(e.data?.site === "trade" ? "Trade" : "Store"); r.why.add(e.data?.reason || ""); if (e.at > r.last) r.last = e.at; return m.set(e.data.ip, r); }, new Map()).values()].sort((a, b) => b.last.localeCompare(a.last)),
       blockedPlaces: [...blockedEv.reduce((m, e) => { const k = `${e.city || "?"}|${e.data?.site || ""}`; const r = m.get(k) || { city: e.city || "Unknown", country: e.country, site: e.data?.site || "", n: 0, last: e.at }; r.n++; if (e.at > r.last) r.last = e.at; return m.set(k, r); }, new Map()).values()].sort((a, b) => b.n - a.n),
     };
-  }, [events, live]);
+  }, [events, live, bots, unpaid]);
 
   if (missing) return (
     <div style={{ ...card, padding: 24, fontSize: 13.5, lineHeight: 1.6 }}>
@@ -133,10 +155,10 @@ export default function VisitorsTab({ showToast, site }) {
     <div style={{ ...card, padding: "12px 14px", minWidth: 0 }}>
       <div style={{ ...lab, marginBottom: 8 }}>{title}</div>
       {!rows.length ? <div style={{ fontSize: 12.5, color: C.inkFaint }}>{empty}</div> : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-          <thead><tr>{cols.map(([h, , right]) => <th key={h} style={{ textAlign: right ? "right" : "left", fontWeight: 600, color: C.inkFaint, fontSize: 11, padding: "0 0 6px" }}>{h}</th>)}</tr></thead>
-          <tbody>{rows.map((r, i) => <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>{cols.map(([h, f, right]) => <td key={h} style={{ padding: "6px 0", textAlign: right ? "right" : "left", maxWidth: right ? undefined : 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f(r)}</td>)}</tr>)}</tbody>
-        </table>
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead><tr>{cols.map(([h, , right], c) => <th key={h} style={{ textAlign: right ? "right" : "left", fontWeight: 600, color: C.inkFaint, fontSize: 11, padding: `0 ${c < cols.length - 1 ? 10 : 0}px 6px 0` }}>{h}</th>)}</tr></thead>
+          <tbody>{rows.map((r, i) => <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>{cols.map(([h, f, right], c) => <td key={h} style={{ padding: `6px ${c < cols.length - 1 ? 10 : 0}px 6px 0`, textAlign: right ? "right" : "left", maxWidth: right ? undefined : 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f(r)}</td>)}</tr>)}</tbody>
+        </table></div>
       )}
     </div>
   );
@@ -164,6 +186,7 @@ export default function VisitorsTab({ showToast, site }) {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         {RANGES.map(([k, l]) => <button key={k} onClick={() => setRange(k)} style={btn(range === k)}>{l}</button>)}
         <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, color: C.inkMid, marginLeft: 6 }}><input type="checkbox" checked={staff} onChange={e => setStaff(e.target.checked)} />Include staff</label>
+        <label title="One-page visits from China and Singapore: bots reading the site, not shoppers" style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, color: C.inkMid }}><input type="checkbox" checked={bots} onChange={e => setBots(e.target.checked)} />Include likely bots{events && !bots && s.hiddenBots ? ` (${s.hiddenBots})` : ""}</label>
         <div style={{ flex: 1 }} /><button onClick={() => { load(); loadLive(); }} style={btn()}>↻ Refresh</button>
       </div>
 
@@ -175,6 +198,34 @@ export default function VisitorsTab({ showToast, site }) {
           <Stat n={s.carts} l="Added to cart" sub={`${pct(s.carts, s.visits.length)} of visits`} />
           <Stat n={s.checkouts} l="Checkouts" />
           <Stat n={s.buys} l="Bought" sub={`${pct(s.buys, s.visits.length)} of visits`} />
+        </div>
+
+        {/* How far visits get, and what was left behind on the way. */}
+        <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr" : "minmax(0,1fr) minmax(0,1.4fr)", gap: 14 }}>
+          <div style={{ ...card, padding: "12px 14px" }}>
+            <div style={{ ...lab, marginBottom: 10 }}>How far visits get</div>
+            {[["Visited", s.visits.length], ["Looked at a piece", s.viewedPiece], ["Added to cart", s.carts], ["Went to checkout", s.checkouts], ["Paid", s.buys]].map(([l, n], i, a) => (
+              <div key={l} style={{ display: "grid", gridTemplateColumns: "118px 1fr 44px 52px", gap: 8, alignItems: "center", fontSize: 12.5, padding: "4px 0" }}>
+                <span>{l}</span>
+                <div style={{ height: 8, background: C.card, borderRadius: 4, overflow: "hidden" }}><div style={{ width: s.visits.length ? `${Math.max(n ? 1.5 : 0, n / s.visits.length * 100)}%` : 0, height: "100%", background: i === a.length - 1 ? C.green : C.ink, borderRadius: 4 }} /></div>
+                <b style={{ textAlign: "right" }}>{n}</b>
+                <span style={{ textAlign: "right", color: C.inkFaint, fontSize: 11 }}>{i ? pct(n, a[i - 1][1]) : ""}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 6 }}>The right-hand % is of the step above.</div>
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+              {[["Left in the cart", s.left.filter(x => !x.checkout)], ["Left at payment", s.left.filter(x => x.checkout)]].map(([l, rows]) => (
+                <div key={l} style={{ flex: "1 1 120px", background: C.card, borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={lab}>{l}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{rows.length} <span style={{ fontSize: 12, fontWeight: 600, color: C.inkMid }}>· {usd(rows.reduce((t, x) => t + x.value, 0))}</span></div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <Table title={`Left without buying — ${s.left.length}`} rows={s.left.slice(0, 30)} empty="No carts left behind in this period."
+            cols={[["When", r => `${day(r.at)} ${time(r.at)}`], ["Who", r => r.order ? <b>{r.order.name}</b> : who[r.v.vid] ? <b>{who[r.v.vid].name || who[r.v.vid].email}</b> : `${flag(r.v.country)} ${place(r.v)}`],
+              ["Pieces", r => <span title={r.items.map(i => i.title).join(", ")}>{r.items.map(i => i.title).join(", ")}</span>], ["Value", r => usd(r.value), 1],
+              ["Got to", r => r.order ? <span title="In Orders → Unpaid, to follow up">Payment · {r.order.number}</span> : r.checkout ? "Payment" : "Cart"]]} />
         </div>
 
         <Table title={`Turned away — ${s.blocked.length} blocked visit${s.blocked.length === 1 ? "" : "s"} (blocked cities and VPNs, both sites)`}

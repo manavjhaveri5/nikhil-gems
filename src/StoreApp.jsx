@@ -260,12 +260,27 @@ function OrdersTab({ showToast }) {
   const [rows, setRows] = useState(null);
   const [open, setOpen] = useState(null);
   const [filter, setFilter] = useState("open");
+  const [sending, setSending] = useState(null);
   const load = useCallback(() => q(supabase.from("store_orders").select("*").order("created_at", { ascending: false }).limit(500))
     .then(setRows).catch(e => { showToast("⚠ " + e.message); setRows([]); }), [showToast]);
   useEffect(() => { load(); }, [load]);
   const patch = async (id, p) => {
     try { await q(supabase.from("store_orders").update({ ...p, updated_at: new Date().toISOString() }).eq("id", id)); setRows(r => r.map(x => x.id === id ? { ...x, ...p } : x)); }
     catch (e) { showToast("⚠ " + e.message); }
+  };
+  // The follow-up email for an unpaid checkout, from hello@eartheditions.co (api/mail.js);
+  // until Resend is set up there, a draft in the mail app instead.
+  const followUp = async (o, draft) => {
+    if (o.notes?.includes("Follow-up emailed") && !window.confirm(`${o.number} has had a follow-up email already. Send another?`)) return;
+    setSending(o.id);
+    try {
+      const r = await fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ template: "checkout_followup", order_id: o.id }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { setRows(rs => rs.map(x => x.id === o.id ? { ...x, notes: d.notes ?? x.notes } : x)); showToast(`✓ Follow-up emailed to ${d.to}`); }
+      else if (r.status === 503) { window.location.href = draft; showToast("Sending from the ERP isn't set up yet, so it opened as a draft in your mail app"); }
+      else showToast("⚠ " + (d.error || `Couldn't send (${r.status})`));
+    } catch (e) { showToast("⚠ " + e.message); }
+    setSending(null);
   };
   // "pending" = a Razorpay payment window opened but never paid: only under Unpaid, to follow up.
   const shown = (rows || []).filter(o => filter === "all" ? o.status !== "pending" : filter === "open" ? ["paid", "packed"].includes(o.status) : o.status === filter);
@@ -288,6 +303,7 @@ function OrdersTab({ showToast }) {
           const unpaid = o.status === "pending";
           const wa = unpaid && waTo(o.phone, a.country);
           const ask = `Hi ${(o.name || "").split(" ")[0] || "there"}, this is Earth Editions. Your order ${o.number} for the ${o.lines.map(l => l.title).join(", ")} didn't go through at payment. Can we help you complete it?`;
+          const draft = o.email ? `mailto:${o.email}?subject=${encodeURIComponent(`Your Earth Editions order ${o.number}`)}&body=${encodeURIComponent(ask)}` : "";
           return (
             <div key={o.id} style={{ ...card, padding: mob() ? 12 : "14px 18px", borderColor: o.notes?.startsWith("⚠") ? C.red : C.border }}>
               <div onClick={() => setOpen(isOpen ? null : o.id)} style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", cursor: "pointer" }}>
@@ -320,7 +336,8 @@ function OrdersTab({ showToast }) {
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                       {o.gateway_order && <a href={`https://dashboard.razorpay.com/app/orders/${o.gateway_order}`} target="_blank" rel="noreferrer" style={{ ...btn(), textDecoration: "none" }}>Razorpay order ↗</a>}
                       {wa && <a href={`https://wa.me/${wa}?text=${encodeURIComponent(ask)}`} target="_blank" rel="noreferrer" style={{ ...btn("#1f8f4e", "#fff"), textDecoration: "none" }}>💬 WhatsApp</a>}
-                      {o.email && <a href={`mailto:${o.email}?subject=${encodeURIComponent(`Your Earth Editions order ${o.number}`)}&body=${encodeURIComponent(ask)}`} style={{ ...btn(), textDecoration: "none" }}>✉ Email</a>}
+                      {o.email && <button onClick={() => followUp(o, draft)} disabled={sending === o.id} title={`Sends the Earth Editions follow-up email to ${o.email}, with a link to the piece`} style={btn(C.ink, "#fff")}>{sending === o.id ? "Sending…" : "✉ Send follow-up email"}</button>}
+                      {o.email && <a href={draft} style={{ ...btn(), textDecoration: "none" }}>Write my own</a>}
                     </div>
                   ) : (
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
