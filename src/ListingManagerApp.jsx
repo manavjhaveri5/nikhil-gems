@@ -10173,24 +10173,45 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   /* Price & post (the grid's bulk window): each selected piece gets the prices
      typed for it, then goes live on the platforms ticked. Platforms it's already
-     on but not ticked just take the new prices. One at a time, so a failure on
-     one piece says which and the rest carry on. */
+     live on (ticked or not) just take the new prices — the quick path, no
+     re-post. A failure on one piece says which and the rest carry on.
+
+     Three pieces go at once: each save is its own row on the server, so they
+     don't trip over each other. A piece's own platforms still go one after
+     another (each writes back onto that listing), and a first post to the
+     trade site — which stops to ask how it's sold — waits its turn behind any
+     other, so two of those questions never open at once. */
   const bulkPricePost = async (rows, post, onStep) => {
     const newOnEtsy = post.includes("etsy") ? rows.filter(r => r.l.platforms?.etsy?.status !== "active").length : 0;
     if (newOnEtsy && !confirm(`Put ${newOnEtsy} listing${newOnEtsy === 1 ? "" : "s"} live on Etsy?\n\nEtsy charges $0.20 each.`)) return null;
-    const failed = [];
-    for (const [i, { l, prices }] of rows.entries()) {
+    const isLive = (l, k) => linkedTo(l, k) && (k === "trade" ? !!tradeMap?.[l.id]?.live : l.platforms?.[k]?.status === "active");
+    const plan = rows.map(({ l, prices }) => {
       const current = listings.find(x => x.id === l.id) || l;
+      const ks = [...new Set([...post, ...["etsy", "store", "trade"].filter(k => linkedTo(current, k))])];
+      return { l, prices, current, steps: ks.map(k => ({ k, quick: isLive(current, k) || !post.includes(k) })) };
+    });
+    const total = plan.reduce((n, p) => n + 1 + p.steps.length, 0);
+    let done = 0, pieces = 0, asking = Promise.resolve();
+    const tick = () => onStep?.(pieces, `${++done} of ${total} updates`);
+    const failed = [];
+    const one = async ({ l, prices, current, steps }) => {
       const next = { ...current, ...prices, updated_at: new Date().toISOString() };
-      try { await saveListingItem(next); } catch (e) { failed.push(`${l.title}: ${e.message}`); continue; }
-      for (const k of post) {
-        try { await handlePublish(next, k); } catch (e) { failed.push(`${l.title} — ${PLATFORMS.find(p => p.key === k)?.label || k}: ${e.message}`); }
+      try { await saveListingItem(next); } catch (e) { failed.push(`${l.title}: ${e.message}`); done += steps.length; tick(); return; }
+      tick();
+      for (const { k, quick } of steps) {
+        const label = PLATFORMS.find(p => p.key === k)?.label || k;
+        try {
+          if (quick) await handlePublish(next, k, { syncOnly: true, allowCreate: false, storeOverride: ["price", "price_inr"] });
+          else if (k !== "trade") await handlePublish(next, k, { storeOverride: ["price", "price_inr"] });
+          else { const go = asking.then(() => handlePublish(next, k)); asking = go.catch(() => {}); await go; }
+        } catch (e) { (post.includes(k) ? failed.push(`${l.title} — ${label}: ${e.message}`) : console.warn(k, e)); }
+        tick();
       }
-      for (const k of ["etsy", "store", "trade"].filter(k => !post.includes(k) && linkedTo(next, k))) {
-        try { await handlePublish(next, k, { syncOnly: true, allowCreate: false, storeOverride: ["price", "price_inr"] }); } catch (e) { console.warn(k, e); }
-      }
-      onStep?.(i + 1);
-    }
+      pieces++;
+    };
+    const queue = [...plan];
+    await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => { while (queue.length) await one(queue.shift()); }));
+    onStep?.(pieces, "");
     showToast(failed.length ? `⚠ ${rows.length - failed.length} done — ${failed.length} problem${failed.length === 1 ? "" : "s"}` : `✓ ${rows.length} priced${post.length ? " and posted" : ""}`);
     return { failed };
   };

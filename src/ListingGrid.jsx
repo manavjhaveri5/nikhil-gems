@@ -704,18 +704,20 @@ function PricePost({ rows, facts, onClose, onRun }) {
   const [all, setAll] = useState({});
   const [post, setPost] = useState(() => new Set(["store"]));
   const [busy, setBusy] = useState(0);
+  const [stage, setStage] = useState("");
   const [failed, setFailed] = useState(null);
   const set = (id, f, v) => setVals(x => ({ ...x, [id]: { ...x[id], [f]: v } }));
-  const fillAll = f => { const v = all[f]; if (v === "" || v == null) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, r]) => [id, { ...r, [f]: v }]))); };
-  const byWeight = f => { const r = +rate[f]; if (!(r > 0)) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, row]) => { const g = gramsOf(rows.find(l => l.id === id)); return [id, g ? { ...row, [f]: Math.round(g * r) } : row]; }))); };
+  // Both fill as they're typed: a number in either box goes straight into the whole column.
+  const fillAll = (f, v) => { setAll(a => ({ ...a, [f]: v })); if (!(+v > 0)) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, r]) => [id, { ...r, [f]: v }]))); };
+  const byWeight = (f, v) => { setRate(a => ({ ...a, [f]: v })); const r = +v; if (!(r > 0)) return; setVals(x => Object.fromEntries(Object.entries(x).map(([id, row]) => { const g = gramsOf(rows.find(l => l.id === id)); return [id, g ? { ...row, [f]: Math.round(g * r) } : row]; }))); };
   const noWeight = rows.filter(l => !gramsOf(l)).length;
   const run = async () => {
     const list = rows.map(l => ({ l, prices: Object.fromEntries(PP_COLS.filter(c => vals[l.id][c.field] !== "" && +vals[l.id][c.field] !== cur(l, c.field)).map(c => [c.field, +vals[l.id][c.field]])) }));
     const missing = post.has("store") ? rows.filter(l => !(+vals[l.id].price_store > 0)).length : 0;
     if (missing && !confirm(`${missing} piece${missing === 1 ? " has" : "s have"} no USA price — post anyway?`)) return;
     setBusy(0.001);
-    const r = await onRun(list, [...post], n => setBusy(n));
-    setBusy(0);
+    const r = await onRun(list, [...post], (n, what = "") => { setBusy(n || 0.001); setStage(what); });
+    setBusy(0); setStage("");
     if (r?.failed?.length) setFailed(r.failed); else if (r) onClose();
   };
   const box = { ...FI(), padding: "5px 7px", fontSize: 12.5, width: 84 };
@@ -734,11 +736,11 @@ function PricePost({ rows, facts, onClose, onRun }) {
                 {PP_COLS.map(c => <th key={c.field} style={{ padding: "6px 4px" }}>{c.label}</th>)}
               </tr>
               <tr style={{ background: C.bg }}>
-                <td style={{ padding: "6px 4px", fontSize: 11.5, color: C.inkMid }} colSpan={2}>Same for all →<br />Per gram →{noWeight ? <span style={{ color: C.amber }}> ({noWeight} without a weight stay as they are)</span> : null}</td>
+                <td style={{ padding: "6px 4px", fontSize: 11.5, color: C.inkMid, lineHeight: "33px" }} colSpan={2}>Same price for all →<br />Price per gram →{noWeight ? <span style={{ color: C.amber, lineHeight: 1.3, display: "block" }}>{noWeight} without a weight stay as they are</span> : null}</td>
                 {PP_COLS.map(c => (
                   <td key={c.field} style={{ padding: "6px 4px" }}>
-                    <div style={{ display: "flex", gap: 3 }}><input value={all[c.field] ?? ""} onChange={e => setAll(a => ({ ...a, [c.field]: e.target.value }))} onKeyDown={e => e.key === "Enter" && fillAll(c.field)} placeholder={c.cur} style={{ ...box, width: 60 }} /><button onClick={() => fillAll(c.field)} style={{ ...box, width: "auto", cursor: "pointer" }}>↓</button></div>
-                    <div style={{ display: "flex", gap: 3, marginTop: 3 }}><input value={rate[c.field] ?? ""} onChange={e => setRate(a => ({ ...a, [c.field]: e.target.value }))} onKeyDown={e => e.key === "Enter" && byWeight(c.field)} placeholder={`${c.cur}/g`} style={{ ...box, width: 60 }} /><button onClick={() => byWeight(c.field)} style={{ ...box, width: "auto", cursor: "pointer" }}>↓</button></div>
+                    <input inputMode="decimal" value={all[c.field] ?? ""} onChange={e => fillAll(c.field, e.target.value.replace(/[^\d.]/g, ""))} placeholder={`${c.cur} each`} title="Typed here, it goes into every row" style={box} />
+                    <input inputMode="decimal" value={rate[c.field] ?? ""} onChange={e => byWeight(c.field, e.target.value.replace(/[^\d.]/g, ""))} placeholder={`${c.cur} per g`} title="Typed here, each row gets its weight × this" style={{ ...box, display: "block", marginTop: 3 }} />
                   </td>))}
               </tr>
             </thead>
@@ -764,7 +766,7 @@ function PricePost({ rows, facts, onClose, onRun }) {
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 11.5, color: C.inkFaint }}>Already live elsewhere? Those just get the new prices.</span>
           <button disabled={!!busy} onClick={run} style={{ background: C.ink, color: "#FAF0DC", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 750, cursor: busy ? "wait" : "pointer" }}>
-            {busy ? `Working… ${Math.floor(busy)}/${rows.length}` : post.size ? `Save prices & post ${rows.length}` : `Save prices`}</button>
+            {busy ? `Working… ${stage || `${Math.floor(busy)}/${rows.length}`}` : post.size ? `Save prices & post ${rows.length}` : `Save prices`}</button>
         </div>
       </div>
     </div>
