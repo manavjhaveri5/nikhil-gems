@@ -3,6 +3,9 @@ import { C, mob, FI } from "./lmTheme.js";
 import { loadK, loadKFresh, upsertItemK, upsertVersionedItemK } from "./utils.js";
 import { EARTH_LOGO_URL, KEYS } from "./constants.js";
 import { loadLiveTrade, setTradePrice, TRADE_SITE } from "./TradeSiteApp.jsx";
+import { loadStoreFacts, loadStoreProduct, publishListingToStore } from "./StoreApp.jsx";
+
+const STORE_SITE = "https://eartheditions.co";
 
 /* Listings live in the one store the Listing Manager writes; a send stamps the
    pieces it went out with, so the next mailer can see what has already been
@@ -31,6 +34,50 @@ const OVERRIDABLE = [
   { key: "url", label: "Link" },
 ];
 
+/* A row's prices where they live, each shown as it stands and saved where it
+   belongs; only the ones changed are written. `fields` come from the composer:
+   { k, label, unit, value, note, blocked } or { info } for a line of text. */
+function PriceEditor({ fields, busy, err, onSave, onCancel }) {
+  const start = f => (f.value ? String(f.value) : "");
+  const [vals, setVals] = useState(() => Object.fromEntries(fields.filter(f => f.k).map(f => [f.k, start(f)])));
+  const [bad, setBad] = useState("");
+  const save = () => {
+    const ch = {};
+    for (const f of fields) {
+      if (!f.k || f.blocked || vals[f.k] === start(f)) continue;
+      const v = vals[f.k] === "" ? 0 : Math.round(+vals[f.k] * 100) / 100;
+      if (!(v >= 0)) { setBad(`${f.label}: type a price`); return; }
+      ch[f.k] = v;
+    }
+    if (!Object.keys(ch).length) { onCancel(); return; }
+    setBad(""); onSave(ch);
+  };
+  const first = fields.find(f => f.k && !f.blocked)?.k;
+  return (
+    <div style={{ padding: "0 8px 10px 51px", display: "grid", gap: 8 }}>
+      {fields.map((f, i) => f.info ? <div key={`i${i}`} style={{ fontSize: 10.5, color: C.inkFaint, lineHeight: 1.45 }}>{f.info}</div> : (
+        <div key={f.k}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.inkMid, marginBottom: 3 }}>{f.label} <span style={{ fontWeight: 500, color: C.inkFaint }}>· USD{f.unit ? ` per ${f.unit}` : ""}</span></div>
+          {f.blocked ? <div style={{ fontSize: 11, color: C.inkMid, lineHeight: 1.45 }}>{f.blocked}</div> : <>
+            <input type="number" min="0" step="0.01" autoFocus={f.k === first} value={vals[f.k]} placeholder="no price"
+              onChange={e => { const v = e.target.value; setVals(o => ({ ...o, [f.k]: v })); setBad(""); }}
+              onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") onCancel(); }}
+              style={{ ...FI(), fontSize: 12, padding: "5px 7px", width: "100%", boxSizing: "border-box" }} />
+            {f.note && <div style={{ fontSize: 10, color: C.inkFaint, marginTop: 2, lineHeight: 1.4 }}>{f.note}</div>}
+          </>}
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button type="button" disabled={busy} onClick={save}
+          style={{ background: C.teal, color: "#fff", border: "none", borderRadius: 6, padding: "5px 14px", fontSize: 11.5, fontWeight: 700, cursor: busy ? "default" : "pointer", opacity: busy ? .6 : 1 }}>{busy ? "Saving…" : "Save"}</button>
+        <button type="button" onClick={onCancel}
+          style={{ border: `1px solid ${C.border}`, background: "transparent", color: C.inkFaint, borderRadius: 6, padding: "5px 9px", fontSize: 11, cursor: "pointer" }}>Cancel</button>
+      </div>
+      {(bad || err) && <div style={{ fontSize: 11, color: C.red, lineHeight: 1.45 }}>{bad || err}</div>}
+    </div>
+  );
+}
+
 export default function CampaignComposer({ listings = [], onClose, showToast }) {
   const [sel, setSel] = useState(() => new Set());
   /* The in-stock banner splits the mailer: pieces marked as a deal print under
@@ -54,8 +101,11 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   const [source, setSource] = useState("listings");
   const [trade, setTrade] = useState(null); // live trade products, once asked for
   const [stockCards, setStockCards] = useState(null); // likewise the stock cards
+  const [storeMap, setStoreMap] = useState(null); // eartheditions.co's products, by listing id
   const [loadErr, setLoadErr] = useState("");
-  const [pricing, setPricing] = useState(null); // { id, value, busy, err }: the price being set on a row
+  const [pricing, setPricing] = useState(null); // { id, busy, err }: the row whose prices are open
+  // Prices saved on listings this session: the listings prop is the one handed in when the composer opened.
+  const [patched, setPatched] = useState({});
   const [brand, setBrand] = useState("Nikhil Gems");
   const [heading, setHeading] = useState("New arrivals");
   // Every mailer is the same weekly list with a new date on it, so the subject
@@ -71,7 +121,8 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
   );
   const [senderName, setSenderName] = useState("Nikhil Gems");
   const [senderEmail, setSenderEmail] = useState("");
-  const [priceMode, setPriceMode] = useState("earth");
+  // The list is trade buyers: trade prices and the trade site's pages unless another storefront is chosen.
+  const [priceMode, setPriceMode] = useState("trade");
   /* Design lives in one object so preview and the created draft can never drift
      apart — both are rendered from payloadBase() by the same server function. */
   const [design, setDesign] = useState({
@@ -133,14 +184,23 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
     })();
   }, []);
 
+  /* Where each piece's price lives, read once the composer opens: the store
+     products on eartheditions.co, the trade site's products and the stock
+     cards. The email prints those prices, and a price set here is saved to
+     them, so the email, the ERP and both sites agree. */
   useEffect(() => {
-    const fail = what => e => { setLoadErr(`Couldn't load ${what}: ${e.message}`); setSource("listings"); };
-    if (source === "trade" && !trade) { setLoadErr(""); loadLiveTrade().then(setTrade).catch(fail("the trade site")); }
-    if (source === "stock" && !stockCards) { setLoadErr(""); loadK(KEYS.stock).then(rows => setStockCards(Array.isArray(rows) ? rows : [])).catch(fail("the stock cards")); }
-  }, [source, trade, stockCards]);
-  const { pool, tradeView, stockView } = useMemo(() => {
-    const byId = new Map(listings.map(l => [String(l.id), l]));
-    const byProduct = new Map(listings.filter(l => l.platforms?.trade?.product_id).map(l => [String(l.platforms.trade.product_id), l]));
+    const fail = what => e => setLoadErr(`Couldn't load ${what}: ${e.message}`);
+    loadStoreFacts().then(setStoreMap).catch(fail("eartheditions.co's prices"));
+    loadLiveTrade().then(setTrade).catch(fail("the trade site"));
+    loadK(KEYS.stock).then(rows => setStockCards(Array.isArray(rows) ? rows : [])).catch(fail("the stock cards"));
+  }, []);
+  const UNIT = { pcs: "pc", gm: "g" };
+  const cardFacts = c => ({ id: c.id, sku: c.sku || "", price: +c.listPrice || 0, unit: c.pricingMode ? "lot" : UNIT[c.unit] || c.unit || "pc", lot: !!c.pricingMode, region: c.region || "",
+    qty: [c.qty && `${c.qty} ${c.unit || ""}`, c.qty2 && `${c.qty2} ${c.unit2 || ""}`].filter(Boolean).join(" · ") });
+  const { pool, tradeView, stockView, cardById } = useMemo(() => {
+    const base = listings.map(l => patched[l.id] ? { ...l, ...patched[l.id] } : l);
+    const byId = new Map(base.map(l => [String(l.id), l]));
+    const byProduct = new Map(base.filter(l => l.platforms?.trade?.product_id).map(l => [String(l.platforms.trade.product_id), l]));
     const tied = new Map(), only = [], view = [];
     for (const r of trade || []) {
       const t = { id: r.id, url: `${TRADE_SITE}/p/${r.id}`, price: +r.price || 0, unit: r.unit === "piece" || r.unit === "lot" ? r.unit : "kg", options: (r.variants || []).length };
@@ -152,64 +212,110 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
       only.push(item); view.push(item);
     }
     // In stock: something left on the card and not sold. A lot priced by the kilo or piece keeps its rate in Stock.
-    const UNIT = { pcs: "pc", gm: "g" };
+    const cardById = new Map((stockCards || []).map(c => [c.id, c]));
     const cards = (stockCards || []).filter(c => (+c.qty > 0 || +c.qty2 > 0) && !c.soldDate).map(c => ({
       id: `stock:${c.id}`, noListing: true, title: [c.material, c.shape].filter(Boolean).join(" ") || c.sku || "Stock card",
       material: c.material, shape: c.shape, size: c.size, sku: c.sku,
       images: [...new Set([...(Array.isArray(c.photos) ? c.photos : []), c.photo].filter(u => typeof u === "string" && /^https?:/.test(u)))],
-      _stock: { id: c.id, price: +c.listPrice || 0, unit: c.pricingMode ? "lot" : UNIT[c.unit] || c.unit || "pc", lot: !!c.pricingMode, region: c.region || "",
-        qty: [c.qty && `${c.qty} ${c.unit || ""}`, c.qty2 && `${c.qty2} ${c.unit2 || ""}`].filter(Boolean).join(" · ") },
+      _stock: cardFacts(c),
     }));
-    return { pool: [...listings.map(l => tied.get(l.id) || l), ...only, ...cards], tradeView: view, stockView: cards };
-  }, [listings, trade, stockCards]);
+    return { pool: [...base.map(l => tied.get(l.id) || l), ...only, ...cards], tradeView: view, stockView: cards, cardById };
+  }, [listings, patched, trade, stockCards]);
+  const storeOf = l => (!l.noListing && storeMap?.[l.id]) || null;
+  const cardOf = l => (!l.noListing && l.linked_stock_id && cardById.get(l.linked_stock_id)) || null;
+  // What eartheditions.co charges: the store product's live price, else the listing's own store price, else the old Shopify one.
+  const storePrice = l => +storeOf(l)?.price || +l.price_store || +l.price_shopify_earth || 0;
+  const storeLink = l => { const s = storeOf(l); return s?.status === "active" && s.handle ? `${STORE_SITE}/products/${s.handle}` : ""; };
 
-  /* Setting a price here saves it where it lives: the trade product (and the
-     listing's trade price, which a listing's sync would otherwise put back),
-     or the stock card, through the same versioned write Stock itself uses. */
-  const priceHome = l => l._stock || (source === "trade" || l.noListing ? l._trade : null);
-  const savePrice = async l => {
-    const home = priceHome(l), v = Math.round(+pricing.value * 100) / 100;
-    if (!(v >= 0) || pricing.value === "") { setPricing(p => ({ ...p, err: "Type a price" })); return; }
+  /* Setting a price saves it where it lives. A trade product or stock card
+     has one home. A listing has up to three: its store price (pushed to
+     eartheditions.co the way Listing Manager does), its trade price (on the
+     product, and on the listing, which a sync would otherwise put back) and
+     its stock card's, through the same versioned write Stock uses. */
+  const saveCard = async (id, v) => {
+    const card = ((await loadKFresh(KEYS.stock)) || []).find(c => c.id === id);
+    if (!card) throw new Error("That stock card is gone");
+    if (card.pricingMode) throw new Error("That card is priced as a lot: set it in Stock");
+    const listPrice = v ? String(v) : "";
+    await upsertVersionedItemK(KEYS.stock, { ...card, listPrice, updatedAt: new Date().toISOString() }, { prepend: false });
+    setStockCards(cs => (cs || []).map(c => c.id === id ? { ...card, listPrice } : c));
+  };
+  const saveTrade = async (id, v) => {
+    await setTradePrice(id, v);
+    setTrade(rs => (rs || []).map(r => r.id === id ? { ...r, price: v, variants: (r.variants || []).map(x => ({ ...x, price: v })) } : r));
+  };
+  const savePrices = async (l, ch) => {
     setPricing(p => ({ ...p, busy: true, err: "" }));
+    const done = [];
     try {
-      if (l._stock) {
-        const fresh = (await loadKFresh(KEYS.stock)) || [];
-        const card = fresh.find(c => c.id === home.id);
-        if (!card) throw new Error("That stock card is gone");
-        await upsertVersionedItemK(KEYS.stock, { ...card, listPrice: String(v), updatedAt: new Date().toISOString() }, { prepend: false });
-        setStockCards(cs => (cs || []).map(c => c.id === card.id ? { ...card, listPrice: String(v) } : c));
-      } else {
-        await setTradePrice(home.id, v);
-        if (!l.noListing && +l.price_trade > 0) {
-          const fresh = (await loadKFresh(LIST_KEY)) || [];
-          const row = fresh.find(x => x.id === l.id);
-          if (row) await upsertItemK(LIST_KEY, { ...row, price_trade: String(v) }, { prepend: false });
+      if (l._stock) { await saveCard(l._stock.id, ch.card); done.push("the stock card"); }
+      else if (l.noListing) { await saveTrade(l._trade.id, ch.trade); done.push("the trade site"); }
+      else {
+        const str = v => (v ? String(v) : "");
+        const patch = { ...("store" in ch ? { price_store: str(ch.store) } : {}), ...("trade" in ch ? { price_trade: str(ch.trade) } : {}) };
+        let row = null;
+        if (Object.keys(patch).length) {
+          row = ((await loadKFresh(LIST_KEY)) || []).find(x => x.id === l.id);
+          if (!row) throw new Error("That listing is gone");
+          row = { ...row, ...patch, updated_at: new Date().toISOString() };
+          await upsertItemK(LIST_KEY, row, { prepend: false });
+          setPatched(m => ({ ...m, [l.id]: { ...(m[l.id] || {}), ...patch } }));
         }
-        setTrade(rs => (rs || []).map(r => r.id === home.id ? { ...r, price: v, variants: (r.variants || []).map(x => ({ ...x, price: v })) } : r));
+        if ("store" in ch) {
+          if (storeOf(l)) {
+            await publishListingToStore(row, { syncOnly: true, override: ["price"] });
+            const sp = await loadStoreProduct(l.id).catch(() => null);
+            setStoreMap(m => ({ ...m, [l.id]: { ...(m?.[l.id] || {}), ...(sp || { price: ch.store }) } }));
+            done.push("eartheditions.co");
+          } else done.push("the listing (it isn't on eartheditions.co yet)");
+        }
+        if ("trade" in ch) { if (l._trade) { await saveTrade(l._trade.id, ch.trade); done.push("the trade site"); } else done.push("the listing's trade price"); }
+        if ("card" in ch && cardOf(l)) { await saveCard(cardOf(l).id, ch.card); done.push("its stock card"); }
       }
       setPricing(null); invalidate();
-      showToast?.(l._stock ? `✓ Stock card price set: $${v}` : `✓ Trade price set: $${v} — live on the trade site`);
-    } catch (e) { setPricing(p => ({ ...p, busy: false, err: e.message })); }
+      showToast?.(`✓ Price saved: ${done.join(", ")}`);
+    } catch (e) { setPricing(p => ({ ...p, busy: false, err: done.length ? `Saved to ${done.join(", ")} — then: ${e.message}` : e.message })); }
+  };
+
+  /* The prices a row's editor shows: a trade product's or stock card's own,
+     or a listing's three — trade first, as the list is mostly trade buyers. */
+  const blockedOptions = t => t?.options > 1 && <>It has {t.options} options with their own prices: <a href={t.url} target="_blank" rel="noreferrer" style={{ color: C.teal, fontWeight: 700 }}>price them on the trade site</a>.</>;
+  const lotNote = "Priced as a lot, by the kilo or piece: set it on the card in Stock, where the rate is kept with it.";
+  const priceFields = l => {
+    if (l._stock) return [{ k: "card", label: `📦 Stock card${l._stock.sku ? ` ${l._stock.sku}` : ""}`, unit: l._stock.unit, value: l._stock.price, note: "Saved on the stock card.", blocked: l._stock.lot && lotNote }];
+    if (l.noListing) return [{ k: "trade", label: "🤝 Trade site", unit: l._trade.unit, value: l._trade.price, note: "0 = price on request. Buyers see it straight away.", blocked: blockedOptions(l._trade) }];
+    const st = storeOf(l), c = cardOf(l), cf = c && cardFacts(c);
+    return [
+      { k: "trade", label: "🤝 Trade site", unit: l._trade?.unit, value: l._trade ? l._trade.price : +l.price_trade || 0, blocked: blockedOptions(l._trade),
+        note: l._trade ? "On the trade site: buyers see it straight away." : "Not on the trade site: kept on the listing for when it goes up." },
+      { k: "store", label: "🛒 eartheditions.co", value: storePrice(l),
+        note: st ? (st.status === "active" ? "Live on eartheditions.co." : `On eartheditions.co (${st.status}).`) + (+l.price_store > 0 ? "" : " Follows the Etsy price until you set one.") : "Not on eartheditions.co: kept on the listing." },
+      cf ? { k: "card", label: `📦 Stock card${cf.sku ? ` ${cf.sku}` : ""}`, unit: cf.unit, value: cf.price, note: [cf.qty, cf.region].filter(Boolean).join(" · ") || "Its stock card.", blocked: cf.lot && lotNote }
+        : { info: "No stock card linked: link one on the listing in Listing Manager to price it here too." },
+    ];
   };
 
   // Money shown per product depends on which storefront the mailer is for —
   // Earth Editions is wholesale/login-to-view, so "no prices" is a first-class option.
-  const priceOf = l => {
-    if (priceMode === "none") return { price: "", priceValue: null, currency: "" };
+  const priceOf = (l, mode = priceMode) => {
+    const none = { price: "", priceValue: null, currency: "" };
+    if (mode === "none") return none;
     // A trade product or stock card with no listing has one price, its own, whichever storefront is chosen.
-    const own = l._stock || (l.noListing ? l._trade : null) || (priceMode === "trade" ? l._trade : null);
-    if (own || priceMode === "trade") {
+    const own = l._stock || (l.noListing ? l._trade : null)
+      || (mode === "trade" ? l._trade || (+l.price_trade > 0 ? { price: +l.price_trade, unit: "" } : null) : null);
+    if (own || mode === "trade") {
       const v = own?.price || 0;
-      return v ? { price: `$${v.toLocaleString("en-US")} / ${own.unit}`, priceValue: v, currency: "USD" } : { price: "", priceValue: null, currency: "" };
+      return v ? { price: `$${v.toLocaleString("en-US")}${own.unit ? ` / ${own.unit}` : ""}`, priceValue: v, currency: "USD" } : none;
     }
-    const map = { earth: ["price_shopify_earth", "USD", "$"], aty: ["price_shopify_aty", "INR", "₹"], etsy: ["price_etsy", "INR", "₹"] };
-    const [field, currency, sym] = map[priceMode] || [];
+    if (mode === "earth") { const v = storePrice(l); return v ? { price: `$${v.toLocaleString("en-US")}`, priceValue: v, currency: "USD" } : none; }
+    const map = { aty: ["price_shopify_aty", "INR", "₹"], etsy: ["price_etsy", "INR", "₹"] };
+    const [field, currency, sym] = map[mode] || [];
     const v = +l[field] || 0;
-    if (!v) return { price: "", priceValue: null, currency: "" };
+    if (!v) return none;
     return { price: `${sym}${v.toLocaleString(currency === "INR" ? "en-IN" : "en-US")}`, priceValue: v, currency };
   };
-  // With trade prices the card goes to the trade site's page; otherwise that page is the last resort.
-  const shopLink = l => l.platforms?.shopify_earth?.storefront_url || l.platforms?.shopify_aty?.storefront_url || l.platforms?.etsy?.url || l.platforms?.ebay?.url || "";
+  // A card goes where its price comes from: the trade site's page with trade prices, eartheditions.co with its prices.
+  const shopLink = l => (priceMode === "earth" && storeLink(l)) || l.platforms?.shopify_earth?.storefront_url || l.platforms?.shopify_aty?.storefront_url || l.platforms?.etsy?.url || l.platforms?.ebay?.url || storeLink(l) || "";
   const linkOf = l => priceMode === "trade" ? l._trade?.url || shopLink(l) : shopLink(l) || l._trade?.url || "";
   const metaOf = l => [l.material, l.shape, l.size].filter(Boolean).join(" · ");
   const baseProduct = l => ({
@@ -383,7 +489,10 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                 const o = overrides[l.id] || {};
                 const open = editing === l.id;
                 const shot = o.image?.trim() || (l.images || [])[0] || "";
-                const home = priceHome(l);
+                const shown = priceOf(l, priceMode === "none" ? "trade" : priceMode).price;
+                const card4 = cardOf(l);
+                const detail = l._stock ? [l.sku, l._stock.qty, l._stock.region].filter(Boolean).join(" · ")
+                  : [[l.material, l.shape].filter(Boolean).join(" · ") || l.sku || "", card4 && `📦 ${card4.sku || "stock card"}`, !linkOf(l) && "no public link"].filter(Boolean).join(" · ");
                 return (
                   <div key={l.id} style={{ borderRadius: 8, background: on ? C.tealBg : "transparent", border: `1px solid ${on ? C.teal : "transparent"}` }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 8px", cursor: "pointer" }}>
@@ -393,21 +502,15 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                       : <div style={{ width: 34, height: 34, borderRadius: 6, background: C.card, flexShrink: 0 }} />}
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.title?.trim() || l.title || "Untitled"}{edited(l) && <span title="Edited for this mailer" style={{ color: C.teal }}> ✎</span>}</div>
-                      {home ? (
-                        /* Trade and stock rows: the price first, as a button that sets it, then the detail on one line. */
-                        <div style={{ fontSize: 10, color: C.inkFaint, display: "flex", alignItems: "center", gap: 6, marginTop: 2, minWidth: 0 }}>
-                          <button type="button" title={l._stock ? "The stock card's price: click to set it" : "The trade site's price: click to set it"}
-                            onClick={e => { e.preventDefault(); e.stopPropagation(); setPricing(pricing?.id === l.id ? null : { id: l.id, value: home.price ? String(home.price) : "", err: "" }); }}
-                            style={{ flexShrink: 0, border: `1px solid ${home.price ? C.border : C.teal}`, background: pricing?.id === l.id ? C.surface : "transparent", color: home.price ? C.ink : C.teal, borderRadius: 5, padding: "1px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
-                            {home.price ? `${home.options > 1 ? "from " : ""}$${home.price.toLocaleString("en-US")}/${home.unit} ✎` : "Set price"}
-                          </button>
-                          {(() => { const d = l._stock ? [l.sku, l._stock.qty, l._stock.region].filter(Boolean).join(" · ") : [l.material, l.shape].filter(Boolean).join(" · ") || l.sku || "";
-                            return <span title={d} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d}</span>; })()}
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 10, color: C.inkFaint }}>{[l.material, l.shape].filter(Boolean).join(" · ") || l.sku || ""}{!linkOf(l) && " · no public link"}
-                          {l._trade && <span style={{ color: C.teal, fontWeight: 600 }}> · Trade{l._trade.price ? ` $${l._trade.price.toLocaleString("en-US")}/${l._trade.unit}` : ""}</span>}</div>
-                      )}
+                      {/* The price this card prints, as a button that opens where it's set; then the detail on one line. */}
+                      <div style={{ fontSize: 10, color: C.inkFaint, display: "flex", alignItems: "center", gap: 6, marginTop: 2, minWidth: 0 }}>
+                        <button type="button" title="Its prices on the trade site, eartheditions.co and its stock card: click to see and set them"
+                          onClick={e => { e.preventDefault(); e.stopPropagation(); setPricing(pricing?.id === l.id ? null : { id: l.id }); }}
+                          style={{ flexShrink: 0, border: `1px solid ${shown ? C.border : "#d9a441"}`, background: pricing?.id === l.id ? C.surface : shown ? "transparent" : "#fff6e0", color: shown ? C.ink : "#8a6d1a", borderRadius: 5, padding: "1px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
+                          {shown ? `${l._trade?.options > 1 && (priceMode === "trade" || l.noListing) ? "from " : ""}${shown} ✎` : "No price · set"}
+                        </button>
+                        <span title={detail} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</span>
+                      </div>
                       {sentOf(l) && (
                         <div title={(l.campaigns || []).map(c => `${c.name} — ${sentLabel(c.sentAt)}`).join("\n")}
                           style={{ fontSize: 10, color: C.teal, fontWeight: 600 }}>
@@ -430,28 +533,9 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
                       </button>
                     )}
                   </label>
-                  {home && pricing?.id === l.id && (
-                    <div style={{ padding: "0 8px 10px 51px", display: "grid", gap: 6 }}>
-                      {l._stock?.lot ? (
-                        <div style={{ fontSize: 11, color: C.inkMid, lineHeight: 1.45 }}>This card is priced as a lot, by the kilo or piece: set it on the card in Stock, where the rate is kept with it.</div>
-                      ) : home.options > 1 ? (
-                        <div style={{ fontSize: 11, color: C.inkMid, lineHeight: 1.45 }}>It has {home.options} options with their own prices: <a href={home.url} target="_blank" rel="noreferrer" style={{ color: C.teal, fontWeight: 700 }}>price them on the trade site</a>.</div>
-                      ) : <>
-                        <label style={{ ...lab, marginBottom: 0 }}>{l._stock ? `Stock card price · USD per ${home.unit}` : `Trade price · USD per ${home.unit} · 0 = on request`}</label>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <input type="number" min="0" step="0.01" autoFocus value={pricing.value} placeholder="0.00"
-                            onChange={e => setPricing(p => ({ ...p, value: e.target.value, err: "" }))}
-                            onKeyDown={e => { if (e.key === "Enter") savePrice(l); if (e.key === "Escape") setPricing(null); }}
-                            style={{ ...FI(), fontSize: 12, padding: "5px 7px", flex: 1, minWidth: 0 }} />
-                          <button type="button" disabled={pricing.busy} onClick={() => savePrice(l)}
-                            style={{ background: C.teal, color: "#fff", border: "none", borderRadius: 6, padding: "5px 12px", fontSize: 11.5, fontWeight: 700, cursor: pricing.busy ? "default" : "pointer", opacity: pricing.busy ? .6 : 1 }}>{pricing.busy ? "Saving…" : "Save"}</button>
-                          <button type="button" onClick={() => setPricing(null)}
-                            style={{ border: `1px solid ${C.border}`, background: "transparent", color: C.inkFaint, borderRadius: 6, padding: "5px 9px", fontSize: 11, cursor: "pointer" }}>Cancel</button>
-                        </div>
-                        <div style={{ fontSize: 10, color: C.inkFaint }}>{l._stock ? "Saved on the stock card." : "Saved on the trade site, where buyers see it straight away."}</div>
-                      </>}
-                      {pricing.err && <div style={{ fontSize: 11, color: C.red }}>{pricing.err}</div>}
-                    </div>
+                  {pricing?.id === l.id && (
+                    <PriceEditor fields={priceFields(l)} busy={!!pricing.busy} err={pricing.err || ""}
+                      onSave={ch => savePrices(l, ch)} onCancel={() => setPricing(null)} />
                   )}
                   {on && open && (
                     <div style={{ padding: "2px 8px 10px", display: "grid", gap: 7 }}>
@@ -518,10 +602,10 @@ export default function CampaignComposer({ listings = [], onClose, showToast }) 
               <div>
                 <label style={lab}>Which price to print</label>
                 <select value={priceMode} onChange={e => { setPriceMode(e.target.value); invalidate(); }} style={FI()}>
-                  <option value="earth">Earth Editions ($)</option>
+                  <option value="trade">Trade site ($ per kg, lot or piece; links to the trade site)</option>
+                  <option value="earth">eartheditions.co ($; links to the store)</option>
                   <option value="aty">Atyahara (₹)</option>
                   <option value="etsy">Etsy (₹)</option>
-                  <option value="trade">Trade site ($ per kg, lot or piece; links to the trade site)</option>
                   <option value="none">Print no prices</option>
                 </select>
               </div>
