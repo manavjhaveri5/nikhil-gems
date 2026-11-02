@@ -7,7 +7,7 @@ import { requireUser, hasStoreSecret, adminClient, cronKeyOk } from "../lib/auth
  *          publish_shopify, unpublish_shopify
  */
 
-import { getEtsyAccessToken } from "../lib/etsy-auth.js";
+import { getEtsyAccessToken, etsyShop, etsyApiKey, withEtsyShop, shopKeyOf, ETSY_SHOPS } from "../lib/etsy-auth.js";
 import { createClient } from "@supabase/supabase-js";
 import { endEbayItem } from "./ebay.js";
 import { storeOrderRows } from "../lib/storeOrderRows.js";
@@ -65,9 +65,8 @@ async function cleanupReadyVideo(listing, result, platformKey) {
 }
 
 /* ── Etsy constants ────────────────────────────────────────────────────────── */
-const ETSY_SHOP_ID   = process.env.ETSY_SHOP_ID   || "21113006";
-// x-api-key must be just the keystring (API key), NOT "keystring:sharedsecret"
-const ETSY_API_KEY   = process.env.ETSY_API_KEY    || process.env.ETSY_KEYSTRING || "";
+/* The shop and its key come from the request's shop (lib/etsy-auth.js):
+   Atyahara unless the request says EarthEditions. */
 
 /* Etsy allows a few calls a second; a publish (fields, photos, video, then
    going live) can burst past that and get "Exceeded per second rate limit",
@@ -83,7 +82,7 @@ async function etsyFetch(url, opts) {
 async function etsyHeaders(json = true) {
   const token = await getEtsyAccessToken();
   return {
-    "x-api-key": ETSY_API_KEY,
+    "x-api-key": etsyApiKey(),
     "Authorization": `Bearer ${token}`,
     ...(json ? { "Content-Type": "application/json" } : {}),
   };
@@ -102,15 +101,16 @@ const ETSY_SHIPPING = {
    and the listing goes nowhere. The shop's live profiles are read once and the
    chosen id checked against them, falling back to one that does exist rather
    than to a number that used to. */
-let etsyShippingCache = null;
+const etsyShippingCache = new Map();   // per shop
 async function etsyShippingProfiles(hdrs) {
-  if (etsyShippingCache) return etsyShippingCache;
+  if (etsyShippingCache.has(etsyShop().key)) return etsyShippingCache.get(etsyShop().key);
   try {
     const { "Content-Type": _drop, ...bare } = hdrs;
-    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/shipping-profiles`, { headers: bare });
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/shipping-profiles`, { headers: bare });
     if (!r.ok) return [];
-    etsyShippingCache = ((await r.json())?.results || []).map(p => ({ id: p.shipping_profile_id, label: p.title || "" }));
-    return etsyShippingCache;
+    const live = ((await r.json())?.results || []).map(p => ({ id: p.shipping_profile_id, label: p.title || "" }));
+    etsyShippingCache.set(etsyShop().key, live);
+    return live;
   } catch { return []; }
 }
 const USA_PROFILE_RE = /\b(usa|u\.s\.a|domestic|united states)\b/i;
@@ -129,26 +129,35 @@ async function resolveShippingProfile(wanted, hdrs, { preferUsa = false } = {}) 
    goes out — but the number is also what quietly becomes somebody else's
    section. Where a listing names the section it wants, the name is looked up
    against the shop and wins over any id carried along with it. */
-let etsySectionCache = null;
+const etsySectionCache = new Map();   // per shop
 async function resolveSectionId(listing, hdrs) {
   const wantName = String(listing.etsy_section_name || "").trim();
   if (!wantName) return null;
   try {
-    if (!etsySectionCache) {
+    if (!etsySectionCache.has(etsyShop().key)) {
       const { "Content-Type": _drop, ...bare } = hdrs;
-      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/sections`, { headers: bare });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/sections`, { headers: bare });
       if (!r.ok) return null;
-      etsySectionCache = ((await r.json())?.results || []).map(x => ({ id: x.shop_section_id, title: decodeHtmlish(x.title || "") }));
+      etsySectionCache.set(etsyShop().key, ((await r.json())?.results || []).map(x => ({ id: x.shop_section_id, title: decodeHtmlish(x.title || "") })));
     }
     const norm = t => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    const hit = etsySectionCache.find(x => norm(x.title) === norm(wantName))
-      || etsySectionCache.find(x => norm(x.title).startsWith(norm(wantName)));
+    const sections = etsySectionCache.get(etsyShop().key);
+    const hit = sections.find(x => norm(x.title) === norm(wantName))
+      || sections.find(x => norm(x.title).startsWith(norm(wantName)));
     return hit ? hit.id : null;
   } catch { return null; }
 }
 // Etsy hands section titles back HTML-escaped — "Collector&#39;s Corner".
 const decodeHtmlish = t => String(t).replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g, "&");
-const ETSY_RETURN_POLICY = 1290534528477; // 14 days, no exchanges
+const ETSY_RETURN_POLICY = 1290534528477; // 14 days, no exchanges — Atyahara's
+// Any other shop: the first return policy it has set up on Etsy.
+async function firstReturnPolicy() {
+  try {
+    const { "Content-Type": _drop, ...bare } = await etsyHeaders();
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/policies/return`, { headers: bare });
+    return r.ok ? ((await r.json())?.results || [])[0]?.return_policy_id || null : null;
+  } catch { return null; }
+}
 
 // Section ID map: shape/type → Etsy section
 const ETSY_SECTIONS = {
@@ -279,7 +288,7 @@ async function etsyTaxonomyProperties(taxonomyId, hdrs) {
   try {
     const r = await fetch(
       `https://openapi.etsy.com/v3/application/seller-taxonomy/nodes/${taxonomyId}/properties`,
-      { headers: { "x-api-key": ETSY_API_KEY, Accept: "application/json" } }
+      { headers: { "x-api-key": etsyApiKey(), Accept: "application/json" } }
     );
     if (!r.ok) return [];
     return (await r.json())?.results || [];
@@ -383,7 +392,7 @@ async function researchEtsy(listing) {
   if (!r.ok) throw new Error(`Etsy search: ${d.error || r.status}`);
   const mine = researchWords(`${listing.title} ${stone} ${shape}`);
   const ourMm = sizeMm(listing.size) || sizeMm(listing.title);
-  const scored = (d.results || []).filter(x => String(x.shop_id) !== String(ETSY_SHOP_ID)).map(x => {
+  const scored = (d.results || []).filter(x => String(x.shop_id) !== String(etsyShop().id)).map(x => {
     const theirs = researchWords(x.title);
     const shared = mine.filter(w => theirs.includes(w));
     const mm = sizeMm(x.title);
@@ -467,7 +476,7 @@ async function etsyReadinessStates(hdrs) {
   try {
     const { "Content-Type": _drop, ...bare } = hdrs;
     const r = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/readiness-state-definitions`,
+      `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/readiness-state-definitions`,
       { headers: bare }
     );
     if (!r.ok) return [];
@@ -500,7 +509,7 @@ async function pickReadinessState(listing, hdrs) {
   try {
     const { "Content-Type": _drop, ...bare } = hdrs;
     const sample = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=1`,
+      `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings?state=active&limit=1`,
       { headers: bare }
     );
     const rid = (await sample.json())?.results?.[0]?.readiness_state_id;
@@ -555,7 +564,7 @@ async function uploadEtsyImage(listingId, imgUrl, rank, altText, authHdrs) {
       form.append("overwrite", "false");
       form.append("alt_text", (altText || "").slice(0, 250));
       const r = await fetch(
-        `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`,
+        `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}/images`,
         { method: "POST", headers: bare, body: form }
       );
       if (r.ok) return { ok: true };
@@ -585,7 +594,7 @@ async function uploadEtsyVideo(listingId, videoUrl, authHdrs, name = "video") {
     form.append("name", String(name || "video").slice(0, 70));
     const { "Content-Type": _ct, ...bare } = authHdrs;
     const r = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/videos`,
+      `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}/videos`,
       { method: "POST", headers: bare, body: form }
     );
     if (!r.ok) {
@@ -634,7 +643,7 @@ async function deleteEtsyImage(listingId, imageId, authHdrs) {
   const { "Content-Type": _ct, ...bare } = authHdrs;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}/images/${imageId}`, { method: "DELETE", headers: bare });
       if (r.ok || r.status === 404) return { ok: true };   // gone is gone
       if (r.status !== 429 && r.status < 500) {
         const d = await r.json().catch(() => ({}));
@@ -662,7 +671,7 @@ async function deleteEtsyVideo(listingId, videoId, authHdrs) {
   try {
     const { "Content-Type": _ct, ...bare } = authHdrs;
     const r = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/videos/${videoId}`,
+      `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}/videos/${videoId}`,
       { method: "DELETE", headers: bare }
     );
     return r.ok || r.status === 404;
@@ -735,7 +744,7 @@ export const stripWarehouseNote = t => String(t || "").replace(/\n*\s*Please not
 async function activateEtsyListing(listingId, readinessStateId = null) {
   const hdrs = await etsyHeaders();
   const body = { state: "active", ...(readinessStateId ? { readiness_state_id: readinessStateId } : {}) };
-  let r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`,
+  let r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}`,
     { method: "PATCH", headers: hdrs, body: JSON.stringify(body) });
   const first = r.ok ? null : await r.clone().json().catch(() => ({}));
   if (!r.ok) {
@@ -854,10 +863,12 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   const etsyDesc  = withStandLine(stripWarehouseNote(ai?.etsy_description || listing.description || title), "etsy", title);
   const etsyTags  = curatedTags(listing.tags, ai?.etsy_tags).slice(0, 13);
 
-  const sectionId      = listing.etsy_section_id   || ETSY_SECTIONS[shape] || ETSY_SECTIONS[productType] || null;
+  // The numbered sections and the return policy below are Atyahara's; another shop goes by section name and its own policy.
+  const own = etsyShop().key === "atyahara";
+  const sectionId      = listing.etsy_section_id   || (own ? ETSY_SECTIONS[shape] || ETSY_SECTIONS[productType] : null) || null;
   const taxonomyId     = listing.etsy_taxonomy_id  || ETSY_TAXONOMY[productType] || ETSY_TAXONOMY.default;
   const wantedShipping = listing.etsy_shipping_profile_id || etsyShippingProfile(price_etsy_usd || (price_etsy / 84));
-  const returnPolicyId = listing.etsy_return_policy_id    || ETSY_RETURN_POLICY;
+  const returnPolicyId = listing.etsy_return_policy_id    || (own ? ETSY_RETURN_POLICY : await firstReturnPolicy());
   const quantity       = type === "unique" ? 1 : Math.max(1, +qty || 1);
 
   const dims   = listingDimensions(listing);
@@ -903,7 +914,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
   const readinessId = await pickReadinessState(listing, hdrs);
   if (readinessId) payload.readiness_state_id = readinessId;
 
-  const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings`, {
+  const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings`, {
     method: "POST", headers: hdrs, body: JSON.stringify(payload),
   });
 
@@ -962,7 +973,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
     // Try shop-scoped PATCH first (more permissive for drafts), then global
     let activateR = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`,
+      `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}`,
       { method: "PATCH", headers: hdrs, body: JSON.stringify(activateBody) }
     );
     if (!activateR.ok) {
@@ -1123,7 +1134,7 @@ async function updateEtsyListing(listingId, listing, ai, { forcePhotos = false }
   const existingStatus = listing.platforms?.etsy?.status || "draft";
 
   // Try shop-scoped endpoint first (works for both draft + active listings)
-  let r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings/${listingId}`, {
+  let r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}`, {
     method: "PATCH", headers: hdrs, body: JSON.stringify(patchBody),
   });
 
@@ -1625,7 +1636,28 @@ async function unpublishShopify(store, token, productId) {
 }
 
 /* ── Main handler ──────────────────────────────────────────────────────────── */
-export default async function handler(req, res) {
+/* A request for another Etsy shop runs in that shop's context, and the
+   listing it carries is shown to the code below as if that shop were Etsy:
+   its own entry (platforms.etsy_ee) stands in for platforms.etsy, and the ids
+   that only mean something on Atyahara — its shipping profile, return policy,
+   section number, processing profile — are left off, so the shop's own are
+   used. The browser files the result back under the shop's own entry. */
+const ATYAHARA_ONLY_IDS = ["etsy_shipping_profile_id", "etsy_return_policy_id", "etsy_section_id", "etsy_readiness_state_id"];
+function asShopListing(listing, shop) {
+  if (!listing || typeof listing !== "object") return listing;
+  const out = { ...listing, platforms: { ...(listing.platforms || {}), etsy: listing.platforms?.[shop.platform] || {} } };
+  for (const k of ATYAHARA_ONLY_IDS) delete out[k];
+  return out;
+}
+
+export default function handler(req, res) {
+  if (typeof req.body === "string") { try { req.body = JSON.parse(req.body); } catch {} }
+  const shop = ETSY_SHOPS[shopKeyOf(req)] || ETSY_SHOPS.atyahara;
+  if (shop.key !== "atyahara" && req.body?.listing) req.body = { ...req.body, listing: asShopListing(req.body.listing, shop) };
+  return withEtsyShop(shop.key, () => listingHandler(req, res));
+}
+
+async function listingHandler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -1691,7 +1723,7 @@ export default async function handler(req, res) {
           let offset = 0;
           while (true) {
             const r = await fetch(
-              `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}&includes=Images`,
+              `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings?state=${state}&limit=100&offset=${offset}&includes=Images`,
               { headers: hdrs }
             );
             const d = await r.json();
@@ -1749,7 +1781,7 @@ export default async function handler(req, res) {
           let offset = 0;
           while (true) {
             const r = await fetch(
-              `https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}`,
+              `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings?state=${state}&limit=100&offset=${offset}`,
               { headers: hdrs }
             );
             const d = await r.json();
@@ -1847,8 +1879,8 @@ export default async function handler(req, res) {
     try {
       const hdrs = await etsyHeaders(false); // no Content-Type for GETs
       const [spResp, rpResp, readinessProfiles] = await Promise.all([
-        fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/shipping-profiles`, { headers: hdrs }),
-        fetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/return-policies`, { headers: hdrs }),
+        fetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/shipping-profiles`, { headers: hdrs }),
+        fetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/return-policies`, { headers: hdrs }),
         etsyReadinessStates(hdrs),
       ]);
       const [spData, rpData] = await Promise.all([spResp.json(), rpResp.json()]);
@@ -1897,7 +1929,7 @@ export default async function handler(req, res) {
     const hdrs = await etsyHeaders(false);
     const ids = [];
     for (let offset = 0; ; offset += 100) {
-      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=active&limit=100&offset=${offset}`, { headers: hdrs });
+      const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings?state=active&limit=100&offset=${offset}`, { headers: hdrs });
       const d = await r.json();
       if (!r.ok) return res.status(502).json({ error: d?.error || `Etsy ${r.status}` });
       ids.push(...(d.results || []).map(l => String(l.listing_id)));
@@ -1997,7 +2029,7 @@ export default async function handler(req, res) {
         const hdrs = await etsyHeaders(false);
         search: for (const state of ["active", "draft", "inactive"]) {
           for (let offset = 0; offset < 300; offset += 100) {
-            const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${ETSY_SHOP_ID}/listings?state=${state}&limit=100&offset=${offset}&sort_on=created&sort_order=desc`, { headers: hdrs });
+            const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings?state=${state}&limit=100&offset=${offset}&sort_on=created&sort_order=desc`, { headers: hdrs });
             if (!r.ok) break;
             const d = await r.json().catch(() => ({}));
             /* A SKU the ERP made from this listing's own id belongs to this piece

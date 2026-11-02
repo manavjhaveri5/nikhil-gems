@@ -59,7 +59,7 @@ const dealsKeyFor = store => store === "atyahara" ? "ng-deals-atyahara" : "ng-de
 const platformUrls = (pkey, ps = {}) => {
   const id = ps.listing_id || ps.product_id || "";
   if (!id) return {};
-  if (pkey === "etsy") return { live: ps.url || `https://www.etsy.com/listing/${id}` };
+  if (pkey === "etsy" || pkey === "etsy_ee") return { live: ps.url || `https://www.etsy.com/listing/${id}` };
   if (pkey === "ebay") return { live: ps.url || `https://www.ebay.com/itm/${id}` };
   return { live: ps.storefront_url || "", admin: ps.url || "" };
 };
@@ -793,12 +793,19 @@ const reconnectEtsy = async () => {
   await fetch("/api/etsy-auth?action=invalidate").catch(() => {});
   window.open("/api/etsy-auth?action=start", "_blank");
 };
+// The EarthEditions shop signs in on its own Etsy account; Atyahara's login is left alone.
+const connectEtsyEE = async () => {
+  await fetch("/api/etsy-auth?action=invalidate&shop=earth").catch(() => {});
+  window.open("/api/etsy-auth?action=start&shop=earth", "_blank");
+};
 
 const needsEtsyReconnect = msg => /reconnect|permission|transactions_w|scope|forbidden|re-?authori/i.test(String(msg || ""));
 
 /* ─── platform config ────────────────────────────────────────────────────── */
 const PLATFORMS = [
   { key:"etsy",          label:"Etsy",         icon:"🏷️", color:"#F56400", priceField:"price_etsy",         currency:"INR" },
+  // The second Etsy shop, on its own account (lib/etsy-auth.js). Same Etsy price.
+  { key:"etsy_ee",       label:"Etsy · EE",    icon:"🏷️", color:"#9C3D0A", priceField:"price_etsy",         currency:"INR" },
   { key:"shopify_earth", label:"Earth Ed.",    icon:"🌍", color:"#2A6845", priceField:"price_shopify_earth", currency:"USD", legacy:true },
   { key:"shopify_aty",   label:"Atyahara",     icon:"💫", color:"#6B3FA0", priceField:"price_shopify_aty",  currency:"INR" },
   { key:"ebay",          label:"eBay",         icon:"🔨", color:"#0064D2", priceField:"price_ebay",          currency:"USD" },
@@ -7268,6 +7275,11 @@ function EtsyLiveView({ onCrossPost }) {
             title="Re-authenticate with Etsy (needed after scope changes)">
             🔑 Reconnect Etsy
           </button>
+          <button onClick={connectEtsyEE} style={{background:"none",border:"1px solid #9C3D0A60",color:"#9C3D0A",
+            borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}
+            title="Sign in to the EarthEditions Etsy shop (its own Etsy account)">
+            🔑 Connect EarthEditions
+          </button>
           <button onClick={()=>fetchAll(false, true)} style={{background:"none",border:"1px solid #F5640060",color:"#F56400",
             borderRadius:7,padding:"7px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}
             title="Full resync — re-pulls every order to catch status changes">
@@ -10144,7 +10156,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   const linkedTo = (l, pkey) => {
     const pd = l.platforms?.[pkey];
     if (!pd || pd.status === "deleted" || pd.linked_only) return false;
-    if (pkey === "etsy") return !!pd.listing_id;
+    if (pkey === "etsy" || pkey === "etsy_ee") return !!pd.listing_id;
     if (pkey === "ebay") return !!pd.item_id;
     return !!pd.product_id;
   };
@@ -10385,7 +10397,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     } catch (e) { console.warn("publish: could not re-read platform ids", e); }
     // Only on the first trip to Etsy: once the listing exists, a re-sync
     // shouldn't stop to ask about fields the seller has already left blank.
-    if (pkey === "etsy" && allowCreate && !listing.platforms?.etsy?.listing_id) {
+    if ((pkey === "etsy" || pkey === "etsy_ee") && allowCreate && !listing.platforms?.[pkey]?.listing_id) {
       const gaps = etsyGaps(listing);
       if (gaps.length && !confirm(
         `This listing publishes to Etsy with these fields empty:\n\n• ${gaps.join("\n• ")}\n\n`
@@ -10394,7 +10406,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     }
     // Apply per-platform title/description overrides into _ai so the API picks them up
     const ai = { ...(listing._ai || {}) };
-    if (pkey === "etsy") {
+    if (pkey === "etsy" || pkey === "etsy_ee") {
       if (listing.etsy_title)       ai.etsy_title       = listing.etsy_title;
       if (listing.etsy_description) ai.etsy_description = listing.etsy_description;
     } else if (pkey === "shopify_aty" || pkey === "shopify_earth") {
@@ -10479,15 +10491,16 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       if (d.videoWarning) showToast(`⚠ eBay video: ${d.videoWarning}`);
       result = { item_id: d.itemId, url: d.url || `https://www.ebay.com/itm/${d.itemId}` };
     } else {
-      let action, storeKey;
+      let action, storeKey, etsyShop;
       if (pkey === "etsy")             { action = "publish_etsy"; }
+      else if (pkey === "etsy_ee")     { action = "publish_etsy"; etsyShop = "earth"; }
       else if (pkey === "shopify_aty") { action = "publish_shopify"; storeKey = "atyahara"; }
       else if (pkey === "shopify_earth"){ action = "publish_shopify"; storeKey = "earth"; }
       else throw new Error(`Platform ${pkey} not supported`);
 
       const r = await fetch("/api/listing-manager", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, sync_only: syncOnly || queueIt, allow_create: allowCreate || queueIt, force_photos: forcePhotos }),
+        body: JSON.stringify({ action, listing: await withShopifyCreds({ ...listing, sku: listingMarketplaceSku(listing) }, storeKey), store_key: storeKey, etsy_shop: etsyShop, sync_only: syncOnly || queueIt, allow_create: allowCreate || queueIt, force_photos: forcePhotos }),
       });
       const d = await lmJson(r);
       /* A failure can come after the listing was made (Etsy kept it a draft):
@@ -10667,8 +10680,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
   /* unpublish */
   const handleUnpublish = async (listing, pkey) => {
-    let action, storeKey;
+    let action, storeKey, etsyShop;
     if (pkey === "etsy")             { action = "unpublish_etsy"; }
+    else if (pkey === "etsy_ee")     { action = "unpublish_etsy"; etsyShop = "earth"; }
     else if (pkey === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
     else if (pkey === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
     else if (pkey === "store") {
@@ -10695,7 +10709,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
     const r = await fetch("/api/listing-manager", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey }),
+      body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey, etsy_shop: etsyShop }),
     });
     const d = await lmJson(r);
     if (!d.ok) throw new Error(d.error || "Failed");

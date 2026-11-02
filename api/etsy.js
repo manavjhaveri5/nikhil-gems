@@ -1,12 +1,17 @@
 import { requireUser, hasStoreSecret } from "../lib/auth.js";
-import { getEtsyAccessToken, etsyAuthHandler } from "../lib/etsy-auth.js";
+import { getEtsyAccessToken, etsyAuthHandler, etsyShop, etsyApiKey, withEtsyShop, shopKeyOf } from "../lib/etsy-auth.js";
 
 export const maxDuration = 45; // Vercel Pro: allow up to 45s for multi-page listing fetches
 
-export default async function handler(req, res) {
+// Every request is for one Etsy shop (?shop= / X-Etsy-Shop); Atyahara unless it says otherwise.
+export default function handler(req, res) {
+  return withEtsyShop(shopKeyOf(req), () => etsyHandler(req, res));
+}
+
+async function etsyHandler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Etsy-Token");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Etsy-Token, X-Etsy-Shop");
   if (req.method === "OPTIONS") return res.status(200).end();
   // /api/etsy-auth is rewritten here (vercel.json) so the Etsy OAuth redirect URI and
   // every existing /api/etsy-auth?action=… caller keep working, on one function
@@ -25,17 +30,15 @@ export default async function handler(req, res) {
   if (!(await requireUser(req, res))) return;
 
   // x-api-key must be keystring:sharedsecret for Etsy API v3
-  const key = process.env.ETSY_API_KEY ||
-    (process.env.ETSY_KEYSTRING && process.env.ETSY_SHARED_SECRET
-      ? `${process.env.ETSY_KEYSTRING}:${process.env.ETSY_SHARED_SECRET}`
-      : process.env.ETSY_KEYSTRING);
+  const key = etsyApiKey();
 
   // Etsy token: prefer client-provided (frontend manages refresh lifecycle),
   // fall back to the stored one. Authorization carries the ERP session, not Etsy's.
-  const clientToken = req.headers["x-etsy-token"] || null;
+  // The browser only ever holds Atyahara's token, so another shop always uses its stored login.
+  const clientToken = etsyShop().key === "atyahara" ? req.headers["x-etsy-token"] || null : null;
   const token = clientToken || await getEtsyAccessToken();
 
-  const defaultShopId = process.env.ETSY_SHOP_ID;
+  const defaultShopId = etsyShop().id;
 
   const readJsonish = async response => {
     const text = await response.text();
