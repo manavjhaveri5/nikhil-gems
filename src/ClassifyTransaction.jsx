@@ -1,6 +1,6 @@
 import { useState, useEffect, forwardRef, useImperativeHandle } from "react";
 import { C, FI, Field } from "./ui.jsx";
-import { mob, uid, fmtDate } from "./utils.js";
+import { mob, uid, fmtDate, loadK } from "./utils.js";
 import { aiSuggest } from "./classifyLearner.js";
 
 // Words that say nothing about WHICH vendor this is. Nearly every supplier here is
@@ -153,6 +153,23 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
   const [showSettledInter, setShowSettledInter] = useState(false);
   const [selectedInvIds, setSelectedInvIds] = useState(() => new Set(txn.classifiedRef?.invoiceIds || (txn.classifiedRef?.invoiceId ? [txn.classifiedRef.invoiceId] : [])));
   const [linkedInvId, setLinkedInvId] = useState(txn.classifiedRef?.linkedInvoiceId || "");
+  // Shows an expense can be booked against (hotels, flights, booth…): it then counts in that show's Costs.
+  const [shows, setShows] = useState([]);
+  const [showId, setShowId] = useState(txn.classifiedRef?.showId || "");
+  useEffect(() => {
+    if (company !== "ng") return;
+    loadK("ng-shows-v1").then(v => {
+      const list = (Array.isArray(v) ? v : []).filter(s => s?.id && s.name && s.startDate && !(s.name === "New Show" && !s.city));
+      setShows(list);
+      if (txn.classifiedRef?.showId) return;
+      // Pre-pick only when the narration names the show's city or the show itself.
+      const text = `${txn.payee || ""} ${txn.notes || ""} ${txn.bankRemarks || ""}`.toLowerCase();
+      const hits = list.filter(s => [s.city?.split(",")[0], s.name?.split(" ")[0]].some(w => w && w.length > 3 && text.includes(w.toLowerCase())));
+      const near = hits.sort((a, b) => Math.abs(new Date(a.startDate) - new Date(txn.date)) - Math.abs(new Date(b.startDate) - new Date(txn.date)))[0];
+      if (near) setShowId(near.id);
+    }).catch(() => {});
+  }, [company]);
+  const showChoices = [...shows].sort((a, b) => Math.abs(new Date(a.startDate) - new Date(txn.date || Date.now())) - Math.abs(new Date(b.startDate) - new Date(txn.date || Date.now())));
   const [recvDiffMode, setRecvDiffMode] = useState(txn.classifiedRef?.differenceMode || "advance");
   const [recvDiffTouched, setRecvDiffTouched] = useState(!!txn.classifiedRef?.differenceMode);
   const [convOtherAcct, setConvOtherAcct] = useState(txn.classifiedRef?.convOtherAccountId || "");
@@ -508,7 +525,8 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
       if (expCat === "Other" && otherCat.trim() && !expenseCats.includes(cat) && !customCats.includes(cat)) {
         try { await onAddCustomCat?.(cat); } catch {}
       }
-      classifiedRef = { cat, party: expParty, ...(linkedInvId && { linkedInvoiceId: linkedInvId }) };
+      const show = shows.find(s => s.id === showId);
+      classifiedRef = { cat, party: expParty, ...(linkedInvId && { linkedInvoiceId: linkedInvId }), ...(show && { showId: show.id, showName: `${show.name} ${String(show.startDate).slice(0, 4)}` }) };
       sideEffects.newExpense = { id: "exp-" + uid(), date: txn.date, cat, party: expParty, amount: txnAmt, currency: cur, notes: expNotes, payFromAccount: txn.accountFrom, createdAt: new Date().toISOString(), ledgerTxnId: txn.id };
       // The Party / Vendor you typed also becomes the transaction's payee (keeping the
       // original bank narration as rawPayee so matching still works).
@@ -920,6 +938,15 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, gap: 10 }}><span style={{ color: C.inkFaint }}>Out of {accounts.find(a => a.id === (isDebit ? convThisAcctId : convOtherAcct))?.name}</span><b style={{ color: C.red }}>− {moneyText(convSrcAmt, convSrcCur)}</b></div>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span style={{ color: C.inkFaint }}>Into {accounts.find(a => a.id === (isDebit ? convOtherAcct : convThisAcctId))?.name}</span><b style={{ color: C.green }}>+ {moneyText(convDstAmt, convDstCur)}</b></div>
           </div>}
+        </div>}
+        {classType === "expense" && shows.length > 0 && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
+          <Field label="Link to show (optional)">
+            <select value={showId} onChange={e => setShowId(e.target.value)} style={SI}>
+              <option value="">- Not for a show -</option>
+              {showChoices.map(s => <option key={s.id} value={s.id}>{s.name} · {fmtDate(s.startDate)}{s.city ? ` · ${s.city}` : ""}</option>)}
+            </select>
+          </Field>
+          <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 6 }}>Hotels, flights, booth… it then shows in that show's Costs. Nearest shows to this date first.</div>
         </div>}
         {(classType === "expense" || classType === "vendor_bill") && invoices.length > 0 && <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}><Field label="Link to Invoice (optional)"><select value={linkedInvId} onChange={e => setLinkedInvId(e.target.value)} style={SI}><option value="">- Not linked to an invoice -</option>{invoices.map(inv => <option key={inv.id} value={inv.id}>{inv.invNo || inv.number || "Invoice"} · {fmtDate(inv.date)}{inv.totalAmt ? ` · ${inv.currency || "$"} ${(+inv.totalAmt).toLocaleString()}` : ""}</option>)}</select></Field></div>}
         <datalist id="acct-class-vendors">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist>

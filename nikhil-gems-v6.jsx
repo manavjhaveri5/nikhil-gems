@@ -19278,8 +19278,11 @@ function ShowsApp({onHome,isAdmin=true}){
   const past=sorted.filter(s=>(s.endDate||s.startDate)<todayStr);
 
   // Helper: all handler props for ShowCard (avoids repeating twice)
+  // Ledger payments classified against a show (hotels, flights…) count as its costs.
+  const [ledgerTx,setLedgerTx]=useState([]);
+  useEffect(()=>{loadK("ng-fin-txns-v1").then(v=>setLedgerTx(Array.isArray(v)?v:[])).catch(()=>{});},[]);
   const mkCardProps=(show)=>({
-    isAdmin,allShows:shows,
+    isAdmin,allShows:shows,ledgerCosts:ledgerTx.filter(t=>t?.classifiedRef?.showId===show.id&&t.type==="debit"),
     onToggleCheck:toggleCheck,onEditCheckTask:editCheckTask,
     onAddCheckItem:addCheckItem,onDelCheckItem:delCheckItem,
     onUpdateShipment:updateShipment,onAddShipment:addShipment,onDelShipment:delShipment,
@@ -19534,7 +19537,7 @@ const itemBackFromShow=(s,show,all)=>{
   if(String(s.returnedFromShow||"").trim().toLowerCase()!==String(show.name||"").trim().toLowerCase())return false;
   const pick=showReturnedFrom(all,show.name,s.returnedAt);return !pick||pick.id===show.id;};
 
-function ShowCard({show,allShows=[],isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onPatchShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],ngBuyers=[],ngInvoices=[],onSaveShowInvoice,onDelShowInvoice,onRefreshShowInvoices,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
+function ShowCard({show,allShows=[],ledgerCosts=[],isDetail=false,isAdmin=true,onOpen=()=>{},onToggleCheck,onEditCheckTask,onAddCheckItem,onDelCheckItem,onUpdateShipment,onAddShipment,onDelShipment,onUpdateShow,onPatchShow,onAddFile,onDelFile,onRenameFile,onSyncToCalendar,onDelete,stock=[],purchases=[],onAddBagItem,onUpdateBagItem,onRemoveBagItem,onMarkShowItemSold,onRemoveShowItem,onPatchStockItem,onPatchStockItems,onAddDailySale,onUpdateDailySale,onDelDailySale,onAddShowExpense,onDelShowExpense,onAddShowPhoto,onDelShowPhoto,onUpdateShowPhotoCaption,onAddJournalEntry,onDelJournalEntry,onCreatePOFromBuyingPlan,showInvoices=[],showInvCfg,showCustomers=[],ngBuyers=[],ngInvoices=[],onSaveShowInvoice,onDelShowInvoice,onRefreshShowInvoices,onSaveShowInvCfg,onSaveShowCustomer,onSellStock,onRestoreStock,onToast}){
   const t=useT();
   const todayStr=today();
   const daysTo=Math.round((new Date(show.startDate)-new Date(todayStr))/(1000*60*60*24));
@@ -20966,7 +20969,8 @@ thead{display:table-header-group;}
     w.document.close();
   };
   const dailySales=show.dailySales||[];
-  const showExpenses=show.showExpenses||[];
+  // The show's own cost entries, plus Ledger payments linked to it (read-only here).
+  const showExpenses=[...(show.showExpenses||[]),...ledgerCosts.map(t=>({id:"led-"+t.id,ledgerTxnId:t.id,category:t.classifiedRef?.cat||t.category||"Expense",date:t.date||"",amount:String(t.amount||0),currency:t.currency||"INR",notes:[t.classifiedRef?.party||t.payee,t.notes].filter(Boolean).join(" · ")}))];
   const showPhotos=show.showPhotos||[];
   const journalEntries=show.journalEntries||[];
 
@@ -22961,10 +22965,10 @@ thead{display:table-header-group;}
                     </div>
                     {exp.notes&&<div style={{fontSize:11,color:C.inkMid,marginTop:2,whiteSpace:"pre-wrap"}}>{exp.notes}</div>}
                   </div>
-                  <button onClick={e=>{e.stopPropagation();
+                  {exp.ledgerTxnId?<span title="Classified in the Ledger against this show — change or unlink it there" style={{fontSize:10,fontWeight:700,color:C.inkMid,background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"1px 7px",flexShrink:0,whiteSpace:"nowrap"}}>📒 Ledger</span>:<button onClick={e=>{e.stopPropagation();
                     // A shipment's freight: the shipment keeps its amount and shows it isn't in Costs.
                     if(exp.shipmentId&&onPatchShow){if(!confirm("This is a shipment's freight — remove it from Costs?"))return;onPatchShow(show.id,s=>({showExpenses:(s.showExpenses||[]).filter(x=>x.id!==exp.id),shipments:(s.shipments||[]).map(sh=>sh.expenseId===exp.id?{...sh,expenseId:""}:sh)}));return;}
-                    onDelShowExpense(show.id,exp.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0,flexShrink:0}}>&times;</button>
+                    onDelShowExpense(show.id,exp.id);}} style={{background:"none",border:"none",cursor:"pointer",color:C.inkFaint,fontSize:13,padding:0,flexShrink:0}}>&times;</button>}
                 </div>
               ))}
               {showExpenses.length>0&&(
