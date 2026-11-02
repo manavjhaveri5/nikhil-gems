@@ -183,6 +183,22 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
     return { cat: expenseCats.includes("Other") ? "Other" : (expenseCats[0] || ""), specify: hint.length <= 24 ? titleCase(hint) : "" };
   })();
   const [expCat, setExpCat] = useState(guessedCat.cat);
+  // Why the form starts on this category, in words — shown under the picker until it is changed.
+  const catReason = (() => {
+    const pct = n => `${Math.round((+n || 0) * 100)}%`;
+    if (L && L.classifiedAs === "expense" && L.cat) {
+      const ex = (L.examples || []).map(e => `“${e.payee}”${e.ts ? ` (${new Date(e.ts).toLocaleDateString("en-IN", { day: "numeric", month: "short" })})` : ""}`).join(", ");
+      return { cat: guessedCat.cat, text: `From your history: ${L.count} similar payment${L.count === 1 ? "" : "s"} ${L.count === 1 ? "was" : "were"} classified ${L.cat}${ex ? ` — e.g. ${ex}` : ""}. ${pct(L.confidence)} of the close matches agree.` };
+    }
+    if (txn.classifiedRef?.cat) return { cat: guessedCat.cat, text: "This payment was classified this way before." };
+    const n = norm(txn.category || "");
+    if (txn.category && n === guessedCat.cat && n !== "Other")
+      return { cat: guessedCat.cat, text: txn.source === "telegram-bot" ? `Stock Boy set this when it read the bank SMS${txn.notes ? `: “${String(txn.notes).slice(0, 90)}”` : ""}.` : "This category came with the entry when it was imported." };
+    for (const [label, v] of [["notes", txn.notes], ["payee", txn.payee]]) {
+      if (v && norm(String(v).trim()) === guessedCat.cat && guessedCat.cat !== "Other") return { cat: guessedCat.cat, text: `The ${label} says “${String(v).trim()}”.` };
+    }
+    return null;
+  })();
   // Free-text sub-category under "Other" (e.g. "Milk"/"Food"). Saved as the real category but kept
   // out of the main picker; remembered for next time.
   const [otherCat, setOtherCat] = useState(guessedCat.specify);
@@ -693,7 +709,14 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 20 }}>{types.map(t => optionBtn(...t))}</div>
         {classType === "expense" && <div style={{ display: "grid", gap: 12 }}>
           {cardSpendAccount && <div style={{ padding: "9px 11px", background: C.tealBg, border: `1px solid ${C.teal}55`, borderRadius: 8, fontSize: 12, color: C.inkMid }}>Paid using <strong>{cardSpendAccount.name}</strong>. This expense will increase that card's amount due.</div>}
-          <Field label="Category"><CategoryPicker /></Field>
+          <Field label="Category"><CategoryPicker />
+            {(() => {
+              // The AI's reason wins once its suggestion is on the form; otherwise the starting reason, until changed.
+              const fromAi = aiSug && (aiAutoApplied || aiApplied) && aiSug.classifiedAs === "expense" && aiSug.why && (norm(aiSug.cat) === expCat || aiSug.cat === otherCat);
+              const r = fromAi ? { text: `AI: ${aiSug.why}` } : (catReason && catReason.cat === expCat ? catReason : null);
+              return r ? <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 6, lineHeight: 1.45 }}><span style={{ fontWeight: 800, color: C.inkFaint }}>Why: </span>{r.text}</div> : null;
+            })()}
+          </Field>
           {expCat === "Other" && (
             <Field label="Specify (optional)">
               <input value={otherCat} onChange={e => setOtherCat(e.target.value)} list="acct-class-othercats" style={SI} placeholder="e.g. Milk — type or pick a past one" />

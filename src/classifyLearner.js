@@ -200,9 +200,10 @@ export const matchLearned = (memory, txn) => {
     if (!r.classifiedAs) continue; // payee/notes-only precedent — votes on fields, not class
     totalWeight += w;
     const k = outcomeKey(r);
-    if (!groups[k]) groups[k] = { weight: 0, count: 0, rec: r };
+    if (!groups[k]) groups[k] = { weight: 0, count: 0, rec: r, recs: [] };
     groups[k].weight += w;
     groups[k].count += 1;
+    groups[k].recs.push({ r, score });
     if ((r.ts || 0) >= (groups[k].rec.ts || 0)) groups[k].rec = r;
   }
   if (!matched.length) return null;
@@ -229,6 +230,9 @@ export const matchLearned = (memory, txn) => {
     count: top?.count || 0,
     total: matched.length,
     confidence: totalWeight ? (top?.weight || 0) / totalWeight : 0,
+    // The closest past entries behind the match, so the form can say why.
+    examples: (top?.recs || []).sort((a, b) => b.score - a.score).slice(0, 3)
+      .map(({ r: x }) => ({ payee: x.payee || x.party || "", ts: x.ts || 0 })).filter(x => x.payee),
     source: "learned",
   };
 };
