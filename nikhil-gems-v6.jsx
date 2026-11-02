@@ -10315,7 +10315,11 @@ Return ONLY this exact JSON structure, no markdown, no explanation:
 
 IMPORTANT: supplierName must be the FULL business name. Extract every line item row separately. If GST columns show SGST 0.125% + CGST 0.125%, the gst value is '0.25'. If GST columns show SGST 1.5% + CGST 1.5%, the gst value is '3'.${customsBlock}`;
     // GPT-4o handles both images and PDFs natively
-    const fileContent=isImg
+    // Excel/CSV bills go to the model as text, one CSV block per sheet.
+    const sheetText=isSheetFile(fd)?await sheetToText(fd.b64):"";
+    const fileContent=sheetText
+      ?{type:"text",text:`The purchase bill is this spreadsheet (each sheet as CSV):\n\n${sheetText}`}
+      :isImg
       ?{type:"image_url",image_url:{url:`data:${fd.mediaType};base64,${fd.b64}`,detail:"high"}}
       :{type:"file",file:{filename:fd.name||"bill.pdf",file_data:`data:application/pdf;base64,${fd.b64}`}};
     const txt=await callOpenAI([{role:"user",content:[fileContent,{type:"text",text:prompt}]}],1500);
@@ -11007,6 +11011,13 @@ function POForm({draft,setDraft,vendors,onSave}){
 }
 
 // ── UPLOAD VIEW ───────────────────────────────────────────────────
+const isSheetFile=fd=>/\.(xlsx?|xlsm|csv)$/i.test(fd?.name||"")||/spreadsheet|excel|csv/i.test(fd?.mediaType||"");
+// Every non-empty sheet as CSV, capped so a huge workbook can't blow the prompt.
+async function sheetToText(b64){
+  const XLSX=await import("xlsx");
+  const wb=XLSX.read(b64,{type:"base64"});
+  return wb.SheetNames.map(n=>{const csv=XLSX.utils.sheet_to_csv(wb.Sheets[n],{blankrows:false}).replace(/^,+$/gm,"").trim();return csv?`### Sheet: ${n}\n${csv}`:"";}).filter(Boolean).join("\n\n").slice(0,60000);
+}
 function UploadView({fileData,setFileData,extracting,onExtract,onManual}){
   const ref=useRef();
   const handle=f=>{if(!f)return;const r=new FileReader();r.onload=e=>{const url=e.target.result;const fd={dataUrl:url,b64:url.split(",")[1],mediaType:url.match(/:(.*?);/)[1],name:f.name};setFileData(fd);onExtract?.(fd);};r.readAsDataURL(f);};
@@ -11015,8 +11026,8 @@ function UploadView({fileData,setFileData,extracting,onExtract,onManual}){
       <div style={{fontFamily:"'Cormorant Garamond',Georgia,serif",fontSize:20,fontWeight:600,marginBottom:4}}>Upload Purchase Bill</div>
       <p style={{fontSize:13,color:C.inkMid,marginBottom:18}}>AI extracts vendor description exactly as invoiced — you classify to physical stock in the next step.</p>
       <div onDrop={e=>{e.preventDefault();handle(e.dataTransfer.files[0]);}} onDragOver={e=>e.preventDefault()} onClick={()=>ref.current.click()} style={{border:`2px dashed ${fileData?C.goldBright:C.borderHi}`,borderRadius:10,padding:fileData?"16px":"42px 22px",textAlign:"center",cursor:"pointer",background:fileData?C.goldLight:C.surface,transition:"all .2s",marginBottom:15}}>
-        <input ref={ref} type="file" accept="image/*,.pdf" style={{display:"none"}} onChange={e=>handle(e.target.files[0])}/>
-        {fileData?(<div>{fileData.mediaType?.startsWith("image")?<img src={fileData.dataUrl} style={{maxWidth:"100%",maxHeight:185,objectFit:"contain",borderRadius:5,marginBottom:8}} alt=""/>:<div style={{fontSize:32,marginBottom:8}}>📄</div>}<div style={{fontSize:13,fontWeight:500,color:C.ink}}>{fileData.name}</div><div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>Click to replace</div></div>):(<div><div style={{fontSize:26,marginBottom:9}}>⬆</div><div style={{fontSize:14,fontWeight:500,color:C.ink,marginBottom:3}}>Drop bill or click to browse</div><div style={{fontSize:12,color:C.inkFaint}}>JPG · PNG · PDF</div></div>)}
+        <input ref={ref} type="file" accept="image/*,.pdf,.xls,.xlsx,.xlsm,.csv" style={{display:"none"}} onChange={e=>handle(e.target.files[0])}/>
+        {fileData?(<div>{fileData.mediaType?.startsWith("image")?<img src={fileData.dataUrl} style={{maxWidth:"100%",maxHeight:185,objectFit:"contain",borderRadius:5,marginBottom:8}} alt=""/>:<div style={{fontSize:32,marginBottom:8}}>{isSheetFile(fileData)?"📊":"📄"}</div>}<div style={{fontSize:13,fontWeight:500,color:C.ink}}>{fileData.name}</div><div style={{fontSize:11,color:C.inkFaint,marginTop:2}}>Click to replace</div></div>):(<div><div style={{fontSize:26,marginBottom:9}}>⬆</div><div style={{fontSize:14,fontWeight:500,color:C.ink,marginBottom:3}}>Drop bill or click to browse</div><div style={{fontSize:12,color:C.inkFaint}}>JPG · PNG · PDF · Excel (XLS/XLSX) · CSV</div></div>)}
       </div>
       {extracting&&<div style={{background:C.goldLight,border:`1px solid ${C.goldBright}`,borderRadius:6,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.amber}}>Extracting vendor description and line items...</div>}
       <div style={{display:"flex",justifyContent:"space-between"}}>
