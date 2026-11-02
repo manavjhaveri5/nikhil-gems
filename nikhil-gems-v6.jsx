@@ -24,6 +24,7 @@ import { runningBalances, monthOf } from "./src/monthClose.js";
 import { invRemitLinks, withRemitLink, NG_REMIT_KEY } from "./src/remittances.js";
 import { nextLocation } from "./src/listingChannels.js";
 import MonthPicker from "./src/MonthPicker.jsx";
+import GmailFinder from "./src/GmailFinder.jsx";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
@@ -4021,6 +4022,7 @@ function MonthlyPacket({month,setMonth,rows,setRows,notes,setNotes,invoices=[],b
 function AccountingTxnAttachmentModal({txn,company,onSave,onClose,showToast,onViewBill}){
   const [uploading,setUploading]=useState(false);
   const [removing,setRemoving]=useState(false);
+  const [gmailOpen,setGmailOpen]=useState(false);
   const fileRef=useRef(null);
   const attachments=txn.attachments||(txn.attachmentUrl?[{url:txn.attachmentUrl,name:txn.attachmentName||"Attachment"}]:[]);
   const isImg=att=>/^image\//i.test(att.type||"")||/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(att.name||att.url||"");
@@ -4079,6 +4081,16 @@ function AccountingTxnAttachmentModal({txn,company,onSave,onClose,showToast,onVi
           <input ref={fileRef} type="file" multiple accept="image/*,application/pdf,.pdf,.doc,.docx,.xls,.xlsx" hidden onChange={e=>{handleFiles(e.target.files);e.target.value="";}}/>
           <div onClick={()=>!uploading&&fileRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();handleFiles(e.dataTransfer.files);}} style={{border:`2px dashed ${C.border}`,borderRadius:10,padding:"24px 20px",textAlign:"center",cursor:uploading?"default":"pointer",background:uploading?C.card:"transparent"}}>
             {uploading?<div style={{fontSize:13,color:C.inkFaint}}>Uploading...</div>:<><div style={{fontSize:28,marginBottom:6}}>📎</div><div style={{fontSize:13,fontWeight:850,color:C.inkMid}}>Click or drag files here</div><div style={{fontSize:11,color:C.inkFaint,marginTop:4}}>Images, PDF, Excel, Word. Multiple files supported.</div></>}
+          </div>
+          {/* The email behind this payment — remittance advice, bill, receipt — found by its amount. */}
+          <div style={{marginTop:12}}>
+            {!gmailOpen
+              ?<button className="bs" style={{fontSize:12,padding:"7px 12px",width:"100%"}} onClick={()=>setGmailOpen(true)}>📧 Find in Gmail</button>
+              :<GmailFinder amount={txn.amount} date={txn.date} folder={`finance-attachments/${company}`} onPick={async att=>{
+                  const next=[...(txn.attachments||attachments),{id:uid(),url:att.url,name:att.name,type:att.type,size:att.size,ext:(att.name||"").split(".").pop().toLowerCase(),uploadedAt:new Date().toISOString(),fromEmail:att.fromEmail}];
+                  await onSave(txn.id,{attachments:next,attachmentUrl:next[0]?.url||null,attachmentName:next[0]?.name||null});
+                  showToast?.(`Attached ${att.name} from Gmail`);
+                }}/>}
           </div>
         </div>
       </div>
@@ -11015,6 +11027,7 @@ async function sheetToText(b64){
 }
 function UploadView({fileData,setFileData,extracting,onExtract,onManual}){
   const ref=useRef();
+  const [gmailOpen,setGmailOpen]=useState(false);
   const handle=f=>{if(!f)return;const r=new FileReader();r.onload=e=>{const url=e.target.result;const fd={dataUrl:url,b64:url.split(",")[1],mediaType:url.match(/:(.*?);/)[1],name:f.name};setFileData(fd);onExtract?.(fd);};r.readAsDataURL(f);};
   return(
     <div style={{maxWidth:500,margin:"0 auto"}}>
@@ -11026,9 +11039,21 @@ function UploadView({fileData,setFileData,extracting,onExtract,onManual}){
       </div>
       {extracting&&<div style={{background:C.goldLight,border:`1px solid ${C.goldBright}`,borderRadius:6,padding:"9px 13px",marginBottom:13,fontSize:12,color:C.amber}}>Extracting vendor description and line items...</div>}
       <div style={{display:"flex",justifyContent:"space-between"}}>
-        <button className="bs" style={{fontSize:12}} onClick={onManual}>Enter manually</button>
+        <div style={{display:"flex",gap:8}}>
+          <button className="bs" style={{fontSize:12}} onClick={onManual}>Enter manually</button>
+          <button className="bs" style={{fontSize:12}} onClick={()=>setGmailOpen(o=>!o)}>📧 From Gmail</button>
+        </div>
         <button className="bp" disabled={!fileData||extracting} onClick={onExtract}>{extracting?"Extracting...":"Extract with AI →"}</button>
       </div>
+      {/* A bill that came by email: pick its attachment and it goes through the same AI extract. */}
+      {gmailOpen&&<div style={{marginTop:16,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
+        <div style={{fontSize:12.5,fontWeight:800,color:C.ink,marginBottom:8}}>Bill from Gmail</div>
+        <GmailFinder text={'has:attachment ("tax invoice" OR invoice OR bill OR challan) newer_than:60d'} folder="purchase-bills/gmail" pickLabel="Use" onPick={async att=>{
+          const blob=await (await fetch(att.url)).blob();
+          handle(new File([blob],att.name||"bill",{type:att.type||blob.type}));
+          setGmailOpen(false);
+        }}/>
+      </div>}
     </div>
   );
 }

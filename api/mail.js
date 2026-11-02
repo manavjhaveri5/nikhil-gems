@@ -11,6 +11,7 @@ const STORE = "https://eartheditions.co";
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   if (!(await requireUser(req, res))) return;
+  if (String(req.body?.action || "").startsWith("gmail_")) return gmail(req, res);
   const key = process.env.RESEND_API_KEY;
   if (!key) return res.status(503).json({ error: "Email isn't set up yet (RESEND_API_KEY)", notConfigured: true });
   let b = req.body;
@@ -61,4 +62,42 @@ export default async function handler(req, res) {
     await adminClient().from("store_orders").update({ notes }).eq("id", order.id).eq("status", "pending");
   }
   return res.json({ ok: true, id: d.id, to, notes });
+}
+
+/* Gmail search for the ERP: find the email behind a figure (remittance advice,
+   purchase bill, statement) and pull its attachment in. Gmail is reached through
+   a small Apps Script web app running in Nikhil Gems' own Google account
+   (scripts/gmail-bridge.gs), so no Google Cloud app or token refresh is needed.
+   The shared secret stays here on the server. Read-only: search and fetch. */
+async function gmail(req, res) {
+  const url = process.env.GMAIL_BRIDGE_URL, secret = process.env.GMAIL_BRIDGE_SECRET;
+  if (!url || !secret) return res.status(503).json({ error: "Gmail isn't connected yet (GMAIL_BRIDGE_URL / GMAIL_BRIDGE_SECRET)", notConfigured: true });
+  const b = req.body;
+  const call = async body => {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, secret }), redirect: "follow" });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d) throw new Error(`Gmail bridge ${r.status}`);
+    if (d.error) throw new Error(d.error);
+    return d;
+  };
+  try {
+    if (b.action === "gmail_search") {
+      const q = String(b.q || "").slice(0, 500);
+      if (!q.trim()) return res.status(400).json({ error: "Nothing to search for" });
+      return res.json(await call({ action: "search", q, max: Math.min(+b.max || 15, 30), find: String(b.find || "").slice(0, 200) }));
+    }
+    if (b.action === "gmail_attachment") {
+      // Saved to storage here, so a large PDF never has to pass back through the browser.
+      const a = await call({ action: "attachment", messageId: String(b.messageId || ""), index: +b.index || 0 });
+      const name = String(a.name || "attachment").replace(/[^\w.\- ]+/g, "_").slice(-80);
+      const path = `${String(b.folder || "gmail").replace(/[^\w/-]/g, "")}/${String(b.messageId).replace(/\W/g, "")}-${+b.index || 0}-${name}`;
+      const db = adminClient().storage.from("ng-media");
+      const { error } = await db.upload(path, Buffer.from(a.b64, "base64"), { contentType: a.type || "application/octet-stream", upsert: true });
+      if (error) throw new Error(error.message);
+      return res.json({ url: db.getPublicUrl(path).data.publicUrl, name: a.name, type: a.type || "", size: a.size || 0 });
+    }
+    return res.status(400).json({ error: "Unknown Gmail action" });
+  } catch (e) {
+    return res.status(502).json({ error: e.message || "Gmail search failed" });
+  }
 }

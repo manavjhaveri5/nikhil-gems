@@ -1,5 +1,8 @@
 {
   "functions": {
+    "api/mail.js": {
+      "maxDuration": 60
+    },
     "api/claude.js": {
       "maxDuration": 300
     },
