@@ -7,6 +7,7 @@
 import { loadKFresh, saveK, upsertItemK } from "./utils.js";
 import { statementsKey, statementId, keepExistingStatement } from "./monthClose.js";
 import { uploadToStorage } from "./storageUtils.js";
+import { classifyCardEmis } from "./cardEmi.js";
 
 const MON = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
 const uid = () => Math.random().toString(36).slice(2, 11);
@@ -90,7 +91,19 @@ export async function applyStatementImport({ company, accounts, txns, add = [], 
     } catch (e) { docMsg = ` · PDF not kept (${e.message})`; }
   }
   const link = t => (fileUrl && rowRefs[t.id] ? { ...t, stmtRef: { url: fileUrl, page: rowRefs[t.id].page, line: rowRefs[t.id].line, name: statementDoc.name || fileName } } : t);
-  const nextTxns = [...add.map(link), ...txns.filter(t => !rm.has(t.id)).map(link)];
+  let nextTxns = [...add.map(link), ...txns.filter(t => !rm.has(t.id)).map(link)];
+  // Card EMI instalments in the new rows are booked the way the last ones were.
+  let emiMsg = "";
+  if (add.length) {
+    const expKey = company === "ng" ? "ng-expenses-v1" : "at-expenses-v1";
+    const { patches, expenses } = classifyCardEmis(nextTxns, { only: new Set(add.map(t => t.id)), expenseKey: expKey });
+    if (expenses.length) {
+      nextTxns = nextTxns.map(t => (patches[t.id] ? { ...t, ...patches[t.id] } : t));
+      const prevEx = await loadKFresh(expKey).catch(() => []);
+      await saveK(expKey, [...expenses, ...(Array.isArray(prevEx) ? prevEx : [])]);
+      emiMsg = ` · ${expenses.length} EMI line${expenses.length === 1 ? "" : "s"} booked`;
+    }
+  }
   if (add.length || removeIds.length || (fileUrl && Object.keys(rowRefs).length)) await saveK(`${company}-fin-txns-v1`, nextTxns);
 
   let nextAccounts = accounts, obMsg = "";
@@ -112,7 +125,7 @@ export async function applyStatementImport({ company, accounts, txns, add = [], 
   }
 
   const message = [add.length ? `${add.length} added` : "", removeIds.length ? `${removeIds.length} removed` : ""].filter(Boolean).join(" · ")
-    + (add.length || removeIds.length ? " — ledger matches bank" : "Statement saved") + obMsg + stMsg + docMsg;
+    + (add.length || removeIds.length ? " — ledger matches bank" : "Statement saved") + obMsg + stMsg + docMsg + emiMsg;
   // statements: the full saved list when month-ends were kept (null otherwise).
   return { txns: nextTxns, accounts: nextAccounts, statements: Array.isArray(statements) && statements.length ? statements : null, message };
 }
