@@ -23,6 +23,7 @@ import MonthClose from "./src/MonthClose.jsx";
 import { runningBalances, monthOf } from "./src/monthClose.js";
 import { invRemitLinks, withRemitLink, NG_REMIT_KEY } from "./src/remittances.js";
 import { nextLocation } from "./src/listingChannels.js";
+import MonthPicker from "./src/MonthPicker.jsx";
 import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
@@ -4809,15 +4810,9 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
           <button className={closeOpen?"bp":"bs"} style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setCloseOpen(o=>!o)} title="Everything left to do before this month is closed">✓ Month close</button>
           <button className="bp" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setManualOpen(true)}>+ Manual entry</button>
           {isAdmin&&<button className="bs" style={{fontSize:12,padding:"7px 11px"}} onClick={()=>setAttachCfgOpen(true)} title="Choose which categories require an attachment">📎 Rules</button>}
-          {/* Calendar-icon month picker: shows a 📅 + friendly month label, and a transparent
-              native <input type="month"> overlaid on top. Clicking calls showPicker() so the OS
-              month picker opens on desktop too (a bare month input only opens via its tiny — here
-              hidden — calendar affordance). Dimmed while searching, since search ignores it. */}
-          <label title={search?"Search spans all months — clear search to filter by month":"Pick month"} style={{position:"relative",display:"flex",alignItems:"center",gap:7,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"7px 12px",cursor:"pointer",opacity:search?.45:1}}>
-            <span style={{fontSize:15,lineHeight:1}}>📅</span>
-            <span style={{fontSize:12,fontWeight:800,color:C.ink,whiteSpace:"nowrap"}}>{monthLabel}</span>
-            <input type="month" value={month} onChange={e=>setMonth(e.target.value||accountantMonth())} onClick={e=>{try{e.currentTarget.showPicker&&e.currentTarget.showPicker();}catch{}}} aria-label="Pick month" style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",border:"none",margin:0,padding:0}}/>
-          </label>
+          {/* Month picker (our own popover — Safari's native month picker won't take clicks).
+              Dimmed while searching, since search ignores it. */}
+          <MonthPicker value={month} onChange={setMonth} label={monthLabel} dim={!!search} title={search?"Search spans all months — clear search to filter by month":"Pick month"}/>
           {/* Multi-select account filter: tick one or more accounts, or leave all unticked for
               "All accounts". Empty selection means no account constraint. */}
           <div style={{position:"relative",width:mob?"100%":"auto"}}>
