@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, createContext, useContext, Fragment } from "react";
 import { isRemittanceAdvice, parseRemittanceAdvice, linesFromTextItems } from "./remittanceAdvice.js";
 import { runningBalances, statementMonthEnds } from "./monthClose.js";
-import { applyStatementImport } from "./statementImport.js";
+import { applyStatementImport, locateStatementRows } from "./statementImport.js";
 import { supabase } from "./supabase.js";
 import { loadK, loadKFresh, saveK, onCacheRefresh } from "./utils.js";
 import ClassifyTransactionModal from "./ClassifyTransaction.jsx";
@@ -2369,7 +2369,7 @@ function PdfProgressBar({ step }) {
 }
 
 // ─── PDF Import Modal ─────────────────────────────────────────────────────────
-function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBalance = null, closingBalance = null, fileName = "" }) {
+function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBalance = null, closingBalance = null, fileName = "", doc = null }) {
   const CUR = acc?.currency || "INR";
   const sym = { INR: "₹", USD: "$", EUR: "€", JPY: "¥", GBP: "£", AUD: "A$" }[CUR] || CUR;
   const f2 = n => (+n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -2388,7 +2388,7 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
       return diff <= 2 && Math.abs(+l.amount - amt) < 0.5 && l.type === t.type;
     });
     if (hit) usedLedgerIds.add(hit.id);
-    return { ...t, matched: !!hit };
+    return { ...t, matched: !!hit, hitId: hit?.id || null };
   });
   // Ledger entries inside the statement window that no statement row matched —
   // per bank-as-truth these are suspect (wrong direction, duplicate, typo date).
@@ -2456,8 +2456,14 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
 
   const handleAdd = async () => {
     setSaving(true);
-    const toAdd = enriched.filter((_, i) => sel.has(i)).map(t => ({
-      id: uid(), type: t.type, amount: String(t.amount), currency: CUR,
+    const locs = doc?.pageLines ? locateStatementRows(doc.pageLines, enriched) : [];
+    const rowRefs = {};
+    const toAdd = enriched.map((t, i) => [t, i]).filter(([, i]) => sel.has(i)).map(([t, i]) => {
+      const id = uid();
+      if (locs[i]) rowRefs[id] = locs[i];
+      return { t, id };
+    }).map(({ t, id }) => ({
+      id, type: t.type, amount: String(t.amount), currency: CUR,
       accountFrom: t.type === "debit"  ? acc.id : null,
       accountTo:   t.type === "credit" ? acc.id : null,
       payee: t.payee || t.description || "", category: t.category || "Other",
@@ -2465,7 +2471,9 @@ function PdfImportModal({ txns, acc, accTxns = [], onApply, onClose, openingBala
       createdAt: new Date().toISOString(),
     }));
     const toRemove = extras.filter(x => selRm.has(x.id)).map(x => x.id);
-    await onApply({ add: toAdd, removeIds: toRemove, openingBalance: setOpening && canSetOpening ? +openingBalance : null, accountId: acc?.id, statementClosings: saveClosings ? closings : [], fileName });
+    enriched.forEach((t, i) => { if (!sel.has(i) && t.hitId && locs[i]) rowRefs[t.hitId] = locs[i]; });
+    await onApply({ add: toAdd, removeIds: toRemove, openingBalance: setOpening && canSetOpening ? +openingBalance : null, accountId: acc?.id, statementClosings: saveClosings ? closings : [], fileName,
+      statementDoc: doc ? { bytes: doc.bytes, name: doc.name } : null, rowRefs });
     setSaving(false);
     setDone(true);
     setTimeout(onClose, 1400);
@@ -3056,7 +3064,17 @@ export function ReconcileView({ accounts, transactions, onAddTxns, onApplyTxns, 
       const arrayBuffer = await file.arrayBuffer();
       const pdfjsLib = await import("pdfjs-dist");
       pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      // pdf.js takes ownership of the buffer it is given, so it always gets a copy.
+      const original = new Uint8Array(arrayBuffer);
+      let pdf, locked = false;
+      try { pdf = await pdfjsLib.getDocument({ data: original.slice() }).promise; }
+      catch (e) {
+        if (e?.name !== "PasswordException") throw e;
+        locked = true;
+        const pw = window.prompt(`${file.name} is password-protected. Type its password to read it (the copy kept in the ERP is saved without one):`);
+        if (!pw) throw new Error("This PDF is password-protected and no password was given.");
+        pdf = await pdfjsLib.getDocument({ data: original.slice(), password: pw }).promise;
+      }
 
       /* A foreign inward remittance advice is a single-transaction document on a
          fixed bank template, not a statement. Read its text layer and parse it
@@ -3117,10 +3135,31 @@ export function ReconcileView({ accounts, transactions, onAddTxns, onApplyTxns, 
       if (!resp.ok || data.error) throw new Error(data.error + (data.raw ? `\n\nAI returned:\n${data.raw}` : ""));
       if (!data.transactions?.length) throw new Error("No transactions found.\n\n" + JSON.stringify(data).slice(0, 400));
 
+      // The PDF itself is kept with the import: every page's text lines, so each
+      // row can point at its page, and the file — re-made from page images when
+      // it was locked, so the kept copy opens without a password.
+      const pageLines = [];
+      for (let p = 1; p <= pdf.numPages; p++) pageLines.push(linesFromTextItems((await (await pdf.getPage(p)).getTextContent()).items).split("\n"));
+      let keepBytes = original;
+      if (locked) {
+        const { PDFDocument } = await import("pdf-lib");
+        const out = await PDFDocument.create();
+        for (let p = 1; p <= pdf.numPages; p++) {
+          const page = await pdf.getPage(p);
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement("canvas");
+          canvas.width = viewport.width; canvas.height = viewport.height;
+          await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+          const jpg = await out.embedJpg(canvas.toDataURL("image/jpeg", 0.85));
+          out.addPage([viewport.width / 2, viewport.height / 2]).drawImage(jpg, { x: 0, y: 0, width: viewport.width / 2, height: viewport.height / 2 });
+        }
+        keepBytes = await out.save();
+      }
+
       // Step 3: Done
       setPdfStep(3);
       await new Promise(r => setTimeout(r, 500));
-      setPdfModal({ txns: data.transactions, openingBalance: data.opening_balance ?? null, closingBalance: data.closing_balance ?? null });
+      setPdfModal({ txns: data.transactions, openingBalance: data.opening_balance ?? null, closingBalance: data.closing_balance ?? null, doc: { bytes: keepBytes, name: file.name, pageLines } });
     } catch (e) {
       setPdfError(e.message);
       console.error("[PDF] Error:", e.message);
@@ -3240,7 +3279,7 @@ If nothing is missing, output <missing_json>[]</missing_json>.`;
   return (
     <div style={{ maxWidth: 700 }}>
       {pdfLoading && <PdfProgressBar step={pdfStep} />}
-      {pdfModal && <PdfImportModal txns={pdfModal.txns} acc={acc} accTxns={accTxns} onApply={onApplyTxns} openingBalance={pdfModal.openingBalance} closingBalance={pdfModal.closingBalance} fileName={pdfName} onClose={() => { setPdfModal(null); setPdfName(""); }} />}
+      {pdfModal && <PdfImportModal txns={pdfModal.txns} acc={acc} accTxns={accTxns} onApply={onApplyTxns} openingBalance={pdfModal.openingBalance} closingBalance={pdfModal.closingBalance} fileName={pdfName} doc={pdfModal.doc} onClose={() => { setPdfModal(null); setPdfName(""); }} />}
       {pdfError && (
         <div style={{ background: "#fff0f0", border: "1px solid #f5c6c6", borderRadius: 10, padding: "14px 16px", marginBottom: 16, position: "relative" }}>
           <button onClick={() => setPdfError("")} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", fontSize: 16, cursor: "pointer", color: "#999" }}>×</button>

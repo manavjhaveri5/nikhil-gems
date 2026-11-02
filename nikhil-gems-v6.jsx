@@ -5021,7 +5021,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
               if(patch.notes!=null)setNotesDraft(patch.notes);
             };
             return(
-              <div style={{display:"grid",gap:12}}>
+              <div style={{display:"grid",gap:12,gridTemplateColumns:"minmax(0,1fr)"}}>
                 <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"start"}}>
                   <div style={{minWidth:0}}>
                     <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.65}}>Selected payment</div>
@@ -5039,11 +5039,11 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
                   if(!ref&&!cover)return null;
                   const href=ref?`${ref.url}#page=${ref.page}`:cover.fileUrl;
                   return(
-                    <div style={{display:"flex",gap:10,alignItems:"center",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+                    <div style={{display:"flex",gap:10,alignItems:"center",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,minWidth:0,overflow:"hidden"}}>
                       <span style={{fontSize:15}}>📄</span>
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>{ref?`On the statement · page ${ref.page}`:"Statement for this period"}</div>
-                        <div title={ref?.line||cover.fileName} style={{fontSize:12,color:C.ink,fontFamily:ref?"ui-monospace,Menlo,monospace":"inherit",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ref?ref.line:(cover.fileName||"Statement")}</div>
+                        <div title={ref?.line||cover.fileName} style={{fontSize:12,color:C.ink,marginTop:2,lineHeight:1.4,wordBreak:"break-word",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{ref?ref.line:(cover.fileName||"Statement")}</div>
                       </div>
                       <a href={href} target="_blank" rel="noopener noreferrer" className="bs" style={{flexShrink:0,fontSize:12,padding:"6px 11px",textDecoration:"none",whiteSpace:"nowrap"}}>View in statement ↗</a>
                     </div>
