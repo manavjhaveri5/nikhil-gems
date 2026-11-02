@@ -660,7 +660,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
     </div>
   );
   return (
-    <div onMouseDown={e => { if (!inline && e.target === e.currentTarget) onClose(); }} style={inline ? {} : { position: "fixed", inset: 0, zIndex: 95, background: "rgba(26,19,8,.48)", display: "flex", alignItems: mob ? "stretch" : "center", justifyContent: "center", padding: mob ? 0 : 16 }}>
+    <div onMouseDown={e => { if (!inline && e.target === e.currentTarget) onClose(); }} style={inline ? {} : { position: "fixed", inset: 0, zIndex: 1000, background: "rgba(26,19,8,.48)", display: "flex", alignItems: mob ? "stretch" : "center", justifyContent: "center", padding: mob ? 0 : 16 }}>
       <div onMouseDown={e => e.stopPropagation()} style={inline ? {} : { width: mob ? "100%" : 500, maxWidth: "100%", height: mob ? "100%" : "auto", maxHeight: mob ? "100%" : "90vh", overflowY: "auto", background: C.bg, border: mob ? "none" : `1.5px solid ${C.border}`, borderRadius: mob ? 0 : 12, padding: mob ? "20px 16px" : "24px 26px", boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
         {!inline && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
