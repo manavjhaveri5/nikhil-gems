@@ -4133,6 +4133,8 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   const [otherInvoices,setOtherInvoices]=useState([]); // the OTHER company's invoices (for inter-company bill payments)
   const [otherBuyers,setOtherBuyers]=useState([]);
   const [rates,setRates]=useState({USD:85,EUR:92,JPY:0.57,GBP:107,AUD:55,INR:1});
+  const [statements,setStatements]=useState([]); // month-end statement records; their fileUrl backs "View in statement" on entries without a stmtRef
+  useEffect(()=>{loadK(`${company}-fin-statements-v1`).then(v=>setStatements(Array.isArray(v)?v:[])).catch(()=>setStatements([]));},[company]);
   const [attTextByTxn,setAttTextByTxn]=useState({});
   const [attachReqCats,setAttachReqCats]=useState(ACCOUNTING_ATTACH_REQ_DEFAULT);
   const [attachCfgOpen,setAttachCfgOpen]=useState(false);
@@ -5028,6 +5030,25 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
                   </div>
                   <div style={{fontSize:18,fontWeight:900,color:selected.type==="credit"?C.green:C.red,whiteSpace:"nowrap"}}>{money(selected)}</div>
                 </div>
+                {(()=>{
+                  // Where this entry sits on the bank / card statement: the exact line and page when the
+                  // import recorded it (stmtRef), else just the statement that covers the date.
+                  const ref=selected.stmtRef;
+                  const accId=selected.type==="credit"?selected.accountTo:selected.accountFrom;
+                  const cover=!ref&&statements.find(s=>s.accountId===accId&&s.fileUrl&&s.fromDate&&s.fromDate<=selected.date&&(s.closingDate||"")>=selected.date);
+                  if(!ref&&!cover)return null;
+                  const href=ref?`${ref.url}#page=${ref.page}`:cover.fileUrl;
+                  return(
+                    <div style={{display:"flex",gap:10,alignItems:"center",padding:"9px 12px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+                      <span style={{fontSize:15}}>📄</span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:10,fontWeight:900,color:C.inkFaint,textTransform:"uppercase",letterSpacing:.6}}>{ref?`On the statement · page ${ref.page}`:"Statement for this period"}</div>
+                        <div title={ref?.line||cover.fileName} style={{fontSize:12,color:C.ink,fontFamily:ref?"ui-monospace,Menlo,monospace":"inherit",marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ref?ref.line:(cover.fileName||"Statement")}</div>
+                      </div>
+                      <a href={href} target="_blank" rel="noopener noreferrer" className="bs" style={{flexShrink:0,fontSize:12,padding:"6px 11px",textDecoration:"none",whiteSpace:"nowrap"}}>View in statement ↗</a>
+                    </div>
+                  );
+                })()}
                 {autoFilled[selected.id]?(
                   <div style={{display:"flex",gap:10,alignItems:"center",padding:"9px 12px",background:C.greenBg,border:`1px solid ${C.green}55`,borderRadius:9,fontSize:12,color:C.ink}}>
                     <span style={{fontSize:14}}>✨</span>
