@@ -706,7 +706,7 @@ const ClassifyTransactionModal = forwardRef(function ClassifyTransactionModal({
         {L && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", marginBottom: 14, background: C.greenBg, border: `1px solid ${C.green}55`, borderRadius: 9, fontSize: 12, color: C.ink }}>
             <span style={{ fontSize: 14 }}>📚</span>
-            <span>Pre-filled from your history — classified this way <strong>{L.count}×</strong> before (<strong>{labelOf(L)}</strong>). Review &amp; Save.</span>
+            <span>{L.source === "recurring" ? <>Recurring payment — the same amount around this day for <strong>{L.count} months</strong>, classified</> : <>Pre-filled from your history — classified this way <strong>{L.count}×</strong> before</>} (<strong>{labelOf(L)}</strong>). Review &amp; Save.</span>
           </div>
         )}
         {!L && aiLoading && (

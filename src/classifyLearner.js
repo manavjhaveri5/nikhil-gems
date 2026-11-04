@@ -45,7 +45,13 @@ const tokenize = s =>
 // (rawPayee/rawNotes preserved on first edit, else the current payee/notes), so a new
 // raw line matches what the user once cleaned it into. Numeric refs / bank noise are
 // stripped, so different lines from the same merchant collapse to one fingerprint.
+// A row matched to the bank statement goes by the statement's own narration: the
+// SMS or email it was first entered from can name someone else entirely (a
+// "Radha Mohan" email entry later matched to a CRED UPI line).
+const stmtNarration = txn => String(txn?.stmtRef?.line || "").replace(/^\d+\s+\d\d-\d\d-\d{4}\s+/, "").replace(/\s[\d,]+\.\d\d\b.*$/, "");
 const txnTokens = txn => {
+  const fromStmt = tokenize(stmtNarration(txn));
+  if (fromStmt.length) return [...new Set(fromStmt)];
   const fromPayee = tokenize(txn?.rawPayee || txn?.payee);
   const toks = fromPayee.length ? fromPayee : tokenize(txn?.rawNotes || txn?.notes);
   return [...new Set(toks)];
@@ -234,6 +240,48 @@ export const matchLearned = (memory, txn) => {
     examples: (top?.recs || []).sort((a, b) => b.score - a.score).slice(0, 3)
       .map(({ r: x }) => ({ payee: x.payee || x.party || "", ts: x.ts || 0 })).filter(x => x.payee),
     source: "learned",
+  };
+};
+
+/* ── Recurring payments: the same amount, from the same account, around the same
+   day each month (a loan EMI, rent, a salary). Two or more earlier months
+   classified alike are enough to classify this one the same way — whatever
+   the bank called the payee this time. Expenses only: a bill to a supplier
+   repeats by amount without being the same bill. */
+const sideOf = t => (t?.type === "credit" ? t?.accountTo : t?.accountFrom) || "";
+export const matchRecurring = (txns, txn) => {
+  const amt = +txn?.amount || 0, day = +String(txn?.date || "").slice(8, 10), month = String(txn?.date || "").slice(0, 7);
+  if (!amt || !day || !Array.isArray(txns)) return null;
+  const dir = direction(txn), acc = sideOf(txn);
+  // The same payee on the bank's side too: round sums (₹25,000, ₹50,000) go to many people on the same day.
+  // BOI's transfer codes (UNAWBNEFT/BKID…, IMPSUAIB) are on most lines, so they don't count as a name.
+  const CODES = /^(unawb|unawbneft|bkid|bkid\w*|impsuaib|uaibbill|boi|statement)$/;
+  const words = t => new Set([...txnTokens(t), ...tokenize(t?.bankRemarks)].filter(w => !CODES.test(w)));
+  const mine = words(txn);
+  const samePayee = t => { for (const w of words(t)) if ([...mine].some(m => tokenMatch(m, w))) return true; return false; };
+  const dayGap = d => { const g = Math.abs(d - day); return Math.min(g, 31 - g); };
+  const hits = txns.filter(t => t && t.id !== txn.id && t.classifiedAs === "expense"
+    && direction(t) === dir && sideOf(t) === acc && Math.abs((+t.amount || 0) - amt) <= Math.max(1, amt * 0.005)
+    && String(t.date || "").slice(0, 7) !== month && dayGap(+String(t.date || "").slice(8, 10)) <= 4 && samePayee(t));
+  const months = new Set(hits.map(t => String(t.date).slice(0, 7)));
+  if (months.size < 2) return null;
+  // The latest month decides; a recurring payment classified two ways goes by the newest.
+  const last = [...hits].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  const same = hits.filter(t => t.classifiedAs === last.classifiedAs && (t.classifiedRef?.cat || "") === (last.classifiedRef?.cat || ""));
+  if (new Set(same.map(t => String(t.date).slice(0, 7))).size < 2) return null;
+  return {
+    classifiedAs: last.classifiedAs,
+    cat: last.classifiedRef?.cat || last.category || "",
+    party: last.classifiedRef?.party || last.payee || "",
+    payee: last.payee || "",
+    notes: "",
+    type: dir,
+    vendorId: last.classifiedRef?.vendorId || "",
+    cardAccountId: last.classifiedRef?.cardAccountId || "",
+    count: same.length, total: hits.length, confidence: 1,
+    examples: same.sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 3)
+      .map(t => ({ payee: t.payee || "", ts: Date.parse(t.date) || 0 })),
+    source: "recurring",
   };
 };
 

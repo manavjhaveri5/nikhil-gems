@@ -25,7 +25,7 @@ import { invRemitLinks, withRemitLink, NG_REMIT_KEY } from "./src/remittances.js
 import { nextLocation } from "./src/listingChannels.js";
 import MonthPicker from "./src/MonthPicker.jsx";
 import GmailFinder from "./src/GmailFinder.jsx";
-import { loadLearnMemory, recordDecision, matchLearned, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
+import { loadLearnMemory, recordDecision, matchLearned, matchRecurring, loadEmbMap, embedAndStore, backfillEmbeddings } from "./src/classifyLearner.js";
 const FinanceApp        = React.lazy(() => import("./src/FinanceApp.jsx"));
 const AccountingApp     = React.lazy(() => import("./src/AccountingApp.jsx"));
 const ListingManagerApp = React.lazy(() => import("./src/ListingManagerApp.jsx"));
@@ -4735,10 +4735,13 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
   // Silent ambient auto-fill: when a confidently-seen unclassified txn is selected,
   // quietly apply the learned cleaned payee/notes (with Undo). One patchTxn, run once.
   const autoFillRef=useRef(new Set());
+  // A payment that recurs (same amount, account and day each month) goes by how the
+  // earlier months were classified; anything else by the learner's word match.
+  const learnedFor=t=>matchRecurring(txns,t)||matchLearned(learnMem,t);
   useEffect(()=>{
     const t=txns.find(x=>x.id===selectedId);
     if(!t||!isUnclassified(t)||autoFillRef.current.has(t.id))return;
-    const m=matchLearned(learnMem,t);
+    const m=learnedFor(t);
     if(!m||!(m.confidence>=0.6&&m.count>=2))return;
     const patch={};
     if(m.payee&&m.payee!==(t.payee||"")){patch.payee=m.payee;if(t.rawPayee==null)patch.rawPayee=t.payee||"";}
@@ -5013,7 +5016,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
             const readingAtt=attText===""&&attachments.some(a=>/pdf/i.test(a?.type||"")||/\.pdf($|\?)/i.test(a?.name||a?.url||""));
             // Learner: for an unclassified payment, suggest the cleaned payee/notes the user
             // settled on for similar bank lines before. One patchTxn keeps it race-free.
-            const smart=isUnclassified(selected)?matchLearned(learnMem,selected):null;
+            const smart=isUnclassified(selected)?learnedFor(selected):null;
             const smartFills=smart?[
               smart.payee&&smart.payee!==(selected.payee||"")?["Payee",smart.payee,"payee"]:null,
               smart.notes&&!(selected.notes||"").trim()?["Notes",smart.notes,"notes"]:null,
@@ -5261,7 +5264,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
             onAddCustomCat={saveCustomCategory}
             normalizeCat={normalizeAccountingExpenseCat}
             suggestedType={isUnclassified(selected)?suggestClassification(selected,attTextByTxn[selected.id])?.classifiedAs:undefined}
-            learned={isUnclassified(selected)?matchLearned(learnMem,selected):null}
+            learned={isUnclassified(selected)?learnedFor(selected):null}
             learnMemory={learnMem}
             embMap={embMap}
             company={company}
