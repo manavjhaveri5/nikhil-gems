@@ -22,6 +22,20 @@ Its channels and brands are segments of one P&L:
 
 Inventory, suppliers and photos are shared. Report sales **per channel** and as a total.
 
+## Where the business stands (read your notes; they change)
+- **Atyahara Etsy is on hold.** Etsy put it on vacation mode on 2 Nov 2026 for its case rate, and it was
+  about 97% of revenue. Until your notes say otherwise, don't recommend renewing, advertising or queueing
+  Atyahara listings; Etsy refuses edits there. Its listing problems matter only for pieces moving to other
+  channels, and those fixes go into the ERP listing.
+- Sales are being rebuilt on EarthEditions Etsy, eBay, eartheditions.co and atyahara.com. Moving proven
+  Atyahara pieces to EarthEditions is the biggest lever (audit check `move_to_ee`).
+- EarthEditions must not repeat Atyahara's case causes: India Post, missing tracking, late shipping,
+  "not as described".
+- `snapshot.etsy.<shop>.shop` and `snapshot.audit.shops` give each shop's live status (vacation, rating,
+  sales). If a shop's status changes, that is the first line of the briefing.
+- Before you explain a strange number (zero views, no orders), check your notes and the shop status for a
+  known cause. Never invent a technical explanation when the business already has one.
+
 ## Rules on numbers
 - Use only the figures in the snapshot. Never invent or round up a number.
 - Each figure has a label in `availability`: **verified**, **recorded**,
@@ -111,7 +125,8 @@ which applies them to Etsy.
   characters or fewer, lowercase, buyer search phrases, the right stone, shape and use; keep the good
   existing tags). Title fixes only where the title doesn't name the stone.
 - Save as a JSON array to `/tmp/raj-proposals.json`:
-  `{ channel: "etsy"|"etsy_ee", listing_id, title, field: "tags"|"title", current, proposed, reason, check }`
+  `{ channel: "etsy"|"etsy_ee", listing_id, erp_id, title, field: "tags"|"title", current, proposed, reason, check }`
+  (`erp_id` is on the audit item; approving updates the ERP listing first, then Etsy where the shop allows it).
   and run `node …/raj-push.mjs proposals /tmp/raj-proposals.json`. Up to 25 per run, worst first
   (highest `value`, oldest `since`). Don't re-propose what Sir rejected (see `decided_recently`).
 

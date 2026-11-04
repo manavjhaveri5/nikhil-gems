@@ -319,14 +319,30 @@ function Proposal({ p, onDecide }) {
   const chip = (t, kind) => <span key={kind + t} style={{ fontSize: 11.5, padding: "2px 7px", borderRadius: 10, margin: "0 4px 4px 0", display: "inline-block",
     background: kind === "add" ? C.greenBg : kind === "drop" ? C.redBg : C.card, color: kind === "add" ? C.green : kind === "drop" ? C.red : C.inkMid,
     textDecoration: kind === "drop" ? "line-through" : "none" }}>{t}</span>;
+  // The ERP listing first (it feeds EarthEditions, eBay and the store), then the Etsy
+  // listing itself, which a shop on hold (vacation mode) refuses.
   const apply = async () => {
     setBusy(true);
+    let erp = false;
     try {
+      if (p.erp_id) {
+        const { data, error } = await supabase.from("app_rows").select("data").eq("key", "ng-listings-v1").eq("id", p.erp_id).eq("deleted", false).maybeSingle();
+        if (error) throw new Error(error.message);
+        if (data?.data) {
+          const item = { ...data.data, [p.field]: p.proposed, updated_at: new Date().toISOString() };
+          const { error: e2 } = await supabase.rpc("app_rows_upsert", { p_key: "ng-listings-v1", p_item: item, p_prepend: false });
+          if (e2) throw new Error(e2.message);
+          erp = true;
+        }
+      }
       const r = await fetch(`/api/etsy?action=update_listing&listing_id=${p.listing_id}${p.channel === "etsy_ee" ? "&shop=earth" : ""}`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [p.field]: p.proposed }) });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.etsyError || d.error || `Etsy said ${r.status}`);
-      await onDecide(p, "applied");
+      if (!r.ok) {
+        const msg = d.etsyError || d.error || `Etsy said ${r.status}`;
+        if (erp) await onDecide(p, "applied_erp", /vacation/i.test(msg) ? "Etsy shop is on hold; fixed in the ERP listing" : msg);
+        else throw new Error(msg);
+      } else await onDecide(p, "applied");
     } catch (e) { await onDecide(p, "failed", e.message); }
     setBusy(false);
   };
@@ -335,7 +351,7 @@ function Proposal({ p, onDecide }) {
       <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 220 }}>
           <a href={`https://www.etsy.com/listing/${p.listing_id}`} target="_blank" rel="noreferrer" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{p.title}</a>
-          <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{CH[p.channel] || p.channel} · new {p.field} · {p.reason}</div>
+          <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{CH[p.channel] || p.channel} · new {p.field}{p.erp_id ? " · ERP listing too" : ""} · {p.reason}</div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button disabled={busy} onClick={() => onDecide(p, "rejected")} style={btn()}>Reject</button>
@@ -401,7 +417,7 @@ function AuditTab({ showToast }) {
     const { error: e } = await supabase.rpc("app_rows_upsert", { p_key: RAJ_KEYS.proposals, p_item: item, p_prepend: false });
     if (e) return showToast("⚠ " + e.message);
     setProps(ps => ps.map(x => x.id === p.id ? item : x));
-    showToast(status === "applied" ? "Applied on Etsy" : status === "failed" ? `⚠ Not applied: ${error}` : "Rejected");
+    showToast(status === "applied" ? "Applied in the ERP and on Etsy" : status === "applied_erp" ? `Fixed in the ERP listing (${error})` : status === "failed" ? `⚠ Not applied: ${error}` : "Rejected");
   };
   if (!rows) return <div style={{ color: C.inkFaint, padding: 30 }}>Loading…</div>;
   const sum = rows.find(r => r.id === "summary");

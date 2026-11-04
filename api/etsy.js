@@ -486,7 +486,13 @@ async function etsyHandler(req, res) {
       const ledgerP = Promise.all(windows.map(([a, b]) => allPages(offset =>
         `https://openapi.etsy.com/v3/application/shops/${sid}/payment-account/ledger-entries?min_created=${a}&max_created=${b}&limit=100&offset=${offset}`
       ))).then(c => ({ rows: c.flat() }), e => ({ error: e.message }));
-      const [rawListings, rawReceipts, ledger] = await Promise.all([listingsP, receiptsP, ledgerP]);
+      // The shop itself: on vacation (Etsy puts a shop on hold this way), rating, sales.
+      const shopP = getJson(`https://openapi.etsy.com/v3/application/shops/${sid}`).then(sh => ({
+        name: sh.shop_name || "", vacation: !!sh.is_vacation, vacation_message: String(sh.vacation_message || "").slice(0, 300),
+        rating: +sh.review_average || 0, reviews: +sh.review_count || 0, sold: +sh.transaction_sold_count || 0,
+        active: +sh.listing_active_count || 0, updated: +sh.update_date || 0,
+      }), e => ({ error: e.message }));
+      const [rawListings, rawReceipts, ledger, shopInfo] = await Promise.all([listingsP, receiptsP, ledgerP, shopP]);
 
       const shape = l => {
         const img = [...(l.images || [])].sort((a, b) => (a.rank || 0) - (b.rank || 0))[0];
@@ -548,7 +554,7 @@ async function etsyHandler(req, res) {
         seenE.add(e.entry_id);
         ads.push({ ts: +e.created_timestamp || +e.create_date || 0, kind, amt: Number((-(+e.amount || 0) / 100).toFixed(2)), ref: String(e.reference_id || ""), rtype: String(e.reference_type || "") });
       }
-      return res.json({ ok: true, at: nowS, days, currency: receipts.find(() => true) ? (rawReceipts[0]?.grandtotal?.currency_code || "") : "", listings, others, receipts, ads, ...(ledger.error ? { adsError: ledger.error } : {}) });
+      return res.json({ ok: true, at: nowS, days, shop: shopInfo, currency: receipts.find(() => true) ? (rawReceipts[0]?.grandtotal?.currency_code || "") : "", listings, others, receipts, ads, ...(ledger.error ? { adsError: ledger.error } : {}) });
     }
 
     // ── renewal_queue: listings that have come off the shop, and the ones about to ─
