@@ -164,6 +164,7 @@ function eeSectionFor(listing) {
 async function eeSectionId(listing, hdrs) {
   return ensureSection(eeSectionFor(listing), hdrs);
 }
+let lastSectionError = "";
 async function ensureSection(name, hdrs) {
   const found = await resolveSectionId({ etsy_section_name: name }, hdrs);
   if (found) return found;
@@ -172,7 +173,7 @@ async function ensureSection(name, hdrs) {
       method: "POST", headers: { ...hdrs, "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ title: name }).toString(),
     });
-    if (!r.ok) { console.error(`Etsy section "${name}" couldn't be made:`, r.status, await r.text().catch(() => "")); return null; }
+    if (!r.ok) { lastSectionError = `${r.status} ${await r.text().catch(() => "")}`.slice(0, 300); console.error(`Etsy section "${name}" couldn't be made:`, lastSectionError); return null; }
     const made = await r.json();
     etsySectionCache.get(etsyShop().key)?.push({ id: made.shop_section_id, title: name });
     return made.shop_section_id || null;
@@ -2008,7 +2009,7 @@ async function listingHandler(req, res) {
             if ((d.results || []).length < 100) break;
           }
         }
-        return { sections: ids, moved, kept: kept.length, failed };
+        return { sections: ids, moved, kept: kept.length, failed, ...(lastSectionError ? { sectionError: lastSectionError } : {}) };
       });
       return res.json({ ok: true, ...out });
     } catch (e) { console.error("ee sections:", e); return res.status(500).json({ error: e.message || String(e) }); }
