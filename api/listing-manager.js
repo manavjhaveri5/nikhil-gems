@@ -472,18 +472,29 @@ function readinessInfo(row = {}) {
   };
 }
 
+/* Per shop, for as long as this function instance lives: the profiles change
+   rarely, and pushing several pieces at once otherwise asks Etsy for them once
+   per piece. Only a good answer is kept. */
+const readinessCache = new Map();
 async function etsyReadinessStates(hdrs) {
+  const shopId = etsyShop().id;
+  const hit = readinessCache.get(shopId);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.list;
   try {
     const { "Content-Type": _drop, ...bare } = hdrs;
-    const r = await fetch(
-      `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/readiness-state-definitions`,
+    // etsyFetch waits out Etsy's rate limit; a plain fetch came back empty when
+    // several pieces went up together, and the create then had no profile.
+    const r = await etsyFetch(
+      `https://openapi.etsy.com/v3/application/shops/${shopId}/readiness-state-definitions`,
       { headers: bare }
     );
-    if (!r.ok) return [];
+    if (!r.ok) { console.error(`Etsy readiness profiles (${shopId}):`, r.status, await r.text().catch(() => "")); return []; }
     // The raw row rides along: Etsy has changed these field names before, and
     // seeing them beats guessing at why every profile reads "1 days".
-    return ((await r.json())?.results || []).map(readinessInfo).filter(x => x.id);
-  } catch { return []; }
+    const list = ((await r.json())?.results || []).map(readinessInfo).filter(x => x.id);
+    if (list.length) readinessCache.set(shopId, { at: Date.now(), list });
+    return list;
+  } catch (e) { console.error("Etsy readiness profiles:", e.message); return []; }
 }
 
 /* The listing's own pick wins; otherwise the fastest profile of the right kind. */
@@ -508,7 +519,7 @@ async function pickReadinessState(listing, hdrs) {
   // made-to-order when this listing isn't — better nothing than the wrong one.
   try {
     const { "Content-Type": _drop, ...bare } = hdrs;
-    const sample = await fetch(
+    const sample = await etsyFetch(
       `https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings?state=active&limit=1`,
       { headers: bare }
     );
