@@ -32,7 +32,7 @@ const EBAY_SESSION_KEY = "ng-ebay-oauth-session-v1";
 const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
-  "https://api.ebay.com/oauth/api_scope/sell.item",
+  // (sell.item isn't granted to this app; eBay refuses the whole request with it.)
   // Read-only, for the insights report: impressions and views, and the
   // shipping policies buyers see.
   "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
