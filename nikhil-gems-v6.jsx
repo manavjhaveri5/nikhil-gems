@@ -38,6 +38,8 @@ const OmnisendApp       = React.lazy(() => import("./src/OmnisendApp.jsx"));
 const DocumentsApp      = React.lazy(() => import("./src/DocumentsApp.jsx"));
 const TradeSiteApp      = React.lazy(() => import("./src/TradeSiteApp.jsx"));
 const StoreApp          = React.lazy(() => import("./src/StoreApp.jsx"));
+const RajApp            = React.lazy(() => import("./src/RajApp.jsx"));
+const RajCard           = React.lazy(() => import("./src/RajCard.jsx"));
 const SocialApp         = React.lazy(() => import("./src/SocialApp.jsx"));
 const LabelsApp         = React.lazy(() => import("./src/LabelsApp.jsx"));
 const ShowLabelImport=React.lazy(()=>import("./src/LabelsApp.jsx").then(m=>({default:m.ShowLabelImport})));
@@ -722,6 +724,7 @@ const MODS=[
   {id:"jobwork",icon:"🔧",title:"Job Work",desc:"Track goods sent for polishing, resetting, cutting",group:"inventory",ready:true},
   {id:"etsy",icon:"🏷️",title:"Listing Manager",desc:"Etsy, eBay, Atyahara, Earth Editions listings & orders",group:"selling",ready:true},
   {id:"orders",icon:"🛍️",title:"Orders",desc:"Customer orders, shipping and fulfilment",group:"selling",ready:true},
+  {id:"raj",icon:"🧑‍💼",title:"Raj",desc:"Chief of operations — morning briefing, follow-ups, memory",ready:true},
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
   {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",group:"studio",ready:true},
   {id:"bgremove",icon:"✂️",title:"Background Remover",desc:"Phone photo → clean white background (sandbox)",group:"studio",ready:true},
@@ -935,7 +938,7 @@ function MorningStandup({todoKey="ng-todos-v1",onClose}){
    without a second set of styles to keep in step. */
 /* Each module's tile colour. Module scope, not inside Welcome: the sidebar
    rows and the group pages draw the same tiles, and it is a constant. */
-const MOD_COLORS={purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",trade:"#1F8F4E",store:"#141210",social:"#E1306C",users:"#007AFF",datasets:"#5AC8FA",ledger:"#0A84FF",labels:"#AF52DE",bgremove:"#5AC8FA",omnisend:"#FF2D55"};
+const MOD_COLORS={raj:"#8B6F3E",purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",trade:"#1F8F4E",store:"#141210",social:"#E1306C",users:"#007AFF",datasets:"#5AC8FA",ledger:"#0A84FF",labels:"#AF52DE",bgremove:"#5AC8FA",omnisend:"#FF2D55"};
 
 function SideModule({m,hov,setHov,onEnter,t,small=false}){
   const mc=MOD_COLORS[m.id]||"#8E8E93";
@@ -1362,6 +1365,9 @@ function Welcome({onEnter,onSignOut,allowedMods,todoKey="ng-todos-v1",isAdmin=tr
 
           {/* Etsy: the month against the $10k goal, what's left to ship and file, ad spend.
               Everyone who works the shop sees it — Manav, and staff with Etsy or Orders. */}
+          {/* Raj: today's briefing headline and the follow-ups due. Admin only. */}
+          {isAdmin&&<React.Suspense fallback={null}><RajCard onEnter={onEnter}/></React.Suspense>}
+
           {(isAdmin||visibleMods.some(m=>m.id==="etsy"||m.id==="orders"))&&!userHides(currentUser,"pulse")&&<EtsyPulse onEnter={onEnter} rates={finRates}/>}
 
           {/* Row 1: Show countdown + stat cards */}
@@ -23575,9 +23581,9 @@ const AI_QUICK=[
 // ── Agent definitions ────────────────────────────────────────────────────────
 const AGENTS={
   raj:{
-    id:"raj",name:"Raj",role:"Gem Market Analyst",emoji:"💎",
+    id:"raj",name:"Kabir",role:"Gem Market Analyst",emoji:"💎",
     color:"#5C4033",bgColor:"#FDF6EE",memKey:"ng-agent-raj-v1",
-    greeting:"Hey, I'm Raj. I live in the gemstone market — Etsy, eBay, Reddit, Instagram, Tucson, Japan. Ask me anything: is a stone worth buying, what's it selling for, what's trending, where to sell it, what margin you'll make. I'll search live and give you real numbers.",
+    greeting:"Hey, I'm Kabir. I live in the gemstone market — Etsy, eBay, Reddit, Instagram, Tucson, Japan. Ask me anything: is a stone worth buying, what's it selling for, what's trending, where to sell it, what margin you'll make. I'll search live and give you real numbers.",
     quickPrompts:[
       "What's trending on crystal TikTok / Instagram right now?",
       "Is lodolite quartz worth stocking? Check Etsy prices",
@@ -23634,7 +23640,7 @@ ${recentBills.length>0?`RECENT BILLS: ${recentBills.join(" | ")}`:""}
 ${vendorNames?`VENDORS: ${vendorNames}`:""}
 ${openJobs.length>0?`JOB WORK OUT: ${openJobs.join(" | ")}`:""}`;
     },
-    systemPrompt:(ctx,memory)=>`You are Raj — a sharp, internet-connected gemstone market analyst for Nikhil Gems (Indian wholesale crystal/gemstone exporter).
+    systemPrompt:(ctx,memory)=>`You are Kabir — a sharp, internet-connected gemstone market analyst for Nikhil Gems (Indian wholesale crystal/gemstone exporter).
 
 YOUR PRIMARY JOB is market intelligence. When evaluating any stone or product:
 
@@ -26596,6 +26602,7 @@ export default function Root({onSignOut}){
     else if(mod==="store")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><StoreApp onHome={goHome}/></React.Suspense>;
     else if(mod==="social"&&(isAdmin||allowedMods.some(m=>m.id==="social")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><SocialApp onHome={goHome}/></React.Suspense>;
     else if(mod==="labels")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><LabelsApp onHome={goHome}/></React.Suspense>;
+    else if(mod==="raj")content=<React.Suspense fallback={null}><RajApp onHome={goHome}/></React.Suspense>;
     else if(mod==="ai")content=<AIAssistantApp onHome={goHome}/>;
     else if(mod==="users"&&isAdmin)content=<UsersApp onHome={goHome}/>;
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;

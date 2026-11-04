@@ -544,7 +544,8 @@ async function handleEbay(req, res) {
   const action = url.searchParams.get("action");
   // sync_orders is the Vercel cron and has its own check below. insights only
   // reads, and also takes the queue's cron key so it can be run without a browser.
-  const keyed = (action === "insights" || action === "fix_listings") && await cronKeyOk(req, "etsy_queue");
+  const keyed = (action === "insights" || action === "fix_listings") && await cronKeyOk(req, "etsy_queue")
+    || action === "insights" && await cronKeyOk(req, "raj");
   if (action !== "sync_orders" && !keyed && !(await requireUser(req, res))) return;
 
   // ── insights — why listings do or don't sell (read-only) ────────────────────
@@ -556,7 +557,8 @@ async function handleEbay(req, res) {
       from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 40 }));
   }
 
-  if (action === "insights") return res.json(await ebayInsights({ full: url.searchParams.get("full") === "1", from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 50, q: url.searchParams.get("q") || "" }));
+  if (action === "insights") return res.json(await ebayInsights({ full: url.searchParams.get("full") === "1", from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 50, q: url.searchParams.get("q") || "",
+    lite: url.searchParams.get("lite") === "1", tdays: +url.searchParams.get("tdays") || 30 }));
 
   // ── ping ──────────────────────────────────────────────────────────────────
   if (action === "ping") {
@@ -822,7 +824,9 @@ async function handleEbay(req, res) {
    item's price, watchers and age, a sample of items in full (shipping, where
    it ships to, item specifics, policies), and — once eBay is connected through
    /api/ebay-auth — 30 days of impressions and views per listing. Reads only. */
-async function ebayInsights({ full = false, from = 0, n = 50, q = "" } = {}) {
+/* lite: no per-item GetItem samples or shipping policies (Raj's daily read).
+   tdays: the traffic report's window, ending yesterday (1 = yesterday only). */
+async function ebayInsights({ full = false, from = 0, n = 50, q = "", lite = false, tdays = 30 } = {}) {
   const out = {};
   const u = await trading("GetUser", "");
   out.user = { ok: u.ok, id: xmlTag("UserID", u.xml), feedback: xmlTag("FeedbackScore", u.xml), positive: xmlTag("PositiveFeedbackPercent", u.xml),
@@ -842,7 +846,7 @@ async function ebayInsights({ full = false, from = 0, n = 50, q = "" } = {}) {
   out.active = items;
 
   out.sample = [];
-  for (const it of items.slice(0, full ? 0 : 3)) {
+  for (const it of items.slice(0, full || lite ? 0 : 3)) {
     const { xml } = await trading("GetItem", `<ItemID>${esc(it.id)}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
     out.sample.push({ id: it.id, shipping: xmlBlock("ShippingDetails", xml).slice(0, 2500), shipTo: xmlAll("ShipToLocations", xml),
       excludeShipTo: xmlBlock("ExcludeShipToLocation", xml) ? "yes" : "", specifics: xmlBlock("ItemSpecifics", xml).replace(/<\/?NameValueList>|<Source>.*?<\/Source>/g, " ").slice(0, 1500),
@@ -875,10 +879,11 @@ async function ebayInsights({ full = false, from = 0, n = 50, q = "" } = {}) {
     const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
     const day = d => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10).replace(/-/g, "");
     const metrics = "LISTING_IMPRESSION_TOTAL,LISTING_IMPRESSION_SEARCH_RESULTS_PAGE,LISTING_VIEWS_TOTAL,CLICK_THROUGH_RATE,SALES_CONVERSION_RATE,TRANSACTION";
-    const r = await fetch(`https://api.ebay.com/sell/analytics/v1/traffic_report?dimension=LISTING&metric=${metrics}&filter=${encodeURIComponent(`marketplace_ids:{EBAY_US},date_range:[${day(30)}..${day(1)}]`)}`, { headers: H });
+    const r = await fetch(`https://api.ebay.com/sell/analytics/v1/traffic_report?dimension=LISTING&metric=${metrics}&filter=${encodeURIComponent(`marketplace_ids:{EBAY_US},date_range:[${day(Math.max(1, Math.min(90, tdays)))}..${day(1)}]`)}`, { headers: H });
     const t = await r.json().catch(() => ({}));
     out.traffic = r.ok ? { header: t.header?.metrics?.map(m => m.key), rows: (t.records || []).map(x => [x.dimensionValues?.[0]?.value, ...(x.metricValues || []).map(v => v.value)]) }
       : { error: r.status, detail: JSON.stringify(t).slice(0, 400) };
+    if (lite) return out;
     const f = await fetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers: H });
     out.fulfillmentPolicies = f.ok ? ((await f.json()).fulfillmentPolicies || []).map(p => ({ name: p.name, handling: p.handlingTime?.value, shipTo: p.shipToLocations,
       services: (p.shippingOptions || []).map(o => ({ type: o.optionType, cost: o.costType, svc: (o.shippingServices || []).map(s => `${s.shippingServiceCode} ${s.shippingCost?.value || ""}${s.freeShipping ? " free" : ""}`) })) }))

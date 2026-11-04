@@ -13,6 +13,7 @@ import { isRowKey, readRows, upsertRow } from "../lib/app-rows.js";
 import { endEbayItem } from "./ebay.js";
 import { storeOrderRows } from "../lib/storeOrderRows.js";
 import { withStandLine } from "../lib/standLine.js";
+import { rajSnapshot, rajFallback } from "../lib/raj.js";
 
 const MEDIA_BUCKET = "ng-media";
 
@@ -1718,7 +1719,7 @@ async function listingHandler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
-  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states" || bodyAction === "etsy_queue_tick" || bodyAction === "ee_sections_sync");
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states" || bodyAction === "etsy_queue_tick" || bodyAction === "ee_sections_sync" || bodyAction === "raj_snapshot" || bodyAction === "raj_fallback");
   const user = storeAction ? null : await requireUser(req, res);
   if (!storeAction && !user) return;
 
@@ -1972,6 +1973,19 @@ async function listingHandler(req, res) {
      sold (or was taken down) on Etsy must not stay for sale on the store. */
   /* The Etsy queue's hourly run, from Postgres (or the store secret). `dry`
      says what it would put live without touching Etsy. */
+  /* Raj's mornings (lib/raj.js): the day's numbers at 07:45 IST, and at 09:30
+     a numbers-only briefing if Claude on the Mac hasn't written one. Postgres
+     knocks with the 'raj' cron key; the Mac's scripts use the same key. */
+  if (action === "raj_snapshot" || action === "raj_fallback") {
+    if (!(await cronKeyOk(req, "raj"))) return res.status(401).json({ error: "Unauthorized" });
+    try {
+      const base = `https://${req.headers.host}`;
+      if (action === "raj_fallback") return res.json({ ok: true, ...(await rajFallback({ sb: adminClient(), base })) });
+      const snap = await rajSnapshot({ sb: adminClient(), base });
+      return res.json({ ok: true, id: snap.id, day: snap.day, errors: snap.errors });
+    } catch (e) { console.error("raj:", e); return res.status(500).json({ error: e.message || String(e) }); }
+  }
+
   if (action === "etsy_queue_tick") {
     if (!hasStoreSecret(req) && !(await cronKeyOk(req, "etsy_queue"))) return res.status(401).json({ error: "Unauthorized" });
     try { return res.json({ ok: true, ...(await etsyQueueTick({ dry: body.dry === true })) }); }

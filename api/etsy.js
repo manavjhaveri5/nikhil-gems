@@ -1,4 +1,4 @@
-import { requireUser, hasStoreSecret } from "../lib/auth.js";
+import { requireUser, hasStoreSecret, cronKeyOk } from "../lib/auth.js";
 import { getEtsyAccessToken, etsyAuthHandler, etsyShop, etsyApiKey, withEtsyShop, shopKeyOf } from "../lib/etsy-auth.js";
 
 export const maxDuration = 45; // Vercel Pro: allow up to 45s for multi-page listing fetches
@@ -27,7 +27,9 @@ async function etsyHandler(req, res) {
   // Reviews for eartheditions.co, for the store's server only (store secret).
   // Text, stars and dates; nothing that names or links the Etsy shop.
   if (req.query?.action === "store_reviews") return hasStoreSecret(req) ? storeReviews(res) : res.status(401).json({ error: "Unauthorized" });
-  if (!(await requireUser(req, res))) return;
+  // Raj's morning numbers (lib/raj.js) read insights with the cron key, no browser.
+  const rajKeyed = req.query?.action === "insights" && await cronKeyOk(req, "raj");
+  if (!rajKeyed && !(await requireUser(req, res))) return;
 
   // x-api-key must be keystring:sharedsecret for Etsy API v3
   const key = etsyApiKey();
