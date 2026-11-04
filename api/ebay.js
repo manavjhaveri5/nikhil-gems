@@ -1,4 +1,4 @@
-import { requireUser } from "../lib/auth.js";
+import { requireUser, cronKeyOk } from "../lib/auth.js";
 /**
  * eBay Trading API proxy — uses Auth'n'Auth token (no OAuth flow needed).
  *
@@ -33,6 +33,10 @@ const EBAY_SCOPES = [
   "https://api.ebay.com/oauth/api_scope",
   "https://api.ebay.com/oauth/api_scope/sell.inventory",
   "https://api.ebay.com/oauth/api_scope/sell.item",
+  // Read-only, for the insights report: impressions and views, and the
+  // shipping policies buyers see.
+  "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
 ].join(" ");
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "";
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
@@ -541,8 +545,13 @@ async function handleEbay(req, res) {
   }
   const url    = new URL(req.url, `https://${req.headers.host}`);
   const action = url.searchParams.get("action");
-  // sync_orders is the Vercel cron and has its own check below.
-  if (action !== "sync_orders" && !(await requireUser(req, res))) return;
+  // sync_orders is the Vercel cron and has its own check below. insights only
+  // reads, and also takes the queue's cron key so it can be run without a browser.
+  const keyed = action === "insights" && await cronKeyOk(req, "etsy_queue");
+  if (action !== "sync_orders" && !keyed && !(await requireUser(req, res))) return;
+
+  // ── insights — why listings do or don't sell (read-only) ────────────────────
+  if (action === "insights") return res.json(await ebayInsights());
 
   // ── ping ──────────────────────────────────────────────────────────────────
   if (action === "ping") {
@@ -801,4 +810,56 @@ async function handleEbay(req, res) {
   }
 
   return res.status(400).json({ error: "Unknown action" });
+}
+
+
+/* What a buyer and eBay's search see: the account's standing, every active
+   item's price, watchers and age, a sample of items in full (shipping, where
+   it ships to, item specifics, policies), and — once eBay is connected through
+   /api/ebay-auth — 30 days of impressions and views per listing. Reads only. */
+async function ebayInsights() {
+  const out = {};
+  const u = await trading("GetUser", "");
+  out.user = { ok: u.ok, id: xmlTag("UserID", u.xml), feedback: xmlTag("FeedbackScore", u.xml), positive: xmlTag("PositiveFeedbackPercent", u.xml),
+    site: xmlTag("Site", u.xml), registered: xmlTag("RegistrationDate", u.xml), business: xmlTag("SellerBusinessType", u.xml), store: xmlTag("StoreOwner", u.xml) };
+
+  const items = [];
+  for (let pg = 1; pg <= 5; pg++) {
+    const { ok, xml } = await trading("GetMyeBaySelling", `<ActiveList><Include>true</Include><IncludeWatchCount>true</IncludeWatchCount><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${pg}</PageNumber></Pagination></ActiveList><SoldList><Include>true</Include><DurationInDays>60</DurationInDays></SoldList><UnsoldList><Include>true</Include><DurationInDays>60</DurationInDays></UnsoldList>`);
+    if (!ok) { out.sellingError = ebayErrors(xml); break; }
+    if (pg === 1) out.sold60 = xmlTag("TotalNumberOfEntries", xmlBlock("SoldList", xml)) || "0";
+    const active = xmlBlock("ActiveList", xml);
+    for (const b of xmlAll("Item", xmlBlock("ItemArray", active))) items.push({
+      id: xmlTag("ItemID", b), title: xmlTag("Title", b), price: xmlTag("CurrentPrice", b), watch: xmlTag("WatchCount", b) || "0",
+      start: xmlTag("StartTime", b), qty: xmlTag("QuantityAvailable", b) });
+    if (pg >= parseInt(xmlTag("TotalNumberOfPages", xmlBlock("PaginationResult", active)) || "1", 10)) break;
+  }
+  out.active = items;
+
+  out.sample = [];
+  for (const it of items.slice(0, 3)) {
+    const { xml } = await trading("GetItem", `<ItemID>${esc(it.id)}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
+    out.sample.push({ id: it.id, shipping: xmlBlock("ShippingDetails", xml).slice(0, 2500), shipTo: xmlAll("ShipToLocations", xml),
+      excludeShipTo: xmlBlock("ExcludeShipToLocation", xml) ? "yes" : "", specifics: xmlBlock("ItemSpecifics", xml).replace(/<\/?NameValueList>|<Source>.*?<\/Source>/g, " ").slice(0, 1500),
+      profiles: xmlBlock("SellerProfiles", xml).slice(0, 800), returns: xmlBlock("ReturnPolicy", xml).slice(0, 500),
+      country: xmlTag("Country", xml), location: xmlTag("Location", xml), handling: xmlTag("DispatchTimeMax", xml), bestOffer: xmlTag("BestOfferEnabled", xml),
+      category: xmlTag("CategoryName", xml), hits: xmlTag("HitCount", xml), condition: xmlTag("ConditionDisplayName", xml) });
+  }
+
+  const token = await getEbayAccessToken().catch(() => null);
+  out.oauth = !!token;
+  if (token) {
+    const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const day = d => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10).replace(/-/g, "");
+    const metrics = "LISTING_IMPRESSION_TOTAL,LISTING_IMPRESSION_SEARCH_RESULTS_PAGE,LISTING_VIEWS_TOTAL,CLICK_THROUGH_RATE,SALES_CONVERSION_RATE,TRANSACTION";
+    const r = await fetch(`https://api.ebay.com/sell/analytics/v1/traffic_report?dimension=LISTING&metric=${metrics}&filter=${encodeURIComponent(`marketplace_ids:{EBAY_US},date_range:[${day(30)}..${day(1)}]`)}`, { headers: H });
+    const t = await r.json().catch(() => ({}));
+    out.traffic = r.ok ? { header: t.header?.metrics?.map(m => m.key), rows: (t.records || []).map(x => [x.dimensionValues?.[0]?.value, ...(x.metricValues || []).map(v => v.value)]) }
+      : { error: r.status, detail: JSON.stringify(t).slice(0, 400) };
+    const f = await fetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers: H });
+    out.fulfillmentPolicies = f.ok ? ((await f.json()).fulfillmentPolicies || []).map(p => ({ name: p.name, handling: p.handlingTime?.value, shipTo: p.shipToLocations,
+      services: (p.shippingOptions || []).map(o => ({ type: o.optionType, cost: o.costType, svc: (o.shippingServices || []).map(s => `${s.shippingServiceCode} ${s.shippingCost?.value || ""}${s.freeShipping ? " free" : ""}`) })) }))
+      : { error: f.status };
+  }
+  return out;
 }
