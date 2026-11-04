@@ -900,9 +900,10 @@ export function ebayCategoryFor(title = "") {
   return /\b(sphere|orb|tower|point|wand|palm ?stone|palmstone|heart|egg|skull|carv|ganesha|shivling|lingam|pyramid|cabochon|tumble|bead|pendant|ring|bracelet|figurine|animal|obelisk|merkaba)/i.test(title)
     ? EBAY_CAT_CRYSTALS : EBAY_CAT_SPECIMENS;
 }
-/* Shipping a buyer in the US can believe: tracked from India, free, a 2-day
-   handling time. USPS Media Mail is for books and can't come from India. */
-export const ebayShippingXml = (cost = 0) => `<ShippingDetails><ShippingType>Flat</ShippingType><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>ExpeditedShippingFromOutsideUS</ShippingService><ShippingServiceCost>${Number(cost || 0).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>2</DispatchTimeMax>`;
+/* Shipping a buyer in the US can believe: tracked from India, free, standard
+   delivery dates the couriers we use (Cirro, UniUni, India Post) can meet.
+   USPS Media Mail is for books and can't come from India. */
+export const ebayShippingXml = (cost = 0) => `<ShippingDetails><ShippingType>Flat</ShippingType><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>StandardShippingFromOutsideUS</ShippingService><ShippingServiceCost>${Number(cost || 0).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>3</DispatchTimeMax>`;
 
 async function ebayFixListings({ dry = false, ids = [], from = 0, n = 40 } = {}) {
   const out = { dry, done: [], failed: [] };
