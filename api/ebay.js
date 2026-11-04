@@ -864,7 +864,9 @@ async function ebayInsights({ full = false, from = 0, n = 50, q = "", lite = fal
       out.all.push(...await Promise.all(batch.slice(i, i + 8).map(async it => {
         const { xml } = await trading("GetItem", `<ItemID>${esc(it.id)}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
         return { id: it.id, sku: xmlTag("SKU", xml), cat: xmlTag("CategoryID", xmlBlock("PrimaryCategory", xml)), catName: xmlTag("CategoryName", xml),
-          cond: xmlTag("ConditionID", xml), specifics: xmlAll("NameValueList", xmlBlock("ItemSpecifics", xml)).length, pics: xmlAll("PictureURL", xml).length };
+          cond: xmlTag("ConditionID", xml), specifics: xmlAll("NameValueList", xmlBlock("ItemSpecifics", xml)).length, pics: xmlAll("PictureURL", xml).length,
+          specNames: xmlAll("NameValueList", xmlBlock("ItemSpecifics", xml)).map(b => xmlTag("Name", b)).filter(Boolean).slice(0, 30),
+          bestOffer: xmlTag("BestOfferEnabled", xml), handling: xmlTag("DispatchTimeMax", xml), hits: xmlTag("HitCount", xml) };
       })));
     }
   }

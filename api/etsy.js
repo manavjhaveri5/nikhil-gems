@@ -475,6 +475,7 @@ async function etsyHandler(req, res) {
       if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
       const nowS = Math.floor(Date.now() / 1000);
       const days = Math.min(400, Math.max(30, parseInt(req.query.days, 10) || 180));
+      const audit = req.query.audit === "1";
       const from = nowS - days * 86400, adsFrom = nowS - 90 * 86400;
       const money = m => m && m.amount != null ? (+m.amount || 0) / (+m.divisor || 100) : 0;
       const { allPages, getJson } = etsyQueue(authHeaders);
@@ -498,6 +499,15 @@ async function etsyHandler(req, res) {
           first: +l.original_creation_timestamp || +l.creation_timestamp || 0,
           ends: +l.ending_timestamp || 0, auto: !!l.should_auto_renew,
           img: img ? img.url_170x135 || img.url_570xN || "" : "", state: l.state || "active",
+          // ?audit=1 (Raj's listing audit): what a listing is filed under and says.
+          ...(audit ? {
+            tagList: l.tags || [], materials: l.materials || [], taxonomy: +l.taxonomy_id || 0, section: l.shop_section_id ? +l.shop_section_id : 0,
+            descLen: String(l.description || "").length, descHead: String(l.description || "").slice(0, 400),
+            whoMade: l.who_made || "", whenMade: l.when_made || "", shipProfile: l.shipping_profile_id ? String(l.shipping_profile_id) : "",
+            returnPolicy: l.return_policy_id ? String(l.return_policy_id) : "", procMax: +l.processing_max || 0,
+            weight: +l.item_weight || 0, variations: !!l.has_variations, personal: !!l.is_personalizable, url: l.url || "",
+            updated: +l.updated_timestamp || +l.last_modified_timestamp || 0,
+          } : {}),
         };
       };
       const listings = rawListings.map(shape);
