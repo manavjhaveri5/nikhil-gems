@@ -547,10 +547,18 @@ async function handleEbay(req, res) {
   const action = url.searchParams.get("action");
   // sync_orders is the Vercel cron and has its own check below. insights only
   // reads, and also takes the queue's cron key so it can be run without a browser.
-  const keyed = action === "insights" && await cronKeyOk(req, "etsy_queue");
+  const keyed = (action === "insights" || action === "fix_listings") && await cronKeyOk(req, "etsy_queue");
   if (action !== "sync_orders" && !keyed && !(await requireUser(req, res))) return;
 
   // ── insights — why listings do or don't sell (read-only) ────────────────────
+  // ── fix_listings — move live items into the crystal categories with real
+  // shipping from India. dry=1 reports what each item would get and changes nothing.
+  if (action === "fix_listings") {
+    if (!keyed && req.method !== "POST") return res.status(405).json({ error: "POST only" });
+    return res.json(await ebayFixListings({ dry: url.searchParams.get("dry") === "1", ids: (url.searchParams.get("ids") || "").split(",").filter(Boolean),
+      from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 40 }));
+  }
+
   if (action === "insights") return res.json(await ebayInsights({ full: url.searchParams.get("full") === "1", from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 50, q: url.searchParams.get("q") || "" }));
 
   // ── ping ──────────────────────────────────────────────────────────────────
@@ -878,6 +886,56 @@ async function ebayInsights({ full = false, from = 0, n = 50, q = "" } = {}) {
     out.fulfillmentPolicies = f.ok ? ((await f.json()).fulfillmentPolicies || []).map(p => ({ name: p.name, handling: p.handlingTime?.value, shipTo: p.shipToLocations,
       services: (p.shippingOptions || []).map(o => ({ type: o.optionType, cost: o.costType, svc: (o.shippingServices || []).map(s => `${s.shippingServiceCode} ${s.shippingCost?.value || ""}${s.freeShipping ? " free" : ""}`) })) }))
       : { error: f.status };
+  }
+  return out;
+}
+
+
+/* eBay US categories for the pieces (category 4218, the old default, now
+   lands in Pottery & Glass > Figurines, where crystal buyers never look):
+   shaped and carved stones go in Crystals, natural pieces in Display Specimens. */
+export const EBAY_CAT_CRYSTALS = "3226";
+export const EBAY_CAT_SPECIMENS = "3225";
+export function ebayCategoryFor(title = "") {
+  return /\b(sphere|orb|tower|point|wand|palm ?stone|palmstone|heart|egg|skull|carv|ganesha|shivling|lingam|pyramid|cabochon|tumble|bead|pendant|ring|bracelet|figurine|animal|obelisk|merkaba)/i.test(title)
+    ? EBAY_CAT_CRYSTALS : EBAY_CAT_SPECIMENS;
+}
+/* Shipping a buyer in the US can believe: tracked from India, free, a 2-day
+   handling time. USPS Media Mail is for books and can't come from India. */
+export const ebayShippingXml = (cost = 0) => `<ShippingDetails><ShippingType>Flat</ShippingType><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>ExpeditedShippingFromOutsideUS</ShippingService><ShippingServiceCost>${Number(cost || 0).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>2</DispatchTimeMax>`;
+
+async function ebayFixListings({ dry = false, ids = [], from = 0, n = 40 } = {}) {
+  const out = { dry, done: [], failed: [] };
+  if (dry) {
+    for (const cat of [EBAY_CAT_CRYSTALS, EBAY_CAT_SPECIMENS]) {
+      const { xml } = await trading("GetCategoryFeatures", `<CategoryID>${cat}</CategoryID><DetailLevel>ReturnAll</DetailLevel><FeatureID>ConditionValues</FeatureID><FeatureID>ConditionEnabled</FeatureID>`);
+      out[`conditions_${cat}`] = xmlAll("Condition", xmlBlock("ConditionValues", xml)).map(c => `${xmlTag("ID", c)} ${xmlTag("DisplayName", c)}`);
+      out[`conditionEnabled_${cat}`] = xmlTag("ConditionEnabled", xml);
+    }
+  }
+  let list = ids;
+  if (!list.length) {
+    const all = [];
+    for (let pg = 1; pg <= 5; pg++) {
+      const { xml } = await trading("GetMyeBaySelling", `<ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${pg}</PageNumber></Pagination></ActiveList>`);
+      const active = xmlBlock("ActiveList", xml);
+      for (const b of xmlAll("Item", xmlBlock("ItemArray", active))) all.push(xmlTag("ItemID", b) + "\t" + xmlTag("Title", b));
+      if (pg >= parseInt(xmlTag("TotalNumberOfPages", xmlBlock("PaginationResult", active)) || "1", 10)) break;
+    }
+    out.total = all.length;
+    list = all.slice(from, from + n);
+  }
+  for (let i = 0; i < list.length; i += 5) {
+    await Promise.all(list.slice(i, i + 5).map(async row => {
+      let [id, title] = row.split("\t");
+      if (!title) title = xmlTag("Title", (await trading("GetItem", `<ItemID>${esc(id)}</ItemID>`)).xml);
+      const cat = ebayCategoryFor(title);
+      if (dry) return out.done.push({ id, title, cat });
+      const fields = `<ItemID>${esc(id)}</ItemID><PrimaryCategory><CategoryID>${cat}</CategoryID></PrimaryCategory><ConditionID>1000</ConditionID>${ebayShippingXml(0)}`;
+      const { ok, xml } = await trading("ReviseItem", `<Item>${fields}</Item>`);
+      if (ok) out.done.push({ id, cat, warnings: xmlAll("Errors", xml).map(e => xmlTag("ShortMessage", e)).filter(Boolean).slice(0, 2) });
+      else out.failed.push({ id, title, error: ebayErrors(xml) });
+    }));
   }
   return out;
 }
