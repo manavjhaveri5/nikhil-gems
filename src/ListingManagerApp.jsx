@@ -2546,9 +2546,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr", gap: 12 }}>
                 <div>
                   <Label>Condition</Label>
-                  <select value={form.conditionId || "3000"} onChange={e => set("conditionId", e.target.value)} style={FI()}>
+                  <select value={form.conditionId || "1000"} onChange={e => set("conditionId", e.target.value)} style={FI()}>
                     <option value="1000">New</option>
-                    <option value="3000">Used (default for natural stones)</option>
+                    <option value="3000">Used</option>
                   </select>
                 </div>
                 <div>
@@ -10629,7 +10629,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           sku:          listingMarketplaceSku(listing),
           syncOnly,
           allowCreate,
-          conditionId:  listing.conditionId || "3000",
+          conditionId:  listing.conditionId || "1000",
           shippingCost: listing.shippingCost || 0,
           ...(existingItemId ? { itemId: existingItemId } : {}),
         }),

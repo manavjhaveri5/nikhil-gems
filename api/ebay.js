@@ -409,8 +409,8 @@ export async function publishEbayListing(body = {}) {
   if (!USER_TOKEN) return { ok: false, status: 401, error: "EBAY_USER_TOKEN not set" };
   const {
     title, description, price, quantity = 1, images = [],
-    conditionId = "3000", shippingCost = 0, itemId: existingId,
-    categoryId = "4218", // Crystals & Mineral Specimens
+    conditionId = "1000", shippingCost = 0, itemId: existingId,
+    categoryId = ebayCategoryFor(title), // 4218, the old default, is now Figurines
     video, sku, syncOnly = false, allowCreate = !syncOnly,
   } = body;
   const itemSku = String(sku || "").trim();
@@ -449,7 +449,9 @@ export async function publishEbayListing(body = {}) {
       `<Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>`,
       ...(picXml ? [`<PictureDetails>${picXml}</PictureDetails>`] : []),
       ...(videoXml ? [videoXml] : []),
-      `<ShippingDetails><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>USPSMedia</ShippingService><ShippingServiceCost>${Number(shippingCost).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails>`,
+      `<PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>`,
+      `<ConditionID>${esc(String(conditionId))}</ConditionID>`,
+      ebayShippingXml(shippingCost),
     ];
     const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
     if (!ok) {
@@ -491,19 +493,12 @@ export async function publishEbayListing(body = {}) {
         <Value>Crystal</Value>
       </NameValueList>
     </ItemSpecifics>
-    <DispatchTimeMax>5</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
     <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
     ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
     ${videoXml}
-    <ShippingDetails>
-      <ShippingServiceOptions>
-        <ShippingServicePriority>1</ShippingServicePriority>
-        <ShippingService>USPSMedia</ShippingService>
-        <ShippingServiceCost>${Number(shippingCost).toFixed(2)}</ShippingServiceCost>
-      </ShippingServiceOptions>
-    </ShippingDetails>
+    ${ebayShippingXml(shippingCost)}
     <Site>US</Site>
   `;
   const { ok, xml } = await trading("AddItem", `<Item>${itemXml}</Item>`);
@@ -787,7 +782,7 @@ async function handleEbay(req, res) {
     if (body.description !== undefined) fields.push(`<Description><![CDATA[${plainToHtml(body.description)}]]></Description>`);
     if (body.conditionId !== undefined) fields.push(`<ConditionID>${esc(String(body.conditionId))}</ConditionID>`);
     if (body.shippingCost !== undefined) {
-      fields.push(`<ShippingDetails><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>USPSMedia</ShippingService><ShippingServiceCost>${Number(body.shippingCost).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails>`);
+      fields.push(ebayShippingXml(body.shippingCost));
     }
     if (Array.isArray(body.imageUrls) && body.imageUrls.length > 0) {
       const picXml = body.imageUrls.slice(0, 12).map(u => `<PictureURL>${esc(u)}</PictureURL>`).join("");
@@ -893,11 +888,12 @@ async function ebayInsights({ full = false, from = 0, n = 50, q = "" } = {}) {
 
 /* eBay US categories for the pieces (category 4218, the old default, now
    lands in Pottery & Glass > Figurines, where crystal buyers never look):
-   shaped and carved stones go in Crystals, natural pieces in Display Specimens. */
+   anything polished or shaped (spheres, towers, dodecahedrons…) and carvings
+   go in Crystals, natural pieces in Display Specimens. */
 export const EBAY_CAT_CRYSTALS = "3226";
 export const EBAY_CAT_SPECIMENS = "3225";
 export function ebayCategoryFor(title = "") {
-  return /\b(sphere|orb|tower|point|wand|palm ?stone|palmstone|heart|egg|skull|carv|ganesha|shivling|lingam|pyramid|cabochon|tumble|bead|pendant|ring|bracelet|figurine|animal|obelisk|merkaba)/i.test(title)
+  return /\b(polished|sphere|orb|tower|point|wand|dodecahedron|icosahedron|octahedron|cube|generator|platonic|vogel|slab|free ?form|palm ?stone|palmstone|heart|egg|skull|carv|ganesha|shivling|lingam|pyramid|cabochon|tumble|bead|pendant|ring|bracelet|figurine|animal|obelisk|merkaba)/i.test(title)
     ? EBAY_CAT_CRYSTALS : EBAY_CAT_SPECIMENS;
 }
 /* Shipping a buyer in the US can believe: tracked from India, free, standard

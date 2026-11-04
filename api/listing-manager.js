@@ -157,7 +157,7 @@ function eeSectionFor(listing) {
   const t = [listing.title, listing.shape, listing.productType, ...(listing.tags || [])].join(" ").toLowerCase();
   if (/\b(pendants?|necklaces?|rings?|bracelets?|earrings?|jewell?ery|jewelry|anklets?|beads?|cabochons?)\b/.test(t)) return "Jewellery";
   if (/\b(carvings?|carved|skulls?|figurines?|statues?|idols?|buddha|ganesh\w*|animals?|angels?|dragons?|owls?|elephants?|turtles?|frogs?|birds?|fish|cats?|horses?|bears?|fox|deer|rabbits?|lions?|wolf|wolves)\b/.test(t)) return "Carvings";
-  if (/\b(polished|spheres?|orbs?|palm ?stones?|hearts?|towers?|tumbled?|tumbles?|eggs?|wands?|worry|pyramids?|obelisks?|free ?forms?|massage|lingams?|shivalingam|slabs?)\b/.test(t)) return "Polished crystals";
+  if (/\b(polished|spheres?|orbs?|palm ?stones?|hearts?|towers?|tumbled?|tumbles?|eggs?|wands?|worry|pyramids?|obelisks?|free ?forms?|massage|lingams?|shivalingam|slabs?|points?|generators?|dodecahedrons?|icosahedrons?|octahedrons?|cubes?|merkabas?|platonic|vogels?|cabochons?)\b/.test(t)) return "Polished crystals";
   return "Mineral specimens";
 }
 // The section by that name on the current shop, made there if it isn't yet.
