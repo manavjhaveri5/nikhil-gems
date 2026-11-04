@@ -423,7 +423,8 @@ function AuditTab({ showToast }) {
   const sum = rows.find(r => r.id === "summary");
   if (!sum) return <div style={{ ...card, padding: 24, color: C.inkMid }}>The first audit runs at 7:30 IST.</div>;
   const order = { high: 0, medium: 1, low: 2 };
-  const checks = rows.filter(r => r.id !== "summary" && r.kind === kind && r.count > 0).sort((a, b) => order[a.severity] - order[b.severity] || b.count - a.count);
+  const checks = rows.filter(r => r.id !== "summary" && r.kind === kind && r.count > 0)
+    .sort((a, b) => (b.check === "etsy_shop_on_hold") - (a.check === "etsy_shop_on_hold") || order[a.severity] - order[b.severity] || b.count - a.count);
   const pending = props.filter(p => p.status === "pending");
   return (
     <div>
