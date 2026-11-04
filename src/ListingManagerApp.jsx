@@ -6619,6 +6619,10 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
   const [filterTags,     setFilterTags]     = useState(new Set());
   const [sections,       setSections]       = useState([]);
   const [filterSection,  setFilterSection]  = useState(null);
+  // The grid shows 100 at a time; a new filter or search starts again at page one.
+  const LIVE_PAGE = 100;
+  const [livePage, setLivePage] = useState(0);
+  useEffect(() => { setLivePage(0); }, [stFilter, filterSection, filterTags, search]);
   const [activeSales,    setActiveSales]    = useState([]);
   const [orderFilter,    setOrderFilter]    = useState("all");
   const [editL,        setEditL]        = useState(null);
@@ -6847,9 +6851,34 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
         if (newestTs > 0) ordersUrl += `&min_created=${Math.max(0, Math.floor(newestTs - INCREMENTAL_BUFFER_S))}`;
       }
 
+      /* Every listing, 100 at a time, one Etsy request per call. listings_all
+         did all the pages in one server call, and with 1,100+ active listings
+         that ran past its time limit — the tab then fell back to the first 100.
+         Each page shows as it lands; a busy Etsy (429) is waited out. */
+      const loadAllListings = async () => {
+        const out = [], stateErrors = [], seen = new Set();
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        for (const state of ["active", "draft", "inactive", "sold_out"]) {
+          for (let offset = 0; ; offset += 100) {
+            let r;
+            for (let a = 0; a < 4; a++) {
+              r = await fetch(`/api/etsy?action=listings&state=${state}&limit=100&offset=${offset}`, { headers: authHdr });
+              if (r.status !== 429) break;
+              await sleep(800 * (a + 1));
+            }
+            if (!r.ok) { const e = await r.json().catch(() => ({})); stateErrors.push({ state, error: e.error || `HTTP ${r.status}` }); break; }
+            const d = await r.json();
+            for (const l of d.results || []) if (!seen.has(l.listing_id)) { seen.add(l.listing_id); out.push(l); }
+            setListings([...out]);
+            if ((d.results || []).length < 100 || offset + 100 >= (d.count || 0)) break;
+            await sleep(250);
+          }
+        }
+        return { ok: true, json: async () => ({ results: out, stateErrors: stateErrors.length ? stateErrors : undefined }) };
+      };
       const [pr, lr, or_, sr, dr] = await Promise.all([
         fetch("/api/etsy?action=ping", { headers: authHdr }),
-        fetch("/api/etsy?action=listings_all", { headers: authHdr }),
+        loadAllListings(),
         fetch(ordersUrl, { headers: authHdr, cache: "no-store" }),
         fetch("/api/etsy?action=sections", { headers: authHdr }),
         fetch("/api/etsy?action=discounts", { headers: authHdr }),
@@ -7509,6 +7538,7 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
               : <>
                   <div style={{fontSize:11,color:C.inkFaint,marginBottom:12}}>
                     {visListings.length} listing{visListings.length!==1?"s":""}
+                    {visListings.length>LIVE_PAGE && ` · showing ${livePage*LIVE_PAGE+1}–${Math.min((livePage+1)*LIVE_PAGE,visListings.length)}`}
                     {filterSection!==null && ` · ${sections.find(s=>s.shop_section_id===filterSection)?.title||"section"}`}
                     {filterTags.size>0 && ` · ${filterTags.size} tag filter${filterTags.size!==1?"s":""}`}
                   </div>
@@ -7517,7 +7547,7 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
                     const bestPct = activeSales.reduce((m,s)=>Math.max(m,parseFloat(s.percent_off||0)),0);
                     return (
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(175px,1fr))",gap:12}}>
-                    {visListings.map(l=>{
+                    {visListings.slice(livePage*LIVE_PAGE,(livePage+1)*LIVE_PAGE).map(l=>{
                       const img    = l.images?.[0]||l.main_image;
                       const imgUrl = img?.url_570xN||img?.url_170x135||img?.url_fullxfull;
                       const rawAmt = l.price?.amount||0, rawDiv = l.price?.divisor||100, rawCode = l.price?.currency_code||"INR";
@@ -7606,6 +7636,19 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
                       );
                     })}
                   </div>
+                    );
+                  })()}
+                  {visListings.length>LIVE_PAGE && (()=>{
+                    const pages=Math.ceil(visListings.length/LIVE_PAGE);
+                    const go=i=>{setLivePage(i);window.scrollTo({top:0,behavior:"smooth"});};
+                    const btn=on=>({border:`1px solid ${on?C.ink:C.border}`,background:on?C.ink:C.surface,color:on?"#FAF0DC":C.ink,
+                      borderRadius:7,padding:"6px 11px",fontSize:12,fontWeight:700,cursor:"pointer",minWidth:34});
+                    return (
+                      <div style={{display:"flex",gap:6,justifyContent:"center",flexWrap:"wrap",margin:"18px 0 6px"}}>
+                        <button type="button" disabled={livePage===0} onClick={()=>go(livePage-1)} style={{...btn(false),opacity:livePage===0?.4:1}}>← Prev</button>
+                        {Array.from({length:pages},(_,i)=><button key={i} type="button" onClick={()=>go(i)} style={btn(i===livePage)}>{i+1}</button>)}
+                        <button type="button" disabled={livePage>=pages-1} onClick={()=>go(livePage+1)} style={{...btn(false),opacity:livePage>=pages-1?.4:1}}>Next →</button>
+                      </div>
                     );
                   })()}
                 </>
