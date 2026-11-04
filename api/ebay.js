@@ -551,7 +551,7 @@ async function handleEbay(req, res) {
   if (action !== "sync_orders" && !keyed && !(await requireUser(req, res))) return;
 
   // ── insights — why listings do or don't sell (read-only) ────────────────────
-  if (action === "insights") return res.json(await ebayInsights({ full: url.searchParams.get("full") === "1", q: url.searchParams.get("q") || "" }));
+  if (action === "insights") return res.json(await ebayInsights({ full: url.searchParams.get("full") === "1", from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 50, q: url.searchParams.get("q") || "" }));
 
   // ── ping ──────────────────────────────────────────────────────────────────
   if (action === "ping") {
@@ -817,7 +817,7 @@ async function handleEbay(req, res) {
    item's price, watchers and age, a sample of items in full (shipping, where
    it ships to, item specifics, policies), and — once eBay is connected through
    /api/ebay-auth — 30 days of impressions and views per listing. Reads only. */
-async function ebayInsights({ full = false, q = "" } = {}) {
+async function ebayInsights({ full = false, from = 0, n = 50, q = "" } = {}) {
   const out = {};
   const u = await trading("GetUser", "");
   out.user = { ok: u.ok, id: xmlTag("UserID", u.xml), feedback: xmlTag("FeedbackScore", u.xml), positive: xmlTag("PositiveFeedbackPercent", u.xml),
@@ -837,7 +837,7 @@ async function ebayInsights({ full = false, q = "" } = {}) {
   out.active = items;
 
   out.sample = [];
-  for (const it of items.slice(0, 3)) {
+  for (const it of items.slice(0, full ? 0 : 3)) {
     const { xml } = await trading("GetItem", `<ItemID>${esc(it.id)}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
     out.sample.push({ id: it.id, shipping: xmlBlock("ShippingDetails", xml).slice(0, 2500), shipTo: xmlAll("ShipToLocations", xml),
       excludeShipTo: xmlBlock("ExcludeShipToLocation", xml) ? "yes" : "", specifics: xmlBlock("ItemSpecifics", xml).replace(/<\/?NameValueList>|<Source>.*?<\/Source>/g, " ").slice(0, 1500),
@@ -846,11 +846,13 @@ async function ebayInsights({ full = false, q = "" } = {}) {
       category: xmlTag("CategoryName", xml), hits: xmlTag("HitCount", xml), condition: xmlTag("ConditionDisplayName", xml) });
   }
 
-  // Category, condition and specifics for every item (one GetItem each, a few at a time).
+  // Category, condition and specifics per item (one GetItem each, a few at a
+  // time), a batch of n from `from` so a call stays inside the time limit.
   if (full) {
     out.all = [];
-    for (let i = 0; i < items.length; i += 6) {
-      out.all.push(...await Promise.all(items.slice(i, i + 6).map(async it => {
+    const batch = items.slice(from, from + n);
+    for (let i = 0; i < batch.length; i += 8) {
+      out.all.push(...await Promise.all(batch.slice(i, i + 8).map(async it => {
         const { xml } = await trading("GetItem", `<ItemID>${esc(it.id)}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
         return { id: it.id, sku: xmlTag("SKU", xml), cat: xmlTag("CategoryID", xmlBlock("PrimaryCategory", xml)), catName: xmlTag("CategoryName", xml),
           cond: xmlTag("ConditionID", xml), specifics: xmlAll("NameValueList", xmlBlock("ItemSpecifics", xml)).length, pics: xmlAll("PictureURL", xml).length };
