@@ -83,7 +83,9 @@ export function redact(s) {
     .replace(/\b\d{8,10}:[A-Za-z0-9_-]{30,}\b/g, "[bot-token]")
     .replace(/((?:password|passwd|secret|token|api[_-]?key|service_role)[^\n]{0,12}?[:=]\s*)\S{6,}/gi, "$1[redacted]")
     .replace(/\b[A-Fa-f0-9]{40,}\b/g, "[hex]")
-    .replace(/\b[A-Za-z0-9+/]{48,}={0,2}/g, "[blob]");
+    .replace(/\b[A-Za-z0-9+/]{48,}={0,2}/g, "[blob]")
+    // Card and bank account numbers (11–19 digits, spaces or dashes allowed): keep the last 4.
+    .replace(/\b\d(?:[ -]?\d){10,18}\b/g, m => `[acct …${m.replace(/\D/g, "").slice(-4)}]`);
 }
 
 export async function telegram(text) {

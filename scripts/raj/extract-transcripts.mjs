@@ -115,6 +115,7 @@ for (const f of files) {
     } else if (o.type === "assistant") {
       const c = o.message?.content;
       if (Array.isArray(c)) text = c.filter(b => b?.type === "text").map(b => b.text).join("\n").trim();
+      if (/^You've hit your (weekly|daily|session) limit/i.test(text) || /^API Error/.test(text)) text = "";
       who = "Claude";
       text = clip(text, 1600);
     }
