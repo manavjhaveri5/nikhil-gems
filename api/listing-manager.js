@@ -9,6 +9,7 @@ import { requireUser, hasStoreSecret, adminClient, cronKeyOk } from "../lib/auth
 
 import { getEtsyAccessToken, etsyShop, etsyApiKey, withEtsyShop, shopKeyOf, ETSY_SHOPS } from "../lib/etsy-auth.js";
 import { createClient } from "@supabase/supabase-js";
+import { isRowKey, readRows, upsertRow } from "../lib/app-rows.js";
 import { endEbayItem } from "./ebay.js";
 import { storeOrderRows } from "../lib/storeOrderRows.js";
 import { withStandLine } from "../lib/standLine.js";
@@ -841,8 +842,8 @@ async function etsyQueueTickShop({ dry = false, sb = adminClient(), at = new Dat
   const shop = etsyShop(), PK = shop.platform;
   const tickKey = shop.key === "atyahara" ? QUEUE_TICK_KEY : `${QUEUE_TICK_KEY}-${shop.key}`;
   const lidOf = it => String(it.listing_id || String(it.id || "").replace(/^ee:/, ""));
-  const read = async k => { const { data } = await sb.from("app_data").select("value").eq("key", k).maybeSingle(); return typeof data?.value === "string" ? JSON.parse(data.value) : data?.value; };
-  const upsert = async (k, item) => { const { error } = await sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: false }); if (error) throw new Error(error.message); };
+  const read = async k => { if (isRowKey(k)) return readRows(sb, k); const { data } = await sb.from("app_data").select("value").eq("key", k).maybeSingle(); return typeof data?.value === "string" ? JSON.parse(data.value) : data?.value; };
+  const upsert = async (k, item) => { if (isRowKey(k)) return upsertRow(sb, k, item, false); const { error } = await sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: false }); if (error) throw new Error(error.message); };
   const settings = { perDay: 5, paused: false, ...((await read(QUEUE_SETTINGS_KEY)) || {}) };
   const items = ((await read(QUEUE_KEY)) || []).filter(i => (i.shop || "atyahara") === shop.key);
   const { day, hour } = etNow(at);
@@ -2017,11 +2018,14 @@ async function listingHandler(req, res) {
     const order = body.order || {};
     const sb = createClient(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
     const readKey = async k => {
+      if (isRowKey(k)) return readRows(sb, k);
       const { data } = await sb.from("app_data").select("value").eq("key", k).maybeSingle();
       const v = typeof data?.value === "string" ? JSON.parse(data.value) : data?.value;
       return Array.isArray(v) ? v : [];
     };
-    const upsert = (k, item, prepend = true) => sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: prepend });
+    const upsert = (k, item, prepend = true) => isRowKey(k)
+      ? upsertRow(sb, k, item, prepend).then(() => ({ error: null }), e => ({ error: { message: e.message } }))
+      : sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: prepend });
     const [orders, listings] = await Promise.all([readKey("ng-orders-v1"), readKey("ng-listings-v1")]);
     const rows = storeOrderRows(order, listings);
     const results = [];

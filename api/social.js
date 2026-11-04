@@ -21,6 +21,7 @@
    for a person to post. */
 import crypto from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { isRowKey, readRows } from "../lib/app-rows.js";
 import { requireUser, hasStoreSecret, cronKeyOk } from "../lib/auth.js";
 import { INSTAGRAM_VOICE, instagramShape, HASHTAG_ENDING } from "../lib/instagramVoice.js";
 import { writeWithBest } from "../lib/captionWriter.js";
@@ -38,6 +39,7 @@ const basic = (id, secret) => "Basic " + Buffer.from(`${id}:${secret}`).toString
 
 /* ── secrets and the log ─────────────────────────────────────────────────── */
 async function appData(key) {
+  if (isRowKey(key)) return readRows(sb(), key);
   const { data } = await sb().from("app_data").select("value").eq("key", key).maybeSingle();
   return typeof data?.value === "string" ? JSON.parse(data.value) : data?.value ?? null;
 }

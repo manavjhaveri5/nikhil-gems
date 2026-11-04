@@ -1,5 +1,6 @@
 import { waitUntil } from "@vercel/functions";
 import { createClient } from "@supabase/supabase-js";
+import { isRowKey, readRows, saveRows, upsertRow } from "../lib/app-rows.js";
 import { ETSY_CATEGORIES, categoryByValue, sectionIdForCategory, inferCategoryValue } from "../lib/listingCategories.js";
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
@@ -14,6 +15,7 @@ function sb() {
    instead of going quiet after "typing…". */
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`${what} took over ${ms / 1000}s`)), ms))]);
 async function loadK(key) {
+  if (isRowKey(key)) return withTimeout(readRows(sb(), key), 25000, `Reading ${key}`);
   const { data, error } = await withTimeout(sb().from("app_data").select("value").eq("key", key).single(), 25000, `Reading ${key}`);
   if (error || !data) return null;
   return data.value ?? null;
@@ -36,6 +38,8 @@ async function broadcastInvalidate(key) {
   } catch {}
 }
 async function saveK(key, value, { quiet = false } = {}) {
+  // Listings are rows: the database tells open screens itself, so no signal is needed.
+  if (isRowKey(key)) return withTimeout(saveRows(sb(), key, value), 25000, `Saving ${key}`);
   const { error } = await withTimeout(sb().from("app_data").upsert({ key, value }), 25000, `Saving ${key}`);
   if (error) throw new Error(error.message);
   // Telling open ERP screens to refresh is a nicety; it never holds the reply.
@@ -1523,7 +1527,7 @@ async function createTelegramVideoListing(caption = "") {
     shopifyPricePending: true,
   };
   await saveK(_ctx.stock, [stockItem, ...stock]);
-  await saveK(_ctx.listings, [listing, ...listings]);
+  await upsertItemK(_ctx.listings, listing);
   await logActivity({ user: "Telegram", action: "created", module: "listing", label: `Video flat listing: ${title}`, targetId: id, targetMod: "listing" });
   return { success: true, listing_id: id, stock_id: stockId, listing_order_id: listingOrderId, title, video_url: media.url, platform: "Earth Editions", price_pending: true };
 }
@@ -1682,6 +1686,7 @@ const LISTING_USD_INR = Number(process.env.LISTING_USD_INR || 84);
    save only if the migration hasn't been applied to this project. */
 async function upsertItemK(key, item, { prepend = true } = {}) {
   if (!item?.id) throw new Error("upsertItemK requires item.id");
+  if (isRowKey(key)) { await upsertRow(sb(), key, item, prepend); return null; }
   const { data, error } = await sb().rpc("app_data_upsert_item", { p_key: key, p_item: item, p_prepend: prepend });
   if (!error) return Array.isArray(data) ? data : null;
   const curr = (await loadK(key)) || [];

@@ -26,11 +26,89 @@ export const onCacheRefresh=(cb)=>{_refreshCallbacks.push(cb);return()=>{_refres
 const _notifyRefresh=keys=>_refreshCallbacks.forEach(cb=>{try{cb(keys);}catch(e){}});
 
 const DEPRECATED_KEYS=["ng-stock-photos-v1"];
+
+/* ── Keys kept one row per item (table app_rows) ───────────────────────────
+   An array key here lives as rows, (key, id) → item, not as one app_data value.
+   Listings were a single 4.6 MB row: saving one piece rewrote all of it, and
+   every open tab downloaded all of it again, which used up the database's disk
+   IO budget. Now a save writes the items that changed, and a tab that already
+   holds the list fetches only rows changed since it last looked (deleted rows
+   come back as tombstones). The rest of the app still sees one array.
+   Should app_rows not exist (migration not run), the key falls back to app_data. */
+const ROW_KEYS=new Set(["ng-listings-v1"]);
+let _rowsMissing=false;
+const _isRowKey=k=>ROW_KEYS.has(k)&&!_rowsMissing;
+const _rowMark=new Map(); // key → newest updated_at fetched
+const _rowPos=new Map();  // key → Map(id → pos)
+const _missingRowsTable=e=>/app_rows|schema cache|does not exist|42P01|42883|PGRST20[0-9]/i.test(`${e?.code||""} ${e?.message||""}`);
+const _posOf=k=>{if(!_rowPos.has(k))_rowPos.set(k,new Map());return _rowPos.get(k);};
+// Items this device added and the server hasn't numbered yet stay at the front.
+const _sortByPos=(k,list)=>{const pos=_posOf(k);return list.map((x,i)=>[x,i]).sort((a,b)=>((pos.get(a[0]?.id)??-Infinity)-(pos.get(b[0]?.id)??-Infinity))||(a[1]-b[1])).map(([x])=>x);};
+const _fetchRowKey=async(k,signal)=>{
+  const mark=_cache.has(k)?_rowMark.get(k):null;
+  // A few seconds' overlap: a row written just before the mark but committed after it isn't missed.
+  const since=mark?new Date(Date.parse(mark)-30000).toISOString():null;
+  const rows=[];
+  for(let from=0;;from+=1000){
+    let q=supabase.from("app_rows").select("id,pos,data,deleted,updated_at").eq("key",k);
+    q=since?q.gt("updated_at",since):q.eq("deleted",false);
+    const{data,error}=await q.order("updated_at",{ascending:true}).order("id",{ascending:true}).range(from,from+999).abortSignal(signal);
+    if(error){
+      const e=new Error(error.message||"Load failed");
+      e.code=error.code;
+      e.transient=signal?.aborted||!error.code||/abort|fetch|network/i.test(error.message||"");
+      throw e;
+    }
+    rows.push(...(data||[]));
+    if(!data||data.length<1000)break;
+  }
+  const pos=_posOf(k);
+  if(!since){
+    pos.clear();
+    rows.forEach(r=>pos.set(r.id,r.pos));
+    _cache.set(k,_sortByPos(k,rows.map(r=>r.data)));
+  }else if(rows.length){
+    const byId=new Map(_arrayValue(_cache.get(k)).filter(x=>x?.id).map(x=>[x.id,x]));
+    rows.forEach(r=>{if(r.deleted){byId.delete(r.id);pos.delete(r.id);}else{byId.set(r.id,r.data);pos.set(r.id,r.pos);}});
+    _cache.set(k,_sortByPos(k,[...byId.values()]));
+  }
+  let newest=mark||"";
+  rows.forEach(r=>{if(r.updated_at&&(!newest||Date.parse(r.updated_at)>Date.parse(newest)))newest=r.updated_at;});
+  if(newest)_rowMark.set(k,newest);
+};
+// What a save changed against what this device held: the items to write, the ids to remove.
+const _rowDiff=(prev,next)=>{
+  const prevById=new Map(_arrayValue(prev).filter(x=>x?.id).map(x=>[x.id,x]));
+  const nextIds=new Set();
+  const items=[];
+  _arrayValue(next).forEach(x=>{
+    if(!x?.id)return;
+    nextIds.add(x.id);
+    const was=prevById.get(x.id);
+    if(!was||_jsonStable(was)!==_jsonStable(x))items.push(x);
+  });
+  const deletes=prev===undefined?[]:[...prevById.keys()].filter(id=>!nextIds.has(id));
+  return{items,deletes};
+};
+// Returns false when app_rows isn't there, so the caller writes app_data instead.
+const _applyRows=async(k,items,deletes)=>{
+  for(let i=0;i<Math.max(items.length,1);i+=200){
+    const{error}=await supabase.rpc("app_rows_apply",{p_key:k,p_items:items.slice(i,i+200),p_deletes:i===0?deletes:[]});
+    if(error){
+      if(_missingRowsTable(error)){_rowsMissing=true;return false;}
+      throw new Error(error.message);
+    }
+  }
+  // New items get their place from the server; others' changes come along too.
+  _fetchKeysRetrying([k],{},2).catch(()=>{});
+  return true;
+};
 const _isFresh=k=>_cache.has(k)&&(Date.now()-(_keyFetchedAt.get(k)||0))<CACHE_TTL;
 const _invalidateKeys=keys=>{
   const wanted=[...new Set((keys||[]).filter(k=>k&&!DEPRECATED_KEYS.includes(k)))];
   if(!wanted.length)return;
-  wanted.forEach(k=>{_cache.delete(k);_keyFetchedAt.delete(k);if(!_hydrateDone)_droppedEarly.add(k);});
+  // A row key keeps what it holds, so the refetch asks only for what changed.
+  wanted.forEach(k=>{if(_isRowKey(k)&&_cache.has(k)&&_rowMark.has(k)){_keyFetchedAt.delete(k);return;}_cache.delete(k);_keyFetchedAt.delete(k);if(!_hydrateDone)_droppedEarly.add(k);});
   _lastFetchAt=0;
   _persistCache();
   _notifyRefresh(wanted);
@@ -168,8 +246,16 @@ const _fetchKeys=async(keys,{silent=false,timeoutMs=_LOAD_LIMITS[0]}={})=>{
   if(!wanted.length)return;
   const ctl=new AbortController();
   const timer=setTimeout(()=>ctl.abort(),timeoutMs);
-  let res;
-  try{res=await supabase.from("app_data").select("key,value").in("key",wanted).abortSignal(ctl.signal);}
+  const plain=[];
+  let res={data:[]};
+  try{
+    for(const k of wanted){
+      if(!_isRowKey(k)){plain.push(k);continue;}
+      try{await _fetchRowKey(k,ctl.signal);_keyFetchedAt.set(k,Date.now());}
+      catch(e){if(_missingRowsTable(e)){_rowsMissing=true;plain.push(k);}else throw e;}
+    }
+    if(plain.length)res=await supabase.from("app_data").select("key,value").in("key",plain).abortSignal(ctl.signal);
+  }
   finally{clearTimeout(timer);}
   const {data,error}=res;
   if(error){
@@ -186,7 +272,7 @@ const _fetchKeys=async(keys,{silent=false,timeoutMs=_LOAD_LIMITS[0]}={})=>{
     _keyFetchedAt.set(r.key,now);
     found.add(r.key);
   });
-  wanted.forEach(k=>{
+  plain.forEach(k=>{
     if(!found.has(k)){
       _cache.set(k,[]);
       _keyFetchedAt.set(k,now);
@@ -363,6 +449,10 @@ export const syncOfflineQueue=async()=>{
   const failed=[];
   for(const item of q){
     try{
+      if(_isRowKey(item.k)){
+        const{items,deletes}=_rowDiff(item.base,item.v);
+        if(await _applyRows(item.k,items,deletes))continue;
+      }
       const value=Array.isArray(item.v)?await _mergeArrayAgainstFresh(item.k,item.v,item.base):item.v;
       _cache.set(item.k,value);
       _keyFetchedAt.set(item.k,Date.now());
@@ -432,6 +522,11 @@ export const saveK=async(k,d,{merge=true}={})=>{
     return;
   }
 
+  if(_isRowKey(k)){
+    const{items,deletes}=_rowDiff(prev,persisted);
+    if(await _applyRows(k,items,deletes))return;
+  }
+
   const value=merge&&Array.isArray(persisted)?await _mergeArrayAgainstFresh(k,persisted,prev):persisted;
   _cache.set(k,value);
   _keyFetchedAt.set(k,Date.now());
@@ -493,6 +588,16 @@ export const upsertItemK=async(k,item,{prepend=true}={})=>{
     return optimistic;
   }
 
+  if(_isRowKey(k)){
+    const{data:row,error:rowErr}=await supabase.rpc("app_rows_upsert",{p_key:k,p_item:item,p_prepend:prepend});
+    if(!rowErr){
+      if(row?.pos!=null)_posOf(k).set(item.id,row.pos);
+      return _arrayValue(_cache.get(k));
+    }
+    if(!_missingRowsTable(rowErr))throw new Error(rowErr.message);
+    _rowsMissing=true;
+  }
+
   const{data,error}=await supabase.rpc("app_data_upsert_item",{p_key:k,p_item:item,p_prepend:prepend});
   if(error){
     // Migration not applied yet: keep the app functional and still avoid stale
@@ -520,6 +625,13 @@ export const deleteItemK=async(k,id)=>{
   if(!navigator.onLine){
     _enqueueWrite(k,optimistic,curr);
     return optimistic;
+  }
+
+  if(_isRowKey(k)){
+    const{error:rowErr}=await supabase.rpc("app_rows_delete",{p_key:k,p_id:id});
+    if(!rowErr){_posOf(k).delete(id);return _arrayValue(_cache.get(k));}
+    if(!_missingRowsTable(rowErr))throw new Error(rowErr.message);
+    _rowsMissing=true;
   }
 
   const{data,error}=await supabase.rpc("app_data_delete_item",{p_key:k,p_id:id});
