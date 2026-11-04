@@ -10503,14 +10503,11 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         listing = { ...listing, platforms: merged };
       }
     } catch (e) { console.warn("publish: could not re-read platform ids", e); }
-    // Only on the first trip to Etsy: once the listing exists, a re-sync
-    // shouldn't stop to ask about fields the seller has already left blank.
+    // Empty Etsy fields (tags, material, size, weight) no longer stop a publish
+    // to ask: Etsy leaves them blank, and they can be filled in later.
     if ((pkey === "etsy" || pkey === "etsy_ee") && allowCreate && !listing.platforms?.[pkey]?.listing_id) {
       const gaps = etsyGaps(listing);
-      if (gaps.length && !confirm(
-        `This listing publishes to Etsy with these fields empty:\n\n• ${gaps.join("\n• ")}\n\n`
-        + `Etsy will leave them blank and suggest its own guesses. Publish anyway?`
-      )) throw new Error("Publish cancelled — fill the missing Etsy fields first");
+      if (gaps.length) console.info("Etsy publish with empty fields:", gaps.join(", "));
     }
     // Apply per-platform title/description overrides into _ai so the API picks them up
     const ai = { ...(listing._ai || {}) };

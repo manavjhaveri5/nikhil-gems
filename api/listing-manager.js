@@ -147,6 +147,34 @@ async function resolveSectionId(listing, hdrs) {
     return hit ? hit.id : null;
   } catch { return null; }
 }
+/* EarthEditions has four sections, and a piece is filed by what it is:
+   jewellery, a figurative carving, a polished (shaped) stone, or else a
+   specimen as it came out of the ground. Read off the title, shape, type and
+   tags, in that order of precedence. */
+const EE_SECTIONS = ["Polished crystals", "Mineral specimens", "Carvings", "Jewellery"];
+function eeSectionFor(listing) {
+  const t = [listing.title, listing.shape, listing.productType, ...(listing.tags || [])].join(" ").toLowerCase();
+  if (/\b(pendants?|necklaces?|rings?|bracelets?|earrings?|jewell?ery|jewelry|anklets?|beads?|cabochons?)\b/.test(t)) return "Jewellery";
+  if (/\b(carvings?|carved|skulls?|figurines?|statues?|idols?|buddha|ganesh\w*|animals?|angels?|dragons?|owls?|elephants?|turtles?|frogs?|birds?|fish|cats?|horses?|bears?|fox|deer|rabbits?|lions?|wolf|wolves)\b/.test(t)) return "Carvings";
+  if (/\b(polished|spheres?|orbs?|palm ?stones?|hearts?|towers?|tumbled?|tumbles?|eggs?|wands?|worry|pyramids?|obelisks?|free ?forms?|massage|lingams?|shivalingam|slabs?)\b/.test(t)) return "Polished crystals";
+  return "Mineral specimens";
+}
+// The section by that name on the current shop, made there if it isn't yet.
+async function eeSectionId(listing, hdrs) {
+  const name = eeSectionFor(listing);
+  const found = await resolveSectionId({ etsy_section_name: name }, hdrs);
+  if (found) return found;
+  try {
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/sections`, {
+      method: "POST", headers: { ...hdrs, "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ title: name }).toString(),
+    });
+    if (!r.ok) { console.error(`Etsy section "${name}" couldn't be made:`, r.status, await r.text().catch(() => "")); return null; }
+    const made = await r.json();
+    etsySectionCache.get(etsyShop().key)?.push({ id: made.shop_section_id, title: name });
+    return made.shop_section_id || null;
+  } catch (e) { console.error(`Etsy section "${name}":`, e.message); return null; }
+}
 // Etsy hands section titles back HTML-escaped — "Collector&#39;s Corner".
 const decodeHtmlish = t => String(t).replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&amp;/g, "&");
 const ETSY_RETURN_POLICY = 1290534528477; // 14 days, no exchanges — Atyahara's
@@ -899,7 +927,7 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   const hdrs = await etsyHeaders();
   const shippingId = await resolveShippingProfile(wantedShipping, hdrs, { preferUsa: !!listing.etsy_slow_dispatch });
-  const namedSection = await resolveSectionId(listing, hdrs);
+  const namedSection = await resolveSectionId(listing, hdrs) || (!own ? await eeSectionId(listing, hdrs) : null);
 
   const payload = {
     quantity,
