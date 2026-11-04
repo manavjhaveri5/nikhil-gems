@@ -6858,7 +6858,8 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
       const loadAllListings = async () => {
         const out = [], stateErrors = [], seen = new Set();
         const sleep = ms => new Promise(r => setTimeout(r, ms));
-        for (const state of ["active", "draft", "inactive", "sold_out"]) {
+        // The three the tab sorts by. Drafts wait in the Etsy queue tab.
+        for (const state of ["active", "expired", "sold_out"]) {
           for (let offset = 0; ; offset += 100) {
             let r;
             for (let a = 0; a < 4; a++) {
@@ -7429,9 +7430,8 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
                 <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Status</div>
                 {[
                   {k:"active",   label:"Active",   n:listingCount("active")},
-                  {k:"draft",    label:"Draft",    n:listingCount("draft")},
-                  {k:"inactive", label:"Inactive", n:listingCount("inactive")},
-                  {k:"all",      label:"All",      n:listingCount("all")},
+                  {k:"expired",  label:"Expired",  n:listingCount("expired")},
+                  {k:"sold_out", label:"Sold out", n:listingCount("sold_out")},
                 ].map(f=>(
                   <div key={f.k} onClick={()=>setStFilter(f.k)} style={{
                     display:"flex",alignItems:"center",justifyContent:"space-between",
