@@ -109,7 +109,7 @@ function PriceByWeight({ form, weightKg, costPerKg, sale, fx, settings, pick, on
   const fill = () => {
     if (!etsy) return;
     const out = {};
-    if (pick.etsy) out.price_etsy = String(etsy);
+    if (pick.etsy || pick.etsy_ee) out.price_etsy = String(etsy);
     if (pick.store) { out.price_store = String(usa); out.price_store_inr = String(inrIndia); }
     onFill(out);
     try { localStorage.setItem(RATE_MEMO, JSON.stringify({ ...readMemo(), [memoKey(form)]: { mode, rate: +rate || undefined, cost: +cost || undefined, mult: +mult || undefined, india: india === "" ? undefined : +india, used: r } })); } catch { /* fine */ }
@@ -145,7 +145,7 @@ function PriceByWeight({ form, weightKg, costPerKg, sale, fx, settings, pick, on
       </div>
       {etsy > 0 && weightKg > 0 && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 14 }}>
-          {pick.etsy && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>Etsy <b>{inr(etsy)}</b>{sale ? <span style={{ color: C.inkMid }}> · buyer pays {inr(pays)}</span> : ""}</span>}
+          {(pick.etsy || pick.etsy_ee) && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>Etsy <b>{inr(etsy)}</b>{sale ? <span style={{ color: C.inkMid }}> · buyer pays {inr(pays)}</span> : ""}</span>}
           {pick.store && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>USA <b>{usd(usa)}</b></span>}
           {pick.store && <span style={{ background: C.card, borderRadius: 8, padding: "6px 10px", fontSize: 12.5 }}>India <b>{inr(inrIndia)}</b></span>}
           {mode === "cost" && +cost > 0 && <span style={{ fontSize: 11.5, color: C.inkMid }}>cost {inr(+cost * units)}</span>}
@@ -164,6 +164,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
   const [noStockWhy, setNoStockWhy] = useState(() => form.stock_exception?.reason || "");
   const stockException = () => (noStock && !form.linked_stock_id ? { reason: noStockWhy.trim(), at: new Date().toISOString() } : null);
   const [pick, setPick] = useState(() => Object.fromEntries(CHANNELS.map(c => [c.key, linkOf(form, c.key).linked])));
+  // Both Etsy shops list at the same price_etsy, so either one asks for it.
+  const pickEtsy = !!(pick.etsy || pick.etsy_ee);
   const [p, setP] = useState(() => ({
     price_etsy: form.price_etsy || "", price_ebay: form.price_ebay || "",
     price_store: form.price_store || "", price_store_inr: form.price_store_inr || "", price_trade: form.price_trade || "",
@@ -365,7 +367,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
   });
   const apply = async live => {
     let go = null;
-    if (live && pick.etsy && !(go = await etsyGo())) return;
+    const ek = pick.etsy ? "etsy" : pick.etsy_ee ? "etsy_ee" : null;
+    if (live && ek && !(go = await etsyGo(ek))) return;
     const patch = {
       stock_exception: stockException(),
       price_etsy: p.price_etsy,
@@ -564,7 +567,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
                         <div style={{ textAlign: "right", flex: "none" }}>
                           <div style={{ fontFamily: serif, fontSize: 20, color: C.ink }}>{r ? inr(r) : x.price ? `${x.price} ${x.currency}` : "—"}</div>
                           {r > 0 && x.currency !== "INR" && <div style={{ fontSize: 11, color: C.inkFaint }}>{x.price.toLocaleString()} {x.currency}</div>}
-                          {r > 0 && vi < 0 && pick.etsy && <button type="button" onClick={() => setP(v => ({ ...v, price_etsy: listedFor(Math.round(r)) }))}
+                          {r > 0 && vi < 0 && pickEtsy && <button type="button" onClick={() => setP(v => ({ ...v, price_etsy: listedFor(Math.round(r)) }))}
                             style={{ marginTop: 4, border: `1px solid ${C.border}`, background: "transparent", borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 700, color: C.ink, cursor: "pointer" }}>Match on Etsy</button>}
                         </div>
                       </div>
@@ -578,7 +581,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
           {step === "price" && <>
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Prices</div>
             {!chosen.length && <div style={{ color: C.inkMid, fontSize: 14 }}>Pick where it goes first.</div>}
-            {chosen.length > 0 && vi < 0 && (pick.etsy || pick.store) && (
+            {chosen.length > 0 && vi < 0 && (pickEtsy || pick.store) && (
               <PriceByWeight form={form} weightKg={weightKg} sale={sale} fx={fx} settings={s} pick={pick}
                 costPerKg={card && +card.costPrice && String(card.unit || "").toLowerCase() === "kg" ? +card.costPrice : card && +card.costPrice && ["g", "gm", "gram", "grams"].includes(String(card.unit || "").toLowerCase()) ? +card.costPrice * 1000 : 0}
                 onFill={out => setP(v => ({ ...v, ...out }))} />
@@ -601,7 +604,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
               const kgText = k => k < 1 ? `${Math.round(k * 1000)} g` : `${+k.toFixed(2)} kg`;
               /* Tap a rate to price this piece at it: rate × this piece's weight,
                  or the price itself for a piece compared by the piece. */
-              const FIELDS = [["price_etsy", "Etsy", "₹", pick.etsy, c => c.price_etsy, 10], ["price_store", "USA", "$", pick.store, storeOf, 1], ["price_store_inr", "India", "₹", pick.store, indiaOf, 10]];
+              const FIELDS = [["price_etsy", "Etsy", "₹", pickEtsy, c => c.price_etsy, 10], ["price_store", "USA", "$", pick.store, storeOf, 1], ["price_store_inr", "India", "₹", pick.store, indiaOf, 10]];
               const apply = (field, value, step) => setP(v => ({ ...v, [field]: String(Math.round(value / step) * step) }));
               const cols = "34px 1fr 56px 74px 66px 70px";
               const cellBtn = (on, txt, title, onClick) => <button type="button" disabled={!on} onClick={onClick} title={title}
@@ -698,7 +701,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
                   style={{ alignSelf: "flex-start", border: `1px dashed ${C.border}`, background: "transparent", borderRadius: 8, padding: "6px 12px", fontSize: 12.5, fontWeight: 700, color: C.ink, cursor: "pointer" }}>+ Add a cost</button>
               </div>
             </Box>}
-            {vi >= 0 && (pick.etsy || pick.store) && <Box>
+            {vi >= 0 && (pickEtsy || pick.store) && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 2 }}>Prices by {varName.toLowerCase()}</div>
               <div style={{ fontSize: 11.5, color: C.inkMid, marginBottom: 8 }}>Each option's listed price. Customer pays is after your {sale ? `${sale}% ` : ""}sale; profit is after fees, shipping and that option's cost.</div>
               {vopts.map(o => {
@@ -711,7 +714,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
                 return (
                   <div key={o.id} style={{ borderTop: `1px solid ${C.border}`, padding: "10px 0", display: "flex", flexWrap: "wrap", gap: "8px 18px", alignItems: "flex-end" }}>
                     <div style={{ flex: "1 1 120px", fontSize: 14, fontWeight: 700, color: C.ink, alignSelf: "center" }}>{o.label}</div>
-                    {pick.etsy && <div>
+                    {pickEtsy && <div>
                       <div style={{ fontSize: 10.5, color: C.inkFaint, marginBottom: 2 }}>Etsy</div>
                       <div style={cell}><span style={{ color: C.inkMid }}>₹</span><input type="number" inputMode="decimal" value={o.price_etsy ?? ""} onChange={e => setOptPrice(o.id, "price_etsy", e.target.value)} style={inp} /></div>
                       <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 4 }}>pays <PaysInput value={paysV} size={14} width={70} onSet={v => setOptPrice(o.id, "price_etsy", listedFor(v))} />{mE && <> ≈ {usd(Math.round(paysV / rate))} · profit <b style={{ color: mE.profit >= 0 ? C.green : C.red }}>{mE.profit < 0 ? "− " : ""}{inr(Math.abs(mE.profit))}</b></>}</div>
@@ -730,7 +733,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
                 );
               })}
             </Box>}
-            {pick.etsy && <Box>
+            {pickEtsy && <Box>
               <div style={{ fontSize: 12, fontWeight: 800, color: C.ink, marginBottom: 8 }}>Etsy</div>
               <div style={{ display: "flex", gap: 16, alignItems: "flex-end" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>{vi >= 0
