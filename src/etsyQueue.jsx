@@ -181,6 +181,9 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
   const [busy, setBusy] = useState("");
   const [now, setNow] = useState(() => new Date());
   const phone = mob();
+  // One shop at a time: each has its own slots, runway and refusals.
+  const [shop, setShopRaw] = useState(() => { try { return localStorage.getItem("lm-etsy-queue-shop") === "earth" ? "earth" : "atyahara"; } catch { return "atyahara"; } });
+  const setShop = k => { setShopRaw(k); try { localStorage.setItem("lm-etsy-queue-shop", k); } catch { /* fine */ } };
 
   const load = async () => {
     const [q, s, t] = await Promise.all([loadKFresh(QUEUE_KEY).catch(() => null), loadQueueSettings(), loadKFresh(QUEUE_TICK_KEY).catch(() => null)]);
@@ -196,12 +199,14 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
 
   const byLid = useMemo(() => new Map(listings.map(l => [l.id, l])), [listings]);
   const byId = useMemo(() => ({ get: qid => byLid.get(listingIdOf({ id: qid })) }), [byLid]);
-  const all = items || [];
+  const every = items || [];
+  const all = every.filter(i => shopOf(i) === shop);
   const stuck = all.filter(i => i.status === "stuck");
+  const countOf = k => every.filter(i => shopOf(i) === k && (i.status === "queued" || i.status === "stuck")).length;
   const when = useMemo(() => forecast(all, settings, now), [items, settings, now]);
   // In the order they'll go live (the shape rule can put one behind a later piece); queue order when paused.
   const waiting = all.filter(i => i.status === "queued").sort((a, b) => (+when.get(a.id) || Infinity) - (+when.get(b.id) || Infinity) || byOrder(a, b));
-  useEffect(() => { onCount?.(waiting.length + stuck.length); }, [waiting.length, stuck.length]);
+  useEffect(() => { onCount?.(countOf("atyahara") + countOf("earth")); }, [items]);
 
   const today = etNow(now).day;
   const recent = all.filter(i => i.status === "live" && i.live_at && +now - new Date(i.live_at) < 7 * DAY).sort((a, b) => new Date(b.live_at) - new Date(a.live_at));
@@ -264,7 +269,7 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
     return src ? <img src={src} alt="" style={{ width: size, height: size, borderRadius: 8, objectFit: "cover", flex: "none", background: C.card }} />
       : <div style={{ width: size, height: size, borderRadius: 8, background: C.card, flex: "none" }} />;
   };
-  const meta = it => [shopOf(it) === "earth" ? "EarthEditions" : "", it.shape, it.material, it.price].filter(Boolean).join(" · ");
+  const meta = it => [it.shape, it.material, it.price].filter(Boolean).join(" · ");
 
   return (
     <div style={{ padding: phone ? "12px 12px 40px" : "16px 22px 40px", maxWidth: 980, margin: "0 auto" }}>
@@ -287,6 +292,14 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
         <input type="checkbox" checked={!!settings.on} onChange={e => saveSettings({ on: e.target.checked })} />
         New pieces published to Etsy go into the queue{settings.on ? "" : " — off: they go live straight away"}
       </label>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {[["atyahara", "Atyahara"], ["earth", "EarthEditions"]].map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setShop(k)} style={pill(shop === k)}>
+            {label}{items ? <span style={{ opacity: .7, fontWeight: 600 }}> · {countOf(k)}</span> : null}
+          </button>
+        ))}
+      </div>
 
       {items === null ? <div style={{ padding: 36, textAlign: "center", color: C.inkFaint, fontSize: 13 }}>Loading…</div> : <>
         <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr 1fr" : "repeat(4, minmax(0, 1fr))", gap: 10, marginBottom: 12 }}>
