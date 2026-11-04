@@ -551,7 +551,7 @@ async function handleEbay(req, res) {
   if (action !== "sync_orders" && !keyed && !(await requireUser(req, res))) return;
 
   // ── insights — why listings do or don't sell (read-only) ────────────────────
-  if (action === "insights") return res.json(await ebayInsights());
+  if (action === "insights") return res.json(await ebayInsights({ full: url.searchParams.get("full") === "1", q: url.searchParams.get("q") || "" }));
 
   // ── ping ──────────────────────────────────────────────────────────────────
   if (action === "ping") {
@@ -817,7 +817,7 @@ async function handleEbay(req, res) {
    item's price, watchers and age, a sample of items in full (shipping, where
    it ships to, item specifics, policies), and — once eBay is connected through
    /api/ebay-auth — 30 days of impressions and views per listing. Reads only. */
-async function ebayInsights() {
+async function ebayInsights({ full = false, q = "" } = {}) {
   const out = {};
   const u = await trading("GetUser", "");
   out.user = { ok: u.ok, id: xmlTag("UserID", u.xml), feedback: xmlTag("FeedbackScore", u.xml), positive: xmlTag("PositiveFeedbackPercent", u.xml),
@@ -846,8 +846,24 @@ async function ebayInsights() {
       category: xmlTag("CategoryName", xml), hits: xmlTag("HitCount", xml), condition: xmlTag("ConditionDisplayName", xml) });
   }
 
+  // Category, condition and specifics for every item (one GetItem each, a few at a time).
+  if (full) {
+    out.all = [];
+    for (let i = 0; i < items.length; i += 6) {
+      out.all.push(...await Promise.all(items.slice(i, i + 6).map(async it => {
+        const { xml } = await trading("GetItem", `<ItemID>${esc(it.id)}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
+        return { id: it.id, sku: xmlTag("SKU", xml), cat: xmlTag("CategoryID", xmlBlock("PrimaryCategory", xml)), catName: xmlTag("CategoryName", xml),
+          cond: xmlTag("ConditionID", xml), specifics: xmlAll("NameValueList", xmlBlock("ItemSpecifics", xml)).length, pics: xmlAll("PictureURL", xml).length };
+      })));
+    }
+  }
+
   const token = await getEbayAccessToken().catch(() => null);
   out.oauth = !!token;
+  if (token && q) {
+    const r = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_category_suggestions?q=${encodeURIComponent(q)}`, { headers: { Authorization: `Bearer ${token}` } });
+    out.categorySuggestions = r.ok ? ((await r.json()).categorySuggestions || []).slice(0, 6).map(c => `${c.category.categoryId} ${[...(c.categoryTreeNodeAncestors || [])].reverse().map(a => a.categoryName).join(" > ")} > ${c.category.categoryName}`) : { error: r.status };
+  }
   if (token) {
     const H = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
     const day = d => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10).replace(/-/g, "");
