@@ -452,6 +452,7 @@ export async function publishEbayListing(body = {}) {
       `<PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>`,
       `<ConditionID>${esc(String(conditionId))}</ConditionID>`,
       ebayShippingXml(shippingCost),
+      ebayBestOfferXml(price),
     ];
     const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
     if (!ok) {
@@ -499,6 +500,7 @@ export async function publishEbayListing(body = {}) {
     ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
     ${videoXml}
     ${ebayShippingXml(shippingCost)}
+    ${ebayBestOfferXml(price)}
     <Site>US</Site>
   `;
   const { ok, xml } = await trading("AddItem", `<Item>${itemXml}</Item>`);
@@ -901,6 +903,14 @@ export function ebayCategoryFor(title = "") {
    USPS Media Mail is for books and can't come from India. */
 export const ebayShippingXml = (cost = 0) => `<ShippingDetails><ShippingType>Flat</ShippingType><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>StandardShippingFromOutsideUS</ShippingService><ShippingServiceCost>${Number(cost || 0).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>3</DispatchTimeMax>`;
 
+/* Best Offer on, with eBay answering the clear cases: an offer of 90% of the
+   price or more is accepted, one under 75% declined; the rest wait for a reply. */
+export function ebayBestOfferXml(price) {
+  const p = +price || 0;
+  const at = f => (Math.floor(p * f * 100) / 100).toFixed(2);
+  return `<BestOfferDetails><BestOfferEnabled>true</BestOfferEnabled></BestOfferDetails>${p > 0 ? `<ListingDetails><BestOfferAutoAcceptPrice>${at(.9)}</BestOfferAutoAcceptPrice><MinimumBestOfferPrice>${at(.75)}</MinimumBestOfferPrice></ListingDetails>` : ""}`;
+}
+
 async function ebayFixListings({ dry = false, ids = [], from = 0, n = 40 } = {}) {
   const out = { dry, done: [], failed: [] };
   if (dry) {
@@ -916,7 +926,7 @@ async function ebayFixListings({ dry = false, ids = [], from = 0, n = 40 } = {})
     for (let pg = 1; pg <= 5; pg++) {
       const { xml } = await trading("GetMyeBaySelling", `<ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${pg}</PageNumber></Pagination></ActiveList>`);
       const active = xmlBlock("ActiveList", xml);
-      for (const b of xmlAll("Item", xmlBlock("ItemArray", active))) all.push(xmlTag("ItemID", b) + "\t" + xmlTag("Title", b));
+      for (const b of xmlAll("Item", xmlBlock("ItemArray", active))) all.push(xmlTag("ItemID", b) + "\t" + xmlTag("Title", b) + "\t" + xmlTag("CurrentPrice", b));
       if (pg >= parseInt(xmlTag("TotalNumberOfPages", xmlBlock("PaginationResult", active)) || "1", 10)) break;
     }
     out.total = all.length;
@@ -924,11 +934,11 @@ async function ebayFixListings({ dry = false, ids = [], from = 0, n = 40 } = {})
   }
   for (let i = 0; i < list.length; i += 5) {
     await Promise.all(list.slice(i, i + 5).map(async row => {
-      let [id, title] = row.split("\t");
-      if (!title) title = xmlTag("Title", (await trading("GetItem", `<ItemID>${esc(id)}</ItemID>`)).xml);
+      let [id, title, price] = row.split("\t");
+      if (!title || !price) { const g = (await trading("GetItem", `<ItemID>${esc(id)}</ItemID>`)).xml; title = xmlTag("Title", g); price = xmlTag("CurrentPrice", g); }
       const cat = ebayCategoryFor(title);
       if (dry) return out.done.push({ id, title, cat });
-      const fields = `<ItemID>${esc(id)}</ItemID><PrimaryCategory><CategoryID>${cat}</CategoryID></PrimaryCategory><ConditionID>1000</ConditionID>${ebayShippingXml(0)}`;
+      const fields = `<ItemID>${esc(id)}</ItemID><PrimaryCategory><CategoryID>${cat}</CategoryID></PrimaryCategory><ConditionID>1000</ConditionID>${ebayShippingXml(0)}${ebayBestOfferXml(price)}`;
       const { ok, xml } = await trading("ReviseItem", `<Item>${fields}</Item>`);
       if (ok) out.done.push({ id, cat, warnings: xmlAll("Errors", xml).map(e => xmlTag("ShortMessage", e)).filter(Boolean).slice(0, 2) });
       else out.failed.push({ id, title, error: ebayErrors(xml) });
