@@ -12,7 +12,14 @@ import { mob, loadK, saveK } from "./utils.js";
    gives; a copy is kept each day (ng-etsy-views-v1) so views over the last
    week and month can be read once a few days have built up. */
 
-const CACHE = "ng-insights-v1", VIEWS_KEY = "ng-etsy-views-v1", DAY = 86400000;
+const DAY = 86400000;
+/* Either Etsy shop. The component is keyed by shop, so it sets these once as
+   it mounts: which shop the API calls name, where its copies are kept, and
+   which platform entry on a listing is that shop's. */
+let SHOP_QS = "", SFX = "", PK = "etsy";
+const scopeToShop = shop => { const ee = shop === "earth"; SHOP_QS = ee ? "&shop=earth" : ""; SFX = ee ? "-earth" : ""; PK = ee ? "etsy_ee" : "etsy"; };
+const CACHE_BASE = "ng-insights-v1", VIEWS_BASE = "ng-etsy-views-v1";
+const cacheKey = () => CACHE_BASE + SFX, viewsKey = () => VIEWS_BASE + SFX;
 const ADS_URL = "https://www.etsy.com/your/shops/me/advertising";
 const SALES = "#D95A00", ETSYADS = "#7A5AC8", OFFSITE = "#0F8C7B";
 
@@ -24,7 +31,7 @@ const flag = iso => /^[A-Z]{2}$/.test(iso || "") ? String.fromCodePoint(...[...i
 const dayKey = ms => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const dayStart = ms => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return +d; };
 const niceMax = v => { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); return [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map(m => m * p).find(m => m >= v); };
-const readCache = () => { try { const c = JSON.parse(localStorage.getItem(CACHE) || "null"); return c?.data?.ok ? c : null; } catch { return null; } };
+const readCache = () => { try { const c = JSON.parse(localStorage.getItem(cacheKey()) || "null"); return c?.data?.ok ? c : null; } catch { return null; } };
 const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
 
 const card = { background: C.surface, borderRadius: 16, boxShadow: "var(--e-1)", border: `1px solid ${C.border}`, padding: mob ? "14px" : "18px 20px", minWidth: 0 };
@@ -468,7 +475,7 @@ function WhatSells({ hist, live, erpListings }) {
     const lines = hist?.lines;
     if (!lines?.length) return null;
     const erp = {};
-    for (const l of erpListings || []) { const id = l.platforms?.etsy?.listing_id; if (id) erp[String(id)] = l; }
+    for (const l of erpListings || []) { const id = l.platforms?.[PK]?.listing_id; if (id) erp[String(id)] = l; }
     const since = span ? dayKey(Date.now() - span * DAY) : "";
     const typeOf = x => erp[x.lid]?.type || live.find(l => l.id === x.lid)?.type || (SIMILAR.test(x.title) ? "repeatable" : "unique");
     const rows = lines.filter(x => x.k >= since).map(x => ({ ...x, rev: x.price * x.qty, band: bandOf(x.price), kind: kindOf(x.title), type: typeOf(x) === "repeatable" ? "similar" : "exact" }));
@@ -754,7 +761,7 @@ async function fetchRetry(url) {
 const HIST_KEY = "ng-ads-history-v1";
 async function loadHistory(set, force = false) {
   let kept = null;
-  try { kept = await loadK(HIST_KEY); } catch { /* read it fresh */ }
+  try { kept = await loadK(HIST_KEY + SFX); } catch { /* read it fresh */ }
   if (kept?.days?.length) set({ ...kept, busy: true });
   // A copy kept before order lines were added is read again whole, once.
   if (kept && !kept.lines) kept = { ...kept, at: 0, days: [] };
@@ -762,7 +769,7 @@ async function loadHistory(set, force = false) {
   const lastK = kept?.days?.length ? kept.days[kept.days.length - 1].k : null;
   const from = lastK ? Math.floor(Date.parse(lastK + "T00:00:00+05:30") / 1000) - 3 * 86400 : 0;
   try {
-    const r = await fetchRetry(`/api/etsy?action=ads_history${from ? `&from=${from}` : ""}&_=${Date.now()}`);
+    const r = await fetchRetry(`/api/etsy?action=ads_history${from ? `&from=${from}` : ""}${SHOP_QS}&_=${Date.now()}`);
     const d = await r.json().catch(() => ({}));
     if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
     const cut = from ? new Date((from + 19800) * 1000).toISOString().slice(0, 10) : "";
@@ -770,11 +777,12 @@ async function loadHistory(set, force = false) {
     const lines = [...(kept?.lines || []).filter(x => cut && x.k < cut), ...(d.lines || [])];
     const next = { at: Date.now(), firstDay: kept?.firstDay || d.firstDay, days, lines };
     set(next);
-    saveK(HIST_KEY, next, { merge: false }).catch(() => {});
+    saveK(HIST_KEY + SFX, next, { merge: false }).catch(() => {});
   } catch (e) { set(kept ? { ...kept, busy: false, error: e.message } : { error: e.message || "Couldn't reach Etsy", days: [] }); }
 }
 
-export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
+export default function EtsyInsights({ listings = [], onOpenRenew, onPrice, shop = "atyahara" }) {
+  scopeToShop(shop);
   const [cache, setCache] = useState(readCache);
   const [busy, setBusy] = useState(false), [err, setErr] = useState("");
   const [range, setRange] = useState(30);
@@ -786,18 +794,18 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
   const load = async () => {
     setBusy(true); setErr("");
     try {
-      const r = await fetchRetry(`/api/etsy?action=insights&days=180&_=${Date.now()}`);
+      const r = await fetchRetry(`/api/etsy?action=insights&days=180${SHOP_QS}&_=${Date.now()}`);
       const d = await r.json().catch(() => ({}));
       if (!r.ok || !d.ok) throw new Error(d.error || `Etsy didn't answer (${r.status})`);
       const next = { at: Date.now(), data: d };
       setCache(next);
-      try { localStorage.setItem(CACHE, JSON.stringify(next)); } catch { /* too big to keep: fine, it reloads */ }
+      try { localStorage.setItem(cacheKey(), JSON.stringify(next)); } catch { /* too big to keep: fine, it reloads */ }
     } catch (e) { setErr(e.message || "Couldn't reach Etsy"); }
     setBusy(false);
   };
   useEffect(() => {
     loadK("ng-fin-rates-v1").then(r => { if (+r?.USD > 0) setRate(+r.USD); }).catch(() => {});
-    loadK(VIEWS_KEY).then(v => setViewsHist(v && typeof v === "object" && !Array.isArray(v) ? v : {})).catch(() => setViewsHist({}));
+    loadK(viewsKey()).then(v => setViewsHist(v && typeof v === "object" && !Array.isArray(v) ? v : {})).catch(() => setViewsHist({}));
     if (!cache || Date.now() - cache.at > 3 * 3600000) load();
     loadHistory(setHist);
   }, []);
@@ -811,7 +819,7 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
     const keep = Object.keys(viewsHist).sort().slice(-34);
     const next = { ...Object.fromEntries(keep.map(d => [d, viewsHist[d]])), [k]: snap };
     setViewsHist(next);
-    saveK(VIEWS_KEY, next, { merge: false }).catch(() => {});
+    saveK(viewsKey(), next, { merge: false }).catch(() => {});
   }, [cache, viewsHist]);
 
   const m = useMemo(() => {
@@ -862,7 +870,7 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
 
     // Listings: sales put against each, joined to the ERP.
     const erpBy = {};
-    for (const l of listings) { const id = l.platforms?.etsy?.listing_id; if (id) erpBy[String(id)] = l; }
+    for (const l of listings) { const id = l.platforms?.[PK]?.listing_id; if (id) erpBy[String(id)] = l; }
     const per = {};
     const add = (r, key, wf) => { for (const ln of r.lines || []) { if (!ln.lid) continue; const p = per[ln.lid] ||= { units: 0, rev: 0, unitsPrev: 0, revPrev: 0, units180: 0, last: 0, title: ln.title }; wf(p, ln, r); } };
     for (const r of rec) add(r, "", (p, ln) => { p.units180 += ln.qty; p.last = Math.max(p.last, r.ms); if (r.ms >= a) { p.units += ln.qty; p.rev += toUSD(ln.amt); } else if (r.ms >= pa) { p.unitsPrev += ln.qty; p.revPrev += toUSD(ln.amt); } });
@@ -899,7 +907,7 @@ export default function EtsyInsights({ listings = [], onOpenRenew, onPrice }) {
     const loved = live.filter(l => l.units180 === 0 && l.favs >= 8 && l.favRate >= 0.04).sort((x, y) => y.favs - x.favs);
     const restock = live.filter(l => l.type === "repeatable" && l.qty <= 3 && l.units180 >= 3).sort((x, y) => y.units180 - x.units180);
     const polish = live.filter(l => l.units180 >= 2 && (!l.video || l.photos < 5)).sort((x, y) => y.units180 - x.units180);
-    const erpExpiredSold = listings.filter(l => l.platforms?.etsy?.expired && l.platforms?.etsy?.listing_id && per[String(l.platforms.etsy.listing_id)]?.units180 > 0);
+    const erpExpiredSold = listings.filter(l => l.platforms?.[PK]?.expired && l.platforms?.[PK]?.listing_id && per[String(l.platforms[PK].listing_id)]?.units180 > 0);
 
     // Shapes: what earns per listing.
     const byShape = {};

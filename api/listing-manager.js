@@ -788,12 +788,24 @@ const etNow = (d = new Date()) => {
 };
 const shapeOf = it => String(it.shape || "").trim().toLowerCase();
 
+/* Both Etsy shops share the queue; each puts its own few live a day, in its own
+   shop's context, writing to its own entry on the listing (platforms.etsy or
+   platforms.etsy_ee). An entry with no shop is Atyahara's, as they all were. */
+export async function etsyQueueTick(opts = {}) {
+  const atyahara = await withEtsyShop("atyahara", () => etsyQueueTickShop(opts));
+  const earth = await withEtsyShop("earth", () => etsyQueueTickShop(opts));
+  return { ...atyahara, earth };
+}
+
 // The clock, database and Etsy call can be handed in, so the timetable can be tried without touching either.
-export async function etsyQueueTick({ dry = false, sb = adminClient(), at = new Date(), activate = activateEtsyListing } = {}) {
+async function etsyQueueTickShop({ dry = false, sb = adminClient(), at = new Date(), activate = activateEtsyListing } = {}) {
+  const shop = etsyShop(), PK = shop.platform;
+  const tickKey = shop.key === "atyahara" ? QUEUE_TICK_KEY : `${QUEUE_TICK_KEY}-${shop.key}`;
+  const lidOf = it => String(it.listing_id || String(it.id || "").replace(/^ee:/, ""));
   const read = async k => { const { data } = await sb.from("app_data").select("value").eq("key", k).maybeSingle(); return typeof data?.value === "string" ? JSON.parse(data.value) : data?.value; };
   const upsert = async (k, item) => { const { error } = await sb.rpc("app_data_upsert_item", { p_key: k, p_item: item, p_prepend: false }); if (error) throw new Error(error.message); };
   const settings = { perDay: 5, paused: false, ...((await read(QUEUE_SETTINGS_KEY)) || {}) };
-  const items = (await read(QUEUE_KEY)) || [];
+  const items = ((await read(QUEUE_KEY)) || []).filter(i => (i.shop || "atyahara") === shop.key);
   const { day, hour } = etNow(at);
   const waiting = items.filter(i => i.status === "queued").sort((a, b) => (a.order || 0) - (b.order || 0));
   const perDay = Math.max(1, Math.min(QUEUE_SLOTS_ET.length, waiting.length < QUEUE_TAPER_BELOW ? Math.min(4, +settings.perDay || 5) : +settings.perDay || 5));
@@ -801,9 +813,9 @@ export async function etsyQueueTick({ dry = false, sb = adminClient(), at = new 
   const liveToday = items.filter(i => i.status === "live" && i.live_day === day && i.by === "queue");
   // A missed hour is made up, but never more than two at once.
   const want = Math.min(2, due - liveToday.length);
-  const out = { day, hour, perDay, due, liveToday: liveToday.length, waiting: waiting.length, wanted: Math.max(0, want), done: [], skipped: [], failed: [] };
+  const out = { shop: shop.key, day, hour, perDay, due, liveToday: liveToday.length, waiting: waiting.length, wanted: Math.max(0, want), done: [], skipped: [], failed: [] };
   const beat = async r => {
-    if (!dry) await sb.from("app_data").upsert({ key: QUEUE_TICK_KEY, value: { at: at.toISOString(), day, hour, paused: !!r.paused, done: r.done.length, skipped: r.skipped.length, failed: r.failed.length } });
+    if (!dry) await sb.from("app_data").upsert({ key: tickKey, value: { at: at.toISOString(), day, hour, paused: !!r.paused, done: r.done.length, skipped: r.skipped.length, failed: r.failed.length } });
     return r;
   };
   if (settings.paused) return beat({ ...out, paused: true });
@@ -819,12 +831,12 @@ export async function etsyQueueTick({ dry = false, sb = adminClient(), at = new 
   let left = want, tries = want + 1;
   while (left > 0 && tries > 0 && pool.length) {
     const it = next();
-    const L = byId.get(String(it.id));
-    const etsyId = L?.platforms?.etsy?.listing_id || it.etsy_id;
+    const L = byId.get(lidOf(it));
+    const etsyId = L?.platforms?.[PK]?.listing_id || it.etsy_id;
     const now = new Date().toISOString();
     // Gone, sold, or already put live by hand: it leaves the queue without using a slot.
     const why = !L ? "the listing was deleted" : L.status === "sold" || (L.qty !== "" && L.qty != null && +L.qty === 0) ? "it sold"
-      : L.platforms?.etsy?.status === "active" ? "it's already live" : !etsyId ? "it has no Etsy draft" : "";
+      : L.platforms?.[PK]?.status === "active" ? "it's already live" : !etsyId ? "it has no Etsy draft" : "";
     if (why) {
       out.skipped.push({ id: it.id, title: it.title, why });
       if (!dry) await upsert(QUEUE_KEY, { ...it, status: why === "it's already live" ? "live" : "dropped", by: "elsewhere", note: why, live_day: day, updated_at: now });
@@ -835,8 +847,8 @@ export async function etsyQueueTick({ dry = false, sb = adminClient(), at = new 
     const act = await activate(etsyId);
     if (act.ok) {
       await upsert(QUEUE_KEY, { ...it, etsy_id: etsyId, status: "live", by: "queue", live_at: now, live_day: day, error: "", updated_at: now });
-      const ep = L.platforms?.etsy || {};
-      await upsert("ng-listings-v1", { ...L, platforms: { ...L.platforms, etsy: { ...ep, listing_id: etsyId, status: "active", url: ep.url || `https://www.etsy.com/listing/${etsyId}`, ...(ep.live_at ? {} : { live_at: now }), queued_at: undefined } }, updated_at: now });
+      const ep = L.platforms?.[PK] || {};
+      await upsert("ng-listings-v1", { ...L, platforms: { ...L.platforms, [PK]: { ...ep, listing_id: etsyId, status: "active", url: ep.url || `https://www.etsy.com/listing/${etsyId}`, ...(ep.live_at ? {} : { live_at: now }), queued_at: undefined } }, updated_at: now });
       out.done.push({ id: it.id, title: it.title, etsy_id: etsyId });
       shapesToday.add(shapeOf(it)); left--;
     } else if (/HTTP (429|5\d\d)|rate limit|timed? ?out|fetch failed|ECONN/i.test(act.error || "")) {

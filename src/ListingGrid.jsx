@@ -14,6 +14,7 @@ const StoryStudio = lazy(() => import("./StoryStudio.jsx"));
 
 const PLAT = [
   { key: "etsy",          label: "Etsy",       short: "Etsy",  color: "#F56400" },
+  { key: "etsy_ee",       label: "Etsy · EarthEditions", short: "Etsy EE", color: "#9C3D0A" },
   // eartheditions.co and the old Earth Editions Shopify store are one shop to us:
   // one chip, live if the piece is live on either.
   { key: "store",         label: "Earth Editions", short: "Earth Ed.", color: "#141210" },
@@ -104,7 +105,7 @@ const shortMoney = (v, cur) => {
   return `${sym}${t}`;
 };
 const ageOf = ms => { const d = ms / 864e5; return d < 1 ? "today" : d < 14 ? `${Math.round(d)}d` : d < 60 ? `${Math.round(d / 7)}wk` : d < 365 ? `${Math.round(d / 30.4)}mo` : `${(d / 365).toFixed(1).replace(/\.0$/, "")}yr`; };
-const PLATFORM_NAME = { etsy: "Etsy", store: "Earth Editions", shopify_earth: "Earth Ed. (Shopify)", shopify_aty: "Atyahara", ebay: "eBay", trade: "Trade site", manual: "by hand" };
+const PLATFORM_NAME = { etsy: "Etsy", etsy_ee: "Etsy · EarthEditions", store: "Earth Editions", shopify_earth: "Earth Ed. (Shopify)", shopify_aty: "Atyahara", ebay: "eBay", trade: "Trade site", manual: "by hand" };
 
 /* ── a price you can click and type over ───────────────────────────────── */
 function PriceCell({ flag, cur, value: live, hint, onSave, big = false, title }) {
@@ -223,7 +224,7 @@ function Tile({ l, store, facts, orders, stock, sales, etsy, etsyAt, onOpen, onE
             const st = statusOf(l, p.key, facts);
             const on = st === "active", draft = st && st !== "active" && st !== "deleted";
             // Filled = live and on sale; dashed = there but not on sale (a draft, or sold out); faint = not on it.
-            const expired = p.key === "etsy" && draft && st !== "sold" && l.platforms?.etsy?.expired;
+            const expired = (p.key === "etsy" || p.key === "etsy_ee") && draft && st !== "sold" && l.platforms?.[p.key]?.expired;
             return <span key={p.key} title={`${p.label}: ${on ? "live" : st === "sold" ? "sold" : expired ? "expired — renew it (Renew tab)" : draft ? "draft — there, not on sale" : "not listed"}`}
               style={{ fontSize: 9.5, fontWeight: 700, padding: "2px 6px", borderRadius: 10, letterSpacing: .2,
               background: on ? p.color : "transparent", color: on ? "#fff" : draft ? p.color : C.inkFaint,
@@ -696,7 +697,7 @@ const PP_COLS = [
   { field: "price_etsy", label: "Etsy ₹", cur: "₹" },
   { field: "price_trade", label: "Trade $", cur: "$" },
 ];
-const PP_POST = [["store", "Earth Editions"], ["etsy", "Etsy"], ["trade", "Trade site"]];
+const PP_POST = [["store", "Earth Editions"], ["etsy", "Etsy (Atyahara)"], ["etsy_ee", "Etsy (EarthEditions)"], ["trade", "Trade site"]];
 function PricePost({ rows, facts, onClose, onRun }) {
   const cur = (l, f) => { const s = facts.store?.[l.id]; return f === "price_store" && s ? num(s.price) : f === "price_store_inr" && s ? num(s.price_inr) : num(l[f]); };
   const [vals, setVals] = useState(() => Object.fromEntries(rows.map(l => [l.id, Object.fromEntries(PP_COLS.map(c => [c.field, cur(l, c.field) ?? ""]))])));

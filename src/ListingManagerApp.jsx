@@ -36,7 +36,7 @@ import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
 import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
-import { CHANNELS, OTHER_CHANNELS, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation } from "./listingChannels.js";
+import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
 /* ─── storage keys ───────────────────────────────────────────────────────── */
@@ -2246,7 +2246,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const p = P(c.key);
     const hasPrice = +form[c.priceField] > 0 || (c.key === "store" && (+form.price_store_inr > 0 || +form.price_etsy > 0));
     const refId = parseRef(c.key, connectDraftFor(c.key));
-    const canConnect = c.key === "etsy" || c.key === "ebay";
+    const canConnect = isEtsyKey(c.key) || c.key === "ebay";
     // A trade product connected for reference shows as itself, not as this listing.
     const tr = c.key === "trade" && pl.ref ? tradeRowOf(tradeFactsMap, form) : null;
     const cover = tr?.image || (form.images || []).find(u => typeof u === "string");
@@ -2313,7 +2313,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>Already on {c.label}? Paste its link to connect it instead of making a new one.</div>
                   <div style={{ display: "flex", gap: 6 }}>
                     <input value={connectDraftFor(c.key)} onChange={e => setConnectDraft(d => ({ ...d, [c.key]: e.target.value }))}
-                      placeholder={c.key === "etsy" ? "https://www.etsy.com/listing/1234567890/…" : "https://www.ebay.com/itm/1234567890"} style={{ ...FI(), fontSize: 12 }} />
+                      placeholder={isEtsyKey(c.key) ? "https://www.etsy.com/listing/1234567890/…" : "https://www.ebay.com/itm/1234567890"} style={{ ...FI(), fontSize: 12 }} />
                     <button type="button" disabled={!refId} onClick={() => {
                       setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), [c.key]: { ...(f.platforms?.[c.key] || {}), ...connectPatch(c.key, refId) } } }));
                       setPublishTo(pt => ({ ...pt, [c.key]: false }));
@@ -2638,7 +2638,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         </div>)}
     </>
   );
-  const platformStep = key => key === "etsy" ? etsyBody(true) : key === "ebay" ? ebayBody(true) : key === "store" ? storeBody(true) : tradeStep();
+  const platformStep = key => isEtsyKey(key) ? etsyBody(true) : key === "ebay" ? ebayBody(true) : key === "store" ? storeBody(true) : tradeStep();
 
   /* A piece with no stock card yet gets one made here, from what the listing
      already says: stone, shape, vendor, what it cost and per what, and a short
@@ -3204,7 +3204,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </>}
 
           {/* ── Etsy ─────────────────────────────────────────────────────────── */}
-          {tab === "etsy" && etsyBody()}
+          {isEtsyKey(tab) && etsyBody()}
 
           {/* ── eBay ─────────────────────────────────────────────────────────── */}
           {tab === "ebay" && ebayBody()}
@@ -3525,7 +3525,7 @@ function ListingCard({ listing, stock, orders, onEdit, onDelete, onPublish, onSa
     // Going live on Etsy costs a $0.20 listing fee — ask first (not for one already live):
     // into the queue or live now, or for a renewal, just whether to.
     let pick = null;
-    if (pkey === "etsy" && listing.platforms?.etsy?.status !== "active" && !(pick = await chooseEtsyPublish(listing))) return;
+    if (isEtsyKey(pkey) && listing.platforms?.[pkey]?.status !== "active" && !(pick = await chooseEtsyPublish(listing, pkey))) return;
     setPublishing(p => ({ ...p, [pkey]: "publishing" }));
     try {
       const r = await onPublish(listing, pkey, { goLiveNow: pick === "now" });
@@ -4650,15 +4650,16 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     updateTrackingDraft(o, { loading: true, error: "", success: "" });
     try {
       const tok = await getEtsyToken(); // fresh token (refresh + Supabase fallback), not the stale localStorage one
-      let r = await fetch("/api/etsy?action=add_tracking", {
+      const ee = o.etsy_shop === "earth";
+      let r = await fetch(`/api/etsy?action=add_tracking${ee ? "&shop=earth" : ""}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(tok ? { "X-Etsy-Token": tok } : {}) },
+        headers: { "Content-Type": "application/json", ...(tok && !ee ? { "X-Etsy-Token": tok } : {}) },
         body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName, note_to_buyer: draft.note_to_buyer || undefined, send_bcc: !!draft.send_bcc }),
       });
       let d = await r.json().catch(() => ({}));
       if (!r.ok && tok && needsEtsyReconnect(d.fix || d.error)) {
         clearLocalEtsySession();
-        r = await fetch("/api/etsy?action=add_tracking", {
+        r = await fetch(`/api/etsy?action=add_tracking${ee ? "&shop=earth" : ""}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ receipt_id: receiptId, tracking_code: trackingCode, carrier_name: carrierName, note_to_buyer: draft.note_to_buyer || undefined, send_bcc: !!draft.send_bcc }),
@@ -4854,11 +4855,11 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
      and removes what's ticked when approved. */
   const [delistPick, setDelistPick] = useState({});
   const [delistBusy, setDelistBusy] = useState({});
-  const soldOnKey = o => o.platform === "store" ? "store" : isEtsyOrder(o) ? "etsy" : isEbayOrder(o) ? "ebay" : isAtyahOrder(o) ? "shopify_aty" : o.platform || "";
+  const soldOnKey = o => o.platform === "store" ? "store" : isEtsyOrder(o) ? (o.etsy_shop === "earth" ? "etsy_ee" : "etsy") : isEbayOrder(o) ? "ebay" : isAtyahOrder(o) ? "shopify_aty" : o.platform || "";
   const findOrderListing = o => {
     const norm = v => String(v || "").trim().toLowerCase();
     return listings.find(l => o.listing_id && l.id === o.listing_id)
-      || listings.find(l => o.etsy_listing_id && String(l.platforms?.etsy?.listing_id || "") === String(o.etsy_listing_id))
+      || listings.find(l => o.etsy_listing_id && String(l.platforms?.[o.etsy_shop === "earth" ? "etsy_ee" : "etsy"]?.listing_id || "") === String(o.etsy_listing_id))
       || listings.find(l => o.listing_sku && norm(l.sku) === norm(o.listing_sku)) || null;
   };
   const liveElsewhere = (o, l) => PLATFORMS.filter(p => !p.coming && p.key !== soldOnKey(o) && l.platforms?.[p.key]?.status === "active"
@@ -4979,8 +4980,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const normalizeEtsyOrdersForERP = rawOrders => {
     const listingByEtsyId = {};
     (listings || []).forEach(l => {
-      const id = l.platforms?.etsy?.listing_id;
-      if (id) listingByEtsyId[String(id)] = l;
+      for (const k of ["etsy", "etsy_ee"]) { const id = l.platforms?.[k]?.listing_id; if (id) listingByEtsyId[String(id)] = l; }
     });
     const rows = [];
     (rawOrders || []).forEach(receipt => {
@@ -5003,6 +5003,8 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
           variations:        etsyVariations(txn),
           listing_image:     etsyImageFromTxn(txn) || linked?.images?.[0] || "",
           platform:          "etsy",
+          // EarthEditions' orders are Etsy orders too; this says which shop to ship and settle them in.
+          ...(receipt._shop === "earth" ? { etsy_shop: "earth" } : {}),
           platform_order_id: String(receipt.receipt_id),
           etsy_listing_id:   etsyListingId,
           etsy_receipt_id:   receipt.receipt_id,
@@ -5081,6 +5083,26 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     });
     return { patches, byReceipt };
   };
+  /* Fees and payouts for a set of receipts, each asked of the shop it was sold
+     in. A receipt id only means something in its own shop. */
+  const earningsFor = async (ids, rows, onChunk) => {
+    const shopOf = new Map((rows || []).map(o => [String(o.etsy_receipt_id || o.platform_order_id || ""), o.etsy_shop === "earth" ? "earth" : "atyahara"]));
+    const tok = await getEtsyToken();
+    const pay = {};
+    let done = 0;
+    for (const shop of ["atyahara", "earth"]) {
+      const mine = ids.filter(id => (shopOf.get(String(id)) || "atyahara") === shop);
+      for (let i = 0; i < mine.length; i += 40) {
+        const chunk = mine.slice(i, i + 40);
+        const hdr = shop === "atyahara" && tok ? { "X-Etsy-Token": tok } : {};
+        const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${chunk.join(",")}${shop === "earth" ? "&shop=earth" : ""}&_=${Date.now()}`, { headers: hdr, cache: "no-store" });
+        if (r.ok) Object.assign(pay, (await r.json())?.payments || {});
+        done += chunk.length; onChunk?.(done);
+      }
+    }
+    return pay;
+  };
+
   const mergeEtsyBackfill = async rawOrders => {
     const { patches, byReceipt } = etsyOrderPatchMap(rawOrders);
     if (!Object.keys(patches).length && !Object.keys(byReceipt).length) return false;
@@ -5138,10 +5160,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     if (!rid) { showToast?.("No Etsy receipt id on this order."); return; }
     setEarnedRefreshing(s => ({ ...s, [order.id]: true }));
     try {
-      const tok = await getEtsyToken();
-      const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${rid}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
-      const d = r.ok ? await r.json() : null;
-      const p = d?.payments?.[rid];
+      const p = (await earningsFor([rid], [order]))[rid];
       try { console.log(`[Etsy earnings] receipt ${rid}:`, p); } catch {}
       if (!p) { showToast?.("Etsy hasn't settled this order yet — try again in a day or two."); return; }
       const fresh = await loadK(ORDERS_KEY) || [];
@@ -5187,14 +5206,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     if (!ids.length) { showToast?.("No Etsy orders to refresh."); return; }
     setEarnedRefreshAll({ done: 0, total: ids.length });
     try {
-      const tok = await getEtsyToken();
-      const pay = {};
-      for (let i = 0; i < ids.length; i += 40) {
-        const chunk = ids.slice(i, i + 40);
-        const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${chunk.join(",")}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
-        if (r.ok) Object.assign(pay, (await r.json())?.payments || {});
-        setEarnedRefreshAll({ done: Math.min(ids.length, i + chunk.length), total: ids.length });
-      }
+      const pay = await earningsFor(ids, targets, done => setEarnedRefreshAll({ done, total: ids.length }));
       const fresh = await loadK(ORDERS_KEY) || [];
       let updated = 0, canceled = 0, settledRids = 0;
       for (const [rid, p] of Object.entries(pay)) {
@@ -5248,15 +5260,7 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
         .filter(Boolean);
       const ids = [...new Set([...repairIds, ...receiptIds])].slice(0, 120);
       if (!ids.length) return;
-      const tok = await getEtsyToken();
-      const pay = {};
-      for (let i = 0; i < ids.length; i += 40) {
-        const chunk = ids.slice(i, i + 40);
-        const r = await fetch(`/api/etsy?action=earnings&receipt_ids=${chunk.join(",")}&_=${Date.now()}`, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" });
-        if (!r.ok) continue;
-        const d = await r.json();
-        Object.assign(pay, d?.payments || {});
-      }
+      const pay = await earningsFor(ids, [...current, ...(receipts || []).map(x => ({ etsy_receipt_id: x.receipt_id, etsy_shop: x._shop }))]);
       if (!Object.keys(pay).length) return;
       const fresh = await loadK(ORDERS_KEY) || [];
       const changedRows = [];
@@ -5325,6 +5329,12 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
     // Resolve a FRESH token (refresh + Supabase fallback). The old code sent the raw localStorage
     // token, which expires hourly — a stale token 401'd and silently dropped new orders until the
     // user manually reconnected Etsy.
+    /* The EarthEditions shop is pulled the same way, from its own newest order;
+       its server-side login needs no browser token. */
+    const eeNewest = (orders || []).filter(o => o.platform === "etsy" && o.etsy_shop === "earth")
+      .reduce((m, o) => Math.max(m, Date.parse(o.created_at || o.date) || 0), 0);
+    let eeUrl = `/api/etsy?action=orders&shop=earth&limit=100&enrich=true&_=${Date.now()}`;
+    if (!doFull && eeNewest > 0) eeUrl += `&min_created=${Math.max(0, Math.floor(eeNewest / 1000) - BUFFER_S)}`;
     getEtsyToken()
       .then(tok => fetch(url, { headers: tok ? { "X-Etsy-Token": tok } : {}, cache: "no-store" }))
       .then(r => r.ok ? r.json() : null)
@@ -5333,6 +5343,13 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
         // Record the full-resync clock on a real full pull, or to bootstrap it on first run.
         if (doFull || !hasBaseline) { try { localStorage.setItem("ng-orders-etsy-fullbackfill-ts", String(Date.now())); } catch {} }
         return mergeEtsyBackfill(d?.results || []).then(() => backfillEtsyFees(d?.results || []));
+      })
+      .catch(() => {})
+      .then(() => fetch(eeUrl, { cache: "no-store" }))
+      .then(r => r?.ok ? r.json() : null)
+      .then(d => {
+        const rows = (d?.results || []).map(x => ({ ...x, _shop: "earth" }));
+        if (rows.length) return mergeEtsyBackfill(rows).then(() => backfillEtsyFees(rows));
       })
       .catch(() => {})
       .finally(() => setEtsyBackfilling(false));
@@ -5364,7 +5381,8 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
   const DUE_SOON_DAYS = 3;
   const dueSoon = o => !isCancelled(o) && !isShipped(o) && shipByDays(o) != null && shipByDays(o) <= DUE_SOON_DAYS;
   const filtered = (shipFilter === "due" ? (orders || []) : dateFilteredOrders)
-    .filter(o => pFilter === "all" || o.platform === pFilter)
+    .filter(o => pFilter === "all" || (pFilter === "etsy_ee" ? o.platform === "etsy" && o.etsy_shop === "earth"
+      : pFilter === "etsy" ? o.platform === "etsy" && o.etsy_shop !== "earth" : o.platform === pFilter))
     .filter(o => {
       if (shipFilter === "all") return true;
       if (shipFilter === "due") return dueSoon(o);
@@ -6556,9 +6574,23 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
 ══════════════════════════════════════════════════════════════════════════ */
 // Bump this to discard every stored cache — the shape changed, or what's in it
 // can no longer be trusted. It is the only thing that should force a cold load.
-const ETSY_CACHE = "ng-etsy-v4";
+const ETSY_CACHE_BASE = "ng-etsy-v4";
 
-function EtsyLiveView({ onCrossPost }) {
+function EtsyLiveView({ onCrossPost, shop = "atyahara" }) {
+  /* One view, either Etsy shop. For EarthEditions every /api/etsy call here
+     names the shop, and Atyahara's browser token is never sent (that shop's
+     login lives on the server); its cache and its listings' platform entry
+     (platforms.etsy_ee) are its own. */
+  const ee = shop === "earth";
+  const ETSY_CACHE = ee ? `${ETSY_CACHE_BASE}-earth` : ETSY_CACHE_BASE;
+  const pkey = ee ? "etsy_ee" : "etsy";
+  const fetch = !ee ? window.fetch.bind(window) : (url, opts = {}) => {
+    const u = String(url);
+    if (!u.startsWith("/api/etsy?")) return window.fetch(url, opts);
+    const headers = { ...(opts.headers || {}) };
+    delete headers["X-Etsy-Token"];
+    return window.fetch(`${u}&shop=earth`, { ...opts, headers });
+  };
   const loadCache = () => { try { return JSON.parse(localStorage.getItem(ETSY_CACHE)||"{}"); } catch { return {}; } };
   const c0 = loadCache();
 
@@ -6690,7 +6722,7 @@ function EtsyLiveView({ onCrossPost }) {
     const [erpListings, erpOrders] = await Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY)]);
     const listingByEtsyId = {};
     (erpListings || []).forEach(l => {
-      const id = l.platforms?.etsy?.listing_id;
+      const id = l.platforms?.[pkey]?.listing_id;
       if (id) listingByEtsyId[String(id)] = l;
     });
     const liveListingByEtsyId = {};
@@ -6719,6 +6751,7 @@ function EtsyLiveView({ onCrossPost }) {
           listing_sku:       txn?.sku || linked?.sku || "",
           listing_image:     txn?.image_data?.url_570xN || txn?.image_data?.url_fullxfull || txn?.image_data?.url_170x135 || txn?.image_data?.url_75x75 || etsyListingImage(liveListing) || linked?.images?.[0] || "",
           platform:          "etsy",
+          ...(ee ? { etsy_shop: "earth" } : {}),
           platform_order_id: String(o.receipt_id),
           etsy_listing_id:   etsyListingId || "",
           etsy_receipt_id:   o.receipt_id,
@@ -9738,6 +9771,9 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   const [queueCount, setQueueCount] = useState(0);      // Etsy drafts waiting to go live
   useEffect(() => { loadK(ETSY_QUEUE_KEY).then(q => setQueueCount((q || []).filter(i => i.status === "queued" || i.status === "stuck").length)).catch(() => {}); }, []);
   const [etsyView, setEtsyView] = useState(() => { try { return localStorage.getItem("lm-etsy-view") || "listings"; } catch { return "listings"; } });
+  // Which Etsy shop the Etsy tab shows: Atyahara or EarthEditions.
+  const [etsyTabShop, setEtsyTabShop] = useState(() => { try { return localStorage.getItem("lm-etsy-shop") === "earth" ? "earth" : "atyahara"; } catch { return "atyahara"; } });
+  const pickEtsyTabShop = k => { setEtsyTabShop(k); try { localStorage.setItem("lm-etsy-shop", k); } catch { /* fine */ } };
   useEffect(() => { try { localStorage.setItem("lm-etsy-view", etsyView); } catch { /* fine */ } }, [etsyView]);
   const [soldModal,  setSoldModal]  = useState(null);
   const [view,       setView]       = useState(() => { try { return localStorage.getItem("lm-view") || "grid"; } catch { return "grid"; } });
@@ -10105,7 +10141,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           const pd = listing.platforms?.[p.key];
           if (!pd || pd.status === "deleted") return false;
           // Has a real listing ID on the platform
-          if (p.key === "etsy" && pd.listing_id) return true;
+          if (isEtsyKey(p.key) && pd.listing_id) return true;
           if (p.key === "ebay" && pd.item_id) return true;
           if ((p.key === "shopify_aty" || p.key === "shopify_earth") && pd.product_id) return true;
           if (p.key === "trade" && pd.linked_only) return false;   // someone else's product: never written to
@@ -10160,7 +10196,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     if (pkey === "ebay") return !!pd.item_id;
     return !!pd.product_id;
   };
-  const PRICE_SYNC = { price_store: ["store"], price_store_inr: ["store"], price_etsy: ["etsy", "store"], price_ebay: ["ebay"],
+  const PRICE_SYNC = { price_store: ["store"], price_store_inr: ["store"], price_etsy: ["etsy", "etsy_ee", "store"], price_ebay: ["ebay"],
     price_shopify_earth: ["shopify_earth"], price_shopify_aty: ["shopify_aty"], price_trade: ["trade"] };
   const quickPrice = async (listing, field, value) => {
     const current = listings.find(x => x.id === listing.id) || listing;
@@ -10183,7 +10219,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     for (const l of sel) {
       const next = { ...l, price_etsy: f(l.price_etsy), price_store: f(l.price_store), price_store_inr: f(l.price_store_inr), updated_at: new Date().toISOString() };
       await saveListingItem(next);
-      for (const k of ["etsy", "store"].filter(k => linkedTo(next, k))) {
+      for (const k of ["etsy", "etsy_ee", "store"].filter(k => linkedTo(next, k))) {
         try { await handlePublish(next, k, { syncOnly: true, allowCreate: false, storeOverride: ["price", "price_inr"] }); } catch (e) { console.warn(k, e); }
       }
       showToast(`Updating prices… ${++n}/${sel.length}`);
@@ -10202,7 +10238,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      trade site — which stops to ask how it's sold — waits its turn behind any
      other, so two of those questions never open at once. */
   const bulkPricePost = async (rows, post, onStep) => {
-    const newOnEtsy = post.includes("etsy") ? rows.filter(r => r.l.platforms?.etsy?.status !== "active").length : 0;
+    const newOnEtsy = ["etsy", "etsy_ee"].filter(k => post.includes(k)).reduce((n, k) => n + rows.filter(r => r.l.platforms?.[k]?.status !== "active").length, 0);
     const queueOn = newOnEtsy > 0 && (await loadQueueSettings()).on;
     if (newOnEtsy && !confirm(queueOn
       ? `Put ${newOnEtsy} listing${newOnEtsy === 1 ? "" : "s"} on Etsy?\n\nNew ones upload as drafts now and go live a few a day from the Etsy queue. Etsy charges $0.20 each when they go live.`
@@ -10210,7 +10246,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
     const isLive = (l, k) => linkedTo(l, k) && (k === "trade" ? !!tradeMap?.[l.id]?.live : l.platforms?.[k]?.status === "active");
     const plan = rows.map(({ l, prices }) => {
       const current = listings.find(x => x.id === l.id) || l;
-      const ks = [...new Set([...post, ...["etsy", "store", "trade"].filter(k => linkedTo(current, k))])];
+      const ks = [...new Set([...post, ...["etsy", "etsy_ee", "store", "trade"].filter(k => linkedTo(current, k))])];
       return { l, prices, current, steps: ks.map(k => ({ k, quick: isLive(current, k) || !post.includes(k) })) };
     });
     const total = plan.reduce((n, p) => n + 1 + p.steps.length, 0);
@@ -10425,7 +10461,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
        (src/etsyQueue.jsx), which puts it live at the next free slot — unless
        it's asked for now, or the queue is switched off. A renewal, or one
        that's live already, never waits. */
-    const queueIt = pkey === "etsy" && !syncOnly && !goLiveNow && queuesOnEtsy(listing) && (await loadQueueSettings()).on;
+    const queueIt = isEtsyKey(pkey) && !syncOnly && !goLiveNow && queuesOnEtsy(listing, pkey) && (await loadQueueSettings()).on;
 
     let result;
 
@@ -10569,12 +10605,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       } },
       updated_at: now(),
     }));
-    if (pkey === "etsy" && !syncOnly) {
+    if (isEtsyKey(pkey) && !syncOnly) {
       if (queueIt) {
-        const id = result.listing_id || listing.platforms?.etsy?.listing_id;
-        try { result = { ...result, queued: true, goes_live: await enqueueEtsy(listing, id) }; }
+        const id = result.listing_id || listing.platforms?.[pkey]?.listing_id;
+        try { result = { ...result, queued: true, goes_live: await enqueueEtsy(listing, id, pkey) }; }
         catch (e) { throw new Error(`It's on Etsy as a draft, but didn't join the queue: ${e.message}`); }
-      } else if ((result.status || "active") === "active") markQueueLive(listing.id).catch(e => console.warn("etsy queue:", e));
+      } else if ((result.status || "active") === "active") markQueueLive(listing.id, pkey).catch(e => console.warn("etsy queue:", e));
     }
     return result;
   };
@@ -10750,8 +10786,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const livePlatforms = PLATFORMS.filter(p => !p.coming && p.key !== saleForm.platform && listing.platforms?.[p.key]?.status === "active");
       // Fire API calls in parallel for all live platforms
       await Promise.allSettled(livePlatforms.map(async p => {
-        let action, storeKey;
+        let action, storeKey, etsyShop;
         if (p.key === "etsy") { action = "unpublish_etsy"; }
+        else if (p.key === "etsy_ee") { action = "unpublish_etsy"; etsyShop = "earth"; }
         else if (p.key === "shopify_aty") { action = "unpublish_shopify"; storeKey = "atyahara"; }
         else if (p.key === "shopify_earth") { action = "unpublish_shopify"; storeKey = "earth"; }
         else if (p.key === "trade") { if (tradeRefOnly(listing)) return; await hideTradeProduct(listing.platforms?.trade?.product_id).catch(e => console.warn("Trade hide failed:", e.message)); return; }
@@ -10766,7 +10803,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         } else return;
         const r = await fetch("/api/listing-manager", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey }),
+          body: JSON.stringify({ action, listing: await withShopifyCreds(listing, storeKey), store_key: storeKey, etsy_shop: etsyShop }),
         });
         const d = await lmJson(r);
         if (!d.ok) console.warn(`Auto-unpublish failed for ${p.key}:`, d.error);
@@ -11043,12 +11080,20 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
 
         {/* ══ ORDERS ══ */}
-        {tab === "queue" && <EtsyQueuePanel listings={listings} onPublishNow={l => handlePublish(l, "etsy", { goLiveNow: true })} showToast={showToast} onCount={setQueueCount} />}
+        {tab === "queue" && <EtsyQueuePanel listings={listings} onPublishNow={(l, pkey = "etsy") => handlePublish(l, pkey, { goLiveNow: true })} showToast={showToast} onCount={setQueueCount} />}
         {tab === "renew" && <RenewalQueue listings={listings} stock={stock} getToken={getEtsyToken} onRenew={renewFromQueue} showToast={showToast} who={who} onCount={setRenewCount} />}
         {tab === "orders" && <OrdersView hideMoney={currentUser?.role !== "admin" && Array.isArray(currentUser?.hide) && currentUser.hide.includes("orderMoney")} orders={orders} listings={listings} stock={stock} showToast={showToast} onOpenInvoice={onOpenInvoice} onViewInvoicePdf={onViewInvoicePdf} onDelist={delistFromPlatform} />}
 
         {/* ══ PLATFORM TABS ══ */}
         {/* Etsy: the shop's listings, and (for admin) how it's selling and where the ad money goes. */}
+        {tab === "etsy" && (
+          <div style={{ display: "inline-flex", gap: 2, padding: 3, background: C.card, borderRadius: 10, marginBottom: 14, marginRight: 10 }}>
+            {[["atyahara", "Atyahara", "#F56400"], ["earth", "EarthEditions", "#9C3D0A"]].map(([k, l, col]) => (
+              <button key={k} onClick={() => pickEtsyTabShop(k)} style={{ border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 800, padding: "7px 14px", borderRadius: 8,
+                background: etsyTabShop === k ? col : "transparent", color: etsyTabShop === k ? "#fff" : C.inkMid }}>{l}</button>
+            ))}
+          </div>
+        )}
         {tab === "etsy" && currentUser?.role === "admin" && (
           <div style={{ display: "inline-flex", gap: 2, padding: 3, background: C.card, borderRadius: 10, marginBottom: 14 }}>
             {[["listings", "Etsy listings"], ["insights", "📈 Insights & ads"], ["tracker", "🎯 Ads tracker"]].map(([k, l]) => (
@@ -11058,10 +11103,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </div>
         )}
         {tab === "etsy" && currentUser?.role === "admin" && etsyView === "insights"
-          ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights listings={listings} onOpenRenew={() => setTab("renew")} onPrice={(l, v) => quickPrice(l, "price_etsy", v)} /></Suspense>
+          ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights key={etsyTabShop} shop={etsyTabShop} listings={listings} onOpenRenew={() => setTab("renew")} onPrice={(l, v) => quickPrice(l, "price_etsy", v)} /></Suspense>
           : tab === "etsy" && currentUser?.role === "admin" && etsyView === "tracker"
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><AdsTracker listings={listings} onEdit={l => { setEditing(l); setShowForm(true); }} /></Suspense>
-          : tab === "etsy" && <EtsyLiveView onCrossPost={crossPostEtsyToShopify} />}
+          : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} onCrossPost={crossPostEtsyToShopify} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
           <ShopifyStoreView

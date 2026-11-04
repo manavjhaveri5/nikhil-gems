@@ -4,7 +4,7 @@
    orders, and each platform's fees are fixed, so there is nothing to set. */
 import { useEffect, useMemo, useState } from "react";
 import { C } from "./lmTheme.js";
-import { CHANNELS, linkOf, tradeRefOnly } from "./listingChannels.js";
+import { CHANNELS, linkOf, tradeRefOnly, isEtsyKey } from "./listingChannels.js";
 import { storeSettings, storePriceFor } from "./StoreApp.jsx";
 import { chooseEtsyPublish } from "./etsyQueue.jsx";
 import { recommendCarriers, carrierLabel } from "./shipping.js";
@@ -43,11 +43,12 @@ export function etsyNow(orders = []) {
    value fee and payments; the two sites: card processing. */
 /* Wholesale is paid by wire, not by card, so there is no percentage to take.
    Charging 3% of a $600 kilo invented a Rs 1,734 cost that nobody pays. */
-const FEES = { etsy: .11, ebay: .15, store: .03, trade: 0, store_in: .0236 };
-const FEE_NAME = { etsy: "Etsy fees", ebay: "eBay fees", store: "Card fees", trade: "Card fees", store_in: "Razorpay 2% + GST" };
+const FEES = { etsy: .11, etsy_ee: .11, ebay: .15, store: .03, trade: 0, store_in: .0236 };
+const FEE_NAME = { etsy: "Etsy fees", etsy_ee: "Etsy fees", ebay: "eBay fees", store: "Card fees", trade: "Card fees", store_in: "Razorpay 2% + GST" };
 
 const PLACE = {
-  etsy: "Retail, worldwide",
+  etsy: "Retail, worldwide · Atyahara shop",
+  etsy_ee: "Retail, worldwide · EarthEditions shop",
   ebay: "Retail, US auctions & buy-now",
   store: "eartheditions.co · USA and India",
   trade: "trade.eartheditions.co · wholesale buyers",
@@ -282,7 +283,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
     || regions.find(r => (r.countries || []).includes("*"));
 
   const shipRule = pkey => {
-    if (pkey === "etsy") return {
+    if (isEtsyKey(pkey)) return {
       rateInr: +s?.etsy_shipping?.rate_inr || ETSY_SHIP.rate_inr,
       freeUsd: s?.etsy_shipping?.free_over_usd ?? ETSY_SHIP.free_usd, set: true };
     if (pkey === "store") return {
@@ -308,14 +309,14 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
        Rs 800 toward shipping is Rs 800 more that Etsy charges its fee on, so
        crediting the postage without widening the fee base would overstate it. */
     const feeBase = pkey === "ebay" ? gross * (1 + (now.tax || 0))
-      : pkey === "etsy" ? gross + shipPaid : gross;
+      : isEtsyKey(pkey) ? gross + shipPaid : gross;
     const fees = feeBase * FEES[pkey];
     // A sale within India owes 0.25% GST on stones (HSN 7103), inside the price; exports carry none.
     const gst = pkey === "store_in" ? gross * .0025 / 1.0025 : 0;
     return { gross, fees, shipping, shipPaid, gst, pieceCost,
       freeShip,
       profit: gross + shipPaid - fees - shipping - gst - pieceCost,
-      onTax: pkey === "ebay" && now.tax > 0, onShip: pkey === "etsy" && shipPaid > 0 };
+      onTax: pkey === "ebay" && now.tax > 0, onShip: isEtsyKey(pkey) && shipPaid > 0 };
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   // Does any of them already hold this piece — live or as a draft?
@@ -336,14 +337,14 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
   const [one, setOne] = useState({});   // key → { busy, url, error }
   /* A piece not yet on sale asks instead: into the Etsy queue, or live now
      (a renewal just asks whether to). Resolves { now } to go ahead, null to stop. */
-  const etsyGo = async () => {
-    if (linkOf(form, "etsy").status === "active") return { now: true };
-    const pick = await chooseEtsyPublish(form);
+  const etsyGo = async key => {
+    if (linkOf(form, key).status === "active") return { now: true };
+    const pick = await chooseEtsyPublish(form, key);
     return pick ? { now: pick === "now" } : null;
   };
   const publishOne = async key => {
     let go = null;
-    if (key === "etsy" && !(go = await etsyGo())) return;
+    if (isEtsyKey(key) && !(go = await etsyGo(key))) return;
     setOne(x => ({ ...x, [key]: { busy: true } }));
     try {
       const out = await onPublishOne(pricesPatch(), key, { goLiveNow: !!go?.now });
@@ -427,7 +428,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
           <span style={{ fontSize: 13, fontWeight: 800, color: C.ink }}>To break even{!pieceCost ? " · no cost entered" : ""}</span>
           <span style={{ fontFamily: serif, fontSize: 22, color: C.ink }}>
             {even ? money(even) : "—"}
-            {pkey === "etsy" && sale > 0 && even > 0 && <span style={{ fontFamily: "inherit", fontSize: 12, color: C.inkMid }}> · listed {inr(+listedFor(even))}</span>}
+            {isEtsyKey(pkey) && sale > 0 && even > 0 && <span style={{ fontFamily: "inherit", fontSize: 12, color: C.inkMid }}> · listed {inr(+listedFor(even))}</span>}
           </span>
         </div>
         <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 2 }}>The least the customer pays to cover {FEES[pkey] ? "the fees, " : ""}{pkey === "trade" ? "" : "shipping and "}the piece. Type a price to see the profit.</div>
@@ -816,7 +817,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
             </Box>
             <Box style={{ padding: 0 }}>
               {chosen.length ? chosen.map((c, i) => {
-                const price = c.key === "etsy" ? (etsyPays ? `${inr(etsyPays)}${sale ? ` (${inr(etsyPrice)} − ${sale}%)` : ""}` : "No price")
+                const price = isEtsyKey(c.key) ? (etsyPays ? `${inr(etsyPays)}${sale ? ` (${inr(etsyPrice)} − ${sale}%)` : ""}` : "No price")
                   : c.key === "ebay" ? (ebayUsd ? usd(ebayUsd) : "No price")
                   : c.key === "store" ? [storeUsd && usd(storeUsd), storeInr && inr(storeInr)].filter(Boolean).join(" · ") || "No price"
                   : tradeRefOnly(form) ? "Priced on the trade site"

@@ -11,7 +11,7 @@ import { createRoot } from "react-dom/client";
 import { C, mob } from "./lmTheme.js";
 import { loadK, loadKFresh, saveK, upsertItemK, deleteItemK, onCacheRefresh } from "./utils.js";
 
-export const QUEUE_KEY = "ng-etsy-queue-v1";             // [{ id: listing id, etsy_id, title, image, price, shape, material, order, status: queued | live | stuck | dropped, by, tries, error, queued_at, live_at, live_day }]
+export const QUEUE_KEY = "ng-etsy-queue-v1";             // [{ id: queueId(listing id, shop), listing_id, shop, etsy_id, title, image, price, shape, material, order, status: queued | live | stuck | dropped, by, tries, error, queued_at, live_at, live_day }]
 export const QUEUE_SETTINGS_KEY = "ng-etsy-queue-settings-v1";   // { on, perDay, paused }
 const QUEUE_TICK_KEY = "ng-etsy-queue-tick-v1";          // the clock's last knock, written by the server
 const SLOTS_ET = [9, 11, 13, 15, 17];
@@ -28,8 +28,19 @@ const shapeOf = it => String(it?.shape || "").trim().toLowerCase();
 const byOrder = (a, b) => (+a.order || 0) - (+b.order || 0);
 const perDayFor = (waiting, setting) => Math.max(1, Math.min(SLOTS_ET.length, waiting < TAPER_BELOW ? Math.min(4, +setting || 5) : +setting || 5));
 
+/* Both Etsy shops share the queue and its timetable, but each puts its own few
+   live a day. Atyahara's entries keep the listing id as their id (as they
+   always had); EarthEditions' are "ee:" + the listing id, so one piece can
+   wait in both. */
+const shopOf = it => it?.shop === "earth" ? "earth" : "atyahara";
+export const pkeyOfShop = shop => shop === "earth" ? "etsy_ee" : "etsy";
+const shopOfPkey = pkey => pkey === "etsy_ee" ? "earth" : "atyahara";
+export const queueId = (listingId, pkey = "etsy") => pkey === "etsy_ee" ? `ee:${listingId}` : listingId;
+export const listingIdOf = it => it?.listing_id || String(it?.id || "").replace(/^ee:/, "");
+const SHOP_NAME = { atyahara: "Atyahara", earth: "EarthEditions" };
+
 // Only a piece that isn't on sale yet waits: new, a draft, or one taken down by hand. A renewal never does.
-export const queuesOnEtsy = l => !l?.platforms?.etsy?.listing_id || ["draft", "inactive"].includes(l.platforms.etsy.status);
+export const queuesOnEtsy = (l, pkey = "etsy") => !l?.platforms?.[pkey]?.listing_id || ["draft", "inactive"].includes(l.platforms[pkey].status);
 
 export async function loadQueueSettings() {
   return { ...DEFAULTS, ...((await loadK(QUEUE_SETTINGS_KEY).catch(() => null)) || {}) };
@@ -40,6 +51,12 @@ export async function loadQueueSettings() {
    different one, four a day under eight waiting) run forward an hour at a
    time from the next knock at two past the hour. */
 export function forecast(items, settings, at = new Date()) {
+  const when = new Map();
+  for (const shop of ["atyahara", "earth"])
+    for (const [k, v] of forecastShop(items.filter(i => shopOf(i) === shop), settings, at)) when.set(k, v);
+  return when;
+}
+function forecastShop(items, settings, at) {
   const when = new Map();
   const pool = items.filter(i => i.status === "queued").sort(byOrder);
   if (settings.paused || !pool.length) return when;
@@ -73,8 +90,8 @@ export function whenLabel(d, now = new Date()) {
 }
 const nyTime = d => d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: true }).toLowerCase().replace(" ", "");
 
-const itemFor = (listing, etsyId) => ({
-  id: listing.id, etsy_id: etsyId,
+const itemFor = (listing, etsyId, pkey = "etsy") => ({
+  id: queueId(listing.id, pkey), listing_id: listing.id, shop: shopOfPkey(pkey), etsy_id: etsyId,
   title: String(listing.etsy_title || listing.title || "").slice(0, 140),
   image: (listing.images || [])[0] || "",
   price: listing.price_etsy_usd ? `$${listing.price_etsy_usd}` : listing.price_etsy ? `₹${Math.round(+listing.price_etsy).toLocaleString("en-IN")}` : "",
@@ -83,20 +100,20 @@ const itemFor = (listing, etsyId) => ({
 
 /* Into the queue, at the back — or where it already is, if it's waiting.
    Returns when it goes live. */
-export async function enqueueEtsy(listing, etsyId) {
+export async function enqueueEtsy(listing, etsyId, pkey = "etsy") {
   const [items, settings] = await Promise.all([loadKFresh(QUEUE_KEY).catch(() => null).then(v => v || []), loadQueueSettings()]);
-  const have = items.find(i => i.id === listing.id);
+  const have = items.find(i => i.id === queueId(listing.id, pkey));
   const waiting = have?.status === "queued";
   const order = waiting ? have.order : Math.max(0, ...items.filter(i => i.status === "queued").map(i => +i.order || 0)) + 1;
-  const item = { ...itemFor(listing, etsyId), order, status: "queued", tries: 0, error: "", queued_at: waiting ? have.queued_at : new Date().toISOString() };
+  const item = { ...itemFor(listing, etsyId, pkey), order, status: "queued", tries: 0, error: "", queued_at: waiting ? have.queued_at : new Date().toISOString() };
   await upsertItemK(QUEUE_KEY, item, { prepend: false });
   return forecast([...items.filter(i => i.id !== item.id), item], settings).get(item.id) || null;
 }
 
 // Put live another way (Publish now, a hand publish): it leaves the queue without using one of the day's slots.
-export async function markQueueLive(listingId) {
+export async function markQueueLive(listingId, pkey = "etsy") {
   const items = (await loadKFresh(QUEUE_KEY).catch(() => null)) || [];
-  const it = items.find(i => i.id === listingId && (i.status === "queued" || i.status === "stuck"));
+  const it = items.find(i => i.id === queueId(listingId, pkey) && (i.status === "queued" || i.status === "stuck"));
   if (!it) return;
   const at = new Date();
   await upsertItemK(QUEUE_KEY, { ...it, status: "live", by: "hand", live_at: at.toISOString(), live_day: etNow(at).day, error: "" }, { prepend: false });
@@ -104,24 +121,26 @@ export async function markQueueLive(listingId) {
 
 /* Asked when a new piece is published to Etsy from its card: into the queue
    (the default) or live now. Resolves "queue" | "now" | null. */
-export async function chooseEtsyPublish(listing) {
-  if (listing.platforms?.etsy?.status === "expired")
-    return confirm("Renew on Etsy?\n\nEtsy charges a $0.20 listing fee to renew it for another four months.") ? "now" : null;
+export async function chooseEtsyPublish(listing, pkey = "etsy") {
+  const where = `Etsy (${SHOP_NAME[shopOfPkey(pkey)]})`;
+  if (listing.platforms?.[pkey]?.status === "expired")
+    return confirm(`Renew on ${where}?\n\nEtsy charges a $0.20 listing fee to renew it for another four months.`) ? "now" : null;
   const [items, settings] = await Promise.all([loadK(QUEUE_KEY).catch(() => null).then(v => v || []), loadQueueSettings()]);
-  if (!settings.on || !queuesOnEtsy(listing)) return confirm("Publish on Etsy?\n\nEtsy charges a $0.20 listing fee to put it live.") ? "now" : null;
-  const have = items.find(i => i.id === listing.id && i.status === "queued");
-  const probe = have || { ...itemFor(listing, null), id: listing.id, status: "queued", order: Math.max(0, ...items.filter(i => i.status === "queued").map(i => +i.order || 0)) + 1 };
-  const at = forecast(have ? items : [...items, probe], settings).get(listing.id);
+  if (!settings.on || !queuesOnEtsy(listing, pkey)) return confirm(`Publish on ${where}?\n\nEtsy charges a $0.20 listing fee to put it live.`) ? "now" : null;
+  const qid = queueId(listing.id, pkey);
+  const have = items.find(i => i.id === qid && i.status === "queued");
+  const probe = have || { ...itemFor(listing, null, pkey), status: "queued", order: Math.max(0, ...items.filter(i => i.status === "queued").map(i => +i.order || 0)) + 1 };
+  const at = forecast(have ? items : [...items, probe], settings).get(qid);
   return new Promise(resolve => {
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
     const done = v => { root.unmount(); host.remove(); resolve(v); };
-    root.render(<Chooser title={listing.title} at={at} queued={!!have} paused={settings.paused} onPick={done} />);
+    root.render(<Chooser shop={where} title={listing.title} at={at} queued={!!have} paused={settings.paused} onPick={done} />);
   });
 }
 
-function Chooser({ title, at, queued, paused, onPick }) {
+function Chooser({ shop = "Etsy", title, at, queued, paused, onPick }) {
   useEffect(() => {
     const k = e => { if (e.key === "Escape") onPick(null); };
     window.addEventListener("keydown", k);
@@ -132,7 +151,7 @@ function Chooser({ title, at, queued, paused, onPick }) {
   return (
     <div onMouseDown={e => e.target === e.currentTarget && onPick(null)} style={{ position: "fixed", inset: 0, zIndex: 5000, background: "rgba(20,15,8,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, fontFamily: "'Figtree',system-ui,sans-serif" }}>
       <div style={{ background: C.bg, borderRadius: 14, padding: 18, width: "100%", maxWidth: 400, boxShadow: "0 18px 50px rgba(0,0,0,.25)" }}>
-        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>Etsy</div>
+        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>{shop}</div>
         <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 14 }}>
           <button type="button" autoFocus onClick={() => onPick("queue")} style={btn(true)}>
@@ -175,7 +194,8 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
     return () => { clearInterval(iv); off(); };
   }, []);
 
-  const byId = useMemo(() => new Map(listings.map(l => [l.id, l])), [listings]);
+  const byLid = useMemo(() => new Map(listings.map(l => [l.id, l])), [listings]);
+  const byId = useMemo(() => ({ get: qid => byLid.get(listingIdOf({ id: qid })) }), [byLid]);
   const all = items || [];
   const stuck = all.filter(i => i.status === "stuck");
   const when = useMemo(() => forecast(all, settings, now), [items, settings, now]);
@@ -224,7 +244,7 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
     const l = byId.get(it.id);
     if (!l) return showToast?.("⚠ That listing isn't in the ERP any more");
     setBusy(it.id);
-    try { await onPublishNow(l); showToast?.(`✓ Live on Etsy — ${String(it.title).slice(0, 40)}`); }
+    try { await onPublishNow(l, pkeyOfShop(shopOf(it))); showToast?.(`✓ Live on Etsy (${SHOP_NAME[shopOf(it)]}) — ${String(it.title).slice(0, 40)}`); }
     catch (e) { showToast?.(`⚠ Etsy didn't publish it: ${e.message}`, 9000); }
     finally { setBusy(""); load(); }
   };
@@ -244,7 +264,7 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
     return src ? <img src={src} alt="" style={{ width: size, height: size, borderRadius: 8, objectFit: "cover", flex: "none", background: C.card }} />
       : <div style={{ width: size, height: size, borderRadius: 8, background: C.card, flex: "none" }} />;
   };
-  const meta = it => [it.shape, it.material, it.price].filter(Boolean).join(" · ");
+  const meta = it => [shopOf(it) === "earth" ? "EarthEditions" : "", it.shape, it.material, it.price].filter(Boolean).join(" · ");
 
   return (
     <div style={{ padding: phone ? "12px 12px 40px" : "16px 22px 40px", maxWidth: 980, margin: "0 auto" }}>
@@ -252,7 +272,7 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: C.ink }}>Etsy queue</div>
           <div style={{ ...small, marginTop: 3, lineHeight: 1.45 }}>
-            New Etsy listings upload as drafts and wait here. They go live {perDay} a day at {SLOTS_ET.slice(0, perDay).map(h => `${h > 12 ? h - 12 : h}`).join(", ")} New York time
+            New Etsy listings upload as drafts and wait here. Each shop puts {perDay} a day live at {SLOTS_ET.slice(0, perDay).map(h => `${h > 12 ? h - 12 : h}`).join(", ")} New York time
             {slotsLocal.every(Boolean) ? ` (${slotsLocal.join(", ")} here)` : ""}, when US buyers shop, mixing shapes through the day.
           </div>
         </div>

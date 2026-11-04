@@ -10,6 +10,10 @@ export const CHANNELS = [
   { key: "etsy",  label: "Etsy",           short: "Etsy",  color: "#F56400", priceField: "price_etsy",  cur: "₹",
     titleField: "etsy_title",  descField: "etsy_description",  titleMax: 140,
     blurb: "Retail marketplace. Title up to 140 characters, 13 tags, category and shop section." },
+  // The second Etsy shop (lib/etsy-auth.js), on its own account. Same price, title and tags as Atyahara's.
+  { key: "etsy_ee", label: "Etsy · EarthEditions", short: "Etsy EE", color: "#9C3D0A", priceField: "price_etsy", cur: "₹",
+    titleField: "etsy_title",  descField: "etsy_description",  titleMax: 140, shop: "earth",
+    blurb: "The EarthEditions Etsy shop. Same Etsy title, tags and price; its own sections and shipping." },
   { key: "ebay",  label: "eBay",           short: "eBay",  color: "#0064D2", priceField: "price_ebay",  cur: "$",
     titleField: "ebay_title",  descField: "ebay_description",  titleMax: 80,
     blurb: "Title up to 80 characters: eBay cuts anything longer. Condition and shipping are set here." },
@@ -25,6 +29,9 @@ export const OTHER_CHANNELS = [
   { key: "shopify_earth", label: "Earth Ed. Shopify", color: "#2A6845", priceField: "price_shopify_earth", cur: "$" },
   { key: "shopify_aty",   label: "Atyahara",          color: "#6B3FA0", priceField: "price_shopify_aty",   cur: "₹" },
 ];
+// Both Etsy shops behave alike everywhere but in which shop they talk to.
+export const isEtsyKey = key => key === "etsy" || key === "etsy_ee";
+export const etsyShopOf = key => key === "etsy_ee" ? "earth" : "atyahara";
 export const channel = key => CHANNELS.find(c => c.key === key) || OTHER_CHANNELS.find(c => c.key === key);
 
 export function titleFor(l, key) {
@@ -55,7 +62,7 @@ export function linkOf(l, key) {
   const id = pd.listing_id || pd.item_id || pd.product_id || "";
   if (!id || pd.status === "deleted") return { linked: false, status: pd.status || "" };
   let live = "", admin = "";
-  if (key === "etsy") { live = pd.url || `https://www.etsy.com/listing/${id}`; admin = `https://www.etsy.com/your/shops/me/listing-editor/edit/${id}`; }
+  if (isEtsyKey(key)) { live = pd.url || `https://www.etsy.com/listing/${id}`; admin = `https://www.etsy.com/your/shops/me/listing-editor/edit/${id}`; }
   else if (key === "ebay") { live = pd.url || `https://www.ebay.com/itm/${id}`; }
   // Our own two sites save the public page as `url`; Shopify saves its admin page there.
   else if (key === "trade" || key === "store") { live = pd.storefront_url || pd.url || ""; }
@@ -98,12 +105,12 @@ export function defaultPieces(l) {
 export function parseRef(key, text) {
   const t = String(text || "").trim();
   if (!t) return "";
-  if (key === "etsy") return (t.match(/listing\/(\d{6,})/) || t.match(/^(\d{6,})$/) || [])[1] || "";
+  if (isEtsyKey(key)) return (t.match(/listing\/(\d{6,})/) || t.match(/^(\d{6,})$/) || [])[1] || "";
   if (key === "ebay") return (t.match(/\/itm\/(?:[^/?#]+\/)?(\d{9,})/) || t.match(/[?&]item=(\d{9,})/) || t.match(/^(\d{9,})$/) || [])[1] || "";
   return "";
 }
 export function connectPatch(key, id) {
-  if (key === "etsy") return { listing_id: id, url: `https://www.etsy.com/listing/${id}`, status: "active", connected_at: new Date().toISOString() };
+  if (isEtsyKey(key)) return { listing_id: id, url: `https://www.etsy.com/listing/${id}`, status: "active", connected_at: new Date().toISOString() };
   if (key === "ebay") return { item_id: id, url: `https://www.ebay.com/itm/${id}`, status: "active", connected_at: new Date().toISOString() };
   return null;
 }
@@ -119,7 +126,7 @@ export function readiness(l, key, tags = l?.tags || []) {
   if (c?.priceField) add(+l?.[c.priceField] > 0 || (key === "store" && +l?.price_etsy > 0), key === "store" && !(+l?.price_store > 0) && +l?.price_etsy > 0 ? "Price (from the Etsy price)" : "Price set", true);
   add(photos > 0, photos ? `${photos} photo${photos === 1 ? "" : "s"}` : "At least one photo", true);
   if (c?.titleMax) add(title && title.length <= c.titleMax, title.length > c.titleMax ? `Title is ${title.length}/${c.titleMax}: too long` : "Title fits", true);
-  if (key === "etsy") {
+  if (isEtsyKey(key)) {
     add(photos >= 5, "5+ photos (Etsy ranks these higher)");
     add((tags || []).length === 13, `All 13 tags (${(tags || []).length}/13)`);
     add(String(l?.material || "").trim(), "Material / stone");
