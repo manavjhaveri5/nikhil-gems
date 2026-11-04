@@ -162,7 +162,9 @@ function eeSectionFor(listing) {
 }
 // The section by that name on the current shop, made there if it isn't yet.
 async function eeSectionId(listing, hdrs) {
-  const name = eeSectionFor(listing);
+  return ensureSection(eeSectionFor(listing), hdrs);
+}
+async function ensureSection(name, hdrs) {
   const found = await resolveSectionId({ etsy_section_name: name }, hdrs);
   if (found) return found;
   try {
@@ -1973,6 +1975,43 @@ async function listingHandler(req, res) {
     if (!hasStoreSecret(req) && !(await cronKeyOk(req, "etsy_queue"))) return res.status(401).json({ error: "Unauthorized" });
     try { return res.json({ ok: true, ...(await etsyQueueTick({ dry: body.dry === true })) }); }
     catch (e) { console.error("etsy queue:", e); return res.status(500).json({ error: e.message || String(e) }); }
+  }
+
+  /* EarthEditions' four sections, made if missing, and every listing on that
+     shop filed into the one it belongs in. For pieces that went up before
+     filing existed, or that were moved by hand. `dry` reports only. */
+  if (action === "ee_sections_sync") {
+    if (!(await cronKeyOk(req, "etsy_queue")) && !(await requireUser(req, res))) return;
+    try {
+      const out = await withEtsyShop("earth", async () => {
+        const hdrs = await etsyHeaders();
+        const { "Content-Type": _drop, ...bare } = hdrs;
+        const ids = {};
+        for (const name of EE_SECTIONS) ids[name] = body.dry ? await resolveSectionId({ etsy_section_name: name }, hdrs) : await ensureSection(name, hdrs);
+        const moved = [], kept = [], failed = [];
+        for (const state of ["active", "draft", "expired", "sold_out", "inactive"]) {
+          for (let offset = 0; ; offset += 100) {
+            const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings?state=${state}&limit=100&offset=${offset}`, { headers: bare });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { failed.push({ state, error: d?.error || `Etsy ${r.status}` }); break; }
+            for (const l of d.results || []) {
+              const name = eeSectionFor({ title: l.title, tags: l.tags });
+              const want = ids[name];
+              if (!want || String(l.shop_section_id || "") === String(want)) { kept.push({ id: l.listing_id, name }); continue; }
+              if (body.dry) { moved.push({ id: l.listing_id, title: l.title, to: name }); continue; }
+              const u = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${l.listing_id}`,
+                { method: "PATCH", headers: hdrs, body: JSON.stringify({ shop_section_id: want }) });
+              if (u.ok) moved.push({ id: l.listing_id, title: l.title, to: name });
+              else failed.push({ id: l.listing_id, title: l.title, error: (await u.json().catch(() => ({})))?.error || `Etsy ${u.status}` });
+              await new Promise(z => setTimeout(z, 250));
+            }
+            if ((d.results || []).length < 100) break;
+          }
+        }
+        return { sections: ids, moved, kept: kept.length, failed };
+      });
+      return res.json({ ok: true, ...out });
+    } catch (e) { console.error("ee sections:", e); return res.status(500).json({ error: e.message || String(e) }); }
   }
 
   if (action === "etsy_active_ids") {
