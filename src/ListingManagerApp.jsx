@@ -7596,7 +7596,7 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
                                     style={{flex:1,background:st==="linked"?C.card:"#9C3D0A",border:`1px solid ${st==="linked"?C.border:"#9C3D0A"}`,
                                       color:st==="linked"?C.inkMid:"#fff",borderRadius:5,padding:"4px 0",fontSize:10,fontWeight:700,
                                       cursor:st?"default":"pointer",opacity:st==="busy"?.6:1}}>
-                                    {st === "linked" ? "On EE ✓" : st === "busy" ? "Sending…" : "→ EE"}
+                                    {st === "linked" ? "On EE ✓" : st === "busy" ? "Copying photos…" : "→ EE"}
                                   </button>
                                 );
                               })()}
@@ -10099,7 +10099,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       listing = { ...listing, price_etsy: String(price.toFixed(2)) };
     }
     if (!listing.etsy_taxonomy_id && l.taxonomy_id) listing = { ...listing, etsy_taxonomy_id: l.taxonomy_id };
-    showToast?.("Sending to EarthEditions…");
+    showToast?.(`Sending to EarthEditions — copying ${(listing.images || []).length || "the"} photos${listing.video ? " and the video" : ""} takes about 20 seconds. Carry on, you can push others meanwhile.`);
     try {
       const r = await handlePublish(listing, "etsy_ee");
       showToast?.(r?.queued ? `In the EarthEditions queue${r.goes_live ? ` — goes live ${whenLabel(r.goes_live)}` : ""}` : "Published on EarthEditions");
