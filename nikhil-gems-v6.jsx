@@ -6645,9 +6645,15 @@ function StockApp({onHome,onCreateInvoiceFromStock,onViewBill,startStockId,onSto
     if(!keys.includes(KEYS.stock))return;
     refreshStockFromCloud();
   }),[refreshStockFromCloud]);
+  // Changes (the bot's included) arrive through onCacheRefresh above, from the
+  // database's version trigger. This is only the backstop: on coming back to the
+  // tab, at most once a minute, and every five minutes. It used to re-download
+  // the whole 1.9 MB stock list every 5 seconds per open tab, which kept the
+  // database busy enough to stall everything else.
   useEffect(()=>{
-    const onVisible=()=>{if(!document.hidden)refreshStockFromCloud();};
-    const id=setInterval(onVisible,5000);
+    let lastAt=Date.now();
+    const onVisible=()=>{if(document.hidden||Date.now()-lastAt<60000)return;lastAt=Date.now();refreshStockFromCloud();};
+    const id=setInterval(()=>{if(!document.hidden){lastAt=Date.now();refreshStockFromCloud();}},5*60000);
     window.addEventListener("focus",onVisible);
     document.addEventListener("visibilitychange",onVisible);
     return()=>{clearInterval(id);window.removeEventListener("focus",onVisible);document.removeEventListener("visibilitychange",onVisible);};
