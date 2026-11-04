@@ -90,8 +90,11 @@ function SnapshotCards({ s }) {
   const ev = s.etsy?.etsy?.views_yesterday ?? null, ev2 = s.etsy?.etsy_ee?.views_yesterday ?? null;
   const views = ev == null && ev2 == null ? null : (ev || 0) + (ev2 || 0);
   const eb = s.ebay?.traffic_yesterday;
-  const ads = s.ads?.etsy, adDay = ads?.day ? (ads.day.etsy_ads || 0) + (ads.day.offsite_ads || 0) : null;
-  const adMtd = ads?.mtd ? (ads.mtd.etsy_ads || 0) + (ads.mtd.offsite_ads || 0) : null;
+  // Etsy ads per shop ({etsy, etsy_ee}), each {cur, day, mtd, last7} of {etsy_ads, offsite_ads}.
+  const shops = Object.values(s.ads?.etsy || {}).filter(x => x && x.day);
+  const ads = shops[0] ? { cur: shops[0].cur } : null;
+  const adSum = k => shops.length ? shops.reduce((t, x) => t + (x[k]?.etsy_ads || 0) + (x[k]?.offsite_ads || 0), 0) : null;
+  const adDay = adSum("day"), adMtd = adSum("mtd");
   return (
     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
       <Metric label="Orders" value={t.orders ?? "—"} sub={`7-day avg ${Math.round(avg7 * 10) / 10}`} avail={av.etsy_sales} />
