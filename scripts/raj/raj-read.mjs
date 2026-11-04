@@ -23,9 +23,28 @@ async function refresh() {
   return d;
 }
 
+// Large JSON to a pipe: wait for it to drain before exiting.
+const out = o => new Promise(r => process.stdout.write(JSON.stringify(o, null, 1) + "\n", r));
 const notes = await rows(sb, KEYS.notes);
 const shortNote = n => ({ id: n.id, kind: n.kind, title: n.title, status: n.status, due: n.due || undefined, channel: n.channel || undefined,
   updated: (n.updated_at || n.created_at || "").slice(0, 10) });
+
+/* --audit            the audit summary (all checks, top items) and pending proposals
+   --audit <check|ch>  every item of one check, e.g. --audit "etsy_tag_wrong_stone|etsy" */
+if (args.has("--audit")) {
+  const i = process.argv.indexOf("--audit"), which = process.argv[i + 1];
+  const audit = await rows(sb, "raj-audit-v1");
+  if (which && !which.startsWith("--")) {
+    const r = audit.find(x => x.id === which);
+    await out(r ? { ...r, resolved: (r.resolved || []).slice(0, 40) } : { error: `no check ${which}`, checks: audit.map(x => x.id) });
+  } else {
+    const proposals = await rows(sb, "raj-proposals-v1");
+    await out({ summary: audit.find(x => x.id === "summary") || null,
+      proposals: { pending: proposals.filter(p => p.status === "pending").length,
+        decided_recently: proposals.filter(p => p.status !== "pending" && (p.decided_at || "") >= addDays(today, -14)).map(p => ({ id: p.id, status: p.status, decided_at: p.decided_at, title: p.title })) } });
+  }
+  process.exit(0);
+}
 
 if (args.has("--notes")) {
   console.log(JSON.stringify({
@@ -48,7 +67,7 @@ const history = [];
 for (let i = 1; i <= 7; i++) {
   const s = await row(sb, KEYS.snapshots, addDays(today, -i));
   if (s) history.push({ day: s.day, orders: s.sales?.total?.orders, revenue_inr_est: s.sales?.total?.revenue_inr_est,
-    etsy_views: (s.etsy?.etsy?.views_yesterday ?? 0) + (s.etsy?.etsy_ee?.views_yesterday ?? 0), site_visitors: s.site?.day?.visitors });
+    etsy_new_favs: (s.etsy?.etsy?.favs_yesterday ?? 0) + (s.etsy?.etsy_ee?.favs_yesterday ?? 0), site_visitors: s.site?.day?.visitors });
 }
 const briefingToday = await row(sb, KEYS.briefings, today);
 

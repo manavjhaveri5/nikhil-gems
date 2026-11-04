@@ -8,7 +8,7 @@ import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
 import { fetchWithRetry } from "./aiClient.js";
 
-export const RAJ_KEYS = { notes: "raj-notes-v1", briefings: "raj-briefings-v1", snapshots: "raj-snapshots-v1" };
+export const RAJ_KEYS = { notes: "raj-notes-v1", briefings: "raj-briefings-v1", snapshots: "raj-snapshots-v1", audit: "raj-audit-v1", proposals: "raj-proposals-v1" };
 const FONT = "-apple-system,'SF Pro Display','Figtree',system-ui,sans-serif";
 const SERIF = "'Cormorant Garamond',Georgia,serif";
 const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12 };
@@ -19,6 +19,7 @@ export const istDay = (ms = Date.now()) => new Date(ms + IST).toISOString().slic
 const KIND = {
   followup: ["📌", "Follow-up", C.amber], problem: ["⚠️", "Problem", C.red], solution: ["🛠", "Solution", C.green],
   decision: ["⚖️", "Decision", C.blue], experiment: ["🧪", "Experiment", C.purple], knowledge: ["📚", "Knowledge", C.teal],
+  lesson: ["🎓", "Lesson", C.gold],
 };
 const CH = { etsy: "Atyahara Etsy", etsy_ee: "EarthEditions Etsy", ebay: "eBay", store: "eartheditions.co", shopify_aty: "Atyahara Shopify", shopify_earth: "Earth Editions Shopify", trade: "Trade" };
 const money = (v, cur = "INR") => v == null ? "—" : `${cur === "INR" ? "₹" : cur === "USD" ? "$" : cur + " "}${Math.round(v).toLocaleString(cur === "INR" ? "en-IN" : "en-US")}`;
@@ -87,8 +88,8 @@ function SnapshotCards({ s }) {
   if (!s) return null;
   const t = s.sales?.total || {}, av = s.availability || {};
   const avg7 = Object.values(s.sales?.compare || {}).reduce((x, c) => x + (c.avg7_orders || 0), 0);
-  const ev = s.etsy?.etsy?.views_yesterday ?? null, ev2 = s.etsy?.etsy_ee?.views_yesterday ?? null;
-  const views = ev == null && ev2 == null ? null : (ev || 0) + (ev2 || 0);
+  const ev = s.etsy?.etsy?.favs_yesterday ?? null, ev2 = s.etsy?.etsy_ee?.favs_yesterday ?? null;
+  const favs = ev == null && ev2 == null ? null : (ev || 0) + (ev2 || 0);
   const eb = s.ebay?.traffic_yesterday;
   // Etsy ads per shop ({etsy, etsy_ee}), each {cur, day, mtd, last7} of {etsy_ads, offsite_ads}.
   const shops = Object.values(s.ads?.etsy || {}).filter(x => x && x.day);
@@ -99,7 +100,7 @@ function SnapshotCards({ s }) {
     <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 14 }}>
       <Metric label="Orders" value={t.orders ?? "—"} sub={`7-day avg ${Math.round(avg7 * 10) / 10}`} avail={av.etsy_sales} />
       <Metric label="Revenue (≈ INR)" value={money(t.revenue_inr_est)} sub={t.units != null ? `${t.units} pieces · AOV ${money(t.aov_inr_est)}` : null} avail={av.inr_totals || "estimated"} />
-      <Metric label="Etsy views" value={views ?? "—"} sub="both shops, yesterday" avail={av.etsy_views} />
+      <Metric label="Etsy new favourites" value={favs ?? "—"} sub="both shops, yesterday (Etsy no longer gives views)" avail={av.etsy_favourites} />
       <Metric label="Site visitors" value={s.site?.day?.visitors ?? "—"} sub={s.site?.avg7?.visitors != null ? `7-day avg ${s.site.avg7.visitors}` : "eartheditions.co"} avail={av.site_traffic} />
       <Metric label="eBay impressions" value={eb?.impressions ?? "—"} sub={eb ? `${eb.views} views` : null} avail={av.ebay_traffic} />
       <Metric label="Etsy ads" value={adDay == null ? "—" : money(adDay, ads.cur)} sub={adMtd != null ? `${money(adMtd, ads.cur)} this month` : null} avail={av.etsy_ads} />
@@ -128,7 +129,7 @@ function ChannelTable({ s }) {
 }
 
 function BriefingTab({ briefings, showToast }) {
-  const [day, setDay] = useState(briefings[0]?.id || istDay());
+  const [day, setDay] = useState(briefings.find(x => x.generated_by !== "weekly")?.id || istDay());
   const [snap, setSnap] = useState(null);
   const b = briefings.find(x => x.id === day) || null;
   useEffect(() => { let on = true; rajRow(RAJ_KEYS.snapshots, day).then(s => on && setSnap(s)).catch(e => showToast("⚠ " + e.message)); return () => { on = false; }; }, [day, showToast]);
@@ -137,7 +138,7 @@ function BriefingTab({ briefings, showToast }) {
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
         <select value={day} onChange={e => setDay(e.target.value)} style={FI({ width: "auto" })}>
           {!briefings.some(x => x.id === istDay()) && <option value={istDay()}>{istDay()} (today, not written yet)</option>}
-          {briefings.map(x => <option key={x.id} value={x.id}>{x.id}{x.generated_by === "numbers-only" ? " · numbers only" : ""}</option>)}
+          {briefings.map(x => <option key={x.id} value={x.id}>{x.generated_by === "weekly" ? `Weekly review ${x.day}` : x.id}{x.generated_by === "numbers-only" ? " · numbers only" : ""}</option>)}
         </select>
         {b && <span style={{ fontSize: 11.5, color: C.inkFaint }}>written {new Date(b.at).toLocaleString("en-IN", { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })} · {b.generated_by === "claude" ? "by Raj" : "numbers only (Mac was off)"}</span>}
       </div>
@@ -306,6 +307,132 @@ function AskTab({ briefings, notes }) {
   );
 }
 
+
+/* ── Audit: every listing checked each morning, and fixes Raj drafted ───── */
+const SEV = { high: [C.red, C.redBg, "Urgent"], medium: [C.amber, C.amberBg, "Important"], low: [C.inkFaint, C.card, "Minor"] };
+const CHN = { ...CH, all: "All channels" };
+
+function Proposal({ p, onDecide }) {
+  const [busy, setBusy] = useState(false);
+  const cur = p.field === "tags" ? (p.current || []) : [p.current];
+  const next = p.field === "tags" ? (p.proposed || []) : [p.proposed];
+  const chip = (t, kind) => <span key={kind + t} style={{ fontSize: 11.5, padding: "2px 7px", borderRadius: 10, margin: "0 4px 4px 0", display: "inline-block",
+    background: kind === "add" ? C.greenBg : kind === "drop" ? C.redBg : C.card, color: kind === "add" ? C.green : kind === "drop" ? C.red : C.inkMid,
+    textDecoration: kind === "drop" ? "line-through" : "none" }}>{t}</span>;
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/etsy?action=update_listing&listing_id=${p.listing_id}${p.channel === "etsy_ee" ? "&shop=earth" : ""}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [p.field]: p.proposed }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.etsyError || d.error || `Etsy said ${r.status}`);
+      await onDecide(p, "applied");
+    } catch (e) { await onDecide(p, "failed", e.message); }
+    setBusy(false);
+  };
+  return (
+    <div style={{ ...card, padding: 14, marginBottom: 10 }}>
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <a href={`https://www.etsy.com/listing/${p.listing_id}`} target="_blank" rel="noreferrer" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{p.title}</a>
+          <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>{CH[p.channel] || p.channel} · new {p.field} · {p.reason}</div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button disabled={busy} onClick={() => onDecide(p, "rejected")} style={btn()}>Reject</button>
+          <button disabled={busy} onClick={apply} style={btn(C.ink, "#fff")}>{busy ? "Applying…" : "Approve & apply"}</button>
+        </div>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        {p.field === "tags" ? <>
+          {cur.filter(t => !next.includes(t)).map(t => chip(t, "drop"))}
+          {next.map(t => chip(t, cur.includes(t) ? "keep" : "add"))}
+        </> : <div style={{ fontSize: 12.5 }}><div style={{ color: C.red, textDecoration: "line-through" }}>{p.current}</div><div style={{ color: C.green }}>{p.proposed}</div></div>}
+      </div>
+    </div>
+  );
+}
+
+function CheckRow({ c }) {
+  const [open, setOpen] = useState(false);
+  const [all, setAll] = useState(false);
+  const [fg, bg, label] = SEV[c.severity] || SEV.low;
+  const items = all ? c.items : (c.items || []).slice(0, 40);
+  const trend = (c.history || []).slice(-8).map(h => h.count);
+  return (
+    <div style={{ ...card, marginBottom: 8, overflow: "hidden" }}>
+      <div onClick={() => setOpen(o => !o)} style={{ padding: "11px 14px", cursor: "pointer", display: "flex", gap: 10, alignItems: "center" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", background: bg, color: fg, borderRadius: 4, padding: "2px 6px", flexShrink: 0 }}>{label}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600 }}>{c.title}</div>
+          <div style={{ fontSize: 11, color: C.inkFaint }}>{CHN[c.channel] || c.channel}{c.new_today ? ` · ${c.new_today} new` : ""}{c.resolved_today ? ` · ${c.resolved_today} fixed` : ""}{trend.length > 1 ? ` · trend ${trend.join(" → ")}` : ""}</div>
+        </div>
+        <span style={{ fontSize: 18, fontWeight: 700, fontFamily: SERIF }}>{c.count}</span>
+        <span style={{ color: C.inkFaint }}>{open ? "▾" : "▸"}</span>
+      </div>
+      {open && (
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: "10px 14px" }}>
+          <div style={{ fontSize: 12.5, color: C.inkMid, marginBottom: 8 }}><b>Why it matters:</b> {c.why} <b>Fix:</b> {c.fix}</div>
+          {items.map(i => (
+            <div key={i.id} style={{ fontSize: 12.5, padding: "5px 0", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {i.url ? <a href={i.url} target="_blank" rel="noreferrer" style={{ color: C.ink }}>{i.title || i.id}</a> : <span>{i.title || i.id}</span>}
+                {i.detail && <div style={{ fontSize: 11.5, color: C.inkMid }}>{i.detail}</div>}
+              </div>
+              <span style={{ fontSize: 10.5, color: C.inkFaint, flexShrink: 0 }}>since {i.since}</span>
+            </div>
+          ))}
+          {!all && (c.items || []).length > 40 && <button onClick={() => setAll(true)} style={{ ...btn(), marginTop: 8 }}>Show all {c.items.length}</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuditTab({ showToast }) {
+  const [rows, setRows] = useState(null);
+  const [props, setProps] = useState([]);
+  const [kind, setKind] = useState("problem");
+  useEffect(() => {
+    Promise.all([rajRows(RAJ_KEYS.audit), rajRows(RAJ_KEYS.proposals)])
+      .then(([a, p]) => { setRows(a); setProps(p); }).catch(e => { setRows([]); showToast("⚠ " + e.message); });
+  }, [showToast]);
+  const decide = async (p, status, error) => {
+    const item = { ...p, status, decided_at: new Date().toISOString(), ...(error ? { error } : {}) };
+    const { error: e } = await supabase.rpc("app_rows_upsert", { p_key: RAJ_KEYS.proposals, p_item: item, p_prepend: false });
+    if (e) return showToast("⚠ " + e.message);
+    setProps(ps => ps.map(x => x.id === p.id ? item : x));
+    showToast(status === "applied" ? "Applied on Etsy" : status === "failed" ? `⚠ Not applied: ${error}` : "Rejected");
+  };
+  if (!rows) return <div style={{ color: C.inkFaint, padding: 30 }}>Loading…</div>;
+  const sum = rows.find(r => r.id === "summary");
+  if (!sum) return <div style={{ ...card, padding: 24, color: C.inkMid }}>The first audit runs at 7:30 IST.</div>;
+  const order = { high: 0, medium: 1, low: 2 };
+  const checks = rows.filter(r => r.id !== "summary" && r.kind === kind && r.count > 0).sort((a, b) => order[a.severity] - order[b.severity] || b.count - a.count);
+  const pending = props.filter(p => p.status === "pending");
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: mob() ? "1fr 1fr" : "repeat(5,1fr)", gap: 10, marginBottom: 14 }}>
+        <Metric label="Urgent problems" value={sum.totals?.problems_high ?? "—"} />
+        <Metric label="All problems" value={sum.totals?.problems ?? "—"} />
+        <Metric label="Sales leads" value={sum.totals?.opportunities ?? "—"} />
+        <Metric label="New today" value={sum.new_today ?? 0} />
+        <Metric label="Fixed since yesterday" value={sum.resolved_today ?? 0} sub={`audit ${sum.day}`} />
+      </div>
+      {sum.errors && Object.keys(sum.errors).length > 0 && <div style={{ ...card, padding: 12, fontSize: 12.5, marginBottom: 12, color: C.red }}>⚠ Not checked today: {Object.entries(sum.errors).map(([k, v]) => `${k} (${v})`).join("; ")}</div>}
+      {pending.length > 0 && <>
+        <div style={{ ...lab, marginTop: 6 }}>Fixes Raj drafted · {pending.length} waiting for you</div>
+        {pending.map(p => <Proposal key={p.id} p={p} onDecide={decide} />)}
+      </>}
+      <div style={{ display: "flex", gap: 8, margin: "14px 0 10px" }}>
+        {[["problem", "Problems"], ["opportunity", "Sales leads"]].map(([k, l]) => (
+          <button key={k} onClick={() => setKind(k)} style={btn(kind === k ? C.ink : C.surface, kind === k ? "#fff" : C.ink)}>{l}</button>
+        ))}
+      </div>
+      {checks.map(c => <CheckRow key={c.id} c={c} />)}
+    </div>
+  );
+}
+
 /* ── the app ────────────────────────────────────────────────────────────── */
 export default function RajApp({ onHome }) {
   const [tab, setTab] = useState("briefing");
@@ -315,11 +442,11 @@ export default function RajApp({ onHome }) {
   const [notes, setNotes] = useState([]);
   useEffect(() => {
     Promise.all([rajRows(RAJ_KEYS.briefings, { limit: 120 }), rajRows(RAJ_KEYS.notes)])
-      .then(([b, n]) => { setBriefings([...b].sort((x, y) => y.id.localeCompare(x.id))); setNotes(n); })
+      .then(([b, n]) => { setBriefings([...b].sort((x, y) => (y.at || y.id).localeCompare(x.at || x.id))); setNotes(n); })
       .catch(e => { setBriefings([]); showToast("⚠ " + e.message); });
   }, [showToast]);
   const openCount = notes.filter(n => n.kind === "followup" && n.status !== "done" && (!n.due || n.due <= istDay())).length;
-  const TABS = [["briefing", "☀️", "Briefing"], ["followups", "📌", `Follow-ups${openCount ? ` (${openCount})` : ""}`], ["memory", "📚", "Memory"], ["ask", "💬", "Ask Raj"]];
+  const TABS = [["briefing", "☀️", "Briefing"], ["audit", "🔎", "Audit"], ["followups", "📌", `Follow-ups${openCount ? ` (${openCount})` : ""}`], ["memory", "📚", "Memory"], ["ask", "💬", "Ask Raj"]];
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: FONT, color: C.ink }}>
       {toast && <div style={{ position: "fixed", bottom: 22, right: 22, left: mob() ? 22 : "auto", zIndex: 1200, background: C.ink, color: "#fff", padding: "10px 18px", borderRadius: 6, fontSize: 12.5 }}>{toast}</div>}
@@ -342,6 +469,7 @@ export default function RajApp({ onHome }) {
       <div style={{ maxWidth: 1000, margin: "0 auto", padding: mob() ? "14px 12px 60px" : "22px 28px 60px" }}>
         {briefings === null ? <div style={{ color: C.inkFaint, padding: 30 }}>Loading…</div>
           : tab === "briefing" ? <BriefingTab briefings={briefings} showToast={showToast} />
+          : tab === "audit" ? <AuditTab showToast={showToast} />
           : tab === "followups" ? <NotesTab mode="followups" notes={notes} setNotes={setNotes} showToast={showToast} />
           : tab === "memory" ? <NotesTab mode="memory" notes={notes} setNotes={setNotes} showToast={showToast} />
           : <AskTab briefings={briefings} notes={notes} />}

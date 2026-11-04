@@ -2,17 +2,19 @@
    Reads the same app_rows Raj's page does; tap to open Raj. */
 import { useState, useEffect } from "react";
 import { C, mob } from "./lmTheme.js";
-import { rajRows, RAJ_KEYS, istDay } from "./RajApp.jsx";
+import { rajRows, rajRow, RAJ_KEYS, istDay } from "./RajApp.jsx";
 
 export default function RajCard({ onEnter }) {
   const [b, setB] = useState(undefined);
   const [due, setDue] = useState([]);
+  const [audit, setAudit] = useState(null);
   useEffect(() => {
     let on = true;
     const today = istDay();
-    rajRows(RAJ_KEYS.briefings, { limit: 3 }).then(l => on && setB([...l].sort((x, y) => y.id.localeCompare(x.id))[0] || null)).catch(() => on && setB(null));
+    rajRows(RAJ_KEYS.briefings, { limit: 6 }).then(l => on && setB(l.filter(x => x.generated_by !== "weekly").sort((x, y) => y.id.localeCompare(x.id))[0] || null)).catch(() => on && setB(null));
     rajRows(RAJ_KEYS.notes).then(n => on && setDue(n.filter(x => x.kind === "followup" && x.status !== "done" && x.due && x.due <= today)
       .sort((x, y) => x.due.localeCompare(y.due)))).catch(() => {});
+    rajRow(RAJ_KEYS.audit, "summary").then(a => on && setAudit(a)).catch(() => {});
     return () => { on = false; };
   }, []);
   if (b === undefined) return null;
@@ -34,6 +36,11 @@ export default function RajCard({ onEnter }) {
         </ul>
       )}
       {!fresh && <div style={{ fontSize: 12.5, color: C.inkMid }}>Today's briefing comes at 8:00 IST{b ? "" : " once Raj's first run is done"}.</div>}
+      {audit?.totals?.problems_high > 0 && (
+        <div style={{ marginTop: 8, fontSize: 12, color: C.red, fontWeight: 600 }}>
+          🔎 {audit.totals.problems_high} urgent listing problem{audit.totals.problems_high > 1 ? "s" : ""}{audit.new_today ? ` · ${audit.new_today} new today` : ""}
+        </div>
+      )}
       {due.length > 0 && (
         <div style={{ marginTop: 8, fontSize: 12, color: C.amber, fontWeight: 600 }}>
           📌 {due.length} follow-up{due.length > 1 ? "s" : ""} due: {due.slice(0, 2).map(d => d.title).join(" · ")}{due.length > 2 ? " …" : ""}
