@@ -1,3 +1,4 @@
+import ConversionBreakdown from "./src/ConversionBreakdown.jsx";
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { supabase } from "./src/supabase.js";
 import { upload as blobUpload } from "@vercel/blob/client";
@@ -5077,12 +5078,12 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
                 )}
                 <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:8}}>
                   <Field label="Date"><input type="date" value={selected.date||""} onChange={e=>patchTxn(selected.id,{date:e.target.value})} style={inputS}/></Field>
-                  <Field label="Account">
+                  {!transfer&&<Field label="Account">
                     <select value={selected.type==="credit"?selected.accountTo||"":selected.accountFrom||""} onChange={e=>patchTxn(selected.id,selected.type==="credit"?{accountTo:e.target.value}:{accountFrom:e.target.value})} style={{...inputS,cursor:"pointer"}}>
                       <option value="">- Select account -</option>
                       {accounts.map(a=><option key={a.id} value={a.id}>{a.name}{a.type==="credit_card"?" · card":""}</option>)}
                     </select>
-                  </Field>
+                  </Field>}
                   <Field label="Payee / source"><input value={payeeDraft} onChange={e=>setPayeeDraft(e.target.value)} style={inputS} placeholder="Who paid / who was paid"/></Field>
                   <Field label="Classification"><input value={displayClassification(selected)} readOnly style={{...inputS,color:transfer?C.blue:isUnclassified(selected)?C.red:C.green,fontWeight:850}}/></Field>
                   {!transfer&&<Field label="Type"><div style={{display:"flex",gap:6}}>
@@ -5103,6 +5104,7 @@ function AccountingFinanceLedger({showToast,onViewBill,isAdmin=false,onOpenModul
                     <div style={{fontSize:15,fontWeight:950,color:transfer?C.blue:done?C.green:C.red}}>{transfer?"Transfer saved":done?"Classified":"Needs classification"}</div>
                     <div style={{fontSize:11,color:C.inkMid,marginTop:4}}>{transfer?"No classification needed for conversion / transfer.":done?displayClassification(selected):"Choose what this payment is."}</div>
                   </div>
+                  {transfer&&<ConversionBreakdown txn={selected} accounts={accounts} onPatch={p=>patchTxn(selected.id,p)} extractPdfText={extractPdfText} C={C} inputS={inputS} mob={mob} showToast={showToast}/>}
                   {!transfer&&<div style={{display:"grid",gridTemplateColumns:done&&!isUnclassified(selected)?(mob?"1fr":"1fr auto"):"1fr",gap:8}}>
                     <button className="bp" onClick={()=>setClassifyOpen(true)} style={{width:"100%",fontSize:13,padding:"11px 12px"}}>{done?"Review classification":"Classify now"}</button>
                     {done&&!isUnclassified(selected)&&<button onClick={unclassifySelected} style={{border:`1.5px solid ${C.border}`,background:C.surface,color:C.inkMid,borderRadius:8,padding:"11px 14px",fontSize:13,fontWeight:850,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Unclassify</button>}

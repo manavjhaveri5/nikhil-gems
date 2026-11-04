@@ -167,3 +167,29 @@ export function parseRemittanceAdvice(rawText) {
       : null,
   };
 }
+
+/* EEFC → INR conversion advice: the same BOI template, read for the ledger's
+   conversion breakdown. The commission and the two GST lines are kept apart
+   because the bank prints them apart (e.g. 100 + SGST 9 + CGST 9), and the
+   accountant checks each one against the tariff. Works on pdf.js text joined
+   either by line or by plain spaces. */
+const r2 = n => Math.round(n * 100) / 100;
+export function parseConversionAdvice(rawText) {
+  const text = String(rawText || "").replace(/\s+/g, " ");
+  const conv = /(?:Purchase|Sale)\s*:?\s*([A-Z]{3})\s+([\d,]+\.?\d*)\s+([\d,]+\.?\d*)\s+([A-Z]{3})\s+([\d,]+\.?\d*)/i.exec(text);
+  if (!conv || conv[1].toUpperCase() === conv[4].toUpperCase()) return null;
+  // Every matching line is summed: on larger amounts the bank adds a second
+  // SGST/CGST pair for GST on the currency conversion itself.
+  const fee = re => [...text.matchAll(new RegExp(re.source, "gi"))].reduce((s, m) => s + (num(m[1]) || 0), 0);
+  const commission = fee(/COMM\w*\s+ON\s+INWD[A-Z ]*?\s+INR\s+Cr\s+([\d,]+\.?\d*)/i);
+  const sgst = fee(/STATE\s+GST[A-Z ]*?\s+INR\s+Cr\s+([\d,]+\.?\d*)/i);
+  const cgst = fee(/CENTRAL\s+GST[A-Z ]*?\s+INR\s+Cr\s+([\d,]+\.?\d*)/i);
+  const igst = fee(/INTEGRATED\s+GST[A-Z ]*?\s+INR\s+Cr\s+([\d,]+\.?\d*)/i);
+  const net = num((/Operative\s+\d+\s+[A-Z .&]*?\s+INR\s+Cr\s+([\d,]+\.?\d*)/i.exec(text) || [])[1]);
+  const gross = num(conv[5]);
+  return {
+    foreignCurrency: conv[1].toUpperCase(), foreignAmount: num(conv[2]), rate: num(conv[3]),
+    gross, commission: r2(commission), sgst: r2(sgst), cgst: r2(cgst), igst: r2(igst),
+    net: net || (gross != null ? Number((gross - commission - sgst - cgst - igst).toFixed(2)) : null),
+  };
+}
