@@ -6576,11 +6576,19 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
 // can no longer be trusted. It is the only thing that should force a cold load.
 const ETSY_CACHE_BASE = "ng-etsy-v4";
 
-function EtsyLiveView({ onCrossPost, shop = "atyahara" }) {
+function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
   /* One view, either Etsy shop. For EarthEditions every /api/etsy call here
      names the shop, and Atyahara's browser token is never sent (that shop's
      login lives on the server); its cache and its listings' platform entry
      (platforms.etsy_ee) are its own. */
+  // Push to EarthEditions: which Atyahara pieces are on EE already, and the
+  // ones sent from here this session.
+  const [eePush, setEePush] = useState({});
+  const [eeLinked, setEeLinked] = useState(() => new Set());
+  useEffect(() => {
+    if (!onPushEE) return;
+    loadK(LIST_KEY).then(all => setEeLinked(new Set((all || []).filter(x => x?.platforms?.etsy_ee?.listing_id && x.platforms?.etsy?.listing_id).map(x => String(x.platforms.etsy.listing_id))))).catch(() => {});
+  }, []);
   const ee = shop === "earth";
   const ETSY_CACHE = ee ? `${ETSY_CACHE_BASE}-earth` : ETSY_CACHE_BASE;
   const pkey = ee ? "etsy_ee" : "etsy";
@@ -7580,6 +7588,18 @@ function EtsyLiveView({ onCrossPost, shop = "atyahara" }) {
                                   textDecoration:"none",textAlign:"center"}}>
                                 View ↗
                               </a>
+                              {onPushEE && (() => {
+                                const st = eePush[l.listing_id] || (eeLinked.has(String(l.listing_id)) ? "linked" : "");
+                                return (
+                                  <button disabled={!!st} title={st === "linked" ? "Already on EarthEditions" : "Publish this on the EarthEditions shop — it joins the Etsy queue"}
+                                    onClick={async () => { setEePush(m => ({ ...m, [l.listing_id]: "busy" })); const r = await onPushEE(l); setEePush(m => ({ ...m, [l.listing_id]: r || "" })); }}
+                                    style={{flex:1,background:st==="linked"?C.card:"#9C3D0A",border:`1px solid ${st==="linked"?C.border:"#9C3D0A"}`,
+                                      color:st==="linked"?C.inkMid:"#fff",borderRadius:5,padding:"4px 0",fontSize:10,fontWeight:700,
+                                      cursor:st?"default":"pointer",opacity:st==="busy"?.6:1}}>
+                                    {st === "linked" ? "On EE ✓" : st === "busy" ? "Sending…" : "→ EE"}
+                                  </button>
+                                );
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -10042,6 +10062,54 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       return JSON.parse(txt);
     } catch { return null; }
   };
+  /* Push to EarthEditions, from an Atyahara card on the Etsy tab: the piece's
+     ERP listing (made from what Etsy holds when there isn't one yet, carrying
+     the Atyahara id so the two stay one piece) goes up on the EarthEditions
+     shop as a draft and joins its Etsy queue, like any new listing does. */
+  const pushEtsyToEE = async l => {
+    const all = await loadKFresh(LIST_KEY).catch(() => null) || listings;
+    let listing = all.find(x => x && String(x.platforms?.etsy?.listing_id || "") === String(l.listing_id));
+    if (listing?.platforms?.etsy_ee?.listing_id) { showToast?.("Already on EarthEditions"); return "linked"; }
+    const price = l.price ? (l.price.amount / (l.price.divisor || 100)) : 0;
+    const dims = {
+      ...(+l.item_width ? { width: String(l.item_width) } : {}),
+      ...(+l.item_height ? { height: String(l.item_height) } : {}),
+      ...(+l.item_length ? { depth: String(l.item_length) } : {}),
+    };
+    if (!listing) {
+      const images = (l.images ? [...l.images].sort((a, b) => (a.rank || 0) - (b.rank || 0)) : [])
+        .map(img => img.url_fullxfull || img.url_570xN || img.url_170x135 || img.url_75x75 || "").filter(Boolean);
+      listing = ensureListingOrderId({
+        id: uid(),
+        title: l.title || "", description: l.description || "",
+        material: (l.materials || []).join(", "), shape: "Mineral", origin: "", size: "",
+        weight: +l.item_weight ? `${l.item_weight}${l.item_weight_unit === "g" ? "g" : ` ${l.item_weight_unit || ""}`.trimEnd()}` : "",
+        ...dims,
+        sku: l.sku || (Array.isArray(l.skus) ? l.skus[0] : "") || "", productType: "Lapidary",
+        type: (l.quantity || 1) > 1 ? "repeatable" : "unique", qty: l.quantity || 1, linked_stock_id: "", officeLocation: "",
+        tags: [...(l.tags || [])], images, video: "",
+        price_etsy: price ? String(price.toFixed(2)) : "",
+        price_shopify_earth: "", price_shopify_aty: "", price_ebay: "",
+        ...(l.taxonomy_id ? { etsy_taxonomy_id: l.taxonomy_id } : {}),
+        platforms: { etsy: { listing_id: l.listing_id, status: l.state || "active" }, shopify_earth: {}, shopify_aty: {}, ebay: {} },
+        variations: [], created_at: now(),
+      });
+      await saveListingItem(listing, { prepend: true });
+    } else if (!(+listing.price_etsy > 0) && price) {
+      listing = { ...listing, price_etsy: String(price.toFixed(2)) };
+    }
+    if (!listing.etsy_taxonomy_id && l.taxonomy_id) listing = { ...listing, etsy_taxonomy_id: l.taxonomy_id };
+    showToast?.("Sending to EarthEditions…");
+    try {
+      const r = await handlePublish(listing, "etsy_ee");
+      showToast?.(r?.queued ? `In the EarthEditions queue${r.goes_live ? ` — goes live ${whenLabel(r.goes_live)}` : ""}` : "Published on EarthEditions");
+      return "linked";
+    } catch (e) {
+      showToast?.(`EarthEditions: ${e.message}`);
+      return null;
+    }
+  };
+
   const crossPostEtsyToShopify = async (l, storeKey, pk = "etsy") => {
     showToast?.("Cross-posting… AI-filling the Shopify listing");
     const images = (l.images ? [...l.images].sort((a, b) => (a.rank || 0) - (b.rank || 0)) : [])
@@ -11110,7 +11178,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights key={etsyTabShop} shop={etsyTabShop} listings={listings} onOpenRenew={() => setTab("renew")} onPrice={(l, v) => quickPrice(l, "price_etsy", v)} /></Suspense>
           : tab === "etsy" && currentUser?.role === "admin" && etsyView === "tracker"
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><AdsTracker listings={listings} onEdit={l => { setEditing(l); setShowForm(true); }} /></Suspense>
-          : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, etsyTabShop === "earth" ? "etsy_ee" : "etsy")} />}
+          : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, etsyTabShop === "earth" ? "etsy_ee" : "etsy")} onPushEE={etsyTabShop === "earth" ? null : pushEtsyToEE} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
           <ShopifyStoreView
