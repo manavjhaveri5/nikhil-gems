@@ -943,13 +943,24 @@ async function etsyHandler(req, res) {
     if (action === "listings_all") {
       const results = [];
       const stateErrors = [];
-      const etsyFetch = (url) => {
+      const once = (url) => {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 12000); // 12s per request
         return fetch(url, { headers: authHeaders, signal: ctrl.signal })
           .finally(() => clearTimeout(t));
       };
+      // The tab loads orders, sections and discounts alongside this, and a push
+      // or publish may be running too: a 429 waits and tries again instead of
+      // leaving that state's listings out.
+      const etsyFetch = async (url) => {
+        for (let attempt = 0; ; attempt++) {
+          const r = await once(url);
+          if (r.status !== 429 || attempt >= 3) return r;
+          await new Promise(s => setTimeout(s, 800 * (attempt + 1)));
+        }
+      };
       for (const state of ["active", "draft", "inactive", "sold_out"]) {
+        if (state !== "active") await new Promise(r => setTimeout(r, 250));
         const p0 = new URLSearchParams({ state, limit: "100", offset: "0" });
         p0.append("includes[]", "Images");
         let r0;
