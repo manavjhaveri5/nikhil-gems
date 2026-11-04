@@ -9828,30 +9828,34 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
   };
   const ETSY_STATE_SYNC_TS = "ng-etsy-state-sync-ts";
   const ETSY_REDATE_KEY = "ng-etsy-redated-v2"; // v2: once more after expired listings joined the sync
-  const reconcileEtsyStates = async (current) => {
+  /* Either Etsy shop: pk is the listing's entry for it (etsy, or etsy_ee for
+     EarthEditions), and the shop's states are asked of that shop. */
+  const reconcileEtsyStates = async (current, pk = "etsy") => {
+    const ee = pk === "etsy_ee", shopQS = ee ? "&shop=earth" : "";
     // Runs when anything is on Etsy, or when something here isn't linked yet —
     // it may have been put on Etsy by hand.
-    if (!current.some(l => l.platforms?.etsy?.listing_id || !l.platforms?.etsy?.listing_id)) return;
+    if (!current.some(l => l.platforms?.[pk]?.listing_id || !l.platforms?.[pk]?.listing_id)) return;
     // The first run after the renewal-date fix goes straight away, whatever the
     // throttle says, so renewed listings drop out of Newest on the next open.
     let redate = false;
     try {
-      redate = !localStorage.getItem(ETSY_REDATE_KEY);
-      const last = +localStorage.getItem(ETSY_STATE_SYNC_TS) || 0;
+      redate = !ee && !localStorage.getItem(ETSY_REDATE_KEY);
+      const tsKey = ETSY_STATE_SYNC_TS + (ee ? "-earth" : "");
+      const last = +localStorage.getItem(tsKey) || 0;
       if (!redate && Date.now() - last < 10 * 60 * 1000) return; // at most once every 10 min (server CPU)
-      localStorage.setItem(ETSY_STATE_SYNC_TS, String(Date.now()));
+      localStorage.setItem(tsKey, String(Date.now()));
     } catch {}
     try {
-      const r = await fetch("/api/listing-manager?action=sync_etsy_states");
+      const r = await fetch(`/api/listing-manager?action=sync_etsy_states${shopQS}`);
       const d = await r.json();
       if (!d.ok || !d.states) return;
       /* Shown live here but neither active nor a draft on Etsy: ask Etsy what
          became of them (sold out, paused, expired, gone) — without this they
          stayed "live" here for good, View link and all. */
       // Drafts here that aren't Etsy drafts either are asked about too: that's how an expired listing is told apart.
-      const missing = current.filter(l => l.platforms?.etsy?.listing_id && ["active", "draft"].includes(l.platforms.etsy.status) && !d.states[l.platforms.etsy.listing_id]).map(l => l.platforms.etsy.listing_id).slice(0, 300);
+      const missing = current.filter(l => l.platforms?.[pk]?.listing_id && ["active", "draft"].includes(l.platforms[pk].status) && !d.states[l.platforms[pk].listing_id]).map(l => l.platforms[pk].listing_id).slice(0, 300);
       if (missing.length) {
-        const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${missing.join(",")}`).then(x => x.json()).catch(() => null);
+        const c = await fetch(`/api/listing-manager?action=sync_etsy_states&only_check=1&check=${missing.join(",")}${shopQS}`).then(x => x.json()).catch(() => null);
         if (c?.ok && c.states) Object.assign(d.states, c.states);
       }
       const states = d.states, firstListed = d.firstListed || {}, info = d.info || {}, dates = d.dates || {};
@@ -9860,14 +9864,14 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
       /* A piece put on Etsy by hand (a draft made there, or listed there first)
          is linked here by its SKU, else by its title — only when exactly one
          Etsy listing fits and no other listing here already holds it. */
-      const taken = new Set(base0.map(l => String(l.platforms?.etsy?.listing_id || "")).filter(Boolean));
+      const taken = new Set(base0.map(l => String(l.platforms?.[pk]?.listing_id || "")).filter(Boolean));
       const tkey = t => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       const sameTitle = (a, b) => { const x = tkey(a), y = tkey(b); if (!x || !y) return false; if (x === y) return true; const [sh, lo] = x.length < y.length ? [x, y] : [y, x]; return sh.length >= 30 && lo.startsWith(sh); };
       const free = Object.entries(info).filter(([id]) => !taken.has(String(id)));
       const linkedNow = [];
       const base = base0.map(l => {
         // Only listings that were never on Etsy — one taken off Etsy stays off.
-        if (l.platforms?.etsy?.listing_id || l.platforms?.etsy?.status === "deleted") return l;
+        if (l.platforms?.[pk]?.listing_id || l.platforms?.[pk]?.status === "deleted") return l;
         const skus = [l.sku, l.listing_order_id].map(v => String(v || "").trim().toLowerCase()).filter(Boolean);
         let hits = free.filter(([, v]) => v.sku && skus.includes(v.sku.trim().toLowerCase()));
         if (!hits.length) hits = free.filter(([, v]) => sameTitle(v.title, l.title) || sameTitle(v.title, l.etsy_title));
@@ -9875,13 +9879,13 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         const [id] = hits[0];
         taken.add(String(id));
         free.splice(free.indexOf(hits[0]), 1);
-        const updated = { ...l, platforms: { ...(l.platforms || {}), etsy: { ...(l.platforms?.etsy || {}), listing_id: Number(id) || id, url: `https://www.etsy.com/listing/${id}`, status: states[id] === "active" ? "active" : "draft", linked_at: new Date().toISOString() } } };
+        const updated = { ...l, platforms: { ...(l.platforms || {}), [pk]: { ...(l.platforms?.[pk] || {}), listing_id: Number(id) || id, url: `https://www.etsy.com/listing/${id}`, status: states[id] === "active" ? "active" : "draft", linked_at: new Date().toISOString() } } };
         linkedNow.push(updated);
         return updated;
       });
       const changedRows = [...linkedNow];
       const next = base.map(l => {
-        const lid = l.platforms?.etsy?.listing_id;
+        const lid = l.platforms?.[pk]?.listing_id;
         const live = lid && states[lid];
         if (!live) return l;
         // Sold out on Etsy is a sale; a listing Etsy no longer has is gone; paused, expired or a draft isn't live.
@@ -9890,13 +9894,13 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
            one came in dated the day it renewed, so it sorted and counted as
            new. Etsy's original date puts it back where it belongs. */
         const first = firstListed[lid];
-        const early = first && Date.parse(first) < (Date.parse(l.created_at || "") || Infinity);
+        const early = !ee && first && Date.parse(first) < (Date.parse(l.created_at || "") || Infinity);
         /* Etsy's own dates, kept on the listing so the ERP holds them itself:
            first listed, its latest renewal (only once it has renewed: Etsy's
            created_timestamp is the first listing until then) and when its term
            ends. The ERP's created_at is the import day for anything brought
            in from Etsy, so these are the ones to read. */
-        const et = l.platforms.etsy, dt = dates[lid] || {};
+        const et = l.platforms[pk], dt = dates[lid] || {};
         const renewedAt = dt.renewed && first && Date.parse(dt.renewed) > Date.parse(first) + 864e5 ? dt.renewed : "";
         const want = { ...(first ? { first_listed_at: first } : {}), ...(renewedAt ? { renewed_at: renewedAt } : {}), ...(dt.ends ? { ends_at: dt.ends } : {}) };
         // Expired is kept as "draft" (not live) but marked, so the card can say expired: it needs renewing, not publishing.
@@ -9905,12 +9909,12 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
         if (et.status === mapped && !early && !datesMoved) return l;
         if (linkedNow.includes(l)) return l;
         const updated = { ...l, ...(early ? { created_at: first } : {}),
-          platforms: { ...l.platforms, etsy: { ...et, status: mapped, ...want } } };
+          platforms: { ...l.platforms, [pk]: { ...et, status: mapped, ...want } } };
         changedRows.push(updated);
         return updated;
       });
       if (linkedNow.length) showToast(`✓ Linked ${linkedNow.length} listing${linkedNow.length === 1 ? "" : "s"} to ${linkedNow.length === 1 ? "its" : "their"} Etsy ${linkedNow.length === 1 ? "listing" : "listings"} — ${linkedNow.slice(0, 2).map(l => `“${String(l.title).slice(0, 40)}”`).join(", ")}`, 6000);
-      const redated = changedRows.filter(l => l.platforms?.etsy?.first_listed_at && l.created_at === l.platforms.etsy.first_listed_at).length;
+      const redated = changedRows.filter(l => l.platforms?.[pk]?.first_listed_at && l.created_at === l.platforms[pk].first_listed_at).length;
       if (changedRows.length) {
         setListings(next);
         /* One save whatever the number: each upsert rewrites the whole listings
@@ -9957,7 +9961,7 @@ export default function ListingManagerApp({ onHome, startTab = "listings", onOpe
     Promise.all([loadK(LIST_KEY), loadK(ORDERS_KEY), loadK(STK_KEY)]).then(async ([l, o, s]) => {
       const normalized = await normalizeListingIds(l);
       setListings(normalized); setOrders(o || []); setStock(s || []); setLoaded(true);
-      reconcileEtsyStates(normalized);
+      reconcileEtsyStates(normalized).then(() => reconcileEtsyStates(normalized, "etsy_ee"));
       dropWarehouseNote(normalized);
       linkTradeProducts(normalized);
       // Pull eBay in the background. eBay strips buyer addresses ~14 days after the
@@ -10038,7 +10042,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       return JSON.parse(txt);
     } catch { return null; }
   };
-  const crossPostEtsyToShopify = async (l, storeKey) => {
+  const crossPostEtsyToShopify = async (l, storeKey, pk = "etsy") => {
     showToast?.("Cross-posting… AI-filling the Shopify listing");
     const images = (l.images ? [...l.images].sort((a, b) => (a.rank || 0) - (b.rank || 0)) : [])
       .map(img => img.url_fullxfull || img.url_570xN || img.url_170x135 || img.url_75x75 || "").filter(Boolean);
@@ -10055,7 +10059,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       price_etsy: price ? String(price.toFixed(2)) : "",
       price_shopify_earth: "", price_shopify_aty: "", price_ebay: "",
       shopify_title: ai?.simple_title || l.title || "", shopify_description: shopifyDesc,
-      platforms: { etsy: { listing_id: l.listing_id, status: l.state || "active" }, shopify_earth: {}, shopify_aty: {}, ebay: {} },
+      platforms: { [pk]: { listing_id: l.listing_id, status: l.state || "active" }, shopify_earth: {}, shopify_aty: {}, ebay: {} },
       variations: [], created_at: now(), _crossPostStore: storeKey,
     });
     await saveListingItem(listing, { prepend: true });
@@ -11106,7 +11110,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights key={etsyTabShop} shop={etsyTabShop} listings={listings} onOpenRenew={() => setTab("renew")} onPrice={(l, v) => quickPrice(l, "price_etsy", v)} /></Suspense>
           : tab === "etsy" && currentUser?.role === "admin" && etsyView === "tracker"
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><AdsTracker listings={listings} onEdit={l => { setEditing(l); setShowForm(true); }} /></Suspense>
-          : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} onCrossPost={crossPostEtsyToShopify} />}
+          : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, etsyTabShop === "earth" ? "etsy_ee" : "etsy")} />}
         {tab === "ebay" && <EbayLiveView />}
         {tab === "shopify_earth" && (
           <ShopifyStoreView
@@ -11128,7 +11132,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
         {tab === "trade" && <TradeProductsPanel showToast={showToast} />}
         {tab === "store" && <StoreProductsPanel showToast={showToast} />}
-        {activePlatform && tab !== "etsy" && tab !== "ebay" && tab !== "shopify_earth" && tab !== "shopify_aty" && tab !== "trade" && tab !== "store" && (
+        {/* The EarthEditions Etsy shop's own tab: what's on that shop now, as the Etsy tab shows it. */}
+        {tab === "etsy_ee" && <EtsyLiveView key="earth" shop="earth" onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, "etsy_ee")} />}
+        {activePlatform && tab !== "etsy" && tab !== "etsy_ee" && tab !== "ebay" && tab !== "shopify_earth" && tab !== "shopify_aty" && tab !== "trade" && tab !== "store" && (
           <PlatformView
             platform={activePlatform}
             listings={listings}
