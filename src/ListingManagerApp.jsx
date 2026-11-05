@@ -4735,6 +4735,47 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
       return false;
     }
   };
+  // eartheditions.co orders: one store order, one ERP row per piece. Shipping marks the
+  // store order shipped with its tracking and emails the buyer (api/mail.js order_shipped),
+  // then marks every row of the order shipped here.
+  const isStoreOrder = o => o.platform === "store";
+  const completeStoreOrder = async o => {
+    const draft = trackingDraft(o);
+    const tracking = String(draft.tracking_code || "").trim();
+    const carrier = String(draft.carrier_name || "").trim();
+    const number = String(o.platform_order_id || "").trim();
+    if (!number) { updateTrackingDraft(o, { error: "Missing store order number.", success: "" }); return false; }
+    if (!tracking) { updateTrackingDraft(o, { error: "Add a tracking number first.", success: "" }); return false; }
+    if (!carrier || carrier === "other") { updateTrackingDraft(o, { error: "Pick the carrier, so the buyer's tracking link works.", success: "" }); return false; }
+    updateTrackingDraft(o, { loading: true, error: "", success: "" });
+    try {
+      const r = await fetch("/api/mail", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template: "order_shipped", number, tracking, carrier, tracking_url: draft.tracking_url || "", note: draft.note_to_buyer || "" }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `Could not ship (${r.status})`);
+      const nowIso = new Date().toISOString();
+      const current = await loadK(ORDERS_KEY) || [];
+      const rows = current.filter(x => isStoreOrder(x) && String(x.platform_order_id) === number);
+      for (const x of rows) await upsertItemK(ORDERS_KEY, {
+        ...x, status: "shipped", shipped_at: x.shipped_at || nowIso,
+        tracking_code: tracking, tracking_number: tracking, carrier_name: carrier,
+        tracking_url: d.tracking_url || x.tracking_url || "",
+        ...(d.emailed ? { buyer_notified_at: nowIso } : {}),
+        ...(x.id === o.id ? shipCostPatch(o) : {}),
+      }, { prepend: false });
+      const fresh = await loadK(ORDERS_KEY);
+      window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: fresh || current }));
+      const msg = d.emailed ? `Shipped · email sent to ${d.to}`
+        : d.already ? "Shipped · the buyer already has this tracking number"
+        : d.notConfigured ? "Shipped · email isn't set up yet (RESEND_API_KEY), so the buyer wasn't emailed"
+        : `Shipped · but the email failed: ${d.error || "unknown error"}`;
+      updateTrackingDraft(o, { loading: false, error: d.emailed || d.already ? "" : msg, success: d.emailed || d.already ? msg : "", tracking_code: tracking, carrier_name: carrier });
+      return true;
+    } catch (e) {
+      updateTrackingDraft(o, { loading: false, error: e.message || "Could not ship", success: "" });
+      return false;
+    }
+  };
   const undoShipStep = async o => {
     if (!window.confirm("Undo step 1 locally?\n\nThis will move the fulfillment step back to Ship on Etsy. It will not undo shipment inside Etsy.")) return;
     const receiptId = etsyReceiptId(o);
@@ -5984,6 +6025,47 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
                         <button onClick={() => restoreOrder(order)} style={{ flexShrink: 0, background: C.surface, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 13px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Restore order</button>
                       </div>
                     )}
+                    {!cancelled && isStoreOrder(order) && (() => {
+                      const d = trackingDraft(order);
+                      const inp = { ...FI(), width: "100%", fontSize: 13, padding: "8px 10px", marginTop: 4 };
+                      const lbl = { fontSize: 11, fontWeight: 800, color: C.inkMid, minWidth: 150, flex: 1 };
+                      const done = shipped && (order.tracking_code || order.tracking_number);
+                      return (
+                        <div style={{ background: C.surface, border: `1.5px solid ${done ? C.green : C.ink}`, borderLeft: `4px solid ${done ? C.green : C.ink}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 15, fontWeight: 850, color: C.ink }}>{done ? "Shipped" : "Ship this eartheditions.co order"}</div>
+                              <div style={{ fontSize: 12, color: C.inkMid, marginTop: 3, lineHeight: 1.4 }}>
+                                {done ? `${order.carrier_name || ""} ${order.tracking_code || order.tracking_number}${order.buyer_notified_at ? ` · buyer emailed ${new Date(order.buyer_notified_at).toLocaleDateString("en-GB")}` : " · buyer not emailed yet"}`
+                                  : `Add the carrier and tracking number. Every piece of ${order.platform_order_id} is marked shipped and ${order.buyer_email || "the buyer"} gets a shipped email with a tracking link.`}
+                              </div>
+                            </div>
+                            <div style={{ fontSize: 11, color: C.inkFaint, fontWeight: 700, whiteSpace: "nowrap" }}>{order.platform_order_id}</div>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginTop: 12 }}>
+                            <label style={lbl}>Carrier
+                              <select value={d.carrier_name === "other" ? "" : d.carrier_name} onChange={e => updateTrackingDraft(order, { carrier_name: e.target.value })} style={{ ...inp, cursor: "pointer" }}>
+                                <option value="">Pick…</option>
+                                {["India Post", "USPS", "DHL", "FedEx", "UPS", "Aramex", "Other"].map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            </label>
+                            <label style={lbl}>Tracking number
+                              <input value={d.tracking_code} onChange={e => updateTrackingDraft(order, { tracking_code: e.target.value })} placeholder="e.g. LX123456789IN" style={inp} />
+                            </label>
+                            <label style={{ ...lbl, flex: 2 }}>Note to buyer <span style={{ fontWeight: 500 }}>(optional)</span>
+                              <input value={d.note_to_buyer || ""} onChange={e => updateTrackingDraft(order, { note_to_buyer: e.target.value })} placeholder="A short line for the email" style={inp} />
+                            </label>
+                            <button onClick={() => completeStoreOrder(order)} disabled={!!d.loading}
+                              style={{ background: C.ink, color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontSize: 12.5, fontWeight: 850, cursor: d.loading ? "wait" : "pointer", opacity: d.loading ? .7 : 1, whiteSpace: "nowrap" }}>
+                              {d.loading ? "Sending…" : done ? "Update & re-email" : "Ship & email buyer"}
+                            </button>
+                          </div>
+                          {d.error && <div style={{ marginTop: 10, fontSize: 12, color: C.red, background: C.redBg, border: `1px solid ${C.red}30`, borderRadius: 7, padding: "8px 10px" }}>{d.error}</div>}
+                          {d.success && <div style={{ marginTop: 10, fontSize: 12, color: C.green, background: C.greenBg, border: `1px solid ${C.green}30`, borderRadius: 7, padding: "8px 10px" }}>✓ {d.success}</div>}
+                          {/^https?:\/\//i.test(order.tracking_url || "") && <a href={order.tracking_url} target="_blank" rel="noopener noreferrer" style={{ display: "inline-block", marginTop: 8, color: C.blue, fontSize: 12, fontWeight: 750, textDecoration: "none" }}>Open tracking link ↗</a>}
+                        </div>
+                      );
+                    })()}
                     {!cancelled && isFulfilOrder(order) && (
                       (() => {
                         const ETSY = shipMeta(order).color;
