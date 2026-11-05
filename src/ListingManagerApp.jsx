@@ -4765,11 +4765,21 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
       }, { prepend: false });
       const fresh = await loadK(ORDERS_KEY);
       window.dispatchEvent(new CustomEvent("ng-orders-updated", { detail: fresh || current }));
+      // Until Resend is set up, the same email opens as a draft in the mail app.
+      if (d.notConfigured && (d.to || o.buyer_email)) {
+        const first = String(o.buyer_name || "").split(" ")[0];
+        const pieces = rows.map(x => x.listing_title).filter(Boolean).join(", ");
+        const body = [`Hello${first ? ` ${first}` : ""},`, "", `Your order ${number} has been packed and shipped from our studio in India.`, pieces ? `In the parcel: ${pieces}.` : "",
+          `Carrier: ${carrier}. Tracking number: ${tracking}. Tracking can take a day or two to show the first scan.`, d.tracking_url ? `Track your parcel: ${d.tracking_url}` : "",
+          draft.note_to_buyer || "", "", "If you have any question about your order, just reply to this email.", "", "Earth Editions", "eartheditions.co"].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
+        window.location.href = `mailto:${d.to || o.buyer_email}?subject=${encodeURIComponent(`Your Earth Editions order ${number} has shipped`)}&body=${encodeURIComponent(body)}`;
+      }
       const msg = d.emailed ? `Shipped · email sent to ${d.to}`
         : d.already ? "Shipped · the buyer already has this tracking number"
-        : d.notConfigured ? "Shipped · email isn't set up yet (RESEND_API_KEY), so the buyer wasn't emailed"
+        : d.notConfigured ? "Shipped · sending from the ERP isn't set up yet, so the email opened as a draft in your mail app. Press Send there."
         : `Shipped · but the email failed: ${d.error || "unknown error"}`;
-      updateTrackingDraft(o, { loading: false, error: d.emailed || d.already ? "" : msg, success: d.emailed || d.already ? msg : "", tracking_code: tracking, carrier_name: carrier });
+      const good = d.emailed || d.already || d.notConfigured;
+      updateTrackingDraft(o, { loading: false, error: good ? "" : msg, success: good ? msg : "", tracking_code: tracking, carrier_name: carrier });
       return true;
     } catch (e) {
       updateTrackingDraft(o, { loading: false, error: e.message || "Could not ship", success: "" });
