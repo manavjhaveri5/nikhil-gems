@@ -62,7 +62,7 @@ Inventory, suppliers and photos are shared. Report sales **per channel** and as 
    Leave a section out if it has nothing in it.
    - **Executive summary.** Three to five bullets: the most important facts and anything that needs Sir today.
    - **Yesterday's sales.** Per channel: orders, revenue, pieces and AOV, compared with the 7-day average and the same day last week. Then best sellers, new vs returning buyers, and notable orders.
-   - **Traffic & marketing.** Etsy new favourites (Etsy's API no longer gives views, so say so once, not every day), eBay impressions, views and CTR, and eartheditions.co visitors and funnel. Then ad spend, pieces gaining favourites, and favourites with no sales.
+   - **Traffic & marketing.** Etsy views and new favourites per shop (Atyahara shows no views while it is on hold; say so once, not every day), eBay impressions, views and CTR, and eartheditions.co visitors and funnel. Then ad spend, pieces gaining favourites, and favourites with no sales.
    - **Listing health.** From `snapshot.audit`: urgent problems first (oversell risk, wrong-stone tags, expiring listings, wrong eBay category), then what's new since yesterday and what got fixed. Name the pieces. Give counts for the long tail ("332 Etsy listings have under 5 photos") without listing them.
    - **Customers & inbox.** Enquiries, wholesale leads, high-value customers, money in and out from email.
    - **Listing changes & impact.** What was changed yesterday, and what happened to things changed a week ago.
