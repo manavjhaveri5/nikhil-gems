@@ -5454,7 +5454,10 @@ const defaultNgDraft = o => ({ qty: String(o._ngAllocatedQty || o._ngDeductedQty
 
   const FILTER_OPTS = [
     { key: "all",    label: "All",      icon: "📦" },
-    ...PLATFORMS.filter(p => !p.coming),
+    // The old Earth Ed. Shopify shop has no orders; its chip only hid where
+    // eartheditions.co orders live (EE store), so it shows only if it ever gets one.
+    ...PLATFORMS.filter(p => !p.coming && (!p.legacy || (orders || []).some(o => o.platform === p.key)))
+      .map(p => p.key === "store" ? { ...p, label: "EE store · eartheditions.co" } : p),
     { key: "manual", label: "Manual",   icon: "✏️", color: C.inkMid },
   ];
   const SHIP_OPTS = [
