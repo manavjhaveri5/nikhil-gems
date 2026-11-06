@@ -182,6 +182,13 @@ function Profile({ c, note, onNote, listings, onClose }) {
   const [via, setVia] = useState(email ? "email" : "etsy"), [occasion, setOccasion] = useState("Diwali / festive greeting"), [extra, setExtra] = useState("");
   const [draft, setDraft] = useState(note?.lastDraft || ""), [busy, setBusy] = useState(false), [err, setErr] = useState(""), [copied, setCopied] = useState(false);
   const save = patch => onNote(c.key, { ...(note || {}), email, notes: memo, ...patch });
+  // Saved notes can arrive after the panel opens (they load in the background): fill in what's still empty.
+  useEffect(() => {
+    if (!note) return;
+    if (note.email) { setEmail(e => e || note.email); setVia(v => v === "etsy" && !email ? "email" : v); }
+    if (note.notes) setMemo(m => m || note.notes);
+    if (note.lastDraft) setDraft(d => d || note.lastDraft);
+  }, [note]);
 
   const write = async () => {
     setBusy(true); setErr("");
