@@ -259,7 +259,7 @@ export default function GirtonApp({ onHome }) {
   if (tab === "overview") body = <>
     <div style={{ ...grid("repeat(4, minmax(0,1fr))", 10), marginBottom: 16 }}>
       <Metric label="Running cost / month" value={usd(monthly, 0)} note={`≈ ${inr(monthly)} · tools + AI`} />
-      <Metric label="AI this month" value={usd(aiMtd)} note={`forecast ${usd(aiForecast)} of ${usd(B, 0)}`} tone={fTone} />
+      <Metric label="AI this month" value={usdS(aiMtd)} note={`forecast ${usd(aiForecast)} of ${usd(B, 0)}`} tone={fTone} />
       <Metric label="AI today" value={usdS(todayRow?.total?.usd || 0)} note={`${todayRow?.total?.calls || 0} calls${todayRow?.total?.errs ? ` · ${todayRow.total.errs} failed` : ""}`} />
       <Metric label="Needs you" value={needs || "—"} note={needs ? `${waiting.length} to approve${openAlerts.length ? ` · ${openAlerts.length} alert${openAlerts.length > 1 ? "s" : ""}` : ""}` : "all on track"} onClick={waiting.length ? () => go("proposals") : undefined} />
     </div>
@@ -298,7 +298,7 @@ export default function GirtonApp({ onHome }) {
   else if (tab === "ai") body = <>
     <div style={{ ...grid("repeat(4, minmax(0,1fr))", 10), marginBottom: 14 }}>
       <Metric label="Today" value={usdS(todayRow?.total?.usd || 0)} note={`${inr(todayRow?.total?.usd || 0)} · ${todayRow?.total?.calls || 0} calls`} />
-      <Metric label={oai ? "OpenAI bill · month" : "This month"} value={usd(aiMtd)} note={`${inr(aiMtd)} of ${usd(B, 0)} budget`} />
+      <Metric label={oai ? "OpenAI bill · month" : "This month"} value={usdS(aiMtd)} note={`${inr(aiMtd)} of ${usd(B, 0)} budget`} />
       <Metric label="Month forecast" value={usd(aiForecast)} note={fTone === "good" ? "Within budget" : fTone === "warn" ? "Heading over budget" : fTone ? "Over budget" : ""} tone={fTone} />
       <Metric label="Failed calls today" value={todayRow?.total?.errs || 0} note={(todayRow?.total?.errs || 0) ? "Key, credit or rate limit" : "None"} tone={(todayRow?.total?.errs || 0) >= 3 ? "critical" : (todayRow?.total?.errs || 0) ? "warn" : "good"} />
     </div>
