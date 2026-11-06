@@ -140,8 +140,8 @@ function NewVsRepeat({ list }) {
 function Countries({ list }) {
   const rows = useMemo(() => { const m = {}; for (const c of list) { const k = c.country || "?"; m[k] = m[k] || { k, n: 0, spend: 0 }; m[k].n++; m[k].spend += c.spend; } return Object.values(m).sort((a, b) => b.spend - a.spend).slice(0, 8); }, [list]);
   const top = rows[0]?.spend || 1;
-  return <div style={{ display: "grid", gap: 7 }}>{rows.map(r => <div key={r.k} style={{ display: "grid", gridTemplateColumns: "34px 1fr 70px", alignItems: "center", gap: 8, fontSize: 12.5 }}>
-    <span style={{ fontWeight: 800 }}>{flag(r.k)} {r.k}</span>
+  return <div style={{ display: "grid", gap: 7 }}>{rows.map(r => <div key={r.k} style={{ display: "grid", gridTemplateColumns: "52px 1fr 86px", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+    <span style={{ fontWeight: 800, whiteSpace: "nowrap" }}>{flag(r.k)} {r.k}</span>
     <div style={{ background: C.card, borderRadius: 6, height: 16, overflow: "hidden" }}><div style={{ width: `${r.spend / top * 100}%`, height: "100%", background: "#D95A00", borderRadius: 6 }} /></div>
     <span style={{ textAlign: "right", color: C.inkMid }}>{inr(r.spend)}<span style={{ color: C.inkFaint }}> · {r.n}</span></span>
   </div>)}</div>;
