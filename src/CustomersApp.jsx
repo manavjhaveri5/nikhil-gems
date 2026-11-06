@@ -189,7 +189,7 @@ function Profile({ c, note, onNote, listings, onClose }) {
       const pieces = picks.filter(x => chosen.has(x.l.id)).map(x => ({ title: shortTitle(x.l.title), price_inr: x.p || null, link: via === "email" ? (x.l.platforms?.store?.status === "active" ? x.l.platforms.store.url : x.l.platforms?.etsy_ee?.url) : null }));
       const hist = c.ords.map(o => `${o.date} (${o.channel}): ${o.lines.map(l => shortTitle(l.listing_title)).join("; ")}`).join("\n");
       const sys = `You write short, warm, personal messages from Sejal at Nikhil Gems (a family gemstone business in Mumbai) to a past customer. The new collector shop is Earth Editions (same family, same workshop).
-Rules: use ONLY facts given here; never invent sizes, prices, stock levels, scarcity, discounts, "new arrivals" or anything about the buyer. Mention what they bought before, naturally. Offer photos or a video. No pressure, no hype, no emojis. Under 170 words.
+Rules: use ONLY facts given here; never invent sizes, prices, stock levels, scarcity, discounts, "new arrivals" or anything about the buyer. Describe each piece only by its title: never claim its clarity, condition, polish, lack of scratches or quality. Sir's notes describe the BUYER (what they like or asked for), never the pieces. Don't say "I hope this message finds you well". Mention what they bought before, naturally. Offer photos or a video. No pressure, no hype, no emojis. Under 170 words.
 ${via === "email" ? "This is an EMAIL: start with 'Subject: ...' on the first line, then the body. You may include the given links, one per piece, as a short bulleted list. Sign off as Sejal, Nikhil Gems." : "This is an ETSY MESSAGE: no links, no website or shop names other than Etsy, no subject line. Name the pieces and offer to send photos. Sign off as Sejal."}`;
       const usr = `Buyer: ${c.name} (${[c.city, c.country].filter(Boolean).join(", ")})
 Orders: ${c.n}, pieces ${c.pieces}, last order ${c.last} (${ago(c.since)}).
@@ -208,7 +208,7 @@ Pieces to offer:\n${pieces.map(p => `- ${p.title}${p.link ? ` — ${p.link}` : "
   };
   const subjectOf = t => (t.match(/^subject:\s*(.+)$/im) || [])[1] || "";
   const bodyOf = t => t.replace(/^subject:.*\n+/i, "");
-  const gmail = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(email)}&su=${encodeURIComponent(subjectOf(draft))}&body=${encodeURIComponent(bodyOf(draft))}`;
+  const gmail = `https://mail.google.com/mail/?authuser=sejal.nikhilgems@gmail.com&view=cm&fs=1&to=${encodeURIComponent(email)}&su=${encodeURIComponent(subjectOf(draft))}&body=${encodeURIComponent(bodyOf(draft))}`;
   const lastEtsy = c.ords.slice().reverse().find(o => /Etsy/.test(o.channel));
   const receipt = lastEtsy?.lines?.[0]?.etsy_receipt_id;
 
