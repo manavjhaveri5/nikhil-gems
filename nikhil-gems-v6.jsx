@@ -6255,7 +6255,7 @@ async function extractPanFromImage(dataUrl){
     const resp=await fetch("/api/openai",{
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
-        model:"gpt-4o",max_tokens:20,
+        model:"gpt-4o-mini",max_tokens:20,
         messages:[{role:"user",content:[
           {type:"image_url",image_url:{url:compressed,detail:"auto"}},
           {type:"text",text:"This is an Indian PAN card. Find the PAN number (format: 5 uppercase letters + 4 digits + 1 uppercase letter, e.g. ABCDE1234F). Reply with ONLY the 10-character PAN number. If not clearly visible reply: NOT_FOUND"}
