@@ -1,4 +1,5 @@
 import { requireUser } from "../lib/auth.js";
+import { aiFetch } from "../lib/ai-meter.js";
 export const config = { api: { bodyParser: { sizeLimit: "20mb" } }, maxDuration: 60 };
 
 export default async function handler(req, res) {
@@ -43,7 +44,7 @@ Rules:
       },
     ];
 
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    const r = await aiFetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
       body: JSON.stringify({
@@ -52,7 +53,7 @@ Rules:
         temperature: 0,
         messages: [{ role: "user", content }],
       }),
-    });
+    }, "pdf-parse");
 
     const raw = await r.text();
     let data;

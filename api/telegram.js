@@ -1,4 +1,5 @@
 import { waitUntil } from "@vercel/functions";
+import { aiFetch } from "../lib/ai-meter.js";
 import { createClient } from "@supabase/supabase-js";
 import { isRowKey, readRows, saveRows, upsertRow } from "../lib/app-rows.js";
 import { ETSY_CATEGORIES, categoryByValue, sectionIdForCategory, inferCategoryValue } from "../lib/listingCategories.js";
@@ -1957,7 +1958,7 @@ Return ONLY JSON:
     const timer = setTimeout(() => abort.abort(), LISTING_AI_TIMEOUT_MS);
     let r;
     try {
-      r = await fetch("https://api.openai.com/v1/chat/completions", {
+      r = await aiFetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         signal: abort.signal,
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
@@ -1966,7 +1967,7 @@ Return ONLY JSON:
           response_format: { type: "json_object" },
           messages: [{ role: "user", content }],
         }),
-      });
+      }, "telegram-listing");
     } finally { clearTimeout(timer); }
 
     if (!r.ok) {
@@ -2033,11 +2034,11 @@ async function aiHealthReport(ctx) {
   const probe = async content => {
     const started = Date.now();
     try {
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      const r = await aiFetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY}` },
         body: JSON.stringify({ model, max_tokens: 5, messages: [{ role: "user", content }] }),
-      });
+      }, "telegram-ai-check");
       const ms = Date.now() - started;
       if (r.ok) return { ok: true, ms };
       let detail = (await r.text()).slice(0, 500);
@@ -2489,11 +2490,11 @@ async function chatWithOpenAI(history) {
   const callOpenAI = async (msgs) => {
     let lastErr;
     for (let attempt = 0; attempt < 4; attempt++) {
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+      const r = await aiFetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.OPENAI_KEY}` },
         body: JSON.stringify({ model: MODEL, messages: msgs, tools: TOOLS, tool_choice: "auto", max_tokens: 2000, temperature: 0.2 })
-      });
+      }, "telegram-chat");
       if (r.ok) return r.json();
       const err = await r.text();
       lastErr = new Error(`OpenAI error ${r.status}: ${err.slice(0, 200)}`);

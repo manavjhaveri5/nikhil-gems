@@ -1,4 +1,5 @@
 import { requireUser } from "../lib/auth.js";
+import { aiFetch } from "../lib/ai-meter.js";
 export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 // ── Shopify OAuth callback (GET /api/shopify?code=xxx&shop=xxx) ───────────────
@@ -160,7 +161,7 @@ async function generateAIContent(item, title, availStr) {
       item.notes    && `Notes: ${item.notes}`,
     ].filter(Boolean).join("\n");
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await aiFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -188,7 +189,7 @@ Return ONLY valid JSON with these fields:
 }`,
         }],
       }),
-    });
+    }, "shopify-seo");
     const data = await res.json();
     const text = data.content?.[0]?.text || "";
     const match = text.match(/\{[\s\S]*\}/);

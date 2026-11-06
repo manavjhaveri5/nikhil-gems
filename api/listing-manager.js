@@ -1,4 +1,5 @@
 import { requireUser, hasStoreSecret, adminClient, cronKeyOk } from "../lib/auth.js";
+import { aiFetch } from "../lib/ai-meter.js";
 /**
  * Listing Manager API — cross-platform publishing hub
  * Supports: Etsy, Shopify (Earth Editions), Shopify (Atyahara), eBay (future)
@@ -15,6 +16,7 @@ import { storeOrderRows } from "../lib/storeOrderRows.js";
 import { withStandLine } from "../lib/standLine.js";
 import { rajSnapshot, rajFallback } from "../lib/raj.js";
 import { rajAudit } from "../lib/raj-audit.js";
+import { girtonTick } from "../lib/girton.js";
 
 const MEDIA_BUCKET = "ng-media";
 
@@ -371,7 +373,7 @@ Return JSON with these fields:
      so the token cap has room for all of it: a cut-off reply is unparseable. */
   let text = "";
   if (process.env.OPENAI_KEY || process.env.OPENAI_API_KEY) {
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    const r = await aiFetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENAI_KEY || process.env.OPENAI_API_KEY}` },
       body: JSON.stringify({
@@ -380,16 +382,16 @@ Return JSON with these fields:
         response_format: { type: "json_object" },
         messages: [{ role: "user", content: prompt }],
       }),
-    });
+    }, "listing-ai");
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(`AI error: ${data?.error?.message || r.status}`);
     text = data.choices?.[0]?.message?.content || "";
   } else if (process.env.ANTHROPIC_KEY) {
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await aiFetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": process.env.ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 4000, messages: [{ role: "user", content: prompt }] }),
-    });
+    }, "listing-ai");
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(`AI error: ${data?.error?.message || r.status}`);
     text = data.content?.[0]?.text || "";
@@ -469,11 +471,11 @@ Return ONLY JSON: {"items":[{"title":"","url":"the item's own page","where":"sit
   const content = [{ type: "input_text", text: prompt }];
   const img = (listing.images || [])[0];
   if (img) content.push({ type: "input_image", image_url: img });
-  const r = await fetch("https://api.openai.com/v1/responses", {
+  const r = await aiFetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({ model: process.env.RESEARCH_AI_MODEL || "gpt-4.1-mini", tools: [{ type: "web_search_preview" }], input: [{ role: "user", content }], max_output_tokens: 2500 }),
-  });
+  }, "price-research");
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`AI error: ${d?.error?.message || r.status}`);
   const text = d.output_text || (d.output || []).flatMap(o => o.content || []).map(c => c.text || "").join("");
@@ -1720,7 +1722,7 @@ async function listingHandler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   // store_sold is the retail store's webhook and checks its own secret below.
   const bodyAction = (() => { let b = req.body; if (typeof b === "string") { try { b = JSON.parse(b); } catch {} } return b?.action; })();
-  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states" || bodyAction === "etsy_queue_tick" || bodyAction === "ee_sections_sync" || bodyAction === "raj_snapshot" || bodyAction === "raj_fallback" || bodyAction === "raj_audit");
+  const storeAction = req.method === "POST" && (bodyAction === "store_sold" || bodyAction === "etsy_active_ids" || bodyAction === "etsy_states" || bodyAction === "etsy_queue_tick" || bodyAction === "ee_sections_sync" || bodyAction === "raj_snapshot" || bodyAction === "raj_fallback" || bodyAction === "raj_audit" || bodyAction === "girton_tick");
   const user = storeAction ? null : await requireUser(req, res);
   if (!storeAction && !user) return;
 
@@ -1977,6 +1979,17 @@ async function listingHandler(req, res) {
   /* Raj's mornings (lib/raj.js): the day's numbers at 07:45 IST, and at 09:30
      a numbers-only briefing if Claude on the Mac hasn't written one. Postgres
      knocks with the 'raj' cron key; the Mac's scripts use the same key. */
+  /* Girton's hourly cost watch (lib/girton.js): Postgres knocks with the
+     'raj' key; the ERP's Girton page asks for a refresh as a signed-in user. */
+  if (action === "girton_tick") {
+    if (!(await cronKeyOk(req, "raj"))) return res.status(401).json({ error: "Unauthorized" });
+    try { return res.json({ ok: true, ...(await girtonTick({ sb: adminClient() })) }); }
+    catch (e) { console.error("girton:", e); return res.status(500).json({ error: e.message || String(e) }); }
+  }
+  if (action === "girton_refresh") {
+    try { return res.json({ ok: true, ...(await girtonTick({ sb: adminClient(), notify: false })) }); }
+    catch (e) { return res.status(500).json({ error: e.message || String(e) }); }
+  }
   if (action === "raj_audit") {
     if (!(await cronKeyOk(req, "raj"))) return res.status(401).json({ error: "Unauthorized" });
     try {

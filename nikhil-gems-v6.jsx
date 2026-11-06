@@ -39,6 +39,7 @@ const DocumentsApp      = React.lazy(() => import("./src/DocumentsApp.jsx"));
 const TradeSiteApp      = React.lazy(() => import("./src/TradeSiteApp.jsx"));
 const StoreApp          = React.lazy(() => import("./src/StoreApp.jsx"));
 const RajApp            = React.lazy(() => import("./src/RajApp.jsx"));
+const GirtonApp         = React.lazy(() => import("./src/GirtonApp.jsx"));
 const RajCard           = React.lazy(() => import("./src/RajCard.jsx"));
 const SocialApp         = React.lazy(() => import("./src/SocialApp.jsx"));
 const LabelsApp         = React.lazy(() => import("./src/LabelsApp.jsx"));
@@ -725,6 +726,7 @@ const MODS=[
   {id:"etsy",icon:"🏷️",title:"Listing Manager",desc:"Etsy, eBay, Atyahara, Earth Editions listings & orders",group:"selling",ready:true},
   {id:"orders",icon:"🛍️",title:"Orders",desc:"Customer orders, shipping and fulfilment",group:"selling",ready:true},
   {id:"raj",icon:"🧑‍💼",title:"Raj",desc:"Chief of operations — morning briefing, follow-ups, memory",ready:true},
+  {id:"girton",icon:"🧮",title:"Girton",desc:"Cost watch — AI spend, budget, platform limits, code audit",ready:true},
   {id:"ai",icon:"🤖",title:"Ask AI",desc:"Ask anything about your business data",ready:true},
   {id:"images",icon:"🖼️",title:"Image Library",desc:"Shape diagrams, material photos, cut references",group:"studio",ready:true},
   {id:"bgremove",icon:"✂️",title:"Background Remover",desc:"Phone photo → clean white background (sandbox)",group:"studio",ready:true},
@@ -938,7 +940,7 @@ function MorningStandup({todoKey="ng-todos-v1",onClose}){
    without a second set of styles to keep in step. */
 /* Each module's tile colour. Module scope, not inside Welcome: the sidebar
    rows and the group pages draw the same tiles, and it is a constant. */
-const MOD_COLORS={raj:"#8B6F3E",purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",trade:"#1F8F4E",store:"#141210",social:"#E1306C",users:"#007AFF",datasets:"#5AC8FA",ledger:"#0A84FF",labels:"#AF52DE",bgremove:"#5AC8FA",omnisend:"#FF2D55"};
+const MOD_COLORS={raj:"#8B6F3E",girton:"#2F6FDE",purchases:"#FF9500",vendors:"#34C759",stock:"#AF52DE",expenses:"#FF3B30",invoices:"#007AFF",shows:"#5AC8FA",recon:"#FF6B2C",finance:"#30D158",jobwork:"#8E8E93",etsy:"#FF9F0A",orders:"#FF9F0A",ai:"#5E5CE6",images:"#FF375F",misc:"#636366",journal:"#32ADE6",documents:"#A2845E",trade:"#1F8F4E",store:"#141210",social:"#E1306C",users:"#007AFF",datasets:"#5AC8FA",ledger:"#0A84FF",labels:"#AF52DE",bgremove:"#5AC8FA",omnisend:"#FF2D55"};
 
 function SideModule({m,hov,setHov,onEnter,t,small=false}){
   const mc=MOD_COLORS[m.id]||"#8E8E93";
@@ -26289,10 +26291,14 @@ export default function Root({onSignOut}){
       }catch{}
     };
     check();
-    const id=setInterval(check,5000);               // keep deploy/update prompt near-immediate
+    // Every 2 minutes while the tab is in view, and at once on coming back to it or
+    // focusing it: the prompt still appears within moments of looking at the ERP.
+    // (At 5 s, each tab left open made 17,280 requests a day — Girton's audit.)
+    const id=setInterval(()=>{if(!document.hidden)check();},120000);
     const onVisible=()=>{if(!document.hidden)check();};
     document.addEventListener("visibilitychange",onVisible);
-    return()=>{clearInterval(id);document.removeEventListener("visibilitychange",onVisible);};
+    window.addEventListener("focus",onVisible);
+    return()=>{clearInterval(id);document.removeEventListener("visibilitychange",onVisible);window.removeEventListener("focus",onVisible);};
   },[]);
   useEffect(()=>{
     let settled=false;
@@ -26603,6 +26609,7 @@ export default function Root({onSignOut}){
     else if(mod==="social"&&(isAdmin||allowedMods.some(m=>m.id==="social")))content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><SocialApp onHome={goHome}/></React.Suspense>;
     else if(mod==="labels")content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><LabelsApp onHome={goHome}/></React.Suspense>;
     else if(mod==="raj")content=<React.Suspense fallback={null}><RajApp onHome={goHome}/></React.Suspense>;
+    else if(mod==="girton")content=<React.Suspense fallback={null}><GirtonApp onHome={goHome}/></React.Suspense>;
     else if(mod==="ai")content=<AIAssistantApp onHome={goHome}/>;
     else if(mod==="users"&&isAdmin)content=<UsersApp onHome={goHome}/>;
     else if(mod==="datasets"&&isAdmin)content=<React.Suspense fallback={<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#8C7E66",fontSize:13}}>Loading…</div>}><DatasetsApp onHome={goHome}/></React.Suspense>;

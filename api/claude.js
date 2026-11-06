@@ -1,4 +1,5 @@
 import { requireUser } from "../lib/auth.js";
+import { aiFetch } from "../lib/ai-meter.js";
 import { writeWithBest, outputText } from "../lib/captionWriter.js";
 export const config = {
   api: {
@@ -83,6 +84,13 @@ function convertMessages(messages = []) {
 //  /api/embed  → /api/claude?_ai=embed     (OpenAI embeddings)
 //  /api/claude?_ai=studio                  (OpenAI image edit: the photo editor's studio shot)
 // The first two are reached via rewrites in vercel.json; the route is detected below.
+/* The ERP's browser names the screen (and file) behind each call in
+   x-ai-feature (src/apiAuth.js), so the meter can say who spent it. */
+function featureOf(req, fallback) {
+  const h = String(req.headers?.["x-ai-feature"] || "").replace(/[^\w:.\-/ ]/g, "").slice(0, 50);
+  return h ? `${fallback}:${h}` : fallback;
+}
+
 function detectRoute(req) {
   if (req.query?._ai) return req.query._ai;
   const u = String(req.url || "");
@@ -93,11 +101,11 @@ function detectRoute(req) {
 
 async function handleOpenaiChat(req, res, key) {
   try {
-    const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    const r = await aiFetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
       body: JSON.stringify(typeof req.body === "string" ? JSON.parse(req.body) : req.body),
-    });
+    }, featureOf(req, "openai-chat"));
     const data = await r.json();
     return res.status(r.status).json(data);
   } catch (e) {
@@ -112,11 +120,11 @@ async function handleEmbed(req, res, key) {
     if (input == null || (Array.isArray(input) && input.length === 0)) {
       return res.status(400).json({ error: "input (string or string[]) required" });
     }
-    const r = await fetch("https://api.openai.com/v1/embeddings", {
+    const r = await aiFetch("https://api.openai.com/v1/embeddings", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
       body: JSON.stringify({ model: "text-embedding-3-small", dimensions: 512, input }),
-    });
+    }, featureOf(req, "embed"));
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data.error?.message || "embedding failed", details: data });
     const embeddings = (data.data || []).sort((a, b) => (a.index || 0) - (b.index || 0)).map(d => d.embedding);
@@ -148,9 +156,9 @@ async function handleStudioShot(req, res, key) {
         form.append("background", "opaque");
         form.append("output_format", "png");
         if (fidelity) form.append("input_fidelity", "high");
-        const r = await fetch("https://api.openai.com/v1/images/edits", {
+        const r = await aiFetch("https://api.openai.com/v1/images/edits", {
           method: "POST", headers: { Authorization: `Bearer ${key}` }, body: form,
-        });
+        }, featureOf(req, "studio-shot"));
         const data = await r.json().catch(() => ({}));
         const b64 = data.data?.[0]?.b64_json;
         if (r.ok && b64) return res.status(200).json({ image: b64, mime: "image/png", model, usage: data.usage });
@@ -172,7 +180,7 @@ async function handleCaptionWriter(req, res, key) {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
     const { instructions, input } = convertMessages(body.messages || []);
     if (!input.length) return res.status(400).json({ error: { message: "messages required" } });
-    const out = await writeWithBest(key, { instructions, input, maxTokens: body.max_tokens || 1000 });
+    const out = await writeWithBest(key, { instructions, input, maxTokens: body.max_tokens || 1000, feature: featureOf(req, "captions") });
     return res.status(200).json({ id: out.id, model: out.model, content: [{ type: "text", text: out.text }], usage: out.usage, provider: "openai" });
   } catch (err) {
     return res.status(err.status || 500).json({ error: { message: `The caption writer couldn't write it: ${err.message || err}` } });
@@ -210,7 +218,7 @@ export default async function handler(req, res) {
       (String(body.model || "").startsWith("claude") ? "gpt-4.1-mini" : body.model) ||
       "gpt-4.1-mini";
 
-    const response = await fetch(OPENAI_URL, {
+    const response = await aiFetch(OPENAI_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -223,7 +231,7 @@ export default async function handler(req, res) {
         max_output_tokens: body.max_output_tokens || body.max_tokens || 1000,
         temperature: body.temperature ?? 0,
       }),
-    });
+    }, featureOf(req, "chat"));
 
     const raw = await response.text();
     let data;
