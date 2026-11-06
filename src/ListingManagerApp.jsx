@@ -11,6 +11,7 @@ import PhotoEditor from "./PhotoEditor.jsx";
    for. */
 const VideoEditor = lazy(() => import("./VideoEditor.jsx"));
 const EtsyInsights = lazy(() => import("./EtsyInsights.jsx"));
+const CustomersApp = lazy(() => import("./CustomersApp.jsx"));
 const AdsTracker = lazy(() => import("./AdsTracker.jsx"));
 /* The listing server's reply. When it runs out of time or falls over, Vercel
    answers with a plain-text page ("An error occurred…"), which read as
@@ -11303,7 +11304,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
         {tab === "etsy" && currentUser?.role === "admin" && (
           <div style={{ display: "inline-flex", gap: 2, padding: 3, background: C.card, borderRadius: 10, marginBottom: 14 }}>
-            {[["listings", "Etsy listings"], ["insights", "📈 Insights & ads"], ["tracker", "🎯 Ads tracker"]].map(([k, l]) => (
+            {[["listings", "Etsy listings"], ["insights", "📈 Insights & ads"], ["tracker", "🎯 Ads tracker"], ["customers", "👥 Customers"]].map(([k, l]) => (
               <button key={k} onClick={() => setEtsyView(k)} style={{ border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 800, padding: "7px 14px", borderRadius: 8,
                 background: etsyView === k ? C.surface : "transparent", color: etsyView === k ? C.ink : C.inkMid, boxShadow: etsyView === k ? "0 1px 2px rgba(0,0,0,.08)" : "none" }}>{l}</button>
             ))}
@@ -11311,6 +11312,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         )}
         {tab === "etsy" && currentUser?.role === "admin" && etsyView === "insights"
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><EtsyInsights key={etsyTabShop} shop={etsyTabShop} listings={listings} onOpenRenew={() => setTab("renew")} onPrice={(l, v) => quickPrice(l, "price_etsy", v)} /></Suspense>
+          : tab === "etsy" && currentUser?.role === "admin" && etsyView === "customers"
+          ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><CustomersApp orders={orders} listings={listings} /></Suspense>
           : tab === "etsy" && currentUser?.role === "admin" && etsyView === "tracker"
           ? <Suspense fallback={<div style={{ padding: 40, color: C.inkFaint }}>Loading…</div>}><AdsTracker listings={listings} onEdit={l => { setEditing(l); setShowForm(true); }} /></Suspense>
           : tab === "etsy" && <EtsyLiveView key={etsyTabShop} shop={etsyTabShop} onCrossPost={(l, k) => crossPostEtsyToShopify(l, k, etsyTabShop === "earth" ? "etsy_ee" : "etsy")} onPushEE={etsyTabShop === "earth" ? null : pushEtsyToEE} />}
