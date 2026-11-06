@@ -17,6 +17,7 @@ import { withStandLine } from "../lib/standLine.js";
 import { rajSnapshot, rajFallback } from "../lib/raj.js";
 import { rajAudit } from "../lib/raj-audit.js";
 import { girtonTick } from "../lib/girton.js";
+import { decide as girtonDecide } from "../lib/girton-proposals.js";
 
 const MEDIA_BUCKET = "ng-media";
 
@@ -1985,6 +1986,12 @@ async function listingHandler(req, res) {
     if (!(await cronKeyOk(req, "raj"))) return res.status(401).json({ error: "Unauthorized" });
     try { return res.json({ ok: true, ...(await girtonTick({ sb: adminClient() })) }); }
     catch (e) { console.error("girton:", e); return res.status(500).json({ error: e.message || String(e) }); }
+  }
+  // Sir's yes/no on a Girton proposal (lib/girton-proposals.js). Admin only.
+  if (action === "girton_decide") {
+    if (!(await isAdminUser(user))) return res.status(403).json({ error: "Only the admin can approve Girton's proposals." });
+    try { return res.json({ ok: true, proposal: await girtonDecide(adminClient(), String(body.id || ""), String(body.decision || ""), user.email || "Sir") }); }
+    catch (e) { return res.status(400).json({ error: e.message || String(e) }); }
   }
   if (action === "girton_refresh") {
     try { return res.json({ ok: true, ...(await girtonTick({ sb: adminClient(), notify: false })) }); }
