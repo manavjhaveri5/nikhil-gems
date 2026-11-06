@@ -360,6 +360,7 @@ export default function GirtonApp({ onHome }) {
         {prov.supabase?.day && <div style={{ marginTop: 6 }}><span style={lab}>Last 24 hours · from the project's logs</span>
           <Row l="Requests" r={num(prov.supabase.day.requests)} />
           <Row l="File downloads" r={num(prov.supabase.day.file_requests)} />
+          {prov.supabase.day.egress_gb > 0 && <Row l="Data sent (approx.)" r={`${prov.supabase.day.egress_gb} GB`} />}
           <Row l="Image transformations" r={<span style={{ color: prov.supabase.day.transforms > 20 ? C.red : C.ink }}>{num(prov.supabase.day.transforms)}</span>} />
           <div style={{ marginTop: 4 }}><Live on at={prov.supabase.at} what="Supabase" /></div></div>}
         {snap?.supabase?.live ? <Live on at={snap.supabase.as_of_ms} what="Supabase" />
