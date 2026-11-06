@@ -213,7 +213,7 @@ Pieces to offer:\n${pieces.map(p => `- ${p.title}${p.link ? ` — ${p.link}` : "
   const receipt = lastEtsy?.lines?.[0]?.etsy_receipt_id;
 
   return <div style={{ position: "fixed", inset: 0, zIndex: 900, background: "rgba(20,12,4,.35)", display: "flex", justifyContent: "flex-end" }} onClick={onClose}>
-    <div onClick={e => e.stopPropagation()} style={{ width: mob ? "100%" : 720, maxWidth: "100%", height: "100%", overflowY: "auto", background: C.bg, padding: mob ? 14 : 22, boxShadow: "-8px 0 32px rgba(0,0,0,.18)" }}>
+    <div onClick={e => e.stopPropagation()} style={{ width: mob ? "100%" : 720, maxWidth: "100%", height: "100%", overflowY: "auto", overflowX: "hidden", boxSizing: "border-box", background: C.bg, padding: mob ? 14 : 22, boxShadow: "-8px 0 32px rgba(0,0,0,.18)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
         <div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><TierPill t={c.tier} />{c.lapsed && <Pill color={C.amber} bg={C.amberBg}>Lapsed</Pill>}{c.channels.map(ch => <Pill key={ch} color="#fff" bg={CH[ch] || C.inkMid}>{ch}</Pill>)}</div>
@@ -261,8 +261,8 @@ Pieces to offer:\n${pieces.map(p => `- ${p.title}${p.link ? ` — ${p.link}` : "
 
       <Section title="Pieces for them" style={{ marginTop: 12 }} sub="In stock and live on eartheditions.co or EarthEditions Etsy, matched on the stones and shapes they've bought. Tick the ones to offer.">
         {picks.length === 0 ? <div style={{ fontSize: 12.5, color: C.inkFaint }}>No close match in stock right now.</div> :
-          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 8 }}>
-            {picks.map(({ l, p }) => { const on = chosen.has(l.id), url = l.platforms?.store?.status === "active" ? l.platforms.store.url : l.platforms?.etsy_ee?.url; return <label key={l.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: 8, borderRadius: 10, border: `1px solid ${on ? "#D95A00" : C.border}`, background: on ? "#FDF3EA" : C.surface, cursor: "pointer" }}>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "minmax(0,1fr)" : "minmax(0,1fr) minmax(0,1fr)", gap: 8 }}>
+            {picks.map(({ l, p }) => { const on = chosen.has(l.id), url = l.platforms?.store?.status === "active" ? l.platforms.store.url : l.platforms?.etsy_ee?.url; return <label key={l.id} style={{ minWidth: 0, display: "flex", gap: 10, alignItems: "center", padding: 8, borderRadius: 10, border: `1px solid ${on ? "#D95A00" : C.border}`, background: on ? "#FDF3EA" : C.surface, cursor: "pointer" }}>
               <input type="checkbox" checked={on} onChange={() => setChosen(s => { const n = new Set(s); n.has(l.id) ? n.delete(l.id) : n.add(l.id); return n; })} />
               {imgOf(l) ? <img src={imgOf(l)} alt="" loading="lazy" style={{ width: 44, height: 44, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 44, height: 44, borderRadius: 8, background: C.card, flexShrink: 0 }} />}
               <div style={{ minWidth: 0 }}>
@@ -278,7 +278,7 @@ Pieces to offer:\n${pieces.map(p => `- ${p.title}${p.link ? ` — ${p.link}` : "
           <Btn on={via === "email"} onClick={() => setVia("email")}>✉ Email (with links)</Btn>
           <Btn on={via === "etsy"} onClick={() => setVia("etsy")}>💬 Etsy message (no links)</Btn>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "minmax(0,1fr)" : "minmax(0,1fr) minmax(0,1fr)", gap: 8 }}>
           <select style={FI} value={occasion} onChange={e => setOccasion(e.target.value)}>
             {["Diwali / festive greeting", "New Year greeting", "Pieces I think they'll like", "Thank-you and check-in", "Follow-up to an earlier message"].map(o => <option key={o}>{o}</option>)}
           </select>
