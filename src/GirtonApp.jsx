@@ -195,7 +195,8 @@ export default function GirtonApp({ onHome }) {
   const monthly = plans.reduce((s, p) => s + (p.metered ? aiForecast : +p.usd || 0), 0);
   const waiting = props.filter(p => p.status === "proposed");
   const openAlerts = (status?.open_alerts || []).filter(a => a.level !== "info");
-  const transforms = snap?.supabase?.items?.find(i => /transform/i.test(i.k));
+  const transforms = snap?.supabase?.live ? null : snap?.supabase?.items?.find(i => /transform/i.test(i.k));
+  const sbErr = status?.supabase_usage?.error && !/not set/.test(status.supabase_usage.error) ? status.supabase_usage.error : "";
   const needs = waiting.length + openAlerts.length;
   const p = status?.platform || {};
   const lim = status?.limits || { db: 8e9, storage: 100e9 };
@@ -358,7 +359,10 @@ export default function GirtonApp({ onHome }) {
               <Meter label="File storage (live)" used={p.storage_bytes || 0} limit={lim.storage} right={`${bytes(p.storage_bytes)} of ${bytes(lim.storage)} · ${num(p.storage_objects)} files`} />
             </> : <div style={{ ...S.sub, marginBottom: 10 }}>Live database figures: {p.error}</div>}
             {(snap?.supabase?.items || []).filter(i => !/storage/i.test(i.k)).map(i => <Meter key={i.k} label={i.k} used={i.used} limit={i.limit} right={`${num(i.used)} of ${num(i.limit)} ${i.unit}`} />)}
-            {snap && <div style={S.sub}>Usage figures as of {snap.as_of} ({daysSince(snap.as_of)} d ago), read from the dashboard. They update automatically once Supabase's access token is added (see below). Compute: {snap.supabase.compute.hours} h, ${snap.supabase.compute.usd} against the $10 credit.</div>}
+            {snap && (snap.supabase.live
+              ? <div style={S.sub}><b style={{ color: C.green }}>● Live</b> from Supabase, updated {ago(snap.supabase.as_of_ms)}.</div>
+              : <div style={S.sub}>Usage figures as of {snap.as_of} ({daysSince(snap.as_of)} d ago), read from the dashboard. They update hourly once Supabase's access token is set in Vercel (see below).{snap.supabase.compute ? ` Compute: ${snap.supabase.compute.hours} h, $${snap.supabase.compute.usd} against the $10 credit.` : ""}</div>)}
+            {sbErr && <div style={{ ...S.sub, color: C.amber, marginTop: 6 }}>▲ {sbErr}</div>}
           </div>
           <div style={{ display: "grid", gap: 14, alignContent: "start" }}>
             {aiBudgetCard}
@@ -387,7 +391,7 @@ export default function GirtonApp({ onHome }) {
         <div style={{ ...S.card, background: C.card }}>
           <div style={S.h}>🔑 Next step: make every number live</div><div style={{ ...S.sub, fontSize: 12.5, marginBottom: 6 }}>Only you can create these. Add them in Vercel, then tell Claude and Girton will start reading them.</div>
           {[["OpenAI admin key", "Real spend per key, including the Railway bot.", "platform.openai.com → Settings → Admin keys → set OPENAI_ADMIN_KEY in Vercel"],
-            ["Supabase access token", "Egress and image-transform counts every hour instead of a snapshot.", "supabase.com/dashboard/account/tokens → set SUPABASE_ACCESS_TOKEN in Vercel"],
+            ["Supabase access token", "Egress, image transforms and storage every hour instead of a snapshot.", "supabase.com/dashboard/account/tokens → Generate new token → in Vercel set SUPABASE_ACCESS_TOKEN (Production), then redeploy"],
             ["Vercel token", "Bandwidth and function usage.", "vercel.com/account/tokens → set VERCEL_TOKEN in Vercel"],
             ["Railway token", "The bot's monthly usage.", "railway.com/account/tokens → set RAILWAY_TOKEN in Vercel"]].map(([t, w, how]) =>
             <div key={t} style={{ padding: "8px 0", borderBottom: `1px solid ${C.border}`, fontSize: 13 }}><b>{t}</b> <span style={{ color: C.inkMid }}>· {w}</span><div style={{ ...S.sub, marginTop: 2 }}>{how}</div></div>)}
