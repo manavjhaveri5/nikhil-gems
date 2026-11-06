@@ -219,7 +219,7 @@ export default function GirtonApp({ onHome }) {
   const aiForecast = oai ? Math.max(status?.forecast || 0, oai.mtd_usd / Math.max(1, +today.slice(8, 10)) * (status?.days_in_month || 30)) : status?.forecast || 0;
   const plans = (bills || budget.plans || DEFAULT_PLANS).map(p =>
     p.id === "railway" && rw ? { ...p, plan: rw.plan[0] + rw.plan.slice(1).toLowerCase(), usd: rw.bill_usd, live: true, check: false }
-      : p.id === "supabase" && prov.supabase?.live && prov.supabase.plan ? { ...p, plan: prov.supabase.plan[0].toUpperCase() + prov.supabase.plan.slice(1), live: true } : p);
+      : p.id === "supabase" && prov.supabase?.plan ? { ...p, plan: prov.supabase.plan[0].toUpperCase() + prov.supabase.plan.slice(1), live: true } : p);
   const monthly = plans.reduce((s, p) => s + (p.metered ? aiForecast : +p.usd || 0), 0);
   const openAlerts = (status?.open_alerts || []).filter(a => a.level !== "info");
   const transforms = snap?.supabase?.live ? null : snap?.supabase?.items?.find(i => /transform/i.test(i.k));
@@ -357,8 +357,13 @@ export default function GirtonApp({ onHome }) {
           <Meter label="File storage" used={p.storage_bytes || 0} limit={lim.storage} right={`${bytes(p.storage_bytes)} of ${bytes(lim.storage)} · ${num(p.storage_objects)} files`} />
         </> : <div style={{ ...sub, marginBottom: 8 }}>Database figures: {p.error}</div>}
         {(snap?.supabase?.items || []).filter(i => !/storage/i.test(i.k)).map(i => <Meter key={i.k} label={i.k} used={i.used} limit={i.limit} right={`${num(i.used)} of ${num(i.limit)} ${i.unit}`} />)}
+        {prov.supabase?.day && <div style={{ marginTop: 6 }}><span style={lab}>Last 24 hours · from the project's logs</span>
+          <Row l="Requests" r={num(prov.supabase.day.requests)} />
+          <Row l="File downloads" r={num(prov.supabase.day.file_requests)} />
+          <Row l="Image transformations" r={<span style={{ color: prov.supabase.day.transforms > 20 ? C.red : C.ink }}>{num(prov.supabase.day.transforms)}</span>} />
+          <div style={{ marginTop: 4 }}><Live on at={prov.supabase.at} what="Supabase" /></div></div>}
         {snap?.supabase?.live ? <Live on at={snap.supabase.as_of_ms} what="Supabase" />
-          : <div style={sub}>Plan usage as of {snap?.as_of} ({daysSince(snap?.as_of)} d ago), read from the dashboard. Live once SUPABASE_ACCESS_TOKEN is set in Vercel.</div>}
+          : <div style={{ ...sub, marginTop: 6 }}>Cycle totals as of {snap?.as_of} ({daysSince(snap?.as_of)} d ago), read from the dashboard: Supabase's API gives tokens no cycle totals.</div>}
         {sbErr && !status?.supabase_usage?.missing && <div style={{ ...sub, color: C.amber, marginTop: 4 }}>▲ {sbErr}</div>}
       </div>
       <div style={card}>
@@ -395,7 +400,7 @@ export default function GirtonApp({ onHome }) {
       <div style={h}>Connections</div>
       <div style={{ ...sub, fontSize: 12.5, marginBottom: 6 }}>Each key goes in Vercel → the ERP project → Settings → Environment Variables (Production), then redeploy. Only you can create them.</div>
       {[["OpenAI", "OPENAI_ADMIN_KEY", "platform.openai.com → Settings → Organization → Admin keys", !!oai, prov.openai?.error],
-        ["Supabase", "SUPABASE_ACCESS_TOKEN", "supabase.com/dashboard/account/tokens → Generate new token", !!snap?.supabase?.live, status?.supabase_usage?.missing ? null : sbErr],
+        ["Supabase", "SUPABASE_ACCESS_TOKEN", "supabase.com/dashboard/account/tokens → Generate new token", !!(snap?.supabase?.live || prov.supabase?.day), status?.supabase_usage?.missing ? null : sbErr],
         ["Railway", "RAILWAY_TOKEN", "railway.com/account/tokens → New token, workspace: No workspace", !!rw, prov.railway?.error]].map(([n, v, how, on, e]) =>
         <div key={n} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "8px 0", borderTop: `1px solid ${C.border}`, fontSize: 13 }}>
           <span style={{ width: 16, color: on ? C.green : e ? C.amber : C.inkFaint }}>{on ? "●" : e ? "▲" : "○"}</span>
