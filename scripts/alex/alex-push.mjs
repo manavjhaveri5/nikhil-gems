@@ -14,7 +14,11 @@
    node scripts/alex/alex-push.mjs notes <file.json>
      [ { id?, kind: decision|lesson|knowledge|followup|handoff, title, body, to?: soniya|raj|sir, status?, due? } ... ]
    node scripts/alex/alex-push.mjs review <file.json>
-     { date: YYYY-MM-DD, headline, review_md, metrics?: {...}, decisions_for_sir?: [ { question, options, recommend } ] } */
+     { date: YYYY-MM-DD, headline, review_md, metrics?: {...}, decisions_for_sir?: [ { question, options, recommend } ],
+       insights?: { regions: [ { region, share_pct, orders, note } ], buyer: "...", next_moment: { name, date, regions, product, ad_angle, budget_inr }, ad_ideas: [ "..." ] } }
+   node scripts/alex/alex-push.mjs moments <file.json>
+     { moments: [ { id, name, date (YYYY-MM-DD or null = year-round), date_note?, regions, product, ad_angle, ad_start_days_before } ] }
+     → app_data alex-moments-v1 (the selling-moments calendar; replaces it) */
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { supa, row, upsert, AKEYS, OPP_KINDS, OPP_STATUS, TIERS, PARTNER_STAGES, NOTE_KINDS } from "./alex-common.mjs";
@@ -29,13 +33,13 @@ const need = (o, ks, what) => { for (const k of ks) if (o[k] == null || o[k] ===
 
 if (cmd === "opps") {
   for (const o of data) {
-    need(o, ["title", "opportunity", "economics", "recommendation", "success_criteria", "next_action"], "opportunity");
     if (o.kind && !OPP_KINDS.includes(o.kind)) throw new Error(`bad kind ${o.kind}`);
     if (o.status && !OPP_STATUS.includes(o.status)) throw new Error(`bad status ${o.status}`);
     const id = o.id || slug("opp", o.title);
     const old = await row(sb, AKEYS.opps, id);
     const item = { ...old, ...o, id, status: o.status || old?.status || "proposed", feedback: old?.feedback || null,
       created_at: old?.created_at || now, updated_at: now, by: "alex" };
+    need(item, ["title", "opportunity", "economics", "recommendation", "success_criteria", "next_action"], "opportunity");
     await upsert(sb, AKEYS.opps, item, !old);
     out.push({ id, title: item.title, status: item.status, updated: !!old });
   }
@@ -65,5 +69,10 @@ if (cmd === "opps") {
   const old = await row(sb, AKEYS.reviews, data.date);
   await upsert(sb, AKEYS.reviews, { ...old, ...data, id: data.date, updated_at: now, created_at: old?.created_at || now }, !old);
   out.push({ review: data.date, updated: !!old });
-} else throw new Error("use: opps | partners | notes | review <file.json>");
+} else if (cmd === "moments") {
+  if (!Array.isArray(data.moments) || !data.moments.length) throw new Error("moments needs a list");
+  const { error } = await sb.from("app_data").upsert({ key: "alex-moments-v1", value: { ...data, updated_at: now } }, { onConflict: "key" });
+  if (error) throw new Error(error.message);
+  out.push({ moments: data.moments.length });
+} else throw new Error("use: opps | partners | notes | review | moments <file.json>");
 console.log(JSON.stringify({ ok: true, out }, null, 1));

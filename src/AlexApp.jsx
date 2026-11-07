@@ -5,8 +5,9 @@
    the brief's 10-step structure, a partner pipeline, and hand-offs to Soniya and
    Raj. Sir approves, asks for changes or declines here. Alex never emails
    partners, publishes, spends or changes listings. Ask Alex runs on /api/claude
-   (metered by Girton). The numbers on the dashboard are computed here from
-   ng-orders-v1 (Atyahara = platforms etsy and shopify_aty). */
+   (metered by Girton). Scope: Atyahara India (atyahara.com, gifting, retail);
+   customer insight and the selling-moments calendar (app_data alex-moments-v1) come
+   from Alex's weekly review, which reads Shopify directly. */
 import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "./supabase.js";
 import { C, mob, FI } from "./lmTheme.js";
@@ -48,23 +49,20 @@ async function put(key, item) {
   if (error) throw new Error(error.message);
 }
 
-/* Atyahara numbers from the ERP's orders (INR rows, cancelled excluded). */
+/* atyahara.com numbers from the ERP's orders (INR, cancelled excluded). Scope is Atyahara INDIA:
+   the Etsy shop is a separate export business. The ERP sync misses some Shopify orders, so the
+   weekly review (read straight from Shopify) is the source of truth for insight. */
 function useNumbers(orders) {
   return useMemo(() => {
     if (!orders) return null;
     const t = istDay();
-    const live = orders.filter(o => (o.platform === "etsy" || o.platform === "shopify_aty") && o.currency === "INR" && !/cancel/i.test(o.status || "") && o.date);
-    const sum = (a, p) => a.filter(o => !p || o.platform === p).reduce((s, o) => s + (+o.sale_price || 0), 0);
+    const live = orders.filter(o => o.platform === "shopify_aty" && !/cancel/i.test(o.status || "") && o.date && (+o.sale_price || 0) > 20);
+    const sum = a => a.reduce((s, o) => s + (+o.sale_price || 0), 0);
     const win = (from, to) => live.filter(o => o.date >= from && o.date <= to);
-    const w = win(addDays(t, -6), t), pw = win(addDays(t, -13), addDays(t, -7)), mtd = win(t.slice(0, 8) + "01", t), y = win(addDays(t, -365), t);
-    const top = {}; for (const o of win(addDays(t, -90), t)) { const k = (o.listing_title || "?").split(/[:|,–—-]/)[0].trim().slice(0, 48); (top[k] ||= [0, 0]); top[k][0]++; top[k][1] += +o.sale_price || 0; }
-    return {
-      week: sum(w), prevWeek: sum(pw), mtd: sum(mtd), mtdSite: sum(mtd, "shopify_aty"), year: sum(y), yearEtsy: sum(y, "etsy"),
-      orders30: new Set(win(addDays(t, -29), t).map(o => o.platform_order_id || o.order_number || o.id)).size,
-      top: Object.entries(top).sort((a, b) => b[1][1] - a[1][1]).slice(0, 6),
-    };
+    return { d30: sum(win(addDays(t, -29), t)), mtd: sum(win(t.slice(0, 8) + "01", t)), orders30: new Set(win(addDays(t, -29), t).map(o => o.order_number || o.id)).size };
   }, [orders]);
 }
+const daysTo = d => d ? Math.round((Date.parse(d) - Date.parse(istDay())) / 864e5) : null;
 
 /* ── one opportunity, in the brief's 10-step structure ─────────────────── */
 function Opp({ o, onSave, compact }) {
@@ -136,7 +134,7 @@ function Partner({ p, onSave }) {
 }
 
 /* ── Ask Alex ──────────────────────────────────────────────────────────── */
-function AskTab({ opps, partners, notes, review, nums }) {
+function AskTab({ opps, partners, notes, review, nums, moments }) {
   const [msgs, setMsgs] = useState([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -150,7 +148,10 @@ function AskTab({ opps, partners, notes, review, nums }) {
     try {
       const ctx = [
         `Today (IST): ${istDay()}`,
-        nums ? `ATYAHARA NUMBERS (facts, item revenue, INR, cancelled excluded): last 7 days ${inr(nums.week)} vs prior 7 days ${inr(nums.prevWeek)}; month to date ${inr(nums.mtd)} (atyahara.com ${inr(nums.mtdSite)}); last 12 months ${inr(nums.year)}, of which Etsy ${inr(nums.yearEtsy)}; orders in 30 days ${nums.orders30}. Top products, 90 days: ${nums.top.map(([t, [n, v]]) => `${t} (${n}, ${inr(v)})`).join("; ")}. Product costs are NOT in the ERP.` : "",
+        "SCOPE: Atyahara INDIA only (atyahara.com, B2B gifting, Indian retail), built as a mass-luxury brand. The Atyahara Etsy shop is a separate export business: ignore it.",
+        nums ? `atyahara.com in the ERP (sync incomplete): last 30 days ${inr(nums.d30)} from ${nums.orders30} orders; month to date ${inr(nums.mtd)}. Product costs are NOT in the ERP.` : "",
+        review?.insights ? `LATEST CUSTOMER INSIGHT:\n${JSON.stringify(review.insights).slice(0, 3000)}` : "",
+        moments?.length ? `SELLING MOMENTS:\n${moments.map(m => `- ${m.name}: ${m.date_note || m.date} · ${m.regions} · ${m.product} · angle "${m.ad_angle}"`).join("\n")}` : "",
         review ? `YOUR LATEST WEEKLY REVIEW (${review.id}):\n${String(review.review_md || "").slice(0, 5000)}` : "",
         `YOUR PIPELINE:\n${opps.filter(o => o.status !== "declined").slice(0, 20).map(o => `- [${o.status}] ${o.title}${o.budget_inr != null ? ` (${inr(o.budget_inr)})` : ""}${o.feedback ? ` (Sir: ${o.feedback})` : ""}`).join("\n") || "none yet"}`,
         `PARTNERS:\n${partners.slice(0, 25).map(p => `- #${p.rank || "?"} ${p.name} (${TIER[p.tier] || p.tier}, ${STAGE[p.stage] || p.stage})${p.sir_note ? ` Sir: ${p.sir_note}` : ""}`).join("\n") || "none yet"}`,
@@ -192,6 +193,7 @@ export default function AlexApp({ onHome }) {
   const [notes, setNotes] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [orders, setOrders] = useState(null);
+  const [moments, setMoments] = useState([]);
   const [err, setErr] = useState("");
   const [toast, setToast] = useState("");
   const [tab, setTab] = useState(() => { try { return localStorage.getItem("alex-tab") || "dash"; } catch { return "dash"; } });
@@ -207,6 +209,7 @@ export default function AlexApp({ onHome }) {
       setOpps(o); setPartners(p); setNotes(n); setReviews(r.sort((a, b) => String(b.id).localeCompare(String(a.id))));
     } catch (e) { setErr(e.message); }
     loadK("ng-orders-v1").then(x => setOrders(Array.isArray(x) ? x : [])).catch(() => setOrders([]));
+    supabase.from("app_data").select("value").eq("key", "alex-moments-v1").maybeSingle().then(({ data }) => setMoments(data?.value?.moments || []));
   };
   useEffect(() => { load(); }, []);
 
@@ -245,33 +248,54 @@ export default function AlexApp({ onHome }) {
 
   let body;
   if (tab === "dash") {
-    const delta = nums && nums.prevWeek ? Math.round(100 * (nums.week - nums.prevWeek) / nums.prevWeek) : null;
+    const ins = review?.insights || {};
+    const upcoming = moments.filter(m => m.date && daysTo(m.date) >= -3).sort((x, y) => x.date.localeCompare(y.date)).slice(0, 4);
+    const next = upcoming[0];
+    const ws = (ins.regions || []).filter(r => /west|south/i.test(r.region)).reduce((t, r) => t + (r.share_pct || 0), 0);
     const stat = (l, v, s) => <div style={card}><span style={lab}>{l}</span><div style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 700, lineHeight: 1.1 }}>{v}</div>{s && <div style={{ ...sub, marginTop: 3 }}>{s}</div>}</div>;
     body = <>
+      <div style={{ ...sub, marginBottom: 10 }}>Atyahara India: atyahara.com, gifting and retail. The Etsy shop is a separate business and is not counted here.</div>
       <div style={{ ...grid("repeat(4, minmax(0,1fr))"), marginBottom: 12 }}>
-        {stat("Last 7 days", nums ? inr(nums.week) : "…", delta == null ? "Atyahara, all channels" : `${delta >= 0 ? "+" : ""}${delta}% vs the week before`)}
-        {stat("Month to date", nums ? inr(nums.mtd) : "…", nums ? `atyahara.com ${inr(nums.mtdSite)}` : "")}
-        {stat("Last 12 months", nums ? inr(nums.year) : "…", nums && nums.year ? `${Math.round(100 * nums.yearEtsy / nums.year)}% from Etsy` : "")}
-        {stat("Orders, 30 days", nums ? nums.orders30 : "…", "Profit unknown: costs missing")}
+        {stat("atyahara.com, 30 days", nums ? inr(nums.d30) : "…", nums ? `${nums.orders30} orders · ERP (sync incomplete)` : "")}
+        {stat("Indian orders, all time", review?.metrics?.orders_all_time ?? "—", review?.metrics?.revenue_all_time_inr ? `${inr(review.metrics.revenue_all_time_inr)} · avg ${inr(review.metrics.avg_order_inr)}` : "from Alex's review")}
+        {stat("West + South", ws ? `${ws}%` : "—", "share of Indian revenue")}
+        {stat("Next selling moment", next ? next.name : "—", next ? `${fmtDay(next.date)} · in ${daysTo(next.date)} days` : "")}
       </div>
       <div style={grid("minmax(0,1.6fr) minmax(0,1fr)")}>
-        <div style={card}>
-          <div style={h}>{review ? `Weekly review · ${fmtDay(review.id)}` : "Weekly review"}</div>
-          {review ? <>{review.headline && <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>{review.headline}</div>}<Md text={review.review_md || ""} size={13} /></>
-            : <div style={{ fontSize: 13, color: C.inkMid }}>Alex's first weekly review arrives Monday morning. Until then, read the Growth Blueprint.</div>}
+        <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+          <div style={card}>
+            <div style={h}>{review ? `Growth review · ${fmtDay(review.id)}` : "Growth review"}</div>
+            {review ? <>{review.headline && <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>{review.headline}</div>}<Md text={review.review_md || ""} size={13} /></>
+              : <div style={{ fontSize: 13, color: C.inkMid }}>Alex's first weekly review arrives Monday morning. Until then, read the Growth Blueprint.</div>}
+          </div>
+          {ins.ad_ideas?.length > 0 && <div style={card}><div style={h}>Ads to make</div>
+            {ins.ad_ideas.map((a, i) => <div key={i} style={{ fontSize: 13, lineHeight: 1.5, padding: "5px 0", borderTop: i ? `1px solid ${C.border}` : "none" }}>{a}</div>)}
+            {ins.next_moment && <div style={{ marginTop: 8, fontSize: 12.5, background: "#E3EFEE", borderRadius: 8, padding: "8px 10px" }}><b>Next test:</b> {ins.next_moment.name} ({fmtDay(ins.next_moment.date)}) · {ins.next_moment.regions} · {ins.next_moment.product} · “{ins.next_moment.ad_angle}” · {inr(ins.next_moment.budget_inr)}</div>}
+          </div>}
         </div>
         <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
           <a href={BLUEPRINT} target="_blank" rel="noreferrer" style={{ ...card, textDecoration: "none", color: C.ink, borderLeft: `3px solid ${ACCENT}` }}>
             <span style={lab}>First assignment</span><div style={{ fontFamily: SERIF, fontSize: 19, fontWeight: 700 }}>Atyahara — The Growth Blueprint ↗</div>
-            <div style={{ ...sub, marginTop: 4 }}>Diagnosis, markets, partners, packaging, financial model, 90-day plan, five decisions.</div></a>
+            <div style={{ ...sub, marginTop: 4 }}>Who buys, where and when; selling moments; markets, partners, packaging, money, 90 days.</div></a>
+          {ins.regions?.length > 0 && <div style={card}><div style={h}>Where buyers are</div>
+            {ins.regions.map(r => <div key={r.region} style={{ padding: "5px 0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}><b>{r.region}</b><span style={{ color: C.inkMid }}>{r.share_pct}% · {r.orders} orders</span></div>
+              <div style={{ height: 6, background: C.card, borderRadius: 3, marginTop: 4 }}><div style={{ width: `${r.share_pct}%`, height: 6, background: ACCENT, borderRadius: 3 }} /></div>
+              {r.note && <div style={{ ...sub, marginTop: 3 }}>{r.note}</div>}
+            </div>)}
+            {ins.buyer && <div style={{ fontSize: 12.5, color: C.inkMid, marginTop: 8, lineHeight: 1.5 }}><b>Buyer:</b> {ins.buyer}</div>}
+          </div>}
+          {upcoming.length > 0 && <div style={card}><div style={h}>Selling moments ahead</div>
+            {upcoming.map(m => { const d = daysTo(m.date); const adIn = d - (m.ad_start_days_before || 0); return <div key={m.id} style={{ padding: "6px 0", borderTop: `1px solid ${C.border}`, fontSize: 12.5 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{m.name}</b><span style={{ color: C.inkFaint, whiteSpace: "nowrap" }}>{fmtDay(m.date)}</span></div>
+              <div style={{ color: C.inkMid, marginTop: 2 }}>{m.regions} · {m.product}</div>
+              <div style={{ color: adIn <= 0 ? C.red : ACCENT, marginTop: 2, fontWeight: 600 }}>{adIn <= 0 ? "Campaign window is open" : `Start campaign in ${adIn} days`}</div>
+            </div>; })}</div>}
           <div style={card}><div style={h}>Decisions for you</div>
-            {(review?.decisions_for_sir || []).length ? review.decisions_for_sir.map((d, i) => <div key={i} style={{ borderTop: i ? `1px solid ${C.border}` : "none", padding: "7px 0", fontSize: 13 }}>
-              <b>{d.question}</b>{d.recommend && <div style={{ color: C.inkMid, marginTop: 2 }}>Alex recommends: {d.recommend}</div>}</div>)
-              : notes.filter(n => n.kind === "decision" && n.status !== "done" && n.to === "sir").slice(0, 5).map(n => <div key={n.id} style={{ fontSize: 13, padding: "5px 0" }}><b>{n.title}</b><div style={{ color: C.inkMid }}>{n.body}</div></div>)}
-            {!(review?.decisions_for_sir || []).length && !notes.some(n => n.kind === "decision" && n.to === "sir") && <div style={sub}>None open.</div>}
+            {(review?.decisions_for_sir || []).map((d, i) => <div key={i} style={{ borderTop: i ? `1px solid ${C.border}` : "none", padding: "7px 0", fontSize: 13 }}>
+              <b>{d.question}</b>{d.recommend && <div style={{ color: C.inkMid, marginTop: 2 }}>Alex recommends: {d.recommend}</div>}</div>)}
+            {!(review?.decisions_for_sir || []).length && <div style={sub}>None open.</div>}
           </div>
-          {nums?.top?.length > 0 && <div style={card}><div style={h}>Selling now · 90 days</div>
-            {nums.top.map(([t, [n, v]]) => <div key={t} style={{ display: "flex", gap: 8, fontSize: 12.5, padding: "3px 0" }}><span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span><span style={{ color: C.inkFaint }}>{n} · {inr(v)}</span></div>)}</div>}
         </div>
       </div>
     </>;
@@ -310,7 +334,7 @@ export default function AlexApp({ onHome }) {
       </div>; })}</div>
       {!list.length && <div style={{ ...card, color: C.inkMid, fontSize: 13 }}>Nothing yet.</div>}
     </>;
-  } else body = <AskTab opps={opps} partners={partners} notes={notes} review={review} nums={nums} />;
+  } else body = <AskTab opps={opps} partners={partners} notes={notes} review={review} nums={nums} moments={moments} />;
 
   return shell(body);
 }

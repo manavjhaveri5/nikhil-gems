@@ -1,46 +1,65 @@
 #!/usr/bin/env node
 /* What Alex needs before his weekly growth review, as one JSON on stdout.
    node scripts/alex/alex-read.mjs
-   Atyahara = platforms "etsy" (the Atyahara Etsy shop) and "shopify_aty" (atyahara.com).
-   Revenue is item revenue (sale_price), INR rows only; older USD rows are counted separately.
-   Never prints customers' names, emails, phones or addresses. */
+   Scope: Atyahara INDIA = atyahara.com (Shopify). The Atyahara Etsy shop is a separate export
+   business and is NOT in Alex's scope. Orders are read straight from Shopify (read-only), because
+   the ERP's ng-orders-v1 sync is incomplete. Never prints customers' names, emails, phones or
+   street addresses: only state, city, dates, products, amounts and traffic source. */
 import { supa, rows, istDay, addDays, AKEYS, BLUEPRINT_URL } from "./alex-common.mjs";
 
 const sb = supa();
 const today = istDay();
-const { data: od } = await sb.from("app_data").select("value").eq("key", "ng-orders-v1").single();
-const ATY = ["etsy", "shopify_aty"];
-const live = (od?.value || []).filter(o => ATY.includes(o.platform) && !/cancel/i.test(o.status || "") && o.date);
-const inr = live.filter(o => o.currency === "INR");
-const sum = a => Math.round(a.reduce((s, o) => s + (+o.sale_price || 0), 0));
-const orderCount = a => new Set(a.map(o => o.platform_order_id || o.order_number || o.id)).size;
-const between = (a, from, to) => a.filter(o => o.date >= from && o.date <= to);
-const byChannel = a => Object.fromEntries(ATY.map(p => { const x = a.filter(o => o.platform === p); return [p, { revenue_inr: sum(x), orders: orderCount(x), pieces: x.length }]; }));
 
-const monthStart = today.slice(0, 8) + "01";
-const yearAgo = addDays(today, -365);
-const months = {};
-for (const o of between(inr, yearAgo, today)) { const m = o.date.slice(0, 7); (months[m] ||= { etsy: 0, shopify_aty: 0 })[o.platform] += +o.sale_price || 0; }
-for (const m of Object.values(months)) for (const k in m) m[k] = Math.round(m[k]);
-const last12 = between(inr, yearAgo, today);
-const top = (a, n = 12) => { const t = {}; for (const o of a) { const k = (o.listing_title || "?").slice(0, 70); (t[k] ||= { pieces: 0, revenue_inr: 0, channel: o.platform }); t[k].pieces++; t[k].revenue_inr += +o.sale_price || 0; } return Object.entries(t).sort((a, b) => b[1].revenue_inr - a[1].revenue_inr).slice(0, n).map(([title, v]) => ({ title, ...v, revenue_inr: Math.round(v.revenue_inr) })); };
-const countries = a => { const t = {}; for (const o of a) t[o.buyer_country || "?"] = (t[o.buyer_country || "?"] || 0) + (+o.sale_price || 0); return Object.entries(t).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([c, v]) => ({ country: c, revenue_inr: Math.round(v) })); };
-const fees12 = Math.round(last12.filter(o => o.platform === "etsy").reduce((s, o) => s + (+o.etsy_fees || +o.order_fees || 0), 0));
+// ── atyahara.com orders from Shopify ─────────────────────────────────────────
+const REGION = { Maharashtra: "West", Gujarat: "West", Goa: "West", Rajasthan: "North", Karnataka: "South", Telangana: "South", "Andhra Pradesh": "South", "Tamil Nadu": "South", Kerala: "South", Puducherry: "South", Delhi: "North", Haryana: "North", Punjab: "North", "Uttar Pradesh": "North", Uttarakhand: "North", "Himachal Pradesh": "North", Chandigarh: "North", "Jammu and Kashmir": "North", "Madhya Pradesh": "Central", Chhattisgarh: "Central", "West Bengal": "East", Assam: "East", Odisha: "East", Bihar: "East", Jharkhand: "East" };
+const METRO = c => { c = (c || "").toLowerCase(); return /mumbai|thane|navi mumbai|mymba/.test(c) ? "Mumbai MMR" : /pune/.test(c) ? "Pune" : /bangal|bengal/.test(c) ? "Bengaluru" : /hyderab|rangareddy|secunderabad/.test(c) ? "Hyderabad" : /chennai/.test(c) ? "Chennai" : /delhi|gurg|noida|ghaziabad|faridabad/.test(c) ? "Delhi NCR" : /ahmedabad/.test(c) ? "Ahmedabad" : /kolkata/.test(c) ? "Kolkata" : "Other"; };
+const SOURCE = o => { const l = `${o.landing_site || ""} ${o.referring_site || ""}`; return /utm_medium=paid|utm_source=(fb|facebook|ig)|Facebook_UA|fbclid|paid_soci/i.test(l) ? "Meta ads" : /google/i.test(l) ? "Google" : /instagram/i.test(l) ? "Instagram organic" : /whatsapp|wa\.me/i.test(l) ? "WhatsApp" : o.source_name === "web" ? "Direct" : o.source_name === "shopify_draft_order" ? "Manual order" : "Checkout app (source not recorded)"; };
 
-const sales = {
-  note: "Item revenue in INR from ng-orders-v1. Product costs are not in the ERP, so gross/contribution/net profit cannot be computed.",
-  last_7_days: { from: addDays(today, -6), ...byChannel(between(inr, addDays(today, -6), today)) },
-  prior_7_days: { from: addDays(today, -13), ...byChannel(between(inr, addDays(today, -13), addDays(today, -7))) },
-  month_to_date: byChannel(between(inr, monthStart, today)),
-  last_12_months: { ...byChannel(last12), etsy_share_pct: Math.round(100 * sum(last12.filter(o => o.platform === "etsy")) / Math.max(1, sum(last12))), etsy_fees_recorded_inr: fees12 },
-  by_month: months,
-  top_products_90_days: top(between(inr, addDays(today, -90), today)),
-  top_products_12_months: top(last12, 15),
-  countries_12_months: countries(last12),
-  orders_last_14_days: between(inr, addDays(today, -13), today).map(o => ({ date: o.date, channel: o.platform, title: (o.listing_title || "").slice(0, 70), price_inr: +o.sale_price || 0, country: o.buyer_country || null })),
-};
+async function shopifyOrders() {
+  const { data } = await sb.from("app_data").select("value").eq("key", "ng-shopify-creds-v1").maybeSingle();
+  const store = data?.value?.store || "7b7b96-29.myshopify.com", token = data?.value?.token;
+  if (!token) throw new Error("no Atyahara Shopify token");
+  const out = [];
+  let url = `https://${store}/admin/api/2025-01/orders.json?status=any&limit=250&fields=created_at,total_price,cancelled_at,shipping_address,billing_address,line_items,source_name,referring_site,landing_site,discount_codes`;
+  for (let i = 0; url && i < 20; i++) {
+    const r = await fetch(url, { headers: { "X-Shopify-Access-Token": token } });
+    if (!r.ok) throw new Error(`Shopify ${r.status}`);
+    out.push(...((await r.json()).orders || []));
+    const next = /<([^>]+)>;\s*rel="next"/.exec(r.headers.get("link") || "");
+    url = next ? next[1] : null;
+  }
+  return out;
+}
+let india = { error: null };
+try {
+  const all = await shopifyOrders();
+  const os = all.filter(o => !o.cancelled_at && +o.total_price > 20 && (o.shipping_address || o.billing_address || {}).country_code === "IN" && !(o.discount_codes || []).some(d => /test/i.test(d.code)))
+    .map(o => { const a = o.shipping_address || o.billing_address || {}; return { date: o.created_at.slice(0, 10), amount: +o.total_price, state: a.province || "?", region: REGION[a.province] || "Other", metro: METRO(a.city), source: SOURCE(o), pieces: o.line_items.reduce((s, l) => s + l.quantity, 0), items: o.line_items.map(l => `${l.title}${l.quantity > 1 ? ` x${l.quantity}` : ""}`), discount: (o.discount_codes || []).map(d => d.code).join(",") || null }; });
+  const agg = (list, key) => { const t = {}; for (const o of list) { const k = o[key]; (t[k] ||= { orders: 0, revenue_inr: 0, pieces: 0 }); t[k].orders++; t[k].revenue_inr += o.amount; t[k].pieces += o.pieces; } const tot = list.reduce((s, o) => s + o.amount, 0) || 1; return Object.entries(t).sort((a, b) => b[1].revenue_inr - a[1].revenue_inr).map(([k, v]) => ({ [key]: k, ...v, revenue_inr: Math.round(v.revenue_inr), share_pct: Math.round(100 * v.revenue_inr / tot), pieces_per_order: +(v.pieces / v.orders).toFixed(1) })); };
+  const products = {}; for (const o of os) for (const it of o.items) { const k = it.replace(/ x\d+$/, "").replace(/\s*-\s*\d.*$/, "").trim(); products[k] = (products[k] || 0) + (+(/ x(\d+)$/.exec(it)?.[1] || 1)); }
+  const win = (from, to) => os.filter(o => o.date >= from && o.date <= to);
+  india = {
+    scope: "atyahara.com India orders (Shopify), cancelled and test orders removed",
+    all_time: { orders: os.length, revenue_inr: Math.round(os.reduce((s, o) => s + o.amount, 0)), avg_order_inr: Math.round(os.reduce((s, o) => s + o.amount, 0) / Math.max(1, os.length)), multi_piece_orders: os.filter(o => o.pieces > 1).length },
+    last_7_days: agg(win(addDays(today, -6), today), "region"),
+    last_30_days: { orders: win(addDays(today, -29), today).length, revenue_inr: Math.round(win(addDays(today, -29), today).reduce((s, o) => s + o.amount, 0)) },
+    by_region: agg(os, "region"), by_state: agg(os, "state"), by_metro: agg(os, "metro"), by_source: agg(os, "source"),
+    by_month: agg(os.map(o => ({ ...o, month: o.date.slice(0, 7) })), "month").sort((a, b) => a.month.localeCompare(b.month)),
+    top_products: Object.entries(products).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([title, pieces]) => ({ title, pieces })),
+    orders_last_60_days: win(addDays(today, -59), today),
+    erp_sync_check: null,
+  };
+  const { data: od } = await sb.from("app_data").select("value").eq("key", "ng-orders-v1").single();
+  const erpCount = new Set((od?.value || []).filter(o => o.platform === "shopify_aty").map(o => o.order_number)).size;
+  india.erp_sync_check = { shopify_orders_total: all.length, erp_shopify_aty_orders: erpCount, note: erpCount < all.length ? "ERP is missing atyahara.com orders: hand off to Raj" : "in sync" };
+} catch (e) { india = { error: e.message }; }
 
-// Raj's latest snapshot (ads, site, Etsy state) and his open items.
+// ── selling-moments calendar (app_data alex-moments-v1, maintained by Alex) ──
+const { data: mrow } = await sb.from("app_data").select("value").eq("key", "alex-moments-v1").maybeSingle();
+const moments = (mrow?.value?.moments || []).map(m => ({ ...m, days_away: m.date ? Math.round((Date.parse(m.date) - Date.parse(today)) / 864e5) : null }));
+const upcoming = moments.filter(m => m.days_away == null || (m.days_away >= -7 && m.days_away <= 75)).sort((a, b) => (a.days_away ?? 999) - (b.days_away ?? 999));
+
+// ── Raj, Soniya, and Alex's own pipeline ─────────────────────────────────────
 const { data: snapRow } = await sb.from("app_rows").select("data").eq("key", "raj-snapshots-v1").eq("deleted", false).order("id", { ascending: false }).limit(1).maybeSingle();
 const snap = snapRow?.data || {};
 const [rajNotes, soniyaWork, opps, partners, notes, reviews] = await Promise.all([
@@ -49,9 +68,12 @@ const [rajNotes, soniyaWork, opps, partners, notes, reviews] = await Promise.all
 ]);
 console.log(JSON.stringify({
   today, blueprint: BLUEPRINT_URL,
-  sales,
+  scope_note: "Atyahara India only (atyahara.com, B2B gifting, retail). The Etsy shop is a separate export business: ignore it.",
+  india,
+  selling_moments: { upcoming_75_days: upcoming, all: moments },
+  meta_ads: { from_raj_snapshot: snap.ads || null, note: "Region/age/gender breakdowns need a CSV export from Ads Manager that Sir approves; ask for it when a decision depends on it." },
   raj: {
-    snapshot_date: snap.id || snap.date || null, site: snap.site || null, ads: snap.ads || null, etsy: snap.etsy || null,
+    snapshot_date: snap.id || snap.date || null, site: snap.site || null,
     open_followups: rajNotes.filter(n => n.kind === "followup" && n.status !== "done").slice(0, 25).map(n => ({ title: n.title, due: n.due, channel: n.channel })),
     recent_decisions: rajNotes.filter(n => n.kind === "decision").slice(0, 15).map(n => ({ title: n.title, body: n.body })),
   },
