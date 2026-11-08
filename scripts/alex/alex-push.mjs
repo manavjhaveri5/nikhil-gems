@@ -18,7 +18,10 @@
        insights?: { regions: [ { region, share_pct, orders, note } ], buyer: "...", next_moment: { name, date, regions, product, ad_angle, budget_inr }, ad_ideas: [ "..." ] } }
    node scripts/alex/alex-push.mjs moments <file.json>
      { moments: [ { id, name, date (YYYY-MM-DD or null = year-round), date_note?, regions, product, ad_angle, ad_start_days_before } ] }
-     → app_data alex-moments-v1 (the selling-moments calendar; replaces it) */
+     → app_data alex-moments-v1 (the selling-moments calendar; replaces it)
+   node scripts/alex/alex-push.mjs blueprint <file.json>
+     { html, doc_rev? } → app_data alex-blueprint-v1, the copy of the Growth Blueprint shown inside the ERP
+     (the Claude doc is private to Sir's Claude account). Refresh it whenever the doc changes. */
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { supa, row, upsert, AKEYS, OPP_KINDS, OPP_STATUS, TIERS, PARTNER_STAGES, NOTE_KINDS } from "./alex-common.mjs";
@@ -74,5 +77,10 @@ if (cmd === "opps") {
   const { error } = await sb.from("app_data").upsert({ key: "alex-moments-v1", value: { ...data, updated_at: now } }, { onConflict: "key" });
   if (error) throw new Error(error.message);
   out.push({ moments: data.moments.length });
-} else throw new Error("use: opps | partners | notes | review | moments <file.json>");
+} else if (cmd === "blueprint") {
+  if (!data.html || data.html.length < 1000) throw new Error("blueprint needs the doc's html");
+  const { error } = await sb.from("app_data").upsert({ key: "alex-blueprint-v1", value: { ...data, updated_at: now } }, { onConflict: "key" });
+  if (error) throw new Error(error.message);
+  out.push({ blueprint: data.html.length, doc_rev: data.doc_rev || null });
+} else throw new Error("use: opps | partners | notes | review | moments | blueprint <file.json>");
 console.log(JSON.stringify({ ok: true, out }, null, 1));

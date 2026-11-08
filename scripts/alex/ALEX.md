@@ -41,3 +41,9 @@ Everything runs from `~/Downloads/project/sites-seo/erp`. Storage (app_rows):
 
 ## Quality bar
 Would a demanding investor accept this number and this recommendation? Is it the highest-return use of the next ₹10,000? If an idea needs spend before evidence, make it an experiment with a ₹5,000 cap first.
+
+## The Blueprint copy in the ERP
+The Growth Blueprint Claude doc is private to Sir's Claude account; other ERP users can't open it.
+The ERP shows its own copy (app_data `alex-blueprint-v1`). Whenever the doc changes, export it as HTML
+(docs connector `export`, format html), remove the @-mention, and run
+`node scripts/alex/alex-push.mjs blueprint <file.json>` with `{ "html": "...", "doc_rev": n }`.

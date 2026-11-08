@@ -26,6 +26,23 @@ const lab = { fontSize: 9.5, fontWeight: 700, color: C.inkFaint, textTransform: 
 const h = { fontFamily: SERIF, fontSize: 18, fontWeight: 700, margin: "0 0 10px", color: C.ink };
 const sub = { fontSize: 11.5, color: C.inkFaint };
 const ACCENT = "#1F5F5B"; // deep teal: Alex's colour
+// The Blueprint is a Claude doc private to Sir's Claude account, so the ERP shows its own copy
+// (app_data alex-blueprint-v1, refreshed by `alex-push.mjs blueprint`). Strip anything active.
+const cleanHtml = html => String(html || "")
+  .replace(/<(script|style|iframe|object|embed|form)[\s\S]*?<\/\1>/gi, "")
+  .replace(/<(script|iframe|object|embed|link|meta)[^>]*>/gi, "")
+  .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+  .replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, "$1=\"#\"")
+  .replace(/<a\s/gi, '<a target="_blank" rel="noreferrer" ');
+const BP_CSS = `.alex-bp{font-size:14.5px;line-height:1.65;color:${C.ink}}
+.alex-bp h1{font-family:${SERIF};font-size:30px;line-height:1.15;margin:0 0 6px}
+.alex-bp h2{font-family:${SERIF};font-size:23px;margin:28px 0 8px;padding-top:14px;border-top:1px solid ${C.border}}
+.alex-bp h3{font-family:${SERIF};font-size:18.5px;margin:20px 0 6px}
+.alex-bp p{margin:0 0 11px}.alex-bp ul,.alex-bp ol{margin:0 0 11px;padding-left:22px}.alex-bp li{margin:3px 0}
+.alex-bp a{color:${ACCENT}}.alex-bp blockquote{margin:0 0 12px;padding:8px 14px;border-left:3px solid ${ACCENT};background:#E3EFEE;border-radius:4px}
+.alex-bp .tw{overflow-x:auto;margin:0 0 14px}.alex-bp table{border-collapse:collapse;font-size:13px;min-width:100%}
+.alex-bp th,.alex-bp td{border:1px solid ${C.border};padding:6px 9px;text-align:left;vertical-align:top}
+.alex-bp th{background:${C.card};font-weight:700}.alex-bp img{max-width:100%}`;
 
 const STATUS = { proposed: ["Waiting for you", C.blue, C.blueBg], changes: ["Changes asked", C.amber, C.amberBg], approved: ["Approved", C.green, C.greenBg], running: ["Running", ACCENT, "#E3EFEE"], done: ["Done", C.inkMid, C.card], declined: ["Declined", C.inkFaint, C.card] };
 const KIND = { experiment: "Experiment", investment: "Investment", opex: "Operating cost" };
@@ -199,6 +216,8 @@ export default function AlexApp({ onHome }) {
   const [tab, setTab] = useState(() => { try { return localStorage.getItem("alex-tab") || "dash"; } catch { return "dash"; } });
   const [filter, setFilter] = useState("waiting");
   const [noteKind, setNoteKind] = useState("all");
+  const [bp, setBp] = useState(null);
+  const [bpOpen, setBpOpen] = useState(false);
   const nums = useNumbers(orders);
 
   const go = t => { setTab(t); try { localStorage.setItem("alex-tab", t); } catch {} };
@@ -210,6 +229,7 @@ export default function AlexApp({ onHome }) {
     } catch (e) { setErr(e.message); }
     loadK("ng-orders-v1").then(x => setOrders(Array.isArray(x) ? x : [])).catch(() => setOrders([]));
     supabase.from("app_data").select("value").eq("key", "alex-moments-v1").maybeSingle().then(({ data }) => setMoments(data?.value?.moments || []));
+    supabase.from("app_data").select("value").eq("key", "alex-blueprint-v1").maybeSingle().then(({ data }) => setBp(data?.value || null));
   };
   useEffect(() => { load(); }, []);
 
@@ -246,6 +266,19 @@ export default function AlexApp({ onHome }) {
 
   if (!opps) return shell(<div style={{ color: C.inkFaint, padding: 30 }}>{err ? "" : "Loading…"}</div>);
 
+  if (bpOpen) return shell(<>
+    <style>{BP_CSS}</style>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+      <button onClick={() => setBpOpen(false)} style={btn()}>← Back to dashboard</button>
+      <span style={sub}>{bp?.updated_at ? `Copy updated ${fmtDay(bp.updated_at.slice(0, 10))}` : ""}</span>
+      <a href={BLUEPRINT} target="_blank" rel="noreferrer" style={{ ...sub, marginLeft: "auto", color: ACCENT }}>Open the editable doc in Claude ↗ (Sir's account only)</a>
+    </div>
+    <div style={{ ...card, padding: mob() ? "18px 16px" : "30px 38px" }}>
+      {bp?.html ? <div className="alex-bp" dangerouslySetInnerHTML={{ __html: cleanHtml(bp.html).replace(/<table/g, '<div class="tw"><table').replace(/<\/table>/g, "</table></div>") }} />
+        : <div style={{ fontSize: 13, color: C.inkMid }}>{bp === null ? "The Blueprint copy hasn't been loaded into the ERP yet." : "Loading…"}</div>}
+    </div>
+  </>);
+
   let body;
   if (tab === "dash") {
     const ins = review?.insights || {};
@@ -274,9 +307,9 @@ export default function AlexApp({ onHome }) {
           </div>}
         </div>
         <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
-          <a href={BLUEPRINT} target="_blank" rel="noreferrer" style={{ ...card, textDecoration: "none", color: C.ink, borderLeft: `3px solid ${ACCENT}` }}>
-            <span style={lab}>First assignment</span><div style={{ fontFamily: SERIF, fontSize: 19, fontWeight: 700 }}>Atyahara — The Growth Blueprint ↗</div>
-            <div style={{ ...sub, marginTop: 4 }}>Who buys, where and when; selling moments; markets, partners, packaging, money, 90 days.</div></a>
+          <button onClick={() => { setBpOpen(true); window.scrollTo(0, 0); }} style={{ ...card, textAlign: "left", cursor: "pointer", fontFamily: "inherit", color: C.ink, borderLeft: `3px solid ${ACCENT}` }}>
+            <span style={lab}>First assignment</span><div style={{ fontFamily: SERIF, fontSize: 19, fontWeight: 700 }}>Atyahara — The Growth Blueprint →</div>
+            <div style={{ ...sub, marginTop: 4 }}>Who buys, where and when; selling moments; markets, partners, packaging, money, 90 days.</div></button>
           {ins.regions?.length > 0 && <div style={card}><div style={h}>Where buyers are</div>
             {ins.regions.map(r => <div key={r.region} style={{ padding: "5px 0" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}><b>{r.region}</b><span style={{ color: C.inkMid }}>{r.share_pct}% · {r.orders} orders</span></div>
