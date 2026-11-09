@@ -179,6 +179,9 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
   const [settings, setSettings] = useState(DEFAULTS);
   const [tick, setTick] = useState(null);
   const [busy, setBusy] = useState("");
+  // Ticked rows, for taking several out of the queue at once.
+  const [picked, setPicked] = useState(() => new Set());
+  const [lastPick, setLastPick] = useState(null);
   const [now, setNow] = useState(() => new Date());
   const phone = mob();
   // One shop at a time: each has its own slots, runway and refusals.
@@ -244,6 +247,33 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
     setItems(list => (list || []).filter(i => i.id !== it.id));
     try { await deleteItemK(QUEUE_KEY, it.id); } catch (e) { showToast?.(`⚠ Not removed: ${e.message}`); load(); }
   };
+  /* Shift-click ticks every row between this one and the last one ticked. */
+  const togglePick = (it, rows, shift) => {
+    setPicked(prev => {
+      const next = new Set(prev);
+      const on = !prev.has(it.id);
+      const a = rows.findIndex(x => x.id === lastPick), b = rows.findIndex(x => x.id === it.id);
+      const span = shift && a >= 0 && b >= 0 ? rows.slice(Math.min(a, b), Math.max(a, b) + 1) : [it];
+      span.forEach(x => on ? next.add(x.id) : next.delete(x.id));
+      return next;
+    });
+    setLastPick(it.id);
+  };
+  const removePicked = async () => {
+    const ids = all.filter(i => picked.has(i.id)).map(i => i.id);
+    if (!ids.length) return;
+    if (!confirm(`Take ${ids.length} piece${ids.length === 1 ? "" : "s"} out of the queue?\n\nThey stay on Etsy as drafts — publish each from its card when you want it live.`)) return;
+    setBusy("bulk");
+    setItems(list => (list || []).filter(i => !ids.includes(i.id)));
+    let failed = 0;
+    // One at a time: each delete is its own row write, and the fallback path rewrites the whole list.
+    for (const id of ids) { try { await deleteItemK(QUEUE_KEY, id); } catch { failed++; } }
+    setPicked(new Set()); setLastPick(null); setBusy("");
+    showToast?.(failed ? `⚠ ${ids.length - failed} removed, ${failed} not — try those again` : `✓ ${ids.length} taken out of the queue`);
+    if (failed) load();
+  };
+  // Keep only ticks for rows still on show (after a shop switch, a publish or a refresh).
+  useEffect(() => { setPicked(prev => { const live = new Set(all.map(i => i.id)); const next = new Set([...prev].filter(id => live.has(id))); return next.size === prev.size ? prev : next; }); }, [items, shop]);
   const retry = it => write({ ...it, status: "queued", tries: 0, error: "" }, "Not retried");
   const publishNow = async it => {
     const l = byId.get(it.id);
@@ -254,6 +284,11 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
     finally { setBusy(""); load(); }
   };
 
+  const tick_ = (it, rows) => (
+    <input type="checkbox" checked={picked.has(it.id)} aria-label={`Select ${it.title}`}
+      onChange={e => togglePick(it, rows, !!e.nativeEvent?.shiftKey)}
+      style={{ width: 17, height: 17, flex: "none", cursor: "pointer", accentColor: C.ink }} />
+  );
   const small = { fontSize: 11.5, color: C.inkMid };
   const pill = (on) => ({ border: `1px solid ${on ? C.ink : C.border}`, background: on ? C.ink : C.surface, color: on ? "#FAF0DC" : C.ink, borderRadius: 8, padding: "6px 11px", fontSize: 12, fontWeight: 700, cursor: "pointer" });
   const action = { border: `1px solid ${C.border}`, background: C.surface, color: C.ink, borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
@@ -325,6 +360,7 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {stuck.map(it => (
               <div key={it.id} style={{ display: "flex", gap: 12, alignItems: "center", background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.red}`, borderRadius: 12, padding: "10px 12px", flexWrap: phone ? "wrap" : "nowrap" }}>
+                {tick_(it, stuck)}
                 {thumb(it, 48)}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
@@ -341,7 +377,18 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
           </div>
         </>}
 
-        <div style={{ fontSize: 12, fontWeight: 800, color: C.inkMid, margin: "16px 0 6px", letterSpacing: ".03em" }}>UP NEXT</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 6px", flexWrap: "wrap", minHeight: 30 }}>
+          {waiting.length > 0 && <input type="checkbox" aria-label="Select every piece up next"
+            checked={waiting.every(i => picked.has(i.id))} ref={el => { if (el) el.indeterminate = waiting.some(i => picked.has(i.id)) && !waiting.every(i => picked.has(i.id)); }}
+            onChange={e => setPicked(prev => { const next = new Set(prev); waiting.forEach(i => e.target.checked ? next.add(i.id) : next.delete(i.id)); return next; })}
+            style={{ width: 17, height: 17, cursor: "pointer", accentColor: C.ink }} />}
+          <span style={{ fontSize: 12, fontWeight: 800, color: C.inkMid, letterSpacing: ".03em" }}>UP NEXT</span>
+          {picked.size > 0 && <>
+            <span style={{ fontSize: 12, color: C.inkMid }}>{picked.size} selected</span>
+            <button type="button" onClick={removePicked} disabled={busy === "bulk"} style={{ ...action, color: C.red, borderColor: C.red }}>{busy === "bulk" ? "Removing…" : `Remove ${picked.size}`}</button>
+            <button type="button" onClick={() => { setPicked(new Set()); setLastPick(null); }} style={{ ...action, color: C.inkMid }}>Clear</button>
+          </>}
+        </div>
         {!waiting.length ? <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28, textAlign: "center", color: C.inkMid, fontSize: 13 }}>
           Nothing waiting. Publish a new piece to Etsy and it lands here as a draft.
         </div> : (
@@ -353,7 +400,8 @@ export default function EtsyQueuePanel({ listings = [], onPublishNow, showToast,
                 <div key={it.id}>
                   {newDay && at && <div style={{ padding: "8px 14px 4px", fontSize: 11, fontWeight: 800, color: C.inkFaint, borderTop: i ? `1px solid ${C.border}` : "none", letterSpacing: ".03em" }}>
                     {whenLabel(at, now).replace(/ \d.*$/, "").toUpperCase()}</div>}
-                  <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 14px", flexWrap: phone ? "wrap" : "nowrap" }}>
+                  <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 14px", flexWrap: phone ? "wrap" : "nowrap", background: picked.has(it.id) ? C.bg : "transparent" }}>
+                    {tick_(it, waiting)}
                     {thumb(it)}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{byId.get(it.id)?.title || it.title}</div>
