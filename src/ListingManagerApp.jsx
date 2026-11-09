@@ -1803,6 +1803,60 @@ function MarkSoldModal({ listing, orders, onSave, onClose }) {
 /* ══════════════════════════════════════════════════════════════════════════
    LISTING FORM
 ══════════════════════════════════════════════════════════════════════════ */
+/* EarthEditions Etsy shop section: pick one the shop already has, make a new
+   one (created on Etsy at publish), or leave it to be filed by what it is. */
+const EE_SHAPE_SECTION = { sphere: "Spheres", heart: "Hearts", palmstone: "Palm Stones", "palm stone": "Palm Stones",
+  tumbled: "Tumbled Stones", wand: "Wands", flatstone: "Flat Stones", "mini heart": "Mini Hearts", "mini hearts": "Mini Hearts",
+  tower: "Towers", point: "Towers", pendant: "Pendants", bracelet: "Bracelets", egg: "Eggs", pyramid: "Pyramids", chips: "Chips" };
+function eeSuggestedSection(form) {
+  const t = `${form.title || ""}`.toLowerCase();
+  if (/mini\s*hearts?/.test(t)) return "Mini Hearts";
+  if (/bowl/i.test(form.shape || "") || /\bbowls?\b/.test(t)) return "Gemstone Bowls";
+  return EE_SHAPE_SECTION[String(form.shape || "").trim().toLowerCase()] || "";
+}
+let eeSectionsCache = null;
+export function EeSectionPicker({ value, onChange, form }) {
+  const [list, setList] = useState(eeSectionsCache);
+  const [err, setErr] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  useEffect(() => {
+    if (eeSectionsCache) return;
+    fetch(`/api/etsy?action=sections&shop=earth&_=${Date.now()}`, { cache: "no-store" })
+      .then(r => r.json()).then(d => {
+        if (!Array.isArray(d?.results)) throw new Error(d?.error || "no sections");
+        eeSectionsCache = d.results.map(x => ({ name: x.title, n: x.active_listing_count || 0 }));
+        setList(eeSectionsCache);
+      }).catch(e => setErr(String(e.message || e)));
+  }, []);
+  const names = (list || []).map(x => x.name);
+  const cur = String(value || "").trim();
+  const isNew = cur && list && !names.some(n => n.toLowerCase() === cur.toLowerCase());
+  const sug = eeSuggestedSection(form);
+  const sugMissing = sug && list && !names.some(n => n.toLowerCase() === sug.toLowerCase());
+  const commit = () => { const v = draft.trim(); if (v) onChange(v); setAdding(false); setDraft(""); };
+  return <div>
+    <Label>EarthEditions shop section</Label>
+    {adding ? <div style={{ display: "flex", gap: 6 }}>
+      <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="e.g. Palm Stones"
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commit(); } if (e.key === "Escape") setAdding(false); }} style={FI()} />
+      <button type="button" onClick={commit} style={{ fontSize: 12, padding: "0 10px", border: `1px solid ${C.border}`, borderRadius: 6, background: C.gold, color: "#fff", cursor: "pointer" }}>Add</button>
+      <button type="button" onClick={() => setAdding(false)} style={{ fontSize: 12, padding: "0 8px", border: `1px solid ${C.border}`, borderRadius: 6, background: "none", cursor: "pointer" }}>Cancel</button>
+    </div> : <select value={cur} onChange={e => e.target.value === "__new" ? (setAdding(true), setDraft(sug || "")) : onChange(e.target.value || null)} style={FI()}>
+      <option value="">— Auto: filed by what it is —</option>
+      {(list || []).map(x => <option key={x.name} value={x.name}>{x.name}{x.n ? ` (${x.n})` : ""}</option>)}
+      {isNew && <option value={cur}>{cur} (new, made at publish)</option>}
+      <option value="__new">+ New section…</option>
+    </select>}
+    <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 4 }}>
+      {err ? `Couldn't load the shop's sections (${err}); a name typed here is still used.` : !list ? "Loading sections…"
+        : isNew ? "This section doesn't exist yet: it's created on the EarthEditions shop when you publish."
+        : sugMissing && !cur ? <>Suggested: <button type="button" onClick={() => onChange(sug)} style={{ fontSize: 11, color: C.gold, background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>{sug}</button> (new section)</>
+        : "Only used on the EarthEditions shop."}
+    </div>
+  </div>;
+}
+
 function ListingForm({ initial, stock = [], listings = [], orders = [], sold = false, onSave, onPublishOne, onClose, who, admin = false, startTab = "overview", startSteps = null }) {
   const editing = !!initial?.id;
   const [dlProg, setDlProg] = useState("");   // "3/11" while media is being saved
@@ -2435,7 +2489,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   /* ── The listing steps reuse the platform tabs' own fields ─────────────
      (without the tab's header, checklist and price boxes: the steps have a
      page of their own for prices). */
-  const etsyBody = (steps = false) => { const c = channel("etsy"); return <>
+  const etsyBody = (steps = false, key = "etsy") => { const c = channel(key); const ee = key === "etsy_ee"; return <>
             {!steps && channelHeader(c)}
             {!steps && checklist(c)}
             {!steps && priceCard(P("etsy"))}
@@ -2449,12 +2503,12 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     {ETSY_CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
                 </div>
-                <div>
+                {ee ? <EeSectionPicker value={form.etsy_ee_section} onChange={v => set("etsy_ee_section", v || null)} form={form} /> : <div>
                   <Label>Shop Section</Label>
                   <select value={form.etsy_section_id ?? ""} onChange={e => set("etsy_section_id", e.target.value ? +e.target.value : null)} style={FI()}>
                     {ETSY_SHOP_SECTIONS.map(s => <option key={s.id ?? ""} value={s.id ?? ""}>{s.label}</option>)}
                   </select>
-                </div>
+                </div>}
               </div>
             </Section>
             <Section title="Tags"
@@ -2639,7 +2693,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         </div>)}
     </>
   );
-  const platformStep = key => isEtsyKey(key) ? etsyBody(true) : key === "ebay" ? ebayBody(true) : key === "store" ? storeBody(true) : tradeStep();
+  const platformStep = key => isEtsyKey(key) ? etsyBody(true, key) : key === "ebay" ? ebayBody(true) : key === "store" ? storeBody(true) : tradeStep();
 
   /* A piece with no stock card yet gets one made here, from what the listing
      already says: stone, shape, vendor, what it cost and per what, and a short
@@ -3205,7 +3259,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           </>}
 
           {/* ── Etsy ─────────────────────────────────────────────────────────── */}
-          {isEtsyKey(tab) && etsyBody()}
+          {isEtsyKey(tab) && etsyBody(false, tab)}
 
           {/* ── eBay ─────────────────────────────────────────────────────────── */}
           {tab === "ebay" && ebayBody()}

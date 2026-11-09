@@ -337,8 +337,22 @@ async function etsyTaxonomyProperties(taxonomyId, hdrs) {
 const SHAPE_WORDS = "Sphere, Heart, Palmstone, Tower, Tumbled, Bracelet, Pendant, Pendulum, Rough, Mineral, Egg, Skull, Pyramid, Chips, Freeform, Wand, Point, Slab, Other";
 async function aiGenerate(listing) {
   const { title, description, material, shape, origin, size, weight, tags = [], productType } = listing;
+  /* A repeatable line (many alike, one picked from stock) sells on the
+     EarthEditions shop, so its buyer is told what they'll actually receive,
+     not sold a one-off piece. */
+  const repeatable = listing.type === "repeatable" || (+listing.qty || 0) > 1;
+  const etsyDescSpec = repeatable
+    ? `plain text, short lines, no healing or medical claims, nothing invented (leave out any fact not given above). In this order:
+1) one or two sentences: what it is (stone, shape, rough size) and what people buy it for (desk, gift, collection, worry stone);
+2) a line "WHAT YOU RECEIVE" then: one piece (or the set, if the title says a set or lot), hand-picked from our stock; it will be similar to the photos but not the exact piece, because every stone's colour and pattern differ;
+3) a line "DETAILS" then • bullets: Stone; Origin (only if given); Shape and finish (e.g. hand-polished); Approx size, in mm and inches; Approx weight, in grams and ounces (only if given); natural, dyed or treated (only if the description says, else leave the bullet out);
+4) a line "MORE THAN ONE?" then: choose the quantity at checkout and we pick a matched set; message us for larger quantities;
+5) a line "SHIPPING" then: ships tracked from India, packed to protect it;
+6) a line "CARE" then: wipe with a soft dry cloth, keep away from harsh chemicals and long direct sun.
+Sign off as EarthEditions, not Atyahara.`
+    : "3-4 paragraphs: 1) poetic product intro, 2) specifications bullet list (use •), 3) about Atyahara brand, 4) care/shipping note";
 
-  const prompt = `You are an expert e-commerce copywriter for a premium crystal/gemstone shop called Atyahara.
+  const prompt = `You are an expert e-commerce copywriter for ${repeatable ? "EarthEditions, a crystal shop selling well-priced natural stones made in India" : "a premium crystal/gemstone shop called Atyahara"}.
 Generate platform-optimised listing content for this product. Return ONLY valid JSON.
 
 Product:
@@ -349,13 +363,15 @@ Product:
 - Size: ${size || ""}
 - Weight: ${weight || ""}
 - Type: ${productType || ""}
+- Stock: ${repeatable ? `repeatable line, ${+listing.qty || "several"} alike in stock — the buyer gets one like the photos` : "one of a kind — the buyer gets this exact piece"}
+- Dimensions: ${[listing.width, listing.height, listing.depth].filter(Boolean).join(" × ")}${listing.dim_unit ? " " + listing.dim_unit : ""}
 - Base description: ${description || ""}
 - Tags: ${tags.join(", ")}
 
 Return JSON with these fields:
 {
   "etsy_title": "max 140 chars, SEO-rich, natural, no ALL CAPS",
-  "etsy_description": "3-4 paragraphs: 1) poetic product intro, 2) specifications bullet list (use •), 3) about Atyahara brand, 4) care/shipping note",
+  "etsy_description": ${JSON.stringify(etsyDescSpec)},
   "etsy_tags": ["exactly 13 strings", "each under 20 chars", "mix of material", "shape", "healing use", "chakra", "origin", "gift keywords"],
   "shopify_title": "clean concise title, max 70 chars",
   "shopify_description": "HTML body with <p> and <ul> tags, professional, SEO-friendly, 200-300 words",
@@ -936,7 +952,11 @@ export async function publishEtsy(listing, ai, { activate = true } = {}) {
 
   const hdrs = await etsyHeaders();
   const shippingId = await resolveShippingProfile(wantedShipping, hdrs, { preferUsa: !!listing.etsy_slow_dispatch });
-  const namedSection = await resolveSectionId(listing, hdrs) || (!own ? await eeSectionId(listing, hdrs) : null);
+  /* EarthEditions: the section picked for it in the listing steps (made on
+     the shop if it's new), else filed by what it is. */
+  const eeName = !own ? String(listing.etsy_ee_section || "").trim() : "";
+  const namedSection = (eeName && await ensureSection(eeName, hdrs))
+    || await resolveSectionId(listing, hdrs) || (!own ? await eeSectionId(listing, hdrs) : null);
 
   const payload = {
     quantity,
@@ -2041,6 +2061,8 @@ async function listingHandler(req, res) {
             for (const l of d.results || []) {
               const name = eeSectionFor({ title: l.title, tags: l.tags });
               const want = ids[name];
+              // In a section of its own (picked in the listing steps, or made on Etsy): left where it is.
+              if (l.shop_section_id && !Object.values(ids).map(String).includes(String(l.shop_section_id))) { kept.push({ id: l.listing_id, name: "own section" }); continue; }
               if (!want || String(l.shop_section_id || "") === String(want)) { kept.push({ id: l.listing_id, name }); continue; }
               if (body.dry) { moved.push({ id: l.listing_id, title: l.title, to: name }); continue; }
               const u = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${l.listing_id}`,
