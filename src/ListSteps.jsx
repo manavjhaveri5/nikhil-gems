@@ -383,7 +383,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
   const money = (field, cur, placeholder) => (
     <div style={{ display: "flex", alignItems: "baseline", gap: 4, borderBottom: `1.5px solid ${C.ink}`, minWidth: 0 }}>
       <span style={{ fontFamily: serif, fontSize: 24, color: C.inkMid }}>{cur}</span>
-      <input type="number" inputMode="decimal" value={p[field]} placeholder={placeholder || "0"}
+      <input type="number" min="0" inputMode="decimal" value={p[field]} placeholder={placeholder || "0"}
         onChange={e => setP(x => ({ ...x, [field]: e.target.value }))}
         style={{ flex: 1, minWidth: 0, width: "100%", border: 0, outline: "none", background: "transparent", fontFamily: serif, fontSize: 30, color: C.ink, padding: "2px 0" }} />
     </div>

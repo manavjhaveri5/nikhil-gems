@@ -2607,9 +2607,23 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                   </select>
                 </div>
                 <div>
-                  <Label>Shipping cost ($)</Label>
-                  <input type="number" inputMode="decimal" value={form.shippingCost ?? ""} onChange={e => set("shippingCost", e.target.value)} placeholder="0 = free shipping" style={FI()} />
+                  <Label>Shipping</Label>
+                  <select value={`${form.ebay_ship_service || "standard"}|${+form.shippingCost > 0 ? "paid" : "free"}`}
+                    onChange={e => { const [svc, who] = e.target.value.split("|"); set("ebay_ship_service", svc); if (who === "free") set("shippingCost", "0"); else if (!(+form.shippingCost > 0)) set("shippingCost", svc === "expedited" ? "19.99" : "4.99"); }} style={FI()}>
+                    <option value="standard|free">Free · standard from India, tracked (5–10 day estimate)</option>
+                    <option value="standard|paid">Buyer pays · standard from India, tracked</option>
+                    <option value="expedited|free">Free · expedited from India (1–4 day estimate)</option>
+                    <option value="expedited|paid">Buyer pays · expedited from India</option>
+                  </select>
                 </div>
+              </div>
+              {+form.shippingCost > 0 && <div style={{ marginTop: 10, maxWidth: 260 }}>
+                <Label>Buyer pays for shipping (US $)</Label>
+                <input type="number" min="0" step="0.01" inputMode="decimal" value={form.shippingCost ?? ""} onChange={e => set("shippingCost", e.target.value)} style={FI()} />
+                {+form.shippingCost > 60 && <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>${form.shippingCost} is dollars. If you meant ₹{form.shippingCost}, that's about ${Math.round(+form.shippingCost / liveUsdRate)}. eBay refuses anything over $60 here.</div>}
+              </div>}
+              <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 8, lineHeight: 1.5 }}>
+                Free shipping wins most clicks on eBay: build the postage into the price. Expedited promises 1–4 days, so only pick it if the courier can really do that, because late parcels count against the account.
               </div>
             </Section>
   </>; };
@@ -10781,6 +10795,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           allowCreate,
           conditionId:  listing.conditionId || "1000",
           shippingCost: listing.shippingCost || 0,
+          shippingService: listing.ebay_ship_service || "standard",
           // ebay.js turns these into item specifics (mineral, origin, weight, size).
           specifics:    { material: listing.material, origin: listing.origin, shape: listing.shape, weight: listing.weight,
                           width: listing.width, height: listing.height, depth: listing.depth, dim_unit: listing.dim_unit, size: listing.size },
