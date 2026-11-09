@@ -10727,6 +10727,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           allowCreate,
           conditionId:  listing.conditionId || "1000",
           shippingCost: listing.shippingCost || 0,
+          // ebay.js turns these into item specifics (mineral, origin, weight, size).
+          specifics:    { material: listing.material, origin: listing.origin, shape: listing.shape, weight: listing.weight,
+                          width: listing.width, height: listing.height, depth: listing.depth, dim_unit: listing.dim_unit, size: listing.size },
           ...(existingItemId ? { itemId: existingItemId } : {}),
         }),
       });

@@ -199,6 +199,75 @@ function ebaySafe(text) {
     .replace(/ {2,}/g, " ").trim();
 }
 
+/* eBay titles stop at 80 characters. Cutting at 80 left words half-written
+   ("…| Indian Z"), so a long title loses its lot number (#12) first, then ends
+   at the last clause break (" | ", " - ", " — ", ", ") that keeps most of it,
+   else at the last whole word, with no dangling "with", "and" or separator.
+   A title that already fits goes out unchanged. */
+export function ebayTitle(raw = "", max = 80) {
+  let t = String(raw || "").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const tidy = s => { let p; do { p = s; s = s.replace(/\s*[|,;:\-–—&+\/(]\s*$/, "").replace(/\s+(with|and|on|in|of|from|the|a|an|for|to|&)$/i, "").trim(); } while (s !== p); return s; };
+  t = t.replace(/\s*#\d+\b/g, "").replace(/\s+/g, " ").replace(/(\s[|\-–—])(\s[|\-–—])+/g, "$1").trim();
+  if (t.length <= max) return tidy(t);
+  const cut = t.slice(0, max + 1);
+  let i = Math.max(...[" | ", " - ", " — ", " – ", ", "].map(s => cut.lastIndexOf(s)));
+  if (i < max * 0.8) i = cut.lastIndexOf(" ");
+  return tidy(t.slice(0, i > 0 ? i : max));
+}
+
+/* Item specifics from the ERP listing. eBay US asks only for Country of
+   Origin (a fixed list) in Display Specimens and Crystals, and Shape in
+   Crystals; Mineral, Weight, Size and Locality go as the seller's own
+   specifics, which buyers see on the listing and search reads. Nothing is
+   guessed: a field the listing doesn't have is left out. */
+const EBAY_COUNTRIES = { india: "India", namibia: "Namibia", zambia: "Zambia", morocco: "Morocco", brazil: "Brazil", madagascar: "Madagascar",
+  pakistan: "Pakistan", afghanistan: "Afghanistan", china: "China", mexico: "Mexico", peru: "Peru", nepal: "Nepal", "sri lanka": "Sri Lanka",
+  bolivia: "Bolivia", "south africa": "South Africa", uruguay: "Uruguay", indonesia: "Indonesia", australia: "Australia", kenya: "Kenya",
+  canada: "Canada", mozambique: "Mozambique", zimbabwe: "Zimbabwe", ethiopia: "Ethiopia", vietnam: "Vietnam", thailand: "Thailand",
+  colombia: "Colombia", argentina: "Argentina", chile: "Chile", russia: "Russian Federation", tanzania: "Tanzania, United Republic of",
+  myanmar: "Myanmar / Burma", burma: "Myanmar / Burma", iran: "Iran, Islamic Republic of", "united states": "United States", usa: "United States",
+  congo: "Congo, The Democratic Republic of the", drc: "Congo, The Democratic Republic of the", katanga: "Congo, The Democratic Republic of the" };
+// Indian states and the quarry towns the stock comes from, for an origin that doesn't say "India".
+const INDIA_PLACES = /\b(maharashtra|telangana|karnataka|gujarat|rajasthan|tamil nadu|andhra|odisha|orissa|jharkhand|madhya pradesh|kerala|uttarakhand|himachal|kashmir|pune|poona|nashik|jalgaon|savda|ahmednagar|aurangabad|mumbai|bombay|deccan)\b/i;
+const EBAY_SHAPES = /^(sphere|palm ?stone|heart|tower|point|egg|pyramid|wand|skull|tumbled|slab|free ?form|cube|obelisk|generator|merkaba|dodecahedron)$/i;
+export function ebayCountryOf(origin = "") {
+  const o = String(origin || "").toLowerCase();
+  if (!o.trim()) return "";
+  const hit = Object.keys(EBAY_COUNTRIES).filter(k => new RegExp(`\\b${k}\\b`).test(o)).sort((a, b) => o.lastIndexOf(b) - o.lastIndexOf(a))[0];
+  return hit ? EBAY_COUNTRIES[hit] : INDIA_PLACES.test(o) ? "India" : "";
+}
+export function ebaySpecifics(src = {}, categoryId = EBAY_CAT_SPECIMENS) {
+  const clip = v => String(v ?? "").replace(/\s+/g, " ").trim().slice(0, 65);
+  const out = [["Brand", "Unbranded"], ["Type", categoryId === EBAY_CAT_CRYSTALS ? "Crystal" : "Mineral Specimen"]];
+  const add = (name, v) => { v = clip(v); if (v) out.push([name, v]); };
+  const country = ebayCountryOf(src.origin);
+  add("Country of Origin", country);
+  // The place itself, when the listing names more than the country.
+  if (country && clip(src.origin).toLowerCase() !== country.toLowerCase()) add("Locality", src.origin);
+  add("Mineral", src.material);
+  if (categoryId === EBAY_CAT_CRYSTALS && EBAY_SHAPES.test(String(src.shape || "").trim()))
+    add("Shape", String(src.shape).trim().replace(/^palm ?stone$/i, "Palmstone").replace(/^\w/, c => c.toUpperCase()));
+  const w = String(src.weight ?? "").trim();
+  add("Weight", /^\d+(\.\d+)?$/.test(w) ? `${w} g` : w);
+  const unit = src.dim_unit || "mm";
+  const dims = [src.width, src.height, src.depth].map(x => String(x ?? "").trim()).filter(x => +x > 0);
+  add("Size", dims.length ? `${dims.join(" x ")} ${unit}` : src.size);
+  return out;
+}
+const specificsXml = list => `<ItemSpecifics>${list.map(([n, v]) => `<NameValueList><Name>${esc(n)}</Name><Value>${esc(v)}</Value></NameValueList>`).join("")}</ItemSpecifics>`;
+/* ReviseItem replaces the whole set, so specifics already on the item that
+   the ERP has no value for (one added by hand on eBay) are kept. */
+async function mergedSpecifics(itemId, ours) {
+  const { ok, xml } = await trading("GetItem", `<ItemID>${esc(itemId)}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
+  if (!ok) return ours;
+  const have = new Set(ours.map(([n]) => n.toLowerCase()));
+  const dec = s => s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  const kept = xmlAll("NameValueList", xmlBlock("ItemSpecifics", xml))
+    .map(b => [dec(xmlTag("Name", b)), dec(xmlTag("Value", b))]).filter(([n, v]) => n && v && !have.has(n.toLowerCase()));
+  return [...ours, ...kept].slice(0, 45);
+}
+
 function plainToHtml(text) {
   if (!text) return "";
   return text
@@ -412,7 +481,10 @@ export async function publishEbayListing(body = {}) {
     conditionId = "1000", shippingCost = 0, itemId: existingId,
     categoryId = ebayCategoryFor(title), // 4218, the old default, is now Figurines
     video, sku, syncOnly = false, allowCreate = !syncOnly,
+    specifics: specSrc = {},
   } = body;
+  const ebayName = ebayTitle(ebaySafe(title) || title);
+  const specs = ebaySpecifics(specSrc, String(categoryId));
   const itemSku = String(sku || "").trim();
 
   if (!title) return { ok: false, status: 400, error: "title required" };
@@ -442,7 +514,7 @@ export async function publishEbayListing(body = {}) {
     // ReviseItem — update existing listing
     const fields = [
       `<ItemID>${esc(existingId)}</ItemID>`,
-      `<Title>${esc((ebaySafe(title) || title).slice(0, 80))}</Title>`,
+      `<Title>${esc(ebayName)}</Title>`,
       ...(itemSku ? [`<SKU>${esc(itemSku.slice(0, 50))}</SKU>`] : []),
       `<Description><![CDATA[${plainToHtml(safeDesc)}]]></Description>`,
       `<StartPrice>${Number(price).toFixed(2)}</StartPrice>`,
@@ -451,6 +523,7 @@ export async function publishEbayListing(body = {}) {
       ...(videoXml ? [videoXml] : []),
       `<PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>`,
       `<ConditionID>${esc(String(conditionId))}</ConditionID>`,
+      specificsXml(await mergedSpecifics(existingId, specs)),
       ebayShippingXml(shippingCost),
       ebayBestOfferXml(price),
     ];
@@ -475,7 +548,7 @@ export async function publishEbayListing(body = {}) {
 
   // AddItem — create new listing
   const itemXml = `
-    <Title>${esc((ebaySafe(title) || title).slice(0, 80))}</Title>
+    <Title>${esc(ebayName)}</Title>
     ${itemSku ? `<SKU>${esc(itemSku.slice(0, 50))}</SKU>` : ""}
     <Description><![CDATA[${plainToHtml(safeDesc)}]]></Description>
     <PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>
@@ -484,16 +557,7 @@ export async function publishEbayListing(body = {}) {
     <Country>IN</Country>
     <Location>India</Location>
     <Currency>USD</Currency>
-    <ItemSpecifics>
-      <NameValueList>
-        <Name>Brand</Name>
-        <Value>Unbranded</Value>
-      </NameValueList>
-      <NameValueList>
-        <Name>Type</Name>
-        <Value>Crystal</Value>
-      </NameValueList>
-    </ItemSpecifics>
+    ${specificsXml(specs)}
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
     <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
@@ -780,7 +844,7 @@ async function handleEbay(req, res) {
     const body = req.body || {};
 
     const fields = [`<ItemID>${esc(itemId)}</ItemID>`];
-    if (body.title       !== undefined) fields.push(`<Title>${esc(body.title)}</Title>`);
+    if (body.title       !== undefined) fields.push(`<Title>${esc(ebayTitle(body.title))}</Title>`);
     if (body.price       !== undefined) fields.push(`<StartPrice>${Number(body.price).toFixed(2)}</StartPrice>`);
     if (body.quantity    !== undefined) fields.push(`<Quantity>${Math.max(0, parseInt(body.quantity, 10))}</Quantity>`);
     if (body.description !== undefined) fields.push(`<Description><![CDATA[${plainToHtml(body.description)}]]></Description>`);
