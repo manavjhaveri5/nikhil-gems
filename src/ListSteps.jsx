@@ -89,9 +89,14 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
 const RATE_MEMO = "ng-rate-memo-v1";
 const memoKey = f => `${String(f.material || "").toLowerCase().trim()}|${String(f.shape || "").toLowerCase().trim()}`;
 const readMemo = () => { try { return JSON.parse(localStorage.getItem(RATE_MEMO) || "{}"); } catch { return {}; } };
-function PriceByWeight({ form, weightKg, costPerKg, sale, fx, settings, pick, onFill }) {
-  const perG = weightKg < 1, unitKg = perG ? .001 : 1, unit = perG ? "g" : "kg";
-  const units = weightKg / unitKg;
+function PriceByWeight({ form, weightKg: givenKg, costPerKg, sale, fx, settings, pick, onFill }) {
+  const perG = givenKg < 1, unitKg = perG ? .001 : 1, unit = perG ? "g" : "kg";
+  /* The weight can be corrected here (a piece weighed again, a typo on the
+     card): the prices follow it, and Use these prices saves it to the piece. */
+  const [wt, setWt] = useState(givenKg ? String(perG ? Math.round(givenKg * 1000) : +givenKg.toFixed(3)) : "");
+  const units = +wt || 0;
+  const weightKg = units * unitKg;
+  const wtChanged = givenKg ? Math.abs(weightKg - givenKg) > 1e-6 : weightKg > 0;
   const memo = readMemo()[memoKey(form)] || null;
   const costUnit = costPerKg ? costPerKg * unitKg : 0;
   const [mode, setMode] = useState(memo?.mode || (costUnit ? "cost" : "rate"));
@@ -111,6 +116,7 @@ function PriceByWeight({ form, weightKg, costPerKg, sale, fx, settings, pick, on
     const out = {};
     if (pick.etsy || pick.etsy_ee) out.price_etsy = String(etsy);
     if (pick.store) { out.price_store = String(usa); out.price_store_inr = String(inrIndia); }
+    if (wtChanged) out.weight = `${units} ${unit}`;
     onFill(out);
     try { localStorage.setItem(RATE_MEMO, JSON.stringify({ ...readMemo(), [memoKey(form)]: { mode, rate: +rate || undefined, cost: +cost || undefined, mult: +mult || undefined, india: india === "" ? undefined : +india, used: r } })); } catch { /* fine */ }
   };
@@ -123,7 +129,12 @@ function PriceByWeight({ form, weightKg, costPerKg, sale, fx, settings, pick, on
         <div style={{ flex: 1, minWidth: 180 }}>
           <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>Price by weight</div>
           <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>
-            {weightKg ? <>This piece is {perG ? `${Math.round(weightKg * 1000)} g` : `${+weightKg.toFixed(2)} kg`}.</> : "Add the piece's weight to price by it."}
+            <span style={{ display: "inline-flex", alignItems: "baseline", gap: 4 }}>
+              {givenKg ? "This piece is" : "Weight"}
+              <input inputMode="decimal" value={wt} onChange={e => setWt(e.target.value.replace(/[^\d.]/g, ""))} placeholder="0" title="Change the weight; the prices follow it"
+                style={{ width: 52, border: 0, borderBottom: `1.5px dashed ${C.inkMid}`, outline: "none", background: "transparent", fontSize: 12.5, fontWeight: 800, color: C.ink, padding: "0 2px", textAlign: "right", fontFamily: "inherit" }} />
+              {unit}.{wtChanged && givenKg ? <span style={{ color: C.inkFaint }}> (was {perG ? Math.round(givenKg * 1000) : +givenKg.toFixed(3)} {unit}; saved with the prices)</span> : ""}
+            </span>
             {memo?.used ? <> Last time for this stone: <b>{fmtRate(memo.used)}</b>.</> : ""}
           </div>
         </div>
@@ -365,6 +376,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
       price_ebay: p.price_ebay || (pick.ebay && ebayUsd ? String(ebayUsd) : form.price_ebay || ""),
       price_store: p.price_store, price_store_inr: p.price_store_inr,
       price_trade: p.price_trade,
+      ...(p.weight ? { weight: p.weight } : {}),
       stock_exception: stockException(),
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
   });
@@ -378,6 +390,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
       price_ebay: p.price_ebay || (pick.ebay && ebayUsd ? String(ebayUsd) : form.price_ebay || ""),
       price_store: p.price_store, price_store_inr: p.price_store_inr,
       price_trade: p.price_trade,
+      ...(p.weight ? { weight: p.weight } : {}),
       ...variantsPatch(), ...costPatch(), ...(rs ? { price_research: rs } : {}),
     };
     onApply(patch, Object.fromEntries(chosen.map(c => [c.key, true])), { live, etsyNow: !!go?.now });
