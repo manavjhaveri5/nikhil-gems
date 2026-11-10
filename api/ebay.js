@@ -365,11 +365,11 @@ async function uploadEbayVideo(videoUrl) {
   const createR = await fetch(MEDIA_BASE, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US" },
-    body: JSON.stringify({ title: "Listing video", classification: ["LISTING"], size: buf.length }),
+    body: JSON.stringify({ title: "Listing video", classification: ["ITEM"], size: buf.length }),
   });
   if (createR.status !== 201) {
     const d = await createR.json().catch(() => ({}));
-    return { ok: false, error: `createVideo failed (${createR.status}): ${d.errors?.[0]?.message || JSON.stringify(d)}` };
+    return { ok: false, error: `createVideo failed (${createR.status}): ${(d.errors || []).map(e => [e.message, e.longMessage, (e.parameters || []).map(x => `${x.name}=${x.value}`).join(" ")].filter(Boolean).join(" · ")).join("; ") || JSON.stringify(d)}` };
   }
   const location = createR.headers.get("location") || "";
   const videoId = location.split("/").filter(Boolean).pop();
