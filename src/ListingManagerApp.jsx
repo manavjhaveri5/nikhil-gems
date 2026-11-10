@@ -386,6 +386,16 @@ Schema: {"items":[{"id":"same id","shape":"shape from list or empty","desc":"cle
   });
 }
 
+/* eBay shipping for a piece whose eBay shipping was never set: the buyer pays
+   $10 standard from India, with expedited offered at $25. A piece set to free
+   ("0") or given its own amounts keeps them. */
+export const EBAY_SHIP_DEFAULT = { cost: "10", expedited: "25" };
+export function withEbayShipDefaults(l) {
+  if (!l || (l.shippingCost != null && String(l.shippingCost).trim() !== "")) return l;
+  return { ...l, shippingCost: EBAY_SHIP_DEFAULT.cost, ebay_ship_service: l.ebay_ship_service || "standard",
+    ebay_expedited_cost: l.ebay_expedited_cost != null && String(l.ebay_expedited_cost).trim() !== "" ? l.ebay_expedited_cost : EBAY_SHIP_DEFAULT.expedited };
+}
+
 async function upsertAtyaharaInvoiceFromEtsy({ receiptId, orderDate, buyer = {}, address = {}, currency = "USD", items = [], notes = "", shippingCost = null, invNoOverride = "", viaEtsy = true, channel = viaEtsy ? "Etsy" : "" }) {
   const sourceReceiptId = String(receiptId || "");
   if (!sourceReceiptId) throw new Error("Missing order receipt id");
@@ -1889,7 +1899,7 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
       etsy_made_to_order: false, etsy_readiness_state_id: null,
       etsy_auto_renew: false, etsy_ads: false,
     };
-    return { ...ensureListingOrderId(base), variations: base.variations || [] };
+    return { ...ensureListingOrderId(withEbayShipDefaults(base)), variations: base.variations || [] };
   });
 
   const [category,    setCategory]    = useState(inferCategory);
@@ -10816,9 +10826,9 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           syncOnly,
           allowCreate,
           conditionId:  listing.conditionId || "1000",
-          shippingCost: listing.shippingCost || 0,
-          shippingService: listing.ebay_ship_service || "standard",
-          expeditedCost: (listing.ebay_ship_service || "standard") !== "expedited" && +listing.ebay_expedited_cost > 0 ? +listing.ebay_expedited_cost : null,
+          shippingCost: +withEbayShipDefaults(listing).shippingCost || 0,
+          shippingService: withEbayShipDefaults(listing).ebay_ship_service || "standard",
+          expeditedCost: (withEbayShipDefaults(listing).ebay_ship_service || "standard") !== "expedited" && +withEbayShipDefaults(listing).ebay_expedited_cost > 0 ? +withEbayShipDefaults(listing).ebay_expedited_cost : null,
           // ebay.js turns these into item specifics (mineral, origin, weight, size).
           specifics:    { material: listing.material, origin: listing.origin, shape: listing.shape, weight: listing.weight,
                           width: listing.width, height: listing.height, depth: listing.depth, dim_unit: listing.dim_unit, size: listing.size },
