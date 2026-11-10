@@ -492,7 +492,12 @@ export async function publishEbayListing(body = {}) {
   // eBay amounts are dollars; a rupee figure here once asked eBay for $800 shipping.
   if (+expeditedCost > 80) return { ok: false, status: 400, error: `eBay expedited shipping is set to $${expeditedCost}. eBay amounts are in dollars: was that ₹${expeditedCost}?` };
   if (+shippingCost > 60) return { ok: false, status: 400, error: `eBay shipping is set to $${shippingCost}. eBay amounts are in dollars: was that ₹${shippingCost}? Set it to 0 for free shipping, or a dollar amount.` };
-  const safeDesc = String(description || title).split(/\n\n+/).map(ebaySafe).filter(Boolean).join("\n\n") || ebaySafe(title);
+  /* We ship Delivered Duty Paid, but eBay's page still warns US buyers they'll
+     pay import fees to the carrier. The description says otherwise, first. */
+  const DDP_LINE = "DELIVERED DUTY PAID: all US import duties, taxes and fees are prepaid by us. You pay nothing extra on delivery.";
+  const descText = String(description || title);
+  const withDdp = /duty paid|\bDDP\b/i.test(descText) ? descText : `${DDP_LINE}\n\n${descText}`;
+  const safeDesc = withDdp.split(/\n\n+/).map(ebaySafe).filter(Boolean).join("\n\n") || ebaySafe(title);
   console.log("[ebay publish_listing] description preview:", JSON.stringify(safeDesc.slice(0, 200)));
 
   const picXml = images.slice(0, 12).map(u => `<PictureURL>${esc(u)}</PictureURL>`).join("");
