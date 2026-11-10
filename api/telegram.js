@@ -1,4 +1,5 @@
 import { waitUntil } from "@vercel/functions";
+import { houseDescription } from "../lib/houseDescription.js";
 import { aiFetch } from "../lib/ai-meter.js";
 import { createClient } from "@supabase/supabase-js";
 import { isRowKey, readRows, saveRows, upsertRow } from "../lib/app-rows.js";
@@ -1834,11 +1835,8 @@ const cleanListingTags = (list = []) => {
    the lighting note on 61. Reproduced here rather than left to the model, which
    would paraphrase them a little differently every time and drift the shop's
    own words out from under it. */
-const ATYAHARA_ABOUT = "Atyāhāra embodies a unique approach to luxury, rooted in mindful sourcing and a deep respect for Mother Earth. Our brand celebrates the beauty of nature’s treasures, not as a necessity, but as a cherished indulgence. Every piece is crafted with a commitment to sustainability, ensuring that the earth’s generosity is honored and preserved for future generations. By choosing Atyāhāra, you are embracing a journey where elegance meets responsibility, and together, we can make a difference.";
-const PHOTO_NOTE = "Photographs were taken in both studio and natural lighting to show the stone as accurately as possible. Please message us for any questions.";
-// One of a kind versus one of several — the shop says which, and says it first.
-const EXACT_LINE = "You will receive the EXACT piece shown in the photographs.";
-const SIMILAR_LINE = "You will receive a very SIMILAR piece. Please message us after purchasing to see available pieces.";
+// ATYAHARA_ABOUT, PHOTO_NOTE and the EXACT / SIMILAR lines live in lib/houseDescription.js,
+// shared with the Listing Manager's AI fill.
 
 /* The shop's own live Etsy titles and tags, so the model writes in the voice the
    shop already sells in rather than a generic one. Read off the listings as they
@@ -2110,25 +2108,11 @@ function buildListingDraft({ parsed, ai, images = [], video = "", source = "tele
   const size = parsed.size || ai?.size || "";
   const weight = parsed.weight || ai?.weight || "";
   const dims = (ai?.dimensions || "").trim();
-  const specs = [
-    ["Material", (ai?.material || "").trim()],
-    ["Finish", (ai?.finish || "").trim()],
-    ["Origin", parsed.origin || ai?.origin || ""],
-    // The shop writes these on one line when it has both, and separately when not.
-    ...(weight && (dims || size)
-      ? [["Weight / Dimensions", `${weight} / ${dims || size}`]]
-      : [["Weight", weight], ["Dimensions", dims || size]]),
-    ["Pantone Color", (ai?.pantone || "").trim()],
-  ].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("\n");
-
   const body = (ai?.body || ai?.description || "").trim();
-  const description = [
-    (parsed.qty > 1 ? SIMILAR_LINE : EXACT_LINE),
-    body || title,
-    specs,
-    images.length ? PHOTO_NOTE : "",
-    `About Atyāhāra:\n${ATYAHARA_ABOUT}`,
-  ].filter(Boolean).join("\n\n");
+  const description = houseDescription({
+    similar: parsed.qty > 1, body, title, photos: images.length > 0,
+    specs: { material: ai?.material, finish: ai?.finish, origin: parsed.origin || ai?.origin, weight, dimensions: dims || size, pantone: ai?.pantone },
+  });
 
   const listing = {
     id,

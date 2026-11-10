@@ -1,5 +1,6 @@
 import { requireUser, hasStoreSecret, adminClient, cronKeyOk } from "../lib/auth.js";
 import { aiFetch } from "../lib/ai-meter.js";
+import { houseDescription, BODY_VOICE } from "../lib/houseDescription.js";
 /**
  * Listing Manager API — cross-platform publishing hub
  * Supports: Etsy, Shopify (Earth Editions), Shopify (Atyahara), eBay (future)
@@ -341,17 +342,12 @@ async function aiGenerate(listing) {
      EarthEditions shop, so its buyer is told what they'll actually receive,
      not sold a one-off piece. */
   const repeatable = listing.type === "repeatable" || (+listing.qty || 0) > 1;
+  /* Repeatables use the shop's house format (lib/houseDescription.js, the same
+     one the Telegram lister writes): the model writes the one paragraph, and
+     the receive line, spec block and photo note are put round it word for word.
+     EarthEditions carries no "About Atyāhāra". */
   const etsyDescSpec = repeatable
-    ? `plain text in Sir's house format, exactly these parts in this order, nothing else:
-1) the line "You will receive a SIMILAR product as pictured." (if the title says a set or lot: "You will receive a SIMILAR set as pictured.");
-2) a blank line, then 2-3 sentences that describe the stone as a mineral: its colour and what you see in it (e.g. "a dark green crystal featuring chatoyant, feathery patterns"), what the polish does to it, then what the piece is good for (display, collection, a handheld stone). Calm, factual, collector's tone. British spelling;
-3) a blank line, then one fact per line, "Label: value", only for facts given above (leave a line out entirely if its fact isn't given; never write "-"):
-Material: <stone>
-Finish: <Polished, Raw, Tumbled… only if known from the title, shape or description>
-Weight / Dimensions: <weight in g, and size in mm with inches in brackets>
-Origin: <as precise as given: mine/deposit, region, country>
-4) a blank line, then the line "Please message us for any question".
-Rules: no headings in capitals, no bullets, no sign-off, no shipping or care lines, no healing or medical claims, no sales phrases (thoughtful gift, desk companion, perfect for, elevate, stunning), never "hand-polished" or "hand-picked", never promise matching pieces. Invent nothing.`
+    ? `the one descriptive paragraph only, about this stone. ${BODY_VOICE.replace(/^Write the paragraph only — one of them, /, "One paragraph, ")} Describe the stone in general, not one specific piece: the buyer gets one like the photos.`
     : "3-4 paragraphs: 1) poetic product intro, 2) specifications bullet list (use •), 3) about Atyahara brand, 4) care/shipping note";
 
   const prompt = `You are an expert e-commerce copywriter for ${repeatable ? "EarthEditions, a crystal shop selling well-priced natural stones made in India" : "a premium crystal/gemstone shop called Atyahara"}.
@@ -384,7 +380,8 @@ Return JSON with these fields:
   "material": "the stone's name, e.g. Ruby in Zoisite — only if the title or description says it, else empty",
   "shape": "one of: ${SHAPE_WORDS} — the one this piece is, else empty",
   "origin": "the country it's from — only if the title or description says it, else empty",
-  "size": "e.g. 165mm or 3 inch — only if stated, else empty"
+  "size": "e.g. 165mm or 3 inch — only if stated, else empty"${repeatable ? `,
+  "finish": "e.g. Polished, Natural, Tumbled — what the surface is, from the title, shape or description, else empty"` : ""}
 }`;
 
   /* OpenAI first — it's the key the rest of the ERP runs on; Anthropic only
@@ -417,7 +414,17 @@ Return JSON with these fields:
   } else throw new Error("No AI key is set in Vercel (OPENAI_KEY).");
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("The AI's reply couldn't be read — try again.");
-  return JSON.parse(match[0]);
+  const ai = JSON.parse(match[0]);
+  if (repeatable) {
+    const dims = [listing.width, listing.height, listing.depth].filter(Boolean).join(" x ");
+    ai.etsy_description = houseDescription({
+      similar: true, brand: "earth", title, body: ai.etsy_description,
+      photos: (listing.images || []).length > 0,
+      specs: { material: material || ai.material, finish: ai.finish, origin: origin || ai.origin, weight,
+        dimensions: dims ? `${dims}${listing.dim_unit ? " " + listing.dim_unit : ""}` : (size || ai.size) },
+    });
+  }
+  return ai;
 }
 
 /* ── Price research ─────────────────────────────────────────────────────────
