@@ -294,7 +294,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
     if (pkey === "store_in") return {
       rateInr: +s?.india_shipping?.rate || 0, freeUsd: (+s?.india_shipping?.free_over || 0) / rate,
       set: !!(+s?.india_shipping?.rate || +s?.india_shipping?.free_over) };
-    return null;   // trade bills freight separately; eBay has no profile here yet
+    // eBay: what the buyer pays for shipping, set on the eBay step (US $, 0 = free).
+    if (pkey === "ebay") return { rateInr: (+form.shippingCost || 0) * rate, freeUsd: 0, set: +form.shippingCost > 0 };
+    return null;   // trade bills freight separately
   };
   const shipUnset = pkey => { const r = shipRule(pkey); return r ? !r.set : false; };
 
@@ -310,7 +312,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
     /* Etsy takes its cut of the postage as well as the price — the buyer paying
        Rs 800 toward shipping is Rs 800 more that Etsy charges its fee on, so
        crediting the postage without widening the fee base would overstate it. */
-    const feeBase = pkey === "ebay" ? gross * (1 + (now.tax || 0))
+    // eBay charges its fee on the whole order: price plus shipping, tax included.
+    const feeBase = pkey === "ebay" ? (gross + shipPaid) * (1 + (now.tax || 0))
       : isEtsyKey(pkey) ? gross + shipPaid : gross;
     const fees = feeBase * FEES[pkey];
     // A sale within India owes 0.25% GST on stones (HSN 7103), inside the price; exports carry none.
@@ -318,7 +321,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
     return { gross, fees, shipping, shipPaid, gst, pieceCost,
       freeShip,
       profit: gross + shipPaid - fees - shipping - gst - pieceCost,
-      onTax: pkey === "ebay" && now.tax > 0, onShip: isEtsyKey(pkey) && shipPaid > 0 };
+      onTax: pkey === "ebay" && now.tax > 0, onShip: (isEtsyKey(pkey) || pkey === "ebay") && shipPaid > 0 };
   };
   const chosen = CHANNELS.filter(c => pick[c.key]);
   // Does any of them already hold this piece — live or as a draft?
@@ -444,7 +447,7 @@ export default function ListSteps({ form, orders, stock = [], weightKg = 0, comp
       {label && <div style={{ fontSize: 11, color: C.inkFaint, marginBottom: 4 }}>{label}</div>}
       {[
         ["Customer pays", m.gross, C.ink],
-        ...(FEES[pkey] ? [[`${FEE_NAME[pkey]} · ${+(FEES[pkey] * 100).toFixed(2)}%${m.onTax ? " of price + tax" : m.onShip ? " of price + shipping" : ""}`, -m.fees, C.inkMid]]
+        ...(FEES[pkey] ? [[`${FEE_NAME[pkey]} · ${+(FEES[pkey] * 100).toFixed(2)}%${m.onTax && m.onShip ? " of price + shipping + tax" : m.onTax ? " of price + tax" : m.onShip ? " of price + shipping" : ""}`, -m.fees, C.inkMid]]
           : [["Paid by wire · no card fee", 0, C.inkFaint]]),
         ...(m.shipPaid ? [["Shipping the customer paid", m.shipPaid, C.inkMid]] : []),
         [(pkey === "trade" ? "Shipping · buyer pays freight"
