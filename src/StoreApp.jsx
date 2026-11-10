@@ -96,7 +96,11 @@ function rowFromListing(l, { fx, rounding, discount, existing, live }) {
   // The store's own short name: "Ruby in Matrix Specimen #3", size on its own line.
   const own = String(l.store_title || "").trim();
   const rt = retailTitle(own || l.shopify_title || l.title);
-  const size = rt.size || retailTitle(l.title).size;
+  /* The size line comes from the title ("50mm Hypersthene Sphere"); a title
+     without one ("Sunstone Mini Hearts") falls back to the piece's own size
+     and weight, so the site still shows how big it is. */
+  const ownSize = [String(l.size || "").trim().replace(/\s*mm\b/i, "mm").replace(/\s*MM\b/, "mm"), String(l.weight || "").trim()].filter(Boolean).join(" · ");
+  const size = rt.size || retailTitle(l.title).size || ownSize;
   const derived = rt.number ? `${rt.title} #${rt.number}` : rt.title || String(l.title || "").trim();
   return {
     id: `lm-${l.id}`, listing_id: l.id,
