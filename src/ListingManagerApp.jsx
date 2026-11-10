@@ -7022,8 +7022,9 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
       const loadAllListings = async () => {
         const out = [], stateErrors = [], seen = new Set();
         const sleep = ms => new Promise(r => setTimeout(r, ms));
-        // The three the tab sorts by. Drafts wait in the Etsy queue tab.
-        for (const state of ["active", "expired", "sold_out"]) {
+        // Every state the tab sorts by, drafts included: the header counted
+        // drafts but they were never fetched, so it always said 0.
+        for (const state of ["active", "draft", "expired", "sold_out"]) {
           for (let offset = 0; ; offset += 100) {
             let r;
             for (let a = 0; a < 4; a++) {
@@ -7489,7 +7490,7 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
         <div style={{flex:1,minWidth:120}}>
           <div style={{fontSize:20,fontWeight:700,color:"#F56400",fontFamily:"'Cormorant Garamond',Georgia,serif"}}>Etsy</div>
           <div style={{fontSize:11,color:C.inkMid,marginTop:2}}>
-            {syncing ? "⟳ Syncing…" : `Atyahara · last synced ${c0.syncedAt ? new Date(c0.syncedAt).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}) : "—"}`}
+            {syncing ? "⟳ Syncing…" : `${ee ? "EarthEditions" : "Atyahara"} · last synced ${c0.syncedAt ? new Date(c0.syncedAt).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}) : "—"}`}
           </div>
         </div>
         <div style={{display:"flex",gap:28,textAlign:"center",flexWrap:"wrap"}}>
@@ -7594,6 +7595,7 @@ function EtsyLiveView({ onCrossPost, onPushEE, shop = "atyahara" }) {
                 <div style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:.7,color:C.inkFaint,marginBottom:8}}>Status</div>
                 {[
                   {k:"active",   label:"Active",   n:listingCount("active")},
+                  {k:"draft",    label:"Drafts",   n:listingCount("draft")},
                   {k:"expired",  label:"Expired",  n:listingCount("expired")},
                   {k:"sold_out", label:"Sold out", n:listingCount("sold_out")},
                 ].map(f=>(
