@@ -375,7 +375,7 @@ Return JSON with these fields:
 {
   "etsy_title": ${JSON.stringify(etsyTitleSpec)},
   "etsy_description": ${JSON.stringify(etsyDescSpec)},
-  "etsy_tags": ["exactly 13 strings", "each under 20 chars", "mix of material", "shape", "healing use", "chakra", "origin", "gift keywords"],
+  "etsy_tags": ${repeatable ? JSON.stringify(["exactly 13 strings, each under 20 chars, all phrases a shopper types into Etsy search", "stone + shape (e.g. sunstone heart)", "the shape's other names (mini heart, crystal heart, pocket stone, worry stone, palm stone)", "colour or look words only if certain", "gift phrases (crystal gift, gift for her)", "origin + stone (e.g. indian sunstone)", "never trade words nobody searches: lapidary, specimen grade, cabochon rough, wholesale"]) : '["exactly 13 strings", "each under 20 chars", "mix of material", "shape", "healing use", "chakra", "origin", "gift keywords"]'},
   "shopify_title": "clean concise title, max 70 chars",
   "shopify_description": "HTML body with <p> and <ul> tags, professional, SEO-friendly, 200-300 words",
   "shopify_tags": "20+ comma-separated tags for Shopify SEO",
@@ -420,6 +420,8 @@ Return JSON with these fields:
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("The AI's reply couldn't be read — try again.");
   const ai = JSON.parse(match[0]);
+  // Trade words buyers never type: kept out of the tags whatever the model says.
+  if (Array.isArray(ai.etsy_tags)) ai.etsy_tags = ai.etsy_tags.filter(t => !/\blapidary\b/i.test(String(t)));
   if (repeatable) {
     const dims = [listing.width, listing.height, listing.depth].filter(Boolean).join(" x ");
     ai.etsy_description = houseDescription({
@@ -1741,6 +1743,9 @@ function asShopListing(listing, shop) {
   if (!listing || typeof listing !== "object") return listing;
   const out = { ...listing, platforms: { ...(listing.platforms || {}), etsy: listing.platforms?.[shop.platform] || {} } };
   for (const k of ATYAHARA_ONLY_IDS) delete out[k];
+  // The shop's own picks, made on its tab (etsy_ee_shipping_profile_id and so on).
+  if (shop.platform === "etsy_ee")
+    for (const k of ATYAHARA_ONLY_IDS) { const own = listing[k.replace(/^etsy_/, "etsy_ee_")]; if (own) out[k] = own; }
   return out;
 }
 

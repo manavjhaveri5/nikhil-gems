@@ -1902,6 +1902,7 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
   const [etsyShippingProfiles, setEtsyShippingProfiles] = useState([]);
   const [etsyReturnPolicies,   setEtsyReturnPolicies]   = useState([]);
   const [etsyReadinessProfiles, setEtsyReadinessProfiles] = useState([]);
+  const [eeSettings, setEeSettings] = useState({ ship: [], ret: [], ready: [] });
   const [tab, setTab] = useState(startTab);
   const [connectDraft, setConnectDraft] = useState({});
   const sheetRef = useRef(null), bodyRef = useRef(null);
@@ -1933,6 +1934,11 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
         if (d.returnPolicies)   setEtsyReturnPolicies(d.returnPolicies);
         if (d.readinessProfiles) setEtsyReadinessProfiles(d.readinessProfiles);
       })
+      .catch(() => {});
+    // EarthEditions has its own shipping, processing and return profiles.
+    fetch("/api/listing-manager?action=get_etsy_settings&shop=earth")
+      .then(r => r.json())
+      .then(d => { if (d && !d.error) setEeSettings({ ship: d.shippingProfiles || [], ret: d.returnPolicies || [], ready: d.readinessProfiles || [] }); })
       .catch(() => {});
   }, []);
 
@@ -2548,10 +2554,10 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
               <div style={{ display: "grid", gridTemplateColumns: phone ? "1fr" : "1fr 1fr 1fr", gap: 12 }}>
                 <div>
                   <Label>Shipping Profile</Label>
-                  <select value={form.etsy_shipping_profile_id || ""}
-                    onChange={e => set("etsy_shipping_profile_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                  <select value={form[ee ? "etsy_ee_shipping_profile_id" : "etsy_shipping_profile_id"] || ""}
+                    onChange={e => set(ee ? "etsy_ee_shipping_profile_id" : "etsy_shipping_profile_id", e.target.value ? +e.target.value : null)} style={FI()}>
                     <option value="">— Auto (by price)</option>
-                    {etsyShippingProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                    {(ee ? eeSettings.ship : etsyShippingProfiles).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
                 </div>
                 {/* Processing profile — Etsy calls it a readiness state. Left to
@@ -2559,18 +2565,18 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     carried, which is how ready stock published as made to order. */}
                 <div>
                   <Label>Processing Profile</Label>
-                  <select value={form.etsy_readiness_state_id || ""}
-                    onChange={e => set("etsy_readiness_state_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                  <select value={form[ee ? "etsy_ee_readiness_state_id" : "etsy_readiness_state_id"] || ""}
+                    onChange={e => set(ee ? "etsy_ee_readiness_state_id" : "etsy_readiness_state_id", e.target.value ? +e.target.value : null)} style={FI()}>
                     <option value="">{form.etsy_made_to_order ? "— Auto (fastest made-to-order)" : "— Auto (fastest ready to ship)"}</option>
-                    {etsyReadinessProfiles.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                    {(ee ? eeSettings.ready : etsyReadinessProfiles).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
                 </div>
                 <div>
                   <Label>Return Policy</Label>
-                  <select value={form.etsy_return_policy_id || ""}
-                    onChange={e => set("etsy_return_policy_id", e.target.value ? +e.target.value : null)} style={FI()}>
-                    <option value="">— Default (14-day returns)</option>
-                    {etsyReturnPolicies.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  <select value={form[ee ? "etsy_ee_return_policy_id" : "etsy_return_policy_id"] || ""}
+                    onChange={e => set(ee ? "etsy_ee_return_policy_id" : "etsy_return_policy_id", e.target.value ? +e.target.value : null)} style={FI()}>
+                    <option value="">{ee ? "— The shop's first policy" : "— Default (14-day returns)"}</option>
+                    {(ee ? eeSettings.ret : etsyReturnPolicies).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
                 </div>
               </div>
