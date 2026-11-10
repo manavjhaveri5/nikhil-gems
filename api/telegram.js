@@ -2261,7 +2261,12 @@ async function finishMediaListing({ chatId, caption, media, ctx }) {
      steps in Listing Manager (where it goes, prices, each platform) take it on. */
   await send(chatId, listingReply({
     ...draft, aiFailed, aiNote: ai?.notes_for_seller,
-    tail: "Saved in Listing Manager only — nothing is on Etsy or eBay yet. Open it there and tap <b>List this piece</b> to price it and publish.",
+    tail: [
+      /* Telegram shrinks anything sent as a photo (2560px at most) before the bot
+         sees it; only a photo sent as a File arrives as the camera took it. */
+      images.some(i => i.compressed) ? "📷 Sent as photos, so Telegram shrank them. For full quality send them as a <b>File</b> (📎 → File → choose the photos)." : "",
+      "Saved in Listing Manager only — nothing is on Etsy or eBay yet. Open it there and tap <b>List this piece</b> to price it and publish.",
+    ].filter(Boolean).join("\n"),
   }), ctx.token);
   return draft.listing;
 }
@@ -2286,6 +2291,12 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
   /* Telegram lets a bot download files up to 20 MB, so a longer or HD video
      can't be pulled at all — say that plainly instead of asking for a resend
      that would fail the same way. Anything else gets one quiet retry. */
+  /* iPhone originals sent as a File can be HEIC, which browsers, Etsy and eBay
+     can't show. Say so rather than save a photo nothing can display. */
+  if (file.kind === "photo" && /hei[cf]/i.test(`${file.mime} ${file.name}`)) {
+    await send(chatId, `⚠️ That photo is HEIC, which Etsy, eBay and browsers can't show. On the iPhone set Settings → Camera → Formats → Most Compatible, then send it as a File again.${groupId ? " The rest of the album is still saved." : ""}`, ctx.token);
+    return;
+  }
   const mb = (Number(file.size) || 0) / 1048576;
   const tooBig = mb > 20;
   const uploaded = tooBig ? null
@@ -2299,7 +2310,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
       : `⚠️ Could not pull that ${what} off Telegram.${rest} Send it again, or add it in Listing Manager.`, ctx.token);
     return;
   }
-  const media = { ...uploaded, kind: file.kind };
+  const media = { ...uploaded, kind: file.kind, compressed: !!file.compressed };
 
   if (!groupId) {
     tg("sendChatAction", { chat_id: chatId, action: "typing" }, ctx.token).catch(() => {});
@@ -2309,7 +2320,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
 
   await upsertItemK(ctx.albums, {
     id: rowId, groupId, messageId, chatId: String(chatId),
-    url: media.url, name: media.name, kind: media.kind, caption: caption || "", ts: Date.now(),
+    url: media.url, name: media.name, kind: media.kind, compressed: media.compressed, caption: caption || "", ts: Date.now(),
   }, { prepend: false });
 
   // Let the rest of the album land, then the lowest message_id writes the listing.
@@ -2331,7 +2342,7 @@ async function handleMediaListing({ chatId, message, caption, file, ctx }) {
   const albumCaption = items.map(p => p.caption).find(c => c && c.trim()) || caption;
   const listing = await finishMediaListing({
     chatId, caption: albumCaption, ctx,
-    media: items.map(p => ({ url: p.url, name: p.name, kind: p.kind || "photo" })),
+    media: items.map(p => ({ url: p.url, name: p.name, kind: p.kind || "photo", compressed: !!p.compressed })),
   });
   await upsertItemK(ctx.albums, { id: `${groupId}:done`, groupId, done: true, listing_id: listing.id, ts: Date.now() }, { prepend: false });
   await pruneAlbums(ctx);
@@ -2743,7 +2754,7 @@ export default async function handler(req, res) {
         if (wantsListing || joinsAlbum) {
           const photo = hasPhoto ? message.photo[message.photo.length - 1] : null;
           const file = photo
-            ? { fileId: photo.file_id, uniqueId: photo.file_unique_id, name: `listing-${photo.file_unique_id}.jpg`, mime: "image/jpeg", kind: "photo", size: photo.file_size }
+            ? { fileId: photo.file_id, uniqueId: photo.file_unique_id, name: `listing-${photo.file_unique_id}.jpg`, mime: "image/jpeg", kind: "photo", size: photo.file_size, compressed: true }
             : imageDoc
               ? { fileId: imageDoc.file_id, uniqueId: imageDoc.file_unique_id, name: imageDoc.file_name || `listing-${imageDoc.file_unique_id}.jpg`, mime: imageDoc.mime_type || "image/jpeg", kind: "photo", size: imageDoc.file_size }
               : { fileId: video.file_id, uniqueId: video.file_unique_id || String(message.message_id), name: video.file_name || `listing-${message.message_id}.mp4`, mime: video.mime_type || "video/mp4", kind: "video", size: video.file_size };

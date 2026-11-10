@@ -1350,8 +1350,18 @@ function ImagePicker({ material, shape, selectedUrls, onChange, video, onVideoCh
                     borderRadius: 4, fontSize: 8, fontWeight: 700, padding: "1px 5px", letterSpacing: .3 }}>COVER</div>
                 )}
                 <div style={{ position: "absolute", bottom: 3, left: 3, background: "rgba(0,0,0,.55)", color: "#fff", borderRadius: 4, fontSize: 9, padding: "0 4px", pointerEvents: "none" }}>✂️</div>
+                {/* The stored file itself, untouched: no resize, no re-encode. */}
+                <button type="button" title="Download this photo (full quality)"
+                  onClick={e => {
+                    e.stopPropagation();
+                    const ext = (String(url).split("?")[0].split(".").pop() || "jpg").slice(0, 4).toLowerCase();
+                    downloadMedia([{ url, name: `photo-${String(i + 1).padStart(2, "0")}.${ext}` }]);
+                  }}
+                  style={{ position: "absolute", bottom: 3, right: 3, background: "rgba(0,0,0,.65)", color: "#fff",
+                    border: "none", borderRadius: 4, width: 20, height: 18, cursor: "pointer", padding: 0,
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, lineHeight: 1 }}>⤓</button>
                 {editedUrls.has(url) && (
-                  <div style={{ position: "absolute", bottom: 3, right: 3, background: C.green, color: "#fff",
+                  <div style={{ position: "absolute", top: 24, right: 3, background: C.green, color: "#fff",
                     borderRadius: 4, fontSize: 8, fontWeight: 700, padding: "1px 5px", letterSpacing: .3, pointerEvents: "none" }}>EDITED</div>
                 )}
                 <button onClick={e => { e.stopPropagation(); onChange(selectedUrls.filter((_, j) => j !== i)); }}
