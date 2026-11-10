@@ -342,14 +342,16 @@ async function aiGenerate(listing) {
      not sold a one-off piece. */
   const repeatable = listing.type === "repeatable" || (+listing.qty || 0) > 1;
   const etsyDescSpec = repeatable
-    ? `plain text, short lines, no healing or medical claims, nothing invented (leave out any fact not given above). In this order:
-1) one or two sentences: what it is (stone, shape, rough size) and what people buy it for (desk, gift, collection, worry stone);
-2) a line "WHAT YOU RECEIVE" then: one piece (or the set, if the title says a set or lot), hand-picked from our stock; it will be similar to the photos but not the exact piece, because every stone's colour and pattern differ;
-3) a line "DETAILS" then • bullets: Stone; Origin (only if given); Shape and finish (e.g. hand-polished); Approx size, in mm and inches; Approx weight, in grams and ounces (only if given); natural, dyed or treated (only if the description says, else leave the bullet out);
-4) a line "MORE THAN ONE?" then: choose the quantity at checkout and we pick a matched set; message us for larger quantities;
-5) a line "SHIPPING" then: ships tracked from India, packed to protect it;
-6) a line "CARE" then: wipe with a soft dry cloth, keep away from harsh chemicals and long direct sun.
-Sign off as EarthEditions, not Atyahara.`
+    ? `plain text in Sir's house format, exactly these parts in this order, nothing else:
+1) the line "You will receive a SIMILAR product as pictured." (if the title says a set or lot: "You will receive a SIMILAR set as pictured.");
+2) a blank line, then 2-3 sentences that describe the stone as a mineral: its colour and what you see in it (e.g. "a dark green crystal featuring chatoyant, feathery patterns"), what the polish does to it, then what the piece is good for (display, collection, a handheld stone). Calm, factual, collector's tone. British spelling;
+3) a blank line, then one fact per line, "Label: value", only for facts given above (leave a line out entirely if its fact isn't given; never write "-"):
+Material: <stone>
+Finish: <Polished, Raw, Tumbled… only if known from the title, shape or description>
+Weight / Dimensions: <weight in g, and size in mm with inches in brackets>
+Origin: <as precise as given: mine/deposit, region, country>
+4) a blank line, then the line "Please message us for any question".
+Rules: no headings in capitals, no bullets, no sign-off, no shipping or care lines, no healing or medical claims, no sales phrases (thoughtful gift, desk companion, perfect for, elevate, stunning), never "hand-polished" or "hand-picked", never promise matching pieces. Invent nothing.`
     : "3-4 paragraphs: 1) poetic product intro, 2) specifications bullet list (use •), 3) about Atyahara brand, 4) care/shipping note";
 
   const prompt = `You are an expert e-commerce copywriter for ${repeatable ? "EarthEditions, a crystal shop selling well-priced natural stones made in India" : "a premium crystal/gemstone shop called Atyahara"}.
