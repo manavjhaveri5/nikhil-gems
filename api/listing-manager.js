@@ -374,6 +374,7 @@ Product:
 Return JSON with these fields:
 {
   "etsy_title": ${JSON.stringify(etsyTitleSpec)},
+  "ebay_title": "eBay search title, 60-80 chars, never over 80. eBay matches the words typed, so pack the words a buyer searches, most important first, no filler or commas: stone, shape${repeatable ? " (singular)" : ""}, size in mm, weight if given, Polished/Raw, Crystal, the use (Pocket Worry Stone, Display Sphere), origin. No ALL CAPS, no L@@K/WOW, no healing claims, no 'Lapidary'. E.g. 'Sunstone Heart 25mm Mini Polished Crystal Pocket Worry Stone India'",
   "etsy_description": ${JSON.stringify(etsyDescSpec)},
   "etsy_tags": ${repeatable ? JSON.stringify(["exactly 13 strings, each under 20 chars, all phrases a shopper types into Etsy search", "stone + shape (e.g. sunstone heart)", "the shape's other names (mini heart, crystal heart, pocket stone, worry stone, palm stone)", "colour or look words only if certain", "gift phrases (crystal gift, gift for her)", "origin + stone (e.g. indian sunstone)", "never trade words nobody searches: lapidary, specimen grade, cabochon rough, wholesale"]) : '["exactly 13 strings", "each under 20 chars", "mix of material", "shape", "healing use", "chakra", "origin", "gift keywords"]'},
   "shopify_title": "clean concise title, max 70 chars",

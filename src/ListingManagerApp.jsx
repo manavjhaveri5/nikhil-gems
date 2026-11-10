@@ -2020,6 +2020,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         // Everything else it can read off the piece, only where nothing is set yet.
         const blank = k => !String(form[k] ?? "").trim();
         if (d.ai.etsy_title && blank("etsy_title")) set("etsy_title", d.ai.etsy_title);
+        if (d.ai.ebay_title && blank("ebay_title")) set("ebay_title", String(d.ai.ebay_title).slice(0, 80));
         if (d.ai.etsy_description && blank("etsy_description")) set("etsy_description", d.ai.etsy_description);
         for (const k of ["material", "shape", "origin", "size"]) if (d.ai[k] && blank(k)) set(k, d.ai[k]);
         if (d.ai.suggested_section && form.etsy_section_id == null) {
@@ -2627,6 +2628,19 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                 <Label>Buyer pays for shipping (US $)</Label>
                 <input type="number" min="0" step="0.01" inputMode="decimal" value={form.shippingCost ?? ""} onChange={e => set("shippingCost", e.target.value)} style={FI()} />
                 {+form.shippingCost > 60 && <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>${form.shippingCost} is dollars. If you meant ₹{form.shippingCost}, that's about ${Math.round(+form.shippingCost / liveUsdRate)}. eBay refuses anything over $60 here.</div>}
+              </div>}
+              {(form.ebay_ship_service || "standard") !== "expedited" && <div style={{ marginTop: 12 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: C.ink }}>
+                  <input type="checkbox" checked={+form.ebay_expedited_cost > 0}
+                    onChange={e => set("ebay_expedited_cost", e.target.checked ? String((+form.shippingCost || 0) + 15) : "")} style={{ accentColor: "#0064D2" }} />
+                  Also offer expedited (1–4 days), buyer pays the extra
+                </label>
+                {+form.ebay_expedited_cost > 0 && <div style={{ marginTop: 8, maxWidth: 260 }}>
+                  <Label>Expedited shipping (US $)</Label>
+                  <input type="number" min="0" step="0.01" inputMode="decimal" value={form.ebay_expedited_cost ?? ""} onChange={e => set("ebay_expedited_cost", e.target.value)} style={FI()} />
+                  {+form.ebay_expedited_cost > 80 && <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>${form.ebay_expedited_cost} is dollars. If you meant ₹{form.ebay_expedited_cost}, that's about ${Math.round(+form.ebay_expedited_cost / liveUsdRate)}.</div>}
+                  <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 4 }}>What the buyer pays if they choose fast delivery at checkout. Cover the courier's express rate.</div>
+                </div>}
               </div>}
               <div style={{ fontSize: 11.5, color: C.inkFaint, marginTop: 8, lineHeight: 1.5 }}>
                 Free shipping wins most clicks on eBay: build the postage into the price. Expedited promises 1–4 days, so only pick it if the courier can really do that, because late parcels count against the account.
@@ -10804,6 +10818,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           conditionId:  listing.conditionId || "1000",
           shippingCost: listing.shippingCost || 0,
           shippingService: listing.ebay_ship_service || "standard",
+          expeditedCost: (listing.ebay_ship_service || "standard") !== "expedited" && +listing.ebay_expedited_cost > 0 ? +listing.ebay_expedited_cost : null,
           // ebay.js turns these into item specifics (mineral, origin, weight, size).
           specifics:    { material: listing.material, origin: listing.origin, shape: listing.shape, weight: listing.weight,
                           width: listing.width, height: listing.height, depth: listing.depth, dim_unit: listing.dim_unit, size: listing.size },

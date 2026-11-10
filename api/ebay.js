@@ -478,7 +478,7 @@ export async function publishEbayListing(body = {}) {
   if (!USER_TOKEN) return { ok: false, status: 401, error: "EBAY_USER_TOKEN not set" };
   const {
     title, description, price, quantity = 1, images = [],
-    conditionId = "1000", shippingCost = 0, shippingService = "standard", itemId: existingId,
+    conditionId = "1000", shippingCost = 0, shippingService = "standard", expeditedCost = null, itemId: existingId,
     categoryId = ebayCategoryFor(title), // 4218, the old default, is now Figurines
     video, sku, syncOnly = false, allowCreate = !syncOnly,
     specifics: specSrc = {},
@@ -490,6 +490,7 @@ export async function publishEbayListing(body = {}) {
   if (!title) return { ok: false, status: 400, error: "title required" };
   if (!(+price > 0)) return { ok: false, status: 400, error: `The eBay price is $${price || 0}. Set a price above $0 first.` };
   // eBay amounts are dollars; a rupee figure here once asked eBay for $800 shipping.
+  if (+expeditedCost > 80) return { ok: false, status: 400, error: `eBay expedited shipping is set to $${expeditedCost}. eBay amounts are in dollars: was that ₹${expeditedCost}?` };
   if (+shippingCost > 60) return { ok: false, status: 400, error: `eBay shipping is set to $${shippingCost}. eBay amounts are in dollars: was that ₹${shippingCost}? Set it to 0 for free shipping, or a dollar amount.` };
   const safeDesc = String(description || title).split(/\n\n+/).map(ebaySafe).filter(Boolean).join("\n\n") || ebaySafe(title);
   console.log("[ebay publish_listing] description preview:", JSON.stringify(safeDesc.slice(0, 200)));
@@ -526,7 +527,7 @@ export async function publishEbayListing(body = {}) {
       `<PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>`,
       `<ConditionID>${esc(String(conditionId))}</ConditionID>`,
       specificsXml(await mergedSpecifics(existingId, specs)),
-      ebayShippingXml(shippingCost, shippingService),
+      ebayShippingXml(shippingCost, shippingService, expeditedCost),
       ebayBestOfferXml(price),
     ];
     const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
@@ -565,7 +566,7 @@ export async function publishEbayListing(body = {}) {
     <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
     ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
     ${videoXml}
-    ${ebayShippingXml(shippingCost, shippingService)}
+    ${ebayShippingXml(shippingCost, shippingService, expeditedCost)}
     ${ebayBestOfferXml(price)}
     <Site>US</Site>
   `;
@@ -977,7 +978,10 @@ export function ebayCategoryFor(title = "") {
 /* service: "standard" (5–10 day estimate) or "expedited" (1–4 day estimate),
    both eBay's from-outside-US services; cost is what the buyer pays, in dollars. */
 export const EBAY_SHIP_SERVICES = { standard: "StandardShippingFromOutsideUS", expedited: "ExpeditedShippingFromOutsideUS" };
-export const ebayShippingXml = (cost = 0, service = "standard") => `<ShippingDetails><ShippingType>Flat</ShippingType><ShippingServiceOptions><ShippingServicePriority>1</ShippingServicePriority><ShippingService>${EBAY_SHIP_SERVICES[service] || EBAY_SHIP_SERVICES.standard}</ShippingService><ShippingServiceCost>${Number(cost || 0).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions></ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>3</DispatchTimeMax>`;
+/* One service, or standard plus a dearer expedited choice the buyer can pick
+   at checkout (expeditedCost set, standard picked). */
+const shipOption = (prio, svc, cost) => `<ShippingServiceOptions><ShippingServicePriority>${prio}</ShippingServicePriority><ShippingService>${EBAY_SHIP_SERVICES[svc] || EBAY_SHIP_SERVICES.standard}</ShippingService><ShippingServiceCost>${Number(cost || 0).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions>`;
+export const ebayShippingXml = (cost = 0, service = "standard", expeditedCost = null) => `<ShippingDetails><ShippingType>Flat</ShippingType>${shipOption(1, service, cost)}${service !== "expedited" && +expeditedCost > 0 ? shipOption(2, "expedited", expeditedCost) : ""}</ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>3</DispatchTimeMax>`;
 
 /* Best Offer on, with eBay answering the clear cases: an offer of 90% of the
    price or more is accepted, one under 75% declined; the rest wait for a reply. */
