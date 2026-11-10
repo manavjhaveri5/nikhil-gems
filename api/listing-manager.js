@@ -350,6 +350,11 @@ async function aiGenerate(listing) {
     ? `the one descriptive paragraph only, about this stone. ${BODY_VOICE.replace(/^Write the paragraph only — one of them, /, "One paragraph, ")} Describe the stone in general, not one specific piece: the buyer gets one like the photos.`
     : "3-4 paragraphs: 1) poetic product intro, 2) specifications bullet list (use •), 3) about Atyahara brand, 4) care/shipping note";
 
+  /* A repeatable's title: what buyers type first, singular (they get one), then
+     size, look and use. "Lapidary" and the like are trade words nobody searches. */
+  const etsyTitleSpec = repeatable
+    ? `60-100 chars, no ALL CAPS. Start with the phrase buyers search, singular: "<Stone> <Shape>" (e.g. "Sunstone Heart"). Then, comma-separated: the size in mm with "Mini" if under 35mm, "Polished Crystal <Shape>"; a short colour/look phrase only if the description or stone makes it certain (e.g. "Green Feather Pattern"); the use buyers search ("Pocket Stone", "Worry Stone", "Palm Stone", "Desk Sphere"); and "from <origin>" if given. Singular even though there are several in stock, unless the title says a set or lot. Never use: Lapidary, Specimen-grade, Heart Shaped (say Heart), Natural as the first word, healing claims.`
+    : "max 140 chars, SEO-rich, natural, no ALL CAPS";
   const prompt = `You are an expert e-commerce copywriter for ${repeatable ? "EarthEditions, a crystal shop selling well-priced natural stones made in India" : "a premium crystal/gemstone shop called Atyahara"}.
 Generate platform-optimised listing content for this product. Return ONLY valid JSON.
 
@@ -368,7 +373,7 @@ Product:
 
 Return JSON with these fields:
 {
-  "etsy_title": "max 140 chars, SEO-rich, natural, no ALL CAPS",
+  "etsy_title": ${JSON.stringify(etsyTitleSpec)},
   "etsy_description": ${JSON.stringify(etsyDescSpec)},
   "etsy_tags": ["exactly 13 strings", "each under 20 chars", "mix of material", "shape", "healing use", "chakra", "origin", "gift keywords"],
   "shopify_title": "clean concise title, max 70 chars",
