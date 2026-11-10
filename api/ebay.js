@@ -396,7 +396,26 @@ async function uploadEbayVideo(videoUrl) {
     if (/SUCCESS|LIVE|AVAILABLE/i.test(status)) return { ok: true, videoId };
     if (/FAIL|BLOCK/i.test(status)) return { ok: false, error: `eBay video processing ${status}`, videoId };
   }
-  return { ok: false, error: "video still processing after timeout", videoId };
+  return { ok: false, pending: true, error: "eBay is still processing the video. Press Publish on eBay again in about 5 minutes and it will be added", videoId };
+}
+
+/* eBay often takes minutes to process a video, longer than one publish can
+   wait. The id from the first try is kept on the listing, so the next publish
+   checks that video instead of uploading it again: live → attach it, still
+   processing → say so, failed or gone → upload afresh. */
+async function ebayVideoFor(videoUrl, knownId) {
+  if (knownId) {
+    const accessToken = await getEbayAccessToken();
+    if (accessToken) {
+      const sR = await fetch(`${MEDIA_BASE}/${encodeURIComponent(knownId)}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      if (sR.ok) {
+        const status = (await sR.json().catch(() => ({}))).status || "";
+        if (/SUCCESS|LIVE|AVAILABLE/i.test(status)) return { ok: true, videoId: knownId };
+        if (!/FAIL|BLOCK/i.test(status)) return { ok: false, pending: true, videoId: knownId, error: "eBay is still processing the video. Press Publish on eBay again in a few minutes and it will be added" };
+      }
+    }
+  }
+  return uploadEbayVideo(videoUrl);
 }
 
 // ── Parse a single <Item> block into a plain object ───────────────────────────
@@ -480,7 +499,7 @@ export async function publishEbayListing(body = {}) {
     title, description, price, quantity = 1, images = [],
     conditionId = "1000", shippingCost = 0, shippingService = "standard", expeditedCost = null, itemId: existingId,
     categoryId = ebayCategoryFor(title), // 4218, the old default, is now Figurines
-    video, sku, syncOnly = false, allowCreate = !syncOnly,
+    video, videoId: knownVideoId = null, sku, syncOnly = false, allowCreate = !syncOnly,
     specifics: specSrc = {},
   } = body;
   const ebayName = ebayTitle(ebaySafe(title) || title);
@@ -506,11 +525,13 @@ export async function publishEbayListing(body = {}) {
   // still publish the listing and surface a warning to the caller.
   let videoXml = "";
   let videoWarning = null;
+  let videoKeep = {};   // saved on the listing so the next publish reuses this video
   if (video && typeof video === "string" && video.startsWith("http")) {
     // Non-fatal: a thrown error here (e.g. missing eBay OAuth) must not crash
     // the publish — fall back to listing without the video and warn the caller.
     try {
-      const v = await uploadEbayVideo(video);
+      const v = await ebayVideoFor(video, knownVideoId);
+      if (v.videoId) videoKeep = { video_id: v.videoId, video_src: video, video_live: !!v.ok };
       if (v.ok && v.videoId) videoXml = `<VideoDetails><VideoID>${esc(v.videoId)}</VideoID></VideoDetails>`;
       else videoWarning = v.error || "video upload failed";
     } catch (e) {
@@ -546,7 +567,7 @@ export async function publishEbayListing(body = {}) {
         return { ok: false, status: 409, error: xmlTag("LongMessage", xml) || "Skipped eBay sync: existing item could not be revised" };
       }
     } else {
-      return { ok: true, itemId: xmlTag("ItemID", xml), isNew: false, ...(videoWarning ? { videoWarning } : {}) };
+      return { ok: true, itemId: xmlTag("ItemID", xml), isNew: false, ...videoKeep, ...(videoWarning ? { videoWarning } : {}) };
     }
   }
 
@@ -581,7 +602,7 @@ export async function publishEbayListing(body = {}) {
   }
   const newItemId = xmlTag("ItemID", xml);
   return { ok: true, itemId: newItemId, isNew: true,
-    url: `https://www.ebay.com/itm/${newItemId}`, ...(videoWarning ? { videoWarning } : {}) };
+    url: `https://www.ebay.com/itm/${newItemId}`, ...videoKeep, ...(videoWarning ? { videoWarning } : {}) };
 }
 
 

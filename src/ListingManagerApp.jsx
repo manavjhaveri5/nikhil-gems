@@ -10832,6 +10832,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
           quantity:     listing.qty || 1,
           images:       listing.images || [],
           video:        listing.video || "",
+          // The video eBay already has for this clip, if a publish uploaded it.
+          videoId:      listing.video && listing.platforms?.ebay?.video_src === listing.video ? listing.platforms.ebay.video_id || null : null,
           sku:          listingMarketplaceSku(listing),
           syncOnly,
           allowCreate,
@@ -10848,7 +10850,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || "eBay publish failed");
       if (d.videoWarning) showToast(`⚠ eBay video: ${d.videoWarning}`);
-      result = { item_id: d.itemId, url: d.url || `https://www.ebay.com/itm/${d.itemId}` };
+      result = { item_id: d.itemId, url: d.url || `https://www.ebay.com/itm/${d.itemId}`,
+        ...(d.video_id ? { video_id: d.video_id, video_src: d.video_src, video_live: !!d.video_live } : {}) };
     } else {
       let action, storeKey, etsyShop;
       if (pkey === "etsy")             { action = "publish_etsy"; }
