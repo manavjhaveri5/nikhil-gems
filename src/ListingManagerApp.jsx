@@ -1922,6 +1922,7 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
   const [etsyShippingProfiles, setEtsyShippingProfiles] = useState([]);
   const [etsyReturnPolicies,   setEtsyReturnPolicies]   = useState([]);
   const [etsyReadinessProfiles, setEtsyReadinessProfiles] = useState([]);
+  const [etsyProfilesErr, setEtsyProfilesErr] = useState("");
   const [eeSettings, setEeSettings] = useState({ ship: [], ret: [], ready: [] });
   const [tab, setTab] = useState(startTab);
   const [connectDraft, setConnectDraft] = useState({});
@@ -1953,12 +1954,13 @@ function ListingForm({ initial, stock = [], listings = [], orders = [], sold = f
         if (d.shippingProfiles) setEtsyShippingProfiles(d.shippingProfiles);
         if (d.returnPolicies)   setEtsyReturnPolicies(d.returnPolicies);
         if (d.readinessProfiles) setEtsyReadinessProfiles(d.readinessProfiles);
+        setEtsyProfilesErr(d.loadError || d.error || "");
       })
-      .catch(() => {});
+      .catch(e => setEtsyProfilesErr(e.message || "couldn't reach the ERP"));
     // EarthEditions has its own shipping, processing and return profiles.
     fetch("/api/listing-manager?action=get_etsy_settings&shop=earth")
       .then(r => r.json())
-      .then(d => { if (d && !d.error) setEeSettings({ ship: d.shippingProfiles || [], ret: d.returnPolicies || [], ready: d.readinessProfiles || [] }); })
+      .then(d => { if (d && !d.error) setEeSettings({ ship: d.shippingProfiles || [], ret: d.returnPolicies || [], ready: d.readinessProfiles || [], err: d.loadError || "" }); else setEeSettings(x => ({ ...x, err: d?.error || "couldn't load" })); })
       .catch(() => {});
   }, []);
 
@@ -2580,6 +2582,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                     <option value="">— Auto (by price)</option>
                     {(ee ? eeSettings.ship : etsyShippingProfiles).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                   </select>
+                  {!(ee ? eeSettings.ship : etsyShippingProfiles).length && (ee ? eeSettings.err : etsyProfilesErr) &&
+                    <div style={{ fontSize: 11, color: C.red, marginTop: 4 }}>Etsy didn't send {ee ? "EarthEditions'" : "Atyahara's"} profiles ({ee ? eeSettings.err : etsyProfilesErr}). Auto picks by price when it publishes.</div>}
                 </div>
                 {/* Processing profile — Etsy calls it a readiness state. Left to
                     the API this used to inherit whatever the last active listing

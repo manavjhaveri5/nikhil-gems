@@ -2046,7 +2046,10 @@ async function listingHandler(req, res) {
           ? `Returns accepted (${p.return_deadline || "?"} days)`
           : "No returns",
       }));
-      return res.json({ shippingProfiles, returnPolicies, readinessProfiles });
+      // Say why a list came back empty (an expired login, a shop on hold) instead of an empty menu.
+      const why = (r, d) => r.ok ? "" : `${r.status} ${d?.error || d?.error_description || ""}`.trim();
+      const error = [why(spResp, spData) && `shipping profiles: ${why(spResp, spData)}`, why(rpResp, rpData) && `return policies: ${why(rpResp, rpData)}`].filter(Boolean).join("; ");
+      return res.json({ shippingProfiles, returnPolicies, readinessProfiles, ...(error ? { loadError: error } : {}) });
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
