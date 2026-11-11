@@ -37,6 +37,7 @@ import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
 import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
+import { eeBestSection } from "../lib/eeSections.js";
 import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
@@ -1903,6 +1904,13 @@ export function EeSectionPicker({ value, onChange, form }) {
   const isNew = cur && list && !names.some(n => n.toLowerCase() === cur.toLowerCase());
   const sug = eeSuggestedSection(form);
   const sugMissing = sug && list && !names.some(n => n.toLowerCase() === sug.toLowerCase());
+  /* Nothing picked yet: the best of the shop's own sections is picked for
+     it, once the list is in, so the dropdown shows where it will go. */
+  const auto = list ? eeBestSection(form, names) : "";
+  const [autoSet, setAutoSet] = useState("");
+  useEffect(() => {
+    if (!cur && auto && !autoSet) { setAutoSet(auto); onChange(auto); }
+  }, [cur, auto]);   // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => { const v = draft.trim(); if (v) onChange(v); setAdding(false); setDraft(""); };
   return <div>
     <Label>EarthEditions shop section</Label>
@@ -1920,6 +1928,7 @@ export function EeSectionPicker({ value, onChange, form }) {
     <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 4 }}>
       {err ? `Couldn't load the shop's sections (${err}); a name typed here is still used.` : !list ? "Loading sections…"
         : isNew ? "This section doesn't exist yet: it's created on the EarthEditions shop when you publish."
+        : autoSet && cur.toLowerCase() === autoSet.toLowerCase() ? "Picked from what it is — change it if it's wrong. Only used on the EarthEditions shop."
         : sugMissing && !cur ? <>Suggested: <button type="button" onClick={() => onChange(sug)} style={{ fontSize: 11, color: C.gold, background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}>{sug}</button> (new section)</>
         : "Only used on the EarthEditions shop."}
     </div>

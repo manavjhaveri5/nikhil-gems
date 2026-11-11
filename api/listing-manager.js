@@ -18,6 +18,7 @@ import { withStandLine } from "../lib/standLine.js";
 import { rajSnapshot, rajFallback } from "../lib/raj.js";
 import { rajAudit } from "../lib/raj-audit.js";
 import { draftFixes } from "../lib/raj-fixes.js";
+import { EE_SECTIONS, eeSectionFor } from "../lib/eeSections.js";
 import { girtonTick } from "../lib/girton.js";
 import { decide as girtonDecide } from "../lib/girton-proposals.js";
 
@@ -158,18 +159,7 @@ async function resolveSectionId(listing, hdrs) {
     return hit ? hit.id : null;
   } catch { return null; }
 }
-/* EarthEditions has four sections, and a piece is filed by what it is:
-   jewellery, a figurative carving, a polished (shaped) stone, or else a
-   specimen as it came out of the ground. Read off the title, shape, type and
-   tags, in that order of precedence. */
-const EE_SECTIONS = ["Polished crystals", "Mineral specimens", "Carvings", "Jewellery"];
-function eeSectionFor(listing) {
-  const t = [listing.title, listing.shape, listing.productType, ...(listing.tags || [])].join(" ").toLowerCase();
-  if (/\b(pendants?|necklaces?|rings?|bracelets?|earrings?|jewell?ery|jewelry|anklets?|beads?|cabochons?)\b/.test(t)) return "Jewellery";
-  if (/\b(carvings?|carved|skulls?|figurines?|statues?|idols?|buddha|ganesh\w*|animals?|angels?|dragons?|owls?|elephants?|turtles?|frogs?|birds?|fish|cats?|horses?|bears?|fox|deer|rabbits?|lions?|wolf|wolves)\b/.test(t)) return "Carvings";
-  if (/\b(polished|spheres?|orbs?|palm ?stones?|hearts?|towers?|tumbled?|tumbles?|eggs?|wands?|worry|pyramids?|obelisks?|free ?forms?|massage|lingams?|shivalingam|slabs?|points?|generators?|dodecahedrons?|icosahedrons?|octahedrons?|cubes?|merkabas?|platonic|vogels?|cabochons?)\b/.test(t)) return "Polished crystals";
-  return "Mineral specimens";
-}
+/* EarthEditions files a piece by what it is: lib/eeSections.js. */
 // The section by that name on the current shop, made there if it isn't yet.
 /* Sections Sir makes on the shop by hand for one kind of piece. A piece of
    that kind goes there when the section exists; none is ever made from here. */
