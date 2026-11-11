@@ -168,6 +168,13 @@ function eeSectionFor(listing) {
 }
 // The section by that name on the current shop, made there if it isn't yet.
 async function eeSectionId(listing, hdrs) {
+  /* Mini hearts have a section of their own on the shop, made there by hand:
+     used when it exists, never made from here. */
+  if (/\bmini\s*hearts?\b/i.test(`${listing.title || ""} ${listing.etsy_title || ""}`)) {
+    const own = await resolveSectionId({ etsy_section_name: "Mini Hearts" }, hdrs)
+      || await resolveSectionId({ etsy_section_name: "Mini Heart" }, hdrs);
+    if (own) return own;
+  }
   return ensureSection(eeSectionFor(listing), hdrs);
 }
 let lastSectionError = "";
