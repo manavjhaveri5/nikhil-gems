@@ -157,7 +157,10 @@ export async function publishListingToStore(listing, { syncOnly = false, overrid
   const id = `lm-${listing.id}`;
   let existing = await q(supabase.from("store_products").select("*").eq("id", id).maybeSingle());
   // Bulk and wholesale lots are trade-site pieces; the retail store sells single pieces.
-  const title = `${listing.title || ""} ${listing.shopify_title || ""}`;
+  // The Earth Editions title, when one is set, is what the site shows, so it's
+  // what's judged: a main title can say "(1kg)" for trade while the store sells one.
+  const storeOwn = String(listing.store_title || "").trim();
+  const title = storeOwn || `${listing.title || ""} ${listing.shopify_title || ""}`;
   if (/\b(bulk|wholesale)\b|\b1\s*kg\b|\bper\s*kg\b/i.test(title) && (!existing || !syncOnly))
     throw new Error("Bulk / wholesale lots don't go on eartheditions.co — post them to the trade site instead");
   if (existing && override.length) existing = { ...existing, source: { ...(existing.source || {}), manual: (existing.source?.manual || []).filter(k => !override.includes(k)) } };
