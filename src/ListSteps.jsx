@@ -2,7 +2,7 @@
    what the customer pays on each of those places and what that leaves us,
    then list it. Etsy's sale and sales tax are read from the shop's own recent
    orders, and each platform's fees are fixed, so there is nothing to set. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import { C } from "./lmTheme.js";
 import { CHANNELS, linkOf, tradeRefOnly, isEtsyKey } from "./listingChannels.js";
 import { storeSettings, storePriceFor } from "./StoreApp.jsx";
@@ -180,8 +180,9 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, costPerPi
   );
 }
 
-export default function ListSteps({ form, orders, stock = [], weightKg: weightKgIn = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onRemove, onClose, onDone, research = false }) {
+export default function ListSteps({ form, orders, stock = [], weightKg: weightKgIn = 0, comparables = [], rate = 88, start = "where", renderWhere, renderPlatform, onAI, aiBusy, onApply, onPublishOne, onRemove, renderLink, onUnlink, onClose, onDone, research = false }) {
   const [removing, setRemoving] = useState("");
+  const [linking, setLinking] = useState("");
   const [step, setStep] = useState(start);
   // The piece's weight, as corrected on the Price by weight card: the cost,
   // shipping and rates below follow it before it's saved.
@@ -568,8 +569,8 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
               const ln = linkOf(form, c.key);
               const on = !!pick[c.key];
               const clash = on && pick.etsy && pick.etsy_ee && (c.key === "etsy" || c.key === "etsy_ee");
-              return (
-                <div key={c.key} role="button" tabIndex={0} onClick={() => setPick(x => ({ ...x, [c.key]: !x[c.key] }))}
+              return (<Fragment key={c.key}>
+                <div role="button" tabIndex={0} onClick={() => setPick(x => ({ ...x, [c.key]: !x[c.key] }))}
                   onKeyDown={e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setPick(x => ({ ...x, [c.key]: !x[c.key] })); } }}
                   style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: clash ? C.amberBg : C.surface, border: `${clash ? 2 : 1.5}px solid ${clash ? C.amber : on ? C.ink : C.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
                   <span style={{ width: 22, height: 22, borderRadius: 6, border: `1.5px solid ${on ? C.ink : C.borderHi}`, background: on ? C.ink : "transparent", color: "#fff", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>{on ? "✓" : ""}</span>
@@ -591,9 +592,19 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
                         }}
                         style={{ fontSize: 12, fontWeight: 700, color: C.red, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: "#fff", cursor: removing ? "wait" : "pointer" }}>
                         {removing === c.key ? "Removing…" : "Remove"}</button>}
+                      {onUnlink && <button type="button" title="Forget the link here — the listing on the platform stays as it is"
+                        onClick={() => { if (confirm(`Unlink ${c.label}? The listing there stays as it is; this piece just stops updating it.`)) { onUnlink(c.key); setPick(x => ({ ...x, [c.key]: false })); } }}
+                        style={{ fontSize: 12, fontWeight: 700, color: C.inkMid, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: "#fff", cursor: "pointer" }}>Unlink</button>}
                     </span>
                   </span>}
+                  {!ln.linked && renderLink && <span onClick={e => e.stopPropagation()} style={{ flex: "none" }}>
+                    <button type="button" onClick={() => setLinking(linking === c.key ? "" : c.key)}
+                      style={{ fontSize: 12, fontWeight: 700, color: C.ink, border: `1px solid ${C.border}`, borderRadius: 7, padding: "4px 9px", background: linking === c.key ? C.bg : "#fff", cursor: "pointer" }}>
+                      {linking === c.key ? "Cancel" : "Link existing"}</button>
+                  </span>}
                 </div>
+                {linking === c.key && !ln.linked && renderLink(c.key, () => setLinking(""))}
+              </Fragment>
               );
             })}
           </>}

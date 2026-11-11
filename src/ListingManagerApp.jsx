@@ -32,7 +32,7 @@ const isVideoUrl = u => typeof u === "string" && /\.(mp4|mov|avi|webm|mkv)(\?|$)
 /* ─── theme ──────────────────────────────────────────────────────────────── */
 import { C, mob, FI } from "./lmTheme.js";
 import { TradeProductsPanel, publishListingToTrade, hideTradeProduct, refreshTradePhotos, findTradeLinks, loadTradeFacts } from "./TradeSiteApp.jsx";
-import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor } from "./StoreApp.jsx";
+import { StoreProductsPanel, publishListingToStore, hideStoreProduct, markStoreSold, loadStoreFacts, storeSettings, loadStoreProduct, storePriceFor, listStoreProducts, linkStoreProduct } from "./StoreApp.jsx";
 import ListingGrid from "./ListingGrid.jsx";
 import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
@@ -2544,6 +2544,75 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
      products on the trade site. Connecting one records where this stone is on
      Wholesale without letting the listing write to it. */
   const [tradeQ, setTradeQ] = useState("");
+  /* ── Link existing (the Where step) ─────────────────────────────────────
+     Ties this piece to a listing already on a platform, so the next save
+     updates that one rather than making a second. Nothing on the platform
+     changes until then. */
+  const [linkQ, setLinkQ] = useState("");
+  const [linkErr, setLinkErr] = useState("");
+  const [storeList, setStoreList] = useState(null);
+  const linkTo = (key, pd) => {
+    setForm(f => ({ ...f, platforms: { ...(f.platforms || {}), [key]: { ...pd, connected_at: new Date().toISOString() } } }));
+    setPublishTo(pt => ({ ...pt, [key]: false }));
+    setLinkQ(""); setLinkErr("");
+  };
+  // Forget the link: the platform's listing is left as it is.
+  const unlink = key => setForm(f => ({ ...f, platforms: Object.fromEntries(Object.entries(f.platforms || {}).filter(([k]) => k !== key)) }));
+  const renderLink = (key, done) => {
+    const c = channel(key);
+    const wordsOf = s => String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 1);
+    const pickList = (rows, onPick, label) => {
+      const q = wordsOf(linkQ);
+      const want = q.length ? q : wordsOf(`${form.material} ${form.shape}`);
+      const hits = rows.map(r => ({ r, n: wordsOf(r.title).filter(w => want.some(x => w.startsWith(x))).length }))
+        .filter(x => q.length ? q.every(x2 => wordsOf(x.r.title).some(w => w.startsWith(x2))) : x.n >= 1)
+        .sort((a, b) => b.n - a.n).slice(0, 8);
+      return <>
+        <input autoFocus value={linkQ} onChange={e => setLinkQ(e.target.value)} placeholder={`Search ${c.label} by name…`} style={{ ...FI(), fontSize: 13, marginBottom: 6 }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 280, overflowY: "auto" }}>
+          {hits.map(({ r }) => <button key={r.id} type="button" onClick={() => { onPick(r); done(); }}
+            style={{ display: "flex", alignItems: "center", gap: 10, background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 6, cursor: "pointer", textAlign: "left" }}>
+            <span style={{ width: 40, height: 40, borderRadius: 6, overflow: "hidden", background: C.bg, flex: "none" }}>{r.image && <img src={r.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: "block", fontSize: 12.5, fontWeight: 650, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.title || r.id}</span>
+              <span style={{ display: "block", fontSize: 11, color: C.inkFaint }}>{label(r)}</span>
+            </span>
+            <span style={{ fontSize: 12, fontWeight: 800, color: c.color }}>Link</span>
+          </button>)}
+          {!hits.length && <div style={{ fontSize: 11.5, color: C.inkFaint }}>{linkQ ? "Nothing by that name." : "Type part of its name."}</div>}
+        </div>
+      </>;
+    };
+    let body;
+    if (isEtsyKey(key) || key === "ebay") {
+      const id = parseRef(key, linkQ);
+      body = <>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input autoFocus value={linkQ} onChange={e => setLinkQ(e.target.value)}
+            placeholder={isEtsyKey(key) ? "Etsy listing link or number" : "eBay item link or number"} style={{ ...FI(), fontSize: 13 }} />
+          <button type="button" disabled={!id} onClick={() => { linkTo(key, connectPatch(key, id)); done(); }}
+            style={{ background: id ? c.color : C.card, color: id ? "#fff" : C.inkFaint, border: "none", borderRadius: 8, padding: "0 16px", fontSize: 13, fontWeight: 800, cursor: id ? "pointer" : "not-allowed" }}>Link</button>
+        </div>
+        {linkQ && !id && <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>That doesn't look like a {c.label} listing link.</div>}
+      </>;
+    } else if (key === "trade") {
+      const rows = Object.entries(tradeFactsMap || {}).filter(([k]) => k.startsWith("#")).map(([, r]) => r);
+      body = pickList(rows, r => linkTo("trade", { product_id: r.id, status: r.live ? "active" : "draft", url: `https://trade.eartheditions.co/p/${r.id}` }),
+        r => `${r.price ? `$${r.price} / ${r.unit === "piece" ? "piece" : r.unit === "lot" ? "lot" : "kg"}` : "Price on request"} · ${r.live ? "live" : "hidden"}`);
+    } else if (key === "store") {
+      if (!storeList) {
+        if (!linkErr) listStoreProducts().then(rows => setStoreList(rows.map(r => ({ ...r, image: (r.images || [])[0] || "" })))).catch(e => setLinkErr(e.message));
+        body = <div style={{ fontSize: 12, color: C.inkFaint }}>{linkErr || "Loading the store's products…"}</div>;
+      } else body = pickList(storeList, r => {
+        linkTo("store", { product_id: r.id, status: r.status === "active" ? "active" : "draft", storefront_url: r.handle ? `https://eartheditions.co/products/${r.handle}` : "" });
+        if (form.id) linkStoreProduct(r.id, form.id).catch(() => {});
+      }, r => `${r.price ? `$${r.price}` : ""}${r.price_inr ? ` · ₹${r.price_inr}` : ""} · ${r.status}${r.listing_id && r.listing_id !== form.id ? " · linked to another listing" : ""}`);
+    }
+    return <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 10 }}>
+      <div style={{ fontSize: 11.5, color: C.inkMid, marginBottom: 6 }}>Already on {c.label}? Link it, and saving updates that listing instead of making a new one. Nothing changes there until you save.</div>
+      {body}
+    </div>;
+  };
   const tradePicker = () => {
     const rows = Object.entries(tradeFactsMap || {}).filter(([k]) => k.startsWith("#")).map(([, r]) => r);
     if (!rows.length) return null;
@@ -3578,7 +3647,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
 
       </div>
       {steps && (
-        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
+        <ListSteps research={admin} form={{ ...form, tags, _stockCost: stockCost, _lotCost: lotCost, _costPerKg: costPerKg, _tradeUnit: tradeRowOf(tradeFactsMap, form)?.unit || "", _loc: loc }} orders={orders} stock={stock} weightKg={pieceKg} comparables={comparables} rate={liveUsdRate} start={steps} renderWhere={pieceCard} renderPlatform={platformStep} renderLink={renderLink} onUnlink={unlink} onAI={generateAI} aiBusy={generating} onPublishOne={onPublishOne ? publishOneFromSteps : null}
           onRemove={onUnpublish ? async pkey => {
             await onUnpublish(form, pkey);
             // Our two sites hide it (a draft); the marketplaces end it.

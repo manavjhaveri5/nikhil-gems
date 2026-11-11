@@ -155,7 +155,8 @@ function keepManual(row, existing) {
    its grid) — they win over an earlier hand edit in the store's editor. */
 export async function publishListingToStore(listing, { syncOnly = false, override = [] } = {}) {
   const s = await storeSettings();
-  const id = `lm-${listing.id}`;
+  // A product linked by hand (Link existing) is the one updated; else the listing's own.
+  const id = listing.platforms?.store?.product_id || `lm-${listing.id}`;
   let existing = await q(supabase.from("store_products").select("*").eq("id", id).maybeSingle());
   // Bulk and wholesale lots are trade-site pieces; the retail store sells single pieces.
   // The Earth Editions title, when one is set, is what the site shows, so it's
@@ -208,6 +209,21 @@ export async function loadStoreFacts() {
     if (rows.length < 1000) break;
   }
   return out;
+}
+
+/* For "Link existing": the store's products to pick from, and the link
+   itself — the product is marked as this listing's, nothing else changes. */
+export async function listStoreProducts() {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const rows = await q(supabase.from("store_products").select("id,listing_id,title,images,price,price_inr,status,handle").range(from, from + 999));
+    out.push(...rows);
+    if (rows.length < 1000) break;
+  }
+  return out;
+}
+export async function linkStoreProduct(productId, listingId) {
+  await q(supabase.from("store_products").update({ listing_id: listingId }).eq("id", productId));
 }
 
 export async function markStoreSold(productId) {
