@@ -550,13 +550,28 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
 
           {step === "where" && <>
             <div style={{ fontFamily: serif, fontSize: 28, color: C.ink }}>Where should it go?</div>
+            {/* One piece goes on one Etsy shop: Atyahara for one-of-a-kind,
+                EarthEditions for repeatables. Both ticked is nearly always a slip. */}
+            {pick.etsy && pick.etsy_ee && (
+              <div style={{ background: C.amberBg, border: `1.5px solid ${C.amber}`, borderRadius: 12, padding: "12px 14px", fontSize: 13.5, color: C.ink, lineHeight: 1.45 }}>
+                <b>⚠ Both Etsy shops are ticked.</b> A piece normally goes on one: {form.type === "repeatable" ? "this is a repeatable, so EarthEditions" : "this is one of a kind, so Atyahara"}.
+                <div style={{ display: "flex", gap: 8, marginTop: 9, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => setPick(x => ({ ...x, etsy_ee: false }))}
+                    style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: form.type === "repeatable" ? "#fff" : C.ink, color: form.type === "repeatable" ? C.ink : "#fff", fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>Atyahara only</button>
+                  <button type="button" onClick={() => setPick(x => ({ ...x, etsy: false }))}
+                    style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: form.type === "repeatable" ? C.ink : "#fff", color: form.type === "repeatable" ? "#fff" : C.ink, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>EarthEditions only</button>
+                  <span style={{ fontSize: 12, color: C.inkMid, alignSelf: "center" }}>or leave both if you mean it</span>
+                </div>
+              </div>
+            )}
             {CHANNELS.map(c => {
               const ln = linkOf(form, c.key);
               const on = !!pick[c.key];
+              const clash = on && pick.etsy && pick.etsy_ee && (c.key === "etsy" || c.key === "etsy_ee");
               return (
                 <div key={c.key} role="button" tabIndex={0} onClick={() => setPick(x => ({ ...x, [c.key]: !x[c.key] }))}
                   onKeyDown={e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setPick(x => ({ ...x, [c.key]: !x[c.key] })); } }}
-                  style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: C.surface, border: `1.5px solid ${on ? C.ink : C.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                  style={{ display: "flex", alignItems: "center", gap: 14, textAlign: "left", background: clash ? C.amberBg : C.surface, border: `${clash ? 2 : 1.5}px solid ${clash ? C.amber : on ? C.ink : C.border}`, borderRadius: 12, padding: "14px 16px", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
                   <span style={{ width: 22, height: 22, borderRadius: 6, border: `1.5px solid ${on ? C.ink : C.borderHi}`, background: on ? C.ink : "transparent", color: "#fff", fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>{on ? "✓" : ""}</span>
                   <span style={{ flex: 1 }}>
                     <span style={{ display: "block", fontSize: 16, fontWeight: 700, color: C.ink }}>{c.label}</span>
