@@ -507,6 +507,12 @@ export async function publishEbayListing(body = {}) {
   const itemSku = String(sku || "").trim();
 
   if (!title) return { ok: false, status: 400, error: "title required" };
+  /* A piece with no description went up with only the duties line and its own
+     title for a description. A publish from the ERP waits for one; the quiet
+     stock syncs, which only follow quantities, still go through. */
+  const ownDesc = String(description || "").trim();
+  if (!syncOnly && (!ownDesc || ownDesc.toLowerCase() === String(title).trim().toLowerCase()))
+    return { ok: false, status: 400, error: "This piece has no description yet. Write one, or press AI fill, then publish on eBay again." };
   if (!(+price > 0)) return { ok: false, status: 400, error: `The eBay price is $${price || 0}. Set a price above $0 first.` };
   // eBay amounts are dollars; a rupee figure here once asked eBay for $800 shipping.
   if (+expeditedCost > 80) return { ok: false, status: 400, error: `eBay expedited shipping is set to $${expeditedCost}. eBay amounts are in dollars: was that ₹${expeditedCost}?` };
