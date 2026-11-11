@@ -559,7 +559,7 @@ export async function publishEbayListing(body = {}) {
       `<PrimaryCategory><CategoryID>${esc(String(categoryId))}</CategoryID></PrimaryCategory>`,
       `<ConditionID>${esc(String(conditionId))}</ConditionID>`,
       specificsXml(await mergedSpecifics(existingId, specs)),
-      ebayShippingXml(shippingCost, shippingService, expeditedCost),
+      ebayShippingXml(shippingCost, shippingService, expeditedCost, (await ebayShippingDiscounts()).xml),
       ebayBestOfferXml(price),
     ];
     const { ok, xml } = await trading("ReviseItem", `<Item>${fields.join("")}</Item>`);
@@ -598,7 +598,7 @@ export async function publishEbayListing(body = {}) {
     <Quantity>${Math.max(1, parseInt(quantity, 10))}</Quantity>
     ${picXml ? `<PictureDetails>${picXml}</PictureDetails>` : ""}
     ${videoXml}
-    ${ebayShippingXml(shippingCost, shippingService, expeditedCost)}
+    ${ebayShippingXml(shippingCost, shippingService, expeditedCost, (await ebayShippingDiscounts()).xml)}
     ${ebayBestOfferXml(price)}
     <Site>US</Site>
   `;
@@ -644,7 +644,7 @@ async function handleEbay(req, res) {
   // sync_orders is the Vercel cron and has its own check below. insights only
   // reads, and also takes the queue's cron key so it can be run without a browser.
   const keyed = (action === "insights" || action === "fix_listings") && await cronKeyOk(req, "etsy_queue")
-    || action === "insights" && await cronKeyOk(req, "raj");
+    || (action === "insights" || action === "ship_discounts") && await cronKeyOk(req, "raj");
   if (action !== "sync_orders" && !keyed && !(await requireUser(req, res))) return;
 
   // ── insights — why listings do or don't sell (read-only) ────────────────────
@@ -655,6 +655,9 @@ async function handleEbay(req, res) {
     return res.json(await ebayFixListings({ dry: url.searchParams.get("dry") === "1", ids: (url.searchParams.get("ids") || "").split(",").filter(Boolean),
       from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 40 }));
   }
+
+  // ship_discounts — the combined-shipping rules publishes attach (read-only).
+  if (action === "ship_discounts") { const d = await ebayShippingDiscounts(); return res.json({ ok: !d.error, ...d }); }
 
   if (action === "insights") return res.json(await ebayInsights({ full: url.searchParams.get("full") === "1", from: +url.searchParams.get("from") || 0, n: +url.searchParams.get("n") || 50, q: url.searchParams.get("q") || "",
     lite: url.searchParams.get("lite") === "1", tdays: +url.searchParams.get("tdays") || 30 }));
@@ -1009,11 +1012,33 @@ export function ebayCategoryFor(title = "") {
    USPS Media Mail is for books and can't come from India. */
 /* service: "standard" (5–10 day estimate) or "expedited" (1–4 day estimate),
    both eBay's from-outside-US services; cost is what the buyer pays, in dollars. */
+/* The account's combined-shipping rules (Seller Hub → Shipping preferences):
+   a flat rule (each extra item ships for $0) and the promotional one (free
+   shipping at $65 or more). eBay only applies them to listings that name
+   them, so each publish does. Read once per warm instance. */
+let _discCache = null;
+export async function ebayShippingDiscounts() {
+  if (_discCache && Date.now() - _discCache.at < 3600e3) return _discCache;
+  const { ok, xml } = await trading("GetShippingDiscountProfiles", "");
+  if (!ok) return { at: Date.now(), xml: "", flat: null, promo: false, error: xmlTag("LongMessage", xml) || "GetShippingDiscountProfiles failed" };
+  const flatBlock = xmlBlock("FlatShippingDiscount", xml);
+  const profiles = [...flatBlock.matchAll(/<DiscountProfile>([\s\S]*?)<\/DiscountProfile>/g)].map(m => ({
+    id: xmlTag("DiscountProfileID", m[1]), name: xmlTag("DiscountProfileName", m[1]), each: xmlTag("EachAdditionalAmount", m[1]),
+  })).filter(x => x.id && x.id !== "0");
+  const flat = profiles[0] || null;
+  const promoBlock = xmlBlock("PromotionalShippingDiscountDetails", xml);
+  const promo = !!promoBlock && !/<DiscountName>\s*<\/DiscountName>/.test(promoBlock);
+  const out = { at: Date.now(), flat, profiles, promo, promoDetails: promoBlock.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+    xml: `${flat ? `<ShippingDiscountProfileID>${esc(flat.id)}</ShippingDiscountProfileID>` : ""}${promo ? "<PromotionalShippingDiscount>true</PromotionalShippingDiscount>" : ""}` };
+  _discCache = out;
+  return out;
+}
+
 export const EBAY_SHIP_SERVICES = { standard: "StandardShippingFromOutsideUS", expedited: "ExpeditedShippingFromOutsideUS" };
 /* One service, or standard plus a dearer expedited choice the buyer can pick
    at checkout (expeditedCost set, standard picked). */
 const shipOption = (prio, svc, cost) => `<ShippingServiceOptions><ShippingServicePriority>${prio}</ShippingServicePriority><ShippingService>${EBAY_SHIP_SERVICES[svc] || EBAY_SHIP_SERVICES.standard}</ShippingService><ShippingServiceCost>${Number(cost || 0).toFixed(2)}</ShippingServiceCost></ShippingServiceOptions>`;
-export const ebayShippingXml = (cost = 0, service = "standard", expeditedCost = null) => `<ShippingDetails><ShippingType>Flat</ShippingType>${shipOption(1, service, cost)}${service !== "expedited" && +expeditedCost > 0 ? shipOption(2, "expedited", expeditedCost) : ""}</ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>3</DispatchTimeMax>`;
+export const ebayShippingXml = (cost = 0, service = "standard", expeditedCost = null, discountXml = "") => `<ShippingDetails><ShippingType>Flat</ShippingType>${discountXml}${shipOption(1, service, cost)}${service !== "expedited" && +expeditedCost > 0 ? shipOption(2, "expedited", expeditedCost) : ""}</ShippingDetails><ShipToLocations>US</ShipToLocations><DispatchTimeMax>3</DispatchTimeMax>`;
 
 /* Best Offer on, with eBay answering the clear cases: an offer of 90% of the
    price or more is accepted, one under 75% declined; the rest wait for a reply. */
