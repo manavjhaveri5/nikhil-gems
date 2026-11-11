@@ -38,6 +38,7 @@ import ListSteps from "./ListSteps.jsx";
 import RenewalQueue from "./RenewalQueue.jsx";
 import EtsyQueuePanel, { enqueueEtsy, markQueueLive, chooseEtsyPublish, loadQueueSettings, queuesOnEtsy, whenLabel, QUEUE_KEY as ETSY_QUEUE_KEY } from "./etsyQueue.jsx";
 import { eeBestSection } from "../lib/eeSections.js";
+import { sbThumb } from "./photoUrls.js";
 import { CHANNELS, OTHER_CHANNELS, isEtsyKey, channel, titleFor, descFor, titleSource, linkOf, parseRef, connectPatch, readiness, readyScore, locationOf, needsLocation, knownLocations, withLocationLog, tradeRowOf, tradeRefOnly, defaultPieces, tradeTitleFor, nextLocation } from "./listingChannels.js";
 const now   = () => new Date().toISOString();
 
@@ -2160,6 +2161,29 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
   // Variations helpers — each variation has a name + options array; options carry per-variant
   // price/qty when enabled. price_etsy is ₹ (Etsy), price_shopify is $ (Earth Ed. store) — each
   // marketplace bills in its own currency, so we keep them separate rather than converting.
+  /* A photo for an option: tap the 📷 on the option, then a photo. Etsy shows
+     that photo when a buyer picks the option. */
+  const [optPick, setOptPick] = useState(null);   // "i:j" open
+  const optPhoto = (i, j, opt) => {
+    const open = optPick === `${i}:${j}`;
+    const photos = (form.images || []).filter(u => typeof u === "string" && /^https?:/.test(u)).slice(0, 10);
+    return <span style={{ position: "relative", flex: "none" }}>
+      <button type="button" title={opt.image ? "Change or remove this option's photo" : "Link a photo to this option"} onClick={() => setOptPick(open ? null : `${i}:${j}`)}
+        style={{ width: 24, height: 24, borderRadius: 6, border: `1px solid ${C.border}`, padding: 0, cursor: "pointer", overflow: "hidden", background: C.card, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {opt.image ? <img src={sbThumb(opt.image, 80)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "📷"}
+      </button>
+      {open && <div style={{ position: "absolute", top: 28, left: 0, zIndex: 30, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 8, boxShadow: "0 8px 24px rgba(0,0,0,.15)", width: 236 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.inkMid, marginBottom: 6 }}>Photo for “{opt.label || "this option"}”</div>
+        {photos.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 5 }}>
+          {photos.map((u, n) => <button key={u} type="button" onClick={() => { updOpt(i, j, { image: u }); setOptPick(null); }}
+            style={{ padding: 0, border: `2px solid ${opt.image === u ? C.green : "transparent"}`, borderRadius: 6, overflow: "hidden", cursor: "pointer", aspectRatio: "1", background: "none" }}>
+            <img src={sbThumb(u, 120)} alt={`Photo ${n + 1}`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} /></button>)}
+        </div> : <div style={{ fontSize: 11.5, color: C.inkFaint }}>Add photos to the listing first.</div>}
+        {opt.image && <button type="button" onClick={() => { updOpt(i, j, { image: "" }); setOptPick(null); }}
+          style={{ marginTop: 7, fontSize: 11.5, color: C.red, background: "none", border: "none", padding: 0, cursor: "pointer" }}>Remove the photo</button>}
+      </div>}
+    </span>;
+  };
   const blankVar = () => ({ id: uid(), name: "", perVariantPricing: false, options: [{ id: uid(), label: "", price_etsy: "", price_shopify: "", qty: "" }] });
   const blankOpt = () => ({ id: uid(), label: "", price_etsy: "", price_shopify: "", qty: "" });
   const addVariation  = () => setForm(f => ({ ...f, variations: [...f.variations, blankVar()] }));
@@ -3374,8 +3398,8 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                           </div>
                           {v.options.map((opt, j) => (
                             <div key={opt.id} style={{ display: "grid", gridTemplateColumns: "1fr 82px 82px 62px 24px", gap: 6, marginBottom: 6, alignItems: "center" }}>
-                              <input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
-                                placeholder="e.g. Small 4 inch" style={{ ...FI(), fontSize: 12 }} />
+                              <div style={{ display: "flex", gap: 6, alignItems: "center", minWidth: 0 }}>{optPhoto(i, j, opt)}<input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
+                                placeholder="e.g. Small 4 inch" style={{ ...FI(), fontSize: 12, flex: 1, minWidth: 0 }} /></div>
                               <input type="number" value={opt.price_etsy} onChange={e => updOpt(i, j, { price_etsy: e.target.value })}
                                 placeholder="0.00" min="0" style={{ ...FI(), fontSize: 12 }} />
                               <input type="number" value={opt.price_shopify ?? ""} onChange={e => updOpt(i, j, { price_shopify: e.target.value })}
@@ -3396,6 +3420,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                             {v.options.map((opt, j) => (
                               <div key={opt.id} style={{ display: "flex", alignItems: "center", gap: 4,
                                 background: C.surface, border: `1px solid ${C.border}`, borderRadius: 20, padding: "4px 10px" }}>
+                                {optPhoto(i, j, opt)}
                                 <input value={opt.label} onChange={e => updOpt(i, j, { label: e.target.value })}
                                   placeholder="Option…"
                                   style={{ border: "none", background: "none", outline: "none", fontSize: 12, color: C.ink, width: Math.max(60, (opt.label.length || 6) * 8) }} />
@@ -3407,7 +3432,7 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
                               style={{ fontSize: 12, color: C.blue, background: "none", border: `1px dashed ${C.blue}`,
                                 borderRadius: 20, padding: "4px 12px", cursor: "pointer" }}>+ option</button>
                           </div>
-                          <div style={{ fontSize: 10, color: C.inkFaint }}>Toggle "Per-variant price & qty" to set individual prices per option.</div>
+                          <div style={{ fontSize: 10, color: C.inkFaint }}>Toggle "Per-variant price & qty" to set individual prices per option. Tap 📷 on an option to link one of the photos to it.</div>
                         </div>
                       )}
                     </div>

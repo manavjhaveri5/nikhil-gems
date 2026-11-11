@@ -1167,6 +1167,35 @@ function etsyVariationAxes(listing) {
     .filter(v => v.name && v.options.length)
     .slice(0, 2);
 }
+/* A photo picked for each option (Style: Pendant → photo 2) goes on as
+   Etsy's variation images, so choosing the option shows its photo. Etsy
+   allows photos on one variation only: the first that has any. The photo is
+   found by its place among the listing's photos, the order they went up in. */
+async function applyEtsyVariationImages(listingId, listing, axes, hdrs) {
+  const k = axes.findIndex(a => a.options.some(o => o.image));
+  if (k < 0) return "";
+  const photos = (listing.images || []).filter(u => typeof u === "string" && u.startsWith("http")).slice(0, 10);
+  try {
+    const [inv, imgs] = await Promise.all([
+      etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { headers: hdrs }).then(r => r.json()),
+      etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/images`, { headers: hdrs }).then(r => r.json()),
+    ]);
+    const byRank = new Map((imgs?.results || []).map(im => [+im.rank, im.listing_image_id]));
+    const valueId = new Map();
+    for (const p of inv?.products || []) for (const pv of p.property_values || [])
+      if (+pv.property_id === ETSY_CUSTOM_PROPS[k]) (pv.values || []).forEach((v, n) => valueId.set(String(v).toLowerCase(), pv.value_ids?.[n]));
+    const variation_images = axes[k].options.filter(o => o.image).map(o => {
+      const rank = photos.indexOf(o.image) + 1;
+      return { property_id: ETSY_CUSTOM_PROPS[k], value_id: valueId.get(String(o.label).trim().slice(0, 45).toLowerCase()), image_id: byRank.get(rank) };
+    }).filter(x => x.value_id && x.image_id);
+    if (!variation_images.length) return "The option photos couldn't be matched on Etsy — check each option's photo is one of the listing's first 10.";
+    const r = await etsyFetch(`https://openapi.etsy.com/v3/application/shops/${etsyShop().id}/listings/${listingId}/variation-images`, {
+      method: "POST", headers: { ...hdrs, "Content-Type": "application/json" }, body: JSON.stringify({ variation_images }) });
+    if (r.ok) return "";
+    const d = await r.json().catch(() => ({}));
+    return `Etsy didn't take the option photos: ${d.error || r.status}`;
+  } catch (e) { return `Etsy didn't take the option photos: ${e.message}`; }
+}
 async function applyEtsyVariations(listingId, listing, hdrs, readinessId) {
   const axes = etsyVariationAxes(listing);
   if (!axes.length) return "";
@@ -1194,7 +1223,7 @@ async function applyEtsyVariations(listingId, listing, hdrs, readinessId) {
   };
   try {
     const r = await etsyFetch(`https://openapi.etsy.com/v3/application/listings/${listingId}/inventory`, { method: "PUT", headers: hdrs, body: JSON.stringify(body) });
-    if (r.ok) return "";
+    if (r.ok) return await applyEtsyVariationImages(listingId, listing, axes, hdrs);
     const d = await r.json().catch(() => ({}));
     console.error("Etsy inventory update failed:", JSON.stringify(d));
     return `Etsy didn't take the sizes/options: ${d.error_description || d.error || d.message || r.status}`;
