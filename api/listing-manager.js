@@ -405,7 +405,8 @@ Product:
 - Size: ${size || ""}
 - Weight: ${weight || ""}
 - Type: ${productType || ""}
-- Stock: ${repeatable ? `repeatable line, ${+listing.qty || "several"} alike in stock — the buyer gets one like the photos` : "one of a kind — the buyer gets this exact piece"}
+${(listing.variations || []).filter(v => v?.name && (v.options || []).some(o => o.label)).map(v => `- Options buyers choose — ${v.name}: ${(v.options || []).map(o => o.label).filter(Boolean).join(" / ")} (the tags must cover each option, e.g. a pendulum tag when Pendulum is one)
+`).join("")}- Stock: ${repeatable ? `repeatable line, ${+listing.qty || "several"} alike in stock — the buyer gets one like the photos` : "one of a kind — the buyer gets this exact piece"}
 - Dimensions: ${[listing.width, listing.height, listing.depth].filter(Boolean).join(" × ")}${listing.dim_unit ? " " + listing.dim_unit : ""}
 - Base description: ${description || ""}
 - Tags: ${tags.join(", ")}

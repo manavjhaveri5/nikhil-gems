@@ -89,7 +89,7 @@ function PaysInput({ value, onSet, size = 30, width = 150 }) {
 const RATE_MEMO = "ng-rate-memo-v1";
 const memoKey = f => `${String(f.material || "").toLowerCase().trim()}|${String(f.shape || "").toLowerCase().trim()}`;
 const readMemo = () => { try { return JSON.parse(localStorage.getItem(RATE_MEMO) || "{}"); } catch { return {}; } };
-function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, costPerPiece = 0, sale, fx, settings, pick, onFill }) {
+function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, costPerPiece = 0, sale, fx, settings, pick, onFill, onCost }) {
   const perG = givenKg < 1, unitKg = perG ? .001 : 1, unit = perG ? "g" : "kg";
   /* The weight can be corrected here (a piece weighed again, a typo on the
      card): the prices follow it, and Use these prices saves it to the piece. */
@@ -112,6 +112,10 @@ function PriceByWeight({ form, weightKg: givenKg, onWeight, costPerKg, costPerPi
   const etsy = mode === "piece"
     ? (+pcPrice ? Math.round(+pcPrice) : Math.round((+pcCost || 0) * (+mult || 0) / 10) * 10)
     : Math.round(r * units / 10) * 10;
+  /* The cost typed here (a piece's cost, or cost a gram/kilo × the weight)
+     is what the piece costs us, for the profit lines below. */
+  const myCost = mode === "piece" ? Math.round(+pcCost || 0) : mode === "cost" ? Math.round((+cost || 0) * units) : 0;
+  useEffect(() => { onCost?.(myCost); }, [myCost]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pays = Math.round(etsy * (1 - sale / 100));
   const indiaOff = india === "" ? sale : +india || 0;
   const inrIndia = Math.round(etsy * (1 - indiaOff / 100) / 10) * 10;
@@ -258,13 +262,15 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
   const cardCost = card && +card.costPrice && weightKg && weightKg !== weightKgIn && ["kg", "g", "gm"].includes(cardUnit)
     ? Math.round(+card.costPrice * weightKg * (cardUnit === "kg" ? 1 : 1000))
     : +form._stockCost || 0;
+  const [pbwCost, setPbwCost] = useState(0);
   const [costLines, setCostLines] = useState(() => {
     const saved = form.price_calc?.cost_lines;
     if (Array.isArray(saved) && saved.length) return saved.map(l => ({ ...l }));
     return [{ id: "c1", label: "", amt: +form.price_calc?.cost ? String(form.price_calc.cost) : "" }];
   });
   const calcCost = costLines.reduce((n, l) => n + (+l.amt || 0), 0);
-  const cost = cardCost || calcCost;
+  // No stock card and nothing added up below: the cost typed in the price card.
+  const cost = cardCost || calcCost || pbwCost;
   const optCost = o => +o.cost || cost;
   /* Wholesale quotes a piece, a lot or a kilo — whichever the Wholesale tab is
      set to — so the cost put against it has to be the same quantity. */
@@ -663,7 +669,12 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
               <PriceByWeight form={form} weightKg={weightKgIn} onWeight={setWeightKg} sale={sale} fx={fx} settings={s} pick={pick}
                 costPerPiece={card && +card.costPrice && ["pcs", "pc", "piece", "pieces", "nos", "no"].includes(String(card.unit || "pcs").toLowerCase()) ? +card.costPrice : +form._stockCost || 0}
                 costPerKg={card && +card.costPrice && String(card.unit || "").toLowerCase() === "kg" ? +card.costPrice : card && +card.costPrice && ["g", "gm", "gram", "grams"].includes(String(card.unit || "").toLowerCase()) ? +card.costPrice * 1000 : 0}
-                onFill={out => setP(v => ({ ...v, ...out }))} />
+                onCost={setPbwCost}
+                onFill={out => {
+                  setP(v => ({ ...v, ...out }));
+                  // Kept with the listing: the price card's cost becomes its cost line.
+                  if (!cardCost && !calcCost && pbwCost) setCostLines([{ id: "c1", label: "The piece", amt: String(pbwCost) }]);
+                }} />
             )}
             {/* Priced by the kilo against the same stone already in the shop: each
                 similar piece's price over its own weight, the middle of those, and
@@ -756,9 +767,9 @@ export default function ListSteps({ form, orders, stock = [], weightKg: weightKg
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 12, fontWeight: 800, color: C.ink }}>What it costs us</div>
-                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>{form.linked_stock_id ? "Its stock card has no cost — add it up here." : "No stock card — add up what goes into it: material, making, packaging."}</div>
+                  <div style={{ fontSize: 11.5, color: C.inkMid, marginTop: 2 }}>{!calcCost && pbwCost ? "From the cost in the price card above. Add lines here to count it differently." : form.linked_stock_id ? "Its stock card has no cost — add it up here." : "No stock card — add up what goes into it: material, making, packaging."}</div>
                 </div>
-                <div style={{ fontFamily: serif, fontSize: 26, color: C.ink }}>{calcCost ? inr(calcCost) : "—"}</div>
+                <div style={{ fontFamily: serif, fontSize: 26, color: C.ink }}>{calcCost ? inr(calcCost) : pbwCost ? inr(pbwCost) : "—"}</div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
                 {costLines.map((l, i) => (

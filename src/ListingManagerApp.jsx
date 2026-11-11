@@ -2123,7 +2123,22 @@ JSON: {"simple_title":"...","size":"...","pieces_per_kg":"...","location":"..."}
         // Merged through the same rules a typed tag goes through, so the chips
         // are exactly what gets published — Etsy refuses a tag over 20
         // characters, and it used to refuse the whole batch along with it.
-        if (d.ai.etsy_tags?.length) setTags(cleanTags([...tags, ...d.ai.etsy_tags]));
+        if (d.ai.etsy_tags?.length) {
+          let next = cleanTags([...tags, ...d.ai.etsy_tags]);
+          /* Each option a buyer chooses (Pendant / Pendulum) needs a tag of its
+             own. With all 13 used, the AI's tag for a missing option takes the
+             place of the last tag that names no option. */
+          const optWords = [...new Set((form.variations || []).flatMap(v => (v.options || []).map(o => String(o.label || "").toLowerCase().trim())).filter(w => w.length > 2))];
+          for (const w of optWords) {
+            if (next.some(t => t.includes(w))) continue;
+            const own = [`${String(form.material || "").toLowerCase()} ${w}`.trim(), `crystal ${w}`, w].find(x => x.length <= 20);
+            const add = cleanTags(d.ai.etsy_tags).find(t => t.includes(w)) || (own && cleanTags([own])[0]);
+            if (!add || next.includes(add)) continue;
+            if (next.length < 13) { next = [...next, add]; continue; }
+            for (let k = next.length - 1; k >= 3; k--) if (!optWords.some(o => next[k].includes(o))) { next = next.map((t, n) => n === k ? add : t); break; }
+          }
+          setTags(next);
+        }
         if (d.ai.etsy_description && !form.description) set("description", d.ai.etsy_description);
         // Everything else it can read off the piece, only where nothing is set yet.
         const blank = k => !String(form[k] ?? "").trim();
