@@ -946,6 +946,25 @@ async function etsyHandler(req, res) {
       return res.json(data);
     }
 
+    // ── create_section: a new shop section by name (returns it if it exists) ──
+    if (action === "create_section") {
+      if (req.method !== "POST") return res.status(405).json({ error: "POST required" });
+      if (!token) return res.status(401).json({ error: "OAuth token required", fix: "Visit /api/etsy-auth?action=start" });
+      const title = String(req.body?.title || "").trim().slice(0, 24);
+      if (!title) return res.status(400).json({ error: "A section name is needed" });
+      const norm = t => String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const cur = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/sections`, { headers: authHeaders }).then(r => r.json()).catch(() => ({}));
+      const have = (cur.results || []).find(x => norm(x.title) === norm(title));
+      if (have) return res.json({ ...have, existed: true });
+      const r = await fetch(`https://openapi.etsy.com/v3/application/shops/${sid}/sections`, {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ title }).toString(),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return res.status(r.status).json({ error: `Etsy didn't make the section: ${d.error || r.status}` });
+      return res.json(d);
+    }
+
     // ── listings: active listings with images ─────────────────────────────────
     if (action === "listings") {
       const state = req.query.state || "active";
